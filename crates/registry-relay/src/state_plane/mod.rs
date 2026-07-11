@@ -13,6 +13,7 @@
 mod audit;
 mod fence;
 mod migration;
+mod quota;
 
 #[cfg(test)]
 mod postgres_tests;
@@ -27,6 +28,11 @@ pub(crate) use fence::{
 };
 pub(crate) use migration::{
     install_postgres_state_plane_v1, AuditChainKeyEpochId, RuntimeDatabaseRole,
-    StatePlaneInstallError, DURABLE_AUDIT_CAPABILITY_V1, POSTGRES_STATE_PLANE_MIGRATION_V1,
-    SERVING_FENCE_CAPABILITY_V1, STATE_PLANE_SCHEMA_FINGERPRINT_V1,
+    StatePlaneInstallError, DURABLE_AUDIT_CAPABILITY_V1, PERSISTENT_QUOTA_CAPABILITY_V1,
+    POSTGRES_STATE_PLANE_MIGRATION_V1, SERVING_FENCE_CAPABILITY_V1,
+    STATE_PLANE_SCHEMA_FINGERPRINT_V1,
+};
+pub(crate) use quota::{
+    EffectiveQuotaLimits, PostgresQuotaStatePlane, PublicQuotaLimits, QuotaError, QuotaExhaustion,
+    QuotaGrant, QuotaKey, QuotaReadiness, QuotaReservation,
 };

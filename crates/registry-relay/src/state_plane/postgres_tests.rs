@@ -23,20 +23,21 @@ use registry_platform_audit::{
     DurableAuditWriteError, DurableAuditWriteOutcome,
 };
 use serde_json::json;
-use tokio::task::JoinHandle;
 use tokio::time::Instant;
+use tokio::{sync::Barrier, task::JoinHandle};
 use tokio_postgres::{error::SqlState, Client, Config, GenericClient};
 use ulid::Ulid;
 
 use super::migration::RUNTIME_SESSION_LIMITS_SQL;
 use super::{
     install_postgres_state_plane_v1, AuditChainKeyEpochId, CompletionAttemptReference,
-    DispatchOperationId, DispatchPermitBudget, PermitCompletionOutcome,
-    PostgresDurableAuditStatePlane, PostgresServingFence, RuntimeDatabaseRole, ServingFenceError,
-    ServingFenceLockKey, ServingFenceReadiness, StatePlaneInitializationError,
-    StatePlaneInstallError, StatePlaneReadiness, DURABLE_AUDIT_CAPABILITY_V1,
-    POSTGRES_STATE_PLANE_MIGRATION_V1, SERVING_FENCE_CAPABILITY_V1,
-    STATE_PLANE_SCHEMA_FINGERPRINT_V1,
+    DispatchOperationId, DispatchPermitBudget, EffectiveQuotaLimits, PermitCompletionOutcome,
+    PostgresDurableAuditStatePlane, PostgresQuotaStatePlane, PostgresServingFence,
+    PublicQuotaLimits, QuotaError, QuotaGrant, QuotaKey, QuotaReadiness, QuotaReservation,
+    RuntimeDatabaseRole, ServingFenceError, ServingFenceLockKey, ServingFenceReadiness,
+    StatePlaneInitializationError, StatePlaneInstallError, StatePlaneReadiness,
+    DURABLE_AUDIT_CAPABILITY_V1, PERSISTENT_QUOTA_CAPABILITY_V1, POSTGRES_STATE_PLANE_MIGRATION_V1,
+    SERVING_FENCE_CAPABILITY_V1, STATE_PLANE_SCHEMA_FINGERPRINT_V1,
 };
 
 const DATABASE_URL_ENV: &str = "REGISTRY_RELAY_STATE_PLANE_POSTGRES_TEST_URL";
@@ -224,6 +225,39 @@ async fn wait_for_fence_unlock(
     }
 }
 
+async fn wait_for_blocked_quota_query(
+    admin: &Client,
+    runtime_role: &str,
+) -> Result<i64, Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let blocked = blocked_quota_query_count(admin, runtime_role).await?;
+        if blocked > 0 {
+            return Ok(blocked);
+        }
+        if Instant::now() >= deadline {
+            return Err("quota query did not reach the PostgreSQL lock wait".into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn blocked_quota_query_count(
+    admin: &Client,
+    runtime_role: &str,
+) -> Result<i64, tokio_postgres::Error> {
+    admin
+        .query_one(
+            "SELECT count(*) FROM pg_catalog.pg_stat_activity \
+             WHERE usename = $1 AND state = 'active' \
+               AND wait_event_type = 'Lock' \
+               AND query LIKE '%relay_state_api.quota_reserve_v1%'",
+            &[&runtime_role],
+        )
+        .await?
+        .try_get(0)
+}
+
 async fn seed_catalog_for_unsafe_restart(
     client: &Client,
     runtime_role_name: &str,
@@ -237,10 +271,10 @@ async fn seed_catalog_for_unsafe_restart(
             "INSERT INTO relay_state_private.state_plane_metadata ( \
                  singleton, schema_version, capability_id, capability_fingerprint, \
                  owner_role_oid, runtime_role_oid, chain_key_epoch_id, \
-                 serving_fence_capability_id, serving_fence_lock_key \
-             ) SELECT true, 1, $1, $2, owner_role.oid, runtime_role.oid, $3, $4, $5 \
+                 serving_fence_capability_id, serving_fence_lock_key, quota_capability_id \
+             ) SELECT true, 1, $1, $2, owner_role.oid, runtime_role.oid, $3, $4, $5, $6 \
              FROM pg_catalog.pg_roles AS owner_role \
-             JOIN pg_catalog.pg_roles AS runtime_role ON runtime_role.rolname = $6 \
+             JOIN pg_catalog.pg_roles AS runtime_role ON runtime_role.rolname = $7 \
              WHERE owner_role.rolname = current_user",
             &[
                 &DURABLE_AUDIT_CAPABILITY_V1,
@@ -248,6 +282,7 @@ async fn seed_catalog_for_unsafe_restart(
                 &chain_key_epoch_id.as_str(),
                 &SERVING_FENCE_CAPABILITY_V1,
                 &test_serving_fence_lock_key().as_i64(),
+                &PERSISTENT_QUOTA_CAPABILITY_V1,
                 &runtime_role_name,
             ],
         )
@@ -280,10 +315,797 @@ async fn seed_catalog_for_unsafe_restart(
                  bigint, text, bigint, text \
              ) TO {runtime}; \
              GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_release_v1(bigint, text, bigint) \
-                 TO {runtime};",
+                 TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.quota_reserve_v1( \
+                 text, text, bigint, integer, integer \
+             ) TO {runtime};",
             runtime = quote_identifier(runtime_role_name),
         ))
         .await?;
+    Ok(())
+}
+
+fn effective_quota_limits(rate_per_minute: u16, burst_tokens: u8) -> EffectiveQuotaLimits {
+    EffectiveQuotaLimits::lowered_from(
+        PublicQuotaLimits::v1_default(),
+        rate_per_minute,
+        burst_tokens,
+    )
+    .expect("test quota is within the public v1 maxima")
+}
+
+fn expect_quota_allowed(reservation: QuotaReservation) -> QuotaGrant {
+    match reservation {
+        QuotaReservation::Allowed(grant) => grant,
+        QuotaReservation::Exhausted(_) => panic!("expected quota authority"),
+    }
+}
+
+fn expect_quota_exhausted(reservation: QuotaReservation) -> Duration {
+    match reservation {
+        QuotaReservation::Allowed(_) => panic!("expected quota exhaustion"),
+        QuotaReservation::Exhausted(exhaustion) => exhaustion.into_retry_after(),
+    }
+}
+
+struct QuotaTestContext<'a> {
+    database_url: &'a str,
+    owner_role: &'a str,
+    runtime_role: &'a str,
+    runtime_password: &'a str,
+    attacker_role: &'a str,
+    attacker_password: &'a str,
+    chain_key_epoch_id: &'a AuditChainKeyEpochId,
+}
+
+async fn exercise_postgres_quota_contract(
+    admin: &Client,
+    context: QuotaTestContext<'_>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let QuotaTestContext {
+        database_url,
+        owner_role,
+        runtime_role,
+        runtime_password,
+        attacker_role,
+        attacker_password,
+        chain_key_epoch_id,
+    } = context;
+    let limits = effective_quota_limits(1, 10);
+    let (hostile_client, hostile_driver) =
+        postgres_client_as(database_url, runtime_role, runtime_password).await?;
+    hostile_client
+        .batch_execute("BEGIN; SET LOCAL search_path = public; SET LOCAL synchronous_commit = off;")
+        .await?;
+    let burst_plane =
+        PostgresQuotaStatePlane::connect(hostile_client, chain_key_epoch_id.clone()).await?;
+    assert_eq!(burst_plane.readiness().await, QuotaReadiness::Ready);
+    for _ in 0..10 {
+        let grant = expect_quota_allowed(
+            burst_plane
+                .reserve(QuotaKey::for_test("opencrvs", "quota.burst", 1), limits)
+                .await?,
+        );
+        assert!(!format!("{grant:?}").contains("opencrvs"));
+    }
+    let retry = expect_quota_exhausted(
+        burst_plane
+            .reserve(QuotaKey::for_test("opencrvs", "quota.burst", 1), limits)
+            .await?,
+    );
+    assert!(retry > Duration::ZERO && retry <= Duration::from_secs(60));
+    drop(burst_plane);
+    hostile_driver.abort();
+
+    let (restart_client, restart_driver) =
+        postgres_client_as(database_url, runtime_role, runtime_password).await?;
+    let restart_plane =
+        PostgresQuotaStatePlane::connect(restart_client, chain_key_epoch_id.clone()).await?;
+    let _ = expect_quota_exhausted(
+        restart_plane
+            .reserve(QuotaKey::for_test("opencrvs", "quota.burst", 1), limits)
+            .await?,
+    );
+    drop(restart_plane);
+    restart_driver.abort();
+
+    let mut concurrent_tasks = Vec::new();
+    let mut concurrent_drivers = Vec::new();
+    for _ in 0..16 {
+        let (client, driver) =
+            postgres_client_as(database_url, runtime_role, runtime_password).await?;
+        let plane = PostgresQuotaStatePlane::connect(client, chain_key_epoch_id.clone()).await?;
+        concurrent_drivers.push(driver);
+        concurrent_tasks.push(tokio::spawn(async move {
+            plane
+                .reserve(QuotaKey::for_test("dhis2", "quota.concurrent", 1), limits)
+                .await
+        }));
+    }
+    let mut concurrent_allowed = 0;
+    let mut concurrent_exhausted = 0;
+    for task in concurrent_tasks {
+        let reservation = task.await??;
+        match reservation {
+            QuotaReservation::Allowed(_grant) => concurrent_allowed += 1,
+            QuotaReservation::Exhausted(exhaustion) => {
+                assert!(exhaustion.into_retry_after() <= Duration::from_secs(60));
+                concurrent_exhausted += 1;
+            }
+        }
+    }
+    assert_eq!(concurrent_allowed, 10);
+    assert_eq!(concurrent_exhausted, 6);
+    for driver in concurrent_drivers {
+        driver.abort();
+    }
+
+    let (mixed_client_a, mixed_driver_a) =
+        postgres_client_as(database_url, runtime_role, runtime_password).await?;
+    let (mixed_client_b, mixed_driver_b) =
+        postgres_client_as(database_url, runtime_role, runtime_password).await?;
+    let mixed_plane_a =
+        PostgresQuotaStatePlane::connect(mixed_client_a, chain_key_epoch_id.clone()).await?;
+    let mixed_plane_b =
+        PostgresQuotaStatePlane::connect(mixed_client_b, chain_key_epoch_id.clone()).await?;
+    let mixed_barrier = Arc::new(Barrier::new(3));
+    let barrier_a = Arc::clone(&mixed_barrier);
+    let barrier_b = Arc::clone(&mixed_barrier);
+    let limits_a = effective_quota_limits(12, 3);
+    let limits_b = effective_quota_limits(24, 5);
+    let mixed_a = tokio::spawn(async move {
+        barrier_a.wait().await;
+        let result = mixed_plane_a
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.mixed-first-use", 1),
+                limits_a,
+            )
+            .await;
+        (mixed_plane_a, result)
+    });
+    let mixed_b = tokio::spawn(async move {
+        barrier_b.wait().await;
+        let result = mixed_plane_b
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.mixed-first-use", 1),
+                limits_b,
+            )
+            .await;
+        (mixed_plane_b, result)
+    });
+    mixed_barrier.wait().await;
+    let (mixed_plane_a, result_a) = mixed_a.await?;
+    let (mixed_plane_b, result_b) = mixed_b.await?;
+    let a_won = matches!(&result_a, Ok(QuotaReservation::Allowed(_)));
+    let b_won = matches!(&result_b, Ok(QuotaReservation::Allowed(_)));
+    assert_ne!(a_won, b_won, "exactly one first-use configuration wins");
+    assert_eq!(
+        mixed_plane_a.readiness().await,
+        if a_won {
+            QuotaReadiness::Ready
+        } else {
+            QuotaReadiness::Unavailable
+        }
+    );
+    assert_eq!(
+        mixed_plane_b.readiness().await,
+        if b_won {
+            QuotaReadiness::Ready
+        } else {
+            QuotaReadiness::Unavailable
+        }
+    );
+    let winning_limits = if a_won { (12_i32, 3_i32) } else { (24, 5) };
+    let mixed_row = admin
+        .query_one(
+            "SELECT rate_per_minute, burst_tokens, tokens_numerator \
+             FROM relay_state_private.consultation_quota_bucket \
+             WHERE workload_id = 'opencrvs' AND profile_id = 'quota.mixed-first-use' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await?;
+    assert_eq!(
+        mixed_row.try_get::<_, i32>("rate_per_minute")?,
+        winning_limits.0
+    );
+    assert_eq!(
+        mixed_row.try_get::<_, i32>("burst_tokens")?,
+        winning_limits.1
+    );
+    assert_eq!(
+        mixed_row.try_get::<_, i64>("tokens_numerator")?,
+        i64::from(winning_limits.1) * 60_000_000 - 60_000_000
+    );
+    match (result_a, result_b) {
+        (Ok(QuotaReservation::Allowed(_grant)), Err(QuotaError::LimitMismatch))
+        | (Err(QuotaError::LimitMismatch), Ok(QuotaReservation::Allowed(_grant))) => {}
+        _ => panic!("mixed first-use race returned an unexpected outcome"),
+    }
+    drop(mixed_plane_a);
+    drop(mixed_plane_b);
+    mixed_driver_a.abort();
+    mixed_driver_b.abort();
+
+    let (arithmetic_client, arithmetic_driver) =
+        postgres_client_as(database_url, runtime_role, runtime_password).await?;
+    let arithmetic_plane =
+        PostgresQuotaStatePlane::connect(arithmetic_client, chain_key_epoch_id.clone()).await?;
+
+    let sustained_limits = effective_quota_limits(60, 1);
+    let _grant = expect_quota_allowed(
+        arithmetic_plane
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.sustained", 1),
+                sustained_limits,
+            )
+            .await?,
+    );
+    admin
+        .execute(
+            "UPDATE relay_state_private.consultation_quota_bucket \
+             SET tokens_numerator = 0, last_refill_at = clock_timestamp() - interval '1 second' \
+             WHERE workload_id = 'opencrvs' AND profile_id = 'quota.sustained' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await?;
+    let _grant = expect_quota_allowed(
+        arithmetic_plane
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.sustained", 1),
+                sustained_limits,
+            )
+            .await?,
+    );
+    let sustained_tokens: i64 = admin
+        .query_one(
+            "SELECT tokens_numerator \
+             FROM relay_state_private.consultation_quota_bucket \
+             WHERE workload_id = 'opencrvs' AND profile_id = 'quota.sustained' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(sustained_tokens, 0);
+
+    let retry_limits = effective_quota_limits(7, 1);
+    let _grant = expect_quota_allowed(
+        arithmetic_plane
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.retry-ceil", 1),
+                retry_limits,
+            )
+            .await?,
+    );
+    admin
+        .execute(
+            "UPDATE relay_state_private.consultation_quota_bucket \
+             SET tokens_numerator = 0, last_refill_at = clock_timestamp() \
+             WHERE workload_id = 'opencrvs' AND profile_id = 'quota.retry-ceil' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await?;
+    let normal_retry = expect_quota_exhausted(
+        arithmetic_plane
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.retry-ceil", 1),
+                retry_limits,
+            )
+            .await?,
+    );
+    let retry_tokens: i64 = admin
+        .query_one(
+            "SELECT tokens_numerator \
+             FROM relay_state_private.consultation_quota_bucket \
+             WHERE workload_id = 'opencrvs' AND profile_id = 'quota.retry-ceil' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    let token_wait_us = (60_000_000 - retry_tokens + 6) / 7;
+    let expected_retry_ms = (token_wait_us + 999) / 1_000;
+    assert_eq!(normal_retry.as_millis(), expected_retry_ms as u128);
+
+    let fractional_limits = effective_quota_limits(7, 1);
+    let _grant = expect_quota_allowed(
+        arithmetic_plane
+            .reserve(
+                QuotaKey::for_test("dhis2", "quota.fractional", 1),
+                fractional_limits,
+            )
+            .await?,
+    );
+    admin
+        .execute(
+            "UPDATE relay_state_private.consultation_quota_bucket \
+             SET tokens_numerator = 0, last_refill_at = clock_timestamp() \
+             WHERE workload_id = 'dhis2' AND profile_id = 'quota.fractional' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await?;
+    for _ in 0..8 {
+        let _ = expect_quota_exhausted(
+            arithmetic_plane
+                .reserve(
+                    QuotaKey::for_test("dhis2", "quota.fractional", 1),
+                    fractional_limits,
+                )
+                .await?,
+        );
+    }
+    let fractional_tokens: i64 = admin
+        .query_one(
+            "SELECT tokens_numerator \
+             FROM relay_state_private.consultation_quota_bucket \
+             WHERE workload_id = 'dhis2' AND profile_id = 'quota.fractional' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    assert!(fractional_tokens > 0);
+    assert_eq!(
+        fractional_tokens % 7,
+        0,
+        "fractional refill is never rounded away"
+    );
+    admin
+        .execute(
+            "UPDATE relay_state_private.consultation_quota_bucket \
+             SET last_refill_at = last_refill_at - \
+                 ((60000000 - tokens_numerator + 6) / 7) * interval '1 microsecond' \
+             WHERE workload_id = 'dhis2' AND profile_id = 'quota.fractional' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await?;
+    let _grant = expect_quota_allowed(
+        arithmetic_plane
+            .reserve(
+                QuotaKey::for_test("dhis2", "quota.fractional", 1),
+                fractional_limits,
+            )
+            .await?,
+    );
+
+    let _grant = expect_quota_allowed(
+        arithmetic_plane
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.backward", 1),
+                sustained_limits,
+            )
+            .await?,
+    );
+    let backward_before: String = admin
+        .query_one(
+            "UPDATE relay_state_private.consultation_quota_bucket \
+             SET tokens_numerator = 0, last_refill_at = clock_timestamp() + interval '500 milliseconds' \
+             WHERE workload_id = 'opencrvs' AND profile_id = 'quota.backward' \
+               AND profile_version = 1 RETURNING last_refill_at::text",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    let rollback_retry = expect_quota_exhausted(
+        arithmetic_plane
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.backward", 1),
+                sustained_limits,
+            )
+            .await?,
+    );
+    assert!(rollback_retry > Duration::from_millis(1_000));
+    assert!(rollback_retry <= Duration::from_millis(1_500));
+    let backward_after: String = admin
+        .query_one(
+            "SELECT last_refill_at::text \
+             FROM relay_state_private.consultation_quota_bucket \
+             WHERE workload_id = 'opencrvs' AND profile_id = 'quota.backward' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(backward_after, backward_before);
+
+    let forward_limits = effective_quota_limits(1, 2);
+    let _grant = expect_quota_allowed(
+        arithmetic_plane
+            .reserve(
+                QuotaKey::for_test("dhis2", "quota.forward", 1),
+                forward_limits,
+            )
+            .await?,
+    );
+    admin
+        .execute(
+            "UPDATE relay_state_private.consultation_quota_bucket \
+             SET tokens_numerator = 0, last_refill_at = clock_timestamp() - interval '100 years' \
+             WHERE workload_id = 'dhis2' AND profile_id = 'quota.forward' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await?;
+    let _grant = expect_quota_allowed(
+        arithmetic_plane
+            .reserve(
+                QuotaKey::for_test("dhis2", "quota.forward", 1),
+                forward_limits,
+            )
+            .await?,
+    );
+    let capped_tokens: i64 = admin
+        .query_one(
+            "SELECT tokens_numerator \
+             FROM relay_state_private.consultation_quota_bucket \
+             WHERE workload_id = 'dhis2' AND profile_id = 'quota.forward' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(capped_tokens, 60_000_000);
+
+    let bound_limits = effective_quota_limits(30, 5);
+    let _grant = expect_quota_allowed(
+        arithmetic_plane
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.bound-limits", 1),
+                bound_limits,
+            )
+            .await?,
+    );
+    let before_mismatch: (i64, String) = admin
+        .query_one(
+            "SELECT tokens_numerator, last_refill_at::text \
+             FROM relay_state_private.consultation_quota_bucket \
+             WHERE workload_id = 'opencrvs' AND profile_id = 'quota.bound-limits' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await
+        .and_then(|row| Ok((row.try_get(0)?, row.try_get(1)?)))?;
+    assert!(matches!(
+        arithmetic_plane
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.bound-limits", 1),
+                effective_quota_limits(20, 4),
+            )
+            .await,
+        Err(QuotaError::LimitMismatch)
+    ));
+    assert_eq!(
+        arithmetic_plane.readiness().await,
+        QuotaReadiness::Unavailable
+    );
+    assert!(matches!(
+        arithmetic_plane
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.bound-limits", 1),
+                bound_limits,
+            )
+            .await,
+        Err(QuotaError::Unavailable)
+    ));
+    let after_mismatch: (i64, String) = admin
+        .query_one(
+            "SELECT tokens_numerator, last_refill_at::text \
+             FROM relay_state_private.consultation_quota_bucket \
+             WHERE workload_id = 'opencrvs' AND profile_id = 'quota.bound-limits' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await
+        .and_then(|row| Ok((row.try_get(0)?, row.try_get(1)?)))?;
+    assert_eq!(after_mismatch, before_mismatch);
+    drop(arithmetic_plane);
+    arithmetic_driver.abort();
+
+    let (clock_client, clock_driver) =
+        postgres_client_as(database_url, runtime_role, runtime_password).await?;
+    let clock_plane =
+        PostgresQuotaStatePlane::connect(clock_client, chain_key_epoch_id.clone()).await?;
+    let _grant = expect_quota_allowed(
+        clock_plane
+            .reserve(
+                QuotaKey::for_test("dhis2", "quota.clock-anomaly", 1),
+                sustained_limits,
+            )
+            .await?,
+    );
+    let clock_before: (i64, String) = admin
+        .query_one(
+            "UPDATE relay_state_private.consultation_quota_bucket \
+             SET tokens_numerator = 0, last_refill_at = clock_timestamp() + interval '2 minutes' \
+             WHERE workload_id = 'dhis2' AND profile_id = 'quota.clock-anomaly' \
+               AND profile_version = 1 \
+             RETURNING tokens_numerator, last_refill_at::text",
+            &[],
+        )
+        .await
+        .and_then(|row| Ok((row.try_get(0)?, row.try_get(1)?)))?;
+    assert!(matches!(
+        clock_plane
+            .reserve(
+                QuotaKey::for_test("dhis2", "quota.clock-anomaly", 1),
+                sustained_limits,
+            )
+            .await,
+        Err(QuotaError::ClockAnomaly)
+    ));
+    assert_eq!(clock_plane.readiness().await, QuotaReadiness::Unavailable);
+    let clock_after: (i64, String) = admin
+        .query_one(
+            "SELECT tokens_numerator, last_refill_at::text \
+             FROM relay_state_private.consultation_quota_bucket \
+             WHERE workload_id = 'dhis2' AND profile_id = 'quota.clock-anomaly' \
+               AND profile_version = 1",
+            &[],
+        )
+        .await
+        .and_then(|row| Ok((row.try_get(0)?, row.try_get(1)?)))?;
+    assert_eq!(clock_after, clock_before);
+    drop(clock_plane);
+    clock_driver.abort();
+
+    admin
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA relay_state_api TO {attacker}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.quota_reserve_v1( \
+                 text, text, bigint, integer, integer \
+             ) TO {attacker};",
+            attacker = quote_identifier(attacker_role),
+        ))
+        .await?;
+    let (attacker_client, attacker_driver) =
+        postgres_client_as(database_url, attacker_role, attacker_password).await?;
+    attacker_client
+        .batch_execute(RUNTIME_SESSION_LIMITS_SQL)
+        .await?;
+    let attacker_error = attacker_client
+        .query_one(
+            "SELECT * FROM relay_state_api.quota_reserve_v1($1, $2, $3, $4, $5)",
+            &[&"attacker", &"quota.denied", &1_i64, &1_i32, &1_i32],
+        )
+        .await
+        .expect_err("unbound role must never reserve quota");
+    assert_eq!(
+        attacker_error.as_db_error().map(|error| error.code()),
+        Some(&SqlState::INSUFFICIENT_PRIVILEGE)
+    );
+    drop(attacker_client);
+    attacker_driver.abort();
+    admin
+        .batch_execute(&format!(
+            "REVOKE EXECUTE ON FUNCTION relay_state_api.quota_reserve_v1( \
+                 text, text, bigint, integer, integer \
+             ) FROM {attacker}; \
+             REVOKE USAGE ON SCHEMA relay_state_api FROM {attacker};",
+            attacker = quote_identifier(attacker_role),
+        ))
+        .await?;
+
+    let (corrupt_client, corrupt_driver) =
+        postgres_client_as(database_url, runtime_role, runtime_password).await?;
+    let corrupt_plane =
+        PostgresQuotaStatePlane::connect(corrupt_client, chain_key_epoch_id.clone()).await?;
+    let _grant = expect_quota_allowed(
+        corrupt_plane
+            .reserve(
+                QuotaKey::for_test("dhis2", "quota.corrupt", 1),
+                sustained_limits,
+            )
+            .await?,
+    );
+    set_role(admin, owner_role).await?;
+    admin
+        .batch_execute(
+            r#"
+ALTER TABLE relay_state_private.consultation_quota_bucket
+    DROP CONSTRAINT consultation_quota_bucket_tokens_check;
+UPDATE relay_state_private.consultation_quota_bucket
+SET tokens_numerator = -1
+WHERE workload_id = 'dhis2' AND profile_id = 'quota.corrupt' AND profile_version = 1;
+CREATE OR REPLACE FUNCTION relay_state_private.capability_valid_v1()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+SELECT true;
+$function$;
+"#,
+        )
+        .await?;
+    reset_role(admin).await?;
+    assert!(matches!(
+        corrupt_plane
+            .reserve(
+                QuotaKey::for_test("dhis2", "quota.corrupt", 1),
+                sustained_limits,
+            )
+            .await,
+        Err(QuotaError::CapabilityDrift)
+    ));
+    assert_eq!(corrupt_plane.readiness().await, QuotaReadiness::Unavailable);
+    drop(corrupt_plane);
+    corrupt_driver.abort();
+    set_role(admin, owner_role).await?;
+    admin
+        .batch_execute(
+            "UPDATE relay_state_private.consultation_quota_bucket \
+                 SET tokens_numerator = 0, last_refill_at = clock_timestamp() \
+                 WHERE workload_id = 'dhis2' AND profile_id = 'quota.corrupt' \
+                   AND profile_version = 1; \
+             ALTER TABLE relay_state_private.consultation_quota_bucket \
+                 ADD CONSTRAINT consultation_quota_bucket_tokens_check CHECK ( \
+                     tokens_numerator BETWEEN 0 AND burst_tokens::bigint * 60000000 \
+                 );",
+        )
+        .await?;
+    admin
+        .batch_execute(POSTGRES_STATE_PLANE_MIGRATION_V1)
+        .await?;
+    reset_role(admin).await?;
+
+    let (waiter_client, waiter_driver) =
+        postgres_client_as(database_url, runtime_role, runtime_password).await?;
+    let waiter_plane = Arc::new(
+        PostgresQuotaStatePlane::connect(waiter_client, chain_key_epoch_id.clone()).await?,
+    );
+    admin
+        .batch_execute(
+            "BEGIN; LOCK TABLE relay_state_private.consultation_quota_bucket \
+             IN ACCESS EXCLUSIVE MODE;",
+        )
+        .await?;
+    let plane_a = Arc::clone(&waiter_plane);
+    let in_flight_a = tokio::spawn(async move {
+        plane_a
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.waiter-a", 1),
+                sustained_limits,
+            )
+            .await
+    });
+    assert_eq!(
+        wait_for_blocked_quota_query(admin, runtime_role).await?,
+        1,
+        "only A has sent quota SQL"
+    );
+    let plane_b = Arc::clone(&waiter_plane);
+    let queued_b = tokio::spawn(async move {
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            plane_b.reserve(
+                QuotaKey::for_test("opencrvs", "quota.waiter-b", 1),
+                sustained_limits,
+            ),
+        )
+        .await
+    });
+    assert!(
+        queued_b.await?.is_err(),
+        "B is cancelled while queued locally"
+    );
+    assert_eq!(
+        wait_for_blocked_quota_query(admin, runtime_role).await?,
+        1,
+        "cancelled B sent zero SQL"
+    );
+    admin.batch_execute("ROLLBACK").await?;
+    let _grant = expect_quota_allowed(in_flight_a.await??);
+    let waiter_rows = admin
+        .query_one(
+            "SELECT count(*) FILTER (WHERE profile_id = 'quota.waiter-a') AS a_rows, \
+                    count(*) FILTER (WHERE profile_id = 'quota.waiter-b') AS b_rows, \
+                    count(*) AS total_rows \
+             FROM relay_state_private.consultation_quota_bucket \
+             WHERE workload_id = 'opencrvs' \
+               AND profile_id IN ('quota.waiter-a', 'quota.waiter-b') \
+               AND profile_version = 1",
+            &[],
+        )
+        .await?;
+    assert_eq!(waiter_rows.try_get::<_, i64>("a_rows")?, 1);
+    assert_eq!(waiter_rows.try_get::<_, i64>("b_rows")?, 0);
+    assert_eq!(waiter_rows.try_get::<_, i64>("total_rows")?, 1);
+    assert_eq!(waiter_plane.readiness().await, QuotaReadiness::Ready);
+    let _fresh_grant = expect_quota_allowed(
+        waiter_plane
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.waiter-fresh", 1),
+                sustained_limits,
+            )
+            .await?,
+    );
+    assert_eq!(waiter_plane.readiness().await, QuotaReadiness::Ready);
+    drop(waiter_plane);
+    waiter_driver.abort();
+
+    let (cancel_client, cancel_driver) =
+        postgres_client_as(database_url, runtime_role, runtime_password).await?;
+    let cancel_plane = Arc::new(
+        PostgresQuotaStatePlane::connect(cancel_client, chain_key_epoch_id.clone()).await?,
+    );
+    admin
+        .batch_execute(
+            "BEGIN; LOCK TABLE relay_state_private.consultation_quota_bucket \
+             IN ACCESS EXCLUSIVE MODE;",
+        )
+        .await?;
+    let cancel_plane_a = Arc::clone(&cancel_plane);
+    let uncertain_a = tokio::spawn(async move {
+        cancel_plane_a
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.sealed-a", 1),
+                sustained_limits,
+            )
+            .await
+    });
+    assert_eq!(wait_for_blocked_quota_query(admin, runtime_role).await?, 1);
+    let cancel_plane_b = Arc::clone(&cancel_plane);
+    let sealed_waiter_b = tokio::spawn(async move {
+        cancel_plane_b
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.sealed-b", 1),
+                sustained_limits,
+            )
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    uncertain_a.abort();
+    assert!(uncertain_a
+        .await
+        .expect_err("A must be cancelled")
+        .is_cancelled());
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(1), sealed_waiter_b).await??,
+        Err(QuotaError::Unavailable)
+    ));
+    assert!(
+        blocked_quota_query_count(admin, runtime_role).await? <= 1,
+        "sealed B rechecked availability and sent zero SQL"
+    );
+    assert_eq!(cancel_plane.readiness().await, QuotaReadiness::Unavailable);
+    assert!(matches!(
+        cancel_plane
+            .reserve(
+                QuotaKey::for_test("opencrvs", "quota.sealed-fresh", 1),
+                sustained_limits,
+            )
+            .await,
+        Err(QuotaError::Unavailable)
+    ));
+    admin.batch_execute("ROLLBACK").await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let cancelled_rows = admin
+        .query_one(
+            "SELECT count(*) FILTER (WHERE profile_id = 'quota.sealed-a') AS a_rows, \
+                    count(*) FILTER (WHERE profile_id = 'quota.sealed-b') AS b_rows, \
+                    count(*) AS total_rows \
+             FROM relay_state_private.consultation_quota_bucket \
+             WHERE workload_id = 'opencrvs' \
+               AND profile_id IN ('quota.sealed-a', 'quota.sealed-b') \
+               AND profile_version = 1",
+            &[],
+        )
+        .await?;
+    assert!((0..=1).contains(&cancelled_rows.try_get::<_, i64>("a_rows")?));
+    assert_eq!(cancelled_rows.try_get::<_, i64>("b_rows")?, 0);
+    assert!((0..=1).contains(&cancelled_rows.try_get::<_, i64>("total_rows")?));
+    drop(cancel_plane);
+    cancel_driver.abort();
+
     Ok(())
 }
 
@@ -609,6 +1431,20 @@ WHERE metadata.singleton = true
     assert_eq!(metadata.get::<_, &str>(3), chain_key_epoch_id.as_str());
     assert!(!metadata.get::<_, bool>(4));
     assert!(metadata.get::<_, bool>(5));
+
+    exercise_postgres_quota_contract(
+        &admin,
+        QuotaTestContext {
+            database_url: &database_url,
+            owner_role: &owner_role,
+            runtime_role: &runtime_role_name,
+            runtime_password: &runtime_password,
+            attacker_role: &attacker_role,
+            attacker_password: &attacker_password,
+            chain_key_epoch_id: &chain_key_epoch_id,
+        },
+    )
+    .await?;
 
     let (unkeyed_client, unkeyed_driver) =
         postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;

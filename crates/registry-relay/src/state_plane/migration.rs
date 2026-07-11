@@ -10,9 +10,11 @@ use super::fence::ServingFenceLockKey;
 
 pub(crate) const DURABLE_AUDIT_CAPABILITY_V1: &str = "registry.relay.postgres-durable-audit/v1";
 pub(crate) const SERVING_FENCE_CAPABILITY_V1: &str = "registry.relay.postgres-serving-fence/v1";
+pub(crate) const PERSISTENT_QUOTA_CAPABILITY_V1: &str =
+    "registry.relay.postgres-persistent-quota/v1";
 pub(crate) const STATE_PLANE_SCHEMA_VERSION_V1: i32 = 1;
 pub(crate) const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "sha256:bd1058dd6010b0b2e6f27200149bbc488b54a0516178def93a04b3a380144418";
+    "sha256:b7d062f1c8acc053158cab59a72c147a9ea7076d23b0336597682b284cc123a4";
 
 pub(super) const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 7_221_091_440;
 const SUPPORTED_POSTGRES_MIN_MAJOR: i32 = 16;
@@ -21,16 +23,16 @@ const SUPPORTED_POSTGRES_MAX_MAJOR: i32 = 18;
 // Filled from the semantic catalog descriptor below on disposable supported
 // PostgreSQL majors. Constraint rendering is explicitly versioned because
 // pg_get_constraintdef is not a cross-major wire contract.
-const CONSTRAINT_FINGERPRINT_PG16: &str = "22a9c0e13067bbc7210faff7d5ca840c";
-const CONSTRAINT_FINGERPRINT_PG17: &str = "22a9c0e13067bbc7210faff7d5ca840c";
-const CONSTRAINT_FINGERPRINT_PG18: &str = "a12595e348f0730b0e72d376246cc8a7";
-const COLUMN_FINGERPRINT_PG16: &str = "d609ba7f07d479944391a6a2e2fbc356";
-const COLUMN_FINGERPRINT_PG17: &str = "d609ba7f07d479944391a6a2e2fbc356";
-const COLUMN_FINGERPRINT_PG18: &str = "d609ba7f07d479944391a6a2e2fbc356";
-const FUNCTION_FINGERPRINT_PG16: &str = "bda2c51bcd31a82ad8e81cf3d0e4b346";
-const FUNCTION_FINGERPRINT_PG17: &str = "bda2c51bcd31a82ad8e81cf3d0e4b346";
-const FUNCTION_FINGERPRINT_PG18: &str = "bda2c51bcd31a82ad8e81cf3d0e4b346";
-const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "287f29327b683efbf1a8c582a35e67fe";
+const CONSTRAINT_FINGERPRINT_PG16: &str = "f75fa38ddcdd78444422f472993c53f1";
+const CONSTRAINT_FINGERPRINT_PG17: &str = "f75fa38ddcdd78444422f472993c53f1";
+const CONSTRAINT_FINGERPRINT_PG18: &str = "e0027e210e87ab855209d3662ee86c69";
+const COLUMN_FINGERPRINT_PG16: &str = "babb2b16a889c0bac5c69c6cc805b907";
+const COLUMN_FINGERPRINT_PG17: &str = "babb2b16a889c0bac5c69c6cc805b907";
+const COLUMN_FINGERPRINT_PG18: &str = "babb2b16a889c0bac5c69c6cc805b907";
+const FUNCTION_FINGERPRINT_PG16: &str = "0afddda861cc635715c1b8f8407713e9";
+const FUNCTION_FINGERPRINT_PG17: &str = "0afddda861cc635715c1b8f8407713e9";
+const FUNCTION_FINGERPRINT_PG18: &str = "0afddda861cc635715c1b8f8407713e9";
+const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "490beadaa3f09d33f3157df247a4d393";
 
 /// Runtime-forceable session semantics. Server/SUSET state that the runtime
 /// cannot safely repair is rejected by the attested SQL capability instead.
@@ -72,6 +74,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     chain_key_epoch_id text NOT NULL,
     serving_fence_capability_id text NOT NULL,
     serving_fence_lock_key bigint NOT NULL,
+    quota_capability_id text NOT NULL,
     installed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     CONSTRAINT state_plane_metadata_pk PRIMARY KEY (singleton),
     CONSTRAINT state_plane_metadata_singleton_check CHECK (singleton),
@@ -81,7 +84,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_fingerprint_check CHECK (
         capability_fingerprint =
-        'sha256:bd1058dd6010b0b2e6f27200149bbc488b54a0516178def93a04b3a380144418'
+        'sha256:b7d062f1c8acc053158cab59a72c147a9ea7076d23b0336597682b284cc123a4'
     ),
     CONSTRAINT state_plane_metadata_roles_distinct_check CHECK (
         owner_role_oid <> runtime_role_oid
@@ -95,6 +98,9 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_fence_lock_key_check CHECK (
         serving_fence_lock_key <> 0 AND serving_fence_lock_key <> 7221091440
+    ),
+    CONSTRAINT state_plane_metadata_quota_capability_check CHECK (
+        quota_capability_id = 'registry.relay.postgres-persistent-quota/v1'
     )
 );
 
@@ -270,11 +276,46 @@ ON relay_state_private.dispatch_permit (
     fence_generation, completed_at, abandoned_at, deadline_at
 );
 
+CREATE TABLE IF NOT EXISTS relay_state_private.consultation_quota_bucket (
+    workload_id text NOT NULL,
+    profile_id text NOT NULL,
+    profile_version bigint NOT NULL,
+    rate_per_minute integer NOT NULL,
+    burst_tokens integer NOT NULL,
+    tokens_numerator bigint NOT NULL,
+    last_refill_at timestamptz NOT NULL,
+    CONSTRAINT consultation_quota_bucket_pk PRIMARY KEY (
+        workload_id, profile_id, profile_version
+    ),
+    CONSTRAINT consultation_quota_bucket_workload_check CHECK (
+        workload_id ~ '^[a-z][a-z0-9._-]{0,95}$'
+    ),
+    CONSTRAINT consultation_quota_bucket_profile_check CHECK (
+        profile_id ~ '^[a-z][a-z0-9._-]{0,95}$'
+    ),
+    CONSTRAINT consultation_quota_bucket_version_check CHECK (
+        profile_version BETWEEN 1 AND 9999999999
+    ),
+    CONSTRAINT consultation_quota_bucket_rate_check CHECK (
+        rate_per_minute BETWEEN 1 AND 60
+    ),
+    CONSTRAINT consultation_quota_bucket_burst_check CHECK (
+        burst_tokens BETWEEN 1 AND 10
+    ),
+    CONSTRAINT consultation_quota_bucket_tokens_check CHECK (
+        tokens_numerator BETWEEN 0 AND burst_tokens::bigint * 60000000
+    ),
+    CONSTRAINT consultation_quota_bucket_time_check CHECK (
+        pg_catalog.isfinite(last_refill_at)
+    )
+);
+
 ALTER TABLE relay_state_private.state_plane_metadata OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.audit_chain_head OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.audit_phase OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.serving_fence_state OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.dispatch_permit OWNER TO CURRENT_USER;
+ALTER TABLE relay_state_private.consultation_quota_bucket OWNER TO CURRENT_USER;
 REVOKE ALL ON ALL TABLES IN SCHEMA relay_state_private FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA relay_state_private FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA relay_state_private REVOKE ALL ON TABLES FROM PUBLIC;
@@ -296,10 +337,11 @@ WITH metadata AS (
       AND schema_version = 1
       AND capability_id = 'registry.relay.postgres-durable-audit/v1'
       AND capability_fingerprint =
-        'sha256:bd1058dd6010b0b2e6f27200149bbc488b54a0516178def93a04b3a380144418'
+        'sha256:b7d062f1c8acc053158cab59a72c147a9ea7076d23b0336597682b284cc123a4'
       AND serving_fence_capability_id = 'registry.relay.postgres-serving-fence/v1'
       AND serving_fence_lock_key <> 0
       AND serving_fence_lock_key <> 7221091440
+      AND quota_capability_id = 'registry.relay.postgres-persistent-quota/v1'
 ),
 target_schemas AS (
     SELECT namespace.oid, namespace.nspname, namespace.nspowner, namespace.nspacl
@@ -348,7 +390,7 @@ target_indexes AS (
     WHERE namespace.nspname = 'relay_state_private'
       AND table_relation.relname IN (
           'state_plane_metadata', 'audit_chain_head', 'audit_phase',
-          'serving_fence_state', 'dispatch_permit'
+          'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket'
       )
 ),
 target_triggers AS (
@@ -362,7 +404,7 @@ target_triggers AS (
     WHERE namespace.nspname = 'relay_state_private'
       AND relation.relname IN (
           'state_plane_metadata', 'audit_chain_head', 'audit_phase',
-          'serving_fence_state', 'dispatch_permit'
+          'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket'
       )
 ),
 target_rules AS (
@@ -373,7 +415,7 @@ target_rules AS (
     WHERE namespace.nspname = 'relay_state_private'
       AND relation.relname IN (
           'state_plane_metadata', 'audit_chain_head', 'audit_phase',
-          'serving_fence_state', 'dispatch_permit'
+          'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket'
       )
 ),
 target_policies AS (
@@ -384,7 +426,7 @@ target_policies AS (
     WHERE namespace.nspname = 'relay_state_private'
       AND relation.relname IN (
           'state_plane_metadata', 'audit_chain_head', 'audit_phase',
-          'serving_fence_state', 'dispatch_permit'
+          'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket'
       )
 ),
 target_functions AS (
@@ -529,7 +571,7 @@ SELECT
         SELECT 1 FROM target_schemas, metadata
         WHERE target_schemas.nspowner <> metadata.owner_role_oid
     )
-    AND (SELECT count(*) = 5 FROM target_relations)
+    AND (SELECT count(*) = 6 FROM target_relations)
     AND NOT EXISTS (
         SELECT 1 FROM target_relations, metadata
         WHERE target_relations.nspname <> 'relay_state_private'
@@ -542,10 +584,10 @@ SELECT
            OR target_relations.amname IS DISTINCT FROM 'heap'
            OR target_relations.relname NOT IN (
                'state_plane_metadata', 'audit_chain_head', 'audit_phase',
-               'serving_fence_state', 'dispatch_permit'
+               'serving_fence_state', 'dispatch_permit', 'consultation_quota_bucket'
            )
     )
-    AND (SELECT count(*) = 8 FROM target_indexes)
+    AND (SELECT count(*) = 9 FROM target_indexes)
     AND NOT EXISTS (
         SELECT 1 FROM target_indexes, metadata
         WHERE target_indexes.relowner <> metadata.owner_role_oid
@@ -568,7 +610,7 @@ SELECT
                'audit_phase_envelope_id_unique',
                'audit_phase_stored_identity_unique',
                'serving_fence_state_pk', 'dispatch_permit_pk',
-               'dispatch_permit_takeover_idx'
+               'dispatch_permit_takeover_idx', 'consultation_quota_bucket_pk'
            )
            OR NOT (
                (target_indexes.table_name = 'state_plane_metadata'
@@ -586,11 +628,14 @@ SELECT
                    AND target_indexes.index_name IN (
                        'dispatch_permit_pk', 'dispatch_permit_takeover_idx'
                    ))
+               OR (target_indexes.table_name = 'consultation_quota_bucket'
+                   AND target_indexes.index_name = 'consultation_quota_bucket_pk')
            )
            OR (
                target_indexes.index_name IN (
                    'state_plane_metadata_pk', 'audit_chain_head_pk', 'audit_phase_pk',
-                   'serving_fence_state_pk', 'dispatch_permit_pk'
+                   'serving_fence_state_pk', 'dispatch_permit_pk',
+                   'consultation_quota_bucket_pk'
                ) AND NOT target_indexes.indisprimary
            )
            OR (
@@ -624,7 +669,7 @@ SELECT
     )
     AND NOT EXISTS (SELECT 1 FROM target_rules)
     AND NOT EXISTS (SELECT 1 FROM target_policies)
-    AND (SELECT count(*) = 11 FROM target_functions)
+    AND (SELECT count(*) = 12 FROM target_functions)
     AND NOT EXISTS (
         SELECT 1 FROM target_functions, metadata
         WHERE target_functions.proowner <> metadata.owner_role_oid
@@ -648,7 +693,7 @@ SELECT
                             'serving_fence_acquire_v1', 'serving_fence_finalize_v1',
                             'serving_fence_status_v1', 'dispatch_permit_create_v1',
                             'dispatch_permit_authorize_v1', 'dispatch_permit_complete_v1',
-                            'serving_fence_release_v1'
+                            'serving_fence_release_v1', 'quota_reserve_v1'
                        )
                         AND target_functions.prosecdef
                         AND target_functions.lanname = 'plpgsql'))
@@ -672,7 +717,7 @@ SELECT
            )
     )
     AND (SELECT count(*) FROM table_acl) = (
-        SELECT 5 * count(*) FROM metadata
+        SELECT 6 * count(*) FROM metadata
         CROSS JOIN LATERAL pg_catalog.aclexplode(
             pg_catalog.acldefault('r', metadata.owner_role_oid)
         ) AS expected_acl
@@ -687,7 +732,7 @@ SELECT
                'REFERENCES', 'TRIGGER', 'MAINTAIN'
            )
     )
-    AND (SELECT count(*) = 21 FROM function_acl)
+    AND (SELECT count(*) = 23 FROM function_acl)
     AND NOT EXISTS (
         SELECT 1 FROM function_acl, metadata
         WHERE function_acl.grantor <> metadata.owner_role_oid
@@ -703,19 +748,19 @@ SELECT
            )
     )
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '22a9c0e13067bbc7210faff7d5ca840c'
-            WHEN 17 THEN '22a9c0e13067bbc7210faff7d5ca840c'
-            WHEN 18 THEN 'a12595e348f0730b0e72d376246cc8a7'
+            WHEN 16 THEN 'f75fa38ddcdd78444422f472993c53f1'
+            WHEN 17 THEN 'f75fa38ddcdd78444422f472993c53f1'
+            WHEN 18 THEN 'e0027e210e87ab855209d3662ee86c69'
             ELSE '' END FROM constraint_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN 'd609ba7f07d479944391a6a2e2fbc356'
-            WHEN 17 THEN 'd609ba7f07d479944391a6a2e2fbc356'
-            WHEN 18 THEN 'd609ba7f07d479944391a6a2e2fbc356'
+            WHEN 16 THEN 'babb2b16a889c0bac5c69c6cc805b907'
+            WHEN 17 THEN 'babb2b16a889c0bac5c69c6cc805b907'
+            WHEN 18 THEN 'babb2b16a889c0bac5c69c6cc805b907'
             ELSE '' END FROM column_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN 'bda2c51bcd31a82ad8e81cf3d0e4b346'
-            WHEN 17 THEN 'bda2c51bcd31a82ad8e81cf3d0e4b346'
-            WHEN 18 THEN 'bda2c51bcd31a82ad8e81cf3d0e4b346'
+            WHEN 16 THEN '0afddda861cc635715c1b8f8407713e9'
+            WHEN 17 THEN '0afddda861cc635715c1b8f8407713e9'
+            WHEN 18 THEN '0afddda861cc635715c1b8f8407713e9'
             ELSE '' END FROM function_fingerprint, server);
 $function$;
 
@@ -1044,7 +1089,8 @@ RETURNS TABLE (
     capability_fingerprint text,
     owner_role_oid bigint,
     runtime_role_oid bigint,
-    chain_key_epoch_id text
+    chain_key_epoch_id text,
+    quota_capability_id text
 )
 LANGUAGE plpgsql
 STABLE
@@ -1096,7 +1142,8 @@ BEGIN
            metadata.capability_fingerprint,
            metadata.owner_role_oid::bigint,
            metadata.runtime_role_oid::bigint,
-           metadata.chain_key_epoch_id
+           metadata.chain_key_epoch_id,
+           metadata.quota_capability_id
     FROM relay_state_private.state_plane_metadata AS metadata
     WHERE metadata.singleton = true;
     IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
@@ -1729,6 +1776,197 @@ BEGIN
 END;
 $function$;
 
+CREATE OR REPLACE FUNCTION relay_state_api.quota_reserve_v1(
+    p_workload_id text,
+    p_profile_id text,
+    p_profile_version bigint,
+    p_rate_per_minute integer,
+    p_burst_tokens integer
+)
+RETURNS TABLE (
+    outcome text,
+    retry_after_ms bigint,
+    rate_per_minute integer,
+    burst_tokens integer
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_started_at timestamptz := clock_timestamp();
+    v_now timestamptz;
+    v_runtime_oid oid;
+    v_session_oid oid;
+    v_bucket relay_state_private.consultation_quota_bucket%ROWTYPE;
+    v_capacity bigint;
+    v_elapsed_us numeric := 0;
+    v_max_elapsed_us numeric := 0;
+    v_refill_numerator bigint := 0;
+    v_tokens bigint;
+    v_last_refill_at timestamptz;
+    v_missing_numerator bigint;
+    v_rollback_gap_us numeric := 0;
+    v_token_wait_us numeric;
+    v_total_wait_us numeric;
+    v_retry_after_ms bigint;
+    v_changed_rows bigint;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.runtime_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'consultation quota caller is not bound' USING ERRCODE = '42501';
+    END IF;
+    IF current_setting('search_path') <> 'pg_catalog, relay_state_private'
+       OR current_setting('lock_timeout') <> '2s'
+       OR current_setting('statement_timeout') <> '5s'
+       OR current_setting('idle_in_transaction_session_timeout') <> '5s'
+       OR current_setting('synchronous_commit') <> 'on'
+       OR current_setting('client_encoding') <> 'UTF8'
+       OR current_setting('standard_conforming_strings') <> 'on'
+       OR current_setting('session_replication_role') <> 'origin'
+       OR current_setting('default_transaction_isolation') <> 'read committed'
+       OR current_setting('transaction_isolation') <> 'read committed'
+       OR current_setting('default_transaction_read_only') <> 'off'
+       OR current_setting('transaction_read_only') <> 'off'
+       OR pg_catalog.pg_is_in_recovery()
+    THEN
+        RAISE EXCEPTION 'consultation quota runtime session is unsafe'
+            USING ERRCODE = '55000';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RAISE EXCEPTION 'consultation quota capability unavailable'
+            USING ERRCODE = '55000';
+    END IF;
+    IF p_workload_id IS NULL OR p_profile_id IS NULL OR p_profile_version IS NULL
+       OR p_rate_per_minute IS NULL OR p_burst_tokens IS NULL
+       OR p_workload_id !~ '^[a-z][a-z0-9._-]{0,95}$'
+       OR p_profile_id !~ '^[a-z][a-z0-9._-]{0,95}$'
+       OR p_profile_version NOT BETWEEN 1 AND 9999999999
+       OR p_rate_per_minute NOT BETWEEN 1 AND 60
+       OR p_burst_tokens NOT BETWEEN 1 AND 10
+    THEN
+        RAISE EXCEPTION 'invalid consultation quota request' USING ERRCODE = '22023';
+    END IF;
+
+    v_capacity := p_burst_tokens::bigint * 60000000;
+    v_now := clock_timestamp();
+    INSERT INTO relay_state_private.consultation_quota_bucket AS bucket (
+        workload_id, profile_id, profile_version, rate_per_minute,
+        burst_tokens, tokens_numerator, last_refill_at
+    ) VALUES (
+        p_workload_id, p_profile_id, p_profile_version, p_rate_per_minute,
+        p_burst_tokens, v_capacity, v_now
+    ) ON CONFLICT (workload_id, profile_id, profile_version) DO NOTHING;
+
+    SELECT bucket.* INTO STRICT v_bucket
+    FROM relay_state_private.consultation_quota_bucket AS bucket
+    WHERE bucket.workload_id = p_workload_id
+      AND bucket.profile_id = p_profile_id
+      AND bucket.profile_version = p_profile_version
+    FOR UPDATE;
+    IF v_bucket.rate_per_minute NOT BETWEEN 1 AND 60
+       OR v_bucket.burst_tokens NOT BETWEEN 1 AND 10
+       OR v_bucket.tokens_numerator < 0
+       OR v_bucket.tokens_numerator > v_bucket.burst_tokens::bigint * 60000000
+       OR NOT pg_catalog.isfinite(v_bucket.last_refill_at)
+    THEN
+        RAISE EXCEPTION 'consultation quota bucket is corrupt' USING ERRCODE = '55000';
+    END IF;
+
+    -- Limits are durably bound at first use. A later lowering or profile
+    -- change requires a governed maintenance transition that preserves the
+    -- conservative token balance. Mismatch never mutates or refills the row.
+    IF v_bucket.rate_per_minute <> p_rate_per_minute
+       OR v_bucket.burst_tokens <> p_burst_tokens
+    THEN
+        RETURN QUERY SELECT 'limit_mismatch'::text, NULL::bigint,
+            v_bucket.rate_per_minute, v_bucket.burst_tokens;
+        RETURN;
+    END IF;
+
+    v_tokens := v_bucket.tokens_numerator;
+    v_last_refill_at := v_bucket.last_refill_at;
+    IF v_now >= v_last_refill_at THEN
+        -- PostgreSQL timestamps have microsecond resolution. One whole token
+        -- is 60,000,000 numerator units, so each elapsed microsecond adds
+        -- exactly rate_per_minute units. Cap elapsed time before multiplying.
+        v_max_elapsed_us := pg_catalog.ceil(
+            (v_capacity - v_tokens)::numeric / p_rate_per_minute::numeric
+        );
+        v_elapsed_us := LEAST(
+            pg_catalog.floor(
+                extract(epoch FROM (v_now - v_last_refill_at)) * 1000000
+            ),
+            v_max_elapsed_us
+        );
+        v_refill_numerator := (v_elapsed_us * p_rate_per_minute::numeric)::bigint;
+        v_tokens := LEAST(v_capacity, v_tokens + v_refill_numerator);
+        v_last_refill_at := v_now;
+    END IF;
+
+    IF v_tokens >= 60000000 THEN
+        v_tokens := v_tokens - 60000000;
+        v_retry_after_ms := 0;
+        outcome := 'allowed';
+    ELSE
+        v_missing_numerator := 60000000 - v_tokens;
+        v_token_wait_us := pg_catalog.ceil(
+            v_missing_numerator::numeric / p_rate_per_minute::numeric
+        );
+        IF v_now < v_last_refill_at THEN
+            v_rollback_gap_us := pg_catalog.floor(
+                extract(epoch FROM (v_last_refill_at - v_now)) * 1000000
+            );
+        END IF;
+        v_total_wait_us := v_rollback_gap_us + v_token_wait_us;
+        IF v_total_wait_us > 60000000 THEN
+            RETURN QUERY SELECT 'clock_anomaly'::text, NULL::bigint,
+                p_rate_per_minute, p_burst_tokens;
+            RETURN;
+        END IF;
+        v_retry_after_ms := pg_catalog.ceil(v_total_wait_us / 1000)::bigint;
+        IF v_retry_after_ms NOT BETWEEN 1 AND 60000 THEN
+            RAISE EXCEPTION 'consultation quota retry calculation is invalid'
+                USING ERRCODE = '55000';
+        END IF;
+        outcome := 'exhausted';
+    END IF;
+
+    UPDATE relay_state_private.consultation_quota_bucket AS bucket
+    SET tokens_numerator = v_tokens,
+        last_refill_at = v_last_refill_at
+    WHERE bucket.workload_id = p_workload_id
+      AND bucket.profile_id = p_profile_id
+      AND bucket.profile_version = p_profile_version
+      AND bucket.rate_per_minute = p_rate_per_minute
+      AND bucket.burst_tokens = p_burst_tokens;
+    GET DIAGNOSTICS v_changed_rows = ROW_COUNT;
+    IF v_changed_rows <> 1 THEN
+        RAISE EXCEPTION 'consultation quota update did not change exactly one row'
+            USING ERRCODE = '55000';
+    END IF;
+    IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
+        RAISE EXCEPTION 'consultation quota reservation exceeded its deadline'
+            USING ERRCODE = '57014';
+    END IF;
+    retry_after_ms := v_retry_after_ms;
+    rate_per_minute := p_rate_per_minute;
+    burst_tokens := p_burst_tokens;
+    RETURN NEXT;
+END;
+$function$;
+
 ALTER FUNCTION relay_state_private.capability_valid_v1() OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_api.audit_phase_snapshot_v1(text, text, text, bytea)
     OWNER TO CURRENT_USER;
@@ -1753,6 +1991,8 @@ ALTER FUNCTION relay_state_api.dispatch_permit_complete_v1(
     bigint, text, bigint, text
 ) OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_api.serving_fence_release_v1(bigint, text, bigint)
+    OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.quota_reserve_v1(text, text, bigint, integer, integer)
     OWNER TO CURRENT_USER;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA relay_state_private FROM PUBLIC;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA relay_state_api FROM PUBLIC;
@@ -2067,7 +2307,7 @@ async fn bind_or_validate_metadata(
 SELECT schema_version, capability_id, capability_fingerprint,
        owner_role_oid::bigint AS owner_role_oid,
        runtime_role_oid::bigint AS runtime_role_oid, chain_key_epoch_id,
-       serving_fence_capability_id, serving_fence_lock_key
+       serving_fence_capability_id, serving_fence_lock_key, quota_capability_id
 FROM relay_state_private.state_plane_metadata WHERE singleton = true
 "#,
             &[],
@@ -2082,7 +2322,8 @@ FROM relay_state_private.state_plane_metadata WHERE singleton = true
             && try_i64(&existing, "runtime_role_oid")? == role_oids.runtime
             && try_str(&existing, "chain_key_epoch_id")? == chain_key_epoch_id.as_str()
             && try_str(&existing, "serving_fence_capability_id")? == SERVING_FENCE_CAPABILITY_V1
-            && try_i64(&existing, "serving_fence_lock_key")? == serving_fence_lock_key.as_i64();
+            && try_i64(&existing, "serving_fence_lock_key")? == serving_fence_lock_key.as_i64()
+            && try_str(&existing, "quota_capability_id")? == PERSISTENT_QUOTA_CAPABILITY_V1;
         return if matches {
             Ok(())
         } else {
@@ -2095,8 +2336,8 @@ FROM relay_state_private.state_plane_metadata WHERE singleton = true
 INSERT INTO relay_state_private.state_plane_metadata (
     singleton, schema_version, capability_id, capability_fingerprint,
     owner_role_oid, runtime_role_oid, chain_key_epoch_id,
-    serving_fence_capability_id, serving_fence_lock_key
-) VALUES (true, $1, $2, $3, $4::bigint::oid, $5::bigint::oid, $6, $7, $8)
+    serving_fence_capability_id, serving_fence_lock_key, quota_capability_id
+) VALUES (true, $1, $2, $3, $4::bigint::oid, $5::bigint::oid, $6, $7, $8, $9)
 "#,
             &[
                 &STATE_PLANE_SCHEMA_VERSION_V1,
@@ -2107,6 +2348,7 @@ INSERT INTO relay_state_private.state_plane_metadata (
                 &chain_key_epoch_id.as_str(),
                 &SERVING_FENCE_CAPABILITY_V1,
                 &serving_fence_lock_key.as_i64(),
+                &PERSISTENT_QUOTA_CAPABILITY_V1,
             ],
         )
         .await
@@ -2149,6 +2391,9 @@ GRANT EXECUTE ON FUNCTION relay_state_api.dispatch_permit_complete_v1(
 ) TO {role};
 GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_release_v1(bigint, text, bigint)
     TO {role};
+GRANT EXECUTE ON FUNCTION relay_state_api.quota_reserve_v1(
+    text, text, bigint, integer, integer
+) TO {role};
 "#
     )
 }
@@ -2165,7 +2410,7 @@ async fn owner_capability_matches(
 SELECT schema_version, capability_id, capability_fingerprint,
        owner_role_oid::bigint AS owner_role_oid,
        runtime_role_oid::bigint AS runtime_role_oid, chain_key_epoch_id,
-       serving_fence_capability_id, serving_fence_lock_key
+       serving_fence_capability_id, serving_fence_lock_key, quota_capability_id
 FROM relay_state_private.state_plane_metadata WHERE singleton = true
 "#,
             &[],
@@ -2182,7 +2427,8 @@ FROM relay_state_private.state_plane_metadata WHERE singleton = true
         && try_i64(&metadata, "runtime_role_oid")? == role_oids.runtime
         && try_str(&metadata, "chain_key_epoch_id")? == chain_key_epoch_id.as_str()
         && try_str(&metadata, "serving_fence_capability_id")? == SERVING_FENCE_CAPABILITY_V1
-        && try_i64(&metadata, "serving_fence_lock_key")? == serving_fence_lock_key.as_i64();
+        && try_i64(&metadata, "serving_fence_lock_key")? == serving_fence_lock_key.as_i64()
+        && try_str(&metadata, "quota_capability_id")? == PERSISTENT_QUOTA_CAPABILITY_V1;
     if !metadata_matches {
         return Ok(false);
     }
@@ -2247,6 +2493,7 @@ WHERE session_role.rolname = session_user
         || try_str_runtime(&readiness, "capability_fingerprint")?
             != STATE_PLANE_SCHEMA_FINGERPRINT_V1
         || try_str_runtime(&readiness, "chain_key_epoch_id")? != chain_key_epoch_id.as_str()
+        || try_str_runtime(&readiness, "quota_capability_id")? != PERSISTENT_QUOTA_CAPABILITY_V1
     {
         return Err(RuntimeCapabilityError::Drift);
     }
@@ -2327,7 +2574,11 @@ mod tests {
             POSTGRES_STATE_PLANE_MIGRATION_V1.contains("head.generation = p_candidate_generation")
         );
         assert!(!POSTGRES_STATE_PLANE_MIGRATION_V1.contains("audit_phase_preparation"));
-        assert!(!POSTGRES_STATE_PLANE_MIGRATION_V1.contains("FOR UPDATE"));
+        let audit_sql = POSTGRES_STATE_PLANE_MIGRATION_V1
+            .split("CREATE OR REPLACE FUNCTION relay_state_api.quota_reserve_v1")
+            .next()
+            .expect("audit migration prefix");
+        assert!(!audit_sql.contains("FOR UPDATE"));
     }
 
     #[test]
@@ -2369,25 +2620,25 @@ mod tests {
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("SET lock_timeout = '2s'")
                 .count(),
-            11
+            12
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("set_config('idle_in_transaction_session_timeout', '5s', false)")
                 .count(),
-            10
+            11
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("SET synchronous_commit = 'on'")
                 .count(),
-            11
+            12
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("set_config('synchronous_commit', 'on', false)")
                 .count(),
-            10
+            11
         );
         assert!(POSTGRES_STATE_PLANE_MIGRATION_V1.contains("exceeded its deadline"));
         for required_setting in [
@@ -2402,6 +2653,27 @@ mod tests {
         ] {
             assert!(POSTGRES_STATE_PLANE_MIGRATION_V1.contains(required_setting));
         }
+    }
+
+    #[test]
+    fn quota_uses_exact_postgres_time_and_atomic_row_locking() {
+        for required in [
+            "consultation_quota_bucket",
+            "quota_reserve_v1",
+            "FOR UPDATE",
+            "extract(epoch FROM (v_now - v_last_refill_at)) * 1000000",
+            "v_elapsed_us * p_rate_per_minute::numeric",
+            "v_now >= v_last_refill_at",
+            "v_rollback_gap_us + v_token_wait_us",
+            "v_total_wait_us > 60000000",
+            "clock_anomaly",
+            "v_retry_after_ms NOT BETWEEN 1 AND 60000",
+            "limit_mismatch",
+            "consultation quota bucket is corrupt",
+        ] {
+            assert!(POSTGRES_STATE_PLANE_MIGRATION_V1.contains(required));
+        }
+        assert!(!POSTGRES_STATE_PLANE_MIGRATION_V1.contains("pg_advisory_xact_lock(p_"));
     }
 
     #[test]
