@@ -743,6 +743,13 @@ pub struct DestinationAuthorizationValue {
 impl DestinationAuthorizationValue {
     /// Build a Basic value from a provider-produced base64 credential payload.
     pub fn basic(encoded_credentials: Vec<u8>) -> Result<Self, DestinationRequestError> {
+        Self::basic_zeroizing(Zeroizing::new(encoded_credentials))
+    }
+
+    /// Build a Basic value while preserving an existing zeroizing owner.
+    pub fn basic_zeroizing(
+        encoded_credentials: Zeroizing<Vec<u8>>,
+    ) -> Result<Self, DestinationRequestError> {
         Self::with_prefix(
             DestinationAuthorizationKind::Basic,
             b"Basic ",
@@ -752,15 +759,18 @@ impl DestinationAuthorizationValue {
 
     /// Build a Bearer value from a provider-produced token payload.
     pub fn bearer(token: Vec<u8>) -> Result<Self, DestinationRequestError> {
-        Self::with_prefix(DestinationAuthorizationKind::Bearer, b"Bearer ", token)
+        Self::with_prefix(
+            DestinationAuthorizationKind::Bearer,
+            b"Bearer ",
+            Zeroizing::new(token),
+        )
     }
 
     fn with_prefix(
         kind: DestinationAuthorizationKind,
         prefix: &[u8],
-        payload: Vec<u8>,
+        payload: Zeroizing<Vec<u8>>,
     ) -> Result<Self, DestinationRequestError> {
-        let payload = Zeroizing::new(payload);
         if payload.is_empty() {
             return Err(DestinationRequestError::InvalidAuthorization);
         }

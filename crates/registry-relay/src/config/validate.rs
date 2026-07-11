@@ -137,6 +137,54 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
             return Err(ConfigError::ValidationError);
         }
     }
+
+    let credential_entries = consultation.source_credentials.entries();
+    if credential_entries.len() > super::MAX_CONSULTATION_SOURCE_CREDENTIALS {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "consultation.source_credentials",
+            count = credential_entries.len(),
+            "consultation source-credential catalog exceeds its restart-only bound"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+
+    let mut credential_references = HashSet::with_capacity(credential_entries.len());
+    let mut credential_sources = HashSet::with_capacity(credential_entries.len() * 2);
+    for (index, entry) in credential_entries.iter().enumerate() {
+        if entry.generation() == 0 || entry.generation() > 9_007_199_254_740_991 {
+            tracing::error!(
+                code = "config.validation_error",
+                field = "consultation.source_credentials",
+                index,
+                "consultation source-credential generation must be a positive interoperable integer"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+        if !credential_references.insert(entry.reference().as_str()) {
+            tracing::error!(
+                code = "config.duplicate_id",
+                field = "consultation.source_credentials",
+                index,
+                "consultation source-credential catalog contains a duplicate reference"
+            );
+            return Err(ConfigError::DuplicateId);
+        }
+        let (username_env, password_env) = entry.environment_names();
+        if source_names.contains(username_env.as_str())
+            || source_names.contains(password_env.as_str())
+            || !credential_sources.insert(username_env.as_str())
+            || !credential_sources.insert(password_env.as_str())
+        {
+            tracing::error!(
+                code = "config.validation_error",
+                field = "consultation.source_credentials",
+                index,
+                "consultation source-credential catalog reuses a reserved or duplicate environment reference"
+            );
+            return Err(ConfigError::ValidationError);
+        }
+    }
     Ok(())
 }
 
@@ -4403,6 +4451,23 @@ datasets: []
         yaml
     }
 
+    fn consultation_credentials_section(entries: &[(&str, u64, &str, &str)]) -> String {
+        use std::fmt::Write as _;
+
+        let mut yaml = String::from(
+            "consultation:\n  audit_pseudonym_materials:\n    - key_id: epoch-a\n      source:\n        provider: environment\n        name: PSEUDONYM_SOURCE\n  source_credentials:\n",
+        );
+        for (reference, generation, username_env, password_env) in entries {
+            writeln!(
+                yaml,
+                "    - type: basic\n      ref: \"{reference}\"\n      generation: {generation}\n      username_env: \"{username_env}\"\n      password_env: \"{password_env}\""
+            )
+            .expect("write consultation credentials");
+        }
+        yaml.push_str("deployment:\n  profile: local");
+        yaml
+    }
+
     #[derive(Clone, Default)]
     struct SharedLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 
@@ -4515,6 +4580,105 @@ datasets: []
             Err(Error::Config(ConfigError::ValidationError))
         ));
         assert!(!logs.contains(source_marker));
+    }
+
+    #[test]
+    fn consultation_source_credential_catalog_accepts_empty_and_protocol_bound() {
+        let empty = parse_deployment_config(&consultation_credentials_section(&[]));
+        run(&empty).expect("credential-free compiled registries may use an empty catalog");
+
+        let owned = (0..super::super::MAX_CONSULTATION_SOURCE_CREDENTIALS)
+            .map(|index| {
+                (
+                    format!("reader-{index}"),
+                    format!("USERNAME_{index}"),
+                    format!("PASSWORD_{index}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let entries = owned
+            .iter()
+            .map(|(reference, username, password)| {
+                (reference.as_str(), 1, username.as_str(), password.as_str())
+            })
+            .collect::<Vec<_>>();
+        let bounded = parse_deployment_config(&consultation_credentials_section(&entries));
+        run(&bounded).expect("bounded credential catalog is valid");
+    }
+
+    #[test]
+    fn consultation_source_credential_catalog_rejects_over_bound_and_invalid_generation() {
+        let owned = (0..=super::super::MAX_CONSULTATION_SOURCE_CREDENTIALS)
+            .map(|index| {
+                (
+                    format!("reader-{index}"),
+                    format!("USERNAME_{index}"),
+                    format!("PASSWORD_{index}"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let entries = owned
+            .iter()
+            .map(|(reference, username, password)| {
+                (reference.as_str(), 1, username.as_str(), password.as_str())
+            })
+            .collect::<Vec<_>>();
+        let over_bound = parse_deployment_config(&consultation_credentials_section(&entries));
+        assert!(matches!(
+            run(&over_bound),
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+
+        for generation in [0, 9_007_199_254_740_992] {
+            let invalid = parse_deployment_config(&consultation_credentials_section(&[(
+                "reader-a",
+                generation,
+                "USERNAME_A",
+                "PASSWORD_A",
+            )]));
+            assert!(matches!(
+                run(&invalid),
+                Err(Error::Config(ConfigError::ValidationError))
+            ));
+        }
+    }
+
+    #[test]
+    fn consultation_source_credential_duplicates_are_rejected_without_reference_leaks() {
+        let reference_marker = "reader-reference-must-not-leak";
+        let duplicate_reference = parse_deployment_config(&consultation_credentials_section(&[
+            (reference_marker, 1, "USERNAME_A", "PASSWORD_A"),
+            (reference_marker, 1, "USERNAME_B", "PASSWORD_B"),
+        ]));
+        let (result, logs) = run_with_captured_logs(&duplicate_reference);
+        assert!(matches!(
+            result,
+            Err(Error::Config(ConfigError::DuplicateId))
+        ));
+        assert!(!logs.contains(reference_marker));
+
+        let source_marker = "CREDENTIAL_SOURCE_MUST_NOT_LEAK";
+        let duplicate_source = parse_deployment_config(&consultation_credentials_section(&[
+            ("reader-a", 1, source_marker, "PASSWORD_A"),
+            ("reader-b", 1, "USERNAME_B", source_marker),
+        ]));
+        let (result, logs) = run_with_captured_logs(&duplicate_source);
+        assert!(matches!(
+            result,
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+        assert!(!logs.contains(source_marker));
+
+        let pseudonym_source_marker = "PSEUDONYM_SOURCE_MUST_NOT_BECOME_A_CREDENTIAL";
+        let cross_catalog = parse_deployment_config(&format!(
+            "consultation:\n  audit_pseudonym_materials:\n    - key_id: epoch-a\n      source:\n        provider: environment\n        name: {pseudonym_source_marker}\n  source_credentials:\n    - type: basic\n      ref: reader-a\n      generation: 1\n      username_env: {pseudonym_source_marker}\n      password_env: PASSWORD_A\ndeployment:\n  profile: local"
+        ));
+        let (result, logs) = run_with_captured_logs(&cross_catalog);
+        assert!(matches!(
+            result,
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+        assert!(!logs.contains(pseudonym_source_marker));
     }
 
     #[test]

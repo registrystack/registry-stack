@@ -52,6 +52,7 @@ pub use loader::{
 };
 
 pub(crate) const MAX_AUDIT_PSEUDONYM_MATERIALS: usize = 32;
+pub(crate) const MAX_CONSULTATION_SOURCE_CREDENTIALS: usize = 128;
 
 /// Root configuration document. Parsed from YAML at startup.
 #[derive(Debug, Clone, Deserialize)]
@@ -636,6 +637,13 @@ fn default_oidc_token_types() -> Vec<String> {
 #[serde(deny_unknown_fields)]
 pub struct ConsultationConfig {
     pub audit_pseudonym_materials: AuditPseudonymMaterialCatalogConfig,
+    /// Complete restart-only catalog of source credentials referenced by the
+    /// compiled consultation plans.
+    ///
+    /// V1 accepts only environment-backed HTTP Basic credentials. Empty is
+    /// valid when no compiled source plan uses HTTP Basic authentication.
+    #[serde(default)]
+    pub source_credentials: ConsultationSourceCredentialCatalogConfig,
     /// Complete restart-only source-plan artifact closure.
     ///
     /// Every public contract in this catalog is an enabled consultation. A
@@ -644,6 +652,163 @@ pub struct ConsultationConfig {
     /// hash, but intentionally has no signing requirement.
     #[serde(default)]
     pub artifacts: Option<ConsultationArtifactClosureConfig>,
+}
+
+/// Bounded source-credential references loaded only during runtime startup.
+///
+/// The catalog contains references, never credential values. Full one-to-one
+/// closure against the compiled source-plan registry is enforced before any
+/// environment variable is read.
+#[derive(Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct ConsultationSourceCredentialCatalogConfig(Vec<ConsultationSourceCredentialConfig>);
+
+impl ConsultationSourceCredentialCatalogConfig {
+    #[must_use]
+    pub(crate) fn entries(&self) -> &[ConsultationSourceCredentialConfig] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for ConsultationSourceCredentialCatalogConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ConsultationSourceCredentialCatalogConfig")
+            .field("entry_count", &self.0.len())
+            .finish()
+    }
+}
+
+/// Closed V1 source-credential provider configuration.
+///
+/// Environment names are opaque references and are redacted from `Debug`.
+/// There is deliberately no field capable of carrying an embedded username,
+/// password, bearer token, or provider-specific extension.
+#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ConsultationSourceCredentialConfig {
+    Basic {
+        #[serde(rename = "ref")]
+        reference: ConsultationSourceCredentialReference,
+        generation: u64,
+        username_env: ConsultationCredentialEnvironmentName,
+        password_env: ConsultationCredentialEnvironmentName,
+    },
+}
+
+impl ConsultationSourceCredentialConfig {
+    #[must_use]
+    pub(crate) const fn reference(&self) -> &ConsultationSourceCredentialReference {
+        match self {
+            Self::Basic { reference, .. } => reference,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn generation(&self) -> u64 {
+        match self {
+            Self::Basic { generation, .. } => *generation,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn environment_names(
+        &self,
+    ) -> (
+        &ConsultationCredentialEnvironmentName,
+        &ConsultationCredentialEnvironmentName,
+    ) {
+        match self {
+            Self::Basic {
+                username_env,
+                password_env,
+                ..
+            } => (username_env, password_env),
+        }
+    }
+}
+
+impl fmt::Debug for ConsultationSourceCredentialConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Basic")
+            .field("reference", &"<configured>")
+            .field("generation", &self.generation())
+            .field("username_env", &"<configured>")
+            .field("password_env", &"<configured>")
+            .finish()
+    }
+}
+
+/// Exact private-binding credential reference grammar.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ConsultationSourceCredentialReference(Box<str>);
+
+impl ConsultationSourceCredentialReference {
+    fn parse(value: String) -> Result<Self, &'static str> {
+        is_consultation_source_credential_reference(&value)
+            .then(|| Self(value.into_boxed_str()))
+            .ok_or("consultation source credential reference is invalid")
+    }
+
+    #[must_use]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ConsultationSourceCredentialReference {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl fmt::Debug for ConsultationSourceCredentialReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ConsultationSourceCredentialReference(<configured>)")
+    }
+}
+
+fn is_consultation_source_credential_reference(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && value.len() <= 96
+        && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'))
+}
+
+/// Portable environment-variable name used only as a credential reference.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ConsultationCredentialEnvironmentName(String);
+
+impl ConsultationCredentialEnvironmentName {
+    fn parse(value: String) -> Result<Self, &'static str> {
+        is_portable_environment_name(&value)
+            .then_some(Self(value))
+            .ok_or("consultation credential environment-variable name is invalid")
+    }
+
+    #[must_use]
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ConsultationCredentialEnvironmentName {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl fmt::Debug for ConsultationCredentialEnvironmentName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ConsultationCredentialEnvironmentName(<configured>)")
+    }
 }
 
 /// Bounded startup catalog of audit-pseudonym material references.
@@ -716,7 +881,7 @@ pub struct AuditPseudonymSecretEnvironmentName(String);
 
 impl AuditPseudonymSecretEnvironmentName {
     fn parse(value: String) -> Result<Self, &'static str> {
-        if is_audit_pseudonym_environment_name(&value) {
+        if is_portable_environment_name(&value) {
             Ok(Self(value))
         } else {
             Err("audit pseudonym environment-variable name is invalid")
@@ -745,7 +910,7 @@ impl fmt::Debug for AuditPseudonymSecretEnvironmentName {
     }
 }
 
-fn is_audit_pseudonym_environment_name(value: &str) -> bool {
+fn is_portable_environment_name(value: &str) -> bool {
     const MAX_ENVIRONMENT_NAME_BYTES: usize = 128;
 
     let mut bytes = value.bytes();
@@ -2032,6 +2197,95 @@ audit_pseudonym_materials:
                 serde_saphyr::from_str::<ConsultationConfig>(invalid).is_err(),
                 "invalid or open-ended consultation config must be rejected"
             );
+        }
+    }
+
+    #[test]
+    fn consultation_source_credentials_are_closed_and_debug_redacted() {
+        let reference_marker = "source-reader-must-not-leak";
+        let username_marker = "REGISTRY_RELAY_USERNAME_ENV_MUST_NOT_LEAK";
+        let password_marker = "REGISTRY_RELAY_PASSWORD_ENV_MUST_NOT_LEAK";
+        let config: ConsultationConfig = serde_saphyr::from_str(&format!(
+            r#"
+audit_pseudonym_materials:
+  - key_id: epoch-a
+    source:
+      provider: environment
+      name: PSEUDONYM_SOURCE
+source_credentials:
+  - type: basic
+    ref: {reference_marker}
+    generation: 7
+    username_env: {username_marker}
+    password_env: {password_marker}
+"#
+        ))
+        .expect("closed Basic credential config");
+        let debug = format!("{config:?}");
+        for marker in [reference_marker, username_marker, password_marker] {
+            assert!(!debug.contains(marker));
+        }
+        assert!(debug.contains("entry_count"));
+
+        for invalid in [
+            r#"
+source_credentials:
+  - type: basic
+    ref: Uppercase
+    generation: 1
+    username_env: USERNAME_ENV
+    password_env: PASSWORD_ENV
+"#,
+            r#"
+source_credentials:
+  - type: basic
+    ref: source-reader
+    generation: 1
+    username_env: INVALID-ENV
+    password_env: PASSWORD_ENV
+"#,
+            r#"
+source_credentials:
+  - type: bearer
+    ref: source-reader
+    generation: 1
+    token_env: TOKEN_ENV
+"#,
+            r#"
+source_credentials:
+  - type: basic
+    ref: source-reader
+    generation: 1
+    username_env: USERNAME_ENV
+    password_env: PASSWORD_ENV
+    password: embedded-values-are-forbidden
+"#,
+        ] {
+            let yaml = format!(
+                "audit_pseudonym_materials:\n  - key_id: epoch-a\n    source:\n      provider: environment\n      name: PSEUDONYM_SOURCE\n{invalid}"
+            );
+            assert!(
+                serde_saphyr::from_str::<ConsultationConfig>(&yaml).is_err(),
+                "open or malformed source credentials must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn consultation_credential_environment_name_uses_portable_grammar() {
+        let max_name = "A".repeat(128);
+        for value in ["A", "_A", "registry_relay_1", max_name.as_str()] {
+            assert!(ConsultationCredentialEnvironmentName::parse(value.to_owned()).is_ok());
+        }
+        for value in [
+            "".to_owned(),
+            "1LEADING".to_owned(),
+            "HAS-DASH".to_owned(),
+            "HAS SPACE".to_owned(),
+            "NON_ASCII_é".to_owned(),
+            "A".repeat(129),
+        ] {
+            assert!(ConsultationCredentialEnvironmentName::parse(value).is_err());
         }
     }
 }

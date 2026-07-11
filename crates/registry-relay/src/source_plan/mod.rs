@@ -12,6 +12,7 @@ mod artifact;
 )]
 mod compiler;
 mod completion_seed;
+mod credentials;
 mod identifiers;
 mod registry;
 #[allow(
@@ -38,6 +39,14 @@ pub use compiler::{
     CompiledStepPredicate, CompiledValueExpression, PinnedEvidenceArtifact,
     PinnedSourcePlanArtifact, RhaiWorkerCapability, SourcePlanArtifactBundle,
     SourcePlanCompileError,
+};
+#[allow(
+    unused_imports,
+    reason = "consumed by the consultation executor integration immediately following this slice"
+)]
+pub(crate) use credentials::{
+    BasicAuthorizationCapability, CompiledBasicSourceCredentialProvider,
+    SourceCredentialProviderError,
 };
 pub use registry::{
     CompiledConsultationRegistry, CompiledConsultationRegistryError,
