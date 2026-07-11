@@ -16,6 +16,8 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
+RELEASE_MANIFEST_DIR = ROOT / "release" / "manifests"
+DOCSETS_PATH = ROOT / "docs" / "site" / "src" / "data" / "docsets.yaml"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 SEMVER_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
@@ -342,6 +344,106 @@ def validate(manifest_path: Path) -> int:
             print(f"error: {error}", file=sys.stderr)
         return 1
     print(f"validated {manifest_path}: {stack.get('release')} {version}")
+    return 0
+
+
+def validate_docsets(manifest_dir: Path, docsets_path: Path) -> int:
+    errors: list[str] = []
+    try:
+        docsets_data = load_yaml(docsets_path)
+        manifests = [
+            load_yaml(path)
+            for path in sorted(manifest_dir.glob("registry-stack-*.yaml"))
+        ]
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    docsets = docsets_data.get("docsets", []) if isinstance(docsets_data, dict) else []
+    if not isinstance(docsets, list):
+        print("error: docsets.yaml docsets must be a list", file=sys.stderr)
+        return 1
+
+    manifests_by_tag: dict[str, dict] = {}
+    for manifest in manifests:
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("stack"), dict):
+            errors.append("release manifest must contain a stack object")
+            continue
+        source_tag = manifest["stack"].get("source_tag")
+        if isinstance(source_tag, str):
+            if source_tag in manifests_by_tag:
+                errors.append(f"multiple release manifests declare {source_tag}")
+            manifests_by_tag[source_tag] = manifest
+
+    checked = 0
+    for docset in docsets:
+        if not isinstance(docset, dict):
+            continue
+        docset_id = str(docset.get("id", ""))
+        if SEMVER_TAG.fullmatch(docset_id) is None:
+            continue
+        source = docset.get("source")
+        expected_source = f"registry-stack-{docset_id}"
+        if source != expected_source:
+            errors.append(
+                f"docset {docset_id} source {source!r} must be {expected_source!r}"
+            )
+        manifest = manifests_by_tag.get(docset_id)
+        if manifest is None:
+            errors.append(f"docset {docset_id} has no release manifest for {docset_id}")
+            continue
+
+        stack = manifest["stack"]
+        products = docset.get("products")
+        if not isinstance(products, dict):
+            errors.append(f"docset {docset_id} products must be an object")
+            continue
+
+        external = manifest.get("external")
+        if not isinstance(external, dict):
+            errors.append(f"release manifest {docset_id} external must be an object")
+            continue
+        expected_source_ref = stack.get("source_ref")
+        expected_version = f"v{stack.get('version')}"
+        for name, product in sorted(products.items()):
+            if name in external:
+                continue
+            actual_ref = product.get("ref") if isinstance(product, dict) else None
+            actual_version = product.get("version") if isinstance(product, dict) else None
+            if actual_ref != expected_source_ref:
+                errors.append(
+                    f"docset {docset_id} product {name} ref {actual_ref!r} "
+                    f"does not match release manifest ref {expected_source_ref!r}"
+                )
+            if actual_version != expected_version:
+                errors.append(
+                    f"docset {docset_id} product {name} version {actual_version!r} "
+                    f"does not match release manifest version {expected_version!r}"
+                )
+        for name, expected in sorted(external.items()):
+            if not isinstance(expected, dict):
+                errors.append(
+                    f"release manifest {docset_id} external {name} must be an object"
+                )
+                continue
+            expected_ref = expected.get("ref")
+            product = products.get(name)
+            actual_ref = product.get("ref") if isinstance(product, dict) else None
+            if actual_ref != expected_ref:
+                errors.append(
+                    f"docset {docset_id} external {name} ref {actual_ref!r} "
+                    f"does not match release manifest ref {expected_ref!r}"
+                )
+        checked += 1
+
+    if errors:
+        for error in errors:
+            print(f"error: {error}", file=sys.stderr)
+        return 1
+    if checked == 0:
+        print("error: no versioned docsets matched release manifests", file=sys.stderr)
+        return 1
+    print(f"validated {checked} versioned docsets against release manifests")
     return 0
 
 
@@ -931,6 +1033,11 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     validate_parser = subparsers.add_parser("validate")
     validate_parser.add_argument("manifest", type=Path)
+    docsets_parser = subparsers.add_parser("validate-docsets")
+    docsets_parser.add_argument(
+        "--manifest-dir", type=Path, default=RELEASE_MANIFEST_DIR
+    )
+    docsets_parser.add_argument("--docsets", type=Path, default=DOCSETS_PATH)
     source_parser = subparsers.add_parser("validate-source")
     source_parser.add_argument("manifest", type=Path)
     source_parser.add_argument("--tag", required=True)
@@ -984,6 +1091,8 @@ def main() -> int:
 
     if args.command == "validate":
         return validate(args.manifest)
+    if args.command == "validate-docsets":
+        return validate_docsets(args.manifest_dir, args.docsets)
     if args.command == "validate-source":
         return validate_source(args.manifest, args.tag, args.repo, args.default_branch)
     if args.command == "audit":
