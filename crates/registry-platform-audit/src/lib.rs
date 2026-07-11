@@ -37,6 +37,13 @@ const AUDIT_REFERENCE_HASH_CONTEXT: &str = "registry-platform:audit-reference:v1
 /// Stable schema identifier for sink-built durable phase records.
 pub const DURABLE_AUDIT_RECORD_SCHEMA_V1: &str = "registry.durable-audit/v1";
 
+// This is a conservative upper bound for the RFC 8785 payload encoding before
+// the durable wrapper and envelope are added. The preflight below charges the
+// worst JSON escaping expansion, so envelope construction and HMAC work stay
+// bounded before a sink-specific storage limit is reached.
+const MAX_DURABLE_AUDIT_SAFE_PAYLOAD_BYTES: usize = 768 * 1024;
+const MAX_DURABLE_AUDIT_SAFE_PAYLOAD_DEPTH: usize = 64;
+
 /// HKDF-Expand `info` label deriving the chain-integrity sub-key (AUDIT-03).
 const CHAIN_KEY_DERIVATION_INFO: &[u8] = b"registry-platform-audit/chain-key/v1";
 /// HKDF-Expand `info` label deriving the identifier-hashing sub-key (AUDIT-03).
@@ -610,9 +617,13 @@ impl DurableAuditWrite {
         if fields.is_empty() {
             return Err(DurableAuditValidationError::SafePayloadMustBeNonEmpty);
         }
+        bounded_durable_payload_size(&safe_payload, 0)?;
         let canonical_safe_payload =
             registry_platform_canonical_json::canonicalize_json(&safe_payload)
                 .map_err(|_| DurableAuditValidationError::SafePayloadCanonicalizationFailed)?;
+        if canonical_safe_payload.len() > MAX_DURABLE_AUDIT_SAFE_PAYLOAD_BYTES {
+            return Err(DurableAuditValidationError::SafePayloadExceedsBounds);
+        }
 
         Ok(Self {
             key: DurableAuditOperationKey::new(stream_kind, operation_id, phase)?,
@@ -690,10 +701,73 @@ pub enum DurableAuditValidationError {
     SafePayloadMustBeObject,
     #[error("safe audit payload object must not be empty")]
     SafePayloadMustBeNonEmpty,
+    #[error("safe audit payload exceeds the durable audit bounds")]
+    SafePayloadExceedsBounds,
     #[error("safe audit payload canonicalization failed")]
     SafePayloadCanonicalizationFailed,
     #[error("durable audit envelope id is not a canonical ULID")]
     InvalidEnvelopeId,
+}
+
+fn bounded_durable_payload_size(
+    value: &Value,
+    depth: usize,
+) -> Result<usize, DurableAuditValidationError> {
+    if depth > MAX_DURABLE_AUDIT_SAFE_PAYLOAD_DEPTH {
+        return Err(DurableAuditValidationError::SafePayloadExceedsBounds);
+    }
+    let size = match value {
+        Value::Null => 4,
+        Value::Bool(true) => 4,
+        Value::Bool(false) => 5,
+        Value::Number(number) => number.to_string().len(),
+        Value::String(value) => worst_case_json_string_size(value)?,
+        Value::Array(values) => {
+            let mut size = 2_usize;
+            for value in values {
+                size = checked_durable_payload_add(size, 1)?;
+                size = checked_durable_payload_add(
+                    size,
+                    bounded_durable_payload_size(value, depth + 1)?,
+                )?;
+            }
+            size
+        }
+        Value::Object(fields) => {
+            let mut size = 2_usize;
+            for (name, value) in fields {
+                size = checked_durable_payload_add(size, worst_case_json_string_size(name)?)?;
+                size = checked_durable_payload_add(size, 2)?;
+                size = checked_durable_payload_add(
+                    size,
+                    bounded_durable_payload_size(value, depth + 1)?,
+                )?;
+            }
+            size
+        }
+    };
+    if size > MAX_DURABLE_AUDIT_SAFE_PAYLOAD_BYTES {
+        return Err(DurableAuditValidationError::SafePayloadExceedsBounds);
+    }
+    Ok(size)
+}
+
+fn worst_case_json_string_size(value: &str) -> Result<usize, DurableAuditValidationError> {
+    value
+        .len()
+        .checked_mul(6)
+        .and_then(|size| size.checked_add(2))
+        .filter(|size| *size <= MAX_DURABLE_AUDIT_SAFE_PAYLOAD_BYTES)
+        .ok_or(DurableAuditValidationError::SafePayloadExceedsBounds)
+}
+
+fn checked_durable_payload_add(
+    left: usize,
+    right: usize,
+) -> Result<usize, DurableAuditValidationError> {
+    left.checked_add(right)
+        .filter(|size| *size <= MAX_DURABLE_AUDIT_SAFE_PAYLOAD_BYTES)
+        .ok_or(DurableAuditValidationError::SafePayloadExceedsBounds)
 }
 
 /// Atomic result of a durable phase write.
@@ -2739,6 +2813,38 @@ mod tests {
         assert_eq!(
             make(json!({})).expect_err("empty object fails"),
             DurableAuditValidationError::SafePayloadMustBeNonEmpty
+        );
+    }
+
+    #[test]
+    fn durable_audit_write_bounds_payload_before_envelope_hmac_work() {
+        let too_large = json!({
+            "value": "x".repeat(MAX_DURABLE_AUDIT_SAFE_PAYLOAD_BYTES / 6 + 1),
+        });
+        assert_eq!(
+            DurableAuditWrite::new(
+                DurableAuditStreamKind::Consultation,
+                durable_operation_id(),
+                DurableAuditPhase::Attempt,
+                too_large,
+            )
+            .expect_err("oversized payload must fail"),
+            DurableAuditValidationError::SafePayloadExceedsBounds
+        );
+
+        let mut too_deep = json!({"leaf": true});
+        for _ in 0..=MAX_DURABLE_AUDIT_SAFE_PAYLOAD_DEPTH {
+            too_deep = json!({"next": too_deep});
+        }
+        assert_eq!(
+            DurableAuditWrite::new(
+                DurableAuditStreamKind::Consultation,
+                durable_operation_id(),
+                DurableAuditPhase::Attempt,
+                too_deep,
+            )
+            .expect_err("deeply nested payload must fail"),
+            DurableAuditValidationError::SafePayloadExceedsBounds
         );
     }
 

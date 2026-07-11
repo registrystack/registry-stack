@@ -38,4 +38,10 @@ pub mod source;
 pub mod source_plan;
 #[cfg(feature = "spdci-api-standards")]
 pub mod spdci;
+#[allow(
+    dead_code,
+    unused_imports,
+    reason = "WP1A compiles the private state-plane boundary before WP1B activates its runtime consumer"
+)]
+mod state_plane;
 pub mod table_provider;
