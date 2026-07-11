@@ -124,6 +124,8 @@ fn shared_config(civil_base_url: &str, social_base_url: &str) -> StandaloneRegis
     );
     let raw = format!(
         r#"
+deployment:
+  profile: local
 server:
   bind: 127.0.0.1:0
 auth:

@@ -4,6 +4,7 @@ set -euo pipefail
 required_version="0.19.8"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_dir="$(cd -- "$script_dir/.." && pwd)"
+workspace_dir="$(cd -- "$repo_dir/../.." && pwd)"
 tool_root="$repo_dir/target/codex-tools"
 tool_bin="$tool_root/bin/cargo-deny"
 
@@ -19,4 +20,5 @@ if [[ "$installed_version" != "$required_version" ]]; then
     --root "$tool_root"
 fi
 
+cd "$workspace_dir"
 exec "$tool_bin" --all-features check "$@"

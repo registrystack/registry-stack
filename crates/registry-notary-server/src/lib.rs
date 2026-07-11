@@ -11,20 +11,24 @@ pub(crate) mod authz_details;
 pub mod cel_worker;
 pub mod config_governed;
 pub(crate) mod credential_status;
+pub(crate) mod digest;
 pub mod docs;
 pub(crate) mod federation;
+pub(crate) mod json_path;
 pub mod machine_quota;
 pub(crate) mod metrics;
 pub mod openapi;
 pub(crate) mod posture;
 pub(crate) mod preauth_state;
+pub(crate) mod problem;
 pub(crate) mod replay;
+pub(crate) mod request_context;
+pub(crate) mod response_context;
 pub mod runtime;
 pub mod self_attestation_rate_limit;
 pub mod standalone;
 
-pub(crate) const PROBLEM_TYPE_BASE_URL: &str =
-    "https://id.registrystack.org/problems/registry-notary";
+pub(crate) use problem::PROBLEM_TYPE_BASE_URL;
 
 pub use api::{
     router, EvidenceAuditContext, EvidenceErrorCodeContext, EvidenceIssuerResolver,
