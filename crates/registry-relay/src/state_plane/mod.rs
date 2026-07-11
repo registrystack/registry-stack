@@ -11,6 +11,7 @@
 //! readiness, fencing/quota, and this durable sink before any route can use it.
 
 mod audit;
+mod consultation;
 mod fence;
 mod migration;
 mod pseudonym_keyring;
@@ -23,9 +24,17 @@ pub(crate) use audit::{
     CompletionAttemptReference, PostgresDurableAuditStatePlane,
     PseudonymBoundDuplicateRecoveryOutcome, StatePlaneInitializationError, StatePlaneReadiness,
 };
+pub(crate) use consultation::{
+    AttemptPseudonymBundle, ConsultationCompletionOutcome, ConsultationCompletionReceipt,
+    ConsultationCompletionSeed, ConsultationPersistenceError, ConsultationPublicationGrant,
+    KnownCompletionDisposition, KnownConsultationCompletionFacts, KnownFailureClass,
+    PublicConsultationOutcome, RecoveredConsultationCompletion,
+};
 pub(crate) use fence::{
-    DispatchOperationId, DispatchPermit, DispatchPermitBudget, PermitCompletionOutcome,
-    PostgresServingFence, ServingFenceError, ServingFenceLockKey, ServingFenceReadiness,
+    AuditedConsultationDispatch, ConsultationDispatchPermit, ConsultationPermitSet,
+    DispatchOperationId, DispatchPermitBudget, DispatchPermitKind,
+    FencedConsultationAttemptAuthority, PostgresServingFence, ServingFenceError,
+    ServingFenceLockKey, ServingFenceReadiness, TakeoverCompletionRecoveryAuthority,
 };
 pub(crate) use migration::install_postgres_state_plane_v1;
 pub(crate) use migration::{

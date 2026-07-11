@@ -17,6 +17,8 @@ use tokio::{
 use tokio_postgres::{Client, Error as PostgresError, Row};
 use ulid::Ulid;
 
+use crate::consultation::OperationId;
+
 use super::migration::{
     validate_runtime_capability_v1, AuditChainKeyEpochId, RuntimeCapabilityError,
     MIGRATION_ADVISORY_LOCK_KEY_V1, RUNTIME_SESSION_LIMITS_SQL,
@@ -28,11 +30,11 @@ const FENCE_FINALIZE_SQL: &str =
 const FENCE_STATUS_SQL: &str = "SELECT * FROM relay_state_api.serving_fence_status_v1($1, $2, $3)";
 const FENCE_RELEASE_SQL: &str =
     "SELECT * FROM relay_state_api.serving_fence_release_v1($1, $2, $3)";
-const PERMIT_CREATE_SQL: &str =
-    "SELECT * FROM relay_state_api.dispatch_permit_create_v1($1, $2, $3, $4, $5)";
 const PERMIT_AUTHORIZE_SQL: &str = r#"
 WITH permit_check AS MATERIALIZED (
-    SELECT * FROM relay_state_api.dispatch_permit_authorize_v1($1, $2, $3, $4)
+    SELECT * FROM relay_state_api.dispatch_permit_authorize_v1(
+        $1, $2, $3, $4, $5, $6, $7, $8
+    )
 )
 SELECT permit_check.*,
        permit_check.deadline_unix_ms
@@ -40,8 +42,8 @@ SELECT permit_check.*,
            - 1 AS remaining_ms
 FROM permit_check
 "#;
-const PERMIT_COMPLETE_SQL: &str =
-    "SELECT * FROM relay_state_api.dispatch_permit_complete_v1($1, $2, $3, $4)";
+const FENCE_OPEN_AFTER_RECOVERY_SQL: &str =
+    "SELECT * FROM relay_state_api.serving_fence_open_after_recovery_v1($1, $2, $3)";
 
 const DATABASE_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const HARD_SOURCE_DEADLINE: Duration = Duration::from_secs(10);
@@ -123,26 +125,97 @@ impl DispatchPermitBudget {
     }
 }
 
-/// Durable permit identity. Possession is not outbound-call authority.
-pub(crate) struct DispatchPermit {
-    operation_id: DispatchOperationId,
-    fence_generation: i64,
-    holder_id: String,
-    budget: DispatchPermitBudget,
-    deadline_unix_ms: i64,
-    local_not_after: Instant,
-    state: DispatchPermitState,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum DispatchPermitKind {
+    Credential,
+    Data,
+}
+
+impl DispatchPermitKind {
+    pub(super) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Credential => "credential",
+            Self::Data => "data",
+        }
+    }
+}
+
+/// Exact closed permit manifest installed atomically with one attempt.
+pub(crate) struct ConsultationPermitSet {
+    permits: Vec<(DispatchPermitKind, u8)>,
+}
+
+impl ConsultationPermitSet {
+    pub(crate) fn from_counts(
+        credential_count: u8,
+        data_count: u8,
+    ) -> Result<Self, ServingFenceError> {
+        if credential_count > 1 || data_count > 5 {
+            return Err(ServingFenceError::InvalidPermitManifest);
+        }
+        let mut permits = Vec::with_capacity(usize::from(credential_count + data_count));
+        if credential_count == 1 {
+            permits.push((DispatchPermitKind::Credential, 0));
+        }
+        permits.extend((0..data_count).map(|ordinal| (DispatchPermitKind::Data, ordinal)));
+        Ok(Self { permits })
+    }
+
+    pub(super) fn postgres_arrays(&self) -> (Vec<String>, Vec<i16>) {
+        self.permits
+            .iter()
+            .map(|(kind, ordinal)| (kind.as_str().to_owned(), i16::from(*ordinal)))
+            .unzip()
+    }
+
+    pub(super) fn permits(&self) -> &[(DispatchPermitKind, u8)] {
+        &self.permits
+    }
+}
+
+/// One-shot authority minted only while the dedicated fence is ready.
+#[must_use = "the fence authority must be consumed by atomic attempt persistence"]
+pub(crate) struct FencedConsultationAttemptAuthority {
+    pub(super) lock_key: ServingFenceLockKey,
+    pub(super) holder_id: String,
+    pub(super) fence_generation: i64,
+    pub(super) budget: DispatchPermitBudget,
+    pub(super) permit_set: ConsultationPermitSet,
+    pub(super) lifecycle_seal: ConsultationLifecycleSeal,
+}
+
+impl FencedConsultationAttemptAuthority {
+    pub(super) fn arm_lifecycle_seal(&mut self) {
+        self.lifecycle_seal.arm_for_attempt_cas();
+    }
+
+    pub(super) fn disarm_after_head_changed(&mut self) {
+        self.lifecycle_seal.disarm_after_non_mutating_attempt_cas();
+    }
+}
+
+/// Durable child permit identity. Possession is not outbound-call authority.
+pub(crate) struct ConsultationDispatchPermit {
+    pub(super) operation_id: DispatchOperationId,
+    pub(super) kind: DispatchPermitKind,
+    pub(super) ordinal: u8,
+    pub(super) fence_generation: i64,
+    pub(super) holder_id: String,
+    pub(super) budget: DispatchPermitBudget,
+    pub(super) deadline_unix_ms: i64,
+    pub(super) local_not_after: Instant,
+    pub(super) state: DispatchPermitState,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DispatchPermitState {
-    Active,
+pub(super) enum DispatchPermitState {
+    Ready,
     Dispatching,
-    Completed,
+    Dispatched,
     Uncertain,
 }
 
-impl DispatchPermit {
+impl ConsultationDispatchPermit {
     pub(crate) fn operation_id(&self) -> &DispatchOperationId {
         &self.operation_id
     }
@@ -161,11 +234,13 @@ impl DispatchPermit {
     }
 }
 
-impl std::fmt::Debug for DispatchPermit {
+impl std::fmt::Debug for ConsultationDispatchPermit {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("DispatchPermit")
+            .debug_struct("ConsultationDispatchPermit")
             .field("operation_id", &"<redacted>")
+            .field("kind", &self.kind)
+            .field("ordinal", &self.ordinal)
             .field("fence_generation", &self.fence_generation)
             .field("holder_id", &"<redacted>")
             .field("budget", &self.budget)
@@ -175,16 +250,90 @@ impl std::fmt::Debug for DispatchPermit {
     }
 }
 
+/// Exact non-cloneable dispatch session returned by the atomic attempt CAS.
+#[must_use = "the consultation must reach an acknowledged terminal completion"]
+pub(crate) struct AuditedConsultationDispatch {
+    pub(super) operation_id: DispatchOperationId,
+    pub(super) attempt_envelope_id: String,
+    pub(super) attempt_record_hash: [u8; 32],
+    pub(super) lock_key: ServingFenceLockKey,
+    pub(super) fence_generation: i64,
+    pub(super) holder_id: String,
+    pub(super) deadline_unix_ms: i64,
+    pub(super) permits: Vec<ConsultationDispatchPermit>,
+    pub(super) lifecycle_seal: ConsultationLifecycleSeal,
+}
+
+impl AuditedConsultationDispatch {
+    pub(crate) fn permits_mut(&mut self) -> &mut [ConsultationDispatchPermit] {
+        &mut self.permits
+    }
+
+    pub(crate) fn deadline_unix_ms(&self) -> i64 {
+        self.deadline_unix_ms
+    }
+
+    pub(super) fn postgres_permit_arrays(&self) -> (Vec<String>, Vec<i16>) {
+        self.permits
+            .iter()
+            .map(|permit| (permit.kind.as_str().to_owned(), i16::from(permit.ordinal)))
+            .unzip()
+    }
+
+    pub(super) fn disarm_after_terminal_completion(&mut self) {
+        self.lifecycle_seal.disarm_after_terminal_completion();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn lifecycle_is_armed(&self) -> bool {
+        self.lifecycle_seal.is_armed()
+    }
+}
+
+/// Opaque canonical takeover batch. It cannot be cloned, serialized, or
+/// constructed by production callers.
+#[must_use = "every persisted orphan must be recovered before admission opens"]
+pub(crate) struct TakeoverCompletionRecoveryAuthority {
+    pub(super) lock_key: ServingFenceLockKey,
+    pub(super) holder_id: String,
+    pub(super) fence_generation: i64,
+    pub(super) operation_ids: Vec<DispatchOperationId>,
+    pub(super) next_index: usize,
+}
+
+impl TakeoverCompletionRecoveryAuthority {
+    pub(crate) fn remaining(&self) -> usize {
+        self.operation_ids.len().saturating_sub(self.next_index)
+    }
+
+    pub(super) fn current_operation(&self) -> Option<&DispatchOperationId> {
+        self.operation_ids.get(self.next_index)
+    }
+
+    pub(super) fn mark_current_recovered(&mut self) {
+        self.next_index += 1;
+    }
+
+    fn is_complete(&self) -> bool {
+        self.next_index == self.operation_ids.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn duplicate_for_test(&self) -> Self {
+        Self {
+            lock_key: self.lock_key,
+            holder_id: self.holder_id.clone(),
+            fence_generation: self.fence_generation,
+            operation_ids: self.operation_ids.clone(),
+            next_index: self.next_index,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ServingFenceReadiness {
     Ready,
     Unavailable,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PermitCompletionOutcome {
-    Completed,
-    AlreadyCompleted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -195,6 +344,8 @@ pub(crate) enum ServingFenceError {
     InvalidOperationId,
     #[error("Relay dispatch permit budget is invalid")]
     InvalidPermitBudget,
+    #[error("Relay consultation permit manifest is invalid")]
+    InvalidPermitManifest,
     #[error("Relay serving fence is held by another instance")]
     Contended,
     #[error("Relay serving-fence runtime identity is not bound")]
@@ -205,16 +356,18 @@ pub(crate) enum ServingFenceError {
     AdmissionClosed,
     #[error("Relay serving-fence ownership is unavailable")]
     OwnershipLost,
-    #[error("Relay dispatch permit is an identical replay")]
-    PermitReplay,
     #[error("Relay dispatch permit conflicts with a durable operation")]
     PermitConflict,
+    #[error("Relay source operation is outside the compiled permit capability")]
+    SourceOperationNotAuthorized,
     #[error("Relay dispatch permit is unknown")]
     PermitUnknown,
     #[error("Relay dispatch permit has expired")]
     PermitExpired,
     #[error("Relay dispatch permit has completed")]
     PermitCompleted,
+    #[error("Relay dispatch permit was already dispatched")]
+    PermitAlreadyDispatched,
     #[error("Relay dispatch permit was abandoned during takeover")]
     PermitAbandoned,
     #[error("Relay dispatch permit outcome is uncertain")]
@@ -223,6 +376,8 @@ pub(crate) enum ServingFenceError {
     StaleGeneration,
     #[error("Relay serving-fence takeover did not reach its database barrier")]
     TakeoverTimedOut,
+    #[error("Relay serving-fence recovery is incomplete")]
+    RecoveryIncomplete,
     #[error("Relay serving-fence database protocol has drifted")]
     ProtocolDrift,
     #[error("Relay serving fence is unavailable")]
@@ -231,12 +386,14 @@ pub(crate) enum ServingFenceError {
 
 /// Execute-only fence capability backed by one dedicated PostgreSQL session.
 pub(crate) struct PostgresServingFence {
+    lock_key: ServingFenceLockKey,
     generation: i64,
     holder_id: String,
     commands: mpsc::UnboundedSender<FenceCommand>,
     admission: watch::Sender<bool>,
     actor_abort: AbortHandle,
     actor: Option<JoinHandle<()>>,
+    takeover_recovery: Option<TakeoverCompletionRecoveryAuthority>,
 }
 
 type ConnectionDriver = JoinHandle<Result<(), PostgresError>>;
@@ -269,6 +426,58 @@ struct SessionUncertaintyGuard {
     admission: watch::Sender<bool>,
     actor_abort: AbortHandle,
     confirmed: bool,
+}
+
+/// Fence-linked ownership of one nonterminal durable consultation.
+///
+/// The seal is deliberately neither `Clone` nor `Debug`. It is harmless while
+/// carried by a freshly minted attempt authority and is armed immediately
+/// before an attempt CAS can commit without its acknowledgement being
+/// observed. A proven `head_changed` result returns it to the harmless
+/// pre-intent state before retry. Once a durable intent is observed, the seal
+/// moves into the resulting dispatch. Losing that sole dispatch before an
+/// acknowledged terminal completion closes admission and drops the dedicated
+/// fence session so the successor must run takeover recovery.
+pub(super) struct ConsultationLifecycleSeal {
+    admission: watch::Sender<bool>,
+    actor_abort: AbortHandle,
+    armed: bool,
+}
+
+impl ConsultationLifecycleSeal {
+    fn unarmed(admission: &watch::Sender<bool>, actor_abort: &AbortHandle) -> Self {
+        Self {
+            admission: admission.clone(),
+            actor_abort: actor_abort.clone(),
+            armed: false,
+        }
+    }
+
+    fn arm_for_attempt_cas(&mut self) {
+        self.armed = true;
+    }
+
+    fn disarm_after_non_mutating_attempt_cas(&mut self) {
+        self.armed = false;
+    }
+
+    fn disarm_after_terminal_completion(&mut self) {
+        self.armed = false;
+    }
+
+    #[cfg(test)]
+    fn is_armed(&self) -> bool {
+        self.armed
+    }
+}
+
+impl Drop for ConsultationLifecycleSeal {
+    fn drop(&mut self) {
+        if self.armed {
+            self.admission.send_replace(false);
+            self.actor_abort.abort();
+        }
+    }
 }
 
 impl SessionUncertaintyGuard {
@@ -309,7 +518,7 @@ impl<'a> PermitDispatchGuard<'a> {
     }
 
     fn finish(mut self) {
-        *self.state = DispatchPermitState::Active;
+        *self.state = DispatchPermitState::Dispatched;
         self.finished = true;
     }
 }
@@ -323,13 +532,6 @@ impl Drop for PermitDispatchGuard<'_> {
 }
 
 #[derive(Debug)]
-struct CreatedPermit {
-    fence_generation: i64,
-    holder_id: String,
-    deadline_unix_ms: i64,
-}
-
-#[derive(Debug)]
 struct AuthorizationWindow {
     remaining_ms: i64,
 }
@@ -338,19 +540,16 @@ enum FenceCommand {
     Readiness {
         reply: oneshot::Sender<Result<(), ServingFenceError>>,
     },
-    CreatePermit {
-        operation_id: String,
-        budget_ms: i32,
-        reply: oneshot::Sender<Result<CreatedPermit, ServingFenceError>>,
-    },
     AuthorizePermit {
         operation_id: String,
+        kind: &'static str,
+        ordinal: i16,
+        source_operation_id: String,
         expected_deadline_unix_ms: i64,
         reply: oneshot::Sender<Result<AuthorizationWindow, ServingFenceError>>,
     },
-    CompletePermit {
-        operation_id: String,
-        reply: oneshot::Sender<Result<PermitCompletionOutcome, ServingFenceError>>,
+    OpenAfterRecovery {
+        reply: oneshot::Sender<Result<(), ServingFenceError>>,
     },
     Release {
         reply: oneshot::Sender<Result<(), ServingFenceError>>,
@@ -398,16 +597,18 @@ impl PostgresServingFence {
         if takeover_required == database_admission_open {
             return Err(ServingFenceError::ProtocolDrift);
         }
-        if takeover_required {
+        let recovery_operation_ids = if takeover_required {
             // Start no earlier than the observed successful acquisition. This
             // deliberately waits longer than eleven seconds from PostgreSQL's
             // actual lock acquisition rather than risking a shortened barrier.
             tokio::time::sleep_until(Instant::now() + LOCAL_TAKEOVER_WAIT).await;
-            finish_takeover(&client, lock_key, &holder_id, generation).await?;
-        }
+            finish_takeover(&client, lock_key, &holder_id, generation).await?
+        } else {
+            Vec::new()
+        };
 
         let (commands, command_receiver) = mpsc::unbounded_channel();
-        let (admission, _) = watch::channel(true);
+        let (admission, _) = watch::channel(!takeover_required);
         let actor_admission = admission.clone();
         let driver = driver_guard.take();
         let actor_holder_id = holder_id.clone();
@@ -421,18 +622,74 @@ impl PostgresServingFence {
             generation,
         ));
         let actor_abort = actor.abort_handle();
+        let takeover_recovery = takeover_required.then_some(TakeoverCompletionRecoveryAuthority {
+            lock_key,
+            holder_id: holder_id.clone(),
+            fence_generation: generation,
+            operation_ids: recovery_operation_ids,
+            next_index: 0,
+        });
         Ok(Self {
+            lock_key,
             generation,
             holder_id,
             commands,
             admission,
             actor_abort,
             actor: Some(actor),
+            takeover_recovery,
         })
     }
 
     pub(crate) fn generation(&self) -> i64 {
         self.generation
+    }
+
+    pub(crate) fn take_takeover_recovery_authority(
+        &mut self,
+    ) -> Option<TakeoverCompletionRecoveryAuthority> {
+        self.takeover_recovery.take()
+    }
+
+    pub(crate) async fn open_after_takeover_recovery(
+        &self,
+        authority: TakeoverCompletionRecoveryAuthority,
+    ) -> Result<(), ServingFenceError> {
+        if !authority.is_complete()
+            || authority.lock_key != self.lock_key
+            || authority.fence_generation != self.generation
+            || authority.holder_id != self.holder_id
+        {
+            return Err(ServingFenceError::RecoveryIncomplete);
+        }
+        let mut uncertainty = SessionUncertaintyGuard::new(&self.admission, &self.actor_abort);
+        let (reply, response) = oneshot::channel();
+        self.commands
+            .send(FenceCommand::OpenAfterRecovery { reply })
+            .map_err(|_| ServingFenceError::Unavailable)?;
+        response
+            .await
+            .map_err(|_| ServingFenceError::Unavailable)??;
+        uncertainty.confirm();
+        Ok(())
+    }
+
+    pub(crate) async fn authorize_consultation_attempt(
+        &self,
+        budget: DispatchPermitBudget,
+        permit_set: ConsultationPermitSet,
+    ) -> Result<FencedConsultationAttemptAuthority, ServingFenceError> {
+        if self.readiness().await != ServingFenceReadiness::Ready {
+            return Err(ServingFenceError::AdmissionClosed);
+        }
+        Ok(FencedConsultationAttemptAuthority {
+            lock_key: self.lock_key,
+            holder_id: self.holder_id.clone(),
+            fence_generation: self.generation,
+            budget,
+            permit_set,
+            lifecycle_seal: ConsultationLifecycleSeal::unarmed(&self.admission, &self.actor_abort),
+        })
     }
 
     pub(crate) async fn readiness(&self) -> ServingFenceReadiness {
@@ -457,54 +714,13 @@ impl PostgresServingFence {
         }
     }
 
-    pub(crate) async fn create_permit(
-        &self,
-        operation_id: DispatchOperationId,
-        budget: DispatchPermitBudget,
-    ) -> Result<DispatchPermit, ServingFenceError> {
-        self.require_open()?;
-        let create_started = Instant::now();
-        let mut uncertainty = SessionUncertaintyGuard::new(&self.admission, &self.actor_abort);
-        let (reply, response) = oneshot::channel();
-        self.commands
-            .send(FenceCommand::CreatePermit {
-                operation_id: operation_id.as_str().to_owned(),
-                budget_ms: budget.as_milliseconds(),
-                reply,
-            })
-            .map_err(|_| ServingFenceError::Unavailable)?;
-        let created = match response.await.map_err(|_| ServingFenceError::Unavailable)? {
-            Ok(created) => created,
-            Err(ServingFenceError::PermitReplay) => {
-                uncertainty.confirm();
-                return Err(ServingFenceError::PermitReplay);
-            }
-            Err(ServingFenceError::PermitConflict) => {
-                uncertainty.confirm();
-                return Err(ServingFenceError::PermitConflict);
-            }
-            Err(error) => return Err(error),
-        };
-        let permit = DispatchPermit {
-            operation_id,
-            fence_generation: created.fence_generation,
-            holder_id: created.holder_id,
-            budget,
-            deadline_unix_ms: created.deadline_unix_ms,
-            local_not_after: create_started
-                + Duration::from_millis(budget.as_milliseconds() as u64),
-            state: DispatchPermitState::Active,
-        };
-        uncertainty.confirm();
-        Ok(permit)
-    }
-
     /// Run one outbound call under fresh database authorization. The closure is
     /// lazy and is never invoked if ownership, permit state, or time is invalid.
     /// No reusable authorization value can escape this method.
     pub(crate) async fn authorize_and_dispatch<T, F, Fut>(
         &self,
-        permit: &mut DispatchPermit,
+        permit: &mut ConsultationDispatchPermit,
+        source_operation: &OperationId,
         dispatch: F,
     ) -> Result<T, ServingFenceError>
     where
@@ -516,8 +732,10 @@ impl PostgresServingFence {
             return Err(ServingFenceError::StaleGeneration);
         }
         match permit.state {
-            DispatchPermitState::Active => {}
-            DispatchPermitState::Completed => return Err(ServingFenceError::PermitCompleted),
+            DispatchPermitState::Ready => {}
+            DispatchPermitState::Dispatched => {
+                return Err(ServingFenceError::PermitAlreadyDispatched)
+            }
             DispatchPermitState::Dispatching | DispatchPermitState::Uncertain => {
                 return Err(ServingFenceError::PermitUncertain)
             }
@@ -529,6 +747,9 @@ impl PostgresServingFence {
         self.commands
             .send(FenceCommand::AuthorizePermit {
                 operation_id: permit.operation_id.as_str().to_owned(),
+                kind: permit.kind.as_str(),
+                ordinal: i16::from(permit.ordinal),
+                source_operation_id: source_operation.as_str().to_owned(),
                 expected_deadline_unix_ms: permit.deadline_unix_ms,
                 reply,
             })
@@ -536,14 +757,27 @@ impl PostgresServingFence {
         let authorized = match response.await.map_err(|_| ServingFenceError::Unavailable)? {
             Ok(authorized) => authorized,
             Err(ServingFenceError::PermitExpired) => {
-                permit.state = DispatchPermitState::Active;
+                permit.state = DispatchPermitState::Ready;
                 uncertainty.confirm();
                 return Err(ServingFenceError::PermitExpired);
             }
             Err(ServingFenceError::PermitCompleted) => {
-                permit.state = DispatchPermitState::Completed;
+                permit.state = DispatchPermitState::Dispatched;
                 uncertainty.confirm();
                 return Err(ServingFenceError::PermitCompleted);
+            }
+            Err(
+                error @ (ServingFenceError::PermitAlreadyDispatched
+                | ServingFenceError::PermitConflict),
+            ) => {
+                permit.state = DispatchPermitState::Dispatched;
+                uncertainty.confirm();
+                return Err(error);
+            }
+            Err(ServingFenceError::SourceOperationNotAuthorized) => {
+                permit.state = DispatchPermitState::Ready;
+                uncertainty.confirm();
+                return Err(ServingFenceError::SourceOperationNotAuthorized);
             }
             Err(error) => return Err(error),
         };
@@ -555,7 +789,11 @@ impl PostgresServingFence {
             authorized.remaining_ms,
             permit.budget,
         ) else {
-            permit.state = DispatchPermitState::Active;
+            // PostgreSQL has already committed the one-shot marker. Even when
+            // response transit exhausts the local window, this permit can
+            // never become reusable. Recovery must conservatively record an
+            // outcome-unknown completion.
+            permit.state = DispatchPermitState::Dispatched;
             uncertainty.confirm();
             return Err(ServingFenceError::PermitExpired);
         };
@@ -574,40 +812,6 @@ impl PostgresServingFence {
             Ok(output) => {
                 dispatch_guard.finish();
                 Ok(output)
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    pub(crate) async fn complete_permit(
-        &self,
-        permit: &mut DispatchPermit,
-    ) -> Result<PermitCompletionOutcome, ServingFenceError> {
-        self.require_open()?;
-        if permit.fence_generation != self.generation || permit.holder_id != self.holder_id {
-            return Err(ServingFenceError::StaleGeneration);
-        }
-        match permit.state {
-            DispatchPermitState::Completed => return Ok(PermitCompletionOutcome::AlreadyCompleted),
-            DispatchPermitState::Active => {}
-            DispatchPermitState::Dispatching | DispatchPermitState::Uncertain => {
-                return Err(ServingFenceError::PermitUncertain)
-            }
-        }
-        permit.state = DispatchPermitState::Uncertain;
-        let mut uncertainty = SessionUncertaintyGuard::new(&self.admission, &self.actor_abort);
-        let (reply, response) = oneshot::channel();
-        self.commands
-            .send(FenceCommand::CompletePermit {
-                operation_id: permit.operation_id.as_str().to_owned(),
-                reply,
-            })
-            .map_err(|_| ServingFenceError::Unavailable)?;
-        match response.await.map_err(|_| ServingFenceError::Unavailable)? {
-            Ok(outcome) => {
-                permit.state = DispatchPermitState::Completed;
-                uncertainty.confirm();
-                Ok(outcome)
             }
             Err(error) => Err(error),
         }
@@ -699,31 +903,11 @@ async fn handle_fence_command(
             }
             fatal || reply.send(result).is_err()
         }
-        FenceCommand::CreatePermit {
-            operation_id,
-            budget_ms,
-            reply,
-        } => {
-            let result = actor_create_permit(
-                client,
-                lock_key,
-                holder_id,
-                generation,
-                &operation_id,
-                budget_ms,
-            )
-            .await;
-            let fatal = !matches!(
-                result,
-                Ok(_) | Err(ServingFenceError::PermitReplay | ServingFenceError::PermitConflict)
-            );
-            if fatal {
-                admission.send_replace(false);
-            }
-            fatal || reply.send(result).is_err()
-        }
         FenceCommand::AuthorizePermit {
             operation_id,
+            kind,
+            ordinal,
+            source_operation_id,
             expected_deadline_unix_ms,
             reply,
         } => {
@@ -733,24 +917,31 @@ async fn handle_fence_command(
                 holder_id,
                 generation,
                 &operation_id,
+                kind,
+                ordinal,
+                &source_operation_id,
                 expected_deadline_unix_ms,
             )
             .await;
             let fatal = !matches!(
                 result,
-                Ok(_) | Err(ServingFenceError::PermitExpired | ServingFenceError::PermitCompleted)
+                Ok(_)
+                    | Err(ServingFenceError::PermitExpired
+                        | ServingFenceError::PermitCompleted
+                        | ServingFenceError::PermitAlreadyDispatched
+                        | ServingFenceError::PermitConflict
+                        | ServingFenceError::SourceOperationNotAuthorized)
             );
             if fatal {
                 admission.send_replace(false);
             }
             fatal || reply.send(result).is_err()
         }
-        FenceCommand::CompletePermit {
-            operation_id,
-            reply,
-        } => {
-            let result =
-                actor_complete_permit(client, lock_key, holder_id, generation, &operation_id).await;
+        FenceCommand::OpenAfterRecovery { reply } => {
+            let result = actor_open_after_recovery(client, lock_key, holder_id, generation).await;
+            if result.is_ok() {
+                admission.send_replace(true);
+            }
             let fatal = result.is_err();
             if fatal {
                 admission.send_replace(false);
@@ -784,62 +975,30 @@ async fn actor_readiness(
     }
 }
 
-async fn actor_create_permit(
-    client: &Client,
-    lock_key: ServingFenceLockKey,
-    holder_id: &str,
-    generation: i64,
-    operation_id: &str,
-    budget_ms: i32,
-) -> Result<CreatedPermit, ServingFenceError> {
-    let row = database_timeout(client.query_one(
-        PERMIT_CREATE_SQL,
-        &[
-            &lock_key.as_i64(),
-            &holder_id,
-            &generation,
-            &operation_id,
-            &budget_ms,
-        ],
-    ))
-    .await?;
-    match try_str(&row, "outcome")? {
-        "inserted" => {}
-        "identical_replay" => return Err(ServingFenceError::PermitReplay),
-        "conflicting_replay" => return Err(ServingFenceError::PermitConflict),
-        "admission_closed" => return Err(ServingFenceError::AdmissionClosed),
-        "ownership_lost" => return Err(ServingFenceError::OwnershipLost),
-        _ => return Err(ServingFenceError::ProtocolDrift),
-    }
-    let stored_operation_id = try_str(&row, "operation_id")?;
-    let stored_generation = try_i64(&row, "fence_generation")?;
-    let stored_holder_id = try_str(&row, "holder_id")?;
-    let stored_budget_ms = try_i32(&row, "budget_ms")?;
-    if stored_operation_id != operation_id
-        || stored_generation != generation
-        || stored_holder_id != holder_id
-        || stored_budget_ms != budget_ms
-    {
-        return Err(ServingFenceError::ProtocolDrift);
-    }
-    Ok(CreatedPermit {
-        fence_generation: stored_generation,
-        holder_id: stored_holder_id.to_owned(),
-        deadline_unix_ms: try_i64(&row, "deadline_unix_ms")?,
-    })
-}
-
+#[allow(clippy::too_many_arguments)]
 async fn actor_authorize_permit(
     client: &Client,
     lock_key: ServingFenceLockKey,
     holder_id: &str,
     generation: i64,
     operation_id: &str,
+    kind: &str,
+    ordinal: i16,
+    source_operation_id: &str,
     expected_deadline_unix_ms: i64,
 ) -> Result<AuthorizationWindow, ServingFenceError> {
     let row = database_timeout(client.query_one(
         PERMIT_AUTHORIZE_SQL,
-        &[&lock_key.as_i64(), &holder_id, &generation, &operation_id],
+        &[
+            &lock_key.as_i64(),
+            &holder_id,
+            &generation,
+            &operation_id,
+            &kind,
+            &ordinal,
+            &source_operation_id,
+            &expected_deadline_unix_ms,
+        ],
     ))
     .await?;
     match try_str(&row, "outcome")? {
@@ -847,6 +1006,10 @@ async fn actor_authorize_permit(
         "expired" => return Err(ServingFenceError::PermitExpired),
         "unknown" => return Err(ServingFenceError::PermitUnknown),
         "completed" => return Err(ServingFenceError::PermitCompleted),
+        "already_dispatched" => return Err(ServingFenceError::PermitAlreadyDispatched),
+        "operation_conflict" => return Err(ServingFenceError::PermitConflict),
+        "source_operation_rejected" => return Err(ServingFenceError::SourceOperationNotAuthorized),
+        "permit_mismatch" => return Err(ServingFenceError::ProtocolDrift),
         "abandoned" => return Err(ServingFenceError::PermitAbandoned),
         "stale_generation" => return Err(ServingFenceError::StaleGeneration),
         "admission_closed" => return Err(ServingFenceError::AdmissionClosed),
@@ -861,25 +1024,20 @@ async fn actor_authorize_permit(
     })
 }
 
-async fn actor_complete_permit(
+async fn actor_open_after_recovery(
     client: &Client,
     lock_key: ServingFenceLockKey,
     holder_id: &str,
     generation: i64,
-    operation_id: &str,
-) -> Result<PermitCompletionOutcome, ServingFenceError> {
+) -> Result<(), ServingFenceError> {
     let row = database_timeout(client.query_one(
-        PERMIT_COMPLETE_SQL,
-        &[&lock_key.as_i64(), &holder_id, &generation, &operation_id],
+        FENCE_OPEN_AFTER_RECOVERY_SQL,
+        &[&lock_key.as_i64(), &holder_id, &generation],
     ))
     .await?;
     match try_str(&row, "outcome")? {
-        "completed" => Ok(PermitCompletionOutcome::Completed),
-        "already_completed" => Ok(PermitCompletionOutcome::AlreadyCompleted),
-        "unknown" => Err(ServingFenceError::PermitUnknown),
-        "abandoned" => Err(ServingFenceError::PermitAbandoned),
-        "stale_generation" => Err(ServingFenceError::StaleGeneration),
-        "admission_closed" => Err(ServingFenceError::AdmissionClosed),
+        "opened" => Ok(()),
+        "recovery_incomplete" => Err(ServingFenceError::RecoveryIncomplete),
         "ownership_lost" => Err(ServingFenceError::OwnershipLost),
         _ => Err(ServingFenceError::ProtocolDrift),
     }
@@ -908,7 +1066,7 @@ async fn finish_takeover(
     lock_key: ServingFenceLockKey,
     holder_id: &str,
     generation: i64,
-) -> Result<(), ServingFenceError> {
+) -> Result<Vec<DispatchOperationId>, ServingFenceError> {
     let deadline = Instant::now() + MAX_POST_LOCAL_BARRIER_WAIT;
     loop {
         let row = database_timeout(client.query_one(
@@ -917,7 +1075,22 @@ async fn finish_takeover(
         ))
         .await?;
         match try_str(&row, "outcome")? {
-            "opened" => return Ok(()),
+            "recovery_ready" => {
+                let operation_ids = row
+                    .try_get::<_, Vec<String>>("recovery_operation_ids")
+                    .map_err(|_| ServingFenceError::ProtocolDrift)?;
+                let parsed = operation_ids
+                    .iter()
+                    .map(|operation_id| DispatchOperationId::parse(operation_id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if parsed
+                    .windows(2)
+                    .any(|pair| pair[0].as_str().as_bytes() >= pair[1].as_str().as_bytes())
+                {
+                    return Err(ServingFenceError::ProtocolDrift);
+                }
+                return Ok(parsed);
+            }
             "barrier_pending" => {
                 let remaining_ms = try_i64(&row, "remaining_ms")?;
                 if remaining_ms <= 0 || Instant::now() >= deadline {
@@ -1016,11 +1189,6 @@ fn try_bool(row: &Row, column: &str) -> Result<bool, ServingFenceError> {
         .map_err(|_| ServingFenceError::ProtocolDrift)
 }
 
-fn try_i32(row: &Row, column: &str) -> Result<i32, ServingFenceError> {
-    row.try_get(column)
-        .map_err(|_| ServingFenceError::ProtocolDrift)
-}
-
 fn try_i64(row: &Row, column: &str) -> Result<i64, ServingFenceError> {
     row.try_get(column)
         .map_err(|_| ServingFenceError::ProtocolDrift)
@@ -1076,6 +1244,66 @@ mod tests {
             LOCAL_TAKEOVER_WAIT,
             HARD_SOURCE_DEADLINE + CANCELLATION_GRACE
         );
+    }
+
+    #[tokio::test]
+    async fn consultation_lifecycle_seal_fails_closed_only_while_armed() {
+        let (admission, _) = watch::channel(true);
+        let unarmed_actor = tokio::spawn(std::future::pending::<()>());
+        let unarmed = ConsultationLifecycleSeal::unarmed(&admission, &unarmed_actor.abort_handle());
+        drop(unarmed);
+        tokio::task::yield_now().await;
+        assert!(*admission.borrow());
+        assert!(!unarmed_actor.is_finished());
+        unarmed_actor.abort();
+
+        let armed_actor = tokio::spawn(std::future::pending::<()>());
+        let mut armed = ConsultationLifecycleSeal::unarmed(&admission, &armed_actor.abort_handle());
+        armed.arm_for_attempt_cas();
+        drop(armed);
+        tokio::task::yield_now().await;
+        assert!(!*admission.borrow());
+        assert!(armed_actor
+            .await
+            .expect_err("armed seal aborts actor")
+            .is_cancelled());
+
+        admission.send_replace(true);
+        let completed_actor = tokio::spawn(std::future::pending::<()>());
+        let mut completed =
+            ConsultationLifecycleSeal::unarmed(&admission, &completed_actor.abort_handle());
+        completed.arm_for_attempt_cas();
+        completed.disarm_after_terminal_completion();
+        drop(completed);
+        tokio::task::yield_now().await;
+        assert!(*admission.borrow());
+        assert!(!completed_actor.is_finished());
+        completed_actor.abort();
+    }
+
+    #[tokio::test]
+    async fn exhausted_head_changed_attempt_retries_leave_fence_ready() {
+        let (admission, _) = watch::channel(true);
+        let actor = tokio::spawn(std::future::pending::<()>());
+        let mut authority = FencedConsultationAttemptAuthority {
+            lock_key: ServingFenceLockKey::new(1).expect("test key is valid"),
+            holder_id: Ulid::new().to_string(),
+            fence_generation: 1,
+            budget: DispatchPermitBudget::new(Duration::from_millis(1))
+                .expect("test budget is valid"),
+            permit_set: ConsultationPermitSet::from_counts(0, 0)
+                .expect("empty permit set is valid"),
+            lifecycle_seal: ConsultationLifecycleSeal::unarmed(&admission, &actor.abort_handle()),
+        };
+        for _ in 0..8 {
+            authority.arm_lifecycle_seal();
+            authority.disarm_after_head_changed();
+        }
+        drop(authority);
+        tokio::task::yield_now().await;
+        assert!(*admission.borrow());
+        assert!(!actor.is_finished());
+        actor.abort();
     }
 
     #[test]

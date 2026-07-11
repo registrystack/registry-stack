@@ -25,29 +25,40 @@ use registry_platform_audit::{
     DurableAuditPhase, DurableAuditSink, DurableAuditStreamKind, DurableAuditWrite,
     DurableAuditWriteError, DurableAuditWriteOutcome,
 };
+use registry_platform_crypto::canonicalize_json;
 use serde_json::json;
+use serde_json::Value;
 use tokio::time::Instant;
 use tokio::{sync::Barrier, task::JoinHandle};
 use tokio_postgres::{error::SqlState, Client, Config, GenericClient};
 use ulid::Ulid;
 
+use crate::consultation::OperationId;
+use crate::source_plan::{
+    maximum_completion_seed_fixture, normal_completion_seed_fixture,
+    rhai_five_operation_two_slot_completion_seed_fixture, semantic_alias_completion_seed_fixture,
+};
+
 use super::migration::RUNTIME_SESSION_LIMITS_SQL;
 use super::pseudonym_keyring::canonical_metadata as canonical_keyring_metadata;
 use super::{
-    install_postgres_state_plane_v1, AuditChainKeyEpochId, AuditPseudonymKeyringLockKey,
-    AuditPseudonymLookupEpoch, AuditPseudonymMaintenanceDatabaseRole,
-    AuditPseudonymReaderDatabaseRole, AuthorizedAuditPseudonymLookupSubset,
-    CompletionAttemptReference, DispatchOperationId, DispatchPermitBudget, EffectiveQuotaLimits,
-    KeyringInitializationOutcome, PermitCompletionOutcome,
-    PostgresAuditPseudonymKeyringMaintenance, PostgresAuditPseudonymKeyringReader,
-    PostgresAuditPseudonymKeyringRuntime, PostgresDurableAuditStatePlane, PostgresKeyringError,
-    PostgresQuotaStatePlane, PostgresServingFence, PseudonymBoundDuplicateRecoveryOutcome,
+    install_postgres_state_plane_v1, AttemptPseudonymBundle, AuditChainKeyEpochId,
+    AuditPseudonymKeyringLockKey, AuditPseudonymLookupEpoch, AuditPseudonymMaintenanceDatabaseRole,
+    AuditPseudonymReaderDatabaseRole, AuditedConsultationDispatch,
+    AuthorizedAuditPseudonymLookupSubset, CompletionAttemptReference,
+    ConsultationCompletionOutcome, ConsultationCompletionSeed, ConsultationPermitSet,
+    ConsultationPersistenceError, DispatchOperationId, DispatchPermitBudget, EffectiveQuotaLimits,
+    KeyringInitializationOutcome, KnownCompletionDisposition, KnownConsultationCompletionFacts,
+    KnownFailureClass, PostgresAuditPseudonymKeyringMaintenance,
+    PostgresAuditPseudonymKeyringReader, PostgresAuditPseudonymKeyringRuntime,
+    PostgresDurableAuditStatePlane, PostgresKeyringError, PostgresQuotaStatePlane,
+    PostgresServingFence, PseudonymBoundDuplicateRecoveryOutcome, PublicConsultationOutcome,
     PublicQuotaLimits, QuotaError, QuotaGrant, QuotaKey, QuotaReadiness, QuotaReservation,
     RuntimeDatabaseRole, ServingFenceError, ServingFenceLockKey, ServingFenceReadiness,
     StatePlaneInitializationError, StatePlaneInstallError, StatePlaneReadiness,
-    AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1, DURABLE_AUDIT_CAPABILITY_V1,
-    PERSISTENT_QUOTA_CAPABILITY_V1, POSTGRES_STATE_PLANE_MIGRATION_V1, SERVING_FENCE_CAPABILITY_V1,
-    STATE_PLANE_SCHEMA_FINGERPRINT_V1,
+    TakeoverCompletionRecoveryAuthority, AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
+    DURABLE_AUDIT_CAPABILITY_V1, PERSISTENT_QUOTA_CAPABILITY_V1, POSTGRES_STATE_PLANE_MIGRATION_V1,
+    SERVING_FENCE_CAPABILITY_V1, STATE_PLANE_SCHEMA_FINGERPRINT_V1,
 };
 
 const DATABASE_URL_ENV: &str = "REGISTRY_RELAY_STATE_PLANE_POSTGRES_TEST_URL";
@@ -75,14 +86,6 @@ fn test_pseudonym_keyring_lock_key() -> AuditPseudonymKeyringLockKey {
 struct DirectCandidate {
     predecessor: Option<[u8; 32]>,
     generation: i64,
-}
-
-struct DispatchDropCounter(Arc<AtomicUsize>);
-
-impl Drop for DispatchDropCounter {
-    fn drop(&mut self) {
-        self.0.fetch_add(1, Ordering::SeqCst);
-    }
 }
 
 async fn postgres_client(
@@ -170,6 +173,217 @@ fn consultation_attempt_write(
         }),
     )
     .expect("test consultation attempt is valid")
+}
+
+fn pseudonym_denial_write(
+    operation_id: &DurableAuditOperationId,
+    key_id: &AuditPseudonymKeyId,
+    marker: &str,
+) -> DurableAuditWrite {
+    DurableAuditWrite::new(
+        DurableAuditStreamKind::Denial,
+        operation_id.clone(),
+        DurableAuditPhase::DenialDecision,
+        json!({
+            "commitment_key_id": key_id.as_str(),
+            "subject_handle": "hmac-sha256:test-only-redacted-handle",
+            "test_marker": marker,
+        }),
+    )
+    .expect("test pseudonym denial is valid")
+}
+
+fn atomic_consultation_attempt_write(
+    operation_id: &DurableAuditOperationId,
+    key_id: &AuditPseudonymKeyId,
+    seed: &Value,
+    marker: &str,
+) -> DurableAuditWrite {
+    DurableAuditWrite::new(
+        DurableAuditStreamKind::Consultation,
+        operation_id.clone(),
+        DurableAuditPhase::Attempt,
+        json!({
+            "authorization": "accepted",
+            "completion_seed": seed,
+            "commitment_key_id": key_id.as_str(),
+            "subject_handle": "hmac-sha256:test-only-redacted-handle",
+            "input_commitment": "hmac-sha256:test-only-input-commitment",
+            "predicate_commitment": "hmac-sha256:test-only-predicate-commitment",
+            "consent_evidence_commitment": null,
+            "test_marker": marker,
+        }),
+    )
+    .expect("test atomic consultation attempt is valid")
+}
+
+fn attempt_pseudonym_bundle(key_id: &AuditPseudonymKeyId) -> AttemptPseudonymBundle {
+    AttemptPseudonymBundle::new(
+        key_id.as_str(),
+        "hmac-sha256:test-only-redacted-handle",
+        "hmac-sha256:test-only-input-commitment",
+        "hmac-sha256:test-only-predicate-commitment",
+        None,
+    )
+    .expect("test pseudonym bundle is bounded")
+}
+
+fn completion_seed_value(
+    plan_kind: &str,
+    credential_operation: Option<&str>,
+    data_operations: &[&str],
+    data_slot_allowed_operations: &[Vec<&str>],
+) -> Value {
+    let mut authorized_operation_union = Vec::new();
+    if let Some(operation_id) = credential_operation {
+        authorized_operation_union.push(json!({
+            "kind": "credential",
+            "operation_id": operation_id,
+        }));
+    }
+    authorized_operation_union.extend(data_operations.iter().map(|operation_id| {
+        json!({
+            "kind": "data",
+            "operation_id": operation_id,
+        })
+    }));
+    let mut permit_bindings = Vec::new();
+    if let Some(operation_id) = credential_operation {
+        permit_bindings.push(json!({
+            "kind": "credential",
+            "ordinal": 0,
+            "allowed_operation_ids": [operation_id],
+        }));
+    }
+    permit_bindings.extend(data_slot_allowed_operations.iter().enumerate().map(
+        |(ordinal, allowed)| {
+            json!({
+                "kind": "data",
+                "ordinal": ordinal,
+                "allowed_operation_ids": allowed,
+            })
+        },
+    ));
+    let credential_count = if credential_operation.is_some() { 1 } else { 0 };
+    let data_count = data_slot_allowed_operations.len() as i64;
+    let is_snapshot = plan_kind == "snapshot_exact";
+    json!({
+        "schema": "registry.relay.consultation-completion-seed/v1",
+        "correlation": {"notary_evaluation_id": null},
+        "profile": {
+            "id": "test-profile",
+            "version": "1",
+            "contract_hash": format!("sha256:{}", "1".repeat(64)),
+        },
+        "integration_pack": {
+            "id": "test-pack",
+            "version": "1",
+            "hash": format!("sha256:{}", "2".repeat(64)),
+        },
+        "private_binding_hash": format!("sha256:{}", "3".repeat(64)),
+        "workload": {
+            "id": "test-workload",
+            "tenant_id": "test-tenant",
+            "registry_id": "test-registry",
+        },
+        "purpose": "test-purpose",
+        "policy": {
+            "id": "test-policy",
+            "hash": format!("sha256:{}", "4".repeat(64)),
+            "legal_basis_id": "test-legal-basis",
+            "consent": {
+                "required": false,
+                "verifier_id": null,
+                "contract_hash": null,
+                "decision": "not_required",
+            },
+            "obligations_digest": format!("sha256:{}", "5".repeat(64)),
+        },
+        "acquisition": {
+            "class": if is_snapshot { "materialized_snapshot" } else { "source_projected_exact" },
+            "schema": {
+                "type": "acquisition_union",
+                "fields": {
+                    "registration_status": {
+                        "type": "string",
+                        "nullable": false,
+                        "max_bytes": 65536,
+                    },
+                },
+            },
+            "disclosure_fields": ["registration_status"],
+            "public_outcomes": ["match", "no_match"],
+            "provenance_contract": {
+                "source_observed_at": null,
+                "source_revision": null,
+                "snapshot_generation": if is_snapshot { "required" } else { "absent" },
+                "snapshot_published_at": if is_snapshot { "required" } else { "absent" },
+            },
+        },
+        "destinations": {
+            "credential_destination_id": credential_operation.map(|_| "credential-destination"),
+            "data_destination_id": (!is_snapshot).then_some("data-destination"),
+        },
+        "credential": {
+            "reference": credential_operation.map(|_| "test-credential"),
+            "generation": credential_operation.map(|_| 1),
+        },
+        "authorized_operation_union": authorized_operation_union,
+        "dispatch": {
+            "plan_kind": plan_kind,
+            "permit_bindings": permit_bindings,
+        },
+        "bounds": {
+            "source_matches": 1,
+            "disclosed_records": 1,
+            "data_exchanges": data_count,
+            "credential_exchanges": credential_count,
+            "data_destinations": if is_snapshot { 0 } else { 1 },
+            "source_bytes": 1048576,
+            "timeout_ms": 10000,
+            "max_in_flight": 16,
+            "quota_rate_per_minute": 60,
+            "quota_burst": 10,
+            "public_response_bytes": 65536,
+            "credential_token_lifetime_ms": credential_operation.map(|_| 86400000),
+        },
+        "request_digest": format!("sha256:{}", "6".repeat(64)),
+        "authorization_context_digest": format!("sha256:{}", "7".repeat(64)),
+        "execution_plan_digest": format!("sha256:{}", "8".repeat(64)),
+    })
+}
+
+async fn persist_test_consultation_attempt(
+    plane: &PostgresDurableAuditStatePlane,
+    fence: &PostgresServingFence,
+    keyring_runtime: &PostgresAuditPseudonymKeyringRuntime,
+    key_id: &AuditPseudonymKeyId,
+    seed: Value,
+    permit_set: ConsultationPermitSet,
+    marker: &str,
+) -> Result<AuditedConsultationDispatch, Box<dyn std::error::Error>> {
+    let operation_id = DurableAuditOperationId::from_ulid(Ulid::new());
+    let write = atomic_consultation_attempt_write(&operation_id, key_id, &seed, marker);
+    let attempt_authority = fence
+        .authorize_consultation_attempt(
+            DispatchPermitBudget::new(Duration::from_secs(10))?,
+            permit_set,
+        )
+        .await?;
+    let pseudonym_authority = keyring_runtime
+        .current_write_authority()
+        .await?
+        .authorize_use()?;
+    plane
+        .write_attempt_with_completion_intent(
+            &write,
+            ConsultationCompletionSeed::from_value_for_test(seed)?,
+            attempt_pseudonym_bundle(key_id),
+            attempt_authority,
+            pseudonym_authority,
+        )
+        .await
+        .map_err(Into::into)
 }
 
 fn rotation_successor(
@@ -330,10 +544,149 @@ async fn wait_for_blocked_quota_query(
     }
 }
 
+async fn wait_for_blocked_consultation_query(
+    admin: &Client,
+    runtime_role: &str,
+    function_name: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let query_pattern = format!("%{function_name}%");
+    loop {
+        admin
+            .batch_execute("SELECT pg_catalog.pg_stat_clear_snapshot()")
+            .await?;
+        let blocked: i64 = admin
+            .query_one(
+                "SELECT count(*) FROM pg_catalog.pg_stat_activity \
+                 WHERE usename = $1 AND state = 'active' \
+                   AND wait_event_type = 'Lock' AND query LIKE $2",
+                &[&runtime_role, &query_pattern],
+            )
+            .await?
+            .try_get(0)?;
+        if blocked > 0 {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("{function_name} did not reach the PostgreSQL lock wait").into());
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn direct_test_fence_acquire(
+    client: &Client,
+    lock_key: ServingFenceLockKey,
+) -> Result<(String, i64, bool, bool), Box<dyn std::error::Error>> {
+    client.batch_execute(RUNTIME_SESSION_LIMITS_SQL).await?;
+    let holder_id = Ulid::new().to_string();
+    let row = client
+        .query_one(
+            "SELECT * FROM relay_state_api.serving_fence_acquire_v1($1, $2)",
+            &[&lock_key.as_i64(), &holder_id],
+        )
+        .await?;
+    if row.try_get::<_, &str>("outcome")? != "acquired" {
+        return Err("direct test successor did not acquire the serving fence".into());
+    }
+    Ok((
+        holder_id,
+        row.try_get("fence_generation")?,
+        row.try_get("takeover_required")?,
+        row.try_get("admission_open")?,
+    ))
+}
+
+async fn direct_test_fence_finalize(
+    client: &Client,
+    lock_key: ServingFenceLockKey,
+    holder_id: &str,
+    generation: i64,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let row = client
+            .query_one(
+                "SELECT * FROM relay_state_api.serving_fence_finalize_v1($1, $2, $3)",
+                &[&lock_key.as_i64(), &holder_id, &generation],
+            )
+            .await?;
+        match row.try_get::<_, &str>("outcome")? {
+            "recovery_ready" => return Ok(row.try_get("recovery_operation_ids")?),
+            "barrier_pending" => {
+                let remaining_ms = row.try_get::<_, i64>("remaining_ms")?;
+                if remaining_ms <= 0 || Instant::now() >= deadline {
+                    return Err("direct test successor did not reach its takeover barrier".into());
+                }
+                tokio::time::sleep(Duration::from_millis(u64::try_from(remaining_ms.min(250))?))
+                    .await;
+            }
+            outcome => return Err(format!("unexpected direct finalize outcome: {outcome}").into()),
+        }
+    }
+}
+
+fn direct_test_recovery_authority(
+    lock_key: ServingFenceLockKey,
+    holder_id: &str,
+    generation: i64,
+    operation_ids: Vec<String>,
+) -> Result<TakeoverCompletionRecoveryAuthority, ServingFenceError> {
+    Ok(TakeoverCompletionRecoveryAuthority {
+        lock_key,
+        holder_id: holder_id.to_owned(),
+        fence_generation: generation,
+        operation_ids: operation_ids
+            .iter()
+            .map(|operation_id| DispatchOperationId::parse(operation_id))
+            .collect::<Result<Vec<_>, _>>()?,
+        next_index: 0,
+    })
+}
+
+async fn direct_test_fence_open(
+    client: &Client,
+    lock_key: ServingFenceLockKey,
+    holder_id: &str,
+    generation: i64,
+) -> Result<String, Box<dyn std::error::Error>> {
+    Ok(client
+        .query_one(
+            "SELECT outcome FROM relay_state_api.serving_fence_open_after_recovery_v1(\
+                 $1, $2, $3\
+             )",
+            &[&lock_key.as_i64(), &holder_id, &generation],
+        )
+        .await?
+        .try_get("outcome")?)
+}
+
+async fn direct_test_fence_release(
+    client: &Client,
+    lock_key: ServingFenceLockKey,
+    holder_id: &str,
+    generation: i64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let outcome: String = client
+        .query_one(
+            "SELECT outcome FROM relay_state_api.serving_fence_release_v1($1, $2, $3)",
+            &[&lock_key.as_i64(), &holder_id, &generation],
+        )
+        .await?
+        .try_get("outcome")?;
+    if outcome != "released" {
+        return Err(format!("unexpected direct release outcome: {outcome}").into());
+    }
+    Ok(())
+}
+
 async fn blocked_quota_query_count(
     admin: &Client,
     runtime_role: &str,
 ) -> Result<i64, tokio_postgres::Error> {
+    admin
+        .batch_execute("SELECT pg_catalog.pg_stat_clear_snapshot()")
+        .await?;
     admin
         .query_one(
             "SELECT count(*) FROM pg_catalog.pg_stat_activity \
@@ -411,14 +764,39 @@ async fn seed_catalog_for_unsafe_restart(
                  TO {runtime}; \
              GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_status_v1(bigint, text, bigint) \
                  TO {runtime}; \
-             GRANT EXECUTE ON FUNCTION relay_state_api.dispatch_permit_create_v1( \
-                 bigint, text, bigint, text, integer \
+             GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_open_after_recovery_v1( \
+                 bigint, text, bigint \
+             ) TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.consultation_attempt_intent_snapshot_v1( \
+                 text, bytea, text, bytea, text, bytea, text, bigint, bytea, bigint, \
+                 text, bigint, integer, text[], smallint[], text, bigint \
+             ) TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.consultation_attempt_intent_cas_v1( \
+                 text, bytea, bigint, bytea, text, bigint, text, text, bytea, text, \
+                 bytea, text, bytea, text, bigint, bytea, bigint, text, bigint, integer, \
+                 text[], smallint[], text, bigint \
+             ) TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.consultation_completion_snapshot_normal_v1( \
+                 text, bigint, text, bigint, bigint, text[], smallint[], text, bigint, \
+                 bytea, text, bigint \
+             ) TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.consultation_completion_snapshot_recovery_v1( \
+                 text, bigint, text, bigint, text, bigint \
+             ) TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.consultation_completion_cas_normal_v1( \
+                 text, bigint, text, bigint, bigint, text[], smallint[], text, bigint, \
+                 bytea, bytea, bigint, bytea, text, bigint, text, text, bytea, text, bigint \
+             ) TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.consultation_completion_cas_unfinished_v1( \
+                 text, bigint, text, bigint, bigint, text[], smallint[], text, bigint, \
+                 bytea, bytea, bigint, bytea, text, bigint, text, text, bytea, text, bigint \
+             ) TO {runtime}; \
+             GRANT EXECUTE ON FUNCTION relay_state_api.consultation_completion_cas_recovery_v1( \
+                 text, bigint, text, bigint, bytea, bigint, bytea, text, bigint, text, \
+                 text, bytea, text, bigint \
              ) TO {runtime}; \
              GRANT EXECUTE ON FUNCTION relay_state_api.dispatch_permit_authorize_v1( \
-                 bigint, text, bigint, text \
-             ) TO {runtime}; \
-             GRANT EXECUTE ON FUNCTION relay_state_api.dispatch_permit_complete_v1( \
-                 bigint, text, bigint, text \
+                 bigint, text, bigint, text, text, smallint, text, bigint \
              ) TO {runtime}; \
              GRANT EXECUTE ON FUNCTION relay_state_api.serving_fence_release_v1(bigint, text, bigint) \
                  TO {runtime}; \
@@ -2249,10 +2627,116 @@ WHERE metadata.singleton = true
     );
     wrong_epoch_driver.abort();
 
+    let fence_key = test_serving_fence_lock_key();
+    let (fence_one_client, fence_one_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let fence_one = PostgresServingFence::acquire(
+        fence_one_client,
+        fence_one_driver,
+        &chain_key_epoch_id,
+        fence_key,
+    )
+    .await?;
+    assert_eq!(fence_one.generation(), 1);
+
     let pseudonym_operation = DurableAuditOperationId::from_ulid(Ulid::new());
-    let pseudonym_write = consultation_attempt_write(
+    let pseudonym_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+    set_role(&admin, &owner_role).await?;
+    let seed_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&pseudonym_seed)?],
+        )
+        .await?
+        .try_get(0)?;
+    let mut subset_outcome_seed = pseudonym_seed.clone();
+    subset_outcome_seed["acquisition"]["public_outcomes"] = json!(["match"]);
+    let subset_outcomes_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&subset_outcome_seed)?],
+        )
+        .await?
+        .try_get(0)?;
+    let mut ambiguous_seed = pseudonym_seed.clone();
+    ambiguous_seed["bounds"]["source_matches"] = json!(2);
+    ambiguous_seed["acquisition"]["public_outcomes"] = json!(["match", "no_match", "ambiguous"]);
+    let ambiguous_seed_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&ambiguous_seed)?],
+        )
+        .await?
+        .try_get(0)?;
+    let compiler_normal_seed = normal_completion_seed_fixture();
+    let compiler_semantic_alias_seed = semantic_alias_completion_seed_fixture();
+    let compiler_maximum_seed = maximum_completion_seed_fixture();
+    let compiler_rhai_seed = rhai_five_operation_two_slot_completion_seed_fixture();
+    assert!(
+        canonicalize_json(&compiler_maximum_seed)
+            .expect("compiler maximum seed is canonicalizable")
+            .len()
+            <= 262_144,
+        "compiler maximum seed must fit the shared SQL/Rust canonical cap"
+    );
+    let compiler_normal_seed_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&compiler_normal_seed)?],
+        )
+        .await?
+        .try_get(0)?;
+    let compiler_semantic_alias_seed_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&compiler_semantic_alias_seed)?],
+        )
+        .await?
+        .try_get(0)?;
+    let compiler_maximum_seed_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&compiler_maximum_seed)?],
+        )
+        .await?
+        .try_get(0)?;
+    let compiler_rhai_seed_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&compiler_rhai_seed)?],
+        )
+        .await?
+        .try_get(0)?;
+    reset_role(&admin).await?;
+    assert!(seed_valid, "snapshot completion seed must satisfy SQL");
+    assert!(
+        !subset_outcomes_valid,
+        "public outcome subsets must fail closed"
+    );
+    assert!(
+        ambiguous_seed_valid,
+        "source_matches=2 admits the exact ambiguous profile"
+    );
+    assert!(
+        compiler_normal_seed_valid,
+        "the compiler's ordinary completion seed must satisfy SQL"
+    );
+    assert!(
+        compiler_semantic_alias_seed_valid,
+        "compiler-produced semantic aliases need not equal raw acquisition keys"
+    );
+    assert!(
+        compiler_maximum_seed_valid,
+        "the SQL seed validator must accept the compiler's exact-maximum profile"
+    );
+    assert!(
+        compiler_rhai_seed_valid,
+        "the SQL seed validator must accept the compiler's five-operation two-slot Rhai profile"
+    );
+    let pseudonym_write = atomic_consultation_attempt_write(
         &pseudonym_operation,
         initial_keyring_metadata.active_key_id(),
+        &pseudonym_seed,
         "pseudonym-bound-insert",
     );
     assert_eq!(
@@ -2264,12 +2748,22 @@ WHERE metadata.singleton = true
         .current_write_authority()
         .await?
         .authorize_use()?;
-    assert!(matches!(
-        plane_one
-            .write_phase_with_pseudonym_authority(&pseudonym_write, initial_write_epoch)
-            .await?,
-        DurableAuditWriteOutcome::Inserted(_)
-    ));
+    let pseudonym_attempt_authority = fence_one
+        .authorize_consultation_attempt(
+            DispatchPermitBudget::new(Duration::from_secs(10))?,
+            ConsultationPermitSet::from_counts(0, 0)?,
+        )
+        .await?;
+    let mut pseudonym_dispatch = plane_one
+        .write_attempt_with_completion_intent(
+            &pseudonym_write,
+            ConsultationCompletionSeed::from_value_for_test(pseudonym_seed.clone())?,
+            attempt_pseudonym_bundle(initial_keyring_metadata.active_key_id()),
+            pseudonym_attempt_authority,
+            initial_write_epoch,
+        )
+        .await?;
+    assert!(pseudonym_dispatch.permits_mut().is_empty());
     assert!(matches!(
         plane_one
             .recover_pseudonym_bound_duplicate(&pseudonym_write)
@@ -2326,7 +2820,7 @@ WHERE metadata.singleton = true
         .await?
         .authorize_use()?;
     let held_operation = DurableAuditOperationId::from_ulid(Ulid::new());
-    let held_write = consultation_attempt_write(
+    let held_write = pseudonym_denial_write(
         &held_operation,
         initial_keyring_metadata.active_key_id(),
         "held-shared-keyring-barrier",
@@ -2382,8 +2876,30 @@ WHERE metadata.singleton = true
         .await?
         .authorize_use()?;
     assert_eq!(current_epoch_2.key_id().as_str(), "epoch-2");
-    drop(current_epoch_2);
-    let stale_after_rotation_write = consultation_attempt_write(
+    let snapshot_acquired_at_unix_ms = current_unix_ms();
+    let snapshot_generation = Ulid::new().to_string();
+    let snapshot_facts = KnownConsultationCompletionFacts::public_for_snapshot_test(
+        PublicConsultationOutcome::NoMatch,
+        snapshot_acquired_at_unix_ms,
+        None,
+        None,
+        &snapshot_generation,
+        snapshot_acquired_at_unix_ms,
+    )?;
+    let publication_after_rotation = match plane_one
+        .finalize_validated_consultation(pseudonym_dispatch, snapshot_facts, current_epoch_2)
+        .await?
+    {
+        KnownCompletionDisposition::Published(publication) => publication,
+        KnownCompletionDisposition::FinalizedFailure(_) => {
+            panic!("SnapshotExact public facts must produce a publication grant")
+        }
+    };
+    assert!(!publication_after_rotation
+        .stored_identity()
+        .envelope_id()
+        .is_empty());
+    let stale_after_rotation_write = pseudonym_denial_write(
         &DurableAuditOperationId::from_ulid(Ulid::new()),
         initial_keyring_metadata.active_key_id(),
         "stale-issued-authority",
@@ -2835,7 +3351,7 @@ WHERE metadata.singleton = true
         .collect::<Result<Vec<_>, _>>()?;
     let ordered_chain = order_chain(stored_envelopes);
     let verification = verify_chain(&ordered_chain, &test_chain_hasher)?;
-    assert_eq!(verification.records, 7);
+    assert_eq!(verification.records, 8);
     let head: Vec<u8> = admin
         .query_one(
             "SELECT record_hash FROM relay_state_private.audit_chain_head WHERE singleton = true",
@@ -2850,7 +3366,6 @@ WHERE metadata.singleton = true
 
     // The serving fence is a separate, dedicated session capability. Runtime
     // role/database GUC inheritance must fail before advisory-lock acquisition.
-    let fence_key = test_serving_fence_lock_key();
     admin
         .batch_execute(&format!(
             "ALTER ROLE {} SET session_replication_role = 'replica'",
@@ -2896,30 +3411,6 @@ WHERE metadata.singleton = true
         ServingFenceError::Unavailable
     );
 
-    // Constructor ownership starts by rolling back caller transaction state
-    // and replacing every forceable hostile GUC before lock acquisition.
-    let (fence_one_client, fence_one_driver) =
-        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
-    fence_one_client
-        .batch_execute(
-            "SET search_path = public; \
-             SET lock_timeout = '0'; \
-             SET statement_timeout = '0'; \
-             SET idle_in_transaction_session_timeout = '0'; \
-             SET synchronous_commit = 'off'; \
-             SET client_encoding = 'SQL_ASCII'; \
-             SET standard_conforming_strings = 'off'; \
-             SET default_transaction_isolation = 'serializable';",
-        )
-        .await?;
-    fence_one_client.batch_execute("BEGIN").await?;
-    let fence_one = PostgresServingFence::acquire(
-        fence_one_client,
-        fence_one_driver,
-        &chain_key_epoch_id,
-        fence_key,
-    )
-    .await?;
     assert_eq!(fence_one.generation(), 1);
     assert_eq!(fence_one.readiness().await, ServingFenceReadiness::Ready);
     let durable_generation: i64 = admin
@@ -2963,8 +3454,368 @@ WHERE metadata.singleton = true
     );
     assert!(contention_started.elapsed() < Duration::from_secs(3));
 
-    // A runtime session without the advisory lock cannot use the permit API,
-    // even when it knows the durable generation and holder identifier.
+    // The exact compiler-produced ordinary and maximal seeds also pass the
+    // atomic attempt path, not only the standalone SQL validator.
+    for (marker, compiler_seed) in [
+        ("compiler-normal-seed", compiler_normal_seed.clone()),
+        ("compiler-maximum-seed", compiler_maximum_seed.clone()),
+    ] {
+        let credential_count = u8::try_from(
+            compiler_seed["bounds"]["credential_exchanges"]
+                .as_u64()
+                .expect("compiler fixture has typed credential bounds"),
+        )?;
+        let data_count = u8::try_from(
+            compiler_seed["bounds"]["data_exchanges"]
+                .as_u64()
+                .expect("compiler fixture has typed data bounds"),
+        )?;
+        let compiler_dispatch = persist_test_consultation_attempt(
+            &plane_one,
+            &fence_one,
+            &keyring_runtime,
+            &pseudonym_key_id("epoch-2"),
+            compiler_seed,
+            ConsultationPermitSet::from_counts(credential_count, data_count)?,
+            marker,
+        )
+        .await?;
+        let compiler_receipt = plane_one
+            .close_unfinished_consultation(
+                compiler_dispatch,
+                keyring_runtime
+                    .current_write_authority()
+                    .await?
+                    .authorize_use()?,
+            )
+            .await?;
+        assert_eq!(
+            compiler_receipt.outcome(),
+            ConsultationCompletionOutcome::NotStarted
+        );
+    }
+
+    // Seed rejection occurs inside the same PostgreSQL transaction as attempt,
+    // intent, and child insertion. No partial authority-bearing row may remain.
+    let invalid_atomic_operation = DurableAuditOperationId::from_ulid(Ulid::new());
+    let mut invalid_atomic_seed = completion_seed_value(
+        "bounded_http",
+        None,
+        &["lookup-registration"],
+        &[vec!["lookup-registration"]],
+    );
+    invalid_atomic_seed["acquisition"]["public_outcomes"] = json!(["match"]);
+    let invalid_atomic_write = atomic_consultation_attempt_write(
+        &invalid_atomic_operation,
+        &pseudonym_key_id("epoch-2"),
+        &invalid_atomic_seed,
+        "invalid-seed-is-atomic",
+    );
+    let invalid_atomic_authority = fence_one
+        .authorize_consultation_attempt(
+            DispatchPermitBudget::new(Duration::from_secs(10))?,
+            ConsultationPermitSet::from_counts(0, 1)?,
+        )
+        .await?;
+    assert_eq!(
+        plane_one
+            .write_attempt_with_completion_intent(
+                &invalid_atomic_write,
+                ConsultationCompletionSeed::from_value_for_test(invalid_atomic_seed)?,
+                attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
+                invalid_atomic_authority,
+                keyring_runtime
+                    .current_write_authority()
+                    .await?
+                    .authorize_use()?,
+            )
+            .await
+            .err(),
+        Some(ConsultationPersistenceError::InvalidInput)
+    );
+    let partial_atomic_rows: i64 = admin
+        .query_one(
+            "SELECT \
+                 (SELECT count(*) FROM relay_state_private.audit_phase \
+                  WHERE operation_id=$1) + \
+                 (SELECT count(*) FROM relay_state_private.consultation_completion_intent \
+                  WHERE operation_id=$1) + \
+                 (SELECT count(*) FROM relay_state_private.dispatch_permit \
+                  WHERE operation_id=$1)",
+            &[&invalid_atomic_operation.as_str()],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(partial_atomic_rows, 0);
+    assert_eq!(
+        fence_one.readiness().await,
+        ServingFenceReadiness::Ready,
+        "an authority stays harmless until a mutating attempt CAS is possible"
+    );
+
+    // The initial read-only snapshot can itself prove an identical durable
+    // attempt. Dispatch construction is the single invariant boundary: both
+    // the inserting and snapshot-replay paths return an armed lifecycle seal,
+    // and identical terminal completion disarms each handle.
+    let replay_operation = DurableAuditOperationId::from_ulid(Ulid::new());
+    let replay_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+    let replay_write = atomic_consultation_attempt_write(
+        &replay_operation,
+        &pseudonym_key_id("epoch-2"),
+        &replay_seed,
+        "identical-attempt-dispatch-seal",
+    );
+    let replay_authority_one = fence_one
+        .authorize_consultation_attempt(
+            DispatchPermitBudget::new(Duration::from_secs(10))?,
+            ConsultationPermitSet::from_counts(0, 0)?,
+        )
+        .await?;
+    let replay_dispatch_one = plane_one
+        .write_attempt_with_completion_intent(
+            &replay_write,
+            ConsultationCompletionSeed::from_value_for_test(replay_seed.clone())?,
+            attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
+            replay_authority_one,
+            keyring_runtime
+                .current_write_authority()
+                .await?
+                .authorize_use()?,
+        )
+        .await?;
+    let replay_authority_two = fence_one
+        .authorize_consultation_attempt(
+            DispatchPermitBudget::new(Duration::from_secs(10))?,
+            ConsultationPermitSet::from_counts(0, 0)?,
+        )
+        .await?;
+    let replay_dispatch_two = plane_one
+        .write_attempt_with_completion_intent(
+            &replay_write,
+            ConsultationCompletionSeed::from_value_for_test(replay_seed)?,
+            attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
+            replay_authority_two,
+            keyring_runtime
+                .current_write_authority()
+                .await?
+                .authorize_use()?,
+        )
+        .await?;
+    assert!(replay_dispatch_one.lifecycle_is_armed());
+    assert!(replay_dispatch_two.lifecycle_is_armed());
+    let replay_completion_one = plane_one
+        .close_unfinished_consultation(
+            replay_dispatch_one,
+            keyring_runtime
+                .current_write_authority()
+                .await?
+                .authorize_use()?,
+        )
+        .await?;
+    let replay_completion_two = plane_one
+        .close_unfinished_consultation(
+            replay_dispatch_two,
+            keyring_runtime
+                .current_write_authority()
+                .await?
+                .authorize_use()?,
+        )
+        .await?;
+    assert_eq!(
+        replay_completion_one.outcome(),
+        ConsultationCompletionOutcome::NotStarted
+    );
+    assert_eq!(
+        replay_completion_two.outcome(),
+        ConsultationCompletionOutcome::NotStarted
+    );
+    assert_eq!(
+        replay_completion_one.stored_identity().envelope_id(),
+        replay_completion_two.stored_identity().envelope_id()
+    );
+    assert_eq!(fence_one.readiness().await, ServingFenceReadiness::Ready);
+
+    // An operation outside the sealed slot capability is rejected before the
+    // lazy source closure is constructed. The exact accepted operation is
+    // then persisted with the one-shot dispatch marker, and an unfinished
+    // close derives outcome_unknown solely from that marker.
+    let bounded_seed = completion_seed_value(
+        "bounded_http",
+        None,
+        &["lookup-registration"],
+        &[vec!["lookup-registration"]],
+    );
+    let mut bounded_dispatch = persist_test_consultation_attempt(
+        &plane_one,
+        &fence_one,
+        &keyring_runtime,
+        &pseudonym_key_id("epoch-2"),
+        bounded_seed,
+        ConsultationPermitSet::from_counts(0, 1)?,
+        "bounded-selected-operation",
+    )
+    .await?;
+    let rejected_dispatches = Arc::new(AtomicUsize::new(0));
+    {
+        let rejected_dispatches = Arc::clone(&rejected_dispatches);
+        assert_eq!(
+            fence_one
+                .authorize_and_dispatch(
+                    &mut bounded_dispatch.permits_mut()[0],
+                    &OperationId::try_from("undeclared-operation")?,
+                    move || async move {
+                        rejected_dispatches.fetch_add(1, Ordering::SeqCst);
+                    },
+                )
+                .await
+                .err(),
+            Some(ServingFenceError::SourceOperationNotAuthorized)
+        );
+    }
+    assert_eq!(rejected_dispatches.load(Ordering::SeqCst), 0);
+    let operation_after_rejection: Option<String> = admin
+        .query_one(
+            "SELECT source_operation_id FROM relay_state_private.dispatch_permit \
+             WHERE operation_id=$1 AND kind='data' AND ordinal=0",
+            &[&bounded_dispatch.permits_mut()[0].operation_id().as_str()],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(operation_after_rejection, None);
+    fence_one
+        .authorize_and_dispatch(
+            &mut bounded_dispatch.permits_mut()[0],
+            &OperationId::try_from("lookup-registration")?,
+            || async {},
+        )
+        .await?;
+    let persisted_operation: String = admin
+        .query_one(
+            "SELECT source_operation_id FROM relay_state_private.dispatch_permit \
+             WHERE operation_id=$1 AND kind='data' AND ordinal=0",
+            &[&bounded_dispatch.permits_mut()[0].operation_id().as_str()],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(persisted_operation, "lookup-registration");
+    let unfinished_receipt = plane_one
+        .close_unfinished_consultation(
+            bounded_dispatch,
+            keyring_runtime
+                .current_write_authority()
+                .await?
+                .authorize_use()?,
+        )
+        .await?;
+    assert_eq!(
+        unfinished_receipt.outcome(),
+        ConsultationCompletionOutcome::OutcomeUnknown
+    );
+
+    // A known credential failure after only the credential marker is a valid
+    // terminal result, but it can return only a receipt, never publication
+    // authority for a public response.
+    let credential_seed = completion_seed_value(
+        "bounded_http",
+        Some("fetch-credential"),
+        &["lookup-registration"],
+        &[vec!["lookup-registration"]],
+    );
+    let mut credential_dispatch = persist_test_consultation_attempt(
+        &plane_one,
+        &fence_one,
+        &keyring_runtime,
+        &pseudonym_key_id("epoch-2"),
+        credential_seed,
+        ConsultationPermitSet::from_counts(1, 1)?,
+        "credential-only-known-failure",
+    )
+    .await?;
+    fence_one
+        .authorize_and_dispatch(
+            &mut credential_dispatch.permits_mut()[0],
+            &OperationId::try_from("fetch-credential")?,
+            || async {},
+        )
+        .await?;
+    let credential_failure = plane_one
+        .finalize_validated_consultation(
+            credential_dispatch,
+            KnownConsultationCompletionFacts::failure_for_test(
+                KnownFailureClass::CredentialUnavailable,
+            ),
+            keyring_runtime
+                .current_write_authority()
+                .await?
+                .authorize_use()?,
+        )
+        .await?;
+    match credential_failure {
+        KnownCompletionDisposition::FinalizedFailure(receipt) => {
+            assert_eq!(
+                receipt.outcome(),
+                ConsultationCompletionOutcome::KnownComplete
+            );
+            assert!(!receipt.stored_identity().envelope_id().is_empty());
+        }
+        KnownCompletionDisposition::Published(_) => {
+            panic!("a known credential failure must not mint publication authority")
+        }
+    }
+
+    // A SandboxedRhai call-budget slot carries the complete sorted callable
+    // data union. Independent consultations may select different operations
+    // at the same ordinal without widening or rewriting the sealed manifest.
+    for selected_operation in ["lookup-a", "lookup-b"] {
+        let rhai_seed = completion_seed_value(
+            "sandboxed_rhai",
+            None,
+            &["lookup-a", "lookup-b"],
+            &[vec!["lookup-a", "lookup-b"]],
+        );
+        let mut rhai_dispatch = persist_test_consultation_attempt(
+            &plane_one,
+            &fence_one,
+            &keyring_runtime,
+            &pseudonym_key_id("epoch-2"),
+            rhai_seed,
+            ConsultationPermitSet::from_counts(0, 1)?,
+            "rhai-call-budget-slot",
+        )
+        .await?;
+        fence_one
+            .authorize_and_dispatch(
+                &mut rhai_dispatch.permits_mut()[0],
+                &OperationId::try_from(selected_operation)?,
+                || async {},
+            )
+            .await?;
+        let selected_operation_stored: String = admin
+            .query_one(
+                "SELECT source_operation_id FROM relay_state_private.dispatch_permit \
+                 WHERE operation_id=$1 AND kind='data' AND ordinal=0",
+                &[&rhai_dispatch.permits_mut()[0].operation_id().as_str()],
+            )
+            .await?
+            .try_get(0)?;
+        assert_eq!(selected_operation_stored, selected_operation);
+        let receipt = plane_one
+            .close_unfinished_consultation(
+                rhai_dispatch,
+                keyring_runtime
+                    .current_write_authority()
+                    .await?
+                    .authorize_use()?,
+            )
+            .await?;
+        assert_eq!(
+            receipt.outcome(),
+            ConsultationCompletionOutcome::OutcomeUnknown
+        );
+    }
+
+    // A runtime session without the advisory lock cannot authorize a child
+    // permit, even when it knows the durable holder identity.
     let fence_one_holder: String = admin
         .query_one(
             "SELECT holder_id FROM relay_state_private.serving_fence_state \
@@ -2981,15 +3832,18 @@ WHERE metadata.singleton = true
         .await?;
     let direct_nonholder_outcome: String = direct_nonholder_client
         .query_one(
-            "SELECT outcome FROM relay_state_api.dispatch_permit_create_v1( \
-                 $1, $2, $3, $4, $5 \
+            "SELECT outcome FROM relay_state_api.dispatch_permit_authorize_v1( \
+                 $1, $2, $3, $4, $5, $6, $7, $8 \
              )",
             &[
                 &fence_key.as_i64(),
                 &fence_one_holder,
                 &fence_one.generation(),
                 &direct_nonholder_operation.as_str(),
-                &1_000_i32,
+                &"data",
+                &0_i16,
+                &"test-source-operation",
+                &(current_unix_ms() + 1_000),
             ],
         )
         .await?
@@ -2997,102 +3851,6 @@ WHERE metadata.singleton = true
     assert_eq!(direct_nonholder_outcome, "ownership_lost");
     drop(direct_nonholder_client);
     direct_nonholder_driver.abort();
-
-    // Permit creation is durable, exact-replay aware, and cannot widen the
-    // original PostgreSQL-clock deadline.
-    let normal_operation = DispatchOperationId::from_ulid(Ulid::new());
-    let normal_budget = DispatchPermitBudget::new(Duration::from_secs(5))?;
-    let mut normal_permit = fence_one
-        .create_permit(normal_operation.clone(), normal_budget)
-        .await?;
-    assert_eq!(normal_permit.fence_generation(), fence_one.generation());
-    let normal_dispatches = Arc::new(AtomicUsize::new(0));
-    let observed_dispatches = Arc::clone(&normal_dispatches);
-    assert_eq!(
-        fence_one
-            .authorize_and_dispatch(&mut normal_permit, move || async move {
-                observed_dispatches.fetch_add(1, Ordering::SeqCst);
-                "dispatched"
-            })
-            .await?,
-        "dispatched"
-    );
-    assert_eq!(normal_dispatches.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        fence_one
-            .create_permit(normal_operation.clone(), normal_budget)
-            .await
-            .err(),
-        Some(ServingFenceError::PermitReplay)
-    );
-    assert_eq!(
-        fence_one
-            .create_permit(
-                normal_operation.clone(),
-                DispatchPermitBudget::new(Duration::from_secs(6))?,
-            )
-            .await
-            .err(),
-        Some(ServingFenceError::PermitConflict)
-    );
-    let stored_permit = admin
-        .query_one(
-            "SELECT budget_ms, \
-                    floor(extract(epoch FROM deadline_at) * 1000)::bigint \
-             FROM relay_state_private.dispatch_permit WHERE operation_id = $1",
-            &[&normal_operation.as_str()],
-        )
-        .await?;
-    let stored_budget_ms: i32 = stored_permit.try_get(0)?;
-    let stored_deadline_unix_ms: i64 = stored_permit.try_get(1)?;
-    assert_eq!(stored_budget_ms, 5_000);
-    assert_eq!(stored_deadline_unix_ms, normal_permit.deadline_unix_ms());
-    assert_eq!(
-        fence_one.complete_permit(&mut normal_permit).await?,
-        PermitCompletionOutcome::Completed
-    );
-    assert_eq!(
-        fence_one.complete_permit(&mut normal_permit).await?,
-        PermitCompletionOutcome::AlreadyCompleted
-    );
-    let post_completion_dispatches = Arc::new(AtomicUsize::new(0));
-    let observed_dispatches = Arc::clone(&post_completion_dispatches);
-    assert_eq!(
-        fence_one
-            .authorize_and_dispatch(&mut normal_permit, move || async move {
-                observed_dispatches.fetch_add(1, Ordering::SeqCst);
-            })
-            .await
-            .err(),
-        Some(ServingFenceError::PermitCompleted)
-    );
-    assert_eq!(post_completion_dispatches.load(Ordering::SeqCst), 0);
-
-    // An already expired PostgreSQL permit never constructs its lazy outbound
-    // future, and can still be durably completed before clean release.
-    let mut expired_permit = fence_one
-        .create_permit(
-            DispatchOperationId::from_ulid(Ulid::new()),
-            DispatchPermitBudget::new(Duration::from_millis(1))?,
-        )
-        .await?;
-    tokio::time::sleep(Duration::from_millis(5)).await;
-    let expired_dispatches = Arc::new(AtomicUsize::new(0));
-    let observed_dispatches = Arc::clone(&expired_dispatches);
-    assert_eq!(
-        fence_one
-            .authorize_and_dispatch(&mut expired_permit, move || async move {
-                observed_dispatches.fetch_add(1, Ordering::SeqCst);
-            })
-            .await
-            .err(),
-        Some(ServingFenceError::PermitExpired)
-    );
-    assert_eq!(expired_dispatches.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        fence_one.complete_permit(&mut expired_permit).await?,
-        PermitCompletionOutcome::Completed
-    );
     fence_one.release().await?;
     wait_for_fence_unlock(&admin, fence_key).await?;
 
@@ -3117,266 +3875,62 @@ WHERE metadata.singleton = true
     )
     .await?;
     assert_eq!(failed_fence.generation(), 2);
+    failed_fence.release().await?;
+    wait_for_fence_unlock(&admin, fence_key).await?;
 
-    // An insert blocked past the function-owned lock timeout closes admission
-    // permanently on that fence instance and stores no provisional permit.
-    let blocked_operation = DispatchOperationId::from_ulid(Ulid::new());
-    let table_lock = admin.transaction().await?;
-    table_lock
-        .batch_execute("LOCK TABLE relay_state_private.dispatch_permit IN ACCESS EXCLUSIVE MODE")
-        .await?;
-    let blocked_started = Instant::now();
+    // If the dedicated fence session is lost after a dispatch marker commits,
+    // the next generation must wait out the protocol barrier, recover the
+    // orphan as outcome_unknown, and open admission only after every recovery
+    // authority item has been consumed.
+    let (orphan_client, orphan_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let orphan_driver_abort = orphan_driver.abort_handle();
+    let orphan_fence =
+        PostgresServingFence::acquire(orphan_client, orphan_driver, &chain_key_epoch_id, fence_key)
+            .await?;
+    assert_eq!(orphan_fence.generation(), 3);
+    let orphan_seed = completion_seed_value(
+        "bounded_http",
+        None,
+        &["lookup-registration"],
+        &[vec!["lookup-registration"]],
+    );
+    let mut orphan_dispatch = persist_test_consultation_attempt(
+        &plane_one,
+        &orphan_fence,
+        &keyring_runtime,
+        &pseudonym_key_id("epoch-2"),
+        orphan_seed,
+        ConsultationPermitSet::from_counts(0, 1)?,
+        "takeover-outcome-unknown",
+    )
+    .await?;
+    let (orphan_dispatch_started, orphan_started) = tokio::sync::oneshot::channel();
+    let abort_orphan_driver = tokio::spawn(async move {
+        tokio::time::timeout(Duration::from_secs(3), orphan_started)
+            .await
+            .expect("guarded orphan dispatch must start promptly")
+            .expect("guarded orphan dispatch start signal must be delivered");
+        orphan_driver_abort.abort();
+    });
     assert_eq!(
-        failed_fence
-            .create_permit(
-                blocked_operation.clone(),
-                DispatchPermitBudget::new(Duration::from_secs(1))?,
+        orphan_fence
+            .authorize_and_dispatch(
+                &mut orphan_dispatch.permits_mut()[0],
+                &OperationId::try_from("lookup-registration")?,
+                move || async move {
+                    let _ = orphan_dispatch_started.send(());
+                    std::future::pending::<()>().await;
+                },
             )
             .await
             .err(),
         Some(ServingFenceError::Unavailable)
     );
-    assert!(blocked_started.elapsed() < Duration::from_secs(4));
+    abort_orphan_driver.await?;
+    assert!(orphan_dispatch.permits_mut()[0].is_uncertain());
     assert_eq!(
-        failed_fence
-            .create_permit(
-                DispatchOperationId::from_ulid(Ulid::new()),
-                DispatchPermitBudget::new(Duration::from_secs(1))?,
-            )
-            .await
-            .err(),
-        Some(ServingFenceError::AdmissionClosed)
-    );
-    table_lock.rollback().await?;
-    let blocked_rows: i64 = admin
-        .query_one(
-            "SELECT count(*) FROM relay_state_private.dispatch_permit \
-             WHERE operation_id = $1",
-            &[&blocked_operation.as_str()],
-        )
-        .await?
-        .try_get(0)?;
-    assert_eq!(blocked_rows, 0);
-    // The failed actor still has a live public handle here. Its owned database
-    // session must already be gone so a standby can acquire without a manual
-    // drop or process restart.
-    wait_for_fence_unlock(&admin, fence_key).await?;
-
-    // Valid catalog state is not enough when the durable holder identity no
-    // longer matches the dedicated backend. Ownership uncertainty seals the
-    // local capability.
-    let (uncertain_client, uncertain_driver) =
-        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
-    let uncertain_fence = PostgresServingFence::acquire(
-        uncertain_client,
-        uncertain_driver,
-        &chain_key_epoch_id,
-        fence_key,
-    )
-    .await?;
-    assert_eq!(uncertain_fence.generation(), 3);
-    admin
-        .execute(
-            "UPDATE relay_state_private.serving_fence_state \
-             SET holder_id = '00000000000000000000000000' \
-             WHERE singleton = true",
-            &[],
-        )
-        .await?;
-    assert_eq!(
-        uncertain_fence.readiness().await,
-        ServingFenceReadiness::Unavailable
-    );
-    let sealed_dispatches = Arc::new(AtomicUsize::new(0));
-    let observed_dispatches = Arc::clone(&sealed_dispatches);
-    assert_eq!(
-        uncertain_fence
-            .authorize_and_dispatch(&mut normal_permit, move || async move {
-                observed_dispatches.fetch_add(1, Ordering::SeqCst);
-            })
-            .await
-            .err(),
-        Some(ServingFenceError::AdmissionClosed)
-    );
-    assert_eq!(sealed_dispatches.load(Ordering::SeqCst), 0);
-    wait_for_fence_unlock(&admin, fence_key).await?;
-
-    // Cancelling a command whose database outcome is unknown aborts the actor
-    // and its owned session. The still-live handle cannot wedge the standby.
-    let (cancelled_client, cancelled_driver) =
-        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
-    let cancelled_fence = PostgresServingFence::acquire(
-        cancelled_client,
-        cancelled_driver,
-        &chain_key_epoch_id,
-        fence_key,
-    )
-    .await?;
-    assert_eq!(cancelled_fence.generation(), 4);
-    let cancelled_operation = DispatchOperationId::from_ulid(Ulid::new());
-    let cancellation_lock = admin.transaction().await?;
-    cancellation_lock
-        .batch_execute("LOCK TABLE relay_state_private.dispatch_permit IN ACCESS EXCLUSIVE MODE")
-        .await?;
-    assert!(tokio::time::timeout(
-        Duration::from_millis(100),
-        cancelled_fence.create_permit(
-            cancelled_operation.clone(),
-            DispatchPermitBudget::new(Duration::from_secs(1))?,
-        ),
-    )
-    .await
-    .is_err());
-    cancellation_lock.rollback().await?;
-    wait_for_fence_unlock(&admin, fence_key).await?;
-    assert_eq!(
-        cancelled_fence.readiness().await,
-        ServingFenceReadiness::Unavailable
-    );
-    let cancelled_row = admin
-        .query_one(
-            "SELECT count(*) AS row_count, \
-                    count(*) FILTER (WHERE completed_at IS NOT NULL \
-                                      OR abandoned_at IS NOT NULL) AS terminal_count \
-             FROM relay_state_private.dispatch_permit \
-             WHERE operation_id = $1",
-            &[&cancelled_operation.as_str()],
-        )
-        .await?;
-    let cancelled_rows: i64 = cancelled_row.try_get("row_count")?;
-    let cancelled_terminal_rows: i64 = cancelled_row.try_get("terminal_count")?;
-    assert!(cancelled_rows <= 1);
-    assert_eq!(cancelled_terminal_rows, 0);
-
-    // A lost dedicated connection closes new authorization immediately. The
-    // next generation cannot open until both the PostgreSQL deadline plus one
-    // second and the non-shortenable local eleven-second barrier have passed.
-    let (hung_client, hung_driver) =
-        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
-    let hung_driver_abort = hung_driver.abort_handle();
-    let hung_fence = Arc::new(
-        PostgresServingFence::acquire(hung_client, hung_driver, &chain_key_epoch_id, fence_key)
-            .await?,
-    );
-    assert_eq!(hung_fence.generation(), 5);
-    let hung_operation = DispatchOperationId::from_ulid(Ulid::new());
-    let mut hung_permit = hung_fence
-        .create_permit(
-            hung_operation.clone(),
-            DispatchPermitBudget::new(Duration::from_secs(10))?,
-        )
-        .await?;
-    assert_eq!(
-        hung_fence
-            .authorize_and_dispatch(&mut hung_permit, || async { "initial dispatch" })
-            .await?,
-        "initial dispatch"
-    );
-
-    // A slow source call is cancelled at the local permit deadline without
-    // turning one caller's timeout into a deployment-wide fence outage.
-    let mut timed_out_permit = hung_fence
-        .create_permit(
-            DispatchOperationId::from_ulid(Ulid::new()),
-            DispatchPermitBudget::new(Duration::from_secs(1))?,
-        )
-        .await?;
-    let timed_dispatches = Arc::new(AtomicUsize::new(0));
-    let observed_dispatches = Arc::clone(&timed_dispatches);
-    assert_eq!(
-        hung_fence
-            .authorize_and_dispatch(&mut timed_out_permit, move || async move {
-                observed_dispatches.fetch_add(1, Ordering::SeqCst);
-                std::future::pending::<()>().await;
-            })
-            .await
-            .err(),
-        Some(ServingFenceError::PermitExpired)
-    );
-    assert_eq!(timed_dispatches.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        hung_fence
-            .complete_permit(&mut timed_out_permit)
-            .await
-            .err(),
-        Some(ServingFenceError::PermitUncertain)
-    );
-    assert_eq!(hung_fence.readiness().await, ServingFenceReadiness::Ready);
-
-    // Caller/task cancellation after the closure starts likewise invalidates
-    // only that permit. The actor and its advisory-lock session remain live.
-    let cancelled_dispatch_permit = hung_fence
-        .create_permit(
-            DispatchOperationId::from_ulid(Ulid::new()),
-            DispatchPermitBudget::new(Duration::from_secs(1))?,
-        )
-        .await?;
-    let (dispatch_started, started) = tokio::sync::oneshot::channel();
-    let cancelled_dispatch_fence = Arc::clone(&hung_fence);
-    let cancelled_dispatch = tokio::spawn(async move {
-        let mut permit = cancelled_dispatch_permit;
-        cancelled_dispatch_fence
-            .authorize_and_dispatch(&mut permit, move || async move {
-                let _ = dispatch_started.send(());
-                std::future::pending::<()>().await;
-            })
-            .await
-    });
-    tokio::time::timeout(Duration::from_secs(3), started).await??;
-    cancelled_dispatch.abort();
-    assert!(cancelled_dispatch
-        .await
-        .expect_err("dispatch task must be cancelled")
-        .is_cancelled());
-    assert_eq!(hung_fence.readiness().await, ServingFenceReadiness::Ready);
-
-    let mut post_cancellation_permit = hung_fence
-        .create_permit(
-            DispatchOperationId::from_ulid(Ulid::new()),
-            DispatchPermitBudget::new(Duration::from_secs(1))?,
-        )
-        .await?;
-    hung_fence
-        .authorize_and_dispatch(&mut post_cancellation_permit, || async {})
-        .await?;
-    assert_eq!(
-        hung_fence
-            .complete_permit(&mut post_cancellation_permit)
-            .await?,
-        PermitCompletionOutcome::Completed
-    );
-
-    // Driver loss while a lazy outbound future is actually pending cancels the
-    // future promptly, drops its resources, marks only the permit uncertain,
-    // closes admission, and releases the advisory lock while this handle lives.
-    let (inflight_began, began) = tokio::sync::oneshot::channel();
-    let abort_driver = tokio::spawn(async move {
-        tokio::time::timeout(Duration::from_secs(3), began)
-            .await
-            .expect("guarded dispatch must start promptly")
-            .expect("guarded dispatch start signal must be delivered");
-        hung_driver_abort.abort();
-    });
-    let closure_drops = Arc::new(AtomicUsize::new(0));
-    let observed_drops = Arc::clone(&closure_drops);
-    let driver_loss_started = Instant::now();
-    assert_eq!(
-        hung_fence
-            .authorize_and_dispatch(&mut hung_permit, move || async move {
-                let _drop_counter = DispatchDropCounter(observed_drops);
-                let _ = inflight_began.send(());
-                std::future::pending::<()>().await;
-            })
-            .await
-            .err(),
-        Some(ServingFenceError::Unavailable)
-    );
-    abort_driver.await?;
-    assert!(driver_loss_started.elapsed() < Duration::from_secs(3));
-    assert_eq!(closure_drops.load(Ordering::SeqCst), 1);
-    assert!(hung_permit.is_uncertain());
-    assert_eq!(
-        hung_fence.readiness().await,
+        orphan_fence.readiness().await,
         ServingFenceReadiness::Unavailable
     );
     wait_for_fence_unlock(&admin, fence_key).await?;
@@ -3384,67 +3938,626 @@ WHERE metadata.singleton = true
     let (takeover_client, takeover_driver) =
         postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
     let takeover_started = Instant::now();
-    let takeover_fence = PostgresServingFence::acquire(
+    let mut takeover_fence = PostgresServingFence::acquire(
         takeover_client,
         takeover_driver,
         &chain_key_epoch_id,
         fence_key,
     )
     .await?;
-    let takeover_elapsed = takeover_started.elapsed();
-    assert!(takeover_elapsed >= Duration::from_secs(11));
-    assert!(takeover_elapsed < Duration::from_secs(30));
-    assert_eq!(takeover_fence.generation(), 6);
+    assert!(takeover_started.elapsed() >= Duration::from_secs(11));
+    assert_eq!(takeover_fence.generation(), 4);
+    assert_eq!(
+        takeover_fence.readiness().await,
+        ServingFenceReadiness::Unavailable
+    );
+    let mut recovery_authority = takeover_fence
+        .take_takeover_recovery_authority()
+        .expect("takeover with one orphan must issue recovery authority");
+    assert_eq!(recovery_authority.remaining(), 1);
+    let recovered = plane_one
+        .recover_orphaned_consultation(&mut recovery_authority)
+        .await?;
+    assert_eq!(
+        recovered.outcome(),
+        ConsultationCompletionOutcome::OutcomeUnknown
+    );
+    assert!(!recovered.stored_identity().envelope_id().is_empty());
+    assert_eq!(recovery_authority.remaining(), 0);
+    takeover_fence
+        .open_after_takeover_recovery(recovery_authority)
+        .await?;
+    assert_eq!(
+        takeover_fence.readiness().await,
+        ServingFenceReadiness::Ready
+    );
     assert_eq!(
         takeover_fence
-            .authorize_and_dispatch(&mut hung_permit, || async {
-                panic!("stale permit must not dispatch")
-            })
+            .authorize_and_dispatch(
+                &mut orphan_dispatch.permits_mut()[0],
+                &OperationId::try_from("lookup-registration")?,
+                || async { panic!("a stale-generation permit must never dispatch") },
+            )
             .await
             .err(),
         Some(ServingFenceError::StaleGeneration)
     );
-    let hung_abandoned: bool = admin
-        .query_one(
-            "SELECT abandoned_at IS NOT NULL FROM relay_state_private.dispatch_permit \
-             WHERE operation_id = $1",
-            &[&hung_operation.as_str()],
-        )
-        .await?
-        .try_get(0)?;
-    assert!(hung_abandoned);
-    let mut post_takeover_permit = takeover_fence
-        .create_permit(
-            DispatchOperationId::from_ulid(Ulid::new()),
-            DispatchPermitBudget::new(Duration::from_secs(1))?,
-        )
-        .await?;
-    takeover_fence
-        .authorize_and_dispatch(&mut post_takeover_permit, || async {})
-        .await?;
-    assert_eq!(
-        takeover_fence
-            .complete_permit(&mut post_takeover_permit)
-            .await?,
-        PermitCompletionOutcome::Completed
-    );
     takeover_fence.release().await?;
     wait_for_fence_unlock(&admin, fence_key).await?;
 
-    // Restart/failover advances, rather than reusing, the durable generation.
-    let (restart_client, restart_driver) =
+    // A successor must linearize behind an attempt CAS that already validated
+    // the prior fence. The audit-head blocker makes the interleaving exact:
+    // the CAS holds the fence row in SHARE while no intent is visible yet.
+    let (linearized_client, linearized_driver) =
         postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
-    let restart_started = Instant::now();
-    let restart_fence = PostgresServingFence::acquire(
-        restart_client,
-        restart_driver,
+    let linearized_driver_abort = linearized_driver.abort_handle();
+    let linearized_fence = PostgresServingFence::acquire(
+        linearized_client,
+        linearized_driver,
         &chain_key_epoch_id,
         fence_key,
     )
     .await?;
-    assert_eq!(restart_fence.generation(), 7);
-    assert!(restart_started.elapsed() < Duration::from_secs(3));
-    restart_fence.release().await?;
+    let linearized_operation = DurableAuditOperationId::from_ulid(Ulid::new());
+    let linearized_operation_text = linearized_operation.as_str().to_owned();
+    let linearized_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+    let linearized_write = atomic_consultation_attempt_write(
+        &linearized_operation,
+        &pseudonym_key_id("epoch-2"),
+        &linearized_seed,
+        "fence-row-linearized-attempt",
+    );
+    let linearized_authority = linearized_fence
+        .authorize_consultation_attempt(
+            DispatchPermitBudget::new(Duration::from_millis(1))?,
+            ConsultationPermitSet::from_counts(0, 0)?,
+        )
+        .await?;
+    let linearized_pseudonym_authority = keyring_runtime
+        .current_write_authority()
+        .await?
+        .authorize_use()?;
+    let (mut head_blocker, head_blocker_driver) = postgres_client(&database_url).await?;
+    let head_blocker_transaction = head_blocker.transaction().await?;
+    head_blocker_transaction
+        .query_one(
+            "SELECT singleton FROM relay_state_private.audit_chain_head \
+             WHERE singleton = true FOR UPDATE",
+            &[],
+        )
+        .await?;
+    let linearized_plane = Arc::clone(&plane_one);
+    let linearized_attempt = tokio::spawn(async move {
+        linearized_plane
+            .write_attempt_with_completion_intent(
+                &linearized_write,
+                ConsultationCompletionSeed::from_value_for_test(linearized_seed)?,
+                attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
+                linearized_authority,
+                linearized_pseudonym_authority,
+            )
+            .await
+    });
+    wait_for_blocked_consultation_query(
+        &admin,
+        &runtime_role_name,
+        "consultation_attempt_intent_cas_v1",
+    )
+    .await?;
+    linearized_driver_abort.abort();
+    assert_eq!(
+        linearized_fence.readiness().await,
+        ServingFenceReadiness::Unavailable
+    );
+    wait_for_fence_unlock(&admin, fence_key).await?;
+
+    let (successor_client, successor_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    successor_client
+        .batch_execute(RUNTIME_SESSION_LIMITS_SQL)
+        .await?;
+    let successor_holder = Ulid::new().to_string();
+    let successor_lock_key = fence_key.as_i64();
+    let successor_parameters: [&(dyn tokio_postgres::types::ToSql + Sync); 2] =
+        [&successor_lock_key, &successor_holder];
+    let mut successor_acquire = Box::pin(successor_client.query_one(
+        "SELECT * FROM relay_state_api.serving_fence_acquire_v1($1, $2)",
+        &successor_parameters,
+    ));
+    tokio::select! {
+        result = successor_acquire.as_mut() => {
+            result?;
+            return Err("successor crossed an uncommitted attempt CAS".into());
+        }
+        observed = wait_for_blocked_consultation_query(
+            &admin,
+            &runtime_role_name,
+            "serving_fence_acquire_v1",
+        ) => observed?,
+    }
+    head_blocker_transaction.commit().await?;
+    let linearized_dispatch = linearized_attempt.await??;
+    assert!(linearized_dispatch.lifecycle_is_armed());
+    let successor_row = successor_acquire.as_mut().await?;
+    drop(successor_acquire);
+    assert_eq!(successor_row.try_get::<_, &str>("outcome")?, "acquired");
+    let successor_generation: i64 = successor_row.try_get("fence_generation")?;
+    assert!(successor_row.try_get::<_, bool>("takeover_required")?);
+    assert!(!successor_row.try_get::<_, bool>("admission_open")?);
+    assert_eq!(
+        direct_test_fence_open(
+            &successor_client,
+            fence_key,
+            &successor_holder,
+            successor_generation,
+        )
+        .await?,
+        "recovery_incomplete"
+    );
+    let successor_operations = direct_test_fence_finalize(
+        &successor_client,
+        fence_key,
+        &successor_holder,
+        successor_generation,
+    )
+    .await?;
+    assert_eq!(successor_operations, vec![linearized_operation_text]);
+    let mut successor_recovery = direct_test_recovery_authority(
+        fence_key,
+        &successor_holder,
+        successor_generation,
+        successor_operations,
+    )?;
+    assert_eq!(
+        plane_one
+            .recover_orphaned_consultation(&mut successor_recovery)
+            .await?
+            .outcome(),
+        ConsultationCompletionOutcome::NotStarted
+    );
+    assert_eq!(
+        direct_test_fence_open(
+            &successor_client,
+            fence_key,
+            &successor_holder,
+            successor_generation,
+        )
+        .await?,
+        "opened"
+    );
+    direct_test_fence_release(
+        &successor_client,
+        fence_key,
+        &successor_holder,
+        successor_generation,
+    )
+    .await?;
+    drop(linearized_dispatch);
+    drop(linearized_fence);
+    drop(successor_client);
+    successor_driver.abort();
+    drop(head_blocker);
+    head_blocker_driver.abort();
+    wait_for_fence_unlock(&admin, fence_key).await?;
+
+    // Dropping a task after its attempt CAS reached PostgreSQL loses the local
+    // acknowledgement but not necessarily the commit. The armed authority
+    // must fail the old fence closed, and row linearization must force the
+    // successor to observe and recover the resulting intent.
+    let (lost_attempt_client, lost_attempt_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let lost_attempt_fence = PostgresServingFence::acquire(
+        lost_attempt_client,
+        lost_attempt_driver,
+        &chain_key_epoch_id,
+        fence_key,
+    )
+    .await?;
+    let lost_attempt_operation = DurableAuditOperationId::from_ulid(Ulid::new());
+    let lost_attempt_operation_text = lost_attempt_operation.as_str().to_owned();
+    let lost_attempt_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+    let lost_attempt_write = atomic_consultation_attempt_write(
+        &lost_attempt_operation,
+        &pseudonym_key_id("epoch-2"),
+        &lost_attempt_seed,
+        "lost-attempt-cas-acknowledgement",
+    );
+    let lost_attempt_authority = lost_attempt_fence
+        .authorize_consultation_attempt(
+            DispatchPermitBudget::new(Duration::from_millis(1))?,
+            ConsultationPermitSet::from_counts(0, 0)?,
+        )
+        .await?;
+    let lost_attempt_pseudonym_authority = keyring_runtime
+        .current_write_authority()
+        .await?
+        .authorize_use()?;
+    let (mut lost_attempt_blocker, lost_attempt_blocker_driver) =
+        postgres_client(&database_url).await?;
+    let lost_attempt_blocker_transaction = lost_attempt_blocker.transaction().await?;
+    lost_attempt_blocker_transaction
+        .query_one(
+            "SELECT singleton FROM relay_state_private.audit_chain_head \
+             WHERE singleton = true FOR UPDATE",
+            &[],
+        )
+        .await?;
+    let lost_attempt_plane = Arc::clone(&plane_one);
+    let lost_attempt_task = tokio::spawn(async move {
+        lost_attempt_plane
+            .write_attempt_with_completion_intent(
+                &lost_attempt_write,
+                ConsultationCompletionSeed::from_value_for_test(lost_attempt_seed)?,
+                attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
+                lost_attempt_authority,
+                lost_attempt_pseudonym_authority,
+            )
+            .await
+    });
+    wait_for_blocked_consultation_query(
+        &admin,
+        &runtime_role_name,
+        "consultation_attempt_intent_cas_v1",
+    )
+    .await?;
+    lost_attempt_task.abort();
+    let lost_attempt_join_error = match lost_attempt_task.await {
+        Err(error) => error,
+        Ok(_) => panic!("blocked attempt task must be cancelled"),
+    };
+    assert!(lost_attempt_join_error.is_cancelled());
+    assert_eq!(
+        lost_attempt_fence.readiness().await,
+        ServingFenceReadiness::Unavailable
+    );
+    wait_for_fence_unlock(&admin, fence_key).await?;
+    let (lost_successor_client, lost_successor_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let lost_successor = tokio::spawn(async move {
+        let acquired = direct_test_fence_acquire(&lost_successor_client, fence_key)
+            .await
+            .map_err(|error| error.to_string());
+        (lost_successor_client, acquired)
+    });
+    wait_for_blocked_consultation_query(&admin, &runtime_role_name, "serving_fence_acquire_v1")
+        .await?;
+    lost_attempt_blocker_transaction.commit().await?;
+    let (lost_successor_client, lost_successor_acquired) = lost_successor.await?;
+    let (lost_successor_holder, lost_successor_generation, takeover_required, admission_open) =
+        lost_successor_acquired.map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+    assert!(takeover_required);
+    assert!(!admission_open);
+    assert_eq!(
+        direct_test_fence_open(
+            &lost_successor_client,
+            fence_key,
+            &lost_successor_holder,
+            lost_successor_generation,
+        )
+        .await?,
+        "recovery_incomplete"
+    );
+    let lost_successor_operations = direct_test_fence_finalize(
+        &lost_successor_client,
+        fence_key,
+        &lost_successor_holder,
+        lost_successor_generation,
+    )
+    .await?;
+    assert_eq!(lost_successor_operations, vec![lost_attempt_operation_text]);
+    let mut lost_successor_recovery = direct_test_recovery_authority(
+        fence_key,
+        &lost_successor_holder,
+        lost_successor_generation,
+        lost_successor_operations,
+    )?;
+    assert_eq!(
+        plane_one
+            .recover_orphaned_consultation(&mut lost_successor_recovery)
+            .await?
+            .outcome(),
+        ConsultationCompletionOutcome::NotStarted
+    );
+    assert_eq!(
+        direct_test_fence_open(
+            &lost_successor_client,
+            fence_key,
+            &lost_successor_holder,
+            lost_successor_generation,
+        )
+        .await?,
+        "opened"
+    );
+    direct_test_fence_release(
+        &lost_successor_client,
+        fence_key,
+        &lost_successor_holder,
+        lost_successor_generation,
+    )
+    .await?;
+    drop(lost_attempt_fence);
+    drop(lost_successor_client);
+    lost_successor_driver.abort();
+    drop(lost_attempt_blocker);
+    lost_attempt_blocker_driver.abort();
+    wait_for_fence_unlock(&admin, fence_key).await?;
+
+    // Once a one-shot marker is visible, cancelling the task that owns the
+    // dispatch must drop its armed lifecycle seal. The old actor closes and
+    // takeover derives outcome_unknown from the durable marker.
+    let (marker_client, marker_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let marker_fence = Arc::new(
+        PostgresServingFence::acquire(marker_client, marker_driver, &chain_key_epoch_id, fence_key)
+            .await?,
+    );
+    let marker_operation = DurableAuditOperationId::from_ulid(Ulid::new());
+    let marker_operation_text = marker_operation.as_str().to_owned();
+    let marker_seed = completion_seed_value(
+        "bounded_http",
+        None,
+        &["lookup-registration"],
+        &[vec!["lookup-registration"]],
+    );
+    let marker_write = atomic_consultation_attempt_write(
+        &marker_operation,
+        &pseudonym_key_id("epoch-2"),
+        &marker_seed,
+        "cancel-after-visible-marker",
+    );
+    let marker_authority = marker_fence
+        .authorize_consultation_attempt(
+            DispatchPermitBudget::new(Duration::from_secs(5))?,
+            ConsultationPermitSet::from_counts(0, 1)?,
+        )
+        .await?;
+    let marker_pseudonym_authority = keyring_runtime
+        .current_write_authority()
+        .await?
+        .authorize_use()?;
+    let mut marker_dispatch = plane_one
+        .write_attempt_with_completion_intent(
+            &marker_write,
+            ConsultationCompletionSeed::from_value_for_test(marker_seed)?,
+            attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
+            marker_authority,
+            marker_pseudonym_authority,
+        )
+        .await?;
+    assert!(marker_dispatch.lifecycle_is_armed());
+    let (marker_visible, marker_started) = tokio::sync::oneshot::channel();
+    let marker_task_fence = Arc::clone(&marker_fence);
+    let marker_source_operation = OperationId::try_from("lookup-registration")?;
+    let marker_task = tokio::spawn(async move {
+        marker_task_fence
+            .authorize_and_dispatch(
+                &mut marker_dispatch.permits_mut()[0],
+                &marker_source_operation,
+                move || async move {
+                    let _ = marker_visible.send(());
+                    std::future::pending::<()>().await;
+                },
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(3), marker_started)
+        .await
+        .expect("marker authorization must commit promptly")
+        .expect("marker dispatch start signal must be delivered");
+    let visible_marker: Option<String> = admin
+        .query_one(
+            "SELECT source_operation_id FROM relay_state_private.dispatch_permit \
+             WHERE operation_id=$1 AND kind='data' AND ordinal=0",
+            &[&marker_operation_text],
+        )
+        .await?
+        .try_get(0)?;
+    assert_eq!(visible_marker.as_deref(), Some("lookup-registration"));
+    marker_task.abort();
+    assert!(marker_task
+        .await
+        .expect_err("marker-owning task must be cancelled")
+        .is_cancelled());
+    assert_eq!(
+        marker_fence.readiness().await,
+        ServingFenceReadiness::Unavailable
+    );
+    wait_for_fence_unlock(&admin, fence_key).await?;
+    let (marker_successor_client, marker_successor_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let (
+        marker_successor_holder,
+        marker_successor_generation,
+        marker_takeover_required,
+        marker_admission_open,
+    ) = direct_test_fence_acquire(&marker_successor_client, fence_key).await?;
+    assert!(marker_takeover_required);
+    assert!(!marker_admission_open);
+    assert_eq!(
+        direct_test_fence_open(
+            &marker_successor_client,
+            fence_key,
+            &marker_successor_holder,
+            marker_successor_generation,
+        )
+        .await?,
+        "recovery_incomplete"
+    );
+    let marker_successor_operations = direct_test_fence_finalize(
+        &marker_successor_client,
+        fence_key,
+        &marker_successor_holder,
+        marker_successor_generation,
+    )
+    .await?;
+    assert_eq!(marker_successor_operations, vec![marker_operation_text]);
+    let mut marker_successor_recovery = direct_test_recovery_authority(
+        fence_key,
+        &marker_successor_holder,
+        marker_successor_generation,
+        marker_successor_operations,
+    )?;
+    assert_eq!(
+        plane_one
+            .recover_orphaned_consultation(&mut marker_successor_recovery)
+            .await?
+            .outcome(),
+        ConsultationCompletionOutcome::OutcomeUnknown
+    );
+    assert_eq!(
+        direct_test_fence_open(
+            &marker_successor_client,
+            fence_key,
+            &marker_successor_holder,
+            marker_successor_generation,
+        )
+        .await?,
+        "opened"
+    );
+    direct_test_fence_release(
+        &marker_successor_client,
+        fence_key,
+        &marker_successor_holder,
+        marker_successor_generation,
+    )
+    .await?;
+    drop(marker_fence);
+    drop(marker_successor_client);
+    marker_successor_driver.abort();
+    wait_for_fence_unlock(&admin, fence_key).await?;
+
+    // Completion uses the same fence-row root. If its acknowledgement is lost
+    // while the audit-head update is blocked, dropping the dispatch seals the
+    // old actor. The successor cannot advance generation until the terminal
+    // write commits, after which no recovery batch is necessary.
+    let (completion_race_client, completion_race_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let completion_race_fence = PostgresServingFence::acquire(
+        completion_race_client,
+        completion_race_driver,
+        &chain_key_epoch_id,
+        fence_key,
+    )
+    .await?;
+    let completion_race_operation = DurableAuditOperationId::from_ulid(Ulid::new());
+    let completion_race_operation_text = completion_race_operation.as_str().to_owned();
+    let completion_race_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
+    let completion_race_write = atomic_consultation_attempt_write(
+        &completion_race_operation,
+        &pseudonym_key_id("epoch-2"),
+        &completion_race_seed,
+        "lost-completion-cas-acknowledgement",
+    );
+    let completion_race_authority = completion_race_fence
+        .authorize_consultation_attempt(
+            DispatchPermitBudget::new(Duration::from_millis(1))?,
+            ConsultationPermitSet::from_counts(0, 0)?,
+        )
+        .await?;
+    let completion_race_attempt_authority = keyring_runtime
+        .current_write_authority()
+        .await?
+        .authorize_use()?;
+    let completion_race_dispatch = plane_one
+        .write_attempt_with_completion_intent(
+            &completion_race_write,
+            ConsultationCompletionSeed::from_value_for_test(completion_race_seed)?,
+            attempt_pseudonym_bundle(&pseudonym_key_id("epoch-2")),
+            completion_race_authority,
+            completion_race_attempt_authority,
+        )
+        .await?;
+    assert!(completion_race_dispatch.lifecycle_is_armed());
+    let completion_race_pseudonym_authority = keyring_runtime
+        .current_write_authority()
+        .await?
+        .authorize_use()?;
+    let (mut completion_head_blocker, completion_head_blocker_driver) =
+        postgres_client(&database_url).await?;
+    let completion_head_blocker_transaction = completion_head_blocker.transaction().await?;
+    completion_head_blocker_transaction
+        .query_one(
+            "SELECT singleton FROM relay_state_private.audit_chain_head \
+             WHERE singleton = true FOR UPDATE",
+            &[],
+        )
+        .await?;
+    let completion_race_plane = Arc::clone(&plane_one);
+    let completion_race_task = tokio::spawn(async move {
+        completion_race_plane
+            .close_unfinished_consultation(
+                completion_race_dispatch,
+                completion_race_pseudonym_authority,
+            )
+            .await
+    });
+    wait_for_blocked_consultation_query(
+        &admin,
+        &runtime_role_name,
+        "consultation_completion_cas_unfinished_v1",
+    )
+    .await?;
+    completion_race_task.abort();
+    let completion_join_error = match completion_race_task.await {
+        Err(error) => error,
+        Ok(_) => panic!("blocked completion task must be cancelled"),
+    };
+    assert!(completion_join_error.is_cancelled());
+    assert_eq!(
+        completion_race_fence.readiness().await,
+        ServingFenceReadiness::Unavailable
+    );
+    wait_for_fence_unlock(&admin, fence_key).await?;
+    let (completion_successor_client, completion_successor_driver) =
+        postgres_client_as(&database_url, &runtime_role_name, &runtime_password).await?;
+    let completion_successor = tokio::spawn(async move {
+        let acquired = direct_test_fence_acquire(&completion_successor_client, fence_key)
+            .await
+            .map_err(|error| error.to_string());
+        (completion_successor_client, acquired)
+    });
+    wait_for_blocked_consultation_query(&admin, &runtime_role_name, "serving_fence_acquire_v1")
+        .await?;
+    completion_head_blocker_transaction.commit().await?;
+    let (completion_successor_client, completion_successor_acquired) = completion_successor.await?;
+    let (
+        completion_successor_holder,
+        completion_successor_generation,
+        completion_takeover_required,
+        completion_admission_open,
+    ) = completion_successor_acquired
+        .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+    assert!(!completion_takeover_required);
+    assert!(completion_admission_open);
+    let terminal_completion: (String, String) = admin
+        .query_one(
+            "SELECT intent.state, phase_row.record_json::jsonb #>> '{payload,outcome}' \
+             FROM relay_state_private.consultation_completion_intent AS intent \
+             JOIN relay_state_private.audit_phase AS phase_row \
+               ON phase_row.stream_kind='consultation' \
+              AND phase_row.operation_id=intent.operation_id \
+              AND phase_row.phase='completion' \
+             WHERE intent.operation_id=$1",
+            &[&completion_race_operation_text],
+        )
+        .await
+        .map(|row| (row.get(0), row.get(1)))?;
+    assert_eq!(
+        terminal_completion,
+        ("completed".into(), "not_started".into())
+    );
+    direct_test_fence_release(
+        &completion_successor_client,
+        fence_key,
+        &completion_successor_holder,
+        completion_successor_generation,
+    )
+    .await?;
+    drop(completion_race_fence);
+    drop(completion_successor_client);
+    completion_successor_driver.abort();
+    drop(completion_head_blocker);
+    completion_head_blocker_driver.abort();
     wait_for_fence_unlock(&admin, fence_key).await?;
 
     // A direct runtime caller can hold a successful CAS open in an explicit
@@ -3744,7 +4857,7 @@ ALTER TABLE relay_state_private.state_plane_metadata
     // Durable tables, executable table state, and their constraint-backed
     // indexes are part of the attested capability, not operational tuning.
     admin
-        .batch_execute("ALTER TABLE relay_state_private.audit_phase SET UNLOGGED")
+        .batch_execute("ALTER TABLE relay_state_private.consultation_quota_bucket SET UNLOGGED")
         .await?;
     assert_eq!(
         plane_one.readiness().await,
@@ -3766,7 +4879,7 @@ ALTER TABLE relay_state_private.state_plane_metadata
     );
     reset_role(&admin).await?;
     admin
-        .batch_execute("ALTER TABLE relay_state_private.audit_phase SET LOGGED")
+        .batch_execute("ALTER TABLE relay_state_private.consultation_quota_bucket SET LOGGED")
         .await?;
     assert_eq!(plane_one.readiness().await, StatePlaneReadiness::Ready);
 

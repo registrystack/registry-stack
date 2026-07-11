@@ -1,0 +1,1215 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Atomic consultation attempt, dispatch, completion, and takeover recovery.
+
+use std::time::Duration;
+
+use registry_platform_audit::{
+    AuditEnvelope, DurableAuditOperationId, DurableAuditPhase, DurableAuditStoredIdentity,
+    DurableAuditStreamKind, DurableAuditWrite,
+};
+use registry_platform_crypto::canonicalize_json;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use thiserror::Error;
+use tokio::time::Instant;
+use tokio_postgres::{Error as PostgresError, Row};
+
+use super::audit::PostgresDurableAuditStatePlane;
+use super::fence::{
+    AuditedConsultationDispatch, ConsultationDispatchPermit, DispatchOperationId,
+    DispatchPermitState, FencedConsultationAttemptAuthority, TakeoverCompletionRecoveryAuthority,
+};
+use super::migration::validate_runtime_pseudonym_capability_v1;
+use super::pseudonym_keyring::ActiveAuditPseudonymWriteEpoch;
+
+const ATTEMPT_SNAPSHOT_SQL: &str = r#"
+SELECT * FROM relay_state_api.consultation_attempt_intent_snapshot_v1(
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+    $15, $16, $17
+)
+"#;
+const ATTEMPT_CAS_SQL: &str = r#"
+SELECT * FROM relay_state_api.consultation_attempt_intent_cas_v1(
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+    $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
+)
+"#;
+const NORMAL_COMPLETION_SNAPSHOT_SQL: &str = r#"
+SELECT * FROM relay_state_api.consultation_completion_snapshot_normal_v1(
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+)
+"#;
+const RECOVERY_COMPLETION_SNAPSHOT_SQL: &str = r#"
+SELECT * FROM relay_state_api.consultation_completion_snapshot_recovery_v1(
+    $1, $2, $3, $4, $5, $6
+)
+"#;
+const NORMAL_COMPLETION_CAS_SQL: &str = r#"
+SELECT * FROM relay_state_api.consultation_completion_cas_normal_v1(
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+    $15, $16, $17, $18, $19, $20
+)
+"#;
+const UNFINISHED_COMPLETION_CAS_SQL: &str = r#"
+SELECT * FROM relay_state_api.consultation_completion_cas_unfinished_v1(
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+    $15, $16, $17, $18, $19, $20
+)
+"#;
+const RECOVERY_COMPLETION_CAS_SQL: &str = r#"
+SELECT * FROM relay_state_api.consultation_completion_cas_recovery_v1(
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+)
+"#;
+
+const MAX_CAS_ATTEMPTS: usize = 8;
+const MAX_ELAPSED: Duration = Duration::from_secs(5);
+const MAX_COMPLETION_SEED_CANONICAL_BYTES_V1: usize = 256 * 1024;
+#[cfg(test)]
+const MAX_COMMITMENT_BYTES: usize = 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub(crate) enum ConsultationPersistenceError {
+    #[error("consultation persistence input is invalid")]
+    InvalidInput,
+    #[error("consultation persistence conflicts with durable state")]
+    Conflict,
+    #[error("consultation serving-fence ownership is unavailable")]
+    OwnershipLost,
+    #[error("consultation completion state no longer permits this operation")]
+    StateConflict,
+    #[error("consultation persistence protocol has drifted")]
+    ProtocolDrift,
+    #[error("consultation persistence is unavailable")]
+    Unavailable,
+}
+
+/// Immutable, canonical, non-pseudonym context shared by every completion.
+pub(crate) struct ConsultationCompletionSeed {
+    canonical: String,
+    digest: [u8; 32],
+}
+
+impl ConsultationCompletionSeed {
+    #[cfg(test)]
+    pub(crate) fn from_value_for_test(value: Value) -> Result<Self, ConsultationPersistenceError> {
+        let (canonical, digest) = canonical_binding(value)?;
+        if canonical.len() > MAX_COMPLETION_SEED_CANONICAL_BYTES_V1 {
+            return Err(ConsultationPersistenceError::InvalidInput);
+        }
+        Ok(Self { canonical, digest })
+    }
+}
+
+/// Exact pseudonym values already committed by the attempt audit.
+pub(crate) struct AttemptPseudonymBundle {
+    key_id: String,
+    canonical: String,
+    digest: [u8; 32],
+}
+
+impl AttemptPseudonymBundle {
+    #[cfg(test)]
+    pub(crate) fn new(
+        key_id: &str,
+        subject_handle: &str,
+        input_commitment: &str,
+        predicate_commitment: &str,
+        consent_evidence_commitment: Option<&str>,
+    ) -> Result<Self, ConsultationPersistenceError> {
+        if !valid_key_id(key_id)
+            || !valid_commitment(subject_handle)
+            || !valid_commitment(input_commitment)
+            || !valid_commitment(predicate_commitment)
+            || consent_evidence_commitment.is_some_and(|value| !valid_commitment(value))
+        {
+            return Err(ConsultationPersistenceError::InvalidInput);
+        }
+        let (canonical, digest) = canonical_binding(json!({
+            "commitment_key_id": key_id,
+            "subject_handle": subject_handle,
+            "input_commitment": input_commitment,
+            "predicate_commitment": predicate_commitment,
+            "consent_evidence_commitment": consent_evidence_commitment,
+        }))?;
+        Ok(Self {
+            key_id: key_id.to_owned(),
+            canonical,
+            digest,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConsultationCompletionOutcome {
+    KnownComplete,
+    NotStarted,
+    OutcomeUnknown,
+}
+
+impl ConsultationCompletionOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::KnownComplete => "known_complete",
+            Self::NotStarted => "not_started",
+            Self::OutcomeUnknown => "outcome_unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PublicConsultationOutcome {
+    Match,
+    NoMatch,
+    Ambiguous,
+}
+
+impl PublicConsultationOutcome {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Match => "match",
+            Self::NoMatch => "no_match",
+            Self::Ambiguous => "ambiguous",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KnownFailureClass {
+    CredentialUnavailable,
+    SourceUnavailable,
+    ResponseContractViolation,
+    CardinalityViolation,
+}
+
+impl KnownFailureClass {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::CredentialUnavailable => "credential_unavailable",
+            Self::SourceUnavailable => "source_unavailable",
+            Self::ResponseContractViolation => "response_contract_violation",
+            Self::CardinalityViolation => "cardinality_violation",
+        }
+    }
+}
+
+enum ValidatedAcquisitionProvenance {
+    Live,
+    MaterializedSnapshot {
+        generation: String,
+        published_at_unix_ms: i64,
+    },
+}
+
+struct ValidatedPublicProvenance {
+    relay_acquired_at_unix_ms: i64,
+    source_observed_at_unix_ms: Option<i64>,
+    source_revision: Option<String>,
+    acquisition: ValidatedAcquisitionProvenance,
+}
+
+enum KnownExecutionResult {
+    Public {
+        outcome: PublicConsultationOutcome,
+        provenance: ValidatedPublicProvenance,
+    },
+    Failure(KnownFailureClass),
+}
+
+/// Executor-issued facts accepted by normal known completion. Production has
+/// no raw constructor: only the validated backend integration may mint it.
+pub(crate) struct KnownConsultationCompletionFacts {
+    result: KnownExecutionResult,
+}
+
+impl KnownConsultationCompletionFacts {
+    #[cfg(test)]
+    pub(crate) fn public_for_live_test(
+        outcome: PublicConsultationOutcome,
+        relay_acquired_at_unix_ms: i64,
+        source_observed_at_unix_ms: Option<i64>,
+        source_revision: Option<&str>,
+    ) -> Result<Self, ConsultationPersistenceError> {
+        Self::public_for_test(
+            outcome,
+            relay_acquired_at_unix_ms,
+            source_observed_at_unix_ms,
+            source_revision,
+            ValidatedAcquisitionProvenance::Live,
+        )
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn public_for_snapshot_test(
+        outcome: PublicConsultationOutcome,
+        relay_acquired_at_unix_ms: i64,
+        source_observed_at_unix_ms: Option<i64>,
+        source_revision: Option<&str>,
+        snapshot_generation: &str,
+        snapshot_published_at_unix_ms: i64,
+    ) -> Result<Self, ConsultationPersistenceError> {
+        let generation = ulid::Ulid::from_string(snapshot_generation)
+            .map_err(|_| ConsultationPersistenceError::InvalidInput)?;
+        if generation.to_string() != snapshot_generation
+            || !valid_public_unix_ms(snapshot_published_at_unix_ms)
+            || snapshot_published_at_unix_ms > relay_acquired_at_unix_ms
+        {
+            return Err(ConsultationPersistenceError::InvalidInput);
+        }
+        Self::public_for_test(
+            outcome,
+            relay_acquired_at_unix_ms,
+            source_observed_at_unix_ms,
+            source_revision,
+            ValidatedAcquisitionProvenance::MaterializedSnapshot {
+                generation: snapshot_generation.to_owned(),
+                published_at_unix_ms: snapshot_published_at_unix_ms,
+            },
+        )
+    }
+
+    #[cfg(test)]
+    fn public_for_test(
+        outcome: PublicConsultationOutcome,
+        relay_acquired_at_unix_ms: i64,
+        source_observed_at_unix_ms: Option<i64>,
+        source_revision: Option<&str>,
+        acquisition: ValidatedAcquisitionProvenance,
+    ) -> Result<Self, ConsultationPersistenceError> {
+        if !valid_public_unix_ms(relay_acquired_at_unix_ms)
+            || source_observed_at_unix_ms.is_some()
+            || source_revision.is_some()
+        {
+            return Err(ConsultationPersistenceError::InvalidInput);
+        }
+        Ok(Self {
+            result: KnownExecutionResult::Public {
+                outcome,
+                provenance: ValidatedPublicProvenance {
+                    relay_acquired_at_unix_ms,
+                    source_observed_at_unix_ms,
+                    source_revision: source_revision.map(ToOwned::to_owned),
+                    acquisition,
+                },
+            },
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn failure_for_test(failure: KnownFailureClass) -> Self {
+        Self {
+            result: KnownExecutionResult::Failure(failure),
+        }
+    }
+
+    fn payload_values(&self) -> (Value, Value) {
+        match &self.result {
+            KnownExecutionResult::Public {
+                outcome,
+                provenance,
+            } => {
+                let (snapshot_generation, snapshot_published_at_unix_ms) =
+                    match &provenance.acquisition {
+                        ValidatedAcquisitionProvenance::Live => (None, None),
+                        ValidatedAcquisitionProvenance::MaterializedSnapshot {
+                            generation,
+                            published_at_unix_ms,
+                        } => (Some(generation.as_str()), Some(*published_at_unix_ms)),
+                    };
+                (
+                    json!({"class": "public_success", "outcome": outcome.as_str()}),
+                    json!({
+                        "relay_acquired_at_unix_ms": provenance.relay_acquired_at_unix_ms,
+                        "source_observed_at_unix_ms": provenance.source_observed_at_unix_ms,
+                        "source_revision": provenance.source_revision,
+                        "snapshot_generation": snapshot_generation,
+                        "snapshot_published_at_unix_ms": snapshot_published_at_unix_ms,
+                    }),
+                )
+            }
+            KnownExecutionResult::Failure(failure) => (
+                json!({"class": "known_failure", "failure_class": failure.as_str()}),
+                Value::Null,
+            ),
+        }
+    }
+
+    const fn is_public_success(&self) -> bool {
+        matches!(&self.result, KnownExecutionResult::Public { .. })
+    }
+}
+
+fn valid_public_unix_ms(value: i64) -> bool {
+    (0..=9_007_199_254_740_991).contains(&value)
+}
+
+/// Response-publication authority exists only after acknowledged or proven
+/// identical normal completion.
+#[must_use = "a response may be published only while this grant is owned"]
+pub(crate) struct ConsultationPublicationGrant {
+    stored_identity: DurableAuditStoredIdentity,
+}
+
+pub(crate) struct ConsultationCompletionReceipt {
+    stored_identity: DurableAuditStoredIdentity,
+    outcome: ConsultationCompletionOutcome,
+}
+
+impl ConsultationCompletionReceipt {
+    pub(crate) fn stored_identity(&self) -> &DurableAuditStoredIdentity {
+        &self.stored_identity
+    }
+
+    pub(crate) const fn outcome(&self) -> ConsultationCompletionOutcome {
+        self.outcome
+    }
+}
+
+pub(crate) enum KnownCompletionDisposition {
+    Published(ConsultationPublicationGrant),
+    FinalizedFailure(ConsultationCompletionReceipt),
+}
+
+impl ConsultationPublicationGrant {
+    pub(crate) fn stored_identity(&self) -> &DurableAuditStoredIdentity {
+        &self.stored_identity
+    }
+}
+
+pub(crate) struct RecoveredConsultationCompletion {
+    stored_identity: DurableAuditStoredIdentity,
+    outcome: ConsultationCompletionOutcome,
+}
+
+impl RecoveredConsultationCompletion {
+    pub(crate) fn outcome(&self) -> ConsultationCompletionOutcome {
+        self.outcome
+    }
+
+    pub(crate) fn stored_identity(&self) -> &DurableAuditStoredIdentity {
+        &self.stored_identity
+    }
+}
+
+struct CompletionSnapshot {
+    outcome: String,
+    attempt_envelope_id: String,
+    attempt_record_hash: [u8; 32],
+    seed: Value,
+    bundle: Value,
+    permit_kinds: Vec<String>,
+    permit_ordinals: Vec<i16>,
+    permit_source_operation_ids: Vec<Option<String>>,
+    permit_dispatched_at_unix_us: Vec<Option<i64>>,
+    dispatched_credentials: i64,
+    dispatched_data: i64,
+    predecessor: Option<[u8; 32]>,
+    generation: Option<i64>,
+    stored_envelope_id: Option<String>,
+    stored_chain_hash: Option<[u8; 32]>,
+    stored_payload_digest: Option<[u8; 32]>,
+}
+
+#[derive(Clone, Copy)]
+enum ActiveCompletionMode {
+    Known,
+    Unfinished,
+}
+
+impl PostgresDurableAuditStatePlane {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn write_attempt_with_completion_intent(
+        &self,
+        write: &DurableAuditWrite,
+        seed: ConsultationCompletionSeed,
+        bundle: AttemptPseudonymBundle,
+        mut fence: FencedConsultationAttemptAuthority,
+        pseudonym_authority: ActiveAuditPseudonymWriteEpoch,
+    ) -> Result<AuditedConsultationDispatch, ConsultationPersistenceError> {
+        if write.key().stream_kind() != DurableAuditStreamKind::Consultation
+            || write.key().phase() != DurableAuditPhase::Attempt
+        {
+            return Err(ConsultationPersistenceError::InvalidInput);
+        }
+        let operation_id = DispatchOperationId::parse(write.key().operation_id().as_str())
+            .map_err(|_| ConsultationPersistenceError::InvalidInput)?;
+        let started = Instant::now();
+        let local_not_after = started
+            .checked_add(Duration::from_millis(fence.budget.as_milliseconds() as u64))
+            .ok_or(ConsultationPersistenceError::ProtocolDrift)?;
+        let (authority_key_id, authority_generation, authority_digest, chain_epoch, lock_key) =
+            pseudonym_authority.postgres_binding();
+        if authority_key_id != bundle.key_id
+            || chain_epoch != &self.chain_key_epoch_id
+            || lock_key != self.keyring_lock_key.as_i64()
+        {
+            return Err(ConsultationPersistenceError::InvalidInput);
+        }
+        let (permit_kinds, permit_ordinals) = fence.permit_set.postgres_arrays();
+        let deadline = Instant::now() + MAX_ELAPSED;
+        let client = tokio::time::timeout_at(deadline, self.client.lock())
+            .await
+            .map_err(|_| ConsultationPersistenceError::Unavailable)?;
+        validate_runtime_pseudonym_capability_v1(
+            &client,
+            &self.chain_key_epoch_id,
+            self.keyring_lock_key,
+        )
+        .await
+        .map_err(|_| ConsultationPersistenceError::Unavailable)?;
+        for _ in 0..MAX_CAS_ATTEMPTS {
+            let snapshot = consultation_query(
+                deadline,
+                client.query_one(
+                    ATTEMPT_SNAPSHOT_SQL,
+                    &[
+                        &operation_id.as_str(),
+                        &write.payload_digest().as_bytes().as_slice(),
+                        &seed.canonical,
+                        &seed.digest.as_slice(),
+                        &bundle.canonical,
+                        &bundle.digest.as_slice(),
+                        &bundle.key_id,
+                        &authority_generation,
+                        &authority_digest.as_slice(),
+                        &fence.lock_key.as_i64(),
+                        &fence.holder_id,
+                        &fence.fence_generation,
+                        &fence.budget.as_milliseconds(),
+                        &permit_kinds,
+                        &permit_ordinals,
+                        &self.chain_key_epoch_id.as_str(),
+                        &self.keyring_lock_key.as_i64(),
+                    ],
+                ),
+            )
+            .await?;
+            match required_str(&snapshot, "outcome")? {
+                "identical_duplicate" => {
+                    return dispatch_from_attempt_row(
+                        &snapshot,
+                        operation_id,
+                        fence,
+                        local_not_after,
+                    );
+                }
+                "conflicting_duplicate" => return Err(ConsultationPersistenceError::Conflict),
+                "ownership_lost" => return Err(ConsultationPersistenceError::OwnershipLost),
+                "candidate" => {}
+                _ => return Err(ConsultationPersistenceError::ProtocolDrift),
+            }
+            let predecessor = optional_hash(&snapshot, "candidate_predecessor_hash")?;
+            let generation = required_i64(&snapshot, "candidate_generation")?;
+            let envelope = write
+                .build_envelope_at_chain_head(predecessor, &self.chain_hasher)
+                .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+            let record_json = serde_json::to_string(&envelope.record)
+                .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+            let envelope_json = serde_json::to_string(&envelope)
+                .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+            // From this point PostgreSQL can commit the intent even if this
+            // task never observes the acknowledgement. The seal remains armed
+            // across retries and transfers into the returned dispatch.
+            fence.arm_lifecycle_seal();
+            let cas = consultation_query(
+                deadline,
+                client.query_one(
+                    ATTEMPT_CAS_SQL,
+                    &[
+                        &operation_id.as_str(),
+                        &write.payload_digest().as_bytes().as_slice(),
+                        &generation,
+                        &predecessor.as_ref().map(<[u8; 32]>::as_slice),
+                        &envelope.envelope_id,
+                        &envelope.timestamp_unix_ms,
+                        &record_json,
+                        &envelope_json,
+                        &envelope.record_hash.as_slice(),
+                        &seed.canonical,
+                        &seed.digest.as_slice(),
+                        &bundle.canonical,
+                        &bundle.digest.as_slice(),
+                        &bundle.key_id,
+                        &authority_generation,
+                        &authority_digest.as_slice(),
+                        &fence.lock_key.as_i64(),
+                        &fence.holder_id,
+                        &fence.fence_generation,
+                        &fence.budget.as_milliseconds(),
+                        &permit_kinds,
+                        &permit_ordinals,
+                        &self.chain_key_epoch_id.as_str(),
+                        &self.keyring_lock_key.as_i64(),
+                    ],
+                ),
+            )
+            .await?;
+            match required_str(&cas, "outcome")? {
+                "inserted" | "identical_duplicate" => {
+                    return dispatch_from_attempt_row(&cas, operation_id, fence, local_not_after);
+                }
+                "head_changed" => {
+                    // PostgreSQL proved that this CAS advanced no audit head
+                    // and inserted no intent or permit. Return the authority
+                    // to its harmless pre-intent state before the read-only
+                    // retry; the next mutating CAS re-arms it immediately.
+                    fence.disarm_after_head_changed();
+                    continue;
+                }
+                "conflicting_duplicate" => return Err(ConsultationPersistenceError::Conflict),
+                "ownership_lost" => return Err(ConsultationPersistenceError::OwnershipLost),
+                _ => return Err(ConsultationPersistenceError::ProtocolDrift),
+            }
+        }
+        Err(ConsultationPersistenceError::Unavailable)
+    }
+
+    pub(crate) async fn finalize_validated_consultation(
+        &self,
+        dispatch: AuditedConsultationDispatch,
+        facts: KnownConsultationCompletionFacts,
+        pseudonym_authority: ActiveAuditPseudonymWriteEpoch,
+    ) -> Result<KnownCompletionDisposition, ConsultationPersistenceError> {
+        let (stored_identity, outcome) = self
+            .finalize_active_consultation(
+                dispatch,
+                Some(&facts),
+                ActiveCompletionMode::Known,
+                pseudonym_authority,
+            )
+            .await?;
+        if outcome != ConsultationCompletionOutcome::KnownComplete {
+            return Err(ConsultationPersistenceError::ProtocolDrift);
+        }
+        Ok(known_disposition(&facts, stored_identity))
+    }
+
+    pub(crate) async fn close_unfinished_consultation(
+        &self,
+        dispatch: AuditedConsultationDispatch,
+        pseudonym_authority: ActiveAuditPseudonymWriteEpoch,
+    ) -> Result<ConsultationCompletionReceipt, ConsultationPersistenceError> {
+        let (stored_identity, outcome) = self
+            .finalize_active_consultation(
+                dispatch,
+                None,
+                ActiveCompletionMode::Unfinished,
+                pseudonym_authority,
+            )
+            .await?;
+        if outcome == ConsultationCompletionOutcome::KnownComplete {
+            return Err(ConsultationPersistenceError::ProtocolDrift);
+        }
+        Ok(ConsultationCompletionReceipt {
+            stored_identity,
+            outcome,
+        })
+    }
+
+    async fn finalize_active_consultation(
+        &self,
+        mut dispatch: AuditedConsultationDispatch,
+        facts: Option<&KnownConsultationCompletionFacts>,
+        mode: ActiveCompletionMode,
+        pseudonym_authority: ActiveAuditPseudonymWriteEpoch,
+    ) -> Result<
+        (DurableAuditStoredIdentity, ConsultationCompletionOutcome),
+        ConsultationPersistenceError,
+    > {
+        if matches!(mode, ActiveCompletionMode::Known) != facts.is_some() {
+            return Err(ConsultationPersistenceError::InvalidInput);
+        }
+        let (permit_kinds, permit_ordinals) = dispatch.postgres_permit_arrays();
+        let (current_key_id, current_generation, current_digest, chain_epoch, lock_key) =
+            pseudonym_authority.postgres_binding();
+        if chain_epoch != &self.chain_key_epoch_id || lock_key != self.keyring_lock_key.as_i64() {
+            return Err(ConsultationPersistenceError::InvalidInput);
+        }
+        let deadline = Instant::now() + MAX_ELAPSED;
+        let client = tokio::time::timeout_at(deadline, self.client.lock())
+            .await
+            .map_err(|_| ConsultationPersistenceError::Unavailable)?;
+        for _ in 0..MAX_CAS_ATTEMPTS {
+            let row = consultation_query(
+                deadline,
+                client.query_one(
+                    NORMAL_COMPLETION_SNAPSHOT_SQL,
+                    &[
+                        &dispatch.operation_id.as_str(),
+                        &dispatch.lock_key.as_i64(),
+                        &dispatch.holder_id,
+                        &dispatch.fence_generation,
+                        &dispatch.deadline_unix_ms,
+                        &permit_kinds,
+                        &permit_ordinals,
+                        &current_key_id,
+                        &current_generation,
+                        &current_digest.as_slice(),
+                        &self.chain_key_epoch_id.as_str(),
+                        &self.keyring_lock_key.as_i64(),
+                    ],
+                ),
+            )
+            .await?;
+            let snapshot = parse_completion_snapshot(&row)?;
+            let completion_outcome = match mode {
+                ActiveCompletionMode::Known => ConsultationCompletionOutcome::KnownComplete,
+                ActiveCompletionMode::Unfinished
+                    if snapshot.dispatched_credentials + snapshot.dispatched_data == 0 =>
+                {
+                    ConsultationCompletionOutcome::NotStarted
+                }
+                ActiveCompletionMode::Unfinished => ConsultationCompletionOutcome::OutcomeUnknown,
+            };
+            let completion =
+                completion_write(&dispatch.operation_id, &snapshot, completion_outcome, facts)?;
+            if snapshot.outcome == "completed" {
+                let stored_identity = identical_completion(&snapshot, &completion)?;
+                dispatch.disarm_after_terminal_completion();
+                return Ok((stored_identity, completion_outcome));
+            }
+            match snapshot.outcome.as_str() {
+                "candidate" => {}
+                "permit_mismatch" => return Err(ConsultationPersistenceError::ProtocolDrift),
+                "state_conflict" => return Err(ConsultationPersistenceError::StateConflict),
+                "ownership_lost" => return Err(ConsultationPersistenceError::OwnershipLost),
+                _ => return Err(ConsultationPersistenceError::ProtocolDrift),
+            }
+            let generation = snapshot
+                .generation
+                .ok_or(ConsultationPersistenceError::ProtocolDrift)?;
+            let envelope = completion
+                .build_envelope_at_chain_head(snapshot.predecessor, &self.chain_hasher)
+                .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+            let record_json = serde_json::to_string(&envelope.record)
+                .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+            let envelope_json = serde_json::to_string(&envelope)
+                .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+            let cas = consultation_query(
+                deadline,
+                client.query_one(
+                    match mode {
+                        ActiveCompletionMode::Known => NORMAL_COMPLETION_CAS_SQL,
+                        ActiveCompletionMode::Unfinished => UNFINISHED_COMPLETION_CAS_SQL,
+                    },
+                    &[
+                        &dispatch.operation_id.as_str(),
+                        &dispatch.lock_key.as_i64(),
+                        &dispatch.holder_id,
+                        &dispatch.fence_generation,
+                        &dispatch.deadline_unix_ms,
+                        &permit_kinds,
+                        &permit_ordinals,
+                        &current_key_id,
+                        &current_generation,
+                        &current_digest.as_slice(),
+                        &completion.payload_digest().as_bytes().as_slice(),
+                        &generation,
+                        &snapshot.predecessor.as_ref().map(<[u8; 32]>::as_slice),
+                        &envelope.envelope_id,
+                        &envelope.timestamp_unix_ms,
+                        &record_json,
+                        &envelope_json,
+                        &envelope.record_hash.as_slice(),
+                        &self.chain_key_epoch_id.as_str(),
+                        &self.keyring_lock_key.as_i64(),
+                    ],
+                ),
+            )
+            .await?;
+            match required_str(&cas, "outcome")? {
+                "inserted" | "identical_duplicate" => {
+                    if required_str(&cas, "completion_outcome")? != completion_outcome.as_str() {
+                        return Err(ConsultationPersistenceError::ProtocolDrift);
+                    }
+                    let stored_identity = stored_identity(&cas)?;
+                    dispatch.disarm_after_terminal_completion();
+                    return Ok((stored_identity, completion_outcome));
+                }
+                "head_changed" => continue,
+                "conflicting_duplicate" => return Err(ConsultationPersistenceError::Conflict),
+                "state_conflict" => return Err(ConsultationPersistenceError::StateConflict),
+                "ownership_lost" => return Err(ConsultationPersistenceError::OwnershipLost),
+                _ => return Err(ConsultationPersistenceError::ProtocolDrift),
+            }
+        }
+        Err(ConsultationPersistenceError::Unavailable)
+    }
+
+    pub(crate) async fn recover_orphaned_consultation(
+        &self,
+        authority: &mut TakeoverCompletionRecoveryAuthority,
+    ) -> Result<RecoveredConsultationCompletion, ConsultationPersistenceError> {
+        let operation_id = authority
+            .current_operation()
+            .ok_or(ConsultationPersistenceError::StateConflict)?;
+        let deadline = Instant::now() + MAX_ELAPSED;
+        let client = tokio::time::timeout_at(deadline, self.client.lock())
+            .await
+            .map_err(|_| ConsultationPersistenceError::Unavailable)?;
+        for _ in 0..MAX_CAS_ATTEMPTS {
+            let row = consultation_query(
+                deadline,
+                client.query_one(
+                    RECOVERY_COMPLETION_SNAPSHOT_SQL,
+                    &[
+                        &operation_id.as_str(),
+                        &authority.lock_key.as_i64(),
+                        &authority.holder_id,
+                        &authority.fence_generation,
+                        &self.chain_key_epoch_id.as_str(),
+                        &self.keyring_lock_key.as_i64(),
+                    ],
+                ),
+            )
+            .await?;
+            let snapshot = parse_completion_snapshot(&row)?;
+            let outcome = if snapshot.dispatched_credentials + snapshot.dispatched_data == 0 {
+                ConsultationCompletionOutcome::NotStarted
+            } else {
+                ConsultationCompletionOutcome::OutcomeUnknown
+            };
+            let completion = completion_write(operation_id, &snapshot, outcome, None)?;
+            if snapshot.outcome == "completed" {
+                let stored = identical_recovery(&snapshot, &completion, outcome)?;
+                authority.mark_current_recovered();
+                return Ok(stored);
+            }
+            match snapshot.outcome.as_str() {
+                "candidate" => {}
+                "state_conflict" => return Err(ConsultationPersistenceError::StateConflict),
+                "ownership_lost" => return Err(ConsultationPersistenceError::OwnershipLost),
+                _ => return Err(ConsultationPersistenceError::ProtocolDrift),
+            }
+            let generation = snapshot
+                .generation
+                .ok_or(ConsultationPersistenceError::ProtocolDrift)?;
+            let envelope = completion
+                .build_envelope_at_chain_head(snapshot.predecessor, &self.chain_hasher)
+                .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+            let record_json = serde_json::to_string(&envelope.record)
+                .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+            let envelope_json = serde_json::to_string(&envelope)
+                .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+            let cas = consultation_query(
+                deadline,
+                client.query_one(
+                    RECOVERY_COMPLETION_CAS_SQL,
+                    &[
+                        &operation_id.as_str(),
+                        &authority.lock_key.as_i64(),
+                        &authority.holder_id,
+                        &authority.fence_generation,
+                        &completion.payload_digest().as_bytes().as_slice(),
+                        &generation,
+                        &snapshot.predecessor.as_ref().map(<[u8; 32]>::as_slice),
+                        &envelope.envelope_id,
+                        &envelope.timestamp_unix_ms,
+                        &record_json,
+                        &envelope_json,
+                        &envelope.record_hash.as_slice(),
+                        &self.chain_key_epoch_id.as_str(),
+                        &self.keyring_lock_key.as_i64(),
+                    ],
+                ),
+            )
+            .await?;
+            match required_str(&cas, "outcome")? {
+                "inserted" | "identical_duplicate" => {
+                    let stored = RecoveredConsultationCompletion {
+                        stored_identity: stored_identity(&cas)?,
+                        outcome,
+                    };
+                    authority.mark_current_recovered();
+                    return Ok(stored);
+                }
+                "head_changed" => continue,
+                "conflicting_duplicate" => return Err(ConsultationPersistenceError::Conflict),
+                "state_conflict" => return Err(ConsultationPersistenceError::StateConflict),
+                "ownership_lost" => return Err(ConsultationPersistenceError::OwnershipLost),
+                _ => return Err(ConsultationPersistenceError::ProtocolDrift),
+            }
+        }
+        Err(ConsultationPersistenceError::Unavailable)
+    }
+}
+
+fn dispatch_from_attempt_row(
+    row: &Row,
+    operation_id: DispatchOperationId,
+    mut fence: FencedConsultationAttemptAuthority,
+    local_not_after: Instant,
+) -> Result<AuditedConsultationDispatch, ConsultationPersistenceError> {
+    // An identical snapshot proves that a durable intent already exists, while
+    // a CAS caller arrives here with the seal already armed.
+    // Arm idempotently before parsing so protocol drift cannot strand it under
+    // an admission-ready fence.
+    fence.arm_lifecycle_seal();
+    let deadline_unix_ms = required_i64(row, "deadline_unix_ms")?;
+    let kinds = required_text_array(row, "stored_permit_kinds")?;
+    let ordinals = required_i16_array(row, "stored_permit_ordinals")?;
+    let expected = fence.permit_set.postgres_arrays();
+    if kinds != expected.0 || ordinals != expected.1 {
+        return Err(ConsultationPersistenceError::ProtocolDrift);
+    }
+    let attempt_envelope_id = required_str(row, "stored_envelope_id")?.to_owned();
+    let attempt_record_hash = required_hash(row, "stored_chain_hash")?;
+    let permits = fence
+        .permit_set
+        .permits()
+        .iter()
+        .map(|(kind, ordinal)| ConsultationDispatchPermit {
+            operation_id: operation_id.clone(),
+            kind: *kind,
+            ordinal: *ordinal,
+            fence_generation: fence.fence_generation,
+            holder_id: fence.holder_id.clone(),
+            budget: fence.budget,
+            deadline_unix_ms,
+            local_not_after,
+            state: DispatchPermitState::Ready,
+        })
+        .collect();
+    Ok(AuditedConsultationDispatch {
+        operation_id,
+        attempt_envelope_id,
+        attempt_record_hash,
+        lock_key: fence.lock_key,
+        fence_generation: fence.fence_generation,
+        holder_id: fence.holder_id,
+        deadline_unix_ms,
+        permits,
+        lifecycle_seal: fence.lifecycle_seal,
+    })
+}
+
+fn completion_write(
+    operation_id: &DispatchOperationId,
+    snapshot: &CompletionSnapshot,
+    outcome: ConsultationCompletionOutcome,
+    facts: Option<&KnownConsultationCompletionFacts>,
+) -> Result<DurableAuditWrite, ConsultationPersistenceError> {
+    let bundle = snapshot
+        .bundle
+        .as_object()
+        .ok_or(ConsultationPersistenceError::ProtocolDrift)?;
+    if snapshot.permit_kinds.len() != snapshot.permit_ordinals.len()
+        || snapshot.permit_kinds.len() != snapshot.permit_source_operation_ids.len()
+        || snapshot.permit_kinds.len() != snapshot.permit_dispatched_at_unix_us.len()
+    {
+        return Err(ConsultationPersistenceError::ProtocolDrift);
+    }
+    let permit_evidence = snapshot
+        .permit_kinds
+        .iter()
+        .zip(&snapshot.permit_ordinals)
+        .zip(&snapshot.permit_source_operation_ids)
+        .zip(&snapshot.permit_dispatched_at_unix_us)
+        .map(|(((kind, ordinal), source_operation_id), dispatched_at)| {
+            if source_operation_id.is_some() != dispatched_at.is_some() {
+                return Err(ConsultationPersistenceError::ProtocolDrift);
+            }
+            Ok(json!({
+                "kind": kind,
+                "ordinal": ordinal,
+                "operation_id": source_operation_id,
+                "dispatched_at_unix_us": dispatched_at,
+            }))
+        })
+        .collect::<Result<Vec<_>, ConsultationPersistenceError>>()?;
+    let actual_path = snapshot
+        .permit_kinds
+        .iter()
+        .zip(&snapshot.permit_ordinals)
+        .zip(&snapshot.permit_source_operation_ids)
+        .zip(&snapshot.permit_dispatched_at_unix_us)
+        .filter_map(|(((kind, ordinal), source_operation_id), dispatched_at)| {
+            dispatched_at
+                .is_some()
+                .then_some((kind, ordinal, source_operation_id.as_deref()))
+        })
+        .map(|(kind, ordinal, source_operation_id)| {
+            let source_operation_id =
+                source_operation_id.ok_or(ConsultationPersistenceError::ProtocolDrift)?;
+            Ok(json!({
+                "kind": kind,
+                "ordinal": ordinal,
+                "operation_id": source_operation_id,
+            }))
+        })
+        .collect::<Result<Vec<_>, ConsultationPersistenceError>>()?;
+    let completion_facts = match (outcome, facts) {
+        (ConsultationCompletionOutcome::KnownComplete, Some(facts)) => {
+            let (execution_result, provenance) = facts.payload_values();
+            Some(json!({
+                "schema": "registry.relay.consultation-completion-facts/v1",
+                "execution_result": execution_result,
+                "provenance": provenance,
+                "actual_credential_exchanges": snapshot.dispatched_credentials,
+                "actual_data_exchanges": snapshot.dispatched_data,
+                "actual_path": actual_path,
+            }))
+        }
+        (ConsultationCompletionOutcome::NotStarted, None)
+        | (ConsultationCompletionOutcome::OutcomeUnknown, None) => None,
+        _ => return Err(ConsultationPersistenceError::InvalidInput),
+    };
+    DurableAuditWrite::new(
+        DurableAuditStreamKind::Consultation,
+        DurableAuditOperationId::parse(operation_id.as_str())
+            .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?,
+        DurableAuditPhase::Completion,
+        json!({
+            "attempt_event": {
+                "envelope_id": snapshot.attempt_envelope_id,
+                "chain_hash": format!(
+                    "registry-audit-chain-v1:{}",
+                    encode_hex(&snapshot.attempt_record_hash)
+                ),
+            },
+            "completion_seed": snapshot.seed,
+            "commitment_key_id": bundle.get("commitment_key_id"),
+            "subject_handle": bundle.get("subject_handle"),
+            "input_commitment": bundle.get("input_commitment"),
+            "predicate_commitment": bundle.get("predicate_commitment"),
+            "consent_evidence_commitment": bundle.get("consent_evidence_commitment"),
+            "outcome": outcome.as_str(),
+            "permit_evidence": permit_evidence,
+            "completion_facts": completion_facts,
+        }),
+    )
+    .map_err(|_| ConsultationPersistenceError::ProtocolDrift)
+}
+
+fn parse_completion_snapshot(
+    row: &Row,
+) -> Result<CompletionSnapshot, ConsultationPersistenceError> {
+    let seed_canonical = required_str(row, "completion_seed_canonical")?;
+    let bundle_canonical = required_str(row, "pseudonym_bundle_canonical")?;
+    verify_canonical_digest(
+        seed_canonical,
+        required_hash(row, "completion_seed_digest")?,
+    )?;
+    verify_canonical_digest(
+        bundle_canonical,
+        required_hash(row, "pseudonym_bundle_digest")?,
+    )?;
+    Ok(CompletionSnapshot {
+        outcome: required_str(row, "outcome")?.to_owned(),
+        attempt_envelope_id: required_str(row, "attempt_envelope_id")?.to_owned(),
+        attempt_record_hash: required_hash(row, "attempt_record_hash")?,
+        seed: serde_json::from_str(seed_canonical)
+            .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?,
+        bundle: serde_json::from_str(bundle_canonical)
+            .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?,
+        permit_kinds: required_text_array(row, "permit_kinds")?,
+        permit_ordinals: required_i16_array(row, "permit_ordinals")?,
+        permit_source_operation_ids: row
+            .try_get("permit_source_operation_ids")
+            .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?,
+        permit_dispatched_at_unix_us: row
+            .try_get("permit_dispatched_at_unix_us")
+            .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?,
+        dispatched_credentials: required_i64(row, "dispatched_credential_count")?,
+        dispatched_data: required_i64(row, "dispatched_data_count")?,
+        predecessor: optional_hash(row, "candidate_predecessor_hash")?,
+        generation: row
+            .try_get("candidate_generation")
+            .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?,
+        stored_envelope_id: row
+            .try_get("stored_completion_envelope_id")
+            .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?,
+        stored_chain_hash: optional_hash(row, "stored_completion_chain_hash")?,
+        stored_payload_digest: optional_hash(row, "stored_completion_payload_digest")?,
+    })
+}
+
+fn identical_completion(
+    snapshot: &CompletionSnapshot,
+    write: &DurableAuditWrite,
+) -> Result<DurableAuditStoredIdentity, ConsultationPersistenceError> {
+    if snapshot.stored_payload_digest != Some(*write.payload_digest().as_bytes()) {
+        return Err(ConsultationPersistenceError::Conflict);
+    }
+    snapshot_identity(snapshot)
+}
+
+fn known_disposition(
+    facts: &KnownConsultationCompletionFacts,
+    stored_identity: DurableAuditStoredIdentity,
+) -> KnownCompletionDisposition {
+    if facts.is_public_success() {
+        KnownCompletionDisposition::Published(ConsultationPublicationGrant { stored_identity })
+    } else {
+        KnownCompletionDisposition::FinalizedFailure(ConsultationCompletionReceipt {
+            stored_identity,
+            outcome: ConsultationCompletionOutcome::KnownComplete,
+        })
+    }
+}
+
+fn identical_recovery(
+    snapshot: &CompletionSnapshot,
+    write: &DurableAuditWrite,
+    outcome: ConsultationCompletionOutcome,
+) -> Result<RecoveredConsultationCompletion, ConsultationPersistenceError> {
+    if snapshot.stored_payload_digest != Some(*write.payload_digest().as_bytes()) {
+        return Err(ConsultationPersistenceError::Conflict);
+    }
+    Ok(RecoveredConsultationCompletion {
+        stored_identity: snapshot_identity(snapshot)?,
+        outcome,
+    })
+}
+
+fn snapshot_identity(
+    snapshot: &CompletionSnapshot,
+) -> Result<DurableAuditStoredIdentity, ConsultationPersistenceError> {
+    identity_from_parts(
+        snapshot
+            .stored_envelope_id
+            .as_deref()
+            .ok_or(ConsultationPersistenceError::ProtocolDrift)?,
+        snapshot
+            .stored_chain_hash
+            .ok_or(ConsultationPersistenceError::ProtocolDrift)?,
+    )
+}
+
+fn stored_identity(row: &Row) -> Result<DurableAuditStoredIdentity, ConsultationPersistenceError> {
+    identity_from_parts(
+        required_str(row, "stored_envelope_id")?,
+        required_hash(row, "stored_chain_hash")?,
+    )
+}
+
+fn identity_from_parts(
+    envelope_id: &str,
+    record_hash: [u8; 32],
+) -> Result<DurableAuditStoredIdentity, ConsultationPersistenceError> {
+    DurableAuditStoredIdentity::from_envelope(&AuditEnvelope {
+        envelope_id: envelope_id.to_owned(),
+        timestamp_unix_ms: 0,
+        prev_hash: None,
+        record: Value::Null,
+        record_hash,
+    })
+    .map_err(|_| ConsultationPersistenceError::ProtocolDrift)
+}
+
+#[cfg(test)]
+fn canonical_binding(value: Value) -> Result<(String, [u8; 32]), ConsultationPersistenceError> {
+    let bytes =
+        canonicalize_json(&value).map_err(|_| ConsultationPersistenceError::InvalidInput)?;
+    let digest: [u8; 32] = Sha256::digest(&bytes).into();
+    let canonical =
+        String::from_utf8(bytes).map_err(|_| ConsultationPersistenceError::InvalidInput)?;
+    Ok((canonical, digest))
+}
+
+fn verify_canonical_digest(
+    canonical: &str,
+    expected: [u8; 32],
+) -> Result<(), ConsultationPersistenceError> {
+    let value: Value =
+        serde_json::from_str(canonical).map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+    let recanonicalized =
+        canonicalize_json(&value).map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+    if recanonicalized != canonical.as_bytes()
+        || <[u8; 32]>::from(Sha256::digest(canonical.as_bytes())) != expected
+    {
+        return Err(ConsultationPersistenceError::ProtocolDrift);
+    }
+    Ok(())
+}
+
+async fn consultation_query<F>(
+    deadline: Instant,
+    future: F,
+) -> Result<Row, ConsultationPersistenceError>
+where
+    F: std::future::Future<Output = Result<Row, PostgresError>>,
+{
+    tokio::time::timeout_at(deadline, future)
+        .await
+        .map_err(|_| ConsultationPersistenceError::Unavailable)?
+        .map_err(map_postgres_error)
+}
+
+fn map_postgres_error(error: PostgresError) -> ConsultationPersistenceError {
+    match error.as_db_error().map(|error| error.code().code()) {
+        Some("22023" | "23514" | "23503" | "23505") => ConsultationPersistenceError::InvalidInput,
+        Some("42501") => ConsultationPersistenceError::OwnershipLost,
+        _ => ConsultationPersistenceError::Unavailable,
+    }
+}
+
+fn required_str<'a>(row: &'a Row, column: &str) -> Result<&'a str, ConsultationPersistenceError> {
+    row.try_get(column)
+        .map_err(|_| ConsultationPersistenceError::ProtocolDrift)
+}
+
+fn required_i64(row: &Row, column: &str) -> Result<i64, ConsultationPersistenceError> {
+    row.try_get(column)
+        .map_err(|_| ConsultationPersistenceError::ProtocolDrift)
+}
+
+fn required_hash(row: &Row, column: &str) -> Result<[u8; 32], ConsultationPersistenceError> {
+    row.try_get::<_, &[u8]>(column)
+        .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?
+        .try_into()
+        .map_err(|_| ConsultationPersistenceError::ProtocolDrift)
+}
+
+fn optional_hash(
+    row: &Row,
+    column: &str,
+) -> Result<Option<[u8; 32]>, ConsultationPersistenceError> {
+    row.try_get::<_, Option<&[u8]>>(column)
+        .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?
+        .map(|value| {
+            value
+                .try_into()
+                .map_err(|_| ConsultationPersistenceError::ProtocolDrift)
+        })
+        .transpose()
+}
+
+fn required_text_array(
+    row: &Row,
+    column: &str,
+) -> Result<Vec<String>, ConsultationPersistenceError> {
+    row.try_get(column)
+        .map_err(|_| ConsultationPersistenceError::ProtocolDrift)
+}
+
+fn required_i16_array(row: &Row, column: &str) -> Result<Vec<i16>, ConsultationPersistenceError> {
+    row.try_get(column)
+        .map_err(|_| ConsultationPersistenceError::ProtocolDrift)
+}
+
+#[cfg(test)]
+fn valid_key_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z' | b'0'..=b'9'))
+        && value.len() <= 64
+        && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'))
+}
+
+#[cfg(test)]
+fn valid_commitment(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_COMMITMENT_BYTES
+        && value.chars().all(|character| !character.is_control())
+}
+
+fn encode_hex(value: &[u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(64);
+    for byte in value {
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
+}

@@ -112,10 +112,10 @@ pub(crate) enum PseudonymBoundDuplicateRecoveryOutcome {
 /// Crate-private execute-only state plane. No public API can obtain the raw
 /// runtime database client or construct this value without attestation.
 pub(crate) struct PostgresDurableAuditStatePlane {
-    client: Mutex<Client>,
-    chain_hasher: AuditChainHasher,
-    chain_key_epoch_id: AuditChainKeyEpochId,
-    keyring_lock_key: AuditPseudonymKeyringLockKey,
+    pub(super) client: Mutex<Client>,
+    pub(super) chain_hasher: AuditChainHasher,
+    pub(super) chain_key_epoch_id: AuditChainKeyEpochId,
+    pub(super) keyring_lock_key: AuditPseudonymKeyringLockKey,
 }
 
 impl PostgresDurableAuditStatePlane {
@@ -341,15 +341,18 @@ impl PostgresDurableAuditStatePlane {
         Err(DurableAuditWriteError::StoreUnavailable)
     }
 
-    /// Persist a consultation or pseudonym-bearing denial only while
-    /// PostgreSQL atomically confirms that the consumed key epoch is still the
-    /// current write binding and before its exclusive deadline. The SQL CAS
-    /// holds the shared keyring transition barrier through the insert.
+    /// Persist a pseudonym-bearing denial only while PostgreSQL atomically
+    /// confirms that the consumed key epoch is still the current write binding
+    /// and before its exclusive deadline. Consultations must use the atomic
+    /// attempt-plus-intent path instead.
     pub(crate) async fn write_phase_with_pseudonym_authority(
         &self,
         write: &DurableAuditWrite,
         authority: ActiveAuditPseudonymWriteEpoch,
     ) -> Result<DurableAuditWriteOutcome, DurableAuditWriteError> {
+        if write.key().stream_kind() == DurableAuditStreamKind::Consultation {
+            return Err(DurableAuditWriteError::StoreFailure);
+        }
         self.write_phase_cas(write, Some(&authority)).await
     }
 
