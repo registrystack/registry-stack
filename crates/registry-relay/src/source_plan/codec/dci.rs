@@ -7,16 +7,16 @@
 //! explicit DCI protocol version and all product-specific constants before a
 //! compiled source plan can construct this type.
 
-use std::fmt;
-
-use serde::de::{self, MapAccess, SeqAccess, Visitor};
+use serde::de;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Number, Value};
+use serde_json::Value;
 use thiserror::Error;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use ulid::Ulid;
 use zeroize::Zeroizing;
+
+use crate::source_plan::strict_json::DuplicateFreeJsonValue;
 
 const MAX_PROTOCOL_VERSION_BYTES: usize = 16;
 const MAX_PROTOCOL_IDENTIFIER_BYTES: usize = 160;
@@ -780,108 +780,11 @@ impl<'de> Deserialize<'de> for StrictRecord {
     where
         D: Deserializer<'de>,
     {
-        let value = StrictJsonValue::deserialize(deserializer)?.0;
+        let value = DuplicateFreeJsonValue::deserialize(deserializer)?.into_inner();
         if !value.is_object() {
             return Err(de::Error::custom("DCI record must be an object"));
         }
         Ok(Self(value))
-    }
-}
-
-/// Recursive JSON decoder that rejects duplicate members inside structural
-/// record payloads before `serde_json::Value` can erase the ambiguity.
-struct StrictJsonValue(Value);
-
-impl<'de> Deserialize<'de> for StrictJsonValue {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_any(StrictJsonValueVisitor)
-    }
-}
-
-struct StrictJsonValueVisitor;
-
-impl<'de> Visitor<'de> for StrictJsonValueVisitor {
-    type Value = StrictJsonValue;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a duplicate-free JSON value")
-    }
-
-    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
-        Ok(StrictJsonValue(Value::Bool(value)))
-    }
-
-    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
-        Ok(StrictJsonValue(Value::Number(Number::from(value))))
-    }
-
-    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(StrictJsonValue(Value::Number(Number::from(value))))
-    }
-
-    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Number::from_f64(value)
-            .map(Value::Number)
-            .map(StrictJsonValue)
-            .ok_or_else(|| E::custom("non-finite JSON number"))
-    }
-
-    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-    where
-        E: de::Error,
-    {
-        Ok(StrictJsonValue(Value::String(value.to_owned())))
-    }
-
-    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
-        Ok(StrictJsonValue(Value::String(value)))
-    }
-
-    fn visit_none<E>(self) -> Result<Self::Value, E> {
-        Ok(StrictJsonValue(Value::Null))
-    }
-
-    fn visit_unit<E>(self) -> Result<Self::Value, E> {
-        Ok(StrictJsonValue(Value::Null))
-    }
-
-    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        StrictJsonValue::deserialize(deserializer)
-    }
-
-    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-    where
-        A: SeqAccess<'de>,
-    {
-        let mut values = Vec::new();
-        while let Some(value) = sequence.next_element::<StrictJsonValue>()? {
-            values.push(value.0);
-        }
-        Ok(StrictJsonValue(Value::Array(values)))
-    }
-
-    fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
-    where
-        A: MapAccess<'de>,
-    {
-        let mut values = Map::new();
-        while let Some(key) = object.next_key::<String>()? {
-            if values.contains_key(&key) {
-                return Err(de::Error::custom("duplicate JSON object member"));
-            }
-            let value = object.next_value::<StrictJsonValue>()?;
-            values.insert(key, value.0);
-        }
-        Ok(StrictJsonValue(Value::Object(values)))
     }
 }
 
