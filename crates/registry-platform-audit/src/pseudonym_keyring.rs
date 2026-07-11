@@ -41,6 +41,30 @@
 //! let _metadata: AuditPseudonymKeyringMetadata = serde_json::from_str("{}")?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
+//!
+//! ```compile_fail
+//! use registry_platform_audit::pseudonym_keyring::AuditPseudonymKeyMaterial;
+//! use zeroize::Zeroizing;
+//! let key = AuditPseudonymKeyMaterial::from_secret_bytes(Zeroizing::new(vec![7; 32]))?;
+//! let _copy = key.clone();
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! ```compile_fail
+//! use registry_platform_audit::pseudonym_keyring::AuditPseudonymKeyMaterial;
+//! use zeroize::Zeroizing;
+//! let key = AuditPseudonymKeyMaterial::from_secret_bytes(Zeroizing::new(vec![7; 32]))?;
+//! let _serialized = serde_json::to_string(&key)?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! ```compile_fail
+//! use registry_platform_audit::pseudonym_keyring::AuditPseudonymKeyMaterial;
+//! use zeroize::Zeroizing;
+//! let key = AuditPseudonymKeyMaterial::from_secret_bytes(Zeroizing::new(vec![7; 32]))?;
+//! let _raw_key = key.as_bytes();
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -50,26 +74,27 @@ use std::{
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-#[cfg(test)]
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
-#[cfg(test)]
-use crate::{AuditError, AuditKeyHasher};
+use crate::{
+    hex_lower, hkdf_expand_sha256, hmac_sha256_bytes, read_secret_env, AuditError, SecretBytes,
+    MIN_AUDIT_SECRET_BYTES,
+};
 
 const MAX_KEY_ID_BYTES: usize = 64;
-#[cfg(test)]
 const MAX_ENV_VAR_NAME_BYTES: usize = 128;
 const MAX_KEYRING_EPOCHS: usize = 32;
 const MAX_CANONICAL_INPUT_BYTES: usize = 8 * 1024;
 const MAX_CANONICAL_INPUT_DEPTH: usize = 64;
 const MAX_EXACT_JSON_INTEGER: i64 = 9_007_199_254_740_991;
+const MAX_AUDIT_PSEUDONYM_SECRET_BYTES: usize = 4 * 1024;
 const KEYRING_METADATA_SCHEMA_V1: &str = "registry.audit-pseudonym-keyring/v1";
-#[cfg(test)]
-const KEY_MATERIAL_PROBE_CLASS: &str = "audit-pseudonym-keyring-probe-v1";
-#[cfg(test)]
-const KEY_MATERIAL_PROBE_INPUT: &str = "fixed-key-equivalence-probe";
+const AUDIT_PSEUDONYM_KEY_DERIVATION_INFO: &[u8] =
+    b"registry-platform-audit/audit-pseudonym-key/v1";
+const KEY_MATERIAL_PROBE_INPUT: &[u8] =
+    b"registry-platform-audit/audit-pseudonym-material-probe/v1";
 
 /// Public, non-secret identifier for one audit-pseudonym key epoch.
 ///
@@ -199,14 +224,7 @@ impl AuditPseudonymKeySource {
         secret_env_var: impl Into<String>,
     ) -> Result<Self, AuditPseudonymKeyringError> {
         let secret_env_var = secret_env_var.into();
-        let mut bytes = secret_env_var.bytes();
-        let Some(first) = bytes.next() else {
-            return Err(AuditPseudonymKeyringError::InvalidEnvironmentVariableName);
-        };
-        if secret_env_var.len() > MAX_ENV_VAR_NAME_BYTES
-            || !matches!(first, b'A'..=b'Z' | b'a'..=b'z' | b'_')
-            || !bytes.all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_'))
-        {
+        if !is_environment_variable_name(&secret_env_var) {
             return Err(AuditPseudonymKeyringError::InvalidEnvironmentVariableName);
         }
         Ok(Self {
@@ -252,13 +270,6 @@ impl TransientPseudonymInput {
         Ok(Self(canonical))
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "only the future PostgreSQL-issued capability may consume canonical input"
-        )
-    )]
     fn as_str(&self) -> &str {
         std::str::from_utf8(&self.0).expect("RFC 8785 output is UTF-8")
     }
@@ -270,30 +281,175 @@ impl fmt::Debug for TransientPseudonymInput {
     }
 }
 
-#[cfg(test)]
+/// One domain-separated audit-pseudonym HMAC sub-key.
+///
+/// Construction always treats the supplied bytes as master key material and
+/// derives a dedicated 32-byte sub-key with the fixed
+/// `registry-platform-audit/audit-pseudonym-key/v1` HKDF-Expand label. The
+/// derived key is distinct from the audit-chain and generic identifier keys.
+/// Raw and derived bytes are zeroized on every path. This type is deliberately
+/// neither cloneable nor serializable and exposes no raw-key accessor.
+///
+/// Possession proves only cryptographic key material. It does not prove the
+/// current PostgreSQL key id, generation, metadata binding, time, lookup grant,
+/// or write authority. Relay must bind it through the state-plane authority
+/// before a commitment can enter a governed event.
+pub struct AuditPseudonymKeyMaterial(SecretBytes);
+
+impl AuditPseudonymKeyMaterial {
+    /// Retain an exact already-derived HMAC key for frozen framing vectors.
+    ///
+    /// Production constructors must always derive from deployment master
+    /// material. This helper exists only in this module's unit-test build so
+    /// the established v1 domain/framing vectors remain independent of the
+    /// newer master-to-sub-key derivation contract.
+    #[cfg(test)]
+    fn from_test_derived_key(mut derived_key: Zeroizing<Vec<u8>>) -> Option<Self> {
+        if derived_key.len() != 32 {
+            return None;
+        }
+        Some(Self(SecretBytes(std::mem::take(&mut *derived_key))))
+    }
+
+    /// Derive the dedicated audit-pseudonym sub-key from owned zeroizing master
+    /// secret bytes.
+    pub fn from_secret_bytes(
+        secret: Zeroizing<Vec<u8>>,
+    ) -> Result<Self, AuditPseudonymKeyringError> {
+        validate_secret_length(secret.len())?;
+        Ok(Self(SecretBytes(hkdf_expand_sha256(
+            &secret,
+            AUDIT_PSEUDONYM_KEY_DERIVATION_INFO,
+        ))))
+    }
+
+    /// Load one exact environment value and derive the dedicated
+    /// audit-pseudonym sub-key.
+    ///
+    /// The value is not trimmed, decoded, or otherwise normalized. Environment
+    /// names use the conservative portable identifier grammar already used by
+    /// the keyring source contract. This is a single-key crypto constructor,
+    /// not a keyring loader or state-plane authority.
+    pub fn from_env_derived(env_var_name: &str) -> Result<Self, AuditPseudonymKeyringError> {
+        if !is_environment_variable_name(env_var_name) {
+            return Err(AuditPseudonymKeyringError::InvalidEnvironmentVariableName);
+        }
+        let mut value = read_secret_env(env_var_name)?;
+        if let Err(error) = validate_secret_length(value.len()) {
+            value.zeroize();
+            return Err(error);
+        }
+        // `String::into_bytes` transfers the environment allocation without a
+        // plaintext copy. Validation has completed, so the allocation moves
+        // immediately under a zeroizing owner before sub-key derivation.
+        Self::from_secret_bytes(Zeroizing::new(value.into_bytes()))
+    }
+
+    /// Compute the frozen Relay consultation-subject commitment.
+    #[must_use]
+    pub fn consultation_subject_commitment(
+        &self,
+        canonical_input: &TransientPseudonymInput,
+    ) -> AuditPseudonymCommitment {
+        self.commitment(RelayConsultationCommitmentDomain::Subject, canonical_input)
+    }
+
+    /// Compute the frozen Relay consultation-input commitment.
+    #[must_use]
+    pub fn consultation_input_commitment(
+        &self,
+        canonical_input: &TransientPseudonymInput,
+    ) -> AuditPseudonymCommitment {
+        self.commitment(RelayConsultationCommitmentDomain::Input, canonical_input)
+    }
+
+    /// Compute the frozen Relay consultation-predicate commitment.
+    #[must_use]
+    pub fn consultation_predicate_commitment(
+        &self,
+        canonical_input: &TransientPseudonymInput,
+    ) -> AuditPseudonymCommitment {
+        self.commitment(
+            RelayConsultationCommitmentDomain::Predicate,
+            canonical_input,
+        )
+    }
+
+    /// Compute the frozen Relay consultation-consent commitment.
+    #[must_use]
+    pub fn consultation_consent_commitment(
+        &self,
+        canonical_input: &TransientPseudonymInput,
+    ) -> AuditPseudonymCommitment {
+        self.commitment(RelayConsultationCommitmentDomain::Consent, canonical_input)
+    }
+
+    /// Compare derived material in constant time without exposing either key.
+    ///
+    /// Both keys authenticate one fixed private probe. The transient tags are
+    /// compared in constant time and scrubbed before return; neither the probe
+    /// nor its tags are exposed or persisted.
+    #[must_use]
+    pub fn is_same_material(&self, other: &Self) -> bool {
+        let mut left = hmac_sha256_bytes(&self.0 .0, b"", KEY_MATERIAL_PROBE_INPUT);
+        let mut right = hmac_sha256_bytes(&other.0 .0, b"", KEY_MATERIAL_PROBE_INPUT);
+        let same = bool::from(left.ct_eq(&right));
+        left.zeroize();
+        right.zeroize();
+        same
+    }
+
+    fn commitment(
+        &self,
+        domain: RelayConsultationCommitmentDomain,
+        canonical_input: &TransientPseudonymInput,
+    ) -> AuditPseudonymCommitment {
+        let preimage = relay_consultation_commitment_preimage(domain, canonical_input);
+        let mut tag = hmac_sha256_bytes(&self.0 .0, b"", &preimage);
+        let value = format!("hmac-sha256:{}", hex_lower(&tag));
+        tag.zeroize();
+        AuditPseudonymCommitment(value)
+    }
+}
+
+impl fmt::Debug for AuditPseudonymKeyMaterial {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("AuditPseudonymKeyMaterial(<redacted>)")
+    }
+}
+
+/// Audit-safe output of one closed audit-pseudonym commitment operation.
+///
+/// This value intentionally carries no key id or state-plane authority. The
+/// authoritative wrapper binds it to the PostgreSQL-issued epoch separately.
+#[derive(PartialEq, Eq)]
+pub struct AuditPseudonymCommitment(String);
+
+impl AuditPseudonymCommitment {
+    /// Return the stable `hmac-sha256:<lowercase hex>` representation.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for AuditPseudonymCommitment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("AuditPseudonymCommitment(hmac-sha256:<redacted>)")
+    }
+}
+
 fn relay_consultation_commitment_preimage(
     domain: RelayConsultationCommitmentDomain,
     canonical_input: &TransientPseudonymInput,
-) -> Zeroizing<String> {
-    let mut preimage = Zeroizing::new(String::with_capacity(
+) -> Zeroizing<Vec<u8>> {
+    let mut preimage = Zeroizing::new(Vec::with_capacity(
         domain.as_str().len() + 1 + canonical_input.as_str().len(),
     ));
-    preimage.push_str(domain.as_str());
-    preimage.push('\0');
-    preimage.push_str(canonical_input.as_str());
+    preimage.extend_from_slice(domain.as_str().as_bytes());
+    preimage.push(0);
+    preimage.extend_from_slice(&canonical_input.0);
     preimage
-}
-
-#[cfg(test)]
-fn relay_consultation_commitment_hash(
-    hasher: &AuditKeyHasher,
-    domain: RelayConsultationCommitmentDomain,
-    canonical_input: &TransientPseudonymInput,
-) -> String {
-    hasher.hash(&relay_consultation_commitment_preimage(
-        domain,
-        canonical_input,
-    ))
 }
 
 /// Audit-safe keyed handle recorded in an event or used in an exact lookup.
@@ -711,7 +867,7 @@ impl fmt::Debug for AuditPseudonymMetadataBinding {
 struct AuditPseudonymWriteKey {
     key_id: AuditPseudonymKeyId,
     metadata_binding: AuditPseudonymMetadataBinding,
-    hasher: AuditKeyHasher,
+    material: AuditPseudonymKeyMaterial,
 }
 
 #[cfg(test)]
@@ -728,30 +884,30 @@ impl AuditPseudonymWriteKey {
         metadata.validate_lifecycle_at(now)?;
         let sources = collect_sources(sources)?;
         ensure_exact_source_ids(metadata, &sources)?;
-        let loaded = load_env_hashers(sources)?;
-        Self::from_preflight_hashers(metadata, now, loaded)
+        let loaded = load_env_materials(sources)?;
+        Self::from_preflight_materials(metadata, now, loaded)
     }
 
-    fn from_preflight_hashers<I>(
+    fn from_preflight_materials<I>(
         metadata: &AuditPseudonymKeyringMetadata,
         now: AuditPseudonymTime,
-        hashers: I,
+        materials: I,
     ) -> Result<Self, AuditPseudonymKeyringError>
     where
-        I: IntoIterator<Item = (AuditPseudonymKeyId, AuditKeyHasher)>,
+        I: IntoIterator<Item = (AuditPseudonymKeyId, AuditPseudonymKeyMaterial)>,
     {
         metadata.validate_lifecycle_at(now)?;
-        let mut loaded = collect_unique_hashers(hashers)?;
+        let mut loaded = collect_unique_materials(materials)?;
         ensure_exact_loaded_ids(metadata, &loaded)?;
         reject_duplicate_key_material(&loaded)?;
-        let hasher = loaded
+        let material = loaded
             .remove(metadata.active_key_id())
             .ok_or(AuditPseudonymKeyringError::MetadataSourceMismatch)?;
         drop(loaded);
         Ok(Self {
             key_id: metadata.active_key_id.clone(),
             metadata_binding: metadata.binding()?,
-            hasher,
+            material,
         })
     }
 
@@ -789,7 +945,11 @@ impl AuditPseudonymWriteKey {
         self.validate_current_metadata(metadata, now)?;
         Ok(AuditPseudonymHandle {
             key_id: self.key_id.clone(),
-            value: relay_consultation_commitment_hash(&self.hasher, domain, canonical_input),
+            value: self
+                .material
+                .commitment(domain, canonical_input)
+                .as_str()
+                .to_owned(),
         })
     }
 }
@@ -807,7 +967,7 @@ impl fmt::Debug for AuditPseudonymWriteKey {
 
 #[cfg(test)]
 struct LookupKey {
-    hasher: AuditKeyHasher,
+    material: AuditPseudonymKeyMaterial,
     destroy_after_unix_ms: Option<i64>,
 }
 
@@ -850,21 +1010,21 @@ impl AuditPseudonymLookupKeyring {
                 return Err(AuditPseudonymKeyringError::DuplicateKeyId);
             }
         }
-        let loaded = load_env_hashers(sources)?;
-        Self::from_hashers_and_expiries(metadata, now, loaded, expiries)
+        let loaded = load_env_materials(sources)?;
+        Self::from_materials_and_expiries(metadata, now, loaded, expiries)
     }
 
     #[cfg(test)]
-    fn from_hashers<I>(
+    fn from_materials<I>(
         metadata: &AuditPseudonymKeyringMetadata,
         now: AuditPseudonymTime,
-        hashers: I,
+        materials: I,
     ) -> Result<Self, AuditPseudonymKeyringError>
     where
-        I: IntoIterator<Item = (AuditPseudonymKeyId, AuditKeyHasher)>,
+        I: IntoIterator<Item = (AuditPseudonymKeyId, AuditPseudonymKeyMaterial)>,
     {
         metadata.validate_lifecycle_at(now)?;
-        let loaded = collect_unique_hashers(hashers)?;
+        let loaded = collect_unique_materials(materials)?;
         if loaded.is_empty() {
             return Err(AuditPseudonymKeyringError::EmptyLookupKeySet);
         }
@@ -872,20 +1032,20 @@ impl AuditPseudonymLookupKeyring {
         for key_id in loaded.keys() {
             expiries.insert(key_id.clone(), metadata.lookup_expiry(key_id, now)?);
         }
-        Self::from_hashers_and_expiries(metadata, now, loaded, expiries)
+        Self::from_materials_and_expiries(metadata, now, loaded, expiries)
     }
 
-    fn from_hashers_and_expiries(
+    fn from_materials_and_expiries(
         metadata: &AuditPseudonymKeyringMetadata,
         now: AuditPseudonymTime,
-        loaded: BTreeMap<AuditPseudonymKeyId, AuditKeyHasher>,
+        loaded: BTreeMap<AuditPseudonymKeyId, AuditPseudonymKeyMaterial>,
         expiries: BTreeMap<AuditPseudonymKeyId, Option<i64>>,
     ) -> Result<Self, AuditPseudonymKeyringError> {
         metadata.validate_lifecycle_at(now)?;
         reject_duplicate_key_material(&loaded)?;
         let keys = loaded
             .into_iter()
-            .map(|(key_id, hasher)| {
+            .map(|(key_id, material)| {
                 let destroy_after_unix_ms = expiries
                     .get(&key_id)
                     .copied()
@@ -893,7 +1053,7 @@ impl AuditPseudonymLookupKeyring {
                 Ok((
                     key_id,
                     LookupKey {
-                        hasher,
+                        material,
                         destroy_after_unix_ms,
                     },
                 ))
@@ -949,7 +1109,11 @@ impl AuditPseudonymLookupKeyring {
             .map(|(key_id, key)| {
                 Ok(AuditPseudonymHandle {
                     key_id: key_id.clone(),
-                    value: relay_consultation_commitment_hash(&key.hasher, domain, canonical_input),
+                    value: key
+                        .material
+                        .commitment(domain, canonical_input)
+                        .as_str()
+                        .to_owned(),
                 })
             })
             .collect()
@@ -976,6 +1140,12 @@ pub enum AuditPseudonymKeyringError {
     InvalidTime,
     #[error("audit pseudonym key environment-variable name is invalid")]
     InvalidEnvironmentVariableName,
+    #[error("audit pseudonym key material is empty")]
+    EmptyKeyMaterial,
+    #[error("audit pseudonym key material is weaker than the 32-byte minimum")]
+    WeakKeyMaterial,
+    #[error("audit pseudonym key material exceeds the 4096-byte limit")]
+    KeyMaterialTooLarge,
     #[error("audit pseudonym canonical input is not valid interoperable JCS")]
     InvalidCanonicalInput,
     #[error("audit pseudonym canonical input exceeds the 8 KiB limit")]
@@ -1024,9 +1194,31 @@ pub enum AuditPseudonymKeyringError {
     MetadataSerializationFailed,
     #[error("audit pseudonym metadata canonicalization failed")]
     MetadataCanonicalizationFailed,
-    #[cfg(test)]
     #[error("audit pseudonym key loading failed: {0}")]
     Audit(#[from] AuditError),
+}
+
+fn validate_secret_length(length: usize) -> Result<(), AuditPseudonymKeyringError> {
+    if length == 0 {
+        return Err(AuditPseudonymKeyringError::EmptyKeyMaterial);
+    }
+    if length < MIN_AUDIT_SECRET_BYTES {
+        return Err(AuditPseudonymKeyringError::WeakKeyMaterial);
+    }
+    if length > MAX_AUDIT_PSEUDONYM_SECRET_BYTES {
+        return Err(AuditPseudonymKeyringError::KeyMaterialTooLarge);
+    }
+    Ok(())
+}
+
+fn is_environment_variable_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    value.len() <= MAX_ENV_VAR_NAME_BYTES
+        && matches!(first, b'A'..=b'Z' | b'a'..=b'z' | b'_')
+        && bytes.all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_'))
 }
 
 fn is_bounded_token(value: &str, max_bytes: usize) -> bool {
@@ -1081,7 +1273,7 @@ fn ensure_exact_source_ids(
 #[cfg(test)]
 fn ensure_exact_loaded_ids(
     metadata: &AuditPseudonymKeyringMetadata,
-    loaded: &BTreeMap<AuditPseudonymKeyId, AuditKeyHasher>,
+    loaded: &BTreeMap<AuditPseudonymKeyId, AuditPseudonymKeyMaterial>,
 ) -> Result<(), AuditPseudonymKeyringError> {
     let expected = metadata
         .declared_key_ids()
@@ -1095,33 +1287,33 @@ fn ensure_exact_loaded_ids(
 }
 
 #[cfg(test)]
-fn load_env_hashers(
+fn load_env_materials(
     sources: Vec<AuditPseudonymKeySource>,
-) -> Result<BTreeMap<AuditPseudonymKeyId, AuditKeyHasher>, AuditPseudonymKeyringError> {
-    collect_unique_hashers(
+) -> Result<BTreeMap<AuditPseudonymKeyId, AuditPseudonymKeyMaterial>, AuditPseudonymKeyringError> {
+    collect_unique_materials(
         sources
             .into_iter()
             .map(|source| {
-                let hasher = AuditKeyHasher::from_env_derived(&source.secret_env_var)?;
-                Ok((source.key_id, hasher))
+                let material = AuditPseudonymKeyMaterial::from_env_derived(&source.secret_env_var)?;
+                Ok((source.key_id, material))
             })
-            .collect::<Result<Vec<_>, AuditError>>()?,
+            .collect::<Result<Vec<_>, AuditPseudonymKeyringError>>()?,
     )
 }
 
 #[cfg(test)]
-fn collect_unique_hashers<I>(
-    hashers: I,
-) -> Result<BTreeMap<AuditPseudonymKeyId, AuditKeyHasher>, AuditPseudonymKeyringError>
+fn collect_unique_materials<I>(
+    materials: I,
+) -> Result<BTreeMap<AuditPseudonymKeyId, AuditPseudonymKeyMaterial>, AuditPseudonymKeyringError>
 where
-    I: IntoIterator<Item = (AuditPseudonymKeyId, AuditKeyHasher)>,
+    I: IntoIterator<Item = (AuditPseudonymKeyId, AuditPseudonymKeyMaterial)>,
 {
     let mut loaded = BTreeMap::new();
-    for (key_id, hasher) in hashers {
+    for (key_id, material) in materials {
         if loaded.len() == MAX_KEYRING_EPOCHS {
             return Err(AuditPseudonymKeyringError::TooManyKeyEpochs);
         }
-        if loaded.insert(key_id, hasher).is_some() {
+        if loaded.insert(key_id, material).is_some() {
             return Err(AuditPseudonymKeyringError::DuplicateKeyId);
         }
     }
@@ -1130,21 +1322,16 @@ where
 
 #[cfg(test)]
 fn reject_duplicate_key_material(
-    loaded: &BTreeMap<AuditPseudonymKeyId, AuditKeyHasher>,
+    loaded: &BTreeMap<AuditPseudonymKeyId, AuditPseudonymKeyMaterial>,
 ) -> Result<(), AuditPseudonymKeyringError> {
-    let mut probes = Vec::<Zeroizing<String>>::new();
-    for hasher in loaded.values() {
-        let probe_input = Zeroizing::new(format!(
-            "{KEY_MATERIAL_PROBE_CLASS}\0{KEY_MATERIAL_PROBE_INPUT}"
-        ));
-        let probe = Zeroizing::new(hasher.hash(&probe_input));
-        if probes
-            .iter()
-            .any(|loaded_probe| bool::from(loaded_probe.as_bytes().ct_eq(probe.as_bytes())))
+    for (index, material) in loaded.values().enumerate() {
+        if loaded
+            .values()
+            .take(index)
+            .any(|previous| material.is_same_material(previous))
         {
             return Err(AuditPseudonymKeyringError::DuplicateKeyMaterial);
         }
-        probes.push(probe);
     }
     Ok(())
 }
@@ -1258,7 +1445,6 @@ fn scrub_json_strings(value: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::AuditHashSecret;
     use serde_json::json;
 
     fn id(value: &str) -> AuditPseudonymKeyId {
@@ -1273,10 +1459,71 @@ mod tests {
         TransientPseudonymInput::from_jcs_value(value).expect("valid test input")
     }
 
-    fn hasher(byte: u8) -> AuditKeyHasher {
-        AuditKeyHasher::Keyed(
-            AuditHashSecret::new(vec![byte; 32]).expect("strong test audit secret"),
-        )
+    fn material(byte: u8) -> AuditPseudonymKeyMaterial {
+        AuditPseudonymKeyMaterial::from_secret_bytes(Zeroizing::new(vec![byte; 32]))
+            .expect("strong test audit pseudonym secret")
+    }
+
+    fn commitment_vector_inputs() -> [(RelayConsultationCommitmentDomain, Value, &'static str); 4] {
+        [
+            (
+                RelayConsultationCommitmentDomain::Subject,
+                json!({
+                    "tenant": "example-government",
+                    "registry_instance": "people-primary",
+                    "identifier_type": "national_id",
+                    "canonical_subject": "123456789",
+                }),
+                "{\"canonical_subject\":\"123456789\",\"identifier_type\":\"national_id\",\"registry_instance\":\"people-primary\",\"tenant\":\"example-government\"}",
+            ),
+            (
+                RelayConsultationCommitmentDomain::Input,
+                json!({
+                    "profile_id": "example.person-status.exact",
+                    "profile_version": "1",
+                    "canonical_inputs": {"subject_id": "123456789"},
+                }),
+                "{\"canonical_inputs\":{\"subject_id\":\"123456789\"},\"profile_id\":\"example.person-status.exact\",\"profile_version\":\"1\"}",
+            ),
+            (
+                RelayConsultationCommitmentDomain::Predicate,
+                json!({
+                    "binding_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "source_operation": "person.lookup-exact",
+                    "exact_predicate": {"national_id": "123456789"},
+                }),
+                "{\"binding_hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"exact_predicate\":{\"national_id\":\"123456789\"},\"source_operation\":\"person.lookup-exact\"}",
+            ),
+            (
+                RelayConsultationCommitmentDomain::Consent,
+                json!({
+                    "verifier_id": "government-consent-service",
+                    "raw_consent_reference": "consent-abc-123",
+                }),
+                "{\"raw_consent_reference\":\"consent-abc-123\",\"verifier_id\":\"government-consent-service\"}",
+            ),
+        ]
+    }
+
+    fn commitment_for_domain(
+        material: &AuditPseudonymKeyMaterial,
+        domain: RelayConsultationCommitmentDomain,
+        canonical_input: &TransientPseudonymInput,
+    ) -> AuditPseudonymCommitment {
+        match domain {
+            RelayConsultationCommitmentDomain::Subject => {
+                material.consultation_subject_commitment(canonical_input)
+            }
+            RelayConsultationCommitmentDomain::Input => {
+                material.consultation_input_commitment(canonical_input)
+            }
+            RelayConsultationCommitmentDomain::Predicate => {
+                material.consultation_predicate_commitment(canonical_input)
+            }
+            RelayConsultationCommitmentDomain::Consent => {
+                material.consultation_consent_commitment(canonical_input)
+            }
+        }
     }
 
     fn retained(
@@ -1405,73 +1652,231 @@ mod tests {
     }
 
     #[test]
+    fn production_key_material_is_bounded_domain_separated_and_redacted() {
+        assert_ne!(
+            AUDIT_PSEUDONYM_KEY_DERIVATION_INFO,
+            crate::CHAIN_KEY_DERIVATION_INFO
+        );
+        assert_ne!(
+            AUDIT_PSEUDONYM_KEY_DERIVATION_INFO,
+            crate::IDENTIFIER_KEY_DERIVATION_INFO
+        );
+        assert!(matches!(
+            AuditPseudonymKeyMaterial::from_secret_bytes(Zeroizing::new(Vec::new())),
+            Err(AuditPseudonymKeyringError::EmptyKeyMaterial)
+        ));
+        assert!(matches!(
+            AuditPseudonymKeyMaterial::from_secret_bytes(Zeroizing::new(vec![7; 31])),
+            Err(AuditPseudonymKeyringError::WeakKeyMaterial)
+        ));
+        assert!(
+            AuditPseudonymKeyMaterial::from_secret_bytes(Zeroizing::new(vec![
+                7;
+                MAX_AUDIT_PSEUDONYM_SECRET_BYTES
+            ]))
+            .is_ok()
+        );
+        assert!(matches!(
+            AuditPseudonymKeyMaterial::from_secret_bytes(Zeroizing::new(vec![
+                7;
+                MAX_AUDIT_PSEUDONYM_SECRET_BYTES
+                    + 1
+            ])),
+            Err(AuditPseudonymKeyringError::KeyMaterialTooLarge)
+        ));
+
+        let same_left = material(9);
+        let same_right = material(9);
+        let different = material(10);
+        assert!(same_left.is_same_material(&same_right));
+        assert!(!same_left.is_same_material(&different));
+
+        let canonical_input = input(json!({"same": "canonical-input"}));
+        let commitments = [
+            same_left.consultation_subject_commitment(&canonical_input),
+            same_left.consultation_input_commitment(&canonical_input),
+            same_left.consultation_predicate_commitment(&canonical_input),
+            same_left.consultation_consent_commitment(&canonical_input),
+        ];
+        let distinct = commitments
+            .iter()
+            .map(AuditPseudonymCommitment::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(distinct.len(), commitments.len());
+
+        let diagnostics = format!("{same_left:?} {:?}", commitments[0]);
+        assert!(!diagnostics.contains("canonical-input"));
+        assert!(!diagnostics.contains(commitments[0].as_str()));
+        assert_eq!(diagnostics, "AuditPseudonymKeyMaterial(<redacted>) AuditPseudonymCommitment(hmac-sha256:<redacted>)");
+
+        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<SecretBytes>();
+    }
+
+    #[test]
+    fn production_key_material_uses_exact_environment_bytes() {
+        const ENV_NAME: &str = "REGISTRY_AUDIT_PSEUDONYM_MATERIAL_EXACT_TEST";
+        const MASTER: &str = " exact-pseudonym-master-secret-0123456789abcdef ";
+        std::env::set_var(ENV_NAME, MASTER);
+        let from_env =
+            AuditPseudonymKeyMaterial::from_env_derived(ENV_NAME).expect("environment material");
+        std::env::remove_var(ENV_NAME);
+        let explicit = AuditPseudonymKeyMaterial::from_secret_bytes(Zeroizing::new(
+            MASTER.as_bytes().to_vec(),
+        ))
+        .expect("explicit material");
+        assert!(from_env.is_same_material(&explicit));
+        let trimmed = AuditPseudonymKeyMaterial::from_secret_bytes(Zeroizing::new(
+            MASTER.trim().as_bytes().to_vec(),
+        ))
+        .expect("trimmed material");
+        assert!(!from_env.is_same_material(&trimmed));
+
+        for invalid_name in ["", " with-space", "9LEADING", "NON-ASCII-É"] {
+            assert!(matches!(
+                AuditPseudonymKeyMaterial::from_env_derived(invalid_name),
+                Err(AuditPseudonymKeyringError::InvalidEnvironmentVariableName)
+            ));
+        }
+    }
+
+    #[test]
+    fn production_key_material_rejects_invalid_environment_values_without_leaks() {
+        const EMPTY_ENV: &str = "REGISTRY_AUDIT_PSEUDONYM_EMPTY_MATERIAL_TEST";
+        const WEAK_ENV: &str = "REGISTRY_AUDIT_PSEUDONYM_WEAK_MATERIAL_TEST";
+        const LARGE_ENV: &str = "REGISTRY_AUDIT_PSEUDONYM_LARGE_MATERIAL_TEST";
+        const MISSING_ENV: &str = "REGISTRY_AUDIT_PSEUDONYM_MISSING_MATERIAL_TEST";
+        const WEAK_MARKER: &str = "weak-material-must-not-leak";
+        std::env::set_var(EMPTY_ENV, "");
+        std::env::set_var(WEAK_ENV, WEAK_MARKER);
+        std::env::set_var(
+            LARGE_ENV,
+            "large-material-must-not-leak".repeat(
+                MAX_AUDIT_PSEUDONYM_SECRET_BYTES / "large-material-must-not-leak".len() + 1,
+            ),
+        );
+        std::env::remove_var(MISSING_ENV);
+
+        let errors = [
+            AuditPseudonymKeyMaterial::from_env_derived(EMPTY_ENV)
+                .expect_err("empty material is rejected"),
+            AuditPseudonymKeyMaterial::from_env_derived(WEAK_ENV)
+                .expect_err("weak material is rejected"),
+            AuditPseudonymKeyMaterial::from_env_derived(LARGE_ENV)
+                .expect_err("oversized material is rejected"),
+            AuditPseudonymKeyMaterial::from_env_derived(MISSING_ENV)
+                .expect_err("missing material is rejected"),
+        ];
+        std::env::remove_var(EMPTY_ENV);
+        std::env::remove_var(WEAK_ENV);
+        std::env::remove_var(LARGE_ENV);
+
+        assert!(matches!(
+            errors[0],
+            AuditPseudonymKeyringError::EmptyKeyMaterial
+        ));
+        assert!(matches!(
+            errors[1],
+            AuditPseudonymKeyringError::WeakKeyMaterial
+        ));
+        assert!(matches!(
+            errors[2],
+            AuditPseudonymKeyringError::KeyMaterialTooLarge
+        ));
+        assert!(matches!(
+            errors[3],
+            AuditPseudonymKeyringError::Audit(AuditError::EnvVarUnavailable { .. })
+        ));
+        for error in errors {
+            let diagnostics = format!("{error:?} {error}");
+            assert!(!diagnostics.contains(WEAK_MARKER));
+            assert!(!diagnostics.contains("large-material-must-not-leak"));
+        }
+    }
+
+    #[test]
+    fn production_commitment_is_canonical_key_order_invariant() {
+        let left =
+            input(serde_json::from_str(r#"{"z":{"b":2,"a":1},"a":"same"}"#).expect("left input"));
+        let right =
+            input(serde_json::from_str(r#"{"a":"same","z":{"a":1,"b":2}}"#).expect("right input"));
+        let left_material = material(17);
+        let right_material = material(17);
+        assert_eq!(
+            left_material.consultation_subject_commitment(&left),
+            right_material.consultation_subject_commitment(&right),
+        );
+    }
+
+    #[test]
     fn consultation_commitment_domains_match_pinned_exact_preimages_and_hmacs() {
-        let vectors = [
-            (
-                RelayConsultationCommitmentDomain::Subject,
-                json!({
-                    "tenant": "example-government",
-                    "registry_instance": "people-primary",
-                    "identifier_type": "national_id",
-                    "canonical_subject": "123456789",
-                }),
-                "{\"canonical_subject\":\"123456789\",\"identifier_type\":\"national_id\",\"registry_instance\":\"people-primary\",\"tenant\":\"example-government\"}",
-                "hmac-sha256:f684cfafd11414f19ecb060115ecaac7fec6420d42e075dc8b2ef770097896bc",
-            ),
-            (
-                RelayConsultationCommitmentDomain::Input,
-                json!({
-                    "profile_id": "example.person-status.exact",
-                    "profile_version": "1",
-                    "canonical_inputs": {"subject_id": "123456789"},
-                }),
-                "{\"canonical_inputs\":{\"subject_id\":\"123456789\"},\"profile_id\":\"example.person-status.exact\",\"profile_version\":\"1\"}",
-                "hmac-sha256:15c3415ebc99c3dab853f6081f3baa621c9603d39f32a9b8b00369382f25f33f",
-            ),
-            (
-                RelayConsultationCommitmentDomain::Predicate,
-                json!({
-                    "binding_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "source_operation": "person.lookup-exact",
-                    "exact_predicate": {"national_id": "123456789"},
-                }),
-                "{\"binding_hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"exact_predicate\":{\"national_id\":\"123456789\"},\"source_operation\":\"person.lookup-exact\"}",
-                "hmac-sha256:346bad213b8477d67cbbb8dbba9705b85eb71477eda8e97b8c1300204fd007e8",
-            ),
-            (
-                RelayConsultationCommitmentDomain::Consent,
-                json!({
-                    "verifier_id": "government-consent-service",
-                    "raw_consent_reference": "consent-abc-123",
-                }),
-                "{\"raw_consent_reference\":\"consent-abc-123\",\"verifier_id\":\"government-consent-service\"}",
-                "hmac-sha256:00d9035914a65b4931f8b6c3685bcbde8ec4a8691350d2e7058518ff5cca205e",
-            ),
+        const EXPECTED_ALREADY_DERIVED_KEY_HANDLES: [&str; 4] = [
+            "hmac-sha256:f684cfafd11414f19ecb060115ecaac7fec6420d42e075dc8b2ef770097896bc",
+            "hmac-sha256:15c3415ebc99c3dab853f6081f3baa621c9603d39f32a9b8b00369382f25f33f",
+            "hmac-sha256:346bad213b8477d67cbbb8dbba9705b85eb71477eda8e97b8c1300204fd007e8",
+            "hmac-sha256:00d9035914a65b4931f8b6c3685bcbde8ec4a8691350d2e7058518ff5cca205e",
         ];
 
-        let commitment_hasher = hasher(0x42);
-        for (domain, value, expected_jcs, expected_handle) in vectors {
+        assert!(
+            AuditPseudonymKeyMaterial::from_test_derived_key(Zeroizing::new(vec![0x42; 31]))
+                .is_none()
+        );
+        assert!(
+            AuditPseudonymKeyMaterial::from_test_derived_key(Zeroizing::new(vec![0x42; 33]))
+                .is_none()
+        );
+        // These frozen v1 vectors treat 0x42 * 32 as the already-derived HMAC
+        // domain key. They pin domain || NUL || JCS framing independently of
+        // deployment-master derivation.
+        let commitment_material =
+            AuditPseudonymKeyMaterial::from_test_derived_key(Zeroizing::new(vec![0x42; 32]))
+                .expect("exact test-only derived key");
+        for ((domain, value, expected_jcs), expected_handle) in commitment_vector_inputs()
+            .into_iter()
+            .zip(EXPECTED_ALREADY_DERIVED_KEY_HANDLES)
+        {
             let canonical_input = input(value);
             assert_eq!(canonical_input.as_str(), expected_jcs);
             let expected_preimage = format!("{}\0{expected_jcs}", domain.as_str());
             assert_eq!(
-                relay_consultation_commitment_preimage(domain, &canonical_input).as_bytes(),
+                relay_consultation_commitment_preimage(domain, &canonical_input).as_slice(),
                 expected_preimage.as_bytes(),
             );
-            assert_eq!(
-                relay_consultation_commitment_hash(&commitment_hasher, domain, &canonical_input,),
-                expected_handle,
-            );
+            let commitment = commitment_for_domain(&commitment_material, domain, &canonical_input);
+            assert_eq!(commitment.as_str(), expected_handle);
+        }
+    }
+
+    #[test]
+    fn production_master_derivation_matches_pinned_end_to_end_commitments() {
+        const EXPECTED_MASTER_DERIVED_HANDLES: [&str; 4] = [
+            "hmac-sha256:80d4a9f979be7df1455203f542a3c393c995aeca508a3009cdbd7e37c45021da",
+            "hmac-sha256:432d0c8e572abd017f848b4e74be7fbb9c9da015a54c3ef47458f0fabe147021",
+            "hmac-sha256:614cfadc2079ff97728a5007908f6c53447f087a22d084eaefb80c5a682fbba6",
+            "hmac-sha256:25483260fc7fa92958c120142cbde1a4a071fc62f3f02ac32ff2e216741e5d6b",
+        ];
+
+        // The same fixture bytes are deployment master material here. The
+        // production constructor first applies the dedicated HKDF-Expand label,
+        // so these vectors pin the complete master -> sub-key -> commitment path.
+        let commitment_material = material(0x42);
+        for ((domain, value, _), expected_handle) in commitment_vector_inputs()
+            .into_iter()
+            .zip(EXPECTED_MASTER_DERIVED_HANDLES)
+        {
+            let canonical_input = input(value);
+            let commitment = commitment_for_domain(&commitment_material, domain, &canonical_input);
+            assert_eq!(commitment.as_str(), expected_handle);
         }
     }
 
     #[test]
     fn test_write_model_is_bound_to_supplied_metadata_and_time() {
         let current = metadata(1, "epoch-1", 1_000, 2_000, vec![]);
-        let write = AuditPseudonymWriteKey::from_preflight_hashers(
+        let write = AuditPseudonymWriteKey::from_preflight_materials(
             &current,
             time(1_000),
-            [(id("epoch-1"), hasher(1))],
+            [(id("epoch-1"), material(1))],
         )
         .expect("write key");
         assert_eq!(write.key_id(), current.active_key_id());
@@ -1498,10 +1903,10 @@ mod tests {
             Err(AuditPseudonymKeyringError::StaleMetadata)
         ));
         assert!(matches!(
-            AuditPseudonymWriteKey::from_preflight_hashers(
+            AuditPseudonymWriteKey::from_preflight_materials(
                 &current,
                 time(999),
-                [(id("epoch-1"), hasher(1))]
+                [(id("epoch-1"), material(1))]
             ),
             Err(AuditPseudonymKeyringError::MetadataNotActive)
         ));
@@ -1517,38 +1922,38 @@ mod tests {
             vec![retained("epoch-1", 1_000, 4_000)],
         );
         assert!(matches!(
-            AuditPseudonymWriteKey::from_preflight_hashers(
+            AuditPseudonymWriteKey::from_preflight_materials(
                 &current,
                 time(2_000),
-                [(id("epoch-2"), hasher(2))]
+                [(id("epoch-2"), material(2))]
             ),
             Err(AuditPseudonymKeyringError::MetadataSourceMismatch)
         ));
         assert!(matches!(
-            AuditPseudonymWriteKey::from_preflight_hashers(
+            AuditPseudonymWriteKey::from_preflight_materials(
                 &current,
                 time(2_000),
-                [(id("epoch-1"), hasher(1)), (id("epoch-2"), hasher(1)),]
+                [(id("epoch-1"), material(1)), (id("epoch-2"), material(1)),]
             ),
             Err(AuditPseudonymKeyringError::DuplicateKeyMaterial)
         ));
         assert!(matches!(
-            AuditPseudonymWriteKey::from_preflight_hashers(
+            AuditPseudonymWriteKey::from_preflight_materials(
                 &current,
                 time(2_000),
                 [
-                    (id("epoch-1"), hasher(1)),
-                    (id("epoch-1"), hasher(2)),
-                    (id("epoch-2"), hasher(3)),
+                    (id("epoch-1"), material(1)),
+                    (id("epoch-1"), material(2)),
+                    (id("epoch-2"), material(3)),
                 ]
             ),
             Err(AuditPseudonymKeyringError::DuplicateKeyId)
         ));
 
-        let write = AuditPseudonymWriteKey::from_preflight_hashers(
+        let write = AuditPseudonymWriteKey::from_preflight_materials(
             &current,
             time(2_000),
-            [(id("epoch-1"), hasher(1)), (id("epoch-2"), hasher(2))],
+            [(id("epoch-1"), material(1)), (id("epoch-2"), material(2))],
         )
         .expect("complete unique preflight");
         assert_eq!(write.key_id().as_str(), "epoch-2");
@@ -1564,38 +1969,38 @@ mod tests {
             vec![retained("epoch-1", 1_000, 4_000)],
         );
         assert!(matches!(
-            AuditPseudonymLookupKeyring::from_hashers(&current, time(2_500), []),
+            AuditPseudonymLookupKeyring::from_materials(&current, time(2_500), []),
             Err(AuditPseudonymKeyringError::EmptyLookupKeySet)
         ));
         assert!(matches!(
-            AuditPseudonymLookupKeyring::from_hashers(
+            AuditPseudonymLookupKeyring::from_materials(
                 &current,
                 time(2_500),
-                [(id("epoch-0"), hasher(3))]
+                [(id("epoch-0"), material(3))]
             ),
             Err(AuditPseudonymKeyringError::UndeclaredLookupKey)
         ));
         assert!(matches!(
-            AuditPseudonymLookupKeyring::from_hashers(
+            AuditPseudonymLookupKeyring::from_materials(
                 &current,
                 time(4_000),
-                [(id("epoch-1"), hasher(1))]
+                [(id("epoch-1"), material(1))]
             ),
             Err(AuditPseudonymKeyringError::ExpiredKeyEpoch)
         ));
         assert!(matches!(
-            AuditPseudonymLookupKeyring::from_hashers(
+            AuditPseudonymLookupKeyring::from_materials(
                 &current,
                 time(2_500),
-                [(id("epoch-1"), hasher(1)), (id("epoch-2"), hasher(1)),]
+                [(id("epoch-1"), material(1)), (id("epoch-2"), material(1)),]
             ),
             Err(AuditPseudonymKeyringError::DuplicateKeyMaterial)
         ));
 
-        let lookup = AuditPseudonymLookupKeyring::from_hashers(
+        let lookup = AuditPseudonymLookupKeyring::from_materials(
             &current,
             time(2_500),
-            [(id("epoch-2"), hasher(2)), (id("epoch-1"), hasher(1))],
+            [(id("epoch-2"), material(2)), (id("epoch-1"), material(1))],
         )
         .expect("declared lookup");
         let canonical_input = input(json!({"selector": "selector-123"}));
@@ -1643,16 +2048,16 @@ mod tests {
             2_000,
             vec![retained("epoch-1", 1_000, 4_000)],
         );
-        let forward = AuditPseudonymLookupKeyring::from_hashers(
+        let forward = AuditPseudonymLookupKeyring::from_materials(
             &current,
             time(2_500),
-            [(id("epoch-1"), hasher(1)), (id("epoch-2"), hasher(2))],
+            [(id("epoch-1"), material(1)), (id("epoch-2"), material(2))],
         )
         .expect("forward");
-        let reversed = AuditPseudonymLookupKeyring::from_hashers(
+        let reversed = AuditPseudonymLookupKeyring::from_materials(
             &current,
             time(2_500),
-            [(id("epoch-2"), hasher(2)), (id("epoch-1"), hasher(1))],
+            [(id("epoch-2"), material(2)), (id("epoch-1"), material(1))],
         )
         .expect("reversed");
         let input_a = input(serde_json::from_str(r#"{"z":2,"a":1}"#).expect("input a"));
@@ -1849,10 +2254,10 @@ mod tests {
         assert_eq!(serialized["active_write_deadline_unix_ms"], 2_000);
 
         assert!(matches!(
-            AuditPseudonymWriteKey::from_preflight_hashers(
+            AuditPseudonymWriteKey::from_preflight_materials(
                 &current,
                 time(2_000),
-                [(id("epoch-1"), hasher(1))],
+                [(id("epoch-1"), material(1))],
             ),
             Err(AuditPseudonymKeyringError::ActiveWriteDeadlineReached)
         ));
@@ -2080,12 +2485,12 @@ mod tests {
             .map(|index| retained(&format!("epoch-{index:02}"), 1_000, 3_000))
             .collect::<Vec<_>>();
         let maximum = metadata(32, "epoch-active", 2_000, 2_000, retained_keys.clone());
-        let hashers = maximum
+        let materials = maximum
             .declared_key_ids()
             .enumerate()
-            .map(|(index, key_id)| (key_id.clone(), hasher((index + 1) as u8)))
+            .map(|(index, key_id)| (key_id.clone(), material((index + 1) as u8)))
             .collect::<Vec<_>>();
-        let lookup = AuditPseudonymLookupKeyring::from_hashers(&maximum, time(2_000), hashers)
+        let lookup = AuditPseudonymLookupKeyring::from_materials(&maximum, time(2_000), materials)
             .expect("32 epochs load");
         assert_eq!(lookup.key_ids().len(), MAX_KEYRING_EPOCHS);
 

@@ -22,9 +22,9 @@ helpers for registry services.
   handles whose service-owned canonical input stays outside the platform domain.
 - `AuditKeyHasher::sensitive_value_hash` for generic field-bound audit lookup
   values used by redaction helpers.
-- `pseudonym_keyring` pure metadata, lifecycle, bounded-domain, and zeroizing
-  input contracts, with production capabilities withheld pending PostgreSQL
-  authority integration.
+- `pseudonym_keyring` pure metadata and lifecycle contracts plus a
+  bounded-domain, zeroizing audit-pseudonym cryptographic primitive. PostgreSQL
+  authority capabilities remain deliberately withheld pending integration.
 
 ## Typical Use
 
@@ -113,12 +113,16 @@ target.
 
 ## Pseudonym Key Epochs
 
-The public API currently exposes pure, hash-covered key-epoch metadata,
-lifecycle validation, closed consultation commitment domains, audit-safe
-handles, and zeroizing transient canonical input. It deliberately exposes no production
-write-key or historical-lookup capability. A caller-supplied metadata copy,
-timestamp, or used-key-id set cannot prove that it is the current authoritative
-state, even when its generation and digest are internally consistent.
+The public API exposes pure, hash-covered key-epoch metadata, lifecycle
+validation, closed consultation commitment domains, audit-safe handles,
+zeroizing transient canonical input, and `AuditPseudonymKeyMaterial`. The key
+material type derives a dedicated sub-key from an owned zeroizing secret, is
+neither cloneable nor serializable, exposes no raw-key accessor, and permits
+only the four frozen Relay consultation commitments. It deliberately exposes
+no production write-key or historical-lookup capability. A caller-supplied
+metadata copy, timestamp, key, or used-key-id set cannot prove that it is the
+current authoritative state, even when its generation and digest are
+internally consistent.
 
 The production wrapper remains a PostgreSQL state-plane integration
 prerequisite. For every write or lookup it must obtain PostgreSQL current time,
@@ -127,9 +131,11 @@ never-reusable key-id history through the authority boundary. Rotation must
 validate and persist the successor and used-id history transactionally. The
 wrapper must fail closed on stale generations, expired lookup epochs, state
 unavailability, rollback, or a reached active-write deadline. Only that
-wrapper may load active or retained key material. The serving runtime receives
-one active write capability; an authorized investigation receives only its
-declared, unexpired lookup subset.
+wrapper may bind active or retained key material to an authority decision. The
+standalone key-material constructors are not configuration loaders, keyrings,
+or evidence of runtime activation. The serving runtime receives one active
+write capability; an authorized investigation receives only its declared,
+unexpired lookup subset.
 
 The existing general-purpose `AuditKeyHasher` remains available for legacy
 audit redaction and chain-adjacent surfaces. It is not a keyring authority and
@@ -138,10 +144,10 @@ investigation code as a substitute for the PostgreSQL-issued wrapper.
 
 Internal test-only scaffolding preserves the intended preflight invariants: the
 serving source set must be exactly active plus retained, duplicate ids and
-duplicate derived key material are rejected, retained hashers are discarded,
-lookup subsets are declared and unexpired, every use rechecks the supplied
-binding and expiry, and lookup ordering is canonical key-id order. These tests
-are not a production authority path.
+duplicate derived key material are rejected, retained key material is
+discarded, lookup subsets are declared and unexpired, every use rechecks the
+supplied binding and expiry, and lookup ordering is canonical key-id order.
+These tests are not a production authority path.
 
 Relay consultation commitments have a separate closed framing contract. The
 only v1 domains are `registry.relay.consultation-subject.v1`,
@@ -151,14 +157,19 @@ only v1 domains are `registry.relay.consultation-subject.v1`,
 domain, one NUL byte, and the RFC 8785 JCS input. They do not use the legacy
 `AuditKeyHasher::audit_reference_hash` class/scope/length framing. Tenant,
 registry instance, profile, operation, and related semantics remain fields of
-the domain-specific JCS value. Pinned vectors cover all four preimages and
-outputs in the test-only model.
+the domain-specific JCS value. The frozen v1 framing vectors treat their fixed
+32-byte fixture as an already-derived HMAC domain key, preserving the
+established four outputs. Separate end-to-end vectors treat the same fixture as
+deployment master material and pin the production HKDF-Expand plus commitment
+path. These are distinct contract layers, not a silent v1 output migration;
+production constructors always derive the dedicated sub-key from master
+material.
 
-Metadata binding assumes SHA-256 collision resistance. The test-only
-duplicate-material preflight compares domain-separated HMAC-SHA-256 probe
-outputs in constant time; it detects equal derived keys under the standard HMAC
-collision-resistance assumption rather than proving equality of the original
-environment strings.
+Metadata binding assumes SHA-256 collision resistance. Key-material equality
+compares domain-separated HMAC-SHA-256 probe outputs in constant time and
+scrubs both transient outputs; it detects equal derived keys under the standard
+HMAC collision-resistance assumption rather than proving equality of the
+original environment strings.
 
 Selector-bearing inputs use `TransientPseudonymInput::from_jcs_value`. It
 consumes a `serde_json::Value`, produces at most 8 KiB of shared RFC 8785

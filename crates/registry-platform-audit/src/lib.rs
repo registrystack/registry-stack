@@ -2345,9 +2345,10 @@ fn hmac_sha256_bytes(secret: &[u8], context: &[u8], bytes: &[u8]) -> [u8; 32] {
         mac.update(&[0]);
     }
     mac.update(bytes);
-    let tag = mac.finalize().into_bytes();
+    let mut tag = mac.finalize().into_bytes();
     let mut out = [0u8; 32];
     out.copy_from_slice(&tag);
+    tag.as_mut_slice().zeroize();
     out
 }
 
@@ -2366,7 +2367,10 @@ fn hkdf_expand_sha256(prk: &[u8], info: &[u8]) -> Vec<u8> {
         <Hmac<Sha256> as KeyInit>::new_from_slice(prk).expect("HMAC-SHA256 accepts any key length");
     mac.update(info);
     mac.update(&[0x01]);
-    mac.finalize().into_bytes().to_vec()
+    let mut tag = mac.finalize().into_bytes();
+    let derived = tag.to_vec();
+    tag.as_mut_slice().zeroize();
+    derived
 }
 
 /// Derive a domain-separated [`AuditHashSecret`] sub-key from a master env
