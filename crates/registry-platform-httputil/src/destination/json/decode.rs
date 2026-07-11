@@ -14,12 +14,24 @@ use super::contract::{
     ClosedJsonDecoder, ClosedJsonSchema, ClosedJsonSchemaNode, CompiledRecordRoot,
     CompiledScalarProjection, ProjectionStep, ScalarContract,
 };
+use super::preflight::{preflight_json, JsonPreflightError};
 
 pub(super) fn decode_body(
     decoder: &ClosedJsonDecoder,
     body: DataDestinationBody,
 ) -> Result<ClosedJsonOutcome, ClosedJsonDecodeError> {
     let BoundedDestinationBody { bytes, slot: _ } = body;
+    preflight_json(
+        bytes.as_slice(),
+        decoder.preflight_token_limit,
+        decoder.preflight_depth_limit,
+    )
+    .map_err(|error| match error {
+        JsonPreflightError::InvalidJson => ClosedJsonDecodeError::InvalidJson,
+        JsonPreflightError::ContractLimitExceeded => {
+            ClosedJsonDecodeError::ResponseContractViolation
+        }
+    })?;
     let parsed =
         parse_json_strict(bytes.as_slice()).map_err(|_| ClosedJsonDecodeError::InvalidJson)?;
     drop(bytes);
@@ -46,7 +58,7 @@ pub(super) fn decode_body(
 pub enum ClosedJsonDecodeError {
     #[error("destination response is not unambiguous strict JSON")]
     InvalidJson,
-    #[error("destination response violates its closed JSON schema")]
+    #[error("destination response violates its closed JSON contract")]
     ResponseContractViolation,
     #[error("destination response exceeds the probe-two cardinality bound")]
     CardinalityViolation,

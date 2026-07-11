@@ -28,6 +28,10 @@ pub const MAX_CLOSED_JSON_NAME_BYTES: usize = 128;
 pub const MAX_CLOSED_JSON_STRING_BYTES: u32 = 64 * 1_024;
 
 const MAX_EXACT_JSON_INTEGER: i64 = 9_007_199_254_740_991;
+// Preserve the decoder's existing value-free syntax, contract, and cardinality
+// classifications for small near-boundary failures while keeping parser work
+// within a fixed factor of the largest closed-schema response.
+const PREFLIGHT_TOKEN_HEADROOM_MULTIPLIER: usize = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ClosedJsonDecoderBuildError {
@@ -294,6 +298,8 @@ pub struct ClosedJsonDecoder {
     pub(super) schema: ClosedJsonSchema,
     pub(super) root: CompiledRecordRoot,
     pub(super) projections: Box<[CompiledScalarProjection]>,
+    pub(super) preflight_token_limit: usize,
+    pub(super) preflight_depth_limit: usize,
 }
 
 impl ClosedJsonDecoder {
@@ -311,6 +317,10 @@ impl ClosedJsonDecoder {
         if projections.len() > MAX_CLOSED_JSON_PROJECTIONS {
             return Err(ClosedJsonDecoderBuildError::InvalidProjection);
         }
+        let preflight_token_limit = maximum_runtime_tokens(&schema)?
+            .checked_mul(PREFLIGHT_TOKEN_HEADROOM_MULTIPLIER)
+            .ok_or(ClosedJsonDecoderBuildError::InvalidSchema)?;
+        let preflight_depth_limit = maximum_runtime_depth(&schema);
         let compiled_root = compile_record_root(&schema, root)?;
         let record_schema = normalized_record_schema(&schema, root)?;
         let mut names = BTreeSet::new();
@@ -332,6 +342,8 @@ impl ClosedJsonDecoder {
             schema,
             root: compiled_root,
             projections,
+            preflight_token_limit,
+            preflight_depth_limit,
         })
     }
 
@@ -364,6 +376,8 @@ impl fmt::Debug for ClosedJsonDecoder {
             .field("root", &self.root)
             .field("projection_count", &self.projections.len())
             .field("projections", &"[REDACTED]")
+            .field("preflight_token_limit", &self.preflight_token_limit)
+            .field("preflight_depth_limit", &self.preflight_depth_limit)
             .finish()
     }
 }
@@ -502,6 +516,53 @@ fn validate_schema_contract(
             Ok(1)
         }
         ClosedJsonSchemaNode::String { .. } => Err(ClosedJsonDecoderBuildError::InvalidSchema),
+    }
+}
+
+/// Count every runtime JSON value plus every object key that a response
+/// conforming to this schema can contain. Every parser-owned string or map
+/// entry has a counted key/value token, and every sequence entry and `Value`
+/// node has a counted value token. The byte preflight uses this fixed-factor
+/// allocation bound before any parser allocation.
+fn maximum_runtime_tokens(schema: &ClosedJsonSchema) -> Result<usize, ClosedJsonDecoderBuildError> {
+    match &schema.node {
+        ClosedJsonSchemaNode::Object { fields, .. } => {
+            fields.iter().try_fold(1_usize, |tokens, field| {
+                let child_tokens = maximum_runtime_tokens(&field.schema)?;
+                tokens
+                    .checked_add(1)
+                    .and_then(|tokens| tokens.checked_add(child_tokens))
+                    .ok_or(ClosedJsonDecoderBuildError::InvalidSchema)
+            })
+        }
+        ClosedJsonSchemaNode::Array {
+            max_items, items, ..
+        } => maximum_runtime_tokens(items)?
+            .checked_mul(usize::from(*max_items))
+            .and_then(|tokens| tokens.checked_add(1))
+            .ok_or(ClosedJsonDecoderBuildError::InvalidSchema),
+        ClosedJsonSchemaNode::String { .. }
+        | ClosedJsonSchemaNode::Boolean { .. }
+        | ClosedJsonSchemaNode::Integer { .. }
+        | ClosedJsonSchemaNode::Number { .. } => Ok(1),
+    }
+}
+
+fn maximum_runtime_depth(schema: &ClosedJsonSchema) -> usize {
+    match &schema.node {
+        ClosedJsonSchemaNode::Object { fields, .. } => {
+            fields
+                .iter()
+                .map(|field| maximum_runtime_depth(&field.schema))
+                .max()
+                .unwrap_or(0)
+                + 1
+        }
+        ClosedJsonSchemaNode::Array { items, .. } => maximum_runtime_depth(items) + 1,
+        ClosedJsonSchemaNode::String { .. }
+        | ClosedJsonSchemaNode::Boolean { .. }
+        | ClosedJsonSchemaNode::Integer { .. }
+        | ClosedJsonSchemaNode::Number { .. } => 1,
     }
 }
 

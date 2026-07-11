@@ -6,10 +6,16 @@
 //!
 //! Successful parse-tree strings and raw body bytes have zeroizing owners.
 //! Rejected parses can create temporary allocations inside parser dependencies;
-//! this crate cannot guarantee erasure of those internal copies.
+//! this crate cannot guarantee erasure of those internal copies. A decoder-owned
+//! encoded-body ceiling and allocation-free structural preflight bound those
+//! failure-path allocations before the parser runs.
 
 mod contract;
 mod decode;
+mod preflight;
+
+/// Maximum encoded bytes accepted by the closed JSON decoder.
+pub const MAX_CLOSED_JSON_ENCODED_BODY_BYTES: usize = 256 * 1_024;
 
 pub use contract::{
     ClosedJsonDecoder, ClosedJsonDecoderBuildError, ClosedJsonField, ClosedJsonRecordRoot,
