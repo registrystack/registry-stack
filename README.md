@@ -134,7 +134,6 @@ inputs unless a later product decision promotes them into Registry Stack.
 Release evidence lives in:
 
 - `release/manifests/`
-- `release/schemas/`
 - `release/notes/`
 - `release/scripts/`
 

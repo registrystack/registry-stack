@@ -29,6 +29,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Relay exposure check", "name: Relay exposure check"),
     ("Release helper tests", "run: python3 -m unittest release/scripts/test_registry_release.py"),
     ("Release manifest validation", "release/scripts/registry-release validate"),
+    ("Release docset validation", "release/scripts/registry-release validate-docsets"),
     ("Release import audit", "release/scripts/registry-release audit"),
     (
         "Release source model",

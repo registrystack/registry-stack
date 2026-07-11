@@ -42,6 +42,13 @@ class GateInventoryTest(unittest.TestCase):
             "Registryctl tutorial source execution", self.module.missing_gates(text)
         )
 
+    def test_missing_release_docset_validation_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "release/scripts/registry-release validate-docsets",
+            "release/scripts/registry-release skip-docsets",
+        )
+        self.assertIn("Release docset validation", self.module.missing_gates(text))
+
     def test_missing_registryctl_tutorial_path_filter_is_reported(self) -> None:
         text = self.workflow.replace(
             "registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}",

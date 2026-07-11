@@ -135,6 +135,87 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("validated", result.stdout)
 
+    def test_validate_docsets_matches_release_manifests(self) -> None:
+        result = run_tool("validate-docsets")
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("validated 5 versioned docsets", result.stdout)
+
+    def test_validate_docsets_rejects_external_ref_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["docsets"][0]["products"]["crosswalk"]["ref"] = "b" * 40
+            docsets.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("external crosswalk ref", result.stderr)
+
+    def test_validate_docsets_rejects_monorepo_ref_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["docsets"][0]["products"]["registry-stack"]["ref"] = "b" * 40
+            docsets.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("product registry-stack ref", result.stderr)
+
+    def test_validate_docsets_rejects_source_marker_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest_dir, docsets = write_docset_fixture(root)
+            data = yaml.safe_load(docsets.read_text(encoding="utf-8"))
+            data["docsets"][0]["source"] = "manual-docset"
+            docsets.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(manifest_dir),
+                "--docsets",
+                str(docsets),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("source 'manual-docset'", result.stderr)
+
+    def test_validate_docsets_rejects_missing_release_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, docsets = write_docset_fixture(root)
+            empty_manifest_dir = root / "empty-manifests"
+            empty_manifest_dir.mkdir()
+
+            result = run_tool(
+                "validate-docsets",
+                "--manifest-dir",
+                str(empty_manifest_dir),
+                "--docsets",
+                str(docsets),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("has no release manifest", result.stderr)
+
     def test_audit_import_map(self) -> None:
         result = run_tool("audit", "release/manifests/import-map-2026-06-24.yaml")
         self.assertEqual(0, result.returncode, result.stderr)
@@ -1045,6 +1126,39 @@ def write_manifest(
     path = directory / "release-manifest.yaml"
     path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
     return path
+
+
+def write_docset_fixture(root: Path) -> tuple[Path, Path]:
+    manifest_dir = root / "manifests"
+    manifest_dir.mkdir()
+    manifest = write_manifest(manifest_dir)
+    manifest.rename(manifest_dir / "registry-stack-beta-6.yaml")
+    docsets = root / "docsets.yaml"
+    docsets.write_text(
+        yaml.safe_dump(
+            {
+                "current": "latest",
+                "docsets": [
+                    {
+                        "id": "v0.8.0",
+                        "source": "registry-stack-v0.8.0",
+                        "products": {
+                            "registry-stack": {
+                                "version": "v0.8.0",
+                                "ref": "f30a541df539c2e16de09733c5944c744a60493c",
+                            },
+                            "crosswalk": {
+                                "version": "crosswalk-core-v0.2.0",
+                                "ref": "1d44ec735fdc8a7c719264b339574371e8330337",
+                            },
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return manifest_dir, docsets
 
 
 def write_binary_fixture(root: Path) -> Path:
