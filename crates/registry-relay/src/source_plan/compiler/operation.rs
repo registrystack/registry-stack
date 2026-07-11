@@ -115,6 +115,7 @@ pub(super) fn compile_operation_descriptors(
                 &operation.response.schema,
                 &operation.response.normalization,
                 operation.response.max_records,
+                operation.response.records_field.as_deref(),
             )
             .map_err(|_| SourcePlanCompileError::CompilerInvariant)?
             {
@@ -516,9 +517,26 @@ fn compile_response(
         },
     };
     let normalization = match operation.response.normalization {
-        ResponseNormalizationDocument::JsonObject => CompiledResponseNormalization::JsonObject,
-        ResponseNormalizationDocument::JsonArrayProbeTwo => {
-            CompiledResponseNormalization::JsonArrayProbeTwo
+        ResponseNormalizationDocument::Object => CompiledResponseNormalization::Object,
+        ResponseNormalizationDocument::ArrayProbeTwo => {
+            CompiledResponseNormalization::ArrayProbeTwo
+        }
+        ResponseNormalizationDocument::ObjectArrayProbeTwo => {
+            let records_field = operation
+                .response
+                .records_field
+                .as_deref()
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+            let records_field_index = match &operation.response.schema {
+                ResponseSchemaDocument::Object { fields, .. } => fields
+                    .keys()
+                    .position(|name| name == records_field)
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+                _ => return Err(SourcePlanCompileError::CompilerInvariant),
+            };
+            CompiledResponseNormalization::ObjectArrayProbeTwo {
+                records_field_index,
+            }
         }
     };
     Ok(CompiledResponse {

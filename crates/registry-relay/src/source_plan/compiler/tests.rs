@@ -34,6 +34,19 @@ const VECTOR_CONTRACT_UTF8_ORDERING: &[u8] =
     include_bytes!("../../../tests/fixtures/source-plan-v1/public-contract-utf8-ordering.json");
 const VECTOR_BINDING: &[u8] =
     include_bytes!("../../../tests/fixtures/source-plan-v1/private-binding.json");
+const DHIS2_PACK: &[u8] =
+    include_bytes!("../../../profiles/dhis2-2.41.9-enrollment-status/integration-pack.json");
+const DHIS2_CONTRACT: &[u8] =
+    include_bytes!("../../../profiles/dhis2-2.41.9-enrollment-status/public-contract.json");
+const DHIS2_BINDING: &[u8] =
+    include_bytes!("../../../profiles/dhis2-2.41.9-enrollment-status/private-binding.example.json");
+const DHIS2_CONFORMANCE: &[u8] =
+    include_bytes!("../../../profiles/dhis2-2.41.9-enrollment-status/evidence/conformance.json");
+const DHIS2_NEGATIVE_SECURITY: &[u8] = include_bytes!(
+    "../../../profiles/dhis2-2.41.9-enrollment-status/evidence/negative-security.json"
+);
+const DHIS2_MINIMIZATION: &[u8] =
+    include_bytes!("../../../profiles/dhis2-2.41.9-enrollment-status/evidence/minimization.json");
 
 fn vector_manifest() -> &'static Value {
     static MANIFEST: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
@@ -133,6 +146,12 @@ fn sync_complete_acquisition_from_responses(fixture: &mut Fixture) {
         let fields = match response["normalization"].as_str() {
             Some("json_object") => &response["schema"]["fields"],
             Some("json_array_probe_two") => &response["schema"]["items"]["fields"],
+            Some("json_object_array_probe_two") => {
+                let records_field = response["records_field"]
+                    .as_str()
+                    .expect("wrapper records field");
+                &response["schema"]["fields"][records_field]["schema"]["items"]["fields"]
+            }
             _ => panic!("known response normalization"),
         }
         .as_object()
@@ -171,6 +190,27 @@ fn fixture() -> Fixture {
         vector_expected_hash("private_binding")
     );
 
+    Fixture {
+        contract_value,
+        pack_value,
+        binding_value,
+        contract,
+        pack,
+        binding,
+        contract_hash,
+        pack_hash,
+    }
+}
+
+fn dhis2_fixture() -> Fixture {
+    let pack = DHIS2_PACK.to_vec();
+    let pack_value = parse_json_strict(&pack).expect("strict DHIS2 pack JSON");
+    let pack_hash = typed_hash(PACK_DOMAIN, &pack);
+    let contract = DHIS2_CONTRACT.to_vec();
+    let contract_value = parse_json_strict(&contract).expect("strict DHIS2 contract JSON");
+    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+    let binding = DHIS2_BINDING.to_vec();
+    let binding_value = parse_json_strict(&binding).expect("strict DHIS2 binding JSON");
     Fixture {
         contract_value,
         pack_value,
@@ -243,6 +283,32 @@ fn compile_with_evidence(
     CompiledSourcePlanRegistry::compile(
         &SourcePlanArtifactBundle::new(&contracts, &packs, &bindings).with_evidence(evidence),
     )
+}
+
+fn compile_dhis2(fixture: &Fixture) -> Result<CompiledSourcePlanRegistry, SourcePlanCompileError> {
+    let evidence_hashes = [
+        raw_hash(DHIS2_CONFORMANCE),
+        raw_hash(DHIS2_NEGATIVE_SECURITY),
+        raw_hash(DHIS2_MINIMIZATION),
+    ];
+    let evidence = [
+        PinnedEvidenceArtifact::new(
+            EvidenceClass::Conformance,
+            DHIS2_CONFORMANCE,
+            &evidence_hashes[0],
+        ),
+        PinnedEvidenceArtifact::new(
+            EvidenceClass::NegativeSecurity,
+            DHIS2_NEGATIVE_SECURITY,
+            &evidence_hashes[1],
+        ),
+        PinnedEvidenceArtifact::new(
+            EvidenceClass::Minimization,
+            DHIS2_MINIMIZATION,
+            &evidence_hashes[2],
+        ),
+    ];
+    compile_with_evidence(fixture, &evidence)
 }
 
 fn completion_seed_value(fixture: &Fixture) -> Value {
@@ -1067,6 +1133,144 @@ fn compiles_closed_bundle_and_exposes_only_safe_metadata() {
     assert_eq!(plan.deployment_parameter_value(0), Some("benefits"));
     assert!(format!("{plan:?}").contains("operation_count"));
     assert!(!format!("{plan:?}").contains("registry.example.test"));
+}
+
+#[test]
+fn maintained_dhis2_enrollment_status_pack_compiles_to_one_bounded_exchange() {
+    let fixture = dhis2_fixture();
+    let registry = compile_dhis2(&fixture).expect("maintained DHIS2 profile compiles");
+    let plan = registry.iter().next().expect("compiled DHIS2 plan");
+    assert_eq!(plan.kind(), SourcePlanKind::BoundedHttp);
+    assert_eq!(plan.cardinality(), SourceCardinality::AmbiguityProbe);
+    assert!(matches!(
+        plan.runtime_profile().subject().selector_provenance(),
+        crate::consultation::SelectorProvenance::WorkloadSelected
+    ));
+    assert_eq!(plan.credential_reference(), Some(("dhis2-basic-reader", 1)));
+    assert_eq!(plan.operations().len(), 1);
+
+    let operation = plan.operations().next().expect("DHIS2 operation");
+    assert_eq!(operation.fixed_path(), "/api/tracker/enrollments");
+    assert_eq!(operation.auth(), CompiledSourceAuth::Basic);
+    assert_eq!(operation.max_source_records(), 2);
+    assert_eq!(operation.acquired_fields().collect::<Vec<_>>(), ["status"]);
+    assert_eq!(operation.disclosed_fields().collect::<Vec<_>>(), ["status"]);
+    assert_eq!(
+        operation
+            .query()
+            .map(CompiledNamedExpression::name)
+            .collect::<Vec<_>>(),
+        [
+            "fields",
+            "orgUnitMode",
+            "pageSize",
+            "program",
+            "trackedEntity"
+        ]
+    );
+    assert!(matches!(
+        operation.response().normalization(),
+        CompiledResponseNormalization::ObjectArrayProbeTwo {
+            records_field_index: 0
+        }
+    ));
+    assert_eq!(
+        operation
+            .response()
+            .schema()
+            .object_fields()
+            .expect("strict wrapper object")[0]
+            .name(),
+        "enrollments"
+    );
+}
+
+#[test]
+fn wrapper_records_field_index_resolves_non_first_compiled_schema_field() {
+    let mut fixture = dhis2_fixture();
+    fixture.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["fields"]
+        ["aaa_metadata"] = json!({
+        "required": true,
+        "schema": {
+            "type": "integer",
+            "nullable": false,
+            "minimum": 1,
+            "maximum": 1
+        }
+    });
+    fixture.refresh_all();
+
+    let registry = compile_dhis2(&fixture).expect("non-first wrapper records field compiles");
+    let operation = registry
+        .iter()
+        .next()
+        .expect("plan")
+        .operations()
+        .next()
+        .expect("operation");
+    let records_field_index = match operation.response().normalization() {
+        CompiledResponseNormalization::ObjectArrayProbeTwo {
+            records_field_index,
+        } => records_field_index,
+        other => panic!("unexpected normalization: {other:?}"),
+    };
+    assert_eq!(records_field_index, 1);
+    assert_eq!(
+        operation
+            .response()
+            .schema()
+            .object_fields()
+            .expect("wrapper object")[records_field_index]
+            .name(),
+        "enrollments"
+    );
+}
+
+#[test]
+fn dhis2_wrapper_normalization_rejects_every_unbounded_or_unlinked_shape() {
+    let reject = |mut fixture: Fixture| {
+        fixture.refresh_all();
+        assert!(matches!(
+            compile_dhis2(&fixture),
+            Err(SourcePlanCompileError::Artifact(
+                SourcePlanArtifactError::InvalidAcquisition
+            ))
+        ));
+    };
+
+    let mut missing = dhis2_fixture();
+    missing.pack_value["spec"]["plan"]["operations"][0]["response"]
+        .as_object_mut()
+        .expect("response object")
+        .remove("records_field");
+    reject(missing);
+
+    let mut unknown = dhis2_fixture();
+    unknown.pack_value["spec"]["plan"]["operations"][0]["response"]["records_field"] =
+        json!("unknown");
+    reject(unknown);
+
+    let mut optional = dhis2_fixture();
+    optional.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["fields"]
+        ["enrollments"]["required"] = json!(false);
+    reject(optional);
+
+    let mut second_array = dhis2_fixture();
+    second_array.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["fields"]
+        ["other"] = second_array.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]
+        ["fields"]["enrollments"]
+        .clone();
+    reject(second_array);
+
+    let mut wrong_bound = dhis2_fixture();
+    wrong_bound.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["fields"]
+        ["enrollments"]["schema"]["max_items"] = json!(1);
+    reject(wrong_bound);
+
+    let mut unlinked_probe = dhis2_fixture();
+    unlinked_probe.pack_value["spec"]["plan"]["operations"][0]["query"]["pageSize"]["value"] =
+        json!("1");
+    reject(unlinked_probe);
 }
 
 #[test]

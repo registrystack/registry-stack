@@ -1,0 +1,244 @@
+{
+  "schema": "registry.relay.integration-pack.v1",
+  "id": "dhis2.tracker.enrollment-status",
+  "version": "1",
+  "spec": {
+    "product_family": "dhis2",
+    "supported_version_evidence": [
+      "dhis2-2.41.9-tracker-enrollments"
+    ],
+    "logical_operation": "tracker.enrollment-status",
+    "input_slots": {
+      "tracked_entity": {
+        "type": "string",
+        "max_bytes": 11,
+        "pattern": "^[A-Za-z][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]$",
+        "canonicalization": "identity"
+      }
+    },
+    "acquisition": {
+      "class": "source_projected_exact",
+      "fields": {
+        "status": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 32
+        }
+      }
+    },
+    "source_provenance": {
+      "source_observed_at": {
+        "type": "absent"
+      },
+      "source_revision": {
+        "type": "absent"
+      }
+    },
+    "reviewed_acquisition": {
+      "class": "source_projected_exact",
+      "fields": {
+        "status": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 32
+        }
+      },
+      "control_fields": {},
+      "selector": {
+        "type": "http_anchor",
+        "input": "tracked_entity",
+        "operation": "lookup-enrollment-status",
+        "location": {
+          "type": "query",
+          "parameter": "trackedEntity"
+        }
+      },
+      "cardinality": "probe_two",
+      "reject_unknown_fields": true
+    },
+    "output": {
+      "status": {
+        "type": "string",
+        "nullable": false
+      }
+    },
+    "plan": {
+      "kind": "bounded_http",
+      "data_destination_slot": "dhis2-data",
+      "credential_destination_slot": null,
+      "operations": [
+        {
+          "id": "lookup-enrollment-status",
+          "method": "GET",
+          "destination_slot": "dhis2-data",
+          "path": "/api/tracker/enrollments",
+          "query": {
+            "fields": {
+              "source": "literal",
+              "value": "status"
+            },
+            "orgUnitMode": {
+              "source": "literal",
+              "value": "ALL"
+            },
+            "pageSize": {
+              "source": "literal",
+              "value": "2"
+            },
+            "program": {
+              "source": "literal",
+              "value": "IpHINAT79UW"
+            },
+            "trackedEntity": {
+              "source": "consultation_input",
+              "name": "tracked_entity"
+            }
+          },
+          "headers": {},
+          "body": null,
+          "request_codec": "none",
+          "step_limits": {
+            "max_request_bytes": 4096,
+            "timeout_ms": 5000,
+            "max_in_flight": 1
+          },
+          "auth": {
+            "mode": "basic",
+            "max_value_bytes": 1024
+          },
+          "acquisition_fields": [
+            "status"
+          ],
+          "control_fields": [],
+          "projection": {
+            "mechanism": "query_parameter_exact",
+            "parameter": "fields",
+            "delimiter": ","
+          },
+          "response": {
+            "max_bytes": 8192,
+            "max_records": 2,
+            "normalization": "json_object_array_probe_two",
+            "records_field": "enrollments",
+            "cardinality": {
+              "mechanism": "probe_query_parameter",
+              "parameter": "pageSize"
+            },
+            "schema": {
+              "type": "object",
+              "nullable": false,
+              "reject_unknown_fields": true,
+              "fields": {
+                "enrollments": {
+                  "required": true,
+                  "schema": {
+                    "type": "array",
+                    "nullable": false,
+                    "max_items": 2,
+                    "items": {
+                      "type": "object",
+                      "nullable": false,
+                      "reject_unknown_fields": true,
+                      "fields": {
+                        "status": {
+                          "required": true,
+                          "schema": {
+                            "type": "string",
+                            "nullable": false,
+                            "max_bytes": 32
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "page": {
+                  "required": true,
+                  "schema": {
+                    "type": "integer",
+                    "nullable": false,
+                    "minimum": 1,
+                    "maximum": 1
+                  }
+                },
+                "pageSize": {
+                  "required": true,
+                  "schema": {
+                    "type": "integer",
+                    "nullable": false,
+                    "minimum": 2,
+                    "maximum": 2
+                  }
+                },
+                "pager": {
+                  "required": true,
+                  "schema": {
+                    "type": "object",
+                    "nullable": false,
+                    "reject_unknown_fields": true,
+                    "fields": {
+                      "page": {
+                        "required": true,
+                        "schema": {
+                          "type": "integer",
+                          "nullable": false,
+                          "minimum": 1,
+                          "maximum": 1
+                        }
+                      },
+                      "pageSize": {
+                        "required": true,
+                        "schema": {
+                          "type": "integer",
+                          "nullable": false,
+                          "minimum": 2,
+                          "maximum": 2
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "accepted_statuses": [
+              200
+            ],
+            "output_mapping": {
+              "status": "/status"
+            }
+          }
+        }
+      ],
+      "steps": [
+        "lookup-enrollment-status"
+      ],
+      "credential_operation": null,
+      "snapshot": null,
+      "rhai": null
+    },
+    "bounds": {
+      "max_source_matches": 2,
+      "max_disclosed_records": 1,
+      "max_data_exchanges": 1,
+      "max_credential_exchanges": 0,
+      "max_data_destinations": 1,
+      "max_source_bytes": 8192,
+      "timeout_ms": 5000,
+      "max_in_flight": 16,
+      "quota_per_minute": 60,
+      "quota_burst": 10
+    },
+    "deployment_parameters": {},
+    "evidence": {
+      "conformance": [
+        "sha256:6fed045b340a99b857968db527037acf2cd09688d64410ad6a25497a55b1eb89"
+      ],
+      "negative_security": [
+        "sha256:6b506641b90243b5233000a9809360a7d64604e300b3396ee17dd9a7420fd634"
+      ],
+      "minimization": [
+        "sha256:34614d3a4121c6ff85cd28f56b5e6f57b4b43371fcfd5a03cfef28cf94e9c73d"
+      ]
+    }
+  }
+}

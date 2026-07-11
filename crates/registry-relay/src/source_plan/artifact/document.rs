@@ -634,8 +634,12 @@ pub(in super::super) enum BodyTemplateDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(in super::super) enum ResponseNormalizationDocument {
-    JsonObject,
-    JsonArrayProbeTwo,
+    #[serde(rename = "json_object")]
+    Object,
+    #[serde(rename = "json_array_probe_two")]
+    ArrayProbeTwo,
+    #[serde(rename = "json_object_array_probe_two")]
+    ObjectArrayProbeTwo,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -739,6 +743,8 @@ pub(in super::super) struct ResponseDocument {
     pub(in super::super) max_bytes: u32,
     pub(in super::super) max_records: u8,
     pub(in super::super) normalization: ResponseNormalizationDocument,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) records_field: Option<String>,
     pub(in super::super) cardinality: CardinalityMechanismDocument,
     pub(in super::super) schema: ResponseSchemaDocument,
     pub(in super::super) output_mapping: BTreeMap<String, String>,

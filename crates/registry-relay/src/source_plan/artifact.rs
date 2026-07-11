@@ -365,7 +365,7 @@ pub(super) use bounds::*;
 
 mod pattern;
 use pattern::{
-    is_sensitive_name, validate_bounded_text, validate_input_pattern, validate_stable_text,
-    validate_token,
+    is_sensitive_name, validate_bounded_text, validate_input_pattern, validate_query_name,
+    validate_stable_text, validate_token,
 };
 pub(super) use pattern::{parse_input_pattern, BoundedInputPattern};

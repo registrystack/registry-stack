@@ -1,0 +1,19 @@
+{
+  "schema": "registry.relay.profile-evidence.v1",
+  "class": "negative_security",
+  "activation_rejections": [
+    "missing_records_field",
+    "unknown_records_field",
+    "optional_records_field",
+    "second_wrapper_array",
+    "record_array_bound_not_two",
+    "page_size_probe_not_two"
+  ],
+  "runtime_rejections_required": [
+    "unknown_wrapper_member",
+    "unknown_enrollment_member",
+    "more_than_two_enrollments",
+    "missing_status",
+    "non_string_status"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "schema": "registry.relay.profile-evidence.v1",
+  "class": "minimization",
+  "product_family": "dhis2",
+  "product_version": "2.41.9",
+  "request_projection": "fields=status",
+  "acquired_record_fields": [
+    "status"
+  ],
+  "released_fields": [
+    "status"
+  ],
+  "excluded_as_unnecessary": [
+    "enrolledAt",
+    "enrollment",
+    "events",
+    "program",
+    "trackedEntity"
+  ]
+}

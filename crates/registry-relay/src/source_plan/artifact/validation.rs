@@ -342,6 +342,7 @@ pub(super) fn validate_plan(
             &operation.response.schema,
             &operation.response.normalization,
             operation.response.max_records,
+            operation.response.records_field.as_deref(),
         )?;
         let ResponseSchemaDocument::Object { fields, .. } = record_schema else {
             return Err(SourcePlanArtifactError::InvalidAcquisition);
@@ -379,10 +380,11 @@ pub(super) fn validate_plan(
             (profile_cardinality, &operation.response.normalization),
             (
                 SourceCardinality::Singleton,
-                ResponseNormalizationDocument::JsonObject
+                ResponseNormalizationDocument::Object
             ) | (
                 SourceCardinality::AmbiguityProbe,
-                ResponseNormalizationDocument::JsonArrayProbeTwo
+                ResponseNormalizationDocument::ArrayProbeTwo
+                    | ResponseNormalizationDocument::ObjectArrayProbeTwo
             )
         );
         if !normalization_matches {
@@ -805,7 +807,7 @@ fn validate_http_operation(
         *oauth_authorization_max_bytes,
     )?;
     for (name, expression) in &operation.query {
-        validate_stable_text(name)?;
+        validate_query_name(name)?;
         validate_expression(expression, inputs, parameters)?;
     }
     for (name, expression) in &operation.headers {
@@ -859,6 +861,7 @@ fn validate_http_operation(
         &operation.response.schema,
         &operation.response.normalization,
         operation.response.max_records,
+        operation.response.records_field.as_deref(),
     )?;
     if operation.response.prior_outputs.len() > MAX_STATIC_COMPONENTS {
         return Err(SourcePlanArtifactError::InvalidSet);
@@ -988,22 +991,24 @@ pub(in super::super) fn response_record_schema<'a>(
     schema: &'a ResponseSchemaDocument,
     normalization: &ResponseNormalizationDocument,
     max_records: u8,
+    records_field: Option<&str>,
 ) -> Result<&'a ResponseSchemaDocument, SourcePlanArtifactError> {
     match (normalization, schema) {
         (
-            ResponseNormalizationDocument::JsonObject,
+            ResponseNormalizationDocument::Object,
             ResponseSchemaDocument::Object {
                 nullable: false, ..
             },
-        ) if max_records == 1 => Ok(schema),
+        ) if max_records == 1 && records_field.is_none() => Ok(schema),
         (
-            ResponseNormalizationDocument::JsonArrayProbeTwo,
+            ResponseNormalizationDocument::ArrayProbeTwo,
             ResponseSchemaDocument::Array {
                 nullable: false,
                 max_items,
                 items,
             },
-        ) if *max_items == u16::from(max_records)
+        ) if records_field.is_none()
+            && *max_items == u16::from(max_records)
             && matches!(
                 items.as_ref(),
                 ResponseSchemaDocument::Object {
@@ -1013,6 +1018,49 @@ pub(in super::super) fn response_record_schema<'a>(
             ) =>
         {
             Ok(items)
+        }
+        (
+            ResponseNormalizationDocument::ObjectArrayProbeTwo,
+            ResponseSchemaDocument::Object {
+                nullable: false,
+                fields,
+                ..
+            },
+        ) if max_records == 2 => {
+            let records_field = records_field.ok_or(SourcePlanArtifactError::InvalidAcquisition)?;
+            validate_response_field_name(records_field)?;
+            let field = fields
+                .get(records_field)
+                .ok_or(SourcePlanArtifactError::InvalidAcquisition)?;
+            if !field.required
+                || fields.iter().any(|(name, candidate)| {
+                    name != records_field
+                        && matches!(
+                            candidate.schema.as_ref(),
+                            ResponseSchemaDocument::Array { .. }
+                        )
+                })
+            {
+                return Err(SourcePlanArtifactError::InvalidAcquisition);
+            }
+            match field.schema.as_ref() {
+                ResponseSchemaDocument::Array {
+                    nullable: false,
+                    max_items,
+                    items,
+                } if *max_items == u16::from(max_records)
+                    && matches!(
+                        items.as_ref(),
+                        ResponseSchemaDocument::Object {
+                            nullable: false,
+                            ..
+                        }
+                    ) =>
+                {
+                    Ok(items)
+                }
+                _ => Err(SourcePlanArtifactError::InvalidAcquisition),
+            }
         }
         _ => Err(SourcePlanArtifactError::InvalidAcquisition),
     }
@@ -1168,7 +1216,7 @@ pub(super) fn validate_projection(
             },
             AcquisitionClassDocument::SourceProjectedExact,
         ) => {
-            validate_stable_text(parameter)?;
+            validate_query_name(parameter)?;
             if !matches!(delimiter.as_str(), "," | " ") {
                 return Err(SourcePlanArtifactError::InvalidExpression);
             }
@@ -1176,6 +1224,7 @@ pub(super) fn validate_projection(
                 &operation.response.schema,
                 &operation.response.normalization,
                 operation.response.max_records,
+                operation.response.records_field.as_deref(),
             )?;
             let ResponseSchemaDocument::Object { fields, .. } = record_schema else {
                 return Err(SourcePlanArtifactError::InvalidAcquisition);
@@ -1228,7 +1277,7 @@ pub(super) fn validate_cardinality_mechanism(
             CardinalityMechanismDocument::ProbeQueryParameter { parameter },
             SourceCardinality::AmbiguityProbe,
         ) => {
-            validate_stable_text(parameter)?;
+            validate_query_name(parameter)?;
             match operation.query.get(parameter) {
                 Some(ValueExpressionDocument::Literal { value })
                     if value == &operation.response.max_records.to_string() =>

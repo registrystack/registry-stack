@@ -750,8 +750,9 @@ pub enum CompiledProjectionMechanism {
 /// Root response shape selected by the reviewed normalizer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompiledResponseNormalization {
-    JsonObject,
-    JsonArrayProbeTwo,
+    Object,
+    ArrayProbeTwo,
+    ObjectArrayProbeTwo { records_field_index: usize },
 }
 
 /// Immutable compiled response parser and extraction contract.

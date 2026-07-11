@@ -1,0 +1,36 @@
+{
+  "profile": {
+    "id": "dhis2.tracker.enrollment-status.exact",
+    "version": "1"
+  },
+  "integration_pack": {
+    "id": "dhis2.tracker.enrollment-status",
+    "version": "1",
+    "hash": "sha256:2084e411891eabbd974fdbdeb2fd6059b33606093250a9d156eb86276dad445c"
+  },
+  "tenant": "example-government",
+  "registry_instance": "dhis2-primary",
+  "source_instance": "tracker-api",
+  "data_destination": {
+    "id": "dhis2-data-private",
+    "origin": "https://dhis2.example.gov/",
+    "allowed_private_cidrs": []
+  },
+  "credential_destination": null,
+  "credential": {
+    "ref": "dhis2-basic-reader",
+    "generation": 1
+  },
+  "deployment_parameters": {},
+  "limits": {
+    "max_source_bytes": 8192,
+    "timeout_ms": 5000,
+    "max_in_flight": 8,
+    "quota_per_minute": 30,
+    "quota_burst": 5,
+    "max_public_response_bytes": 4096
+  },
+  "capabilities": {
+    "allow_sandboxed_rhai": false
+  }
+}

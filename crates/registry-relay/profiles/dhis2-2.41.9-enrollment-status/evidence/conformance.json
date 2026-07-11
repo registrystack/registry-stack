@@ -1,0 +1,54 @@
+{
+  "schema": "registry.relay.profile-evidence.v1",
+  "class": "conformance",
+  "product_family": "dhis2",
+  "product_version": "2.41.9",
+  "operation": "GET /api/tracker/enrollments",
+  "request_shape": {
+    "fields": "status",
+    "orgUnitMode": "ALL",
+    "pageSize": "2",
+    "program": "IpHINAT79UW",
+    "trackedEntity": "consultation_input"
+  },
+  "response_cases": {
+    "no_match": {
+      "enrollments": [],
+      "page": 1,
+      "pageSize": 2,
+      "pager": {
+        "page": 1,
+        "pageSize": 2
+      }
+    },
+    "match": {
+      "enrollments": [
+        {
+          "status": "ACTIVE"
+        }
+      ],
+      "page": 1,
+      "pageSize": 2,
+      "pager": {
+        "page": 1,
+        "pageSize": 2
+      }
+    },
+    "ambiguous": {
+      "enrollments": [
+        {
+          "status": "ACTIVE"
+        },
+        {
+          "status": "COMPLETED"
+        }
+      ],
+      "page": 1,
+      "pageSize": 2,
+      "pager": {
+        "page": 1,
+        "pageSize": 2
+      }
+    }
+  }
+}

@@ -290,6 +290,28 @@ pub(super) fn validate_stable_text(value: &str) -> Result<(), SourcePlanArtifact
         .ok_or(SourcePlanArtifactError::InvalidText)
 }
 
+pub(super) fn validate_query_name(value: &str) -> Result<(), SourcePlanArtifactError> {
+    let mut bytes = value.bytes();
+    let valid = matches!(bytes.next(), Some(b'a'..=b'z' | b'A'..=b'Z'))
+        && value.len() <= 96
+        && bytes.all(|byte| {
+            matches!(
+                byte,
+                b'a'..=b'z'
+                    | b'A'..=b'Z'
+                    | b'0'..=b'9'
+                    | b'.'
+                    | b'_'
+                    | b':'
+                    | b'~'
+                    | b'-'
+            )
+        });
+    valid
+        .then_some(())
+        .ok_or(SourcePlanArtifactError::InvalidText)
+}
+
 pub(super) fn validate_bounded_text(
     value: &str,
     max_bytes: usize,
@@ -325,4 +347,38 @@ pub(super) fn is_sensitive_name(name: &str) -> bool {
     ]
     .iter()
     .any(|sensitive| name.contains(sensitive))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn query_name_grammar_preserves_colons_and_accepts_product_camel_case() {
+        for valid in [
+            "orgUnitMode",
+            "pageSize",
+            "trackedEntity",
+            "selector:subject",
+            "XTrace",
+        ] {
+            assert_eq!(validate_query_name(valid), Ok(()), "rejected {valid:?}");
+        }
+        assert_eq!(validate_query_name(&"a".repeat(96)), Ok(()));
+    }
+
+    #[test]
+    fn query_name_grammar_rejects_delimiters_controls_and_oversized_names() {
+        for invalid in ["", "a&b", "a=b", "a%b", "a\n", "a\0"] {
+            assert_eq!(
+                validate_query_name(invalid),
+                Err(SourcePlanArtifactError::InvalidText),
+                "accepted {invalid:?}"
+            );
+        }
+        assert_eq!(
+            validate_query_name(&"a".repeat(97)),
+            Err(SourcePlanArtifactError::InvalidText)
+        );
+    }
 }

@@ -1,0 +1,90 @@
+{
+  "schema": "registry.relay.consultation-contract.v1",
+  "id": "dhis2.tracker.enrollment-status.exact",
+  "version": "1",
+  "spec": {
+    "subject": {
+      "mode": "single_subject",
+      "selector_provenance": {
+        "type": "workload_selected"
+      }
+    },
+    "inputs": {
+      "tracked_entity": {
+        "type": "string",
+        "max_bytes": 11,
+        "pattern": "^[A-Za-z][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]$",
+        "canonicalization": "identity"
+      }
+    },
+    "integration_pack": {
+      "id": "dhis2.tracker.enrollment-status",
+      "version": "1",
+      "hash": "sha256:2084e411891eabbd974fdbdeb2fd6059b33606093250a9d156eb86276dad445c"
+    },
+    "acquisition": {
+      "class": "source_projected_exact",
+      "fields": {
+        "status": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 32
+        }
+      }
+    },
+    "source_provenance": {
+      "source_observed_at": {
+        "type": "absent"
+      },
+      "source_revision": {
+        "type": "absent"
+      }
+    },
+    "output": {
+      "status": {
+        "type": "string",
+        "nullable": false
+      }
+    },
+    "authorization": {
+      "workload": "registry-notary",
+      "required_scope": "registry:consult:dhis2-enrollment-status",
+      "purposes": [
+        "program-enrollment-verification"
+      ],
+      "legal_basis": "public_task",
+      "policy": {
+        "id": "relay.dhis2.tracker.enrollment-status.exact",
+        "hash": "sha256:673b8507cccc073fe67d64558fc3ddf9775f9d1e38fed72435ca94ea19df6e7a",
+        "decision_cache": "disabled",
+        "max_decision_age_ms": 1000,
+        "unavailable": "deny"
+      },
+      "consent": {
+        "required": false
+      },
+      "mandatory_obligations": []
+    },
+    "bounds": {
+      "max_source_matches": 2,
+      "max_disclosed_records": 1,
+      "max_data_exchanges": 1,
+      "max_credential_exchanges": 0,
+      "max_data_destinations": 1,
+      "max_source_bytes": 8192,
+      "timeout_ms": 5000,
+      "max_in_flight": 16,
+      "quota_per_minute": 60,
+      "quota_burst": 10
+    },
+    "public_behavior": {
+      "outcomes": [
+        "match",
+        "no_match",
+        "ambiguous"
+      ],
+      "denial_code": "consultation.denied",
+      "denial_timing_profile": "measured-uniform-v1"
+    }
+  }
+}
