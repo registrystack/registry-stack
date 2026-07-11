@@ -154,6 +154,9 @@ impl StandaloneRegistryNotaryConfig {
         }
         self.evidence.concurrency.validate()?;
         self.evidence.machine_quota.validate()?;
+        if let Some(relay) = &self.evidence.relay {
+            relay.validate()?;
+        }
         self.cel.validate()?;
         if self.evidence.max_credential_validity_seconds == 0 {
             return Err(EvidenceConfigError::InvalidCredentialProfileValidity {
@@ -285,6 +288,7 @@ impl StandaloneRegistryNotaryConfig {
                 });
             }
             validate_claim_semantics(claim)?;
+            validate_claim_evidence_mode(claim, self.evidence.relay.is_some())?;
             // REQ-DM-CLAIM-008: reject a disclosure default outside the
             // allowed set at load; this is the most consequential of the
             // three RS-DM-CLAIM Section 10 gaps because a privacy-sensitive
@@ -302,21 +306,23 @@ impl StandaloneRegistryNotaryConfig {
                     allowed: claim.disclosure.allowed.clone(),
                 });
             }
-            // REQ-DM-CLAIM-006: reject an extract/exists rule whose `source`
-            // does not name a binding declared under this claim's
-            // source_bindings. A `cel` or `plugin` rule has no single named
-            // source to check here.
-            let rule_source = match &claim.rule {
-                RuleConfig::Extract { source, .. } => Some(source.as_str()),
-                RuleConfig::Exists { source } => Some(source.as_str()),
-                RuleConfig::Cel { .. } | RuleConfig::Plugin { .. } => None,
-            };
-            if let Some(source) = rule_source {
-                if !claim.source_bindings.contains_key(source) {
-                    return Err(EvidenceConfigError::UnknownRuleSourceBinding {
-                        claim: claim.id.clone(),
-                        rule_source: source.to_string(),
-                    });
+            // Preserve the existing direct-source rule/binding invariant only
+            // behind the explicit migration mode. Registry-backed rules are
+            // checked against their one consultation above, while
+            // self-attested rules cannot name a source at all.
+            if matches!(&claim.evidence_mode, ClaimEvidenceMode::TransitionalDirect) {
+                let rule_source = match &claim.rule {
+                    RuleConfig::Extract { source, .. } => Some(source.as_str()),
+                    RuleConfig::Exists { source } => Some(source.as_str()),
+                    RuleConfig::Cel { .. } | RuleConfig::Plugin { .. } => None,
+                };
+                if let Some(source) = rule_source {
+                    if !claim.source_bindings.contains_key(source) {
+                        return Err(EvidenceConfigError::UnknownRuleSourceBinding {
+                            claim: claim.id.clone(),
+                            rule_source: source.to_string(),
+                        });
+                    }
                 }
             }
             let mut source_lookup_dependencies_by_binding = BTreeMap::new();
@@ -501,6 +507,7 @@ impl StandaloneRegistryNotaryConfig {
                 )?;
             }
         }
+        validate_self_attested_dependency_modes(&self.evidence.claims)?;
         self.self_attestation.validate(&self.auth, &self.evidence)?;
         self.validate_oid4vci_cross_block()?;
         self.validate_access_token_signing_cross_block()?;
@@ -619,7 +626,12 @@ impl StandaloneRegistryNotaryConfig {
                 .evidence
                 .source_connections
                 .values()
-                .any(source_connection_uses_insecure_url),
+                .any(source_connection_uses_insecure_url)
+                || self
+                    .evidence
+                    .relay
+                    .as_ref()
+                    .is_some_and(RelayConnectionConfig::uses_insecure_url),
             source_private_network_escape: self
                 .evidence
                 .source_connections

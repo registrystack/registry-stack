@@ -6,6 +6,7 @@ mod credentials;
 mod infrastructure;
 mod issuance;
 mod preauth;
+mod relay;
 mod root;
 mod sources;
 mod support;

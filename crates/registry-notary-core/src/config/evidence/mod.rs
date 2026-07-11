@@ -6,12 +6,14 @@ use super::*;
 mod claims;
 mod disclosure;
 mod matching;
+mod relay;
 mod signing;
 mod sources;
 
 pub use claims::*;
 pub use disclosure::*;
 pub use matching::*;
+pub use relay::*;
 pub use signing::*;
 pub use sources::*;
 
@@ -46,6 +48,11 @@ pub struct EvidenceConfig {
     pub credential_profiles: BTreeMap<String, CredentialProfileConfig>,
     #[serde(default)]
     pub ecosystem_bindings: BTreeMap<String, EvidenceEcosystemBindingConfig>,
+    /// The one Registry Relay connection available to registry-backed claims.
+    /// Authentication remains an environment reference; core never loads the
+    /// bearer token value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay: Option<RelayConnectionConfig>,
     #[serde(default)]
     pub source_connections: BTreeMap<String, SourceConnectionConfig>,
     /// Per-request fan-out caps. Setting both `subjects=1` and `bindings=1`

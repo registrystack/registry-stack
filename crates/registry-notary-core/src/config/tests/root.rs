@@ -617,6 +617,8 @@ id: {id}
 title: Test Claim
 version: "1.0"
 subject_type: person
+evidence_mode:
+  type: transitional_direct
 rule:
   type: cel
   expression: "true"
@@ -768,6 +770,8 @@ evidence:
       title: Person is alive
       version: "1.0"
       subject_type: Person
+      evidence_mode:
+        type: transitional_direct
       source_bindings:
         src:
           connector: registry_data_api
@@ -821,6 +825,8 @@ evidence:
       title: Person is alive
       version: "1.0"
       subject_type: Person
+      evidence_mode:
+        type: transitional_direct
       source_bindings:
         src:
           connector: registry_data_api
@@ -1234,6 +1240,8 @@ evidence:
       title: Date of birth
       version: "1.0"
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       purpose: citizen_self_attestation
       inputs:
         - name: subject_id

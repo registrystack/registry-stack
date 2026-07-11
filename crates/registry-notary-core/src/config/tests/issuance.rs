@@ -310,6 +310,8 @@ id: date-of-birth
 title: Date of birth
 version: "2026-06"
 subject_type: person
+evidence_mode:
+  type: transitional_direct
 value:
   type: date
 semantics:
@@ -366,6 +368,8 @@ id: date-of-birth
 title: Date of birth
 version: "2026-06"
 subject_type: person
+evidence_mode:
+  type: transitional_direct
 semantics:
   property: https://publicschema.org/date_of_birth
 source_bindings:

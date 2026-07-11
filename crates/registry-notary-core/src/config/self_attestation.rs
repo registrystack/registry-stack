@@ -132,6 +132,7 @@ impl SelfAttestationConfig {
             "self_attestation.credential_profiles",
             &self.credential_profiles,
         )?;
+        validate_self_attestation_registry_backed_paths(self, evidence)?;
         self.delegation.validate(evidence)?;
         self.rate_limits.validate()?;
         validate_exact_wallet_origins(&self.allowed_wallet_origins)?;
@@ -223,6 +224,63 @@ impl SelfAttestationConfig {
             reason: reason.into(),
         })
     }
+}
+
+pub(super) fn validate_self_attestation_registry_backed_paths(
+    config: &SelfAttestationConfig,
+    evidence: &EvidenceConfig,
+) -> Result<(), EvidenceConfigError> {
+    for claim_id in &config.allowed_claims {
+        reject_registry_backed_dependency_path(
+            "self_attestation.allowed_claims",
+            claim_id,
+            evidence,
+        )?;
+    }
+    for relationship in &config.delegation.allowed_relationships {
+        reject_registry_backed_dependency_path(
+            "self_attestation.delegation.proof_claim",
+            &relationship.proof_claim,
+            evidence,
+        )?;
+        for claim_id in &relationship.allowed_claims {
+            reject_registry_backed_dependency_path(
+                "self_attestation.delegation.allowed_claims",
+                claim_id,
+                evidence,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn reject_registry_backed_dependency_path(
+    context: &str,
+    root_claim_id: &str,
+    evidence: &EvidenceConfig,
+) -> Result<(), EvidenceConfigError> {
+    let mut pending = vec![root_claim_id];
+    let mut visited = HashSet::new();
+    while let Some(claim_id) = pending.pop() {
+        if !visited.insert(claim_id) {
+            continue;
+        }
+        let Some(claim) = evidence
+            .claims
+            .iter()
+            .find(|candidate| candidate.id == claim_id)
+        else {
+            continue;
+        };
+        if claim.evidence_mode.is_registry_backed() {
+            return invalid_self_attestation(format!(
+                "{context} path cannot include registry_backed claim '{}'",
+                claim.id
+            ));
+        }
+        pending.extend(claim.depends_on.iter().map(String::as_str));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]

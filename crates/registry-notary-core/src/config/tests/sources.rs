@@ -879,6 +879,8 @@ evidence:
       title: Date of birth
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       source_bindings:
         crvs:
           connector: source_adapter_sidecar
