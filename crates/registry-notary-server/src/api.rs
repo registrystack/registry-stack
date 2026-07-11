@@ -107,7 +107,7 @@ use crate::{
     SelfAttestationRateLimiter, SourceReader,
 };
 
-pub(crate) use crate::digest::{evidence_claim_hash, hex_encode};
+pub(crate) use crate::digest::evidence_claim_hash;
 use crate::digest::{sha256_canonical_json, sha256_json};
 pub(crate) use crate::problem::{evidence_detail, evidence_status, evidence_title};
 pub use crate::response_context::{EvidenceAuditContext, EvidenceErrorCodeContext};

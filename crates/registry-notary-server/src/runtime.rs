@@ -309,6 +309,10 @@ use ulid::Ulid;
 
 #[cfg(feature = "registry-notary-cel")]
 use crate::cel_worker::{cel_expression_uses_regex, CelWorker, CelWorkerError};
+use crate::digest::hex_encode;
+use crate::json_path::get_json_path;
+use crate::problem::evidence_title;
+use crate::request_context::with_request_correlation_id;
 use crate::self_attestation_rate_limit::SelfAttestationRateLimitKeys;
 
 #[cfg(feature = "registry-notary-cel")]
@@ -2056,8 +2060,7 @@ impl RegistryNotaryRuntime {
                     let correlation_id = ctx.correlation_id.clone();
                     let evaluation = evaluate_claim_task(ctx, &claim_id, prior_for_task);
                     let result = if let Some(correlation_id) = correlation_id {
-                        crate::standalone::with_request_correlation_id(correlation_id, evaluation)
-                            .await
+                        with_request_correlation_id(correlation_id, evaluation).await
                     } else {
                         evaluation.await
                     };
@@ -2225,7 +2228,7 @@ async fn evaluate_claim_task(
             let record = sources
                 .get(source)
                 .ok_or(EvidenceError::SourceUnavailable)?;
-            let value = crate::standalone::get_json_path(record, field)
+            let value = get_json_path(record, field)
                 .cloned()
                 .ok_or(EvidenceError::SourceNotFound)?;
             validate_claim_value_type(&value, &claim.value.value_type)?;
@@ -4000,7 +4003,7 @@ fn source_observed_at_from_row(
     let Some(field) = binding.matching.source_observed_at_field.as_deref() else {
         return Ok(None);
     };
-    let Some(value) = crate::standalone::get_json_path(row, field) else {
+    let Some(value) = get_json_path(row, field) else {
         return Ok(None);
     };
     if value.is_null() {
@@ -4065,7 +4068,7 @@ fn validate_required_binding_fields(
     row: &Value,
 ) -> Result<(), EvidenceError> {
     for field in binding.fields.values().filter(|field| field.required) {
-        match crate::standalone::get_json_path(row, &field.field) {
+        match get_json_path(row, &field.field) {
             Some(value) if !value.is_null() => {}
             _ => return Err(EvidenceError::SourceNotFound),
         }
@@ -4178,8 +4181,7 @@ fn scalar_source_lookup_value(
         Value::Array(rows) => rows.first().ok_or(EvidenceError::SourceNotFound)?,
         row => row,
     };
-    let value = crate::standalone::get_json_path(row, reference.field_path)
-        .ok_or(EvidenceError::SourceNotFound)?;
+    let value = get_json_path(row, reference.field_path).ok_or(EvidenceError::SourceNotFound)?;
     match value {
         Value::String(_) | Value::Number(_) | Value::Bool(_) => Ok(value.clone()),
         Value::Null => Err(EvidenceError::SourceNotFound),
@@ -5825,7 +5827,7 @@ fn batch_value_type(claim: &ClaimDefinition, result: &ClaimResultView) -> String
 fn batch_item_error(error: &EvidenceError) -> BatchItemError {
     BatchItemError {
         code: error.code().to_string(),
-        title: crate::api::evidence_title(error).to_string(),
+        title: evidence_title(error).to_string(),
         retryable: matches!(error, EvidenceError::SourceUnavailable),
         audit_code: Some(error.audit_code().to_string()),
     }
@@ -5864,7 +5866,7 @@ pub(crate) fn batch_idempotency_key(principal_id: &str, key: &str) -> String {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    crate::api::hex_encode(&Sha256::digest(bytes))
+    hex_encode(&Sha256::digest(bytes))
 }
 
 #[cfg(test)]
