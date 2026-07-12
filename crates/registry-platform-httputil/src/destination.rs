@@ -567,6 +567,9 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             return Err(DestinationSendError::DeadlineExceeded);
         }
         let client_builder = reqwest::Client::builder()
+            // Workspace feature unification can enable multiple TLS backends.
+            // Keep this security transport on its reviewed rustls substrate.
+            .use_rustls_tls()
             .timeout(request_remaining)
             .connect_timeout(request_remaining.min(DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT))
             .redirect(reqwest::redirect::Policy::none())
