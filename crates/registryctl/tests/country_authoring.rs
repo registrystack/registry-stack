@@ -24,7 +24,6 @@ fn every_country_golden_passes_the_offline_journey() {
     for project in [
         "custom-system",
         "dhis2-tracker",
-        "dhis2-sandboxed-rhai",
         "fhir-r4-coverage-active",
         "opencrvs",
         "opencrvs-country-variant",
@@ -60,54 +59,6 @@ fn fhir_r4_coverage_active_passes_the_closed_bundle_matrix() {
 }
 
 #[test]
-fn dhis2_bounded_http_and_rhai_have_identical_fixture_semantics() {
-    let bounded = test_country_project(&CountryTestOptions {
-        project_directory: golden("dhis2-tracker"),
-        environment: None,
-        live: false,
-    })
-    .expect("bounded DHIS2 fixtures pass");
-    let rhai = test_country_project(&CountryTestOptions {
-        project_directory: golden("dhis2-sandboxed-rhai"),
-        environment: None,
-        live: false,
-    })
-    .expect("Rhai DHIS2 fixtures pass");
-    let rhai_by_name = rhai
-        .fixtures
-        .iter()
-        .map(|fixture| (fixture.fixture.as_str(), fixture))
-        .collect::<std::collections::BTreeMap<_, _>>();
-    for expected in &bounded.fixtures {
-        let actual = rhai_by_name
-            .get(expected.fixture.as_str())
-            .unwrap_or_else(|| panic!("Rhai omitted fixture {}", expected.fixture));
-        assert_eq!(
-            actual.inputs, expected.inputs,
-            "{} inputs",
-            expected.fixture
-        );
-        assert_eq!(actual.calls, expected.calls, "{} calls", expected.fixture);
-        assert_eq!(actual.facts, expected.facts, "{} facts", expected.fixture);
-        assert_eq!(
-            actual.claims, expected.claims,
-            "{} claims",
-            expected.fixture
-        );
-        assert_eq!(
-            actual.outcome, expected.outcome,
-            "{} outcome",
-            expected.fixture
-        );
-        assert_eq!(
-            actual.passed, expected.passed,
-            "{} result",
-            expected.fixture
-        );
-    }
-}
-
-#[test]
 fn approved_opencrvs_and_dhis2_claim_sets_execute_offline() {
     for project in ["opencrvs", "opencrvs-country-variant", "dhis2-tracker"] {
         let report = test_country_project(&CountryTestOptions {
@@ -118,6 +69,48 @@ fn approved_opencrvs_and_dhis2_claim_sets_execute_offline() {
         .unwrap_or_else(|error| panic!("{project} approved claims failed: {error:#}"));
         assert!(report.fixtures.iter().all(|fixture| fixture.passed));
     }
+}
+
+#[test]
+fn successful_negative_fixtures_report_the_closed_denial_assertion() {
+    let report = test_country_project(&CountryTestOptions {
+        project_directory: golden("custom-system"),
+        environment: None,
+        live: false,
+    })
+    .expect("custom system golden passes");
+
+    let denied_before_access = report
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.fixture == "wrong-purpose-denied-before-source")
+        .expect("wrong-purpose fixture report");
+    assert!(denied_before_access.passed);
+    assert_eq!(
+        denied_before_access.expected_error.as_deref(),
+        Some("authorization.purpose_denied")
+    );
+    assert_eq!(denied_before_access.source_access, Some(false));
+
+    let denied_after_access = report
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.fixture == "custom-malformed-response")
+        .expect("malformed-response fixture report");
+    assert!(denied_after_access.passed);
+    assert_eq!(
+        denied_after_access.expected_error.as_deref(),
+        Some("source.response_malformed")
+    );
+    assert_eq!(denied_after_access.source_access, Some(true));
+
+    let successful = report
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.fixture == "eligible-household")
+        .expect("eligible fixture report");
+    assert_eq!(successful.expected_error, None);
+    assert_eq!(successful.source_access, None);
 }
 
 #[test]
@@ -141,19 +134,98 @@ fn authored_rhai_script_compiles_under_the_production_surface() {
 }
 
 #[test]
-fn rhai_offline_journey_is_fresh_process_deterministic() {
-    let options = CountryTestOptions {
-        project_directory: golden("dhis2-sandboxed-rhai"),
+fn public_rhai_commands_cannot_select_the_code_owned_conformance_path() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("dhis2-sandboxed-rhai", temporary.path());
+    replace_in_file(
+        &project.join("integrations/health-record/integration.yaml"),
+        "2.41.9",
+        "2.41.10",
+    );
+    replace_in_file(
+        &project.join("environments/local.yaml"),
+        "2.41.9",
+        "2.41.10",
+    );
+
+    let test_error = test_country_project(&CountryTestOptions {
+        project_directory: project.clone(),
         environment: None,
         live: false,
-    };
-    let first = test_country_project(&options).expect("first fresh-worker journey");
-    let second = test_country_project(&options).expect("second fresh-worker journey");
-    assert_eq!(
-        serde_json::to_value(&first.fixtures).expect("first fixture report"),
-        serde_json::to_value(&second.fixtures).expect("second fixture report"),
-        "fresh one-shot workers must produce deterministic fixture reports"
+    })
+    .expect_err("public test must enforce the Rhai release gate");
+    assert!(
+        format!("{test_error:#}").contains("release allow-list"),
+        "{test_error:#}"
     );
+
+    let check_error = check_country_project(&CountryCheckOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("public check must enforce the Rhai release gate");
+    assert!(
+        format!("{check_error:#}").contains("release allow-list"),
+        "{check_error:#}"
+    );
+
+    let build_error = build_country_project(&CountryBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect_err("public build must enforce the Rhai release gate");
+    assert!(
+        format!("{build_error:#}").contains("release allow-list"),
+        "{build_error:#}"
+    );
+    assert!(!project.join(".registry-stack/build/local").exists());
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn public_rhai_commands_enforce_the_production_platform_gate() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("dhis2-sandboxed-rhai", temporary.path());
+
+    let test_error = test_country_project(&CountryTestOptions {
+        project_directory: project.clone(),
+        environment: None,
+        live: false,
+    })
+    .expect_err("public test must enforce the Rhai platform gate");
+    assert!(
+        format!("{test_error:#}").contains("consultation service plan is unsupported"),
+        "{test_error:#}"
+    );
+
+    for error in [
+        check_country_project(&CountryCheckOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+            explain: false,
+            against: None,
+            anchor: None,
+        })
+        .expect_err("public check must enforce the Rhai platform gate"),
+        build_country_project(&CountryBuildOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+            against: None,
+            anchor: None,
+        })
+        .expect_err("public build must enforce the Rhai platform gate"),
+    ] {
+        assert!(
+            format!("{error:#}").contains("consultation service plan is unsupported"),
+            "{error:#}"
+        );
+    }
+    assert!(!project.join(".registry-stack/build/local").exists());
 }
 
 #[test]
@@ -510,6 +582,8 @@ fn fixture_failure_reports_safe_actual_error_code() {
     .expect_err("invalid positive fixture must fail");
     let diagnostic = format!("{error:#}");
     assert!(diagnostic.contains("eligibility.eligible-household"));
+    assert!(diagnostic.contains("integrations/eligibility/fixtures/eligible.yaml"));
+    assert!(diagnostic.contains("field=input.household_reference"));
     assert!(diagnostic.contains("actual=input.pattern_mismatch"));
     assert!(!diagnostic.contains("invalid-reference"));
 }

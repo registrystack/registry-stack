@@ -130,6 +130,10 @@ pub struct FixtureReport {
     pub claims: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_access: Option<bool>,
     pub passed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
@@ -1358,9 +1362,10 @@ pub fn test_country_project(options: &CountryTestOptions) -> Result<CountryComma
     }
     let loaded = load_country_project(&options.project_directory, options.environment.as_deref())?;
     let offline_environment = offline_fixture_environment(&loaded)?;
+    validate_environment(&loaded.integrations, &loaded.records, &offline_environment)?;
     let compiled =
         compile_country_for_environment(&loaded, "offline-fixture", &offline_environment, None)?;
-    validate_generated_product_configs_for_offline_conformance(&loaded, &compiled)?;
+    validate_generated_product_configs(&compiled)?;
     let mut reports = execute_all_fixtures(&loaded, &compiled)?;
     require_passing_fixtures(&reports)?;
     if options.live {
@@ -1632,6 +1637,8 @@ fn execute_governed_live_test(loaded: &LoadedCountryProject) -> Result<FixtureRe
         facts: Vec::new(),
         claims: returned_claims,
         outcome: Some("match".to_string()),
+        expected_error: None,
+        source_access: None,
         passed: true,
         failure: None,
     })
@@ -6269,7 +6276,7 @@ fn execute_all_fixtures(
     let relay_fixture = compile_generated_relay_fixture(relay_config, &compiled.relay_private)?;
     let mut reports = Vec::new();
     for (alias, integration) in &loaded.integrations {
-        for (_, fixture) in &integration.fixtures {
+        for (fixture_path, fixture) in &integration.fixtures {
             let preflight = fixture_preflight(loaded, alias, fixture);
             let mut actual_calls = Vec::new();
             let (result, evaluated_claims) = match preflight {
@@ -6397,6 +6404,20 @@ fn execute_all_fixtures(
                 }
                 _ => "expectation_mismatch".to_string(),
             });
+            let failure = failure.map(|failure| {
+                let relative = fixture_path
+                    .strip_prefix(&loaded.root)
+                    .unwrap_or(fixture_path)
+                    .display();
+                let field = result
+                    .as_ref()
+                    .err()
+                    .filter(|code| code.as_str() == "input.pattern_mismatch")
+                    .and_then(|_| invalid_fixture_input_field(&integration.document, fixture))
+                    .map(|field| format!(" field=input.{field}"))
+                    .unwrap_or_default();
+                format!("file={relative}{field} {failure}")
+            });
             let facts = result
                 .as_ref()
                 .ok()
@@ -6416,12 +6437,40 @@ fn execute_all_fixtures(
                     .as_ref()
                     .ok()
                     .map(|(_, outcome)| (*outcome).to_string()),
+                expected_error: fixture.expect.error.clone(),
+                source_access: result
+                    .as_ref()
+                    .err()
+                    .map(|code| error_implies_source_access(code)),
                 passed,
                 failure,
             });
         }
     }
     Ok(reports)
+}
+
+fn invalid_fixture_input_field<'a>(
+    integration: &'a IntegrationDocument,
+    fixture: &FixtureDocument,
+) -> Option<&'a str> {
+    integration.input.iter().find_map(|(name, declaration)| {
+        let Some(value) = fixture.input.get(name).and_then(Value::as_str) else {
+            return Some(name.as_str());
+        };
+        if value.len() > usize::from(declaration.bytes) {
+            return Some(name.as_str());
+        }
+        if declaration.input_type == InputType::FullDate && validate_full_date(value).is_err() {
+            return Some(name.as_str());
+        }
+        let canonical = match declaration.canonicalization {
+            Canonicalization::Identity => std::borrow::Cow::Borrowed(value),
+            Canonicalization::AsciiLowercase => std::borrow::Cow::Owned(value.to_ascii_lowercase()),
+        };
+        let pattern = relay_input_pattern(&declaration.pattern).ok()?;
+        (!regex::Regex::new(&pattern).ok()?.is_match(&canonical)).then_some(name.as_str())
+    })
 }
 
 fn mismatched_map_keys<T: PartialEq>(
@@ -7529,27 +7578,6 @@ fn validate_generated_product_configs(compiled: &CompiledCountry) -> Result<()> 
     validate_generated_notary(compiled)
 }
 
-fn validate_generated_product_configs_for_offline_conformance(
-    loaded: &LoadedCountryProject,
-    compiled: &CompiledCountry,
-) -> Result<()> {
-    if loaded.integrations.values().any(|integration| {
-        matches!(
-            &integration.document.capability,
-            CapabilityDeclaration::SandboxedRhai { .. }
-        )
-    }) {
-        let relay_config = compiled
-            .relay_private
-            .get(Path::new("config/relay.yaml"))
-            .ok_or_else(|| anyhow!("generated Relay config is absent"))?;
-        compile_generated_relay_fixture(relay_config, &compiled.relay_private).map(drop)?;
-        validate_generated_notary(compiled)
-    } else {
-        validate_generated_product_configs(compiled)
-    }
-}
-
 fn validate_generated_notary(compiled: &CompiledCountry) -> Result<()> {
     let notary_config = compiled
         .notary_private
@@ -8479,6 +8507,83 @@ fn sha256_uri(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn run_code_owned_country_conformance(project: &Path) -> Result<Vec<FixtureReport>> {
+        let loaded = load_country_project(project, None)?;
+        let offline_environment = offline_fixture_environment(&loaded)?;
+        let compiled = compile_country_for_environment(
+            &loaded,
+            "offline-fixture",
+            &offline_environment,
+            None,
+        )?;
+        let relay_config = compiled
+            .relay_private
+            .get(Path::new("config/relay.yaml"))
+            .ok_or_else(|| anyhow!("generated Relay config is absent"))?;
+        // This structural compiler bypass is selected only by this cfg(test)
+        // harness. No authored field, CLI flag, environment variable, startup
+        // path, or runtime API can request it.
+        compile_generated_relay_fixture(relay_config, &compiled.relay_private).map(drop)?;
+        validate_generated_notary(&compiled)?;
+        let reports = execute_all_fixtures(&loaded, &compiled)?;
+        require_passing_fixtures(&reports)?;
+        Ok(reports)
+    }
+
+    fn country_golden(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/country-authoring")
+            .join(name)
+    }
+
+    #[test]
+    fn code_owned_rhai_conformance_matches_bounded_http_and_is_deterministic() {
+        let bounded = run_code_owned_country_conformance(&country_golden("dhis2-tracker"))
+            .expect("bounded DHIS2 conformance passes");
+        let rhai_project = country_golden("dhis2-sandboxed-rhai");
+        let rhai = run_code_owned_country_conformance(&rhai_project)
+            .expect("Rhai DHIS2 conformance passes");
+        let repeated = run_code_owned_country_conformance(&rhai_project)
+            .expect("repeated Rhai DHIS2 conformance passes");
+        assert_eq!(
+            serde_json::to_value(&rhai).expect("first Rhai report serializes"),
+            serde_json::to_value(&repeated).expect("repeated Rhai report serializes"),
+            "fresh one-shot workers must produce deterministic fixture reports"
+        );
+
+        let rhai_by_name = rhai
+            .iter()
+            .map(|fixture| (fixture.fixture.as_str(), fixture))
+            .collect::<BTreeMap<_, _>>();
+        for expected in &bounded {
+            let actual = rhai_by_name
+                .get(expected.fixture.as_str())
+                .unwrap_or_else(|| panic!("Rhai omitted fixture {}", expected.fixture));
+            assert_eq!(
+                actual.inputs, expected.inputs,
+                "{} inputs",
+                expected.fixture
+            );
+            assert_eq!(actual.calls, expected.calls, "{} calls", expected.fixture);
+            assert_eq!(actual.facts, expected.facts, "{} facts", expected.fixture);
+            assert_eq!(
+                actual.claims, expected.claims,
+                "{} claims",
+                expected.fixture
+            );
+            assert_eq!(
+                actual.outcome, expected.outcome,
+                "{} outcome",
+                expected.fixture
+            );
+            assert_eq!(
+                actual.passed, expected.passed,
+                "{} result",
+                expected.fixture
+            );
+        }
+    }
 
     #[test]
     fn generated_relay_rejects_independent_raw_and_typed_binding_tampering() {
