@@ -1207,10 +1207,6 @@ pub(super) fn valid_self_attestation_config() -> StandaloneRegistryNotaryConfig 
         r#"
 evidence:
   enabled: true
-  source_connections:
-    crvs:
-      base_url: https://registry.example/source
-      token_env: SOURCE_TOKEN
   signing_keys:
     issuer-key:
       provider: local_jwk_env
@@ -1241,26 +1237,13 @@ evidence:
       version: "1.0"
       subject_type: person
       evidence_mode:
-        type: transitional_direct
+        type: self_attested
+      value:
+        type: boolean
       purpose: citizen_self_attestation
-      inputs:
-        - name: subject_id
-          type: string
-      source_bindings:
-        crvs:
-          connector: dci
-          connection: crvs
-          required_scope: civil_registry:evidence_verification
-          dataset: civil_registry
-          entity: civil_person
-          lookup:
-            input: target.identifiers.national_id
-            field: NATIONAL_ID
-            op: eq
-            cardinality: one
       rule:
-        type: exists
-        source: crvs
+        type: cel
+        expression: "true"
       disclosure:
         default: value
         allowed:
@@ -1345,22 +1328,6 @@ pub(super) fn valid_delegated_self_attestation_config() -> StandaloneRegistryNot
     proof.title = "Guardian link".to_string();
     proof.subject_type = "relationship".to_string();
     proof.purpose = Some("dependent_attestation".to_string());
-    proof.rule = RuleConfig::Exists {
-        source: "crvs".to_string(),
-    };
-    let proof_binding = proof
-        .source_bindings
-        .get_mut("crvs")
-        .expect("proof source binding exists");
-    proof_binding.connector = SourceConnectorKind::RegistryDataApi;
-    proof_binding.entity = "guardian_link".to_string();
-    proof_binding.lookup.input = "target.identifiers.civil_registration_id".to_string();
-    proof_binding.lookup.field = "DEPENDENT_ID".to_string();
-    proof_binding.query_fields = vec![SourceQueryFieldConfig {
-        input: "requester.identifiers.national_id".to_string(),
-        field: "GUARDIAN_ID".to_string(),
-        op: "eq".to_string(),
-    }];
 
     let mut dependent = config.evidence.claims[0].clone();
     dependent.id = "dependent-date-of-birth".to_string();

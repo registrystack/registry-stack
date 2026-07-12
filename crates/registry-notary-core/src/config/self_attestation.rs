@@ -132,7 +132,7 @@ impl SelfAttestationConfig {
             "self_attestation.credential_profiles",
             &self.credential_profiles,
         )?;
-        validate_self_attestation_registry_backed_paths(self, evidence)?;
+        validate_self_attestation_evidence_paths(self, evidence)?;
         self.delegation.validate(evidence)?;
         self.rate_limits.validate()?;
         validate_exact_wallet_origins(&self.allowed_wallet_origins)?;
@@ -226,25 +226,25 @@ impl SelfAttestationConfig {
     }
 }
 
-pub(super) fn validate_self_attestation_registry_backed_paths(
+pub(super) fn validate_self_attestation_evidence_paths(
     config: &SelfAttestationConfig,
     evidence: &EvidenceConfig,
 ) -> Result<(), EvidenceConfigError> {
     for claim_id in &config.allowed_claims {
-        reject_registry_backed_dependency_path(
+        require_self_attested_dependency_path(
             "self_attestation.allowed_claims",
             claim_id,
             evidence,
         )?;
     }
     for relationship in &config.delegation.allowed_relationships {
-        reject_registry_backed_dependency_path(
+        require_self_attested_dependency_path(
             "self_attestation.delegation.proof_claim",
             &relationship.proof_claim,
             evidence,
         )?;
         for claim_id in &relationship.allowed_claims {
-            reject_registry_backed_dependency_path(
+            require_self_attested_dependency_path(
                 "self_attestation.delegation.allowed_claims",
                 claim_id,
                 evidence,
@@ -254,7 +254,7 @@ pub(super) fn validate_self_attestation_registry_backed_paths(
     Ok(())
 }
 
-fn reject_registry_backed_dependency_path(
+fn require_self_attested_dependency_path(
     context: &str,
     root_claim_id: &str,
     evidence: &EvidenceConfig,
@@ -272,10 +272,11 @@ fn reject_registry_backed_dependency_path(
         else {
             continue;
         };
-        if claim.evidence_mode.is_registry_backed() {
+        if !claim.evidence_mode.is_self_attested() {
             return invalid_self_attestation(format!(
-                "{context} path cannot include registry_backed claim '{}'",
-                claim.id
+                "{context} path must contain only self_attested claims; claim '{}' uses {}",
+                claim.id,
+                claim.evidence_mode.name(),
             ));
         }
         pending.extend(claim.depends_on.iter().map(String::as_str));
@@ -303,6 +304,11 @@ impl SelfAttestationDelegationConfig {
                 });
             }
             return Ok(());
+        }
+        if !delegated_attestation_v1_enabled() {
+            return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                reason: "self_attestation.delegation is unavailable in v1 until a trusted assertion design replaces direct source proof claims".to_string(),
+            });
         }
         if self.allowed_relationships.is_empty() {
             return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
@@ -339,6 +345,10 @@ impl SelfAttestationDelegationConfig {
             .iter()
             .find(|relationship| relationship.relationship_type == relationship_type)
     }
+}
+
+fn delegated_attestation_v1_enabled() -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1199,6 +1209,9 @@ pub(super) fn validate_required_scopes_do_not_grant_source_access(
 pub(super) fn source_required_scopes(evidence: &EvidenceConfig) -> HashSet<String> {
     let mut scopes = HashSet::new();
     for claim in &evidence.claims {
+        if !claim.evidence_mode.is_self_attested() {
+            scopes.extend(claim.required_scopes.iter().cloned());
+        }
         for binding in claim.source_bindings.values() {
             if let Some(scope) = binding.required_scope.as_deref() {
                 scopes.insert(scope.to_string());

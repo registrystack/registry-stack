@@ -58,6 +58,14 @@ pub enum EvidenceConfigError {
     InvalidClaimSemantics { claim: String, reason: String },
     #[error("claim '{claim}' has invalid evidence_mode: {reason}")]
     InvalidClaimEvidenceMode { claim: String, reason: String },
+    #[error(
+        "claim '{claim}' dependency closure exceeds v1 bounds ({nodes} nodes, {edges} edges)"
+    )]
+    ClaimDependencyGraphTooLarge {
+        claim: String,
+        nodes: usize,
+        edges: usize,
+    },
     /// REQ-DM-CLAIM-008 requires a claim's `disclosure.default` to be a
     /// member of `disclosure.allowed`; RS-DM-CLAIM Section 10 previously
     /// documented this as unchecked at load, surfacing only when a result

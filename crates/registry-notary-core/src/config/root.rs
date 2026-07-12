@@ -156,6 +156,13 @@ impl StandaloneRegistryNotaryConfig {
         self.evidence.machine_quota.validate()?;
         if let Some(relay) = &self.evidence.relay {
             relay.validate()?;
+            if relay.uses_insecure_url()
+                && self.deployment.profile != Some(crate::deployment::DeploymentProfile::Local)
+            {
+                return Err(EvidenceConfigError::InvalidRelayConfig {
+                    reason: "HTTP Relay origins require deployment.profile = local".to_string(),
+                });
+            }
         }
         self.cel.validate()?;
         if self.evidence.max_credential_validity_seconds == 0 {
@@ -275,6 +282,7 @@ impl StandaloneRegistryNotaryConfig {
                 }
             }
         }
+        validate_claim_dependency_bounds(&self.evidence.claims)?;
         let mut seen_claim_ids: HashSet<&str> = HashSet::new();
         for claim in &self.evidence.claims {
             if claim.id.trim().is_empty() {
@@ -508,6 +516,7 @@ impl StandaloneRegistryNotaryConfig {
             }
         }
         validate_self_attested_dependency_modes(&self.evidence.claims)?;
+        validate_registry_backed_dependency_modes(&self.evidence.claims)?;
         self.self_attestation.validate(&self.auth, &self.evidence)?;
         self.validate_oid4vci_cross_block()?;
         self.validate_access_token_signing_cross_block()?;

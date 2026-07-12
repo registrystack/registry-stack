@@ -46,37 +46,11 @@ pub(super) fn valid_self_attestation_config_passes_validation() {
 }
 
 #[test]
-pub(super) fn delegated_attestation_requires_bound_proof_claim_source_inputs() {
-    let mut config = valid_delegated_self_attestation_config();
-    let proof = config
-        .evidence
-        .claims
-        .iter_mut()
-        .find(|claim| claim.id == "guardian-link")
-        .expect("proof claim exists");
-    proof
-        .source_bindings
-        .get_mut("crvs")
-        .expect("proof binding exists")
-        .query_fields
-        .clear();
-
+pub(super) fn delegated_attestation_is_disabled_until_trusted_assertions_replace_direct_proofs() {
+    let config = valid_delegated_self_attestation_config();
     let reason = expect_self_attestation_error(&config);
     assert!(
-        reason.contains("must bind both requester and target source inputs"),
-        "unexpected: {reason}"
-    );
-}
-
-#[test]
-pub(super) fn delegated_attestation_rejects_unsupported_allowed_disclosure() {
-    let mut config = valid_delegated_self_attestation_config();
-    config.self_attestation.delegation.allowed_relationships[0].allowed_disclosures =
-        vec!["predicate".to_string()];
-
-    let reason = expect_self_attestation_error(&config);
-    assert!(
-        reason.contains("must support at least one allowed disclosure"),
+        reason.contains("delegation is unavailable in v1"),
         "unexpected: {reason}"
     );
 }
@@ -921,6 +895,9 @@ pub(super) fn self_attestation_disabled_scope_policy_rejects_required_scopes() {
 #[test]
 pub(super) fn self_attestation_rejects_citizen_scope_map_granting_source_scope() {
     let mut config = valid_self_attestation_config();
+    let mut machine_claim = minimal_claim("machine-only");
+    machine_claim.required_scopes = vec!["civil_registry:evidence_verification".to_string()];
+    config.evidence.claims.push(machine_claim);
     config.auth.oidc.as_mut().unwrap().scope_map.insert(
         "citizen_self_attestation".to_string(),
         vec![

@@ -80,10 +80,9 @@ pub(in crate::config) const fn default_relay_max_in_flight() -> usize {
 
 fn is_loopback_origin(origin: &url::Url) -> bool {
     match origin.host() {
-        Some(url::Host::Domain(host)) => host.eq_ignore_ascii_case("localhost"),
         Some(url::Host::Ipv4(address)) => address.is_loopback(),
         Some(url::Host::Ipv6(address)) => address.is_loopback(),
-        None => false,
+        Some(url::Host::Domain(_)) | None => false,
     }
 }
 

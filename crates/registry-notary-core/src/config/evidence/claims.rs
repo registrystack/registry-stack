@@ -3,6 +3,9 @@
 
 use super::*;
 
+pub const MAX_CLAIM_DEPENDENCY_NODES_V1: usize = 64;
+pub const MAX_CLAIM_DEPENDENCY_EDGES_V1: usize = 256;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimDefinition {
@@ -99,6 +102,11 @@ impl ClaimEvidenceMode {
     #[must_use]
     pub const fn is_self_attested(&self) -> bool {
         matches!(self, Self::SelfAttested)
+    }
+
+    #[must_use]
+    pub const fn is_transitional_direct(&self) -> bool {
+        matches!(self, Self::TransitionalDirect)
     }
 }
 
@@ -207,13 +215,10 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                             "registry_backed extract rule.field must be one top-level Relay output name",
                         );
                     }
-                    if !matches!(
-                        claim.value.value_type.as_str(),
-                        "string" | "boolean" | "integer" | "number"
-                    ) {
+                    if claim.value.value_type != "string" {
                         return invalid_claim_evidence_mode(
                             claim,
-                            "registry_backed extract claim value.type must be string, boolean, integer, or number",
+                            "registry_backed extract claim value.type must be string in v1",
                         );
                     }
                 }
@@ -246,14 +251,20 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                     "self_attested cannot declare source_bindings",
                 );
             }
-            if matches!(
-                claim.rule,
-                RuleConfig::Extract { .. } | RuleConfig::Exists { .. }
-            ) {
-                return invalid_claim_evidence_mode(
-                    claim,
-                    "self_attested rules cannot name an evidence source",
-                );
+            match &claim.rule {
+                RuleConfig::Cel { .. } => {}
+                RuleConfig::Extract { .. } | RuleConfig::Exists { .. } => {
+                    return invalid_claim_evidence_mode(
+                        claim,
+                        "self_attested rules cannot name an evidence source",
+                    );
+                }
+                RuleConfig::Plugin { .. } => {
+                    return invalid_claim_evidence_mode(
+                        claim,
+                        "self_attested supports only CEL rules in v1",
+                    );
+                }
             }
         }
         ClaimEvidenceMode::TransitionalDirect => {}
@@ -287,6 +298,74 @@ pub(in crate::config) fn validate_self_attested_dependency_modes(
                 );
             }
             pending.extend(dependency.depends_on.iter().map(String::as_str));
+        }
+    }
+    Ok(())
+}
+
+pub(in crate::config) fn validate_registry_backed_dependency_modes(
+    claims: &[ClaimDefinition],
+) -> Result<(), EvidenceConfigError> {
+    for claim in claims
+        .iter()
+        .filter(|claim| claim.evidence_mode.is_registry_backed())
+    {
+        let mut pending: Vec<&str> = claim.depends_on.iter().map(String::as_str).collect();
+        let mut visited = HashSet::new();
+        while let Some(dependency_id) = pending.pop() {
+            if !visited.insert(dependency_id) {
+                continue;
+            }
+            let Some(dependency) = claims
+                .iter()
+                .find(|candidate| candidate.id == dependency_id)
+            else {
+                continue;
+            };
+            if dependency.evidence_mode.is_transitional_direct() {
+                return invalid_claim_evidence_mode(
+                    claim,
+                    "registry_backed dependency closure cannot contain transitional_direct claims",
+                );
+            }
+            pending.extend(dependency.depends_on.iter().map(String::as_str));
+        }
+    }
+    Ok(())
+}
+
+pub(in crate::config) fn validate_claim_dependency_bounds(
+    claims: &[ClaimDefinition],
+) -> Result<(), EvidenceConfigError> {
+    if claims.len() > MAX_CLAIM_DEPENDENCY_NODES_V1 {
+        return Err(EvidenceConfigError::ClaimDependencyGraphTooLarge {
+            claim: "*".to_string(),
+            nodes: claims.len(),
+            edges: 0,
+        });
+    }
+    for root in claims {
+        let mut pending = vec![root.id.as_str()];
+        let mut visited = HashSet::new();
+        let mut edges = 0usize;
+        while let Some(claim_id) = pending.pop() {
+            if !visited.insert(claim_id) {
+                continue;
+            }
+            let Some(claim) = claims.iter().find(|candidate| candidate.id == claim_id) else {
+                continue;
+            };
+            edges = edges.saturating_add(claim.depends_on.len());
+            if visited.len() > MAX_CLAIM_DEPENDENCY_NODES_V1
+                || edges > MAX_CLAIM_DEPENDENCY_EDGES_V1
+            {
+                return Err(EvidenceConfigError::ClaimDependencyGraphTooLarge {
+                    claim: root.id.clone(),
+                    nodes: visited.len(),
+                    edges,
+                });
+            }
+            pending.extend(claim.depends_on.iter().map(String::as_str));
         }
     }
     Ok(())

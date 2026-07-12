@@ -70,15 +70,19 @@ fn expect_mode_error(config: &StandaloneRegistryNotaryConfig, expected: &str) {
     );
 }
 
-fn expect_self_attestation_mode_error(config: &StandaloneRegistryNotaryConfig, expected: &str) {
+fn expect_self_attestation_closure_error(config: &StandaloneRegistryNotaryConfig) {
     let error = config
         .validate()
-        .expect_err("registry-backed self-attestation path must fail validation");
+        .expect_err("a self-attestation closure with mixed evidence modes must fail validation");
     assert!(
         matches!(
             error,
+            EvidenceConfigError::InvalidClaimEvidenceMode { ref reason, .. }
+                if reason.contains("self_attested dependency closure")
+        ) || matches!(
+            error,
             EvidenceConfigError::InvalidSelfAttestationConfig { ref reason }
-                if reason.contains(expected)
+                if reason.contains("must contain only self_attested claims")
         ),
         "unexpected error: {error:?}"
     );
@@ -336,13 +340,15 @@ fn registry_backed_claim_matches_relay_identifier_and_scalar_contract() {
     config.evidence.claims[0].value.value_type = "string".to_string();
     expect_mode_error(&config, "one top-level Relay output name");
 
-    let mut config = valid_registry_backed_config();
-    config.evidence.claims[0].rule = RuleConfig::Extract {
-        source: "person_status".to_string(),
-        field: "registration_status".to_string(),
-    };
-    config.evidence.claims[0].value.value_type = "object".to_string();
-    expect_mode_error(&config, "string, boolean, integer, or number");
+    for unsupported in ["boolean", "integer", "number", "object"] {
+        let mut config = valid_registry_backed_config();
+        config.evidence.claims[0].rule = RuleConfig::Extract {
+            source: "person_status".to_string(),
+            field: "registration_status".to_string(),
+        };
+        config.evidence.claims[0].value.value_type = unsupported.to_string();
+        expect_mode_error(&config, "must be string in v1");
+    }
 }
 
 #[test]
@@ -404,10 +410,36 @@ fn relay_connection_requires_https_origin_or_explicit_loopback() {
     relay.base_url = "http://127.0.0.1:8080".to_string();
     relay.allow_insecure_localhost = true;
     config.evidence.relay = Some(relay);
+    config.deployment.profile = Some(crate::deployment::DeploymentProfile::Local);
     config
         .validate()
         .expect("explicit HTTP loopback is permitted for local development");
     assert!(config.gate_input().source_insecure_url);
+
+    let mut config = minimal_config();
+    let mut relay = relay_connection();
+    relay.base_url = "http://localhost:8080".to_string();
+    relay.allow_insecure_localhost = true;
+    config.evidence.relay = Some(relay);
+    config.deployment.profile = Some(crate::deployment::DeploymentProfile::Local);
+    config
+        .validate()
+        .expect_err("local development HTTP requires a literal loopback origin");
+
+    let mut config = minimal_config();
+    let mut relay = relay_connection();
+    relay.base_url = "http://127.0.0.1:8080".to_string();
+    relay.allow_insecure_localhost = true;
+    config.evidence.relay = Some(relay);
+    config.deployment.profile = Some(crate::deployment::DeploymentProfile::HostedLab);
+    let error = config
+        .validate()
+        .expect_err("HTTP Relay is restricted to the local deployment profile");
+    assert!(matches!(
+        error,
+        EvidenceConfigError::InvalidRelayConfig { ref reason }
+            if reason.contains("deployment.profile = local")
+    ));
 
     let sensitive_path = "private-route";
     let mut config = minimal_config();
@@ -445,6 +477,12 @@ fn self_attested_claims_are_source_free_across_dependencies() {
     };
     expect_mode_error(&source_rule, "cannot name an evidence source");
 
+    let mut plugin_rule = config.clone();
+    plugin_rule.evidence.claims[0].rule = RuleConfig::Plugin {
+        plugin: "unavailable".to_string(),
+    };
+    expect_mode_error(&plugin_rule, "supports only CEL");
+
     let mut source_binding = config.clone();
     source_binding.evidence.claims[0].source_bindings.insert(
         "implicit-source".to_string(),
@@ -476,11 +514,15 @@ lookup:
 }
 
 #[test]
-fn self_attestation_allowed_claim_paths_reject_registry_backed_modes() {
+fn self_attestation_allowed_claim_closures_require_self_attested_modes() {
     let mut config = valid_self_attestation_config();
     config.evidence.relay = Some(relay_connection());
     make_registry_backed(&mut config.evidence.claims[0], "civil_status");
-    expect_self_attestation_mode_error(&config, "allowed_claims path");
+    expect_self_attestation_closure_error(&config);
+
+    let mut config = valid_self_attestation_config();
+    config.evidence.claims[0].evidence_mode = ClaimEvidenceMode::TransitionalDirect;
+    expect_self_attestation_closure_error(&config);
 
     let mut config = valid_self_attestation_config();
     config.evidence.relay = Some(relay_connection());
@@ -490,11 +532,49 @@ fn self_attestation_allowed_claim_paths_reject_registry_backed_modes() {
         .depends_on
         .push(dependency.id.clone());
     config.evidence.claims.push(dependency);
-    expect_self_attestation_mode_error(&config, "allowed_claims path");
+    expect_self_attestation_closure_error(&config);
 }
 
 #[test]
-fn delegated_self_attestation_paths_reject_registry_backed_modes() {
+fn registry_backed_dependency_closure_rejects_transitional_direct() {
+    let mut config = valid_registry_backed_config();
+    let dependency = minimal_claim("legacy-dependency");
+    config.evidence.claims[0]
+        .depends_on
+        .push(dependency.id.clone());
+    config.evidence.claims.push(dependency);
+    expect_mode_error(&config, "dependency closure cannot contain transitional_direct");
+}
+
+#[test]
+fn claim_dependency_graph_has_fixed_v1_node_and_edge_bounds() {
+    let mut too_many_nodes = minimal_config();
+    too_many_nodes.evidence.claims = (0..=MAX_CLAIM_DEPENDENCY_NODES_V1)
+        .map(|index| minimal_claim(&format!("claim-{index}")))
+        .collect();
+    assert!(matches!(
+        too_many_nodes.validate(),
+        Err(EvidenceConfigError::ClaimDependencyGraphTooLarge { nodes, .. })
+            if nodes == MAX_CLAIM_DEPENDENCY_NODES_V1 + 1
+    ));
+
+    let mut too_many_edges = minimal_config();
+    for index in 0..24 {
+        let mut claim = minimal_claim(&format!("claim-{index}"));
+        claim.depends_on = (0..index)
+            .map(|dependency| format!("claim-{dependency}"))
+            .collect();
+        too_many_edges.evidence.claims.push(claim);
+    }
+    assert!(matches!(
+        too_many_edges.validate(),
+        Err(EvidenceConfigError::ClaimDependencyGraphTooLarge { edges, .. })
+            if edges > MAX_CLAIM_DEPENDENCY_EDGES_V1
+    ));
+}
+
+#[test]
+fn delegated_self_attestation_claim_closures_require_self_attested_modes() {
     let mut config = valid_delegated_self_attestation_config();
     config.evidence.relay = Some(relay_connection());
     let proof = config
@@ -504,7 +584,7 @@ fn delegated_self_attestation_paths_reject_registry_backed_modes() {
         .find(|claim| claim.id == "guardian-link")
         .expect("proof claim");
     make_registry_backed(proof, "guardian_link");
-    expect_self_attestation_mode_error(&config, "delegation.proof_claim path");
+    expect_self_attestation_closure_error(&config);
 
     let mut config = valid_delegated_self_attestation_config();
     config.evidence.relay = Some(relay_connection());
@@ -515,15 +595,17 @@ fn delegated_self_attestation_paths_reject_registry_backed_modes() {
         .find(|claim| claim.id == "dependent-date-of-birth")
         .expect("delegated claim");
     make_registry_backed(delegated, "civil_status");
-    expect_self_attestation_mode_error(&config, "delegation.allowed_claims path");
+    expect_self_attestation_closure_error(&config);
 }
 
 #[test]
 fn transitional_direct_preserves_rule_source_validation() {
-    let mut config = valid_self_attestation_config();
-    config.evidence.claims[0].rule = RuleConfig::Exists {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("legacy-claim");
+    claim.rule = RuleConfig::Exists {
         source: "missing-direct-binding".to_string(),
     };
+    config.evidence.claims.push(claim);
     let error = config
         .validate()
         .expect_err("legacy direct rule must still name its source binding");
