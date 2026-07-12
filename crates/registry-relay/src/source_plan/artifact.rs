@@ -6,6 +6,10 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use registry_platform_crypto::{canonicalize_json, parse_json_strict};
+use registry_platform_httputil::destination::input_pattern::{
+    MAX_BOUNDED_INPUT_BYTES as MAX_INPUT_BYTES,
+    MAX_BOUNDED_INPUT_PATTERN_BYTES as MAX_PATTERN_BYTES,
+};
 use registry_platform_httputil::destination::validate_fixed_destination_path;
 use reqwest::Url;
 use serde::de::{self, DeserializeOwned, MapAccess, SeqAccess, Visitor};
@@ -35,10 +39,6 @@ const REQUEST_TEMPLATE_HASH_DOMAIN: &[u8] = b"registry.relay.request-template.v1
 
 const MAX_ARTIFACT_BYTES: usize = 256 * 1024;
 const MAX_STABLE_TEXT_BYTES: usize = 512;
-const MAX_PATTERN_BYTES: usize = 1_024;
-const MAX_INPUT_PATTERN_ATOMS: usize = 128;
-const MAX_INPUT_CLASS_RANGES: usize = 64;
-const MAX_INPUT_BYTES: u16 = 256;
 const MAX_PURPOSE_BYTES: usize = 256;
 const MAX_DATA_RESPONSE_BYTES: u32 = 256 * 1024;
 const MAX_PUBLIC_RESPONSE_BYTES: u32 = 64 * 1024;

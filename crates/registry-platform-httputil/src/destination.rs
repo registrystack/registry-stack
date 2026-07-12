@@ -24,9 +24,9 @@ use hickory_resolver::proto::op::ResponseCode;
 use hickory_resolver::proto::rr::{Name, RData};
 use hickory_resolver::TokioResolver;
 use http::header::{
-    HeaderName, HeaderValue, ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_LENGTH, COOKIE,
-    FORWARDED, HOST, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER, TRANSFER_ENCODING,
-    UPGRADE,
+    HeaderName, HeaderValue, ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_LENGTH,
+    CONTENT_TYPE, COOKIE, FORWARDED, HOST, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER,
+    TRANSFER_ENCODING, UPGRADE,
 };
 use http::uri::PathAndQuery;
 use http::{HeaderMap, StatusCode};
@@ -39,6 +39,7 @@ use zeroize::Zeroizing;
 
 use crate::{is_cloud_metadata_ip, DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT};
 
+pub mod input_pattern;
 pub mod json;
 
 /// Maximum canonical origin identifier length.
@@ -817,11 +818,12 @@ impl DestinationAuthorizationValue {
 
     /// Build a Bearer value from a provider-produced token payload.
     pub fn bearer(token: Vec<u8>) -> Result<Self, DestinationRequestError> {
-        Self::with_prefix(
-            DestinationAuthorizationKind::Bearer,
-            b"Bearer ",
-            Zeroizing::new(token),
-        )
+        Self::bearer_zeroizing(Zeroizing::new(token))
+    }
+
+    /// Build a Bearer value while preserving an existing zeroizing owner.
+    pub fn bearer_zeroizing(token: Zeroizing<Vec<u8>>) -> Result<Self, DestinationRequestError> {
+        Self::with_prefix(DestinationAuthorizationKind::Bearer, b"Bearer ", token)
     }
 
     fn with_prefix(
@@ -1874,6 +1876,17 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
         self.response.status()
     }
 
+    /// Require exactly one response media type with the exact JSON value.
+    ///
+    /// Parameters, comma-joined alternatives, duplicate fields, and missing
+    /// fields are rejected. The failure deliberately does not expose the
+    /// upstream value.
+    pub fn require_exact_json_content_type(&self) -> Result<(), DestinationResponseMediaTypeError> {
+        exact_json_content_type(self.response.headers())
+            .then_some(())
+            .ok_or(DestinationResponseMediaTypeError::NotExactJson)
+    }
+
     /// Consume the response body under both the operation deadline and byte cap.
     pub async fn read_bounded(
         self,
@@ -1920,6 +1933,21 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
             .await
             .map_err(|_| DestinationResponseError::DeadlineExceeded)?
     }
+}
+
+fn exact_json_content_type(headers: &HeaderMap) -> bool {
+    let mut values = headers.get_all(CONTENT_TYPE).iter();
+    matches!(
+        (values.next(), values.next()),
+        (Some(value), None) if value.as_bytes() == b"application/json"
+    )
+}
+
+/// Value-free strict response-media-type failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum DestinationResponseMediaTypeError {
+    #[error("destination response media type is not exactly application/json")]
+    NotExactJson,
 }
 
 /// Value-free bounded response-read failures.
@@ -2659,6 +2687,25 @@ mod tests {
         assert!(credential.with_bytes(|bytes| bytes == b"credential-token"));
         assert!(!format!("{data:?}").contains("registry-record"));
         assert!(!format!("{credential:?}").contains("credential-token"));
+    }
+
+    #[test]
+    fn exact_json_response_media_type_rejects_missing_wrong_and_duplicate_values() {
+        let mut headers = HeaderMap::new();
+        assert!(!exact_json_content_type(&headers));
+
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        assert!(exact_json_content_type(&headers));
+
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/json; charset=utf-8"),
+        );
+        assert!(!exact_json_content_type(&headers));
+
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        assert!(!exact_json_content_type(&headers));
     }
 
     fn classify(
