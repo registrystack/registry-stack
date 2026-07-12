@@ -652,6 +652,8 @@ integrations:
 unless both the built-in release capability table allows the exact source product and version and
 the environment contains that operator-security declaration. The pre-1.0 table allows only the
 reviewed DHIS2 2.41.9 surface; the maintained differential fixture targets that same version.
+The generated Relay configuration must also pass the product's exact production activation gate
+on the current platform before fixture-only compilation begins.
 An ordinary starter does not depend on Rhai.
 Country configuration does not select a worker command, runtime path, script hash, or sandbox
 limit.

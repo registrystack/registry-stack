@@ -7595,8 +7595,8 @@ fn validate_generated_relay(
     relay_config: &[u8],
     files: &BTreeMap<PathBuf, Box<[u8]>>,
 ) -> Result<()> {
-    compile_generated_relay_fixture(relay_config, files).map(drop)?;
-    validate_generated_relay_activation(relay_config, files)
+    validate_generated_relay_activation(relay_config, files)?;
+    compile_generated_relay_fixture(relay_config, files).map(drop)
 }
 
 fn validate_generated_relay_activation(

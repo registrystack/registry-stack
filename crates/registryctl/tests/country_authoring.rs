@@ -79,6 +79,9 @@ fn successful_negative_fixtures_report_the_closed_denial_assertion() {
         live: false,
     })
     .expect("custom system golden passes");
+    let serialized = serde_json::to_string(&report).expect("fixture report serializes");
+    assert!(!serialized.contains("HH-AB12CD34"));
+    assert!(!serialized.contains("synthetic-key-1"));
 
     let denied_before_access = report
         .fixtures
