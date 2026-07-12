@@ -12,7 +12,9 @@ use tokio::sync::Notify;
 use ulid::Ulid;
 use zeroize::Zeroizing;
 
-use crate::relay_client::{RelayClientError, RelayConsultationOutcome, VerifiedRelayClient};
+use crate::relay_client::{
+    RelayClientError, RelayConsultationOutcome, RelayMatchData, VerifiedRelayClient,
+};
 
 pub(crate) const MAX_CONSULTATION_GROUPS_V1: usize = 16;
 const MAX_CHECKED_SCOPES_V1: usize = 16;
@@ -354,11 +356,23 @@ impl fmt::Debug for RuntimeRelayOutput {
     }
 }
 
+/// Match-only data released by the verified Relay client.
+pub(crate) enum RuntimeRelayMatchData {
+    ProjectedString(RuntimeRelayOutput),
+    PresenceOnly,
+}
+
+impl fmt::Debug for RuntimeRelayMatchData {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RuntimeRelayMatchData([REDACTED])")
+    }
+}
+
 /// The only Relay result shape visible to the evaluation runtime.
 pub(crate) struct RuntimeRelayConsultationResult {
     consultation_id: Ulid,
     outcome: RuntimeRelayOutcome,
-    output: Option<RuntimeRelayOutput>,
+    match_data: Option<RuntimeRelayMatchData>,
     acquired_at: OffsetDateTime,
 }
 
@@ -366,12 +380,12 @@ impl RuntimeRelayConsultationResult {
     pub(crate) fn new(
         consultation_id: Ulid,
         outcome: RuntimeRelayOutcome,
-        output: Option<RuntimeRelayOutput>,
+        match_data: Option<RuntimeRelayMatchData>,
         acquired_at: OffsetDateTime,
     ) -> Result<Self, RelayClientError> {
         let output_shape_valid = match outcome {
-            RuntimeRelayOutcome::Match => output.is_some(),
-            RuntimeRelayOutcome::NoMatch | RuntimeRelayOutcome::Ambiguous => output.is_none(),
+            RuntimeRelayOutcome::Match => match_data.is_some(),
+            RuntimeRelayOutcome::NoMatch | RuntimeRelayOutcome::Ambiguous => match_data.is_none(),
         };
         if !output_shape_valid {
             return Err(RelayClientError::InvalidResult);
@@ -379,7 +393,7 @@ impl RuntimeRelayConsultationResult {
         Ok(Self {
             consultation_id,
             outcome,
-            output,
+            match_data,
             acquired_at,
         })
     }
@@ -396,7 +410,10 @@ impl RuntimeRelayConsultationResult {
 
     #[must_use]
     pub(crate) const fn output(&self) -> Option<&RuntimeRelayOutput> {
-        self.output.as_ref()
+        match self.match_data.as_ref() {
+            Some(RuntimeRelayMatchData::ProjectedString(output)) => Some(output),
+            Some(RuntimeRelayMatchData::PresenceOnly) | None => None,
+        }
     }
 
     #[must_use]
@@ -468,16 +485,18 @@ impl ActivatedRelayConsultations for VerifiedRelayClient {
             RelayConsultationOutcome::NoMatch => RuntimeRelayOutcome::NoMatch,
             RelayConsultationOutcome::Ambiguous => RuntimeRelayOutcome::Ambiguous,
         };
-        let output = result
-            .data()
-            .map(|output| {
+        let match_data = match result.match_data() {
+            Some(RelayMatchData::ProjectedString(output)) => Some(
                 RuntimeRelayOutput::new(output.name(), Zeroizing::new(output.value().to_string()))
-            })
-            .transpose()?;
+                    .map(RuntimeRelayMatchData::ProjectedString)?,
+            ),
+            Some(RelayMatchData::PresenceOnly) => Some(RuntimeRelayMatchData::PresenceOnly),
+            None => None,
+        };
         RuntimeRelayConsultationResult::new(
             result.consultation_id(),
             outcome,
-            output,
+            match_data,
             result.provenance().relay_acquired_at(),
         )
     }
@@ -798,6 +817,7 @@ mod tests {
                     "registration_status",
                     Zeroizing::new(OUTPUT_VALUE.to_string()),
                 )
+                .map(RuntimeRelayMatchData::ProjectedString)
                 .expect("valid output"),
             ),
             OffsetDateTime::UNIX_EPOCH,
@@ -1182,7 +1202,7 @@ mod tests {
     }
 
     #[test]
-    fn result_shape_is_one_bounded_zeroizing_string_or_no_output() {
+    fn result_shape_is_sealed_projected_string_presence_or_no_match_data() {
         RuntimeRelayConsultationResult::new(
             Ulid::from_parts(2, 1),
             RuntimeRelayOutcome::Match,
@@ -1191,10 +1211,21 @@ mod tests {
         )
         .expect_err("match requires one output");
 
+        let presence = RuntimeRelayConsultationResult::new(
+            Ulid::from_parts(2, 1),
+            RuntimeRelayOutcome::Match,
+            Some(RuntimeRelayMatchData::PresenceOnly),
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .expect("presence-only is explicit match data");
+        assert!(presence.output().is_none());
+
         RuntimeRelayConsultationResult::new(
             Ulid::from_parts(2, 1),
             RuntimeRelayOutcome::NoMatch,
-            Some(RuntimeRelayOutput::new("status", Zeroizing::new("value".to_string())).unwrap()),
+            Some(RuntimeRelayMatchData::ProjectedString(
+                RuntimeRelayOutput::new("status", Zeroizing::new("value".to_string())).unwrap(),
+            )),
             OffsetDateTime::UNIX_EPOCH,
         )
         .expect_err("no_match cannot release output");

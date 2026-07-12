@@ -405,12 +405,12 @@ pub(in crate::config) fn validate_relay_activation_shape(
             }
         }
     }
-    if output_name.is_none() {
-        return invalid_claim_evidence_mode(
-            first,
-            "the initial Relay journey requires one extract claim to pin the shared string output",
-        );
-    }
+    // An extract claim pins one exact projected string output. When every
+    // claim is an existence rule, activation instead expects the profile's
+    // explicit `presence_only` result contract and derives the boolean solely
+    // from Relay's closed outcome. The two modes cannot be inferred from a
+    // missing name at the transport boundary; the server carries them as a
+    // sealed type and verifies the selected mode against Relay metadata.
     Ok(())
 }
 

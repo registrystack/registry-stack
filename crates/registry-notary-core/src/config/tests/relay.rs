@@ -239,7 +239,9 @@ fn initial_relay_activation_shape_is_one_shared_product_journey() {
 
     let mut exists_only = config.clone();
     exists_only.evidence.claims.remove(0);
-    expect_mode_error(&exists_only, "requires one extract claim");
+    exists_only
+        .validate()
+        .expect("an exists-only journey selects the explicit presence-only Relay contract");
 
     let mut different_profile = config.clone();
     let ClaimEvidenceMode::RegistryBacked { consultations } =
@@ -256,6 +258,14 @@ fn initial_relay_activation_shape_is_one_shared_product_journey() {
         &different_profile,
         "one shared profile, purpose, and input name",
     );
+
+    let mut different_output = config;
+    different_output.evidence.claims[1].rule = RuleConfig::Extract {
+        source: "person_status".to_string(),
+        field: "other_status".to_string(),
+    };
+    different_output.evidence.claims[1].value.value_type = "string".to_string();
+    expect_mode_error(&different_output, "one shared string output");
 }
 
 #[test]

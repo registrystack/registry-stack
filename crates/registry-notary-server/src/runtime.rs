@@ -82,12 +82,12 @@ pub(crate) use cel::validate_cel_claims_for_startup;
 use consultation::ConsultationGroupKeyV1;
 #[cfg(test)]
 pub(crate) use consultation::ConsultationGroupKeyV1;
-#[cfg(test)]
-use consultation::RuntimeRelayOutput;
 pub(crate) use consultation::{
     ActivatedRelayConsultations, EvaluationAuditSnapshot, RuntimeRelayConsultationResult,
 };
 use consultation::{EvaluationAuditCollector, RequestScopedRelayPlan, RuntimeRelayOutcome};
+#[cfg(test)]
+use consultation::{RuntimeRelayMatchData, RuntimeRelayOutput};
 use disclosure::*;
 pub use evaluation::*;
 pub(crate) use matching::*;

@@ -19,7 +19,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use registry_platform_crypto::canonicalize_json;
+use registry_platform_crypto::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::destination::input_pattern::{
     BoundedInputPattern, MAX_BOUNDED_INPUT_BYTES, MAX_BOUNDED_INPUT_PATTERN_BYTES,
 };
@@ -35,8 +35,8 @@ use registry_platform_httputil::destination::{
     MAX_DESTINATION_HEADER_VALUE_BYTES, MAX_SERVICE_HOP_OPERATION_TIMEOUT,
 };
 use serde::ser::{SerializeMap, SerializeStruct};
-use serde::{Serialize, Serializer};
-use serde_json::{json, Map, Value};
+use serde::{Deserialize, Serialize, Serializer};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use time::format_description::well_known::Rfc3339;
@@ -59,6 +59,16 @@ const MAX_RESULT_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_BYTES: usize = 8 * 1024;
 const MAX_WIRE_REQUEST_BYTES: usize = 18 * 1024;
 const MAX_PUBLIC_STRING_BYTES: u32 = 64 * 1024;
+const MAX_CANONICAL_CONTRACT_BYTES: u32 = 64 * 1024;
+const MAX_ACQUIRED_FIELDS: usize = 64;
+const MAX_RESPONSE_SCHEMA_DEPTH: usize = 8;
+const MAX_RESPONSE_SCHEMA_NODES: usize = 256;
+const MAX_RESPONSE_SCHEMA_EXPANDED_NODES: usize = 4_096;
+const MAX_RESPONSE_OBJECT_FIELDS: usize = 32;
+const MAX_RESPONSE_ARRAY_ITEMS: u16 = 256;
+const MAX_RESPONSE_FIELD_NAME_BYTES: usize = 128;
+const MAX_JSON_INTEROPERABLE_INTEGER: u64 = (1_u64 << 53) - 1;
+const PRESENCE_RESULT_GUARD_FIELD: &str = "__notary_presence_contract_guard";
 const RELAY_WORKLOAD: &str = "registry-notary";
 const CONTRACT_SCHEMA: &str = "registry.relay.consultation-contract.v1";
 const RESULT_SCHEMA: &str = "registry.relay.consultation-result.v1";
@@ -162,6 +172,33 @@ impl fmt::Debug for RelayExpectedOutput {
     }
 }
 
+/// The exact public result contract Notary expects Relay to expose.
+///
+/// Presence-only is a first-class mode rather than an absent output name. It
+/// can therefore be selected only by an exists-only claim journey and must be
+/// confirmed by the hash-pinned Relay metadata before evaluations are served.
+#[derive(Clone, PartialEq, Eq)]
+pub enum RelayExpectedResult {
+    ProjectedString(RelayExpectedOutput),
+    PresenceOnly,
+}
+
+impl RelayExpectedResult {
+    /// Require one exact non-null string output.
+    pub fn projected_string(name: impl Into<Box<str>>) -> Result<Self, RelayClientError> {
+        RelayExpectedOutput::new(name).map(Self::ProjectedString)
+    }
+}
+
+impl fmt::Debug for RelayExpectedResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RelayExpectedResult")
+            .field("contract", &"[REDACTED]")
+            .finish()
+    }
+}
+
 /// A bounded reloadable workload-JWT file binding.
 ///
 /// The path is restart-only. The current token is reopened, bounded,
@@ -218,7 +255,7 @@ pub struct RelayConsultationClient {
     pin: RelayProfilePin,
     purpose: Box<str>,
     input_name: Box<str>,
-    expected_output: RelayExpectedOutput,
+    expected_result: RelayExpectedResult,
 }
 
 impl RelayConsultationClient {
@@ -229,7 +266,7 @@ impl RelayConsultationClient {
         pin: RelayProfilePin,
         purpose: impl Into<Box<str>>,
         input_name: impl Into<Box<str>>,
-        expected_output: RelayExpectedOutput,
+        expected_result: RelayExpectedResult,
     ) -> Result<Self, RelayClientError> {
         let purpose = purpose.into();
         let input_name = input_name.into();
@@ -270,7 +307,7 @@ impl RelayConsultationClient {
             MAX_WIRE_REQUEST_BYTES,
         )
         .map_err(|_| RelayClientError::InvalidConfiguration)?;
-        let metadata_decoder = metadata_decoder(&input_name, &expected_output)?;
+        let metadata_decoder = metadata_decoder()?;
 
         Ok(Self {
             destination,
@@ -281,7 +318,7 @@ impl RelayConsultationClient {
             pin,
             purpose,
             input_name,
-            expected_output,
+            expected_result,
         })
     }
 
@@ -296,7 +333,7 @@ impl RelayConsultationClient {
             &self.pin,
             &self.purpose,
             &self.input_name,
-            self.expected_output.name(),
+            &self.expected_result,
         )
         .await?;
         let result_decoder = result_decoder(&profile)?;
@@ -324,7 +361,7 @@ async fn fetch_verified_profile(
     pin: &RelayProfilePin,
     purpose: &str,
     input_name: &str,
-    expected_output_name: &str,
+    expected_result: &RelayExpectedResult,
 ) -> Result<VerifiedRelayProfile, RelayClientError> {
     let deadline = operation_deadline()?;
     let authorization = authorization_before_deadline(credential, deadline).await?;
@@ -359,7 +396,7 @@ async fn fetch_verified_profile(
         pin,
         purpose,
         input_name,
-        expected_output_name,
+        expected_result,
     )?;
     require_deadline(deadline)?;
     Ok(profile)
@@ -400,6 +437,7 @@ impl VerifiedRelayClient {
     /// the exact pinned metadata profile. Readiness uses this operation so a
     /// rotated or expired token cannot remain ready on stale startup state.
     pub async fn verify_current_profile(&self) -> Result<(), RelayClientError> {
+        let expected_result = self.profile.result.expected();
         fetch_verified_profile(
             &self.destination,
             &self.metadata_request,
@@ -408,7 +446,7 @@ impl VerifiedRelayClient {
             &self.profile.pin,
             &self.profile.purpose,
             &self.profile.input_name,
-            &self.profile.output.name,
+            &expected_result,
         )
         .await
         .map(|_| ())
@@ -527,7 +565,7 @@ pub struct VerifiedRelayProfile {
     acquisition_class: RelayAcquisitionClass,
     integration_pack: RelayArtifactIdentity,
     policy: RelayPolicyIdentity,
-    output: VerifiedRelayOutput,
+    result: VerifiedRelayResult,
 }
 
 impl VerifiedRelayProfile {
@@ -547,8 +585,11 @@ impl VerifiedRelayProfile {
     }
 
     #[cfg(test)]
-    fn output_name(&self) -> &str {
-        &self.output.name
+    fn output_name(&self) -> Option<&str> {
+        match &self.result {
+            VerifiedRelayResult::ProjectedString(output) => Some(&output.name),
+            VerifiedRelayResult::PresenceOnly => None,
+        }
     }
 }
 
@@ -568,6 +609,24 @@ impl fmt::Debug for VerifiedRelayProfile {
 struct VerifiedRelayOutput {
     name: Box<str>,
     max_bytes: u32,
+}
+
+enum VerifiedRelayResult {
+    ProjectedString(VerifiedRelayOutput),
+    PresenceOnly,
+}
+
+impl VerifiedRelayResult {
+    fn expected(&self) -> RelayExpectedResult {
+        match self {
+            Self::ProjectedString(output) => {
+                RelayExpectedResult::ProjectedString(RelayExpectedOutput {
+                    name: output.name.clone(),
+                })
+            }
+            Self::PresenceOnly => RelayExpectedResult::PresenceOnly,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -634,6 +693,18 @@ impl fmt::Debug for RelayOutputValue {
     }
 }
 
+/// Match-only data contract verified against the pinned Relay profile.
+pub(crate) enum RelayMatchData {
+    ProjectedString(RelayOutputValue),
+    PresenceOnly,
+}
+
+impl fmt::Debug for RelayMatchData {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RelayMatchData([REDACTED])")
+    }
+}
+
 /// Relay observation facts bound to one completed consultation.
 pub struct RelayConsultationProvenance {
     relay_acquired_at: OffsetDateTime,
@@ -659,7 +730,7 @@ impl fmt::Debug for RelayConsultationProvenance {
 pub struct RelayConsultationResult {
     consultation_id: Ulid,
     outcome: RelayConsultationOutcome,
-    data: Option<RelayOutputValue>,
+    match_data: Option<RelayMatchData>,
     provenance: RelayConsultationProvenance,
 }
 
@@ -675,8 +746,17 @@ impl RelayConsultationResult {
     }
 
     #[must_use]
+    #[cfg(test)]
     pub const fn data(&self) -> Option<&RelayOutputValue> {
-        self.data.as_ref()
+        match self.match_data.as_ref() {
+            Some(RelayMatchData::ProjectedString(output)) => Some(output),
+            Some(RelayMatchData::PresenceOnly) | None => None,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn match_data(&self) -> Option<&RelayMatchData> {
+        self.match_data.as_ref()
     }
 
     #[must_use]
@@ -761,339 +841,52 @@ impl Serialize for SingleInput<'_> {
 // and result schemas into the platform decoder. No raw response bytes cross
 // this boundary.
 
-fn metadata_decoder(
-    input_name: &str,
-    output: &RelayExpectedOutput,
-) -> Result<ClosedJsonDecoder, RelayClientError> {
-    let acquired_field = acquired_string_contract_schema()?;
-    let public_output = object(
-        false,
-        vec![
-            field("type", true, string(false, 16)?)?,
-            field("nullable", true, ClosedJsonSchema::boolean(false))?,
-        ],
-    )?;
-    let input = object(
-        false,
-        vec![
-            field("type", true, string(false, 16)?)?,
-            field(
-                "max_bytes",
-                true,
-                integer(false, 1, INPUT_VALUE_MAX_BYTES as i64)?,
-            )?,
-            field(
-                "pattern",
-                true,
-                string(false, MAX_BOUNDED_INPUT_PATTERN_BYTES as u32)?,
-            )?,
-            field("canonicalization", true, string(false, 32)?)?,
-        ],
-    )?;
-    let subject = object(
-        false,
-        vec![
-            field("mode", true, string(false, 32)?)?,
-            field(
-                "selector_provenance",
-                true,
-                object(false, vec![field("type", true, string(false, 32)?)?])?,
-            )?,
-        ],
-    )?;
-    let integration_pack = artifact_identity_schema()?;
-    let acquisition = object(
-        false,
-        vec![
-            field("class", true, string(false, 32)?)?,
-            field(
-                "fields",
-                true,
-                object(false, vec![field(output.name(), true, acquired_field)?])?,
-            )?,
-        ],
-    )?;
-    let source_provenance = object(
-        false,
-        vec![
-            field(
-                "source_observed_at",
-                true,
-                object(false, vec![field("type", true, string(false, 32)?)?])?,
-            )?,
-            field(
-                "source_revision",
-                true,
-                object(false, vec![field("type", true, string(false, 32)?)?])?,
-            )?,
-        ],
-    )?;
-    let policy = object(
-        false,
-        vec![
-            field("id", true, string(false, PROFILE_ID_MAX_BYTES as u32)?)?,
-            field("hash", true, string(false, HASH_BYTES as u32)?)?,
-            field("decision_cache", true, string(false, 16)?)?,
-            field("max_decision_age_ms", true, integer(false, 1, 10_000)?)?,
-            field("unavailable", true, string(false, 16)?)?,
-        ],
-    )?;
-    let authorization = object(
-        false,
-        vec![
-            field(
-                "workload",
-                true,
-                string(false, PROFILE_ID_MAX_BYTES as u32)?,
-            )?,
-            field("required_scope", true, string(false, 256)?)?,
-            field(
-                "purposes",
-                true,
-                array(false, 1, string(false, PURPOSE_MAX_BYTES as u32)?)?,
-            )?,
-            field(
-                "legal_basis",
-                true,
-                string(false, PROFILE_ID_MAX_BYTES as u32)?,
-            )?,
-            field("policy", true, policy)?,
-            field(
-                "consent",
-                true,
-                object(
-                    false,
-                    vec![field("required", true, ClosedJsonSchema::boolean(false))?],
-                )?,
-            )?,
-            field(
-                "mandatory_obligations",
-                true,
-                array(false, 1, string(false, 1)?)?,
-            )?,
-        ],
-    )?;
-    let bounds = object(
-        false,
-        vec![
-            field("max_source_matches", true, integer(false, 1, 2)?)?,
-            field("max_disclosed_records", true, integer(false, 1, 1)?)?,
-            field("max_data_exchanges", true, integer(false, 1, 5)?)?,
-            field("max_credential_exchanges", true, integer(false, 0, 1)?)?,
-            field("max_data_destinations", true, integer(false, 1, 1)?)?,
-            field("max_source_bytes", true, integer(false, 1, 256 * 1024)?)?,
-            field("timeout_ms", true, integer(false, 1, 10_000)?)?,
-            field("max_in_flight", true, integer(false, 1, 16)?)?,
-            field("quota_per_minute", true, integer(false, 1, 60)?)?,
-            field("quota_burst", true, integer(false, 1, 10)?)?,
-        ],
-    )?;
-    let public_behavior = object(
-        false,
-        vec![
-            field("outcomes", true, array(false, 3, string(false, 16)?)?)?,
-            field("denial_code", true, string(false, 64)?)?,
-            field("denial_timing_profile", true, string(false, 64)?)?,
-        ],
-    )?;
-    let contract = object(
-        false,
-        vec![
-            field("schema", true, string(false, 64)?)?,
-            field("id", true, string(false, PROFILE_ID_MAX_BYTES as u32)?)?,
-            field(
-                "version",
-                true,
-                string(false, PROFILE_VERSION_MAX_BYTES as u32)?,
-            )?,
-            field(
-                "spec",
-                true,
-                object(
-                    false,
-                    vec![
-                        field("subject", true, subject)?,
-                        field(
-                            "inputs",
-                            true,
-                            object(false, vec![field(input_name, true, input)?])?,
-                        )?,
-                        field("integration_pack", true, integration_pack)?,
-                        field("acquisition", true, acquisition)?,
-                        field("source_provenance", true, source_provenance)?,
-                        field(
-                            "output",
-                            true,
-                            object(false, vec![field(output.name(), true, public_output)?])?,
-                        )?,
-                        field("authorization", true, authorization)?,
-                        field("bounds", true, bounds)?,
-                        field("public_behavior", true, public_behavior)?,
-                    ],
-                )?,
-            )?,
-        ],
-    )?;
+fn metadata_decoder() -> Result<ClosedJsonDecoder, RelayClientError> {
     let schema = object(
         false,
         vec![
             field("contract_hash", true, string(false, HASH_BYTES as u32)?)?,
-            field("contract", true, contract)?,
+            field(
+                "contract_json",
+                true,
+                string(false, MAX_CANONICAL_CONTRACT_BYTES)?,
+            )?,
         ],
     )?;
-
-    let output_name = output.name();
-    let mut projections = vec![
-        projection("m00", &["contract_hash"])?,
-        projection("m01", &["contract", "schema"])?,
-        projection("m02", &["contract", "id"])?,
-        projection("m03", &["contract", "version"])?,
-        projection("m04", &["contract", "spec", "subject", "mode"])?,
-        projection(
-            "m05",
-            &["contract", "spec", "subject", "selector_provenance", "type"],
-        )?,
-        projection("m06", &["contract", "spec", "inputs", input_name, "type"])?,
-        projection(
-            "m07",
-            &["contract", "spec", "inputs", input_name, "max_bytes"],
-        )?,
-        projection(
-            "m08",
-            &["contract", "spec", "inputs", input_name, "pattern"],
-        )?,
-        projection(
-            "m09",
-            &["contract", "spec", "inputs", input_name, "canonicalization"],
-        )?,
-        projection("m10", &["contract", "spec", "integration_pack", "id"])?,
-        projection("m11", &["contract", "spec", "integration_pack", "version"])?,
-        projection("m12", &["contract", "spec", "integration_pack", "hash"])?,
-        projection("m13", &["contract", "spec", "acquisition", "class"])?,
-        projection(
-            "m14",
-            &[
-                "contract",
-                "spec",
-                "acquisition",
-                "fields",
-                output_name,
-                "type",
-            ],
-        )?,
-        projection(
-            "m15",
-            &[
-                "contract",
-                "spec",
-                "acquisition",
-                "fields",
-                output_name,
-                "nullable",
-            ],
-        )?,
-    ];
-    projections.push(projection(
-        "m16",
-        &[
-            "contract",
-            "spec",
-            "acquisition",
-            "fields",
-            output_name,
-            "max_bytes",
-        ],
-    )?);
-    let next = projections.len();
-    for (offset, tokens) in [
-        vec![
-            "contract",
-            "spec",
-            "source_provenance",
-            "source_observed_at",
-            "type",
-        ],
-        vec![
-            "contract",
-            "spec",
-            "source_provenance",
-            "source_revision",
-            "type",
-        ],
-        vec!["contract", "spec", "output", output_name, "type"],
-        vec!["contract", "spec", "output", output_name, "nullable"],
-        vec!["contract", "spec", "authorization", "workload"],
-        vec!["contract", "spec", "authorization", "required_scope"],
-        vec!["contract", "spec", "authorization", "purposes", "0"],
-        vec!["contract", "spec", "authorization", "legal_basis"],
-        vec!["contract", "spec", "authorization", "policy", "id"],
-        vec!["contract", "spec", "authorization", "policy", "hash"],
-        vec![
-            "contract",
-            "spec",
-            "authorization",
-            "policy",
-            "decision_cache",
-        ],
-        vec![
-            "contract",
-            "spec",
-            "authorization",
-            "policy",
-            "max_decision_age_ms",
-        ],
-        vec!["contract", "spec", "authorization", "policy", "unavailable"],
-        vec!["contract", "spec", "authorization", "consent", "required"],
-        vec!["contract", "spec", "bounds", "max_source_matches"],
-        vec!["contract", "spec", "bounds", "max_disclosed_records"],
-        vec!["contract", "spec", "bounds", "max_data_exchanges"],
-        vec!["contract", "spec", "bounds", "max_credential_exchanges"],
-        vec!["contract", "spec", "bounds", "max_data_destinations"],
-        vec!["contract", "spec", "bounds", "max_source_bytes"],
-        vec!["contract", "spec", "bounds", "timeout_ms"],
-        vec!["contract", "spec", "bounds", "max_in_flight"],
-        vec!["contract", "spec", "bounds", "quota_per_minute"],
-        vec!["contract", "spec", "bounds", "quota_burst"],
-        vec!["contract", "spec", "public_behavior", "outcomes", "0"],
-        vec!["contract", "spec", "public_behavior", "outcomes", "1"],
-        vec!["contract", "spec", "public_behavior", "outcomes", "2"],
-        vec!["contract", "spec", "public_behavior", "denial_code"],
-        vec![
-            "contract",
-            "spec",
-            "public_behavior",
-            "denial_timing_profile",
-        ],
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        projections.push(projection(&format!("m{:02}", next + offset), &tokens)?);
-    }
-    let presence = vec![ClosedJsonPresenceProjection::new(
-        "m99",
-        [
-            "contract",
-            "spec",
-            "authorization",
-            "mandatory_obligations",
-            "0",
-        ],
-    )
-    .map_err(|_| RelayClientError::InvalidConfiguration)?];
-    ClosedJsonDecoder::new_with_presence(
+    ClosedJsonDecoder::new(
         schema,
         ClosedJsonRecordRoot::Object,
-        projections,
-        presence,
+        vec![
+            projection("m00", &["contract_hash"])?,
+            projection("m01", &["contract_json"])?,
+        ],
     )
     .map_err(|_| RelayClientError::InvalidConfiguration)
 }
 
 fn result_decoder(profile: &VerifiedRelayProfile) -> Result<ClosedJsonDecoder, RelayClientError> {
-    let output = &profile.output;
-    let data_value = string(true, output.max_bytes)?;
-    let data = object(true, vec![field(output.name.as_ref(), true, data_value)?])?;
+    let data = match &profile.result {
+        VerifiedRelayResult::ProjectedString(output) => object(
+            true,
+            vec![field(
+                output.name.as_ref(),
+                true,
+                string(true, output.max_bytes)?,
+            )?],
+        )?,
+        // The platform decoder intentionally rejects zero-field schemas. A
+        // single optional guard lets it validate `{}` while the parser below
+        // rejects the guard if it is ever present, preserving the exact empty
+        // object contract without releasing response bytes.
+        VerifiedRelayResult::PresenceOnly => object(
+            true,
+            vec![field(
+                PRESENCE_RESULT_GUARD_FIELD,
+                false,
+                ClosedJsonSchema::boolean(false),
+            )?],
+        )?,
+    };
     let provenance = object(
         false,
         vec![
@@ -1160,7 +953,7 @@ fn result_decoder(profile: &VerifiedRelayProfile) -> Result<ClosedJsonDecoder, R
             field("provenance", true, provenance)?,
         ],
     )?;
-    let projections = vec![
+    let mut projections = vec![
         projection("r00", &["schema"])?,
         projection("r01", &["consultation_id"])?,
         projection("r02", &["notary_evaluation_id"])?,
@@ -1183,10 +976,20 @@ fn result_decoder(profile: &VerifiedRelayProfile) -> Result<ClosedJsonDecoder, R
         projection("r19", &["provenance", "consent", "checked_at"])?,
         projection("r20", &["provenance", "consent", "expires_at"])?,
         projection("r21", &["provenance", "consent", "revocation_status"])?,
-        projection("r22", &["data", output.name.as_ref()])?,
     ];
-    let presence = vec![ClosedJsonPresenceProjection::new("r23", ["data"])
-        .map_err(|_| RelayClientError::InvalidConfiguration)?];
+    let presence = match &profile.result {
+        VerifiedRelayResult::ProjectedString(output) => {
+            projections.push(projection("r22", &["data", output.name.as_ref()])?);
+            vec![ClosedJsonPresenceProjection::new("r23", ["data"])
+                .map_err(|_| RelayClientError::InvalidConfiguration)?]
+        }
+        VerifiedRelayResult::PresenceOnly => vec![
+            ClosedJsonPresenceProjection::new("r22", ["data"])
+                .map_err(|_| RelayClientError::InvalidConfiguration)?,
+            ClosedJsonPresenceProjection::new("r23", ["data", PRESENCE_RESULT_GUARD_FIELD])
+                .map_err(|_| RelayClientError::InvalidConfiguration)?,
+        ],
+    };
     ClosedJsonDecoder::new_with_presence(
         schema,
         ClosedJsonRecordRoot::Object,
@@ -1201,175 +1004,381 @@ fn parse_verified_profile(
     pin: &RelayProfilePin,
     purpose: &str,
     input_name: &str,
-    expected_output_name: &str,
+    expected_result: &RelayExpectedResult,
 ) -> Result<VerifiedRelayProfile, RelayClientError> {
     let mut fields = FieldCursor::new(fields, RelayClientError::InvalidProfileMetadata);
     let returned_contract_hash = fields.take_hash()?;
-    fields.require_string(CONTRACT_SCHEMA)?;
-    fields.require_string(pin.id())?;
-    fields.require_string(pin.version())?;
-    fields.require_string("single_subject")?;
-    fields.require_string("workload_selected")?;
-    fields.require_string("string")?;
-    let input_max_bytes = fields.integer()?;
-    let input_max_bytes = u16::try_from(input_max_bytes)
-        .ok()
-        .filter(|value| usize::from(*value) <= INPUT_VALUE_MAX_BYTES)
-        .ok_or(RelayClientError::InvalidProfileMetadata)?;
-    let pattern = fields.string()?;
-    let input_pattern = BoundedInputPattern::compile(&pattern)
-        .map_err(|_| RelayClientError::InvalidProfileMetadata)?;
-    fields.require_string("identity")?;
-    let integration_pack_id = fields.take_bounded_id()?;
-    let integration_pack_version = fields.take_version()?;
-    let integration_pack_hash = fields.take_hash()?;
-    let acquisition_class_text = fields.string()?;
-    let acquisition_class = match acquisition_class_text.as_str() {
-        "source_projected_exact" => RelayAcquisitionClass::SourceProjectedExact,
-        "bounded_full_record" => RelayAcquisitionClass::BoundedFullRecord,
-        _ => return Err(RelayClientError::InvalidProfileMetadata),
-    };
-    fields.require_string("string")?;
-    fields.require_boolean(false)?;
-    let max_bytes = u32::try_from(fields.integer()?)
-        .ok()
-        .filter(|value| (1..=MAX_PUBLIC_STRING_BYTES).contains(value))
-        .ok_or(RelayClientError::InvalidProfileMetadata)?;
-    fields.require_string("absent")?;
-    fields.require_string("absent")?;
-    fields.require_string("string")?;
-    fields.require_boolean(false)?;
-    fields.require_string(RELAY_WORKLOAD)?;
-    let required_scope = fields.string()?;
-    if !valid_scope(&required_scope) {
-        return Err(RelayClientError::InvalidProfileMetadata);
-    }
-    fields.require_string(purpose)?;
-    let legal_basis = fields.string()?;
-    if legal_basis.is_empty() {
-        return Err(RelayClientError::InvalidProfileMetadata);
-    }
-    let policy_id = fields.take_bounded_id()?;
-    let policy_hash = fields.take_hash()?;
-    fields.require_string("disabled")?;
-    let max_decision_age_ms = fields.integer()?;
-    fields.require_string("deny")?;
-    fields.require_boolean(false)?;
-    let max_source_matches = fields.integer()?;
-    let max_disclosed_records = fields.integer()?;
-    let max_data_exchanges = fields.integer()?;
-    let max_credential_exchanges = fields.integer()?;
-    let max_data_destinations = fields.integer()?;
-    let max_source_bytes = fields.integer()?;
-    let timeout_ms = fields.integer()?;
-    let max_in_flight = usize::try_from(fields.integer()?)
-        .ok()
-        .filter(|value| (1..=16).contains(value))
-        .ok_or(RelayClientError::InvalidProfileMetadata)?;
-    let quota_per_minute = fields.integer()?;
-    let quota_burst = fields.integer()?;
-    fields.require_string("match")?;
-    fields.require_string("no_match")?;
-    fields.require_string("ambiguous")?;
-    fields.require_string("consultation.denied")?;
-    let denial_timing = fields.string()?;
-    if denial_timing.is_empty() {
-        return Err(RelayClientError::InvalidProfileMetadata);
-    }
-    fields.require_boolean(false)?;
+    let contract_json = fields.string()?;
     if !fields.exhausted() {
         return Err(RelayClientError::InvalidProfileMetadata);
     }
-
-    // The platform decoder has independently strict-parsed the response,
-    // rejected every undeclared member, and projected every scalar in the
-    // closed contract. Reconstructing that complete value makes the JCS hash
-    // independent of Relay's returned digest while keeping raw response bytes
-    // inside the platform-owned decoder.
-    let integration_pack = json!({
-        "id": integration_pack_id.as_ref(),
-        "version": integration_pack_version.as_ref(),
-        "hash": integration_pack_hash.as_ref(),
-    });
-    let consent = json!({"required": false});
-    let contract = json!({
-        "schema": CONTRACT_SCHEMA,
-        "id": pin.id(),
-        "version": pin.version(),
-        "spec": {
-            "subject": {
-                "mode": "single_subject",
-                "selector_provenance": {"type": "workload_selected"},
-            },
-            "inputs": single_json_member(input_name, json!({
-                "type": "string",
-                "max_bytes": input_max_bytes,
-                "pattern": pattern.as_str(),
-                "canonicalization": "identity",
-            })),
-            "integration_pack": integration_pack.clone(),
-            "acquisition": {
-                "class": acquisition_class_text.as_str(),
-                "fields": single_json_member(expected_output_name, json!({
-                    "type": "string",
-                    "nullable": false,
-                    "max_bytes": max_bytes,
-                })),
-            },
-            "source_provenance": {
-                "source_observed_at": {"type": "absent"},
-                "source_revision": {"type": "absent"},
-            },
-            "output": single_json_member(expected_output_name, json!({
-                "type": "string",
-                "nullable": false,
-            })),
-            "authorization": {
-                "workload": RELAY_WORKLOAD,
-                "required_scope": required_scope.as_str(),
-                "purposes": [purpose],
-                "legal_basis": legal_basis.as_str(),
-                "policy": {
-                    "id": policy_id.as_ref(),
-                    "hash": policy_hash.as_ref(),
-                    "decision_cache": "disabled",
-                    "max_decision_age_ms": max_decision_age_ms,
-                    "unavailable": "deny",
-                },
-                "consent": consent.clone(),
-                "mandatory_obligations": [],
-            },
-            "bounds": {
-                "max_source_matches": max_source_matches,
-                "max_disclosed_records": max_disclosed_records,
-                "max_data_exchanges": max_data_exchanges,
-                "max_credential_exchanges": max_credential_exchanges,
-                "max_data_destinations": max_data_destinations,
-                "max_source_bytes": max_source_bytes,
-                "timeout_ms": timeout_ms,
-                "max_in_flight": max_in_flight,
-                "quota_per_minute": quota_per_minute,
-                "quota_burst": quota_burst,
-            },
-            "public_behavior": {
-                "outcomes": ["match", "no_match", "ambiguous"],
-                "denial_code": "consultation.denied",
-                "denial_timing_profile": denial_timing.as_str(),
-            },
-        },
-    });
-    let computed_contract_hash = typed_json_hash(CONTRACT_HASH_DOMAIN, &contract)?;
+    let contract_value = parse_json_strict(contract_json.as_bytes())
+        .map_err(|_| RelayClientError::InvalidProfileMetadata)?;
+    let canonical =
+        canonicalize_json(&contract_value).map_err(|_| RelayClientError::InvalidProfileMetadata)?;
+    if canonical.as_slice() != contract_json.as_bytes() {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    }
+    let computed_contract_hash = typed_json_hash(CONTRACT_HASH_DOMAIN, &contract_value)?;
     if returned_contract_hash.as_ref() != computed_contract_hash
         || pin.contract_hash() != computed_contract_hash
     {
         return Err(RelayClientError::InvalidProfileMetadata);
     }
+    let contract: RelayContractDocument = serde_json::from_value(contract_value)
+        .map_err(|_| RelayClientError::InvalidProfileMetadata)?;
+    validate_contract_document(contract, pin, purpose, input_name, expected_result)
+}
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayContractDocument {
+    schema: String,
+    id: String,
+    version: String,
+    spec: RelayContractSpec,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayContractSpec {
+    subject: RelaySubjectContract,
+    inputs: std::collections::BTreeMap<String, RelayInputContract>,
+    integration_pack: RelayArtifactContract,
+    acquisition: RelayAcquisitionContract,
+    source_provenance: RelaySourceProvenanceContract,
+    #[serde(default)]
+    output_mode: RelayOutputMode,
+    output: std::collections::BTreeMap<String, RelayOutputContract>,
+    authorization: RelayAuthorizationContract,
+    bounds: RelayBoundsContract,
+    public_behavior: RelayPublicBehaviorContract,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelaySubjectContract {
+    mode: String,
+    selector_provenance: RelaySelectorProvenanceContract,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelaySelectorProvenanceContract {
+    #[serde(rename = "type")]
+    kind: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayInputContract {
+    #[serde(rename = "type")]
+    kind: String,
+    max_bytes: u16,
+    pattern: String,
+    canonicalization: String,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayArtifactContract {
+    id: String,
+    version: String,
+    hash: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayAcquisitionContract {
+    class: RelayAcquisitionClassContract,
+    fields: std::collections::BTreeMap<String, RelayResponseSchemaContract>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RelayAcquisitionClassContract {
+    SourceProjectedExact,
+    BoundedFullRecord,
+    MaterializedSnapshot,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum RelayResponseSchemaContract {
+    Object {
+        nullable: bool,
+        reject_unknown_fields: bool,
+        fields: std::collections::BTreeMap<String, RelayResponseFieldContract>,
+    },
+    Array {
+        nullable: bool,
+        max_items: u16,
+        items: Box<RelayResponseSchemaContract>,
+    },
+    String {
+        nullable: bool,
+        max_bytes: u32,
+    },
+    Boolean {
+        nullable: bool,
+    },
+    Integer {
+        nullable: bool,
+        minimum: i64,
+        maximum: i64,
+    },
+    Number {
+        nullable: bool,
+        minimum: i64,
+        maximum: i64,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayResponseFieldContract {
+    required: bool,
+    schema: Box<RelayResponseSchemaContract>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelaySourceProvenanceContract {
+    source_observed_at: RelayAbsentContract,
+    source_revision: RelayAbsentContract,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayAbsentContract {
+    #[serde(rename = "type")]
+    kind: String,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RelayOutputMode {
+    #[default]
+    ProjectedFields,
+    PresenceOnly,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayOutputContract {
+    #[serde(rename = "type")]
+    kind: RelayOutputType,
+    nullable: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RelayOutputType {
+    String,
+    Boolean,
+    Integer,
+    Number,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayAuthorizationContract {
+    workload: String,
+    required_scope: String,
+    purposes: Vec<String>,
+    legal_basis: String,
+    policy: RelayPolicyContract,
+    consent: RelayConsentContract,
+    mandatory_obligations: Vec<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayPolicyContract {
+    id: String,
+    hash: String,
+    decision_cache: String,
+    max_decision_age_ms: i64,
+    unavailable: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayConsentContract {
+    required: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayBoundsContract {
+    max_source_matches: i64,
+    max_disclosed_records: i64,
+    max_data_exchanges: i64,
+    max_credential_exchanges: i64,
+    max_data_destinations: i64,
+    max_source_bytes: i64,
+    timeout_ms: i64,
+    max_in_flight: i64,
+    quota_per_minute: i64,
+    quota_burst: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayPublicBehaviorContract {
+    outcomes: Vec<String>,
+    denial_code: String,
+    denial_timing_profile: String,
+}
+
+fn validate_contract_document(
+    contract: RelayContractDocument,
+    pin: &RelayProfilePin,
+    purpose: &str,
+    input_name: &str,
+    expected_result: &RelayExpectedResult,
+) -> Result<VerifiedRelayProfile, RelayClientError> {
+    if contract.schema != CONTRACT_SCHEMA
+        || contract.id != pin.id()
+        || contract.version != pin.version()
+        || contract.spec.subject.mode != "single_subject"
+        || contract.spec.subject.selector_provenance.kind != "workload_selected"
+    {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    }
+    let spec = contract.spec;
+    let (returned_input_name, input) = spec
+        .inputs
+        .first_key_value()
+        .filter(|_| spec.inputs.len() == 1)
+        .ok_or(RelayClientError::InvalidProfileMetadata)?;
+    if returned_input_name != input_name
+        || input.kind != "string"
+        || input.max_bytes == 0
+        || usize::from(input.max_bytes) > INPUT_VALUE_MAX_BYTES
+        || input.pattern.len() > MAX_BOUNDED_INPUT_PATTERN_BYTES
+        || input.canonicalization != "identity"
+    {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    }
+    let input_pattern = BoundedInputPattern::compile(&input.pattern)
+        .map_err(|_| RelayClientError::InvalidProfileMetadata)?;
+
+    let pack = spec.integration_pack;
+    if !stable_id(&pack.id, PROFILE_ID_MAX_BYTES)
+        || !canonical_version(&pack.version)
+        || !sha256_uri(&pack.hash)
+    {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    }
+    let acquisition_class = match spec.acquisition.class {
+        RelayAcquisitionClassContract::SourceProjectedExact => {
+            RelayAcquisitionClass::SourceProjectedExact
+        }
+        RelayAcquisitionClassContract::BoundedFullRecord => {
+            RelayAcquisitionClass::BoundedFullRecord
+        }
+        RelayAcquisitionClassContract::MaterializedSnapshot => {
+            return Err(RelayClientError::InvalidProfileMetadata)
+        }
+    };
+    validate_acquisition_contract(&spec.acquisition.fields)?;
+    if spec.source_provenance.source_observed_at.kind != "absent"
+        || spec.source_provenance.source_revision.kind != "absent"
+    {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    }
+
+    let authorization = spec.authorization;
+    if authorization.workload != RELAY_WORKLOAD
+        || !valid_scope(&authorization.required_scope)
+        || authorization.purposes.as_slice() != [purpose]
+        || !stable_id(&authorization.legal_basis, PROFILE_ID_MAX_BYTES)
+        || authorization.policy.decision_cache != "disabled"
+        || !(1..=10_000).contains(&authorization.policy.max_decision_age_ms)
+        || authorization.policy.unavailable != "deny"
+        || authorization.consent.required
+        || !authorization.mandatory_obligations.is_empty()
+        || !stable_id(&authorization.policy.id, PROFILE_ID_MAX_BYTES)
+        || !sha256_uri(&authorization.policy.hash)
+    {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    }
+    let bounds = spec.bounds;
+    if !(1..=2).contains(&bounds.max_source_matches)
+        || bounds.max_disclosed_records != 1
+        || !(1..=5).contains(&bounds.max_data_exchanges)
+        || !(0..=1).contains(&bounds.max_credential_exchanges)
+        || bounds.max_data_destinations != 1
+        || !(1..=256 * 1024).contains(&bounds.max_source_bytes)
+        || !(1..=10_000).contains(&bounds.timeout_ms)
+        || !(1..=16).contains(&bounds.max_in_flight)
+        || !(1..=60).contains(&bounds.quota_per_minute)
+        || !(1..=10).contains(&bounds.quota_burst)
+    {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    }
+    let public_behavior = spec.public_behavior;
+    if public_behavior.outcomes != ["match", "no_match", "ambiguous"]
+        || public_behavior.denial_code != "consultation.denied"
+        || public_behavior.denial_timing_profile.is_empty()
+        || public_behavior.denial_timing_profile.len() > 64
+        || public_behavior
+            .denial_timing_profile
+            .chars()
+            .any(char::is_control)
+    {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    }
+
+    let result = match (expected_result, spec.output_mode) {
+        (RelayExpectedResult::ProjectedString(expected), RelayOutputMode::ProjectedFields) => {
+            let output = spec
+                .output
+                .get(expected.name())
+                .filter(|_| spec.output.len() == 1)
+                .ok_or(RelayClientError::InvalidProfileMetadata)?;
+            if output.kind != RelayOutputType::String || output.nullable {
+                return Err(RelayClientError::InvalidProfileMetadata);
+            }
+            let RelayResponseSchemaContract::String {
+                nullable,
+                max_bytes,
+            } = spec
+                .acquisition
+                .fields
+                .get(expected.name())
+                .ok_or(RelayClientError::InvalidProfileMetadata)?
+            else {
+                return Err(RelayClientError::InvalidProfileMetadata);
+            };
+            if *nullable || !(1..=MAX_PUBLIC_STRING_BYTES).contains(max_bytes) {
+                return Err(RelayClientError::InvalidProfileMetadata);
+            }
+            VerifiedRelayResult::ProjectedString(VerifiedRelayOutput {
+                name: expected.name().into(),
+                max_bytes: *max_bytes,
+            })
+        }
+        (RelayExpectedResult::PresenceOnly, RelayOutputMode::PresenceOnly)
+            if spec.output.is_empty() =>
+        {
+            VerifiedRelayResult::PresenceOnly
+        }
+        _ => return Err(RelayClientError::InvalidProfileMetadata),
+    };
+
+    let integration_pack = json!({
+        "id": pack.id.as_str(),
+        "version": pack.version.as_str(),
+        "hash": pack.hash.as_str(),
+    });
+    let consent = json!({"required": false});
     let policy_preimage = json!({
         "schema": POLICY_SCHEMA,
         "enforcement_profile": POLICY_ENFORCEMENT_PROFILE,
         "rule_set": POLICY_RULE_SET,
-        "id": policy_id.as_ref(),
+        "id": authorization.policy.id.as_str(),
         "action": POLICY_ACTION,
         "target": {
             "profile": {"id": pin.id(), "version": pin.version()},
@@ -1377,44 +1386,151 @@ fn parse_verified_profile(
         },
         "authorization": {
             "workload": RELAY_WORKLOAD,
-            "required_scope": required_scope.as_str(),
+            "required_scope": authorization.required_scope.as_str(),
             "purposes": [purpose],
-            "legal_basis": legal_basis.as_str(),
+            "legal_basis": authorization.legal_basis.as_str(),
             "consent": consent,
             "mandatory_obligations": [],
         },
         "decision": {
             "permit": POLICY_PERMIT,
             "decision_cache": "disabled",
-            "max_decision_age_ms": max_decision_age_ms,
+            "max_decision_age_ms": authorization.policy.max_decision_age_ms,
             "unavailable": "deny",
         },
     });
-    if policy_hash.as_ref() != typed_json_hash(POLICY_HASH_DOMAIN, &policy_preimage)? {
+    if authorization.policy.hash != typed_json_hash(POLICY_HASH_DOMAIN, &policy_preimage)? {
         return Err(RelayClientError::InvalidProfileMetadata);
     }
+
     Ok(VerifiedRelayProfile {
         pin: pin.clone(),
         purpose: purpose.into(),
         input_name: input_name.into(),
-        input_max_bytes,
-        max_in_flight,
+        input_max_bytes: input.max_bytes,
+        max_in_flight: usize::try_from(bounds.max_in_flight)
+            .map_err(|_| RelayClientError::InvalidProfileMetadata)?,
         input_pattern,
         acquisition_class,
         integration_pack: RelayArtifactIdentity {
-            id: integration_pack_id,
-            version: integration_pack_version,
-            hash: integration_pack_hash,
+            id: pack.id.into_boxed_str(),
+            version: pack.version.into_boxed_str(),
+            hash: pack.hash.into_boxed_str(),
         },
         policy: RelayPolicyIdentity {
-            id: policy_id,
-            hash: policy_hash,
+            id: authorization.policy.id.into_boxed_str(),
+            hash: authorization.policy.hash.into_boxed_str(),
         },
-        output: VerifiedRelayOutput {
-            name: expected_output_name.into(),
-            max_bytes,
-        },
+        result,
     })
+}
+
+fn validate_acquisition_contract(
+    fields: &std::collections::BTreeMap<String, RelayResponseSchemaContract>,
+) -> Result<(), RelayClientError> {
+    if fields.is_empty() || fields.len() > MAX_ACQUIRED_FIELDS {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    }
+    for (name, schema) in fields {
+        if !stable_id(name, OUTPUT_NAME_MAX_BYTES) {
+            return Err(RelayClientError::InvalidProfileMetadata);
+        }
+        let mut nodes = 0;
+        let expanded = validate_response_schema_contract(schema, 1, &mut nodes)?;
+        if expanded > MAX_RESPONSE_SCHEMA_EXPANDED_NODES {
+            return Err(RelayClientError::InvalidProfileMetadata);
+        }
+    }
+    Ok(())
+}
+
+fn validate_response_schema_contract(
+    schema: &RelayResponseSchemaContract,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<usize, RelayClientError> {
+    *nodes = nodes
+        .checked_add(1)
+        .ok_or(RelayClientError::InvalidProfileMetadata)?;
+    if depth > MAX_RESPONSE_SCHEMA_DEPTH || *nodes > MAX_RESPONSE_SCHEMA_NODES {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    }
+    match schema {
+        RelayResponseSchemaContract::Object {
+            nullable,
+            reject_unknown_fields,
+            fields,
+        } => {
+            let _ = nullable;
+            if !reject_unknown_fields
+                || fields.is_empty()
+                || fields.len() > MAX_RESPONSE_OBJECT_FIELDS
+            {
+                return Err(RelayClientError::InvalidProfileMetadata);
+            }
+            let mut expanded = 1_usize;
+            for (name, field) in fields {
+                if name.is_empty()
+                    || name.len() > MAX_RESPONSE_FIELD_NAME_BYTES
+                    || name.chars().any(char::is_control)
+                {
+                    return Err(RelayClientError::InvalidProfileMetadata);
+                }
+                let _ = field.required;
+                let child = validate_response_schema_contract(&field.schema, depth + 1, nodes)?;
+                expanded = expanded
+                    .checked_add(child)
+                    .ok_or(RelayClientError::InvalidProfileMetadata)?;
+            }
+            Ok(expanded)
+        }
+        RelayResponseSchemaContract::Array {
+            nullable,
+            max_items,
+            items,
+        } => {
+            let _ = nullable;
+            if !(1..=MAX_RESPONSE_ARRAY_ITEMS).contains(max_items) {
+                return Err(RelayClientError::InvalidProfileMetadata);
+            }
+            let child = validate_response_schema_contract(items, depth + 1, nodes)?;
+            usize::from(*max_items)
+                .checked_mul(child)
+                .and_then(|expanded| expanded.checked_add(1))
+                .ok_or(RelayClientError::InvalidProfileMetadata)
+        }
+        RelayResponseSchemaContract::String {
+            nullable,
+            max_bytes,
+        } => {
+            let _ = nullable;
+            (1..=MAX_PUBLIC_STRING_BYTES)
+                .contains(max_bytes)
+                .then_some(1)
+                .ok_or(RelayClientError::InvalidProfileMetadata)
+        }
+        RelayResponseSchemaContract::Boolean { nullable } => {
+            let _ = nullable;
+            Ok(1)
+        }
+        RelayResponseSchemaContract::Integer {
+            nullable,
+            minimum,
+            maximum,
+        }
+        | RelayResponseSchemaContract::Number {
+            nullable,
+            minimum,
+            maximum,
+        } => {
+            let _ = nullable;
+            (*minimum <= *maximum
+                && minimum.unsigned_abs() <= MAX_JSON_INTEROPERABLE_INTEGER
+                && maximum.unsigned_abs() <= MAX_JSON_INTEROPERABLE_INTEGER)
+                .then_some(1)
+                .ok_or(RelayClientError::InvalidProfileMetadata)
+        }
+    }
 }
 
 fn parse_result(
@@ -1422,7 +1538,6 @@ fn parse_result(
     evaluation_id: &str,
     profile: &VerifiedRelayProfile,
 ) -> Result<RelayConsultationResult, RelayClientError> {
-    let output = &profile.output;
     let mut fields = FieldCursor::new(fields, RelayClientError::InvalidResult);
     fields.require_string(RESULT_SCHEMA)?;
     let consultation_id_text = fields.string()?;
@@ -1457,30 +1572,49 @@ fn parse_result(
     fields.require_null()?;
     fields.require_null()?;
     fields.require_string("not_applicable")?;
-    let scalar = fields.scalar()?;
-    let data_present = fields.boolean()?;
+    let match_data = match &profile.result {
+        VerifiedRelayResult::ProjectedString(output) => {
+            let scalar = fields.scalar()?;
+            let data_present = fields.boolean()?;
+            match (outcome, data_present, scalar) {
+                (RelayConsultationOutcome::Match, true, ProjectedJsonScalar::String(value)) => {
+                    Some(RelayMatchData::ProjectedString(RelayOutputValue {
+                        name: output.name.clone(),
+                        value,
+                    }))
+                }
+                (
+                    RelayConsultationOutcome::NoMatch | RelayConsultationOutcome::Ambiguous,
+                    false,
+                    ProjectedJsonScalar::Null,
+                ) => None,
+                _ => return Err(RelayClientError::InvalidResult),
+            }
+        }
+        VerifiedRelayResult::PresenceOnly => {
+            let data_present = fields.boolean()?;
+            let guard_present = fields.boolean()?;
+            if guard_present {
+                return Err(RelayClientError::InvalidResult);
+            }
+            match (outcome, data_present) {
+                (RelayConsultationOutcome::Match, true) => Some(RelayMatchData::PresenceOnly),
+                (
+                    RelayConsultationOutcome::NoMatch | RelayConsultationOutcome::Ambiguous,
+                    false,
+                ) => None,
+                _ => return Err(RelayClientError::InvalidResult),
+            }
+        }
+    };
     if !fields.exhausted() {
         return Err(RelayClientError::InvalidResult);
     }
-    let data = match (outcome, data_present, scalar) {
-        (RelayConsultationOutcome::Match, true, ProjectedJsonScalar::String(value)) => {
-            Some(RelayOutputValue {
-                name: output.name.clone(),
-                value,
-            })
-        }
-        (
-            RelayConsultationOutcome::NoMatch | RelayConsultationOutcome::Ambiguous,
-            false,
-            ProjectedJsonScalar::Null,
-        ) => None,
-        _ => return Err(RelayClientError::InvalidResult),
-    };
 
     Ok(RelayConsultationResult {
         consultation_id,
         outcome,
-        data,
+        match_data,
         provenance: RelayConsultationProvenance { relay_acquired_at },
     })
 }
@@ -1513,13 +1647,6 @@ impl FieldCursor {
         }
     }
 
-    fn integer(&mut self) -> Result<i64, RelayClientError> {
-        match self.scalar()? {
-            ProjectedJsonScalar::Integer(value) => Ok(value),
-            _ => Err(self.error),
-        }
-    }
-
     fn boolean(&mut self) -> Result<bool, RelayClientError> {
         match self.scalar()? {
             ProjectedJsonScalar::Boolean(value) => Ok(value),
@@ -1533,32 +1660,10 @@ impl FieldCursor {
             .ok_or(self.error)
     }
 
-    fn require_boolean(&mut self, expected: bool) -> Result<(), RelayClientError> {
-        (self.boolean()? == expected)
-            .then_some(())
-            .ok_or(self.error)
-    }
-
     fn require_null(&mut self) -> Result<(), RelayClientError> {
         matches!(self.scalar()?, ProjectedJsonScalar::Null)
             .then_some(())
             .ok_or(self.error)
-    }
-
-    fn take_bounded_id(&mut self) -> Result<Box<str>, RelayClientError> {
-        let mut value = self.string()?;
-        if !stable_id(&value, PROFILE_ID_MAX_BYTES) {
-            return Err(RelayClientError::InvalidProfileMetadata);
-        }
-        Ok(std::mem::take(&mut *value).into_boxed_str())
-    }
-
-    fn take_version(&mut self) -> Result<Box<str>, RelayClientError> {
-        let mut value = self.string()?;
-        if !canonical_version(&value) {
-            return Err(RelayClientError::InvalidProfileMetadata);
-        }
-        Ok(std::mem::take(&mut *value).into_boxed_str())
     }
 
     fn take_hash(&mut self) -> Result<Box<str>, RelayClientError> {
@@ -1572,21 +1677,6 @@ impl FieldCursor {
     fn exhausted(&self) -> bool {
         self.fields.as_slice().is_empty()
     }
-}
-
-fn acquired_string_contract_schema() -> Result<ClosedJsonSchema, RelayClientError> {
-    object(
-        false,
-        vec![
-            field("type", true, string(false, 16)?)?,
-            field("nullable", true, ClosedJsonSchema::boolean(false))?,
-            field(
-                "max_bytes",
-                true,
-                integer(false, 1, i64::from(MAX_PUBLIC_STRING_BYTES))?,
-            )?,
-        ],
-    )
 }
 
 fn artifact_identity_schema() -> Result<ClosedJsonSchema, RelayClientError> {
@@ -1611,26 +1701,8 @@ fn object(
     ClosedJsonSchema::object(nullable, fields).map_err(|_| RelayClientError::InvalidConfiguration)
 }
 
-fn array(
-    nullable: bool,
-    max_items: u16,
-    items: ClosedJsonSchema,
-) -> Result<ClosedJsonSchema, RelayClientError> {
-    ClosedJsonSchema::array(nullable, max_items, items)
-        .map_err(|_| RelayClientError::InvalidConfiguration)
-}
-
 fn string(nullable: bool, max_bytes: u32) -> Result<ClosedJsonSchema, RelayClientError> {
     ClosedJsonSchema::string(nullable, max_bytes)
-        .map_err(|_| RelayClientError::InvalidConfiguration)
-}
-
-fn integer(
-    nullable: bool,
-    minimum: i64,
-    maximum: i64,
-) -> Result<ClosedJsonSchema, RelayClientError> {
-    ClosedJsonSchema::integer(nullable, minimum, maximum)
         .map_err(|_| RelayClientError::InvalidConfiguration)
 }
 
@@ -1645,12 +1717,6 @@ fn field(
 fn projection(name: &str, tokens: &[&str]) -> Result<ClosedJsonScalarProjection, RelayClientError> {
     ClosedJsonScalarProjection::new(name, tokens.iter().copied())
         .map_err(|_| RelayClientError::InvalidConfiguration)
-}
-
-fn single_json_member(name: &str, value: Value) -> Value {
-    let mut object = Map::new();
-    object.insert(name.to_owned(), value);
-    Value::Object(object)
 }
 
 fn typed_json_hash(domain: &[u8], value: &Value) -> Result<String, RelayClientError> {

@@ -24,15 +24,16 @@
             _key: &ConsultationGroupKeyV1,
         ) -> Result<RuntimeRelayConsultationResult, crate::relay_client::RelayClientError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            let output = matches!(self.outcome, RuntimeRelayOutcome::Match)
+            let match_data = matches!(self.outcome, RuntimeRelayOutcome::Match)
                 .then(|| {
                     RuntimeRelayOutput::new("registration_status", Zeroizing::new("ACTIVE".to_string()))
+                        .map(RuntimeRelayMatchData::ProjectedString)
                 })
                 .transpose()?;
             RuntimeRelayConsultationResult::new(
                 Ulid::from_parts(2, 1),
                 self.outcome,
-                output,
+                match_data,
                 OffsetDateTime::UNIX_EPOCH,
             )
         }
@@ -130,7 +131,7 @@
     }
 
     #[test]
-    fn relay_exists_match_does_not_copy_the_semantic_output_value() {
+    fn relay_exists_match_materializes_presence_without_source_output() {
         let claim = registry_claim(
             "enrollment-known",
             RuleConfig::Exists {
@@ -141,13 +142,7 @@
         let result = RuntimeRelayConsultationResult::new(
             Ulid::from_parts(2, 1),
             RuntimeRelayOutcome::Match,
-            Some(
-                RuntimeRelayOutput::new(
-                    "registration_status",
-                    Zeroizing::new("ACTIVE-SENSITIVE".to_string()),
-                )
-                .expect("bounded output"),
-            ),
+            Some(RuntimeRelayMatchData::PresenceOnly),
             OffsetDateTime::UNIX_EPOCH,
         )
         .expect("valid Relay match");
@@ -157,7 +152,6 @@
         let wire = serde_json::to_string(&sources).expect("presence sentinel serializes");
 
         assert_eq!(sources.get("enrollment"), Some(&json!({})));
-        assert!(!wire.contains("ACTIVE-SENSITIVE"));
         assert!(!wire.contains("registration_status"));
     }
 
@@ -208,6 +202,24 @@
                 field: "registration_status".to_string(),
             },
             "string",
+        );
+        let (result, audit, activated, source) =
+            audited_registry_evaluation(claim, RuntimeRelayOutcome::Ambiguous).await;
+
+        assert!(matches!(result, Err(EvidenceError::SourceAmbiguous)));
+        assert_relay_audit(audit);
+        assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn relay_ambiguous_exists_remains_fail_closed() {
+        let claim = registry_claim(
+            "enrollment-status",
+            RuleConfig::Exists {
+                source: "enrollment".to_string(),
+            },
+            "boolean",
         );
         let (result, audit, activated, source) =
             audited_registry_evaluation(claim, RuntimeRelayOutcome::Ambiguous).await;
@@ -874,7 +886,7 @@
                 policy_id: "lab.oots-birth-evidence.governed-evidence.v1".to_string(),
                 policy_hash:
                     "sha256:5555555555555555555555555555555555555555555555555555555555555555"
-                        .to_string(),
+                    .to_string(),
                 unsupported_odrl_terms: Vec::new(),
             },
         );
@@ -922,20 +934,20 @@
         assert_eq!(generated_by.pack_version.as_deref(), Some("v1"));
         assert_eq!(results[0].disclosure, "value");
     }
-#[test]
-fn internal_claim_result_debug_redacts_relay_correlation_and_value() {
-    let mut result = test_claim_result(
-        "registry-backed-claim",
-        serde_json::json!("registry-value-SENSITIVE"),
-        BTreeSet::new(),
-    );
-    result
-        .relay_consultation_ids
-        .insert("01JRELAYCORRELATIONSENSITIVE".to_string());
+    #[test]
+    fn internal_claim_result_debug_redacts_relay_correlation_and_value() {
+        let mut result = test_claim_result(
+            "registry-backed-claim",
+            serde_json::json!("registry-value-SENSITIVE"),
+            BTreeSet::new(),
+        );
+        result
+            .relay_consultation_ids
+            .insert("01JRELAYCORRELATIONSENSITIVE".to_string());
 
-    let rendered = format!("{result:?}");
+        let rendered = format!("{result:?}");
 
-    assert!(!rendered.contains("01JRELAYCORRELATIONSENSITIVE"));
-    assert!(!rendered.contains("registry-value-SENSITIVE"));
-    assert!(rendered.contains("relay_consultation_ids: \"[REDACTED]\""));
-}
+        assert!(!rendered.contains("01JRELAYCORRELATIONSENSITIVE"));
+        assert!(!rendered.contains("registry-value-SENSITIVE"));
+        assert!(rendered.contains("relay_consultation_ids: \"[REDACTED]\""));
+    }

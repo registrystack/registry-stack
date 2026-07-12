@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use crate::relay_client::{
-    RelayClientError, RelayConsultationClient, RelayExpectedOutput, RelayProfilePin,
+    RelayClientError, RelayConsultationClient, RelayExpectedResult, RelayProfilePin,
     RelayWorkloadCredentialFile,
 };
 use crate::runtime::ActivatedRelayConsultations;
@@ -42,8 +42,7 @@ pub(super) async fn activate_relay_from_config(
             .map_err(|_| StandaloneServerError::RelayActivation)?,
         plan.purpose,
         plan.input_name,
-        RelayExpectedOutput::new(plan.output_name)
-            .map_err(|_| StandaloneServerError::RelayActivation)?,
+        plan.expected_result,
     )
     .map_err(map_relay_client_error)?;
     let verified = client
@@ -83,7 +82,7 @@ struct RelayActivationPlan<'a> {
     contract_hash: &'a str,
     purpose: &'a str,
     input_name: &'a str,
-    output_name: &'a str,
+    expected_result: RelayExpectedResult,
 }
 
 fn activation_plan(
@@ -116,7 +115,7 @@ fn activation_plan(
         .filter(|_| consultation.inputs.len() == 1)
         .map(|(name, _)| name.as_str())
         .ok_or(StandaloneServerError::InvalidRelayActivationPlan)?;
-    let output_name = config
+    let expected_result = config
         .evidence
         .claims
         .iter()
@@ -126,7 +125,10 @@ fn activation_plan(
             }
             _ => None,
         })
-        .ok_or(StandaloneServerError::InvalidRelayActivationPlan)?;
+        .map(RelayExpectedResult::projected_string)
+        .transpose()
+        .map_err(|_| StandaloneServerError::InvalidRelayActivationPlan)?
+        .unwrap_or(RelayExpectedResult::PresenceOnly);
     Ok(Some(RelayActivationPlan {
         connection,
         profile_id: &consultation.profile.id,
@@ -137,7 +139,7 @@ fn activation_plan(
             .as_deref()
             .ok_or(StandaloneServerError::InvalidRelayActivationPlan)?,
         input_name,
-        output_name,
+        expected_result,
     }))
 }
 
@@ -248,6 +250,43 @@ evidence:
         assert!(matches!(
             error,
             StandaloneServerError::RelayCredentialsRejected
+        ));
+    }
+
+    #[test]
+    fn exists_only_config_selects_the_sealed_presence_result_contract() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let config = config_with_claim(
+            r#"    - id: birth-record-exists
+      title: Birth record exists
+      version: "1"
+      subject_type: person
+      evidence_mode:
+        type: registry_backed
+        consultations:
+          birth_record:
+            profile:
+              id: opencrvs.birth-record-exists.exact
+              version: "1"
+              contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            inputs:
+              uin: target.id
+      purpose: civil-registration-verification
+      required_scopes: [registry:consult:opencrvs]
+      value:
+        type: boolean
+      rule:
+        type: exists
+        source: birth_record"#,
+            &directory.path().join("relay.jwt"),
+        );
+
+        let plan = activation_plan(&config)
+            .expect("activation plan is valid")
+            .expect("Registry-backed activation is present");
+        assert!(matches!(
+            plan.expected_result,
+            RelayExpectedResult::PresenceOnly
         ));
     }
 }
