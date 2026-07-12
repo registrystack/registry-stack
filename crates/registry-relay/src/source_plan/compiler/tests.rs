@@ -49,6 +49,24 @@ const DHIS2_NEGATIVE_SECURITY: &[u8] = include_bytes!(
 );
 const DHIS2_MINIMIZATION: &[u8] =
     include_bytes!("../../../profiles/dhis2-2.41.9-enrollment-status/evidence/minimization.json");
+const OPENCRVS_PACK: &[u8] = include_bytes!(
+    "../../../profiles/opencrvs-1.9.0-rc.1-farajaland-birth-record-exists/integration-pack.json"
+);
+const OPENCRVS_CONTRACT: &[u8] = include_bytes!(
+    "../../../profiles/opencrvs-1.9.0-rc.1-farajaland-birth-record-exists/public-contract.json"
+);
+const OPENCRVS_BINDING: &[u8] = include_bytes!(
+    "../../../profiles/opencrvs-1.9.0-rc.1-farajaland-birth-record-exists/private-binding.example.json"
+);
+const OPENCRVS_CONFORMANCE: &[u8] = include_bytes!(
+    "../../../profiles/opencrvs-1.9.0-rc.1-farajaland-birth-record-exists/evidence/conformance.json"
+);
+const OPENCRVS_NEGATIVE_SECURITY: &[u8] = include_bytes!(
+    "../../../profiles/opencrvs-1.9.0-rc.1-farajaland-birth-record-exists/evidence/negative-security.json"
+);
+const OPENCRVS_MINIMIZATION: &[u8] = include_bytes!(
+    "../../../profiles/opencrvs-1.9.0-rc.1-farajaland-birth-record-exists/evidence/minimization.json"
+);
 const DHIS2_PACK_HASH: &str =
     "sha256:ec0136be504e3f98539f9e0ec10e59532ff793dbadc2e66ea1c017a632da6ac4";
 const DHIS2_POLICY_HASH: &str =
@@ -57,6 +75,14 @@ const DHIS2_CONTRACT_HASH: &str =
     "sha256:a2d0e7588bc1bbeb0caf3247703a15d81830875f5e84dd257f7dc163d3a4ecb6";
 const DHIS2_BINDING_HASH: &str =
     "sha256:aa6172d3995b11dbc082ce744dcb46c40d5c28217d4e325a323fa595f42410ce";
+const OPENCRVS_PACK_HASH: &str =
+    "sha256:2ee2dff4fb6859d6ff58c222fc08dac1a871580324c1d6b00e1af5cdee2ce466";
+const OPENCRVS_POLICY_HASH: &str =
+    "sha256:2a03447ccf160d32e2fac3debee8d7c931f53a0fe28a368c79407ed476324754";
+const OPENCRVS_CONTRACT_HASH: &str =
+    "sha256:4fdd83fdee1a86b7eea610c59e2ee44d7936bbcb44d837bd64c173a3c5b3f411";
+const OPENCRVS_BINDING_HASH: &str =
+    "sha256:76d31f5c07639935953fa1744cefb37a640f1f301d94c5a3b5a6d212223d6de2";
 
 fn vector_manifest() -> &'static Value {
     static MANIFEST: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
@@ -212,6 +238,152 @@ fn fixture() -> Fixture {
     }
 }
 
+fn open_crvs_fixture() -> Fixture {
+    let mut fixture = fixture();
+    let input = json!({
+        "type": "string",
+        "max_bytes": 128,
+        "pattern": "^[0-9]+$",
+        "canonicalization": "identity"
+    });
+    fixture.pack_value["spec"]["input_slots"] = json!({"uin": input.clone()});
+    fixture.contract_value["spec"]["inputs"] = json!({"uin": input});
+
+    let record_schema = json!({
+        "type": "object",
+        "nullable": false,
+        "reject_unknown_fields": true,
+        "fields": {
+            "id": {
+                "required": true,
+                "schema": {"type": "string", "nullable": false, "max_bytes": 256}
+            },
+            "name": {
+                "required": false,
+                "schema": {
+                    "type": "array",
+                    "nullable": false,
+                    "max_items": 8,
+                    "items": {
+                        "type": "object",
+                        "nullable": false,
+                        "reject_unknown_fields": true,
+                        "fields": {
+                            "use": {
+                                "required": false,
+                                "schema": {"type": "string", "nullable": false, "max_bytes": 64}
+                            },
+                            "text": {
+                                "required": false,
+                                "schema": {"type": "string", "nullable": false, "max_bytes": 512}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let acquisition = json!({
+        "class": "bounded_full_record",
+        "fields": {"record": record_schema.clone()}
+    });
+    fixture.pack_value["spec"]["acquisition"] = acquisition.clone();
+    fixture.contract_value["spec"]["acquisition"] = acquisition;
+    fixture.pack_value["spec"]["reviewed_acquisition"] = json!({
+        "class": "bounded_full_record",
+        "fields": {"record": record_schema.clone()},
+        "control_fields": {},
+        "selector": {
+            "type": "http_anchor",
+            "input": "uin",
+            "operation": "opencrvs-search",
+            "location": {"type": "codec", "role": "dci_idtype_value"}
+        },
+        "cardinality": "probe_two",
+        "reject_unknown_fields": true
+    });
+    fixture.pack_value["spec"]["output_mode"] = json!("presence_only");
+    fixture.contract_value["spec"]["output_mode"] = json!("presence_only");
+    fixture.pack_value["spec"]["output"] = json!({});
+    fixture.contract_value["spec"]["output"] = json!({});
+
+    fixture.pack_value["spec"]["plan"]["operations"] = json!([{
+        "id": "opencrvs-search",
+        "method": "READ_ONLY_POST",
+        "destination_slot": "registry-data",
+        "path": "/registry/sync/search",
+        "query": {},
+        "headers": {},
+        "body": null,
+        "request_codec": "open_crvs_dci_exact_v1",
+        "step_limits": {
+            "max_request_bytes": 16384,
+            "timeout_ms": 5000,
+            "max_in_flight": 1
+        },
+        "auth": {"mode": "oauth_client_credentials"},
+        "acquisition_fields": [],
+        "control_fields": [],
+        "projection": {"mechanism": "bounded_full_record"},
+        "response": {
+            "max_bytes": 65536,
+            "max_records": 2,
+            "normalization": "json_array_probe_two",
+            "cardinality": {"mechanism": "open_crvs_dci_probe_two"},
+            "schema": {
+                "type": "array",
+                "nullable": false,
+                "max_items": 2,
+                "items": {
+                    "type": "object",
+                    "nullable": false,
+                    "reject_unknown_fields": true,
+                    "fields": {
+                        "record": {"required": true, "schema": record_schema}
+                    }
+                }
+            },
+            "accepted_statuses": [200],
+            "output_mapping": {}
+        }
+    }]);
+    fixture.pack_value["spec"]["plan"]["steps"] = json!(["opencrvs-search"]);
+    fixture.pack_value["spec"]["plan"]
+        .as_object_mut()
+        .expect("plan")
+        .remove("step_conditions");
+    let credential_request = fixture.pack_value["spec"]["plan"]["credential_operation"]["request"]
+        .as_object_mut()
+        .expect("credential request");
+    credential_request.remove("audience");
+    credential_request.remove("scopes");
+    credential_request["timeout_ms"] = json!(5_000);
+    fixture.pack_value["spec"]["plan"]["credential_operation"]["path"] =
+        json!("/oauth2/client/token");
+    fixture.pack_value["spec"]["plan"]["credential_operation"]["response"] = json!({
+        "max_bytes": 16384,
+        "accepted_statuses": [200],
+        "schema": "strict_access_token_bearer_no_expiry",
+        "access_token_max_bytes": 4089,
+        "token_type": "Bearer",
+        "cache_mode": "disabled"
+    });
+    fixture.pack_value["spec"]["bounds"]["max_data_exchanges"] = json!(2);
+    fixture.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(180_224);
+    fixture.contract_value["spec"]["bounds"] = fixture.pack_value["spec"]["bounds"].clone();
+    fixture.pack_value["spec"]["deployment_parameters"] = json!({});
+    fixture.binding_value["deployment_parameters"] = json!({});
+    fixture.binding_value["credential_destination"]["origin"] =
+        fixture.binding_value["data_destination"]["origin"].clone();
+    fixture.binding_value["limits"]["max_source_bytes"] = json!(180_224);
+    fixture.binding_value["limits"]
+        .as_object_mut()
+        .expect("binding limits")
+        .remove("max_token_lifetime_ms");
+    fixture.refresh_all();
+    fixture
+}
+
 fn dhis2_fixture() -> Fixture {
     let pack = DHIS2_PACK.to_vec();
     let pack_value = parse_json_strict(&pack).expect("strict DHIS2 pack JSON");
@@ -221,6 +393,27 @@ fn dhis2_fixture() -> Fixture {
     let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
     let binding = DHIS2_BINDING.to_vec();
     let binding_value = parse_json_strict(&binding).expect("strict DHIS2 binding JSON");
+    Fixture {
+        contract_value,
+        pack_value,
+        binding_value,
+        contract,
+        pack,
+        binding,
+        contract_hash,
+        pack_hash,
+    }
+}
+
+fn maintained_opencrvs_fixture() -> Fixture {
+    let pack = OPENCRVS_PACK.to_vec();
+    let pack_value = parse_json_strict(&pack).expect("strict OpenCRVS pack JSON");
+    let pack_hash = typed_hash(PACK_DOMAIN, &pack);
+    let contract = OPENCRVS_CONTRACT.to_vec();
+    let contract_value = parse_json_strict(&contract).expect("strict OpenCRVS contract JSON");
+    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+    let binding = OPENCRVS_BINDING.to_vec();
+    let binding_value = parse_json_strict(&binding).expect("strict OpenCRVS binding JSON");
     Fixture {
         contract_value,
         pack_value,
@@ -315,6 +508,34 @@ fn compile_dhis2(fixture: &Fixture) -> Result<CompiledSourcePlanRegistry, Source
         PinnedEvidenceArtifact::new(
             EvidenceClass::Minimization,
             DHIS2_MINIMIZATION,
+            &evidence_hashes[2],
+        ),
+    ];
+    compile_with_evidence(fixture, &evidence)
+}
+
+fn compile_maintained_opencrvs(
+    fixture: &Fixture,
+) -> Result<CompiledSourcePlanRegistry, SourcePlanCompileError> {
+    let evidence_hashes = [
+        raw_hash(OPENCRVS_CONFORMANCE),
+        raw_hash(OPENCRVS_NEGATIVE_SECURITY),
+        raw_hash(OPENCRVS_MINIMIZATION),
+    ];
+    let evidence = [
+        PinnedEvidenceArtifact::new(
+            EvidenceClass::Conformance,
+            OPENCRVS_CONFORMANCE,
+            &evidence_hashes[0],
+        ),
+        PinnedEvidenceArtifact::new(
+            EvidenceClass::NegativeSecurity,
+            OPENCRVS_NEGATIVE_SECURITY,
+            &evidence_hashes[1],
+        ),
+        PinnedEvidenceArtifact::new(
+            EvidenceClass::Minimization,
+            OPENCRVS_MINIMIZATION,
             &evidence_hashes[2],
         ),
     ];
@@ -592,6 +813,199 @@ fn pre_authorization_rejects_same_key_with_a_different_private_binding() {
     );
 }
 
+#[test]
+fn open_crvs_exact_presence_plan_compiles_embedded_jwks_and_fresh_oauth() {
+    let fixture = open_crvs_fixture();
+    let registry = compile(&fixture).expect("exact OpenCRVS plan compiles");
+    let plan = registry.iter().next().expect("one plan");
+    let operation = plan.operations().next().expect("one authored operation");
+    assert!(operation.is_open_crvs_dci_exact_v1());
+    assert_eq!(operation.disclosed_fields().len(), 0);
+    assert_eq!(operation.acquired_fields().collect::<Vec<_>>(), ["record"]);
+    assert_eq!(operation.response().outputs().len(), 0);
+    let template_debug = format!("{:?}", operation.transport_template());
+    assert!(template_debug.contains("ReviewedReadOnlyPost"));
+    assert!(template_debug.contains("header_count: 2"));
+    assert!(template_debug.contains("Bearer"));
+    assert!(template_debug.contains("Required"));
+    let request = operation
+        .transport_template()
+        .render_zeroizing(
+            &[],
+            &[],
+            Some(
+                DestinationAuthorizationValue::bearer(b"production-token".to_vec())
+                    .expect("Bearer authorization"),
+            ),
+            Some(Zeroizing::new(br#"{"header":{},"message":{}}"#.to_vec())),
+        )
+        .expect("production-shaped OpenCRVS request renders");
+    let request_debug = format!("{request:?}");
+    assert!(request_debug.contains("ReviewedReadOnlyPost"));
+    assert!(request_debug.contains("[REDACTED]"));
+    let jwks = operation.embedded_open_crvs_jwks().expect("embedded JWKS");
+    assert_eq!(jwks.id().as_str(), "opencrvs-search.jwks");
+    assert_eq!(jwks.fixed_path(), "/.well-known/jwks.json");
+    assert_eq!(jwks.response_max_bytes(), 65_536);
+    assert_eq!(
+        plan.runtime_profile()
+            .authorized_operation_union()
+            .collect::<Vec<_>>(),
+        [
+            ("credential", "acquire-token"),
+            ("data", "opencrvs-search"),
+            ("data", "opencrvs-search.jwks"),
+        ]
+    );
+    assert_eq!(
+        plan.runtime_profile().permit_bindings().collect::<Vec<_>>(),
+        [
+            ("credential", 0, vec!["acquire-token"]),
+            ("data", 0, vec!["opencrvs-search.jwks"]),
+            ("data", 1, vec!["opencrvs-search"]),
+        ]
+    );
+    assert_eq!(plan.steps().count(), 1);
+    assert_eq!(
+        plan.runtime_profile()
+            .dispatch()
+            .bounded_http_operations()
+            .expect("bounded dispatch")
+            .iter()
+            .map(OperationId::as_str)
+            .collect::<Vec<_>>(),
+        ["opencrvs-search.jwks", "opencrvs-search"]
+    );
+    assert_eq!(plan.runtime_profile().credential_token_lifetime_ms(), None);
+    assert!(plan.oauth_cache_identity().is_none());
+    let credential = plan.credential_operation().expect("credential operation");
+    assert!(credential.parser().is_no_expiry());
+    assert_eq!(credential.parser().max_response_bytes(), 16_384);
+    assert_eq!(credential.parser().access_token_max_bytes(), 4_089);
+    let token = credential
+        .parser()
+        .parse(200, br#"{"access_token":"fresh","token_type":"Bearer"}"#)
+        .expect("strict two-member token response");
+    assert_eq!(token.usable_lifetime_ms(), None);
+    assert!(matches!(
+        credential.parser().parse(
+            200,
+            br#"{"access_token":"fresh","token_type":"Bearer","expires_in":60}"#,
+        ),
+        Err(CredentialOperationFailure::MalformedResponse)
+    ));
+}
+
+#[test]
+fn open_crvs_exact_shape_rejects_optional_flexibility_and_unsafe_origin_changes() {
+    let cases: Vec<(&str, Box<dyn Fn(&mut Fixture)>)> = vec![
+        (
+            "projected output",
+            Box::new(|fixture| {
+                fixture.pack_value["spec"]["output_mode"] = json!("projected_fields");
+                fixture.contract_value["spec"]["output_mode"] = json!("projected_fields");
+            }),
+        ),
+        (
+            "operator query",
+            Box::new(|fixture| {
+                fixture.pack_value["spec"]["plan"]["operations"][0]["query"] =
+                    json!({"optional": {"source": "literal", "value": "true"}});
+            }),
+        ),
+        (
+            "authored body",
+            Box::new(|fixture| {
+                fixture.pack_value["spec"]["plan"]["operations"][0]["body"] =
+                    json!({"kind": "null"});
+            }),
+        ),
+        (
+            "expiring token",
+            Box::new(|fixture| {
+                fixture.pack_value["spec"]["plan"]["credential_operation"]["response"] = json!({
+                    "max_bytes": 16384,
+                    "accepted_statuses": [200],
+                    "schema": "strict_access_token_bearer_expires_in",
+                    "access_token_max_bytes": 4089,
+                    "token_type": "Bearer",
+                    "expires_in_min_seconds": 60,
+                    "expires_in_max_seconds": 3600,
+                    "max_token_lifetime_ms": 3600000,
+                    "expiry_safety_skew_ms": 30000
+                });
+            }),
+        ),
+        (
+            "different credential origin",
+            Box::new(|fixture| {
+                fixture.binding_value["credential_destination"]["origin"] =
+                    json!("https://identity.example.test/");
+            }),
+        ),
+        (
+            "credential path",
+            Box::new(|fixture| {
+                fixture.pack_value["spec"]["plan"]["credential_operation"]["path"] =
+                    json!("/oauth/token");
+            }),
+        ),
+        (
+            "credential destination prefix",
+            Box::new(|fixture| {
+                fixture.binding_value["credential_destination"]["application_base_path"] =
+                    json!("/identity");
+            }),
+        ),
+        (
+            "main subdeadline",
+            Box::new(|fixture| {
+                fixture.pack_value["spec"]["plan"]["operations"][0]["step_limits"]["timeout_ms"] =
+                    json!(4_000);
+            }),
+        ),
+        (
+            "credential subdeadline",
+            Box::new(|fixture| {
+                fixture.pack_value["spec"]["plan"]["credential_operation"]["request"]
+                    ["timeout_ms"] = json!(4_000);
+            }),
+        ),
+    ];
+    for (label, mutation) in cases {
+        let mut fixture = open_crvs_fixture();
+        mutation(&mut fixture);
+        fixture.refresh_all();
+        assert!(compile(&fixture).is_err(), "accepted {label}");
+    }
+}
+
+#[test]
+fn open_crvs_generated_body_and_embedded_jwks_are_charged_to_bounds() {
+    let mut request_too_small = open_crvs_fixture();
+    request_too_small.pack_value["spec"]["plan"]["operations"][0]["step_limits"]
+        ["max_request_bytes"] = json!(8_192);
+    request_too_small.refresh_all();
+    assert!(matches!(
+        compile(&request_too_small),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidLimits
+        ))
+    ));
+
+    let mut source_too_small = open_crvs_fixture();
+    source_too_small.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(147_455);
+    source_too_small.contract_value["spec"]["bounds"]["max_source_bytes"] = json!(147_455);
+    source_too_small.binding_value["limits"]["max_source_bytes"] = json!(147_455);
+    source_too_small.refresh_all();
+    assert!(matches!(
+        compile(&source_too_small),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidLimits
+        )) | Err(SourcePlanCompileError::BindingWidening)
+    ));
+}
+
 pub(crate) fn dhis2_runtime_vector_plan_fixture() -> CompiledSourcePlan {
     compile_dhis2(&dhis2_fixture())
         .expect("maintained DHIS2 vector plan compiles")
@@ -599,6 +1013,32 @@ pub(crate) fn dhis2_runtime_vector_plan_fixture() -> CompiledSourcePlan {
         .into_values()
         .next()
         .expect("one maintained DHIS2 vector plan")
+}
+
+pub(crate) fn open_crvs_completion_seed_fixture() -> Value {
+    completion_seed_value(&open_crvs_fixture())
+}
+
+pub(crate) fn open_crvs_runtime_vector_plan_fixture() -> CompiledSourcePlan {
+    compile(&open_crvs_fixture())
+        .expect("exact OpenCRVS vector plan compiles")
+        .plans
+        .into_values()
+        .next()
+        .expect("one exact OpenCRVS vector plan")
+}
+
+pub(crate) fn maintained_open_crvs_runtime_plan_fixture() -> CompiledSourcePlan {
+    compile_maintained_opencrvs(&maintained_opencrvs_fixture())
+        .expect("maintained OpenCRVS profile compiles")
+        .plans
+        .into_values()
+        .next()
+        .expect("one maintained OpenCRVS plan")
+}
+
+pub(crate) fn open_crvs_runtime_vector_registry_fixture() -> CompiledSourcePlanRegistry {
+    compile(&open_crvs_fixture()).expect("exact OpenCRVS vector registry compiles")
 }
 
 pub(crate) fn dhis2_duplicate_selector_runtime_vector_plan_fixture() -> CompiledSourcePlan {
@@ -1277,6 +1717,49 @@ fn maintained_dhis2_enrollment_status_pack_compiles_to_one_bounded_exchange() {
             .expect("strict wrapper object")[0]
             .name(),
         "enrollments"
+    );
+}
+
+#[test]
+fn maintained_opencrvs_birth_record_exists_pack_compiles_to_exact_closed_exchange() {
+    let fixture = maintained_opencrvs_fixture();
+    assert_eq!(fixture.pack_hash, OPENCRVS_PACK_HASH);
+    assert_eq!(fixture.contract_hash, OPENCRVS_CONTRACT_HASH);
+    assert_eq!(
+        fixture.contract_value["spec"]["authorization"]["policy"]["hash"].as_str(),
+        Some(OPENCRVS_POLICY_HASH)
+    );
+    parse_public_contract(&fixture.contract, OPENCRVS_CONTRACT_HASH)
+        .expect("maintained OpenCRVS contract hash remains valid after normalization");
+    parse_integration_pack(&fixture.pack, OPENCRVS_PACK_HASH)
+        .expect("maintained OpenCRVS pack hash remains valid after normalization");
+
+    let registry =
+        compile_maintained_opencrvs(&fixture).expect("maintained OpenCRVS profile compiles");
+    let plan = registry.iter().next().expect("compiled OpenCRVS plan");
+    assert_eq!(plan.binding_hash(), OPENCRVS_BINDING_HASH);
+    assert_eq!(plan.kind(), SourcePlanKind::BoundedHttp);
+    assert_eq!(plan.cardinality(), SourceCardinality::AmbiguityProbe);
+    assert_eq!(
+        plan.credential_reference(),
+        Some(("opencrvs-oauth-client", 1))
+    );
+    assert_eq!(plan.runtime_profile().credential_token_lifetime_ms(), None);
+    assert!(plan.oauth_cache_identity().is_none());
+
+    let operation = plan.operations().next().expect("OpenCRVS search operation");
+    assert!(operation.is_open_crvs_dci_exact_v1());
+    assert_eq!(operation.total_deadline_ms(), 10_000);
+    assert_eq!(operation.max_source_records(), 2);
+    assert_eq!(operation.acquired_fields().collect::<Vec<_>>(), ["record"]);
+    assert_eq!(operation.disclosed_fields().len(), 0);
+    assert_eq!(
+        plan.runtime_profile().permit_bindings().collect::<Vec<_>>(),
+        [
+            ("credential", 0, vec!["acquire-opencrvs-token"]),
+            ("data", 0, vec!["lookup-birth-record.jwks"]),
+            ("data", 1, vec!["lookup-birth-record"]),
+        ]
     );
 }
 
@@ -3424,7 +3907,7 @@ fn oauth_token_parser_is_strict_bounded_and_fail_closed() {
             br#"{"access_token":"abc+/._~-==","token_type":"Bearer","expires_in":3600}"#,
         )
         .expect("strict token response");
-    assert_eq!(token.usable_lifetime_ms(), 1_770_000);
+    assert_eq!(token.usable_lifetime_ms(), Some(1_770_000));
     assert!(format!("{token:?}").contains("[REDACTED]"));
     assert!(!format!("{token:?}").contains("abc+"));
     assert!(token.bearer_authorization().is_ok());
@@ -3476,10 +3959,11 @@ fn oauth_token_parser_is_strict_bounded_and_fail_closed() {
         max_response_bytes: 1_024,
         accepted_statuses: vec![200].into_boxed_slice(),
         access_token_max_bytes: 64,
-        expires_in_min_seconds: 1,
-        expires_in_max_seconds: 60,
-        max_token_lifetime_ms: 30_000,
-        expiry_safety_skew_ms: 30_000,
+        schema: CompiledOAuth2TokenSchema::StrictAccessTokenBearerExpiresIn,
+        expires_in_min_seconds: Some(1),
+        expires_in_max_seconds: Some(60),
+        max_token_lifetime_ms: Some(30_000),
+        expiry_safety_skew_ms: Some(30_000),
     };
     assert!(matches!(
         expired.parse(

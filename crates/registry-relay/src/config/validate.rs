@@ -318,11 +318,13 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
             );
             return Err(ConfigError::DuplicateId);
         }
-        let (username_env, password_env) = entry.environment_names();
-        if source_names.contains(username_env.as_str())
-            || source_names.contains(password_env.as_str())
-            || !credential_sources.insert(username_env.as_str())
-            || !credential_sources.insert(password_env.as_str())
+        if entry
+            .environment_names()
+            .into_iter()
+            .any(|environment_name| {
+                source_names.contains(environment_name.as_str())
+                    || !credential_sources.insert(environment_name.as_str())
+            })
         {
             tracing::error!(
                 code = "config.validation_error",

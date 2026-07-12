@@ -359,6 +359,9 @@ mod validation;
 #[cfg(test)]
 pub(super) use validation::validate_response_schema;
 pub(super) use validation::{decode_pointer_tokens, response_record_schema};
+pub(super) use validation::{
+    OPEN_CRVS_DCI_REQUEST_BODY_MAX_BYTES, OPEN_CRVS_JWKS_MAX_RESPONSE_BYTES, OPEN_CRVS_JWKS_PATH,
+};
 
 mod bounds;
 pub(super) use bounds::*;

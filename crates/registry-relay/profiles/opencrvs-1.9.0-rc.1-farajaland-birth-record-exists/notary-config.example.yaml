@@ -1,0 +1,57 @@
+# SPDX-License-Identifier: Apache-2.0
+# Local Notary example for the maintained OpenCRVS existence journey.
+
+deployment:
+  profile: local
+
+server:
+  bind: "127.0.0.1:8081"
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: opencrvs-verifier
+      fingerprint:
+        provider: env
+        name: REGISTRY_NOTARY_OPENCRVS_API_KEY_HASH
+      scopes: [registry:evidence:opencrvs-birth-record]
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+evidence:
+  enabled: true
+  service_id: registry-notary-opencrvs-birth-record
+  allowed_purposes: [civil-registration-verification]
+  relay:
+    base_url: "https://relay.example.gov"
+    # Mount a mode-0600 Relay-issued workload JWT and replace it atomically.
+    token_file: /var/run/secrets/registry-notary/relay-access-token
+    allowed_private_cidrs: []
+  claims:
+    - id: opencrvs-birth-record-exists
+      title: OpenCRVS birth record exists
+      version: "1"
+      subject_type: person
+      evidence_mode:
+        type: registry_backed
+        consultations:
+          birth_record:
+            profile:
+              id: opencrvs.dci.farajaland.birth-record-exists.exact
+              version: "1"
+              contract_hash: sha256:4fdd83fdee1a86b7eea610c59e2ee44d7936bbcb44d837bd64c173a3c5b3f411
+            inputs:
+              uin: target.id
+      value:
+        type: boolean
+      purpose: civil-registration-verification
+      required_scopes: [registry:evidence:opencrvs-birth-record]
+      rule:
+        type: exists
+        source: birth_record
+      disclosure:
+        default: value
+        allowed: [value, redacted]
+      formats: [application/vnd.registry-notary.claim-result+json]

@@ -1,0 +1,33 @@
+{
+  "schema": "registry.relay.profile-evidence.v1",
+  "class": "conformance",
+  "product_family": "opencrvs",
+  "product_version": "dci-crvs-api-v1.9.0-rc.1-farajaland-v1.9.5",
+  "operation": "POST /registry/sync/search",
+  "source_pins": {
+    "dci_crvs_api": "5e31d1e381d4bd8c7c74112d714fd49d263c6df7",
+    "opencrvs_core": "7243ccb79eb84254420878ff5146c6e50f084554",
+    "opencrvs_countryconfig": "3c1a5612d8d7bebddd43463682860b38ef14bcb4"
+  },
+  "request_shape": {
+    "protocol_version": "1.0.0",
+    "registry_type": "ns:org:RegistryType:Civil",
+    "registry_event_type": "birth",
+    "record_type": "spdci-extensions-dci:Person",
+    "query_type": "idtype-value",
+    "identifier_type": "UIN",
+    "page_number": 1,
+    "page_size": 2,
+    "request_signature": "absent"
+  },
+  "response_contract": {
+    "signature": "compact-jws-rs256-over-exact-unsigned-sibling",
+    "jwks": "exactly-one-rs256-signing-key-and-one-rsa-oaep-256-encryption-key",
+    "cardinality": [
+      "no_match",
+      "match",
+      "ambiguous"
+    ],
+    "record_schema": "closed-farajaland-birth-person"
+  }
+}

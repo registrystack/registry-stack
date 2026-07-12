@@ -46,7 +46,8 @@ use super::commitments::{
     SealedConsultationExecution, VerifiedConsentDecision,
 };
 use super::executor::{
-    execute_one_step_basic_get, ConcreteExecutorProof, ConcreteExecutorUnfinished,
+    execute_concrete_consultation, ConcreteExecutorKind, ConcreteExecutorProof,
+    ConcreteExecutorUnfinished,
 };
 use super::pseudonym::PreparedConsultationPseudonyms;
 use super::response::PublishableConsultationResponse;
@@ -662,21 +663,21 @@ pub(crate) enum FinalizedValidatedConsultation<T> {
     FinalizedFailure(ConsultationCompletionReceipt),
 }
 
-/// Terminal result of the concrete Basic GET journey. The publication grant
+/// Terminal result of a concrete maintained journey. The publication grant
 /// and its candidate bytes cannot be extracted or independently re-paired.
 #[must_use = "a finalized consultation result must be handled"]
-pub(crate) enum FinalizedBasicGetConsultation {
-    Published(PublishedBasicGetResponse),
+pub(crate) enum FinalizedConcreteConsultation {
+    Published(PublishedConcreteResponse),
     FinalizedFailure(ConsultationCompletionReceipt),
 }
 
 #[must_use = "published consultation bytes must be returned or dropped"]
-pub(crate) struct PublishedBasicGetResponse {
+pub(crate) struct PublishedConcreteResponse {
     grant: ConsultationPublicationGrant,
     output: PublishableConsultationResponse,
 }
 
-impl PublishedBasicGetResponse {
+impl PublishedConcreteResponse {
     pub(crate) fn into_http_body(self) -> Vec<u8> {
         self.output.into_http_body(self.grant)
     }
@@ -693,14 +694,16 @@ pub(crate) struct UnfinishedAuditedConsultationDispatch {
 }
 
 impl<'profile> PreparedAuditedConsultationDispatch<'profile> {
-    /// Run the first concrete consultation product journey. Every outer fence
+    /// Run one startup-selected concrete product journey. Every outer fence
     /// error retains the sealed dispatch for PostgreSQL to classify as
     /// `not_started` or `outcome_unknown`; only a closure-returned known result
     /// enters normal completion.
-    pub(crate) async fn execute_one_step_basic_get(
+    pub(crate) async fn execute_concrete_consultation(
         self,
+        executor: ConcreteExecutorKind,
         fence: &crate::state_plane::PostgresServingFence,
-        credentials: &crate::source_plan::CompiledBasicSourceCredentialProvider,
+        basic_credentials: &crate::source_plan::CompiledBasicSourceCredentialProvider,
+        oauth_credentials: &crate::source_plan::CompiledOAuthSourceCredentialProvider,
     ) -> Result<
         ExecutedAuditedConsultationDispatch<PublishableConsultationResponse>,
         UnfinishedAuditedConsultationDispatch,
@@ -717,13 +720,15 @@ impl<'profile> PreparedAuditedConsultationDispatch<'profile> {
                 dispatch: Some(dispatch),
             });
         }
-        let proof = match execute_one_step_basic_get(
+        let proof = match execute_concrete_consultation(
+            executor,
             &mut dispatch,
             execution,
             publication,
             quota,
             fence,
-            credentials,
+            basic_credentials,
+            oauth_credentials,
         )
         .await
         {
@@ -831,11 +836,11 @@ impl PostgresDurableAuditStatePlane {
     /// Terminally complete one validated backend result without separating its
     /// structurally sealed dispatch from its output. The keyring runtime mints
     /// a fresh then-current pseudonym authority for each bounded stale retry.
-    pub(crate) async fn finalize_basic_get_consultation(
+    pub(crate) async fn finalize_concrete_consultation(
         &self,
         executed: ExecutedAuditedConsultationDispatch<PublishableConsultationResponse>,
         keyring: &PostgresAuditPseudonymKeyringRuntime,
-    ) -> Result<FinalizedBasicGetConsultation, ConsultationPersistenceError> {
+    ) -> Result<FinalizedConcreteConsultation, ConsultationPersistenceError> {
         match self
             .finalize_validated_consultation_inner(
                 executed,
@@ -846,12 +851,12 @@ impl PostgresDurableAuditStatePlane {
             .await?
         {
             FinalizedValidatedConsultationInner::Published { grant, output } => {
-                Ok(FinalizedBasicGetConsultation::Published(
-                    PublishedBasicGetResponse { grant, output },
+                Ok(FinalizedConcreteConsultation::Published(
+                    PublishedConcreteResponse { grant, output },
                 ))
             }
             FinalizedValidatedConsultationInner::FinalizedFailure(receipt) => {
-                Ok(FinalizedBasicGetConsultation::FinalizedFailure(receipt))
+                Ok(FinalizedConcreteConsultation::FinalizedFailure(receipt))
             }
         }
     }

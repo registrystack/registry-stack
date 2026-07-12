@@ -24,7 +24,11 @@ pub(in super::super) fn parse_public_contract(
         .spec
         .bounds
         .validate_for_acquisition(document.spec.acquisition.class)?;
-    validate_output(&document.spec.output, &acquired_fields)?;
+    validate_output(
+        document.spec.output_mode,
+        &document.spec.output,
+        &acquired_fields,
+    )?;
     let authorization = validate_authorization(&mut document.spec.authorization)?;
     let cardinality = cardinality_from_bounds(document.spec.bounds)?;
     validate_public_behavior(&mut document.spec.public_behavior, cardinality)?;
@@ -94,7 +98,11 @@ pub(in super::super) fn parse_integration_pack(
     validate_inputs(&document.spec.input_slots)?;
     let acquired_fields = validate_acquisition(&document.spec.acquisition)?;
     validate_source_provenance(&document.spec.source_provenance)?;
-    validate_output(&document.spec.output, &acquired_fields)?;
+    validate_output(
+        document.spec.output_mode,
+        &document.spec.output,
+        &acquired_fields,
+    )?;
     validate_parameter_declarations(&mut document.spec.deployment_parameters)?;
     validate_evidence_manifest(&mut document.spec.evidence)?;
     validate_plan(&mut document.spec, &acquired_fields)?;

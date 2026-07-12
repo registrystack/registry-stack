@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Concrete one-step Basic GET consultation executor.
+//! Closed concrete consultation executors.
 //!
-//! This is deliberately a product journey, not an executor framework. Startup
-//! accepts one closed operation shape and runtime consumes the authorization-
-//! bound plan/input pair directly through the durable serving fence.
+//! This is deliberately a small set of product journeys, not an executor
+//! framework. Startup selects one closed operation shape and runtime consumes
+//! the authorization-bound plan/input pair directly through the durable
+//! serving fence.
+
+mod opencrvs;
 
 use std::time::Duration;
 
@@ -15,9 +18,9 @@ use thiserror::Error;
 
 use crate::source_plan::runtime_profile::CompiledConsentProfile;
 use crate::source_plan::{
-    CompiledBasicSourceCredentialProvider, CompiledRequestCodec, CompiledSelectorLocation,
-    CompiledSelectorSource, CompiledSourceAuth, CompiledSourcePlan, CompiledValueExpression,
-    ReadMethod, SourcePlanKind,
+    CompiledBasicSourceCredentialProvider, CompiledOAuthSourceCredentialProvider,
+    CompiledRequestCodec, CompiledSelectorLocation, CompiledSelectorSource, CompiledSourceAuth,
+    CompiledSourcePlan, CompiledValueExpression, ReadMethod, SourcePlanKind,
 };
 use crate::state_plane::{
     AuditedConsultationDispatch, KnownConsultationCompletionFacts, KnownFailureClass,
@@ -31,12 +34,54 @@ use super::commitments::{
 use super::response::{ConsultationResponseError, PublishableConsultationResponse};
 use super::ConsultationOutcome;
 
-/// Value-free reason an artifact-valid plan cannot be served by the first
+use opencrvs::{execute_open_crvs_dci_exact, validate_open_crvs_dci_exact_activation};
+
+/// Value-free reason an artifact-valid plan cannot be served by a maintained
 /// concrete product journey.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
-pub(crate) enum BasicGetActivationError {
-    #[error("consultation plan is outside the first Basic GET serving profile")]
+pub(crate) enum ConcreteExecutorActivationError {
+    #[error("consultation plan is outside the maintained concrete serving profiles")]
     UnsupportedPlan,
+}
+
+/// Restart-only selection of one fully reviewed product journey.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConcreteExecutorKind {
+    BasicGet,
+    OpenCrvsDciExact,
+}
+
+impl ConcreteExecutorKind {
+    pub(crate) fn activate(
+        plan: &CompiledSourcePlan,
+    ) -> Result<Self, ConcreteExecutorActivationError> {
+        if validate_basic_get_activation(plan).is_ok() {
+            return Ok(Self::BasicGet);
+        }
+        validate_open_crvs_dci_exact_activation(plan)?;
+        Ok(Self::OpenCrvsDciExact)
+    }
+
+    pub(crate) const fn permit_counts(self) -> (u8, u8) {
+        match self {
+            Self::BasicGet => (0, 1),
+            Self::OpenCrvsDciExact => (1, 2),
+        }
+    }
+
+    pub(crate) fn dispatch_budget(
+        self,
+        plan: &CompiledSourcePlan,
+    ) -> Result<crate::state_plane::DispatchPermitBudget, ConcreteExecutorActivationError> {
+        match self {
+            Self::BasicGet => validate_basic_get_activation(plan)?,
+            Self::OpenCrvsDciExact => validate_open_crvs_dci_exact_activation(plan)?,
+        }
+        crate::state_plane::DispatchPermitBudget::new(Duration::from_millis(u64::from(
+            plan.limits().operation().timeout_ms,
+        )))
+        .map_err(|_| ConcreteExecutorActivationError::UnsupportedPlan)
+    }
 }
 
 /// Proof minted only after one fenced marker reaches a closed, known result.
@@ -77,7 +122,7 @@ enum PublicResultPreparationError {
 /// shapes as inert, hash-covered artifacts for later reviewed journeys.
 pub(crate) fn validate_basic_get_activation(
     plan: &CompiledSourcePlan,
-) -> Result<(), BasicGetActivationError> {
+) -> Result<(), ConcreteExecutorActivationError> {
     if plan.kind() != SourcePlanKind::BoundedHttp
         || plan.inputs().len() != 1
         || plan.operations().len() != 1
@@ -91,24 +136,24 @@ pub(crate) fn validate_basic_get_activation(
             CompiledConsentProfile::NotRequired
         )
     {
-        return Err(BasicGetActivationError::UnsupportedPlan);
+        return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
 
     let operation = plan
         .operations()
         .next()
-        .ok_or(BasicGetActivationError::UnsupportedPlan)?;
+        .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?;
     let step = plan
         .compiled_steps()
         .next()
-        .ok_or(BasicGetActivationError::UnsupportedPlan)?;
+        .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?;
     if step.condition().is_some()
         || step.condition_source_index().is_some()
         || step.condition_output_slot_index().is_some()
         || !std::ptr::eq(
             plan.steps()
                 .next()
-                .ok_or(BasicGetActivationError::UnsupportedPlan)?,
+                .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?,
             operation,
         )
         || operation.method() != ReadMethod::Get
@@ -122,13 +167,13 @@ pub(crate) fn validate_basic_get_activation(
             .ok()
             .is_none_or(|limit| limit > MAX_CLOSED_JSON_ENCODED_BODY_BYTES)
     {
-        return Err(BasicGetActivationError::UnsupportedPlan);
+        return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
 
     let input = plan
         .inputs()
         .next()
-        .ok_or(BasicGetActivationError::UnsupportedPlan)?;
+        .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?;
     if operation.query().any(|component| {
         matches!(
             component.value(),
@@ -138,7 +183,7 @@ pub(crate) fn validate_basic_get_activation(
             CompiledValueExpression::PriorStepOutput { .. }
         )
     }) {
-        return Err(BasicGetActivationError::UnsupportedPlan);
+        return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
 
     let (input_index, query_index) = match (
@@ -149,12 +194,12 @@ pub(crate) fn validate_basic_get_activation(
             CompiledSelectorSource::ConsultationInput { input_index },
             CompiledSelectorLocation::Query { component_index },
         ) => (input_index, *component_index),
-        _ => return Err(BasicGetActivationError::UnsupportedPlan),
+        _ => return Err(ConcreteExecutorActivationError::UnsupportedPlan),
     };
     let selector_component = operation
         .query()
         .nth(query_index)
-        .ok_or(BasicGetActivationError::UnsupportedPlan)?;
+        .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?;
     if input_index != 0
         || !matches!(
             selector_component.value(),
@@ -162,7 +207,7 @@ pub(crate) fn validate_basic_get_activation(
         )
         || input.name().is_empty()
     {
-        return Err(BasicGetActivationError::UnsupportedPlan);
+        return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
     let consultation_input_positions = operation
         .query()
@@ -176,7 +221,7 @@ pub(crate) fn validate_basic_get_activation(
         })
         .collect::<Vec<_>>();
     if consultation_input_positions.as_slice() != [query_index] {
-        return Err(BasicGetActivationError::UnsupportedPlan);
+        return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
     Ok(())
 }
@@ -273,6 +318,45 @@ pub(super) async fn execute_one_step_basic_get(
     match inner {
         InnerDispatchResult::Known(proof) => Ok(proof),
         InnerDispatchResult::Unfinished => Err(ConcreteExecutorUnfinished),
+    }
+}
+
+/// Consume one sealed execution through the startup-selected product journey.
+/// The closed enum keeps runtime dispatch explicit without exposing a generic
+/// callback or provider surface.
+pub(super) async fn execute_concrete_consultation(
+    kind: ConcreteExecutorKind,
+    dispatch: &mut AuditedConsultationDispatch,
+    execution: SealedConsultationExecution<'_>,
+    publication: PendingPublicationContext,
+    quota: QuotaGrant,
+    fence: &PostgresServingFence,
+    basic_credentials: &CompiledBasicSourceCredentialProvider,
+    oauth_credentials: &CompiledOAuthSourceCredentialProvider,
+) -> Result<ConcreteExecutorProof<PublishableConsultationResponse>, ConcreteExecutorUnfinished> {
+    match kind {
+        ConcreteExecutorKind::BasicGet => {
+            execute_one_step_basic_get(
+                dispatch,
+                execution,
+                publication,
+                quota,
+                fence,
+                basic_credentials,
+            )
+            .await
+        }
+        ConcreteExecutorKind::OpenCrvsDciExact => {
+            execute_open_crvs_dci_exact(
+                dispatch,
+                execution,
+                publication,
+                quota,
+                fence,
+                oauth_credentials,
+            )
+            .await
+        }
     }
 }
 
@@ -381,23 +465,14 @@ const fn map_decode_error(error: ClosedJsonDecodeError) -> KnownFailureClass {
     }
 }
 
-pub(super) fn dispatch_budget(
-    plan: &CompiledSourcePlan,
-) -> Result<crate::state_plane::DispatchPermitBudget, BasicGetActivationError> {
-    validate_basic_get_activation(plan)?;
-    crate::state_plane::DispatchPermitBudget::new(Duration::from_millis(u64::from(
-        plan.limits().operation().timeout_ms,
-    )))
-    .map_err(|_| BasicGetActivationError::UnsupportedPlan)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::source_plan::{
         bounded_runtime_vector_plan_fixture, dhis2_duplicate_selector_runtime_vector_plan_fixture,
-        dhis2_runtime_vector_plan_fixture, rhai_runtime_vector_plan_fixture,
+        dhis2_runtime_vector_plan_fixture, maintained_open_crvs_runtime_plan_fixture,
+        rhai_runtime_vector_plan_fixture,
     };
 
     #[test]
@@ -405,7 +480,8 @@ mod tests {
         let dhis2 = dhis2_runtime_vector_plan_fixture();
         assert_eq!(validate_basic_get_activation(&dhis2), Ok(()));
         assert_eq!(
-            dispatch_budget(&dhis2)
+            ConcreteExecutorKind::activate(&dhis2)
+                .and_then(|executor| executor.dispatch_budget(&dhis2))
                 .expect("DHIS2 budget")
                 .as_milliseconds(),
             10_000
@@ -414,17 +490,33 @@ mod tests {
         let oauth = bounded_runtime_vector_plan_fixture();
         assert_eq!(
             validate_basic_get_activation(&oauth),
-            Err(BasicGetActivationError::UnsupportedPlan)
+            Err(ConcreteExecutorActivationError::UnsupportedPlan)
         );
         let rhai = rhai_runtime_vector_plan_fixture();
         assert_eq!(
             validate_basic_get_activation(&rhai),
-            Err(BasicGetActivationError::UnsupportedPlan)
+            Err(ConcreteExecutorActivationError::UnsupportedPlan)
         );
         let duplicate_selector = dhis2_duplicate_selector_runtime_vector_plan_fixture();
         assert_eq!(
             validate_basic_get_activation(&duplicate_selector),
-            Err(BasicGetActivationError::UnsupportedPlan)
+            Err(ConcreteExecutorActivationError::UnsupportedPlan)
+        );
+    }
+
+    #[test]
+    fn activation_selects_the_exact_opencrvs_journey_and_permit_shape() {
+        let opencrvs = maintained_open_crvs_runtime_plan_fixture();
+        assert_eq!(validate_open_crvs_dci_exact_activation(&opencrvs), Ok(()));
+        let executor = ConcreteExecutorKind::activate(&opencrvs).expect("OpenCRVS executor");
+        assert_eq!(executor, ConcreteExecutorKind::OpenCrvsDciExact);
+        assert_eq!(executor.permit_counts(), (1, 2));
+        assert_eq!(
+            executor
+                .dispatch_budget(&opencrvs)
+                .expect("OpenCRVS shared budget")
+                .as_milliseconds(),
+            10_000
         );
     }
 

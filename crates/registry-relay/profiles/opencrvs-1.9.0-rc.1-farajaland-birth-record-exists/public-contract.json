@@ -1,0 +1,154 @@
+{
+  "schema": "registry.relay.consultation-contract.v1",
+  "id": "opencrvs.dci.farajaland.birth-record-exists.exact",
+  "version": "1",
+  "spec": {
+    "subject": {
+      "mode": "single_subject",
+      "selector_provenance": { "type": "workload_selected" }
+    },
+    "inputs": {
+      "uin": {
+        "type": "string",
+        "max_bytes": 10,
+        "pattern": "^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]$",
+        "canonicalization": "identity"
+      }
+    },
+    "integration_pack": {
+      "id": "opencrvs.dci.farajaland.birth-record-exists",
+      "version": "1",
+      "hash": "sha256:2ee2dff4fb6859d6ff58c222fc08dac1a871580324c1d6b00e1af5cdee2ce466"
+    },
+    "acquisition": {
+      "class": "bounded_full_record",
+      "fields": {
+        "record": {
+          "type": "object",
+          "nullable": false,
+          "reject_unknown_fields": true,
+          "fields": {
+            "@context": {
+              "required": true,
+              "schema": {
+                "type": "object",
+                "nullable": false,
+                "reject_unknown_fields": true,
+                "fields": {
+                  "@vocab": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 34 } },
+                  "xsd": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 33 } },
+                  "schema": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 18 } },
+                  "rdfs": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 37 } },
+                  "owl": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 30 } }
+                }
+              }
+            },
+            "@type": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 11 } },
+            "@id": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 45 } },
+            "identifier": {
+              "required": true,
+              "schema": {
+                "type": "array",
+                "nullable": false,
+                "max_items": 2,
+                "items": {
+                  "type": "object",
+                  "nullable": false,
+                  "reject_unknown_fields": true,
+                  "fields": {
+                    "@id": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 10 } },
+                    "@type": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 10 } },
+                    "identifier_type": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 3 } },
+                    "identifier_value": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 12 } }
+                  }
+                }
+              }
+            },
+            "name": {
+              "required": true,
+              "schema": {
+                "type": "object",
+                "nullable": false,
+                "reject_unknown_fields": true,
+                "fields": {
+                  "@type": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 4 } },
+                  "given_name": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 32 } },
+                  "second_name": { "required": false, "schema": { "type": "string", "nullable": false, "max_bytes": 32 } },
+                  "surname": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 32 } }
+                }
+              }
+            },
+            "sex": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 7 } },
+            "birth_date": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 10 } },
+            "parent1_identifier": {
+              "required": false,
+              "schema": {
+                "type": "object",
+                "nullable": false,
+                "reject_unknown_fields": true,
+                "fields": {
+                  "@id": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 10 } },
+                  "@type": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 10 } },
+                  "identifier_type": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 3 } },
+                  "identifier_value": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 10 } }
+                }
+              }
+            },
+            "parent2_identifier": {
+              "required": false,
+              "schema": {
+                "type": "object",
+                "nullable": false,
+                "reject_unknown_fields": true,
+                "fields": {
+                  "@id": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 10 } },
+                  "@type": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 10 } },
+                  "identifier_type": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 3 } },
+                  "identifier_value": { "required": true, "schema": { "type": "string", "nullable": false, "max_bytes": 10 } }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "source_provenance": {
+      "source_observed_at": { "type": "absent" },
+      "source_revision": { "type": "absent" }
+    },
+    "output_mode": "presence_only",
+    "output": {},
+    "authorization": {
+      "workload": "registry-notary",
+      "required_scope": "registry:consult:opencrvs-birth-record",
+      "purposes": ["civil-registration-verification"],
+      "legal_basis": "public_task",
+      "policy": {
+        "id": "relay.opencrvs.dci.farajaland.birth-record-exists.exact",
+        "hash": "sha256:2a03447ccf160d32e2fac3debee8d7c931f53a0fe28a368c79407ed476324754",
+        "decision_cache": "disabled",
+        "max_decision_age_ms": 1000,
+        "unavailable": "deny"
+      },
+      "consent": { "required": false },
+      "mandatory_obligations": []
+    },
+    "bounds": {
+      "max_source_matches": 2,
+      "max_disclosed_records": 1,
+      "max_data_exchanges": 2,
+      "max_credential_exchanges": 1,
+      "max_data_destinations": 1,
+      "max_source_bytes": 147456,
+      "timeout_ms": 10000,
+      "max_in_flight": 16,
+      "quota_per_minute": 60,
+      "quota_burst": 10
+    },
+    "public_behavior": {
+      "outcomes": ["match", "no_match", "ambiguous"],
+      "denial_code": "consultation.denied",
+      "denial_timing_profile": "measured-uniform-v1"
+    }
+  }
+}

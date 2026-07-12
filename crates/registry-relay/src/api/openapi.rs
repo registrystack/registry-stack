@@ -2929,17 +2929,18 @@ fn consultation_profile_metadata_schema() -> Value {
     json!({
         "type": "object",
         "description": "Protected metadata for one exact consultation profile. The canonical public contract remains generic here so one operation supports OpenCRVS, DHIS2, OpenSPP, and other reviewed integration packs without generating per-profile OpenAPI schemas.",
-        "required": ["contract_hash", "contract"],
+        "required": ["contract_hash", "contract_json"],
         "properties": {
             "contract_hash": {
                 "type": "string",
                 "pattern": "^sha256:[0-9a-f]{64}$",
                 "description": "SHA-256 identity of the canonical public contract."
             },
-            "contract": {
-                "type": "object",
-                "description": "Canonical public consultation contract selected by the path id and version.",
-                "additionalProperties": true
+            "contract_json": {
+                "type": "string",
+                "maxLength": registry_platform_httputil::destination::json::MAX_CLOSED_JSON_STRING_BYTES,
+                "contentMediaType": "application/json",
+                "description": "Exact RFC 8785 canonical JSON for the public consultation contract selected by the path id and version. Clients strict-parse and re-hash this bounded value before activation."
             }
         },
         "additionalProperties": false
@@ -3021,7 +3022,7 @@ fn consultation_result_schema() -> Value {
                 "enum": ["match", "no_match", "ambiguous"]
             },
             "data": {
-                "description": "Profile-approved scalar fields for `match`; null for `no_match` and `ambiguous`.",
+                "description": "Profile-approved scalar fields, or an empty object for a presence-only `match`; null for `no_match` and `ambiguous`.",
                 "anyOf": [
                     {
                         "type": "object",
@@ -5920,7 +5921,11 @@ mod tests {
         let schemas = &doc["components"]["schemas"];
         assert_eq!(
             schemas["ConsultationProfileMetadata"]["required"],
-            json!(["contract_hash", "contract"])
+            json!(["contract_hash", "contract_json"])
+        );
+        assert_eq!(
+            schemas["ConsultationProfileMetadata"]["properties"]["contract_json"]["maxLength"],
+            65_536
         );
         assert_eq!(
             schemas["ConsultationExecuteRequest"]["properties"]["inputs"]["minProperties"],

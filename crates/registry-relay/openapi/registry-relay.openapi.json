@@ -1200,20 +1200,21 @@
         "additionalProperties": false,
         "description": "Protected metadata for one exact consultation profile. The canonical public contract remains generic here so one operation supports OpenCRVS, DHIS2, OpenSPP, and other reviewed integration packs without generating per-profile OpenAPI schemas.",
         "properties": {
-          "contract": {
-            "additionalProperties": true,
-            "description": "Canonical public consultation contract selected by the path id and version.",
-            "type": "object"
-          },
           "contract_hash": {
             "description": "SHA-256 identity of the canonical public contract.",
             "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "contract_json": {
+            "contentMediaType": "application/json",
+            "description": "Exact RFC 8785 canonical JSON for the public consultation contract selected by the path id and version. Clients strict-parse and re-hash this bounded value before activation.",
+            "maxLength": 65536,
             "type": "string"
           }
         },
         "required": [
           "contract_hash",
-          "contract"
+          "contract_json"
         ],
         "type": "object"
       },
@@ -1243,7 +1244,7 @@
                 "type": "null"
               }
             ],
-            "description": "Profile-approved scalar fields for `match`; null for `no_match` and `ambiguous`."
+            "description": "Profile-approved scalar fields, or an empty object for a presence-only `match`; null for `no_match` and `ambiguous`."
           },
           "notary_evaluation_id": {
             "description": "Registry Notary evaluation id when supplied on the request.",

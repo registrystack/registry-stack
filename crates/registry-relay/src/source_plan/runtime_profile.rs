@@ -329,15 +329,19 @@ impl CompiledRuntimeProfile {
                 CompiledDispatchProfile::SnapshotExact
             }
             (SourcePlanKind::BoundedHttp, None) => CompiledDispatchProfile::BoundedHttp {
-                ordered_operations: steps
-                    .iter()
-                    .map(|step| {
-                        operations
+                ordered_operations: {
+                    let mut ordered = Vec::new();
+                    for step in steps {
+                        let operation = operations
                             .get(step.operation_index())
-                            .map(|operation| operation.id().clone())
-                            .ok_or(SourcePlanCompileError::CompilerInvariant)
-                    })
-                    .collect::<Result<_, _>>()?,
+                            .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+                        if let Some(jwks) = operation.embedded_open_crvs_jwks() {
+                            ordered.push(jwks.id().clone());
+                        }
+                        ordered.push(operation.id().clone());
+                    }
+                    ordered.into_boxed_slice()
+                },
             },
             _ => return Err(SourcePlanCompileError::CompilerInvariant),
         };

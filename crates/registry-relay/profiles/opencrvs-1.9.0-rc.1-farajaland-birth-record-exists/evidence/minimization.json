@@ -1,0 +1,27 @@
+{
+  "schema": "registry.relay.profile-evidence.v1",
+  "class": "minimization",
+  "product_family": "opencrvs",
+  "product_version": "dci-crvs-api-v1.9.0-rc.1-farajaland-v1.9.5",
+  "source_projection": "full-record-required-by-pinned-dci-adapter",
+  "acquired_record_fields": [
+    "@context",
+    "@type",
+    "@id",
+    "identifier",
+    "name",
+    "sex",
+    "birth_date",
+    "parent1_identifier",
+    "parent2_identifier"
+  ],
+  "released_fields": [],
+  "released_fact": "birth-record-presence-only",
+  "excluded_from_relay_output": [
+    "all-source-record-fields",
+    "source-identifier",
+    "source-envelope",
+    "source-signature",
+    "source-url"
+  ]
+}

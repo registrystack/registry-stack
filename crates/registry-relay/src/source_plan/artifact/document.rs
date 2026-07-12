@@ -132,94 +132,17 @@ pub(in super::super) struct OutputFieldDocument {
     pub(in super::super) nullable: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub(in super::super) enum AcquiredValueSchemaDocument {
-    String {
-        nullable: bool,
-        max_bytes: u32,
-    },
-    Boolean {
-        nullable: bool,
-    },
-    Integer {
-        nullable: bool,
-        minimum: i64,
-        maximum: i64,
-    },
-    Number {
-        nullable: bool,
-        minimum: i64,
-        maximum: i64,
-    },
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum OutputModeDocument {
+    #[default]
+    ProjectedFields,
+    PresenceOnly,
 }
 
-impl AcquiredValueSchemaDocument {
-    pub(super) fn validates_public_output(&self, output: &OutputFieldDocument) -> bool {
-        match (self, &output.output_type) {
-            (Self::String { nullable, .. }, OutputTypeDocument::String)
-            | (Self::Boolean { nullable }, OutputTypeDocument::Boolean)
-            | (Self::Integer { nullable, .. }, OutputTypeDocument::Integer)
-            | (Self::Number { nullable, .. }, OutputTypeDocument::Number) => {
-                *nullable == output.nullable
-            }
-            _ => false,
-        }
-    }
-
-    fn output_type(&self) -> OutputTypeDocument {
-        match self {
-            Self::String { .. } => OutputTypeDocument::String,
-            Self::Boolean { .. } => OutputTypeDocument::Boolean,
-            Self::Integer { .. } => OutputTypeDocument::Integer,
-            Self::Number { .. } => OutputTypeDocument::Number,
-        }
-    }
-
-    pub(super) fn matches_response_schema(&self, schema: &ResponseSchemaDocument) -> bool {
-        match (self, schema) {
-            (
-                Self::String {
-                    nullable,
-                    max_bytes,
-                },
-                ResponseSchemaDocument::String {
-                    nullable: raw_nullable,
-                    max_bytes: raw_max_bytes,
-                },
-            ) => nullable == raw_nullable && max_bytes == raw_max_bytes,
-            (
-                Self::Boolean { nullable },
-                ResponseSchemaDocument::Boolean {
-                    nullable: raw_nullable,
-                },
-            ) => nullable == raw_nullable,
-            (
-                Self::Number {
-                    nullable,
-                    minimum,
-                    maximum,
-                },
-                ResponseSchemaDocument::Number {
-                    nullable: raw_nullable,
-                    minimum: raw_minimum,
-                    maximum: raw_maximum,
-                },
-            ) => nullable == raw_nullable && minimum == raw_minimum && maximum == raw_maximum,
-            (
-                Self::Integer {
-                    nullable,
-                    minimum,
-                    maximum,
-                },
-                ResponseSchemaDocument::Integer {
-                    nullable: raw_nullable,
-                    minimum: raw_minimum,
-                    maximum: raw_maximum,
-                },
-            ) => nullable == raw_nullable && minimum == raw_minimum && maximum == raw_maximum,
-            _ => false,
-        }
+impl OutputModeDocument {
+    pub(super) const fn is_projected_fields(&self) -> bool {
+        matches!(self, Self::ProjectedFields)
     }
 }
 
@@ -297,6 +220,24 @@ pub(in super::super) enum ResponseSchemaDocument {
     },
 }
 
+impl ResponseSchemaDocument {
+    pub(super) fn validates_public_output(&self, output: &OutputFieldDocument) -> bool {
+        match (self, &output.output_type) {
+            (Self::String { nullable, .. }, OutputTypeDocument::String)
+            | (Self::Boolean { nullable }, OutputTypeDocument::Boolean)
+            | (Self::Integer { nullable, .. }, OutputTypeDocument::Integer)
+            | (Self::Number { nullable, .. }, OutputTypeDocument::Number) => {
+                *nullable == output.nullable
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn matches_response_schema(&self, schema: &Self) -> bool {
+        self == schema
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in super::super) struct ResponseSchemaFieldDocument {
@@ -317,8 +258,8 @@ impl ReviewedCardinalityDocument {
 #[serde(deny_unknown_fields)]
 pub(in super::super) struct PackAcquisitionDocument {
     pub(in super::super) class: AcquisitionClassDocument,
-    pub(in super::super) fields: BTreeMap<String, AcquiredValueSchemaDocument>,
-    pub(in super::super) control_fields: BTreeMap<String, AcquiredValueSchemaDocument>,
+    pub(in super::super) fields: BTreeMap<String, ResponseSchemaDocument>,
+    pub(in super::super) control_fields: BTreeMap<String, ResponseSchemaDocument>,
     pub(in super::super) selector: ExactSelectorDocument,
     pub(in super::super) cardinality: ReviewedCardinalityDocument,
     pub(in super::super) reject_unknown_fields: bool,
@@ -526,6 +467,11 @@ pub(in super::super) struct PublicContractSpecDocument {
     pub(in super::super) integration_pack: ArtifactReferenceDocument,
     pub(in super::super) acquisition: PublicAcquisitionDocument,
     pub(in super::super) source_provenance: SourceProvenanceDocument,
+    #[serde(
+        default,
+        skip_serializing_if = "OutputModeDocument::is_projected_fields"
+    )]
+    pub(in super::super) output_mode: OutputModeDocument,
     pub(in super::super) output: BTreeMap<String, OutputFieldDocument>,
     pub(in super::super) authorization: AuthorizationDocument,
     pub(in super::super) bounds: LimitsDocument,
@@ -648,6 +594,7 @@ pub(in super::super) enum RequestCodecDocument {
     None,
     Json,
     DciExactV1,
+    OpenCrvsDciExactV1,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -722,6 +669,7 @@ pub(in super::super) enum ProjectionMechanismDocument {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mechanism", rename_all = "snake_case", deny_unknown_fields)]
 pub(in super::super) enum CardinalityMechanismDocument {
+    OpenCrvsDciProbeTwo,
     ProbeQueryParameter {
         parameter: String,
     },
@@ -830,10 +778,19 @@ pub(in super::super) struct OAuth2ClientCredentialsResponseDocument {
     pub(in super::super) schema: OAuth2TokenResponseSchemaDocument,
     pub(in super::super) access_token_max_bytes: u16,
     pub(in super::super) token_type: OAuth2TokenTypeDocument,
-    pub(in super::super) expires_in_min_seconds: u32,
-    pub(in super::super) expires_in_max_seconds: u32,
-    pub(in super::super) max_token_lifetime_ms: u32,
-    pub(in super::super) expiry_safety_skew_ms: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) expires_in_min_seconds: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) expires_in_max_seconds: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) max_token_lifetime_ms: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) expiry_safety_skew_ms: Option<u32>,
+    #[serde(
+        default,
+        skip_serializing_if = "OAuth2TokenCacheModeDocument::is_expiry_bound"
+    )]
+    pub(in super::super) cache_mode: OAuth2TokenCacheModeDocument,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -845,6 +802,21 @@ pub(in super::super) enum OAuth2TokenTypeDocument {
 #[serde(rename_all = "snake_case")]
 pub(in super::super) enum OAuth2TokenResponseSchemaDocument {
     StrictAccessTokenBearerExpiresIn,
+    StrictAccessTokenBearerNoExpiry,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum OAuth2TokenCacheModeDocument {
+    #[default]
+    ExpiryBound,
+    Disabled,
+}
+
+impl OAuth2TokenCacheModeDocument {
+    pub(super) const fn is_expiry_bound(&self) -> bool {
+        matches!(self, Self::ExpiryBound)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -964,6 +936,11 @@ pub(in super::super) struct IntegrationPackSpecDocument {
     pub(in super::super) source_provenance: SourceProvenanceDocument,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) reviewed_acquisition: Option<PackAcquisitionDocument>,
+    #[serde(
+        default,
+        skip_serializing_if = "OutputModeDocument::is_projected_fields"
+    )]
+    pub(in super::super) output_mode: OutputModeDocument,
     pub(in super::super) output: BTreeMap<String, OutputFieldDocument>,
     pub(in super::super) plan: PlanTemplateDocument,
     pub(in super::super) bounds: LimitsDocument,

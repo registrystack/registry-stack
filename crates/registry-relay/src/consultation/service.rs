@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Concrete consultation service for the one-step Basic GET product journey.
+//! Concrete consultation service for the maintained product journeys.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -10,6 +10,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use registry_platform_audit::{
     AuditChainHasher, DurableAuditOperationId, DurableAuditPhase, DurableAuditSink,
     DurableAuditStreamKind, DurableAuditWrite, DurableAuditWriteError, DurableAuditWriteOutcome,
+};
+use registry_platform_httputil::destination::json::{
+    MAX_CLOSED_JSON_ENCODED_BODY_BYTES, MAX_CLOSED_JSON_STRING_BYTES,
 };
 use serde_json::json;
 use thiserror::Error;
@@ -23,20 +26,20 @@ use crate::config::{
     AuthMode as ConfigAuthMode, Config, ConsultationConfig, VerifiedConsultationArtifactClosure,
 };
 use crate::source_plan::{
-    CompiledBasicSourceCredentialProvider, CompiledConsultationRegistry, CompiledSourcePlan,
-    InitializedConsentVerifierRegistry,
+    CompiledBasicSourceCredentialProvider, CompiledConsultationRegistry,
+    CompiledOAuthSourceCredentialProvider, CompiledSourcePlan, InitializedConsentVerifierRegistry,
 };
 use crate::state_plane::{
     ConsultationPermitSet, ConsultationStatePlaneReadiness, ConsultationStatePlaneRuntime,
     EffectiveQuotaLimits, PublicQuotaLimits, QuotaKey, QuotaReservation,
 };
 
-use super::audit::{prepare_atomic_consultation_attempt, FinalizedBasicGetConsultation};
+use super::audit::{prepare_atomic_consultation_attempt, FinalizedConcreteConsultation};
 use super::commitments::{
     authorize_consultation_attempt, build_pseudonym_inputs, CanonicalConsultationInputs,
     ConsultationCommitmentError, VerifiedConsentAuthority,
 };
-use super::executor::{dispatch_budget, validate_basic_get_activation};
+use super::executor::ConcreteExecutorKind;
 use super::policy::evaluate_compiled_policy;
 use super::pseudonym::AuditPseudonymMaterialProvider;
 use super::{
@@ -47,9 +50,8 @@ use super::{
     ResolvedConsultationProfile,
 };
 
-const MAX_PROTECTED_PROFILE_METADATA_BYTES: usize = 257 * 1_024;
-const METADATA_PREFIX: &[u8] = br#"{"contract_hash":""#;
-const METADATA_CONTRACT_MEMBER: &[u8] = br#"","contract":"#;
+const MAX_PROTECTED_CONTRACT_JSON_BYTES: usize = MAX_CLOSED_JSON_STRING_BYTES as usize;
+const MAX_PROTECTED_PROFILE_METADATA_BYTES: usize = MAX_CLOSED_JSON_ENCODED_BODY_BYTES;
 const DENIAL_DECISION_SCHEMA: &str = "registry.relay.consultation.denial-decision.v1";
 const UNMATCHED_CONSULTATION_ROUTE: &str = "/v1/consultations/{unmatched}";
 
@@ -282,6 +284,7 @@ struct ActivatedProfile {
     quota_limits: ActivatedQuotaLimits,
     semaphore: Arc<Semaphore>,
     metadata: Arc<[u8]>,
+    executor: ConcreteExecutorKind,
     dispatch_budget: crate::state_plane::DispatchPermitBudget,
 }
 
@@ -289,7 +292,8 @@ struct CompiledServiceActivation {
     registry: CompiledConsultationRegistry,
     fixed_notary_identity: ConfiguredOidcWorkloadProof,
     profiles: BTreeMap<ConsultationKey, ActivatedProfile>,
-    credentials: CompiledBasicSourceCredentialProvider,
+    basic_credentials: CompiledBasicSourceCredentialProvider,
+    oauth_credentials: CompiledOAuthSourceCredentialProvider,
     pseudonym_materials: AuditPseudonymMaterialProvider,
 }
 
@@ -298,7 +302,8 @@ pub struct ConsultationService {
     registry: CompiledConsultationRegistry,
     fixed_notary_identity: ConfiguredOidcWorkloadProof,
     profiles: BTreeMap<ConsultationKey, ActivatedProfile>,
-    credentials: CompiledBasicSourceCredentialProvider,
+    basic_credentials: CompiledBasicSourceCredentialProvider,
+    oauth_credentials: CompiledOAuthSourceCredentialProvider,
     pseudonym_materials: AuditPseudonymMaterialProvider,
     state_plane: ConsultationStatePlaneRuntime,
     admission_open: AtomicBool,
@@ -361,7 +366,8 @@ impl ConsultationService {
             registry: compiled.registry,
             fixed_notary_identity: compiled.fixed_notary_identity,
             profiles: compiled.profiles,
-            credentials: compiled.credentials,
+            basic_credentials: compiled.basic_credentials,
+            oauth_credentials: compiled.oauth_credentials,
             pseudonym_materials: compiled.pseudonym_materials,
             state_plane,
             admission_open: AtomicBool::new(true),
@@ -585,7 +591,8 @@ impl ConsultationService {
             .map_err(map_authorization_commitment_error)?;
         let attempt =
             authorize_consultation_attempt(decision).map_err(map_authorization_commitment_error)?;
-        let permit_set = ConsultationPermitSet::from_counts(0, 1)
+        let (credential_permits, data_permits) = activated.executor.permit_counts();
+        let permit_set = ConsultationPermitSet::from_counts(credential_permits, data_permits)
             .map_err(|_| ConsultationServiceError::Unavailable)?;
         let fence = self
             .state_plane
@@ -608,18 +615,23 @@ impl ConsultationService {
             .await
             .map_err(|_| ConsultationServiceError::Unavailable)?;
         match audited
-            .execute_one_step_basic_get(self.state_plane.serving_fence(), &self.credentials)
+            .execute_concrete_consultation(
+                activated.executor,
+                self.state_plane.serving_fence(),
+                &self.basic_credentials,
+                &self.oauth_credentials,
+            )
             .await
         {
             Ok(executed) => match self
                 .state_plane
                 .audit()
-                .finalize_basic_get_consultation(executed, self.state_plane.pseudonym_keyring())
+                .finalize_concrete_consultation(executed, self.state_plane.pseudonym_keyring())
                 .await
                 .map_err(|_| ConsultationServiceError::Unavailable)?
             {
-                FinalizedBasicGetConsultation::Published(response) => Ok(response.into_http_body()),
-                FinalizedBasicGetConsultation::FinalizedFailure(_) => {
+                FinalizedConcreteConsultation::Published(response) => Ok(response.into_http_body()),
+                FinalizedConcreteConsultation::FinalizedFailure(_) => {
                     Err(ConsultationServiceError::Unavailable)
                 }
             },
@@ -811,13 +823,18 @@ fn compile_service_activation(
     )
     .map_err(|_| ConsultationServiceActivationError::RegistryActivation)?;
     let mut profiles = BTreeMap::new();
-    for plan in registry.plans_for_basic_get_activation() {
+    for plan in registry.plans_for_concrete_activation() {
         let (key, activated) = compile_profile_activation(plan, &fixed_notary_identity)?;
         if profiles.insert(key, activated).is_some() {
             return Err(ConsultationServiceActivationError::RegistryActivation);
         }
     }
-    let credentials = CompiledBasicSourceCredentialProvider::compile_for_consultations(
+    let basic_credentials = CompiledBasicSourceCredentialProvider::compile_for_consultations(
+        &consultation.source_credentials,
+        &registry,
+    )
+    .map_err(|_| ConsultationServiceActivationError::SourceCredentials)?;
+    let oauth_credentials = CompiledOAuthSourceCredentialProvider::compile_for_consultations(
         &consultation.source_credentials,
         &registry,
     )
@@ -828,7 +845,8 @@ fn compile_service_activation(
         registry,
         fixed_notary_identity,
         profiles,
-        credentials,
+        basic_credentials,
+        oauth_credentials,
         pseudonym_materials,
     })
 }
@@ -884,7 +902,7 @@ fn compile_profile_activation(
     plan: &CompiledSourcePlan,
     fixed_notary_identity: &ConfiguredOidcWorkloadProof,
 ) -> Result<(ConsultationKey, ActivatedProfile), ConsultationServiceActivationError> {
-    validate_basic_get_activation(plan)
+    let executor = ConcreteExecutorKind::activate(plan)
         .map_err(|_| ConsultationServiceActivationError::UnsupportedPlan)?;
     let runtime = plan.runtime_profile();
     let key = ConsultationKey::try_parse(
@@ -916,7 +934,9 @@ fn compile_profile_activation(
             quota_limits: ActivatedQuotaLimits { public, effective },
             semaphore: Arc::new(Semaphore::new(max_in_flight)),
             metadata,
-            dispatch_budget: dispatch_budget(plan)
+            executor,
+            dispatch_budget: executor
+                .dispatch_budget(plan)
                 .map_err(|_| ConsultationServiceActivationError::UnsupportedPlan)?,
         },
     ))
@@ -937,23 +957,27 @@ fn quota_limits(
 fn protected_metadata_bytes(
     plan: &CompiledSourcePlan,
 ) -> Result<Vec<u8>, ConsultationServiceActivationError> {
-    let contract = plan.canonical_public_contract();
-    let contract_hash = plan.profile().contract_hash().as_str().as_bytes();
-    let capacity = METADATA_PREFIX
-        .len()
-        .checked_add(contract_hash.len())
-        .and_then(|length| length.checked_add(METADATA_CONTRACT_MEMBER.len()))
-        .and_then(|length| length.checked_add(contract.len()))
-        .and_then(|length| length.checked_add(1))
-        .filter(|length| *length <= MAX_PROTECTED_PROFILE_METADATA_BYTES)
-        .ok_or(ConsultationServiceActivationError::InvalidMetadata)?;
-    let mut metadata = Vec::with_capacity(capacity);
-    metadata.extend_from_slice(METADATA_PREFIX);
-    metadata.extend_from_slice(contract_hash);
-    metadata.extend_from_slice(METADATA_CONTRACT_MEMBER);
-    metadata.extend_from_slice(contract);
-    metadata.push(b'}');
-    if metadata.len() != capacity {
+    encode_protected_metadata(
+        plan.profile().contract_hash().as_str(),
+        plan.canonical_public_contract(),
+    )
+}
+
+fn encode_protected_metadata(
+    contract_hash: &str,
+    contract: &[u8],
+) -> Result<Vec<u8>, ConsultationServiceActivationError> {
+    if contract.len() > MAX_PROTECTED_CONTRACT_JSON_BYTES {
+        return Err(ConsultationServiceActivationError::InvalidMetadata);
+    }
+    let contract_json = std::str::from_utf8(contract)
+        .map_err(|_| ConsultationServiceActivationError::InvalidMetadata)?;
+    let metadata = serde_json::to_vec(&json!({
+        "contract_hash": contract_hash,
+        "contract_json": contract_json,
+    }))
+    .map_err(|_| ConsultationServiceActivationError::InvalidMetadata)?;
+    if metadata.len() > MAX_PROTECTED_PROFILE_METADATA_BYTES {
         return Err(ConsultationServiceActivationError::InvalidMetadata);
     }
     Ok(metadata)
@@ -1024,18 +1048,44 @@ mod tests {
             Some(plan.profile().contract_hash().as_str())
         );
         assert_eq!(
-            metadata["contract"],
+            metadata["contract_json"].as_str(),
+            std::str::from_utf8(plan.canonical_public_contract()).ok()
+        );
+        assert_eq!(
+            parse_json_strict(metadata["contract_json"].as_str().unwrap().as_bytes()).unwrap(),
             parse_json_strict(plan.canonical_public_contract()).unwrap()
         );
         assert!(!metadata
             .as_object()
             .unwrap()
             .contains_key("private_binding"));
+        assert!(!metadata.as_object().unwrap().contains_key("contract"));
+        assert_eq!(metadata.as_object().unwrap().len(), 2);
 
         assert_eq!(
             compile_profile_activation(&bounded_runtime_vector_plan_fixture(), &fixed_identity(),)
                 .err(),
             Some(ConsultationServiceActivationError::UnsupportedPlan)
+        );
+    }
+
+    #[test]
+    fn protected_metadata_keeps_the_canonical_contract_bounded_and_string_typed() {
+        let hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let encoded = encode_protected_metadata(hash, br#"{"value":"line\nquote\""}"#)
+            .expect("bounded canonical contract");
+        let metadata = parse_json_strict(&encoded).expect("strict metadata");
+        assert_eq!(metadata["contract_hash"], hash);
+        assert_eq!(metadata["contract_json"], r#"{"value":"line\nquote\""}"#);
+        assert!(metadata["contract_json"].is_string());
+
+        assert_eq!(
+            encode_protected_metadata(hash, &[0xff]),
+            Err(ConsultationServiceActivationError::InvalidMetadata)
+        );
+        assert_eq!(
+            encode_protected_metadata(hash, &vec![b'x'; MAX_PROTECTED_CONTRACT_JSON_BYTES + 1],),
+            Err(ConsultationServiceActivationError::InvalidMetadata)
         );
     }
 

@@ -1,6 +1,7 @@
 //! Closed, slot-typed OAuth client-credentials request and response capabilities.
 
 use std::fmt;
+use std::num::NonZeroU32;
 
 use registry_platform_crypto::parse_json_strict;
 use registry_platform_httputil::destination::{
@@ -16,6 +17,18 @@ use crate::consultation::OperationId;
 pub(crate) enum CompiledOAuth2RequestFormat {
     JsonClientSecretBody,
     FormClientSecretBody,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompiledOAuth2TokenSchema {
+    StrictAccessTokenBearerExpiresIn,
+    StrictAccessTokenBearerNoExpiry,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompiledOAuth2CacheMode {
+    ExpiryBound,
+    Disabled,
 }
 
 /// One hash-bound failure behavior for every credential-exchange failure.
@@ -66,7 +79,7 @@ pub(crate) enum CredentialOperationFailure {
 /// Opaque parsed access token retained only in zeroizing memory.
 pub(crate) struct ParsedOAuth2AccessToken {
     value: Zeroizing<String>,
-    usable_lifetime_ms: u32,
+    usable_lifetime_ms: Option<NonZeroU32>,
 }
 
 impl fmt::Debug for ParsedOAuth2AccessToken {
@@ -80,8 +93,11 @@ impl fmt::Debug for ParsedOAuth2AccessToken {
 }
 
 impl ParsedOAuth2AccessToken {
-    pub(crate) const fn usable_lifetime_ms(&self) -> u32 {
-        self.usable_lifetime_ms
+    pub(crate) const fn usable_lifetime_ms(&self) -> Option<u32> {
+        match self.usable_lifetime_ms {
+            Some(value) => Some(value.get()),
+            None => None,
+        }
     }
 
     pub(crate) fn bearer_authorization(
@@ -102,10 +118,11 @@ pub(crate) struct CompiledOAuth2TokenParser {
     pub(super) max_response_bytes: u32,
     pub(super) accepted_statuses: Box<[u16]>,
     pub(super) access_token_max_bytes: u16,
-    pub(super) expires_in_min_seconds: u32,
-    pub(super) expires_in_max_seconds: u32,
-    pub(super) max_token_lifetime_ms: u32,
-    pub(super) expiry_safety_skew_ms: u32,
+    pub(super) schema: CompiledOAuth2TokenSchema,
+    pub(super) expires_in_min_seconds: Option<u32>,
+    pub(super) expires_in_max_seconds: Option<u32>,
+    pub(super) max_token_lifetime_ms: Option<u32>,
+    pub(super) expiry_safety_skew_ms: Option<u32>,
 }
 
 impl fmt::Debug for CompiledOAuth2TokenParser {
@@ -120,6 +137,21 @@ impl fmt::Debug for CompiledOAuth2TokenParser {
 }
 
 impl CompiledOAuth2TokenParser {
+    pub(crate) const fn max_response_bytes(&self) -> u32 {
+        self.max_response_bytes
+    }
+
+    pub(crate) const fn access_token_max_bytes(&self) -> u16 {
+        self.access_token_max_bytes
+    }
+
+    pub(crate) const fn is_no_expiry(&self) -> bool {
+        matches!(
+            self.schema,
+            CompiledOAuth2TokenSchema::StrictAccessTokenBearerNoExpiry
+        )
+    }
+
     pub(crate) fn parse(
         &self,
         status: u16,
@@ -136,10 +168,17 @@ impl CompiledOAuth2TokenParser {
         let serde_json::Value::Object(mut object) = value else {
             return Err(CredentialOperationFailure::MalformedResponse);
         };
-        if object.len() != 3
+        let expected_members = match self.schema {
+            CompiledOAuth2TokenSchema::StrictAccessTokenBearerExpiresIn => 3,
+            CompiledOAuth2TokenSchema::StrictAccessTokenBearerNoExpiry => 2,
+        };
+        if object.len() != expected_members
             || !object.contains_key("access_token")
             || !object.contains_key("token_type")
-            || !object.contains_key("expires_in")
+            || (matches!(
+                self.schema,
+                CompiledOAuth2TokenSchema::StrictAccessTokenBearerExpiresIn
+            ) != object.contains_key("expires_in"))
         {
             return Err(CredentialOperationFailure::MalformedResponse);
         }
@@ -164,22 +203,40 @@ impl CompiledOAuth2TokenParser {
         {
             return Err(CredentialOperationFailure::InvalidTokenType);
         }
-        let expires_in = object
-            .remove("expires_in")
-            .and_then(|value| value.as_u64())
-            .and_then(|value| u32::try_from(value).ok())
-            .ok_or(CredentialOperationFailure::InvalidExpiresIn)?;
-        if !(self.expires_in_min_seconds..=self.expires_in_max_seconds).contains(&expires_in) {
-            return Err(CredentialOperationFailure::InvalidExpiresIn);
-        }
-        let lifetime_ms = expires_in
-            .checked_mul(1_000)
-            .ok_or(CredentialOperationFailure::InvalidExpiresIn)?
-            .min(self.max_token_lifetime_ms);
-        let usable_lifetime_ms = lifetime_ms
-            .checked_sub(self.expiry_safety_skew_ms)
-            .filter(|value| *value > 0)
-            .ok_or(CredentialOperationFailure::ExpiredAfterSkew)?;
+        let usable_lifetime_ms = match self.schema {
+            CompiledOAuth2TokenSchema::StrictAccessTokenBearerNoExpiry => None,
+            CompiledOAuth2TokenSchema::StrictAccessTokenBearerExpiresIn => {
+                let expires_in = object
+                    .remove("expires_in")
+                    .and_then(|value| value.as_u64())
+                    .and_then(|value| u32::try_from(value).ok())
+                    .ok_or(CredentialOperationFailure::InvalidExpiresIn)?;
+                let min_seconds = self
+                    .expires_in_min_seconds
+                    .ok_or(CredentialOperationFailure::InvalidExpiresIn)?;
+                let max_seconds = self
+                    .expires_in_max_seconds
+                    .ok_or(CredentialOperationFailure::InvalidExpiresIn)?;
+                if !(min_seconds..=max_seconds).contains(&expires_in) {
+                    return Err(CredentialOperationFailure::InvalidExpiresIn);
+                }
+                let lifetime_ms = expires_in
+                    .checked_mul(1_000)
+                    .ok_or(CredentialOperationFailure::InvalidExpiresIn)?
+                    .min(
+                        self.max_token_lifetime_ms
+                            .ok_or(CredentialOperationFailure::InvalidExpiresIn)?,
+                    );
+                let usable = lifetime_ms
+                    .checked_sub(
+                        self.expiry_safety_skew_ms
+                            .ok_or(CredentialOperationFailure::InvalidExpiresIn)?,
+                    )
+                    .and_then(NonZeroU32::new)
+                    .ok_or(CredentialOperationFailure::ExpiredAfterSkew)?;
+                Some(usable)
+            }
+        };
         Ok(ParsedOAuth2AccessToken {
             value: access_token,
             usable_lifetime_ms,
@@ -223,6 +280,7 @@ pub(crate) struct CompiledCredentialOperation {
     pub(super) scope: Option<Box<str>>,
     pub(super) resource: Option<Box<str>>,
     pub(super) parser: CompiledOAuth2TokenParser,
+    pub(super) cache_mode: CompiledOAuth2CacheMode,
     pub(super) failure_policy: CompiledCredentialFailurePolicy,
 }
 
@@ -241,6 +299,10 @@ impl fmt::Debug for CompiledCredentialOperation {
 }
 
 impl CompiledCredentialOperation {
+    pub(crate) const fn id(&self) -> &OperationId {
+        &self.id
+    }
+
     pub(crate) fn render_request(
         &self,
         client_id: Zeroizing<Vec<u8>>,
@@ -310,6 +372,10 @@ impl CompiledCredentialOperation {
 
     pub(crate) const fn parser(&self) -> &CompiledOAuth2TokenParser {
         &self.parser
+    }
+
+    pub(crate) const fn cache_mode(&self) -> CompiledOAuth2CacheMode {
+        self.cache_mode
     }
 
     pub(crate) const fn failure_policy(&self) -> CompiledCredentialFailurePolicy {

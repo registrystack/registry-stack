@@ -1,0 +1,27 @@
+{
+  "schema": "registry.relay.profile-evidence.v1",
+  "class": "negative_security",
+  "activation_rejections": [
+    "non-root-data-or-credential-base-path",
+    "non-opencrvs-search-or-token-path",
+    "authored-query-header-or-body",
+    "request-or-credential-timeout-not-equal-to-total-deadline",
+    "cached-or-expiring-token-contract",
+    "non-presence-only-output",
+    "missing-fresh-jwks-exchange"
+  ],
+  "runtime_rejections_required": [
+    "non-json-media-type",
+    "unknown-or-duplicate-jwks-member",
+    "weak-wrong-or-duplicate-signing-key",
+    "invalid-jws-protected-header",
+    "invalid-signature",
+    "signed-payload-sibling-mismatch",
+    "request-correlation-mismatch",
+    "unknown-envelope-member",
+    "pagination-inconsistency",
+    "unknown-record-member",
+    "more-than-two-records",
+    "source-field-in-presence-only-output"
+  ]
+}

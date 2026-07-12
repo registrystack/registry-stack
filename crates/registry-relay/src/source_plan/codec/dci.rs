@@ -389,13 +389,19 @@ impl DciExactSearchRequest {
 /// Zeroizing encoded request bytes containing the exact selector.
 ///
 /// The wrapper deliberately has no `Debug`, `Clone`, or serialization
-/// implementation. The executor may only borrow the bytes for dispatch.
+/// implementation. The executor may borrow the bytes for inspection or move
+/// the zeroizing allocation directly into the transport renderer.
 pub(crate) struct DciRequestBody(Zeroizing<Vec<u8>>);
 
 impl DciRequestBody {
     /// Borrow the encoded body without creating another sensitive allocation.
     pub(crate) fn as_bytes(&self) -> &[u8] {
         self.0.as_slice()
+    }
+
+    /// Consume the body without copying its selector-bearing allocation.
+    pub(crate) fn into_zeroizing_bytes(self) -> Zeroizing<Vec<u8>> {
+        self.0
     }
 }
 

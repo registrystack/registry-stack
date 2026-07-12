@@ -238,16 +238,15 @@ impl CompiledConsultationRegistry {
         ))
     }
 
-    /// Narrow source-plan access for restart-only Basic credential activation.
+    /// Narrow source-plan access for restart-only source credential activation.
     /// This is visible only inside `source_plan`, never to request paths.
-    pub(super) const fn source_plans_for_basic_credentials(&self) -> &CompiledSourcePlanRegistry {
+    pub(super) const fn source_plans_for_credentials(&self) -> &CompiledSourcePlanRegistry {
         &self.source_plans
     }
 
-    /// Iterate the exact immutable plan closure only while activating the
-    /// concrete one-step Basic GET product journey. Request paths must resolve
-    /// through [`Self::resolve_for_authenticated_workload`] instead.
-    pub(crate) fn plans_for_basic_get_activation(
+    /// Iterate the immutable plan closure for concrete Basic GET and exact
+    /// OpenCRVS activation only. Request paths retain no registry-wide access.
+    pub(crate) fn plans_for_concrete_activation(
         &self,
     ) -> impl ExactSizeIterator<Item = &CompiledSourcePlan> {
         self.source_plans.iter()

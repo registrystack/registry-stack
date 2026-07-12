@@ -44,8 +44,8 @@ use crate::consultation::{
 };
 use crate::source_plan::{
     dhis2_completion_seed_fixture, maximum_completion_seed_fixture, normal_completion_seed_fixture,
-    rhai_five_operation_two_slot_completion_seed_fixture, semantic_alias_completion_seed_fixture,
-    snapshot_completion_seed_fixture,
+    open_crvs_completion_seed_fixture, rhai_five_operation_two_slot_completion_seed_fixture,
+    semantic_alias_completion_seed_fixture, snapshot_completion_seed_fixture,
 };
 
 use super::migration::RUNTIME_SESSION_LIMITS_SQL;
@@ -2751,6 +2751,7 @@ WHERE metadata.singleton = true
         .try_get(0)?;
     let compiler_normal_seed = normal_completion_seed_fixture();
     let compiler_dhis2_seed = dhis2_completion_seed_fixture();
+    let compiler_open_crvs_seed = open_crvs_completion_seed_fixture();
     let compiler_snapshot_seed = snapshot_completion_seed_fixture();
     let compiler_semantic_alias_seed = semantic_alias_completion_seed_fixture();
     let compiler_maximum_seed = maximum_completion_seed_fixture();
@@ -2785,6 +2786,46 @@ WHERE metadata.singleton = true
         .query_one(
             "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
             &[&serde_json::to_string(&compiler_normal_seed)?],
+        )
+        .await?
+        .try_get(0)?;
+    let compiler_open_crvs_seed_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&compiler_open_crvs_seed)?],
+        )
+        .await?
+        .try_get(0)?;
+    let mut open_crvs_positive_lifetime = compiler_open_crvs_seed.clone();
+    open_crvs_positive_lifetime["bounds"]["credential_token_lifetime_ms"] = json!(60_000);
+    let open_crvs_positive_lifetime_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&open_crvs_positive_lifetime)?],
+        )
+        .await?
+        .try_get(0)?;
+    let mut open_crvs_broken_jwks = compiler_open_crvs_seed.clone();
+    open_crvs_broken_jwks["authorized_operation_union"][2]["operation_id"] =
+        json!("opencrvs-search.keys");
+    open_crvs_broken_jwks["dispatch"]["permit_bindings"][1]["allowed_operation_ids"] =
+        json!(["opencrvs-search.keys"]);
+    let open_crvs_broken_jwks_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&open_crvs_broken_jwks)?],
+        )
+        .await?
+        .try_get(0)?;
+    let mut open_crvs_misordered_jwks = compiler_open_crvs_seed.clone();
+    open_crvs_misordered_jwks["dispatch"]["permit_bindings"][1]["allowed_operation_ids"] =
+        json!(["opencrvs-search"]);
+    open_crvs_misordered_jwks["dispatch"]["permit_bindings"][2]["allowed_operation_ids"] =
+        json!(["opencrvs-search.jwks"]);
+    let open_crvs_misordered_jwks_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&open_crvs_misordered_jwks)?],
         )
         .await?
         .try_get(0)?;
@@ -2867,6 +2908,22 @@ WHERE metadata.singleton = true
     assert!(
         compiler_normal_seed_valid,
         "the compiler's ordinary completion seed must satisfy SQL"
+    );
+    assert!(
+        compiler_open_crvs_seed_valid,
+        "the compiler's cache-disabled OpenCRVS seed must satisfy SQL"
+    );
+    assert!(
+        !open_crvs_positive_lifetime_valid,
+        "presence-only OAuth must use null, never an expiry-bound lifetime"
+    );
+    assert!(
+        !open_crvs_broken_jwks_valid,
+        "presence-only OAuth must retain the derived JWKS operation identity"
+    );
+    assert!(
+        !open_crvs_misordered_jwks_valid,
+        "presence-only OAuth must dispatch JWKS before the DCI search"
     );
     assert!(
         compiler_semantic_alias_seed_valid,

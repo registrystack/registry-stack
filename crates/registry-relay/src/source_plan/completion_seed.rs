@@ -16,8 +16,8 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::artifact::{
-    IntegrationPackArtifact, PrivateBindingArtifact, PublicContractArtifact, SourcePlanKind,
-    SourcePlanLimits,
+    IntegrationPackArtifact, PrivateBindingArtifact, PublicContractArtifact, RequestCodecDocument,
+    SourcePlanKind, SourcePlanLimits,
 };
 use super::compiler::{
     CompiledBodyTemplate, CompiledCardinalityMechanism, CompiledOperation,
@@ -252,15 +252,22 @@ fn compile_physical_projection_digest(
                     })
                 })
                 .collect::<Vec<_>>();
-            Ok((
-                operation.id().as_str(),
-                json!({
-                    "operation_id": operation.id().as_str(),
-                    "projection": projection_preimage(operation)?,
-                    "cardinality": cardinality_preimage(operation)?,
-                    "output_mappings": outputs,
-                }),
-            ))
+            let mut preimage = json!({
+                "operation_id": operation.id().as_str(),
+                "projection": projection_preimage(operation)?,
+                "cardinality": cardinality_preimage(operation)?,
+                "output_mappings": outputs,
+            });
+            if let Some(jwks) = operation.embedded_open_crvs_jwks() {
+                preimage["request_codec"] = Value::String("open_crvs_dci_exact_v1".into());
+                preimage["embedded_jwks"] = json!({
+                    "operation_id": jwks.id().as_str(),
+                    "fixed_path": jwks.fixed_path(),
+                    "response_max_bytes": jwks.response_max_bytes(),
+                    "order": "before_data_operation",
+                });
+            }
+            Ok((operation.id().as_str(), preimage))
         })
         .collect::<Result<Vec<_>, SourcePlanCompileError>>()?;
     operation_preimages.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
@@ -293,14 +300,24 @@ fn predicate_operation_preimage(
             })
         })
         .collect::<Vec<_>>();
-    Ok(json!({
+    let mut preimage = json!({
         "operation_id": operation.id().as_str(),
         "selector": selector_preimage(operation, input_names, operations)?,
         "prior_output_dependencies": prior_output_dependencies(operation, operations)?,
         "prior_output_declarations": prior_output_declarations,
         "projection": projection_preimage(operation)?,
         "cardinality": cardinality_preimage(operation)?,
-    }))
+    });
+    if let Some(jwks) = operation.embedded_open_crvs_jwks() {
+        preimage["request_codec"] = Value::String("open_crvs_dci_exact_v1".into());
+        preimage["embedded_jwks"] = json!({
+            "operation_id": jwks.id().as_str(),
+            "fixed_path": jwks.fixed_path(),
+            "response_max_bytes": jwks.response_max_bytes(),
+            "order": "before_data_operation",
+        });
+    }
+    Ok(preimage)
 }
 
 fn selector_preimage(
@@ -499,6 +516,9 @@ fn projection_preimage(operation: &CompiledOperation) -> Result<Value, SourcePla
 
 fn cardinality_preimage(operation: &CompiledOperation) -> Result<Value, SourcePlanCompileError> {
     match operation.response().cardinality() {
+        CompiledCardinalityMechanism::OpenCrvsDciProbeTwo => {
+            Ok(json!({"kind": "open_crvs_dci_probe_two"}))
+        }
         CompiledCardinalityMechanism::ProbeQueryParameter { query_index } => Ok(json!({
             "kind": "probe_query_parameter",
             "parameter": operation
@@ -630,6 +650,10 @@ pub(super) fn measure_completion_seed(
 ) -> Result<CompletionSeedSizing, SourcePlanCompileError> {
     let operations = &pack.document.spec.plan.operations;
     let credential_operation = pack.document.spec.plan.credential_operation.as_ref();
+    let open_crvs_jwks_operation_id = operations
+        .iter()
+        .find(|operation| operation.request_codec == Some(RequestCodecDocument::OpenCrvsDciExactV1))
+        .map(|operation| format!("{}.jwks", operation.id));
     let mut authorized_operation_union = credential_operation
         .iter()
         .map(|operation| ("credential", operation.id.as_str()))
@@ -639,6 +663,9 @@ pub(super) fn measure_completion_seed(
                 .map(|operation| ("data", operation.id.as_str())),
         )
         .collect::<Vec<_>>();
+    if let Some(operation_id) = &open_crvs_jwks_operation_id {
+        authorized_operation_union.push(("data", operation_id));
+    }
     authorized_operation_union.sort_unstable();
     let compiled_authorized_operation_union = authorized_operation_union
         .iter()
@@ -663,23 +690,33 @@ pub(super) fn measure_completion_seed(
     let data_permit_operations = match pack.document.spec.plan.kind {
         SourcePlanKind::SnapshotExact => Vec::new(),
         SourcePlanKind::BoundedHttp => {
-            let steps = pack
-                .document
-                .spec
-                .plan
-                .steps
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>();
-            let conditioned = pack
-                .document
-                .spec
-                .plan
-                .step_conditions
-                .keys()
-                .map(String::as_str)
-                .collect::<BTreeSet<_>>();
-            bounded_actual_call_permit_operations(&steps, &conditioned)
+            if let Some(jwks_operation_id) = &open_crvs_jwks_operation_id {
+                let main_operation = operations
+                    .first()
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+                vec![
+                    vec![jwks_operation_id.as_str()],
+                    vec![main_operation.id.as_str()],
+                ]
+            } else {
+                let steps = pack
+                    .document
+                    .spec
+                    .plan
+                    .steps
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>();
+                let conditioned = pack
+                    .document
+                    .spec
+                    .plan
+                    .step_conditions
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>();
+                bounded_actual_call_permit_operations(&steps, &conditioned)
+            }
         }
         SourcePlanKind::SandboxedRhai => {
             let limits = rhai_limits.ok_or(SourcePlanCompileError::CompilerInvariant)?;

@@ -34,6 +34,12 @@ pub(in super::super) fn validate_request_shape(
                 true,
                 Some(RequestSignerDocument::DciJwsV1)
             )
+            | (
+                ReadMethod::ReadOnlyPost,
+                RequestCodecDocument::OpenCrvsDciExactV1,
+                false,
+                None
+            )
     );
     let auth_bytes = match operation.auth {
         SourceAuthDocument::OAuthClientCredentials => {
@@ -101,16 +107,26 @@ pub(in super::super) fn validate_request_shape(
             .and_then(|total| total.checked_add(value_bytes))
             .ok_or(SourcePlanArtifactError::InvalidLimits)?;
     }
+    if codec == RequestCodecDocument::OpenCrvsDciExactV1 {
+        header_bytes = header_bytes
+            .checked_add("accept".len() + b"application/json".len())
+            .and_then(|total| total.checked_add("content-type".len() + b"application/json".len()))
+            .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+    }
     if header_bytes > MAX_REQUEST_HEADER_BYTES {
         return Err(SourcePlanArtifactError::InvalidLimits);
     }
 
-    let body_bytes = operation
-        .body
-        .as_ref()
-        .map(|body| body_template_max_bytes(body, inputs, parameters))
-        .transpose()?
-        .unwrap_or(0);
+    let body_bytes = if codec == RequestCodecDocument::OpenCrvsDciExactV1 {
+        OPEN_CRVS_DCI_REQUEST_BODY_MAX_BYTES
+    } else {
+        operation
+            .body
+            .as_ref()
+            .map(|body| body_template_max_bytes(body, inputs, parameters))
+            .transpose()?
+            .unwrap_or(0)
+    };
     let aggregate = target_bytes
         .checked_add(header_bytes)
         .and_then(|total| total.checked_add(body_bytes))
@@ -449,30 +465,56 @@ pub(in super::super) fn validate_oauth_response(
     response: &mut OAuth2ClientCredentialsResponseDocument,
 ) -> Result<(), SourcePlanArtifactError> {
     normalize_status_set(&mut response.accepted_statuses)?;
-    let max_lifetime_from_response = response
-        .expires_in_max_seconds
-        .checked_mul(1_000)
-        .ok_or(SourcePlanArtifactError::InvalidLimits)?;
-    let min_lifetime_from_response = response
-        .expires_in_min_seconds
-        .checked_mul(1_000)
-        .ok_or(SourcePlanArtifactError::InvalidLimits)?;
     if response.max_bytes == 0
         || response.max_bytes > MAX_DATA_RESPONSE_BYTES
         || response.access_token_max_bytes == 0
         || response.access_token_max_bytes > MAX_OAUTH_ACCESS_TOKEN_BYTES
         || response.token_type != OAuth2TokenTypeDocument::Bearer
-        || response.schema != OAuth2TokenResponseSchemaDocument::StrictAccessTokenBearerExpiresIn
-        || response.expires_in_min_seconds == 0
-        || response.expires_in_min_seconds > response.expires_in_max_seconds
-        || response.max_token_lifetime_ms == 0
-        || response.max_token_lifetime_ms > MAX_OAUTH_TOKEN_LIFETIME_MS
-        || max_lifetime_from_response > response.max_token_lifetime_ms
-        || response.expiry_safety_skew_ms >= min_lifetime_from_response
     {
         return Err(SourcePlanArtifactError::InvalidLimits);
     }
-    Ok(())
+    match (response.schema, response.cache_mode) {
+        (
+            OAuth2TokenResponseSchemaDocument::StrictAccessTokenBearerExpiresIn,
+            OAuth2TokenCacheModeDocument::ExpiryBound,
+        ) => {
+            let (Some(min_seconds), Some(max_seconds), Some(max_lifetime_ms), Some(skew_ms)) = (
+                response.expires_in_min_seconds,
+                response.expires_in_max_seconds,
+                response.max_token_lifetime_ms,
+                response.expiry_safety_skew_ms,
+            ) else {
+                return Err(SourcePlanArtifactError::InvalidLimits);
+            };
+            let max_lifetime_from_response = max_seconds
+                .checked_mul(1_000)
+                .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+            let min_lifetime_from_response = min_seconds
+                .checked_mul(1_000)
+                .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+            if min_seconds == 0
+                || min_seconds > max_seconds
+                || max_lifetime_ms == 0
+                || max_lifetime_ms > MAX_OAUTH_TOKEN_LIFETIME_MS
+                || max_lifetime_from_response > max_lifetime_ms
+                || skew_ms >= min_lifetime_from_response
+            {
+                return Err(SourcePlanArtifactError::InvalidLimits);
+            }
+            Ok(())
+        }
+        (
+            OAuth2TokenResponseSchemaDocument::StrictAccessTokenBearerNoExpiry,
+            OAuth2TokenCacheModeDocument::Disabled,
+        ) if response.expires_in_min_seconds.is_none()
+            && response.expires_in_max_seconds.is_none()
+            && response.max_token_lifetime_ms.is_none()
+            && response.expiry_safety_skew_ms.is_none() =>
+        {
+            Ok(())
+        }
+        _ => Err(SourcePlanArtifactError::InvalidLimits),
+    }
 }
 
 pub(in super::super) fn validate_template_kind(

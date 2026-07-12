@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: Apache-2.0
+# Local bootstrap example for the maintained OpenCRVS existence profile.
+# Production deployments must deliver configuration and artifacts through the
+# signed configuration-bundle path.
+
+server:
+  bind: "127.0.0.1:8080"
+
+catalog:
+  title: "OpenCRVS consultation Relay"
+  base_url: "https://relay.example.gov"
+  publisher: "Example Ministry"
+
+auth:
+  mode: oidc
+  oidc:
+    issuer: "https://identity.example.gov"
+    audiences: ["relay-consultation"]
+    jwks_url: "https://identity.example.gov/.well-known/jwks.json"
+    allowed_clients: ["registry-notary"]
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+
+consultation:
+  notary_workload:
+    audience: relay-consultation
+    client_claim_selector: azp
+    client_value: registry-notary
+    principal_id: registry-notary
+  state_plane:
+    database_url_env: REGISTRY_RELAY_CONSULTATION_DATABASE_URL
+    chain_key_epoch_id: relay-consultation-chain-1
+    serving_fence_lock_key: 7221091541
+    audit_pseudonym_keyring_lock_key: 7221091542
+  artifacts:
+    public_contracts:
+      - path: public-contract.json
+        hash: sha256:4fdd83fdee1a86b7eea610c59e2ee44d7936bbcb44d837bd64c173a3c5b3f411
+        sha256: sha256:790c7dacc7e674189c4437d9462f549925d2a326443dac4158233fdd826294ed
+    integration_packs:
+      - path: integration-pack.json
+        hash: sha256:2ee2dff4fb6859d6ff58c222fc08dac1a871580324c1d6b00e1af5cdee2ce466
+        sha256: sha256:ccaf8fd32d73dcd4d0ee7dce85ee9de27ce7768e6e274a38b991158b2e41fd20
+    private_bindings:
+      - path: private-binding.example.json
+        sha256: sha256:e8b877cf2bdb9f8069aa6230581e12e6e7dcd52cac84319d40fec43e31e970ba
+    evidence:
+      - class: conformance
+        path: evidence/conformance.json
+        sha256: sha256:ab29301c94e97486a744f3f8ce75e5f2b9f13d0f7fbe23cc727e1909414de867
+      - class: negative_security
+        path: evidence/negative-security.json
+        sha256: sha256:256e603484895b805f4904db6effcf75b143a89a60730351a1d25ec2e98177e7
+      - class: minimization
+        path: evidence/minimization.json
+        sha256: sha256:8b9aad532d816ae12dc3abd1b94027edd00a31169d19a2cbef3902e8873106ef
+  audit_pseudonym_materials:
+    - key_id: epoch-1
+      source:
+        provider: environment
+        name: REGISTRY_RELAY_AUDIT_PSEUDONYM_EPOCH_1
+  source_credentials:
+    - type: oauth_client_credentials
+      ref: opencrvs-oauth-client
+      generation: 1
+      client_id_env: OPENCRVS_DCI_CLIENT_ID
+      client_secret_env: OPENCRVS_DCI_CLIENT_SECRET
+
+datasets: []
+
+deployment:
+  profile: local

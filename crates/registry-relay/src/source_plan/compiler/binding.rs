@@ -234,16 +234,27 @@ pub(super) fn validate_effective_source_bytes(
 ) -> Result<(), SourcePlanCompileError> {
     let data_response_bytes = match pack.document.spec.plan.kind {
         SourcePlanKind::SnapshotExact => 0,
-        SourcePlanKind::BoundedHttp => pack
-            .document
-            .spec
-            .plan
-            .operations
-            .iter()
-            .try_fold(0_u64, |total, operation| {
-                total.checked_add(u64::from(operation.response.max_bytes))
-            })
-            .ok_or(SourcePlanCompileError::BindingWidening)?,
+        SourcePlanKind::BoundedHttp => {
+            let declared = pack
+                .document
+                .spec
+                .plan
+                .operations
+                .iter()
+                .try_fold(0_u64, |total, operation| {
+                    total.checked_add(u64::from(operation.response.max_bytes))
+                })
+                .ok_or(SourcePlanCompileError::BindingWidening)?;
+            if pack.document.spec.plan.operations.iter().any(|operation| {
+                operation.request_codec == Some(RequestCodecDocument::OpenCrvsDciExactV1)
+            }) {
+                declared
+                    .checked_add(OPEN_CRVS_JWKS_MAX_RESPONSE_BYTES)
+                    .ok_or(SourcePlanCompileError::BindingWidening)?
+            } else {
+                declared
+            }
+        }
         SourcePlanKind::SandboxedRhai => {
             let maximum_data_response_bytes = pack
                 .document
@@ -307,6 +318,7 @@ pub(super) fn validate_contract_implementation(
     let exact = pack_spec.input_slots == contract_spec.inputs
         && pack_spec.acquisition == contract_spec.acquisition
         && pack_spec.source_provenance == contract_spec.source_provenance
+        && pack_spec.output_mode == contract_spec.output_mode
         && pack_spec.output == contract_spec.output
         && pack_spec.bounds == contract_spec.bounds;
     exact
@@ -405,12 +417,29 @@ pub(super) fn effective_token_lifetime_ms(
             Err(SourcePlanCompileError::BindingWidening)
         };
     };
-    let reviewed = operation.response.max_token_lifetime_ms;
-    let effective = private.unwrap_or(reviewed);
-    if effective == 0 || effective > reviewed {
-        Err(SourcePlanCompileError::BindingWidening)
-    } else {
-        Ok(Some(effective))
+    match operation.response.cache_mode {
+        OAuth2TokenCacheModeDocument::Disabled => {
+            if private.is_none()
+                && operation.response.schema
+                    == OAuth2TokenResponseSchemaDocument::StrictAccessTokenBearerNoExpiry
+            {
+                Ok(None)
+            } else {
+                Err(SourcePlanCompileError::BindingWidening)
+            }
+        }
+        OAuth2TokenCacheModeDocument::ExpiryBound => {
+            let reviewed = operation
+                .response
+                .max_token_lifetime_ms
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+            let effective = private.unwrap_or(reviewed);
+            if effective == 0 || effective > reviewed {
+                Err(SourcePlanCompileError::BindingWidening)
+            } else {
+                Ok(Some(effective))
+            }
+        }
     }
 }
 
@@ -471,8 +500,6 @@ pub(super) fn compile_credential_operation(
     };
     let id = OperationId::try_from(operation.id.as_str())
         .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
-    let effective_token_lifetime_ms =
-        effective_token_lifetime_ms.ok_or(SourcePlanCompileError::CompilerInvariant)?;
     let (format, transport_format) = match operation.request.format {
         OAuth2ClientCredentialsRequestFormatDocument::JsonClientSecretBody => (
             CompiledOAuth2RequestFormat::JsonClientSecretBody,
@@ -497,12 +524,32 @@ pub(super) fn compile_credential_operation(
             SourcePlanCompileError::BindingWidening
         }
     })?;
-    if operation.response.schema
-        != OAuth2TokenResponseSchemaDocument::StrictAccessTokenBearerExpiresIn
-        || operation.response.token_type != OAuth2TokenTypeDocument::Bearer
-    {
+    if operation.response.token_type != OAuth2TokenTypeDocument::Bearer {
         return Err(SourcePlanCompileError::CompilerInvariant);
     }
+    let (token_schema, cache_mode) = match (
+        operation.response.schema,
+        operation.response.cache_mode,
+        effective_token_lifetime_ms,
+    ) {
+        (
+            OAuth2TokenResponseSchemaDocument::StrictAccessTokenBearerExpiresIn,
+            OAuth2TokenCacheModeDocument::ExpiryBound,
+            Some(_),
+        ) => (
+            CompiledOAuth2TokenSchema::StrictAccessTokenBearerExpiresIn,
+            CompiledOAuth2CacheMode::ExpiryBound,
+        ),
+        (
+            OAuth2TokenResponseSchemaDocument::StrictAccessTokenBearerNoExpiry,
+            OAuth2TokenCacheModeDocument::Disabled,
+            None,
+        ) => (
+            CompiledOAuth2TokenSchema::StrictAccessTokenBearerNoExpiry,
+            CompiledOAuth2CacheMode::Disabled,
+        ),
+        _ => return Err(SourcePlanCompileError::CompilerInvariant),
+    };
     let failure_policy = match operation.failure_policy {
         CredentialFailurePolicyDocument::FailClosedSourceUnavailableNoRetryNoStaleNoDataDispatch => {
             CompiledCredentialFailurePolicy::FailClosedSourceUnavailableNoRetryNoStaleNoDataDispatch
@@ -529,16 +576,19 @@ pub(super) fn compile_credential_operation(
                 .clone()
                 .into_boxed_slice(),
             access_token_max_bytes: operation.response.access_token_max_bytes,
+            schema: token_schema,
             expires_in_min_seconds: operation.response.expires_in_min_seconds,
             expires_in_max_seconds: operation.response.expires_in_max_seconds,
             max_token_lifetime_ms: effective_token_lifetime_ms,
             expiry_safety_skew_ms: operation.response.expiry_safety_skew_ms,
         },
+        cache_mode,
         failure_policy,
     }))
 }
 
 pub(super) fn reject_destination_overlap(
+    pack: &IntegrationPackArtifact,
     binding: &PrivateBindingArtifact,
 ) -> Result<(), SourcePlanCompileError> {
     let Some(credential) = &binding.document.credential_destination else {
@@ -553,7 +603,20 @@ pub(super) fn reject_destination_overlap(
         Url::parse(&data.origin).map_err(|_| SourcePlanCompileError::UnsafeDestination)?;
     let credential_origin =
         Url::parse(&credential.origin).map_err(|_| SourcePlanCompileError::UnsafeDestination)?;
-    if data.id == credential.id || data_origin == credential_origin {
+    let open_crvs_exact = pack.document.spec.plan.operations.len() == 1
+        && pack.document.spec.plan.operations[0].request_codec
+            == Some(RequestCodecDocument::OpenCrvsDciExactV1);
+    if open_crvs_exact {
+        if data.id != credential.id
+            && data_origin == credential_origin
+            && data.application_base_path == "/"
+            && credential.application_base_path == "/"
+        {
+            Ok(())
+        } else {
+            Err(SourcePlanCompileError::UnsafeDestination)
+        }
+    } else if data.id == credential.id || data_origin == credential_origin {
         Err(SourcePlanCompileError::UnsafeDestination)
     } else {
         Ok(())

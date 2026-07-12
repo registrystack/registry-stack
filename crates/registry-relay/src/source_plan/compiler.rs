@@ -27,14 +27,15 @@ use super::artifact::{
     CardinalityMechanismDocument, CodecSelectorRoleDocument, CredentialFailurePolicyDocument,
     DestinationDnsFamilyDocument, DestinationDocument, EvidenceClass, ExactSelectorDocument,
     HttpOperationDocument, IntegrationPackArtifact, MaterializationRefreshClassDocument,
-    OAuth2ClientCredentialsRequestFormatDocument, OAuth2TokenResponseSchemaDocument,
-    OAuth2TokenTypeDocument, OutputTypeDocument, PriorOutputBindingDocument,
-    PrivateBindingArtifact, ProjectionMechanismDocument, PublicContractArtifact, ReadMethod,
-    RequestCodecDocument, RequestSelectorLocationDocument, RequestSignerDocument,
-    ResponseNormalizationDocument, ResponseSchemaDocument, SourceAuthDocument, SourceCardinality,
-    SourcePlanArtifactError, SourcePlanKind, SourcePlanLimits, StepConditionDocument,
-    ValueExpressionDocument, MAX_ARTIFACTS_PER_BUNDLE, MAX_EVIDENCE_CLASS_BYTES,
-    MAX_EVIDENCE_FILES_PER_CLASS, MAX_EVIDENCE_FILE_BYTES,
+    OAuth2ClientCredentialsRequestFormatDocument, OAuth2TokenCacheModeDocument,
+    OAuth2TokenResponseSchemaDocument, OAuth2TokenTypeDocument, OutputTypeDocument,
+    PriorOutputBindingDocument, PrivateBindingArtifact, ProjectionMechanismDocument,
+    PublicContractArtifact, ReadMethod, RequestCodecDocument, RequestSelectorLocationDocument,
+    RequestSignerDocument, ResponseNormalizationDocument, ResponseSchemaDocument,
+    SourceAuthDocument, SourceCardinality, SourcePlanArtifactError, SourcePlanKind,
+    SourcePlanLimits, StepConditionDocument, ValueExpressionDocument, MAX_ARTIFACTS_PER_BUNDLE,
+    MAX_EVIDENCE_CLASS_BYTES, MAX_EVIDENCE_FILES_PER_CLASS, MAX_EVIDENCE_FILE_BYTES,
+    OPEN_CRVS_DCI_REQUEST_BODY_MAX_BYTES, OPEN_CRVS_JWKS_MAX_RESPONSE_BYTES, OPEN_CRVS_JWKS_PATH,
 };
 use super::completion_seed::{measure_completion_seed, MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1};
 use super::identifiers::{CredentialReferenceId, SourceDestinationId};
@@ -415,6 +416,8 @@ pub enum CompiledRequestCodec {
     Json,
     /// Exact DCI v1 request encoding.
     DciExactV1,
+    /// Exact unsigned OpenCRVS DCI v1 search request and signed response flow.
+    OpenCrvsDciExactV1,
 }
 
 /// Request signature mechanism frozen by the reviewed operation.
@@ -734,6 +737,7 @@ impl CompiledOutputMapping {
 /// Concrete response-cardinality enforcement compiled from request-linked proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompiledCardinalityMechanism {
+    OpenCrvsDciProbeTwo,
     ProbeQueryParameter { query_index: usize },
     ProbeBodyInteger { pointer: CompiledJsonPointer },
     ReviewedRequestTemplateProbe { evidence_hash: Box<str> },
@@ -832,6 +836,49 @@ pub struct CompiledOperation {
     total_deadline_ms: u32,
     acquired_fields: BTreeSet<AcquiredField>,
     disclosed_fields: BTreeSet<AcquiredField>,
+    open_crvs_jwks: Option<CompiledEmbeddedJwksOperation>,
+}
+
+/// Fixed same-origin JWKS exchange embedded by the exact OpenCRVS codec.
+pub(crate) struct CompiledEmbeddedJwksOperation {
+    id: OperationId,
+    fixed_path: Box<str>,
+    transport_template: DataDestinationRequestTemplate,
+    response_max_bytes: u32,
+    request_timeout_ms: u32,
+}
+
+impl fmt::Debug for CompiledEmbeddedJwksOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompiledEmbeddedJwksOperation")
+            .field("id", &self.id)
+            .field("fixed_path", &self.fixed_path)
+            .field("response_max_bytes", &self.response_max_bytes)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CompiledEmbeddedJwksOperation {
+    pub(crate) const fn id(&self) -> &OperationId {
+        &self.id
+    }
+
+    pub(crate) fn fixed_path(&self) -> &str {
+        &self.fixed_path
+    }
+
+    pub(crate) const fn transport_template(&self) -> &DataDestinationRequestTemplate {
+        &self.transport_template
+    }
+
+    pub(crate) const fn response_max_bytes(&self) -> u32 {
+        self.response_max_bytes
+    }
+
+    pub(crate) const fn request_timeout_ms(&self) -> u32 {
+        self.request_timeout_ms
+    }
 }
 
 /// One compiled, bounded predicate that can only skip its owning fixed step.
@@ -990,6 +1037,15 @@ impl CompiledOperation {
     #[must_use]
     pub const fn request_codec(&self) -> CompiledRequestCodec {
         self.request_codec
+    }
+
+    #[must_use]
+    pub const fn is_open_crvs_dci_exact_v1(&self) -> bool {
+        matches!(self.request_codec, CompiledRequestCodec::OpenCrvsDciExactV1)
+    }
+
+    pub(crate) const fn embedded_open_crvs_jwks(&self) -> Option<&CompiledEmbeddedJwksOperation> {
+        self.open_crvs_jwks.as_ref()
     }
 
     #[must_use]
@@ -1165,7 +1221,7 @@ struct RuntimePrivateBinding {
 }
 
 mod credential;
-use credential::*;
+pub(crate) use credential::*;
 
 /// Exact non-secret inputs that isolate one OAuth access-token cache entry.
 ///
@@ -1691,7 +1747,7 @@ fn compile_one(
         .as_ref()
         .map(compile_credential_destination)
         .transpose()?;
-    reject_destination_overlap(&binding)?;
+    reject_destination_overlap(pack, &binding)?;
 
     let footprint = DeclaredOperationFootprint::try_new(
         &pack.document.spec.logical_operation,
@@ -1796,6 +1852,9 @@ fn compile_one(
         .plan
         .credential_operation
         .as_ref()
+        .filter(|operation| {
+            operation.response.cache_mode == OAuth2TokenCacheModeDocument::ExpiryBound
+        })
         .map(|operation| {
             let credential = binding
                 .document
@@ -1826,7 +1885,10 @@ fn compile_one(
                 resource: operation.request.resource.as_deref().map(Into::into),
                 max_token_lifetime_ms: effective_token_lifetime_ms
                     .ok_or(SourcePlanCompileError::CompilerInvariant)?,
-                expiry_safety_skew_ms: operation.response.expiry_safety_skew_ms,
+                expiry_safety_skew_ms: operation
+                    .response
+                    .expiry_safety_skew_ms
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?,
             })
         })
         .transpose()?;
@@ -1999,8 +2061,10 @@ mod tests;
 pub(crate) use tests::{
     bounded_runtime_vector_plan_fixture, consent_runtime_vector_plan_fixture,
     dhis2_completion_seed_fixture, dhis2_duplicate_selector_runtime_vector_plan_fixture,
-    dhis2_runtime_vector_plan_fixture, maximum_completion_seed_fixture,
-    maximum_runtime_profile_fixture, normal_completion_seed_fixture,
+    dhis2_runtime_vector_plan_fixture, maintained_open_crvs_runtime_plan_fixture,
+    maximum_completion_seed_fixture, maximum_runtime_profile_fixture,
+    normal_completion_seed_fixture, open_crvs_completion_seed_fixture,
+    open_crvs_runtime_vector_plan_fixture, open_crvs_runtime_vector_registry_fixture,
     rhai_five_operation_two_slot_completion_seed_fixture, rhai_runtime_vector_plan_fixture,
     semantic_alias_completion_seed_fixture, snapshot_completion_seed_fixture,
 };

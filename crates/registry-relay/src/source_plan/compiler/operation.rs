@@ -167,6 +167,9 @@ pub(super) fn compile_operation_descriptors(
                 RequestCodecDocument::None => CompiledRequestCodec::None,
                 RequestCodecDocument::Json => CompiledRequestCodec::Json,
                 RequestCodecDocument::DciExactV1 => CompiledRequestCodec::DciExactV1,
+                RequestCodecDocument::OpenCrvsDciExactV1 => {
+                    CompiledRequestCodec::OpenCrvsDciExactV1
+                }
             };
             let request_signer = operation.request_signer.map(|signer| match signer {
                 RequestSignerDocument::DciJwsV1 => CompiledRequestSigner::DciJwsV1,
@@ -202,19 +205,23 @@ pub(super) fn compile_operation_descriptors(
                     )
                 })
                 .collect::<Vec<_>>();
-            let max_body_bytes = operation
-                .body
-                .as_ref()
-                .map(|body| {
-                    body_template_max_bytes(
-                        body,
-                        &pack.document.spec.input_slots,
-                        &pack.document.spec.deployment_parameters,
-                    )
-                })
-                .transpose()
-                .map_err(|_| SourcePlanCompileError::CompilerInvariant)?
-                .unwrap_or(0);
+            let max_body_bytes = if request_codec == CompiledRequestCodec::OpenCrvsDciExactV1 {
+                OPEN_CRVS_DCI_REQUEST_BODY_MAX_BYTES
+            } else {
+                operation
+                    .body
+                    .as_ref()
+                    .map(|body| {
+                        body_template_max_bytes(
+                            body,
+                            &pack.document.spec.input_slots,
+                            &pack.document.spec.deployment_parameters,
+                        )
+                    })
+                    .transpose()
+                    .map_err(|_| SourcePlanCompileError::CompilerInvariant)?
+                    .unwrap_or(0)
+            };
             let destination_method = match operation.method {
                 ReadMethod::Get => DestinationMethod::Get,
                 ReadMethod::ReadOnlyPost => DestinationMethod::ReviewedReadOnlyPost,
@@ -255,21 +262,39 @@ pub(super) fn compile_operation_descriptors(
                 }
             };
             let fixed_path = destination_fixed_path(application_base_path, &operation.path);
-            let transport_template = DataDestinationRequestTemplate::new(
-                destination_method,
-                &fixed_path,
-                &query_bounds,
-                &header_bounds,
-                authorization_template,
-                if operation.body.is_some() {
-                    DestinationBodyTemplate::Required {
-                        max_bytes: max_body_bytes,
-                    }
-                } else {
-                    DestinationBodyTemplate::Forbidden
-                },
-                step_limits.max_request_bytes as usize,
-            )
+            let body_template = if operation.body.is_some()
+                || request_codec == CompiledRequestCodec::OpenCrvsDciExactV1
+            {
+                DestinationBodyTemplate::Required {
+                    max_bytes: max_body_bytes,
+                }
+            } else {
+                DestinationBodyTemplate::Forbidden
+            };
+            let transport_template = if request_codec == CompiledRequestCodec::OpenCrvsDciExactV1 {
+                DataDestinationRequestTemplate::new_with_exact_headers(
+                    destination_method,
+                    &fixed_path,
+                    &query_bounds,
+                    &[
+                        ("accept", b"application/json"),
+                        ("content-type", b"application/json"),
+                    ],
+                    authorization_template,
+                    body_template,
+                    step_limits.max_request_bytes as usize,
+                )
+            } else {
+                DataDestinationRequestTemplate::new(
+                    destination_method,
+                    &fixed_path,
+                    &query_bounds,
+                    &header_bounds,
+                    authorization_template,
+                    body_template,
+                    step_limits.max_request_bytes as usize,
+                )
+            }
             .map_err(|_| {
                 if application_base_path == "/" {
                     SourcePlanCompileError::CompilerInvariant
@@ -280,6 +305,31 @@ pub(super) fn compile_operation_descriptors(
             let projection = compile_projection(operation)?;
             let response = compile_response(operation)?;
             let response_decoder = compile_closed_json_decoder(&response)?;
+            let open_crvs_jwks = if request_codec == CompiledRequestCodec::OpenCrvsDciExactV1 {
+                let jwks_id = OperationId::try_from(format!("{}.jwks", operation.id).as_str())
+                    .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+                let fixed_path: Box<str> = OPEN_CRVS_JWKS_PATH.into();
+                let transport_template = DataDestinationRequestTemplate::new(
+                    DestinationMethod::Get,
+                    &fixed_path,
+                    &[],
+                    &[],
+                    DestinationAuthorizationTemplate::Forbidden,
+                    DestinationBodyTemplate::Forbidden,
+                    step_limits.max_request_bytes as usize,
+                )
+                .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+                Some(CompiledEmbeddedJwksOperation {
+                    id: jwks_id,
+                    fixed_path,
+                    transport_template,
+                    response_max_bytes: u32::try_from(OPEN_CRVS_JWKS_MAX_RESPONSE_BYTES)
+                        .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
+                    request_timeout_ms: step_limits.timeout_ms,
+                })
+            } else {
+                None
+            };
             Ok(CompiledOperation {
                 id,
                 method: operation.method,
@@ -303,6 +353,7 @@ pub(super) fn compile_operation_descriptors(
                 total_deadline_ms,
                 acquired_fields,
                 disclosed_fields,
+                open_crvs_jwks,
             })
         })
         .collect()
@@ -507,6 +558,9 @@ fn compile_response(
         })
         .collect::<Result<Box<[_]>, _>>()?;
     let cardinality = match &operation.response.cardinality {
+        CardinalityMechanismDocument::OpenCrvsDciProbeTwo => {
+            CompiledCardinalityMechanism::OpenCrvsDciProbeTwo
+        }
         CardinalityMechanismDocument::ProbeQueryParameter { parameter } => operation
             .query
             .keys()

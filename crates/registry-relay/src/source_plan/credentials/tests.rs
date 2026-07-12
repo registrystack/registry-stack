@@ -14,7 +14,8 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 use crate::source_plan::{
-    EvidenceClass, PinnedEvidenceArtifact, PinnedSourcePlanArtifact, SourcePlanArtifactBundle,
+    open_crvs_runtime_vector_registry_fixture, EvidenceClass, PinnedEvidenceArtifact,
+    PinnedSourcePlanArtifact, SourcePlanArtifactBundle,
 };
 
 const PACK_DOMAIN: &[u8] = b"registry.relay.integration-pack.v1\0";
@@ -79,6 +80,17 @@ fn catalog(
 
 fn catalog_from_yaml(yaml: &str) -> ConsultationSourceCredentialCatalogConfig {
     serde_saphyr::from_str(yaml).expect("source credential catalog parses")
+}
+
+fn oauth_catalog(
+    reference: &str,
+    generation: u64,
+    client_id_env: &str,
+    client_secret_env: &str,
+) -> ConsultationSourceCredentialCatalogConfig {
+    catalog_from_yaml(&format!(
+        "- type: oauth_client_credentials\n  ref: {reference}\n  generation: {generation}\n  client_id_env: {client_id_env}\n  client_secret_env: {client_secret_env}\n"
+    ))
 }
 
 fn basic_registry() -> CompiledSourcePlanRegistry {
@@ -278,6 +290,98 @@ fn closure_errors_precede_environment_access() {
     let oauth_only = CompiledBasicSourceCredentialProvider::compile(&missing, &oauth_registry())
         .expect("OAuth-only plans belong to another provider");
     assert_eq!(oauth_only.credentials.len(), 0);
+}
+
+#[test]
+fn oauth_provider_closes_before_environment_access_and_mints_only_bound_requests() {
+    let registry = open_crvs_runtime_vector_registry_fixture();
+    let missing: ConsultationSourceCredentialCatalogConfig =
+        serde_saphyr::from_str("[]").expect("empty catalog");
+    assert_eq!(
+        CompiledOAuthSourceCredentialProvider::compile(&missing, &registry).unwrap_err(),
+        SourceCredentialProviderError::MissingCredential
+    );
+
+    let client_id_env = unique_env_name("OPENCRVS_CLIENT_ID");
+    let client_secret_env = unique_env_name("OPENCRVS_CLIENT_SECRET");
+    let _client_id = EnvironmentGuard::set(client_id_env.clone(), "opencrvs-client");
+    let _client_secret = EnvironmentGuard::set(client_secret_env.clone(), "opencrvs-secret");
+    let catalog = oauth_catalog("people-api-reader", 7, &client_id_env, &client_secret_env);
+    let provider = CompiledOAuthSourceCredentialProvider::compile(&catalog, &registry)
+        .expect("exact OAuth closure compiles");
+    let diagnostics = format!("{provider:?}");
+    for marker in [
+        client_id_env.as_str(),
+        client_secret_env.as_str(),
+        "opencrvs-client",
+        "opencrvs-secret",
+        "people-api-reader",
+    ] {
+        assert!(!diagnostics.contains(marker));
+    }
+    let plan = registry.iter().next().expect("one OpenCRVS plan");
+    let operation = plan.credential_operation().expect("credential operation");
+    let capability = provider
+        .credentials_for(plan, operation)
+        .expect("exact operation receives OAuth capability");
+    assert!(!format!("{capability:?}").contains("opencrvs"));
+    let request = capability.render().expect("bounded request renders");
+    let request_debug = format!("{request:?}");
+    assert!(!request_debug.contains("opencrvs-client"));
+    assert!(!request_debug.contains("opencrvs-secret"));
+}
+
+#[test]
+fn oauth_provider_rejects_wrong_kind_generation_duplicate_env_and_material() {
+    let registry = open_crvs_runtime_vector_registry_fixture();
+    let client_id_env = unique_env_name("OPENCRVS_WRONG_CLIENT_ID");
+    let client_secret_env = unique_env_name("OPENCRVS_WRONG_CLIENT_SECRET");
+    let _client_id = EnvironmentGuard::missing(client_id_env.clone());
+    let _client_secret = EnvironmentGuard::missing(client_secret_env.clone());
+    assert_eq!(
+        CompiledOAuthSourceCredentialProvider::compile(
+            &oauth_catalog("people-api-reader", 8, &client_id_env, &client_secret_env,),
+            &registry,
+        )
+        .unwrap_err(),
+        SourceCredentialProviderError::CredentialGenerationMismatch
+    );
+    let duplicate_env = catalog_from_yaml(
+        "- type: oauth_client_credentials\n  ref: people-api-reader\n  generation: 7\n  client_id_env: SAME_ENV\n  client_secret_env: SAME_ENV\n",
+    );
+    assert_eq!(
+        CompiledOAuthSourceCredentialProvider::compile(&duplicate_env, &registry).unwrap_err(),
+        SourceCredentialProviderError::DuplicateEnvironmentReference
+    );
+
+    let client_id_env = unique_env_name("OPENCRVS_EMPTY_CLIENT_ID");
+    let client_secret_env = unique_env_name("OPENCRVS_EMPTY_CLIENT_SECRET");
+    let _client_id = EnvironmentGuard::set(client_id_env.clone(), "");
+    let _client_secret = EnvironmentGuard::set(client_secret_env.clone(), "secret");
+    assert_eq!(
+        CompiledOAuthSourceCredentialProvider::compile(
+            &oauth_catalog("people-api-reader", 7, &client_id_env, &client_secret_env,),
+            &registry,
+        )
+        .unwrap_err(),
+        SourceCredentialProviderError::EnvironmentLoadFailed
+    );
+
+    let basic_left = unique_env_name("CROSS_KIND_BASIC_LEFT");
+    let basic_right = unique_env_name("CROSS_KIND_BASIC_RIGHT");
+    let oauth_left = unique_env_name("CROSS_KIND_OAUTH_LEFT");
+    let oauth_right = unique_env_name("CROSS_KIND_OAUTH_RIGHT");
+    let _basic_left = EnvironmentGuard::set(basic_left.clone(), "shared-id");
+    let _basic_right = EnvironmentGuard::set(basic_right.clone(), "shared-secret");
+    let _oauth_left = EnvironmentGuard::set(oauth_left.clone(), "shared-id");
+    let _oauth_right = EnvironmentGuard::set(oauth_right.clone(), "shared-secret");
+    let cross_kind = catalog_from_yaml(&format!(
+        "- type: basic\n  ref: basic-reader\n  generation: 1\n  username_env: {basic_left}\n  password_env: {basic_right}\n- type: oauth_client_credentials\n  ref: people-api-reader\n  generation: 7\n  client_id_env: {oauth_left}\n  client_secret_env: {oauth_right}\n"
+    ));
+    assert_eq!(
+        validate_global_credential_material(cross_kind.entries()).unwrap_err(),
+        SourceCredentialProviderError::DuplicateCredentialMaterial
+    );
 }
 
 #[test]

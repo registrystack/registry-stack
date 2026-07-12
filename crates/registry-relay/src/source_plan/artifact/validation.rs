@@ -125,10 +125,11 @@ pub(super) fn validate_materialization_contract(
         .ok_or(SourcePlanArtifactError::InvalidAcquisition)
 }
 pub(super) fn validate_output(
+    mode: OutputModeDocument,
     output: &BTreeMap<String, OutputFieldDocument>,
     acquired_fields: &BTreeSet<AcquiredField>,
 ) -> Result<(), SourcePlanArtifactError> {
-    if output.is_empty() {
+    if mode.is_projected_fields() == output.is_empty() {
         return Err(SourcePlanArtifactError::InvalidSet);
     }
     if output.len() > MAX_ACQUIRED_FIELDS || acquired_fields.len() > MAX_ACQUIRED_FIELDS {
@@ -327,6 +328,7 @@ pub(super) fn validate_plan(
         evidence: &spec.evidence,
         bounds: spec.bounds,
         oauth_authorization_max_bytes,
+        output_mode: spec.output_mode,
     };
     for operation in &mut plan.operations {
         let operation_id = OperationId::try_from(operation.id.as_str())
@@ -399,11 +401,7 @@ pub(super) fn validate_plan(
         maximum_data_response_bytes =
             maximum_data_response_bytes.max(u64::from(operation.response.max_bytes));
     }
-    let declared_disclosed_fields = reviewed_acquisition
-        .fields
-        .keys()
-        .cloned()
-        .collect::<BTreeSet<_>>();
+    let declared_disclosed_fields = spec.output.keys().cloned().collect::<BTreeSet<_>>();
     let declared_control_fields = spec
         .reviewed_acquisition
         .as_ref()
@@ -444,9 +442,13 @@ pub(super) fn validate_plan(
             return Err(SourcePlanArtifactError::InvalidPlan);
         }
     }
+    let embedded_data_exchanges = usize::from(plan.operations.iter().any(|operation| {
+        operation.request_codec == Some(RequestCodecDocument::OpenCrvsDciExactV1)
+    }));
     if used_operations != known_operations
         || (plan.kind == SourcePlanKind::BoundedHttp
-            && plan.steps.len() != usize::from(spec.bounds.max_data_exchanges))
+            && plan.steps.len() + embedded_data_exchanges
+                != usize::from(spec.bounds.max_data_exchanges))
         || (plan.kind == SourcePlanKind::SandboxedRhai && !plan.step_conditions.is_empty())
     {
         return Err(SourcePlanArtifactError::InvalidPlan);
@@ -472,13 +474,133 @@ pub(super) fn validate_plan(
             .checked_add(u64::from(credential.response.max_bytes))
             .ok_or(SourcePlanArtifactError::InvalidLimits)?;
     }
+    if plan
+        .operations
+        .iter()
+        .any(|operation| operation.request_codec == Some(RequestCodecDocument::OpenCrvsDciExactV1))
+    {
+        response_bytes = response_bytes
+            .checked_add(OPEN_CRVS_JWKS_MAX_RESPONSE_BYTES)
+            .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+    }
     if response_bytes > spec.bounds.max_source_bytes {
         return Err(SourcePlanArtifactError::InvalidLimits);
     }
     validate_template_kind(plan, spec.acquisition.class)?;
     validate_prior_step_references(plan)?;
     validate_step_conditions(plan)?;
-    Ok(())
+    validate_open_crvs_exact_plan(spec)
+}
+
+pub(in super::super) const OPEN_CRVS_JWKS_PATH: &str = "/.well-known/jwks.json";
+pub(in super::super) const OPEN_CRVS_JWKS_MAX_RESPONSE_BYTES: u64 = 64 * 1024;
+pub(in super::super) const OPEN_CRVS_DCI_SEARCH_PATH: &str = "/registry/sync/search";
+pub(in super::super) const OPEN_CRVS_OAUTH_TOKEN_PATH: &str = "/oauth2/client/token";
+pub(in super::super) const OPEN_CRVS_DCI_REQUEST_BODY_MAX_BYTES: usize = 8 * 1024;
+
+fn validate_open_crvs_exact_plan(
+    spec: &IntegrationPackSpecDocument,
+) -> Result<(), SourcePlanArtifactError> {
+    let exact_operations = spec
+        .plan
+        .operations
+        .iter()
+        .filter(|operation| {
+            operation.request_codec == Some(RequestCodecDocument::OpenCrvsDciExactV1)
+        })
+        .collect::<Vec<_>>();
+    if exact_operations.is_empty() {
+        return Ok(());
+    }
+    let [operation] = exact_operations.as_slice() else {
+        return Err(SourcePlanArtifactError::InvalidPlan);
+    };
+    let reviewed = spec
+        .reviewed_acquisition
+        .as_ref()
+        .ok_or(SourcePlanArtifactError::InvalidAcquisition)?;
+    let credential = spec
+        .plan
+        .credential_operation
+        .as_ref()
+        .ok_or(SourcePlanArtifactError::InvalidPlan)?;
+    let jwks_operation_id = format!("{}.jwks", operation.id);
+    OperationId::try_from(jwks_operation_id.as_str())
+        .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
+    let record_schema_matches = reviewed.fields.len() == 1
+        && reviewed.fields.contains_key("record")
+        && reviewed.control_fields.is_empty()
+        && spec.acquisition.fields.len() == 1
+        && spec.acquisition.fields.get("record") == reviewed.fields.get("record");
+    let response_record_matches = response_record_schema(
+        &operation.response.schema,
+        &operation.response.normalization,
+        operation.response.max_records,
+        operation.response.records_field.as_deref(),
+    )
+    .is_ok_and(|schema| {
+        matches!(schema, ResponseSchemaDocument::Object { fields, .. }
+            if fields.len() == 1 && fields.get("record").is_some_and(|field|
+                field.required && Some(field.schema.as_ref()) == reviewed.fields.get("record")))
+    });
+    let exact = spec.plan.kind == SourcePlanKind::BoundedHttp
+        && spec.acquisition.class == AcquisitionClassDocument::BoundedFullRecord
+        && spec.output_mode == OutputModeDocument::PresenceOnly
+        && spec.output.is_empty()
+        && spec.plan.operations.len() == 1
+        && spec.plan.steps == [operation.id.as_str()]
+        && credential.id != jwks_operation_id
+        && spec.plan.step_conditions.is_empty()
+        && spec.deployment_parameters.is_empty()
+        && spec.bounds.max_source_matches == 2
+        && spec.bounds.max_disclosed_records == 1
+        && spec.bounds.max_data_exchanges == 2
+        && spec.bounds.max_credential_exchanges == 1
+        && spec.bounds.max_data_destinations == 1
+        && reviewed.class == AcquisitionClassDocument::BoundedFullRecord
+        && reviewed.cardinality == ReviewedCardinalityDocument::ProbeTwo
+        && record_schema_matches
+        && operation.method == ReadMethod::ReadOnlyPost
+        && operation.path == OPEN_CRVS_DCI_SEARCH_PATH
+        && operation.query.is_empty()
+        && operation.headers.is_empty()
+        && operation.body.is_none()
+        && operation.relation_selector.is_none()
+        && operation.request_signer.is_none()
+        && operation
+            .step_limits
+            .is_some_and(|limits| limits.timeout_ms == spec.bounds.timeout_ms)
+        && operation.auth == SourceAuthDocument::OAuthClientCredentials
+        && operation.acquisition_fields.is_empty()
+        && operation.control_fields.is_empty()
+        && operation.projection == ProjectionMechanismDocument::BoundedFullRecord
+        && operation.response.output_mapping.is_empty()
+        && operation.response.prior_outputs.is_empty()
+        && operation.response.accepted_statuses == [200]
+        && operation.response.max_records == 2
+        && matches!(
+            operation.response.cardinality,
+            CardinalityMechanismDocument::OpenCrvsDciProbeTwo
+        )
+        && matches!(
+            operation.response.normalization,
+            ResponseNormalizationDocument::ArrayProbeTwo
+        )
+        && response_record_matches
+        && credential.request.format
+            == OAuth2ClientCredentialsRequestFormatDocument::JsonClientSecretBody
+        && credential.path == OPEN_CRVS_OAUTH_TOKEN_PATH
+        && credential.request.timeout_ms == spec.bounds.timeout_ms
+        && credential.request.audience.is_none()
+        && credential.request.scopes.is_empty()
+        && credential.request.resource.is_none()
+        && credential.response.accepted_statuses == [200]
+        && credential.response.schema
+            == OAuth2TokenResponseSchemaDocument::StrictAccessTokenBearerNoExpiry
+        && credential.response.cache_mode == OAuth2TokenCacheModeDocument::Disabled;
+    exact
+        .then_some(())
+        .ok_or(SourcePlanArtifactError::InvalidPlan)
 }
 
 pub(super) fn validate_reviewed_acquisition(
@@ -497,23 +619,18 @@ pub(super) fn validate_reviewed_acquisition(
         return Err(SourcePlanArtifactError::InvalidAcquisition);
     }
 
+    let mut reviewed_schema_nodes = 0_usize;
+    let mut reviewed_expanded_nodes = 0_usize;
     for (name, schema) in &reviewed.fields {
         AcquiredField::try_from(name.as_str())
             .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
-        match schema {
-            AcquiredValueSchemaDocument::String { max_bytes, .. }
-                if *max_bytes > 0 && *max_bytes <= MAX_PUBLIC_RESPONSE_BYTES => {}
-            AcquiredValueSchemaDocument::Integer {
-                minimum, maximum, ..
-            }
-            | AcquiredValueSchemaDocument::Number {
-                minimum, maximum, ..
-            } if minimum <= maximum
-                && minimum.unsigned_abs() <= MAX_JSON_INTEROPERABLE_INTEGER
-                && maximum.unsigned_abs() <= MAX_JSON_INTEROPERABLE_INTEGER => {}
-            AcquiredValueSchemaDocument::Boolean { .. } => {}
-            _ => return Err(SourcePlanArtifactError::InvalidAcquisition),
-        }
+        reviewed_expanded_nodes = reviewed_expanded_nodes
+            .checked_add(validate_response_schema(
+                schema,
+                1,
+                &mut reviewed_schema_nodes,
+            )?)
+            .ok_or(SourcePlanArtifactError::InvalidLimits)?;
     }
     if reviewed.control_fields.len() > MAX_ACQUIRED_FIELDS {
         return Err(SourcePlanArtifactError::InvalidAcquisition);
@@ -524,7 +641,16 @@ pub(super) fn validate_reviewed_acquisition(
         if reviewed.fields.contains_key(name) {
             return Err(SourcePlanArtifactError::InvalidAcquisition);
         }
-        validate_acquired_value_schema(schema)?;
+        reviewed_expanded_nodes = reviewed_expanded_nodes
+            .checked_add(validate_response_schema(
+                schema,
+                1,
+                &mut reviewed_schema_nodes,
+            )?)
+            .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+    }
+    if reviewed_expanded_nodes > MAX_RESPONSE_SCHEMA_EXPANDED_NODES {
+        return Err(SourcePlanArtifactError::InvalidLimits);
     }
     for (name, output) in &spec.output {
         if reviewed
@@ -564,31 +690,6 @@ pub(super) fn validate_reviewed_acquisition(
     Ok(())
 }
 
-pub(super) fn validate_acquired_value_schema(
-    schema: &AcquiredValueSchemaDocument,
-) -> Result<(), SourcePlanArtifactError> {
-    match schema {
-        AcquiredValueSchemaDocument::String { max_bytes, .. }
-            if *max_bytes > 0 && *max_bytes <= MAX_PUBLIC_RESPONSE_BYTES =>
-        {
-            Ok(())
-        }
-        AcquiredValueSchemaDocument::Integer {
-            minimum, maximum, ..
-        }
-        | AcquiredValueSchemaDocument::Number {
-            minimum, maximum, ..
-        } if minimum <= maximum
-            && minimum.unsigned_abs() <= MAX_JSON_INTEROPERABLE_INTEGER
-            && maximum.unsigned_abs() <= MAX_JSON_INTEROPERABLE_INTEGER =>
-        {
-            Ok(())
-        }
-        AcquiredValueSchemaDocument::Boolean { .. } => Ok(()),
-        _ => Err(SourcePlanArtifactError::InvalidAcquisition),
-    }
-}
-
 enum SelectorSource<'a> {
     Input(&'a str),
     Prior { step: &'a str, output: &'a str },
@@ -626,7 +727,10 @@ fn selector_location_matches(
             }),
         RequestSelectorLocationDocument::Codec {
             role: CodecSelectorRoleDocument::DciIdtypeValue,
-        } => operation.request_codec == Some(RequestCodecDocument::DciExactV1),
+        } => matches!(
+            operation.request_codec,
+            Some(RequestCodecDocument::DciExactV1 | RequestCodecDocument::OpenCrvsDciExactV1)
+        ),
     }
 }
 
@@ -768,13 +872,14 @@ pub(super) fn validate_snapshot_plan(
 struct HttpOperationValidationContext<'a> {
     inputs: &'a BTreeMap<String, InputDocument>,
     parameters: &'a BTreeMap<String, ParameterDeclarationDocument>,
-    reviewed_fields: &'a BTreeMap<String, AcquiredValueSchemaDocument>,
-    reviewed_control_fields: &'a BTreeMap<String, AcquiredValueSchemaDocument>,
+    reviewed_fields: &'a BTreeMap<String, ResponseSchemaDocument>,
+    reviewed_control_fields: &'a BTreeMap<String, ResponseSchemaDocument>,
     acquisition_class: AcquisitionClassDocument,
     cardinality: SourceCardinality,
     evidence: &'a EvidenceManifestDocument,
     bounds: LimitsDocument,
     oauth_authorization_max_bytes: Option<usize>,
+    output_mode: OutputModeDocument,
 }
 
 fn validate_http_operation(
@@ -791,6 +896,7 @@ fn validate_http_operation(
         evidence,
         bounds,
         oauth_authorization_max_bytes,
+        output_mode,
     } = context;
     validate_fixed_path(&operation.path)?;
     if operation.query.len() > MAX_STATIC_COMPONENTS
@@ -818,7 +924,13 @@ fn validate_http_operation(
         let mut node_count = 0;
         validate_body_template(body, inputs, parameters, 1, &mut node_count)?;
     }
-    normalize_stable_set(&mut operation.acquisition_fields)?;
+    if operation.acquisition_fields.is_empty() {
+        if output_mode.is_projected_fields() {
+            return Err(SourcePlanArtifactError::InvalidSet);
+        }
+    } else {
+        normalize_stable_set(&mut operation.acquisition_fields)?;
+    }
     if operation.control_fields.is_empty() {
         if !operation.response.prior_outputs.is_empty() {
             return Err(SourcePlanArtifactError::InvalidAcquisition);
@@ -847,7 +959,9 @@ fn validate_http_operation(
     if operation.response.max_bytes == 0 || operation.response.max_bytes > MAX_DATA_RESPONSE_BYTES {
         return Err(SourcePlanArtifactError::InvalidLimits);
     }
-    if operation.response.output_mapping.is_empty() {
+    if output_mode.is_projected_fields() == operation.response.output_mapping.is_empty()
+        || output_mode.is_projected_fields() == operation.acquisition_fields.is_empty()
+    {
         return Err(SourcePlanArtifactError::InvalidSet);
     }
     normalize_status_set(&mut operation.response.accepted_statuses)?;
@@ -1273,6 +1387,11 @@ pub(super) fn validate_cardinality_mechanism(
     evidence: &EvidenceManifestDocument,
 ) -> Result<(), SourcePlanArtifactError> {
     match (&operation.response.cardinality, cardinality) {
+        (CardinalityMechanismDocument::OpenCrvsDciProbeTwo, SourceCardinality::AmbiguityProbe)
+            if operation.request_codec == Some(RequestCodecDocument::OpenCrvsDciExactV1) =>
+        {
+            Ok(())
+        }
         (
             CardinalityMechanismDocument::ProbeQueryParameter { parameter },
             SourceCardinality::AmbiguityProbe,

@@ -648,8 +648,8 @@ pub struct ConsultationConfig {
     /// Complete restart-only catalog of source credentials referenced by the
     /// compiled consultation plans.
     ///
-    /// V1 accepts only environment-backed HTTP Basic credentials. Empty is
-    /// valid when no compiled source plan uses HTTP Basic authentication.
+    /// V1 accepts environment-backed HTTP Basic and OAuth client credentials.
+    /// Empty is valid when no compiled source plan uses source authentication.
     #[serde(default)]
     pub source_credentials: ConsultationSourceCredentialCatalogConfig,
     /// Complete restart-only source-plan artifact closure.
@@ -676,9 +676,9 @@ impl ConsultationConfig {
             references.insert(material.source.environment_name().as_str());
         }
         for credential in self.source_credentials.entries() {
-            let (username, password) = credential.environment_names();
-            references.insert(username.as_str());
-            references.insert(password.as_str());
+            for environment_name in credential.environment_names() {
+                references.insert(environment_name.as_str());
+            }
         }
         references.into_iter().collect()
     }
@@ -822,49 +822,81 @@ pub enum ConsultationSourceCredentialConfig {
         username_env: ConsultationCredentialEnvironmentName,
         password_env: ConsultationCredentialEnvironmentName,
     },
+    #[serde(rename = "oauth_client_credentials")]
+    OAuthClientCredentials {
+        #[serde(rename = "ref")]
+        reference: ConsultationSourceCredentialReference,
+        generation: u64,
+        client_id_env: ConsultationCredentialEnvironmentName,
+        client_secret_env: ConsultationCredentialEnvironmentName,
+    },
 }
 
 impl ConsultationSourceCredentialConfig {
     #[must_use]
     pub(crate) const fn reference(&self) -> &ConsultationSourceCredentialReference {
         match self {
-            Self::Basic { reference, .. } => reference,
+            Self::Basic { reference, .. } | Self::OAuthClientCredentials { reference, .. } => {
+                reference
+            }
         }
     }
 
     #[must_use]
     pub(crate) const fn generation(&self) -> u64 {
         match self {
-            Self::Basic { generation, .. } => *generation,
+            Self::Basic { generation, .. } | Self::OAuthClientCredentials { generation, .. } => {
+                *generation
+            }
         }
     }
 
     #[must_use]
-    pub(crate) const fn environment_names(
-        &self,
-    ) -> (
-        &ConsultationCredentialEnvironmentName,
-        &ConsultationCredentialEnvironmentName,
-    ) {
+    pub(crate) const fn environment_names(&self) -> [&ConsultationCredentialEnvironmentName; 2] {
         match self {
             Self::Basic {
                 username_env,
                 password_env,
                 ..
-            } => (username_env, password_env),
+            } => [username_env, password_env],
+            Self::OAuthClientCredentials {
+                client_id_env,
+                client_secret_env,
+                ..
+            } => [client_id_env, client_secret_env],
         }
+    }
+
+    #[must_use]
+    pub(crate) const fn is_basic(&self) -> bool {
+        matches!(self, Self::Basic { .. })
+    }
+
+    #[must_use]
+    pub(crate) const fn is_oauth_client_credentials(&self) -> bool {
+        matches!(self, Self::OAuthClientCredentials { .. })
     }
 }
 
 impl fmt::Debug for ConsultationSourceCredentialConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Basic")
+        let mut debug = formatter.debug_struct(match self {
+            Self::Basic { .. } => "Basic",
+            Self::OAuthClientCredentials { .. } => "OAuthClientCredentials",
+        });
+        debug
             .field("reference", &"<configured>")
-            .field("generation", &self.generation())
-            .field("username_env", &"<configured>")
-            .field("password_env", &"<configured>")
-            .finish()
+            .field("generation", &self.generation());
+        match self {
+            Self::Basic { .. } => debug
+                .field("username_env", &"<configured>")
+                .field("password_env", &"<configured>")
+                .finish(),
+            Self::OAuthClientCredentials { .. } => debug
+                .field("client_id_env", &"<configured>")
+                .field("client_secret_env", &"<configured>")
+                .finish(),
+        }
     }
 }
 
@@ -2379,6 +2411,11 @@ source_credentials:
     generation: 1
     username_env: REGISTRY_RELAY_USERNAME_A
     password_env: REGISTRY_RELAY_PASSWORD_A
+  - type: oauth_client_credentials
+    ref: source-opencrvs
+    generation: 2
+    client_id_env: REGISTRY_RELAY_OPENCRVS_CLIENT_ID
+    client_secret_env: REGISTRY_RELAY_OPENCRVS_CLIENT_SECRET
 "#,
             consultation_runtime_fields()
         ))
@@ -2387,6 +2424,8 @@ source_credentials:
         assert_eq!(
             config.required_environment_references(),
             vec![
+                "REGISTRY_RELAY_OPENCRVS_CLIENT_ID",
+                "REGISTRY_RELAY_OPENCRVS_CLIENT_SECRET",
                 "REGISTRY_RELAY_PASSWORD_A",
                 "REGISTRY_RELAY_PASSWORD_B",
                 "REGISTRY_RELAY_PSEUDONYM_A",
@@ -2470,6 +2509,42 @@ source_credentials:
                 "open or malformed source credentials must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn consultation_oauth_source_credentials_are_closed_and_debug_redacted() {
+        let reference_marker = "opencrvs-reader-must-not-leak";
+        let client_id_marker = "REGISTRY_RELAY_OPENCRVS_ID_MUST_NOT_LEAK";
+        let client_secret_marker = "REGISTRY_RELAY_OPENCRVS_SECRET_MUST_NOT_LEAK";
+        let config: ConsultationConfig = serde_saphyr::from_str(&format!(
+            r#"
+{}
+audit_pseudonym_materials:
+  - key_id: epoch-a
+    source:
+      provider: environment
+      name: PSEUDONYM_SOURCE
+source_credentials:
+  - type: oauth_client_credentials
+    ref: {reference_marker}
+    generation: 9
+    client_id_env: {client_id_marker}
+    client_secret_env: {client_secret_marker}
+"#,
+            consultation_runtime_fields()
+        ))
+        .expect("closed OAuth credential config");
+        let debug = format!("{config:?}");
+        for marker in [reference_marker, client_id_marker, client_secret_marker] {
+            assert!(!debug.contains(marker));
+        }
+        assert!(debug.contains("entry_count"));
+
+        let embedded = format!(
+            "{}\naudit_pseudonym_materials:\n  - key_id: epoch-a\n    source:\n      provider: environment\n      name: PSEUDONYM_SOURCE\nsource_credentials:\n  - type: oauth_client_credentials\n    ref: opencrvs-reader\n    generation: 1\n    client_id_env: CLIENT_ID\n    client_secret_env: CLIENT_SECRET\n    client_secret: forbidden",
+            consultation_runtime_fields()
+        );
+        assert!(serde_saphyr::from_str::<ConsultationConfig>(&embedded).is_err());
     }
 
     #[test]
