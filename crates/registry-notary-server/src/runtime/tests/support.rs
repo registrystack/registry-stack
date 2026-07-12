@@ -94,6 +94,7 @@
                     target: EvidenceEntity::from_subject_request("Person", subject.clone()),
                     relationship: None,
                     on_behalf_of: None,
+                    variables: Default::default(),
                 };
                 self.read_one_for_context(binding, &context, purpose).await
             })
@@ -521,6 +522,7 @@
             evidence_mode: registry_notary_core::ClaimEvidenceMode::TransitionalDirect,
             value: registry_notary_core::ClaimValueConfig {
                 value_type: "boolean".to_string(),
+                nullable: false,
                 unit: None,
             },
             semantics: None,
@@ -622,6 +624,7 @@
             )),
             relationship: None,
             on_behalf_of: None,
+            variables: Default::default(),
             claims: vec![ClaimRef::from(claim)],
             disclosure: Some("value".to_string()),
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
@@ -729,6 +732,7 @@
                 attributes: BTreeMap::new(),
             }),
             on_behalf_of: None,
+            variables: Default::default(),
             claims: vec![ClaimRef::from("selected")],
             disclosure: Some("value".to_string()),
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),

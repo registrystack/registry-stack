@@ -259,8 +259,32 @@ pub(super) fn hash_json<T: serde::Serialize>(value: &T) -> Result<String, Eviden
     Ok(sha256_hex(&bytes))
 }
 
-pub(crate) fn batch_request_hash(request: &BatchEvaluateRequest) -> Result<String, EvidenceError> {
-    hash_json(request)
+pub(crate) fn batch_request_binding_hash(
+    evidence: &EvidenceConfig,
+    request: &BatchEvaluateRequest,
+    principal: &EvidencePrincipal,
+    effective_item_purposes: &[String],
+    claim_versions: &ClaimVersionSelections,
+) -> Result<String, EvidenceError> {
+    let checked_scopes = principal
+        .scopes
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    hash_json(&json!({
+        "schema": "registry.notary.batch-idempotency-binding/v1",
+        "evidence_config": evidence,
+        "request": request,
+        "authentication": {
+            "auth_profile_id": principal.auth_profile_id.as_str(),
+            "principal_id": principal.principal_id.as_str(),
+            "checked_scopes": checked_scopes,
+        },
+        "effective_item_purposes": effective_item_purposes,
+        "claim_versions": claim_versions,
+    }))
 }
 
 pub(crate) fn batch_idempotency_key(principal_id: &str, key: &str) -> String {

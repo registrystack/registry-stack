@@ -27,7 +27,15 @@
           },
           "value": {
             "description": "Claim value. The runtime may return any JSON value.",
-            "type": "object"
+            "type": [
+              "object",
+              "array",
+              "string",
+              "number",
+              "integer",
+              "boolean",
+              "null"
+            ]
           },
           "value_type": {
             "type": "string"
@@ -322,7 +330,15 @@
           },
           "value": {
             "description": "Claim value. The runtime may return any JSON value.",
-            "type": "object"
+            "type": [
+              "object",
+              "array",
+              "string",
+              "number",
+              "integer",
+              "boolean",
+              "null"
+            ]
           }
         },
         "required": [
@@ -936,6 +952,21 @@
           },
           "target": {
             "$ref": "#/components/schemas/EvidenceEntity"
+          },
+          "variables": {
+            "additionalProperties": {
+              "format": "date",
+              "maxLength": 10,
+              "minLength": 10,
+              "type": "string"
+            },
+            "maxProperties": 16,
+            "propertyNames": {
+              "maxLength": 96,
+              "pattern": "^[a-z][a-z0-9_]{0,95}$",
+              "type": "string"
+            },
+            "type": "object"
           }
         },
         "required": [
@@ -1969,6 +2000,7 @@
                 "example": {
                   "code": "auth.missing_credential",
                   "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
                   "status": 401,
                   "title": "Missing credential",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
@@ -2245,6 +2277,7 @@
                 "example": {
                   "code": "auth.missing_credential",
                   "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
                   "status": 401,
                   "title": "Missing credential",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
@@ -2262,6 +2295,7 @@
                 "example": {
                   "code": "auth.scope_denied",
                   "detail": "missing required scope",
+                  "request_id": "01J00000000000000000000000",
                   "status": 403,
                   "title": "Scope denied",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
@@ -2331,6 +2365,7 @@
                 "example": {
                   "code": "credential_status.invalid_status",
                   "detail": "status must be valid, suspended, or revoked",
+                  "request_id": "01J00000000000000000000000",
                   "status": 400,
                   "title": "Invalid credential status",
                   "type": "https://id.registrystack.org/problems/registry-notary/credential_status/invalid_status"
@@ -2348,6 +2383,7 @@
                 "example": {
                   "code": "auth.missing_credential",
                   "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
                   "status": 401,
                   "title": "Missing credential",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
@@ -2365,6 +2401,7 @@
                 "example": {
                   "code": "auth.scope_denied",
                   "detail": "missing required scope",
+                  "request_id": "01J00000000000000000000000",
                   "status": 403,
                   "title": "Scope denied",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
@@ -2382,6 +2419,7 @@
                 "example": {
                   "code": "credential_status.not_found",
                   "detail": "credential status record was not found",
+                  "request_id": "01J00000000000000000000000",
                   "status": 404,
                   "title": "Credential status not found",
                   "type": "https://id.registrystack.org/problems/registry-notary/credential_status/not_found"
@@ -2399,6 +2437,7 @@
                 "example": {
                   "code": "credential_status.unavailable",
                   "detail": "credential status store is unavailable",
+                  "request_id": "01J00000000000000000000000",
                   "status": 503,
                   "title": "Credential status unavailable",
                   "type": "https://id.registrystack.org/problems/registry-notary/credential_status/unavailable"
@@ -2566,6 +2605,7 @@
                   "code": "registry.admin.posture.invalid_tier",
                   "detail": "posture tier must be default or restricted",
                   "message": "posture tier must be default or restricted",
+                  "request_id": "01J00000000000000000000000",
                   "schema": "registry.admin.error.v1",
                   "status": 400,
                   "title": "Admin posture tier invalid",
@@ -2584,6 +2624,7 @@
                 "example": {
                   "code": "auth.missing_credential",
                   "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
                   "status": 401,
                   "title": "Missing credential",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
@@ -2601,6 +2642,7 @@
                 "example": {
                   "code": "auth.scope_denied",
                   "detail": "missing required scope",
+                  "request_id": "01J00000000000000000000000",
                   "status": 403,
                   "title": "Scope denied",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
@@ -2618,6 +2660,7 @@
                 "example": {
                   "code": "posture.filter_failed",
                   "detail": "admin posture could not be filtered for the requested tier",
+                  "request_id": "01J00000000000000000000000",
                   "status": 500,
                   "title": "Admin posture unavailable",
                   "type": "https://id.registrystack.org/problems/registry-notary/posture/filter_failed"
@@ -2636,6 +2679,7 @@
                   "code": "posture.unavailable",
                   "detail": "posture state is unavailable",
                   "message": "posture state is unavailable",
+                  "request_id": "01J00000000000000000000000",
                   "schema": "registry.admin.error.v1",
                   "status": 503,
                   "title": "Admin posture unavailable",
@@ -2671,6 +2715,7 @@
                 "example": {
                   "code": "auth.missing_credential",
                   "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
                   "status": 401,
                   "title": "Missing credential",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
@@ -2688,6 +2733,7 @@
                 "example": {
                   "code": "auth.scope_denied",
                   "detail": "missing required scope",
+                  "request_id": "01J00000000000000000000000",
                   "status": 403,
                   "title": "Scope denied",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
@@ -2706,6 +2752,7 @@
                   "code": "registry.admin.capability.not_supported",
                   "detail": "registry-notary standalone runtime does not support reload",
                   "message": "registry-notary standalone runtime does not support reload",
+                  "request_id": "01J00000000000000000000000",
                   "schema": "registry.admin.error.v1",
                   "status": 501,
                   "title": "Admin capability not supported",
@@ -2880,6 +2927,7 @@
                 "example": {
                   "code": "request.invalid",
                   "detail": "the evidence request is invalid",
+                  "request_id": "01J00000000000000000000000",
                   "status": 400,
                   "title": "Invalid evidence request",
                   "type": "https://id.registrystack.org/problems/registry-notary/request/invalid"
@@ -3379,6 +3427,7 @@
                 "example": {
                   "code": "auth.missing_credential",
                   "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
                   "status": 401,
                   "title": "Missing credential",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
@@ -3462,6 +3511,7 @@
                 "example": {
                   "code": "request.invalid",
                   "detail": "the evidence request is invalid",
+                  "request_id": "01J00000000000000000000000",
                   "status": 400,
                   "title": "Invalid evidence request",
                   "type": "https://id.registrystack.org/problems/registry-notary/request/invalid"
@@ -3547,10 +3597,13 @@
         "operationId": "batchEvaluateClaims",
         "parameters": [
           {
+            "description": "Required for every registry-backed batch. Direct-source batches retain the legacy optional contract. The value is caller-bound and may contain 1 to 256 bytes.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
             "schema": {
+              "maxLength": 256,
+              "minLength": 1,
               "type": "string"
             }
           }
@@ -3653,6 +3706,7 @@
                 "example": {
                   "code": "request.invalid",
                   "detail": "the evidence request is invalid",
+                  "request_id": "01J00000000000000000000000",
                   "status": 400,
                   "title": "Invalid evidence request",
                   "type": "https://id.registrystack.org/problems/registry-notary/request/invalid"
@@ -3662,7 +3716,7 @@
                 }
               }
             },
-            "description": "Invalid request"
+            "description": "Invalid request, including a registry-backed batch without a valid Idempotency-Key or an item that fails whole-batch preflight"
           },
           "401": {
             "content": {
@@ -3670,6 +3724,7 @@
                 "example": {
                   "code": "auth.missing_credential",
                   "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
                   "status": 401,
                   "title": "Missing credential",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
@@ -3687,6 +3742,7 @@
                 "example": {
                   "code": "claim.disclosure_not_allowed",
                   "detail": "the requested disclosure profile is not allowed",
+                  "request_id": "01J00000000000000000000000",
                   "status": 403,
                   "title": "Disclosure not allowed",
                   "type": "https://id.registrystack.org/problems/registry-notary/claim/disclosure_not_allowed"
@@ -3704,6 +3760,7 @@
                 "example": {
                   "code": "format.unsupported",
                   "detail": "the requested claim format is not supported",
+                  "request_id": "01J00000000000000000000000",
                   "status": 406,
                   "title": "Claim format not supported",
                   "type": "https://id.registrystack.org/problems/registry-notary/format/unsupported"
@@ -3721,6 +3778,7 @@
                 "example": {
                   "code": "request.conflict",
                   "detail": "the request conflicts with existing state",
+                  "request_id": "01J00000000000000000000000",
                   "status": 409,
                   "title": "Request conflict",
                   "type": "https://id.registrystack.org/problems/registry-notary/request/conflict"
@@ -3738,6 +3796,7 @@
                 "example": {
                   "code": "request.too_large",
                   "detail": "the request body or batch is too large",
+                  "request_id": "01J00000000000000000000000",
                   "status": 413,
                   "title": "Request too large",
                   "type": "https://id.registrystack.org/problems/registry-notary/request/too_large"
@@ -3755,6 +3814,7 @@
                 "example": {
                   "code": "self_attestation.rate_limited",
                   "detail": "self-attestation request is rate limited",
+                  "request_id": "01J00000000000000000000000",
                   "status": 429,
                   "title": "Self-attestation rate limited",
                   "type": "https://id.registrystack.org/problems/registry-notary/self_attestation/rate_limited"
@@ -3772,6 +3832,7 @@
                 "example": {
                   "code": "source.unavailable",
                   "detail": "the evidence source is unavailable",
+                  "request_id": "01J00000000000000000000000",
                   "status": 503,
                   "title": "Source unavailable",
                   "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable"
@@ -3913,6 +3974,7 @@
                 "example": {
                   "code": "auth.missing_credential",
                   "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
                   "status": 401,
                   "title": "Missing credential",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
@@ -4031,6 +4093,7 @@
                 "example": {
                   "code": "auth.missing_credential",
                   "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
                   "status": 401,
                   "title": "Missing credential",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
@@ -4048,6 +4111,7 @@
                 "example": {
                   "code": "claim.not_found",
                   "detail": "the requested claim is not available",
+                  "request_id": "01J00000000000000000000000",
                   "status": 404,
                   "title": "Claim not found",
                   "type": "https://id.registrystack.org/problems/registry-notary/claim/not_found"
@@ -4102,6 +4166,7 @@
                 "example": {
                   "code": "credential.holder_proof_required",
                   "detail": "holder proof of possession is required",
+                  "request_id": "01J00000000000000000000000",
                   "status": 400,
                   "title": "Holder proof required",
                   "type": "https://id.registrystack.org/problems/registry-notary/credential/holder_proof_required"
@@ -4119,6 +4184,7 @@
                 "example": {
                   "code": "auth.missing_credential",
                   "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
                   "status": 401,
                   "title": "Missing credential",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
@@ -4136,6 +4202,7 @@
                 "example": {
                   "code": "evaluation.not_found",
                   "detail": "the evaluation id is unknown or expired",
+                  "request_id": "01J00000000000000000000000",
                   "status": 404,
                   "title": "Evaluation not found",
                   "type": "https://id.registrystack.org/problems/registry-notary/evaluation/not_found"
@@ -4153,6 +4220,7 @@
                 "example": {
                   "code": "format.unsupported",
                   "detail": "the requested claim format is not supported",
+                  "request_id": "01J00000000000000000000000",
                   "status": 406,
                   "title": "Claim format not supported",
                   "type": "https://id.registrystack.org/problems/registry-notary/format/unsupported"
@@ -4170,6 +4238,7 @@
                 "example": {
                   "code": "request.conflict",
                   "detail": "the request conflicts with existing state",
+                  "request_id": "01J00000000000000000000000",
                   "status": 409,
                   "title": "Request conflict",
                   "type": "https://id.registrystack.org/problems/registry-notary/request/conflict"
@@ -4187,6 +4256,7 @@
                 "example": {
                   "code": "request.too_large",
                   "detail": "the request body or batch is too large",
+                  "request_id": "01J00000000000000000000000",
                   "status": 413,
                   "title": "Request too large",
                   "type": "https://id.registrystack.org/problems/registry-notary/request/too_large"
@@ -4204,6 +4274,7 @@
                 "example": {
                   "code": "self_attestation.rate_limited",
                   "detail": "self-attestation request is rate limited",
+                  "request_id": "01J00000000000000000000000",
                   "status": 429,
                   "title": "Self-attestation rate limited",
                   "type": "https://id.registrystack.org/problems/registry-notary/self_attestation/rate_limited"
@@ -4221,6 +4292,7 @@
                 "example": {
                   "code": "source.unavailable",
                   "detail": "the evidence source is unavailable",
+                  "request_id": "01J00000000000000000000000",
                   "status": 503,
                   "title": "Source unavailable",
                   "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable"
@@ -4272,6 +4344,7 @@
                 "example": {
                   "code": "credential_status.not_found",
                   "detail": "credential status record was not found",
+                  "request_id": "01J00000000000000000000000",
                   "status": 404,
                   "title": "Credential status not found",
                   "type": "https://id.registrystack.org/problems/registry-notary/credential_status/not_found"
@@ -4289,6 +4362,7 @@
                 "example": {
                   "code": "credential_status.unavailable",
                   "detail": "credential status store is unavailable",
+                  "request_id": "01J00000000000000000000000",
                   "status": 503,
                   "title": "Credential status unavailable",
                   "type": "https://id.registrystack.org/problems/registry-notary/credential_status/unavailable"
@@ -4392,6 +4466,7 @@
                 "example": {
                   "code": "request.invalid",
                   "detail": "the evidence request is invalid",
+                  "request_id": "01J00000000000000000000000",
                   "status": 400,
                   "title": "Invalid evidence request",
                   "type": "https://id.registrystack.org/problems/registry-notary/request/invalid"
@@ -4409,6 +4484,7 @@
                 "example": {
                   "code": "auth.missing_credential",
                   "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
                   "status": 401,
                   "title": "Missing credential",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
@@ -4426,6 +4502,7 @@
                 "example": {
                   "code": "auth.scope_denied",
                   "detail": "missing required scope",
+                  "request_id": "01J00000000000000000000000",
                   "status": 403,
                   "title": "Scope denied",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/scope_denied"
@@ -4443,6 +4520,7 @@
                 "example": {
                   "code": "format.unsupported",
                   "detail": "the requested claim format is not supported",
+                  "request_id": "01J00000000000000000000000",
                   "status": 406,
                   "title": "Claim format not supported",
                   "type": "https://id.registrystack.org/problems/registry-notary/format/unsupported"
@@ -4460,6 +4538,7 @@
                 "example": {
                   "code": "request.too_large",
                   "detail": "the request body or batch is too large",
+                  "request_id": "01J00000000000000000000000",
                   "status": 413,
                   "title": "Request too large",
                   "type": "https://id.registrystack.org/problems/registry-notary/request/too_large"
@@ -4477,6 +4556,7 @@
                 "example": {
                   "code": "self_attestation.rate_limited",
                   "detail": "self-attestation request is rate limited",
+                  "request_id": "01J00000000000000000000000",
                   "status": 429,
                   "title": "Self-attestation rate limited",
                   "type": "https://id.registrystack.org/problems/registry-notary/self_attestation/rate_limited"
@@ -4494,6 +4574,7 @@
                 "example": {
                   "code": "source.unavailable",
                   "detail": "the evidence source is unavailable",
+                  "request_id": "01J00000000000000000000000",
                   "status": 503,
                   "title": "Source unavailable",
                   "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable"
@@ -4606,6 +4687,7 @@
                 "example": {
                   "code": "request.invalid",
                   "detail": "the evidence request is invalid",
+                  "request_id": "01J00000000000000000000000",
                   "status": 400,
                   "title": "Invalid evidence request",
                   "type": "https://id.registrystack.org/problems/registry-notary/request/invalid"
@@ -4623,6 +4705,7 @@
                 "example": {
                   "code": "auth.missing_credential",
                   "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
                   "status": 401,
                   "title": "Missing credential",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"
@@ -4640,6 +4723,7 @@
                 "example": {
                   "code": "evaluation.not_found",
                   "detail": "the evaluation id is unknown or expired",
+                  "request_id": "01J00000000000000000000000",
                   "status": 404,
                   "title": "Evaluation not found",
                   "type": "https://id.registrystack.org/problems/registry-notary/evaluation/not_found"
@@ -4657,6 +4741,7 @@
                 "example": {
                   "code": "format.unsupported",
                   "detail": "the requested claim format is not supported",
+                  "request_id": "01J00000000000000000000000",
                   "status": 406,
                   "title": "Claim format not supported",
                   "type": "https://id.registrystack.org/problems/registry-notary/format/unsupported"
@@ -4674,6 +4759,7 @@
                 "example": {
                   "code": "request.too_large",
                   "detail": "the request body or batch is too large",
+                  "request_id": "01J00000000000000000000000",
                   "status": 413,
                   "title": "Request too large",
                   "type": "https://id.registrystack.org/problems/registry-notary/request/too_large"
@@ -4691,6 +4777,7 @@
                 "example": {
                   "code": "self_attestation.rate_limited",
                   "detail": "self-attestation request is rate limited",
+                  "request_id": "01J00000000000000000000000",
                   "status": 429,
                   "title": "Self-attestation rate limited",
                   "type": "https://id.registrystack.org/problems/registry-notary/self_attestation/rate_limited"
@@ -4708,6 +4795,7 @@
                 "example": {
                   "code": "source.unavailable",
                   "detail": "the evidence source is unavailable",
+                  "request_id": "01J00000000000000000000000",
                   "status": 503,
                   "title": "Source unavailable",
                   "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable"
@@ -4759,6 +4847,7 @@
                 "example": {
                   "code": "auth.missing_credential",
                   "detail": "missing authentication credential",
+                  "request_id": "01J00000000000000000000000",
                   "status": 401,
                   "title": "Missing credential",
                   "type": "https://id.registrystack.org/problems/registry-notary/auth/missing_credential"

@@ -29,6 +29,7 @@ pub(crate) use audit::{
 #[cfg(test)]
 pub(crate) use consultation::{AttemptPseudonymBundle, ConsultationCompletionSeed};
 pub(crate) use consultation::{
+    BatchChildReplayContext, BatchChildReplayReservation, BatchTerminalReplay,
     ConsultationCompletionOutcome, ConsultationCompletionReceipt, ConsultationPersistenceError,
     ConsultationPublicationGrant, KnownCompletionDisposition, KnownConsultationCompletionFacts,
     KnownFailureClass, PublicConsultationOutcome, RecoveredConsultationCompletion,

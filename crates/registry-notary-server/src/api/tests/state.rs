@@ -124,6 +124,60 @@ async fn relay_readiness_is_singleflight_cached_and_recovers() {
     assert_eq!(relay.calls.load(Ordering::SeqCst), 2);
 }
 
+#[tokio::test]
+async fn readiness_reports_each_relay_profile_without_hiding_partial_availability() {
+    let state = Arc::new(relay_readiness_state());
+    let ready_profile: Arc<dyn crate::runtime::ActivatedRelayConsultations> =
+        Arc::new(ReadinessRelay::new(true));
+    let unavailable: Arc<dyn crate::runtime::ActivatedRelayConsultations> =
+        Arc::new(ReadinessRelay::new(false));
+    let contract_hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let clients = crate::runtime::ActivatedRelayClientSet::new([
+        (
+            crate::runtime::RelayClientSelectionV1::new(
+                "example.live-status.exact",
+                "1",
+                contract_hash,
+                "benefit-verification",
+                "subject_id",
+                crate::runtime::RuntimeRelayExpectedResult::PresenceOnly,
+            )
+            .expect("ready profile selection is valid"),
+            ready_profile,
+        ),
+        (
+            crate::runtime::RelayClientSelectionV1::new(
+                "example.snapshot-status.exact",
+                "1",
+                contract_hash,
+                "benefit-verification",
+                "subject_id",
+                crate::runtime::RuntimeRelayExpectedResult::PresenceOnly,
+            )
+            .expect("unavailable profile selection is valid"),
+            unavailable,
+        ),
+    ])
+    .expect("both exact profile selections are retained");
+    state
+        .install_activated_relay(Arc::new(clients))
+        .expect("Relay activation succeeds once");
+
+    let response = ready(Some(Extension(state))).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("ready body reads");
+    let value: Value = serde_json::from_slice(&body).expect("ready body is JSON");
+
+    assert_eq!(value["checks"]["relay"]["total"], json!(2));
+    assert_eq!(value["checks"]["relay"]["ok"], json!(1));
+    assert_eq!(value["checks"]["relay"]["failed"], json!(1));
+    assert_eq!(value["checks"]["total"], json!(3));
+    assert_eq!(value["checks"]["ok"], json!(1));
+    assert_eq!(value["checks"]["failed"], json!(1));
+}
+
 #[test]
 fn runtime_snapshot_read_never_observes_torn_issuer_federation_generation() {
     let old_issuers: Arc<dyn EvidenceIssuerResolver> = Arc::new(NoopIssuerResolver);

@@ -100,6 +100,9 @@ mod connectors;
 mod cors;
 #[path = "deployment.rs"]
 mod deployment;
+#[cfg(feature = "registry-notary-cel")]
+#[path = "offline_fixture.rs"]
+mod offline_fixture;
 #[path = "preauth.rs"]
 mod preauth;
 #[path = "relay.rs"]
@@ -117,6 +120,8 @@ pub(crate) use compat::*;
 use connectors::*;
 use cors::*;
 pub(crate) use deployment::*;
+#[cfg(feature = "registry-notary-cel")]
+pub use offline_fixture::*;
 use preauth::*;
 pub(crate) use preauth::{
     constant_time_eq, generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge,

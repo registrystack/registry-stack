@@ -192,6 +192,7 @@ pub(in crate::api) async fn oid4vci_credential(
             attributes: Default::default(),
         }),
         on_behalf_of: None,
+        variables: Default::default(),
         claims: configuration_claim_ids
             .iter()
             .map(|claim_id| ClaimRef::from(claim_id.as_str()))

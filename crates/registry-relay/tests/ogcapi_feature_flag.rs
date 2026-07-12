@@ -3,6 +3,14 @@
 
 use tempfile::TempDir;
 
+#[cfg(any(
+    not(feature = "ogcapi-features"),
+    all(
+        feature = "ogcapi-features",
+        feature = "ogcapi-edr",
+        feature = "ogcapi-records"
+    )
+))]
 const CRS84: &str = "http://www.opengis.net/def/crs/OGC/1.3/CRS84";
 const OGC_RECORDS_CORE: &str = "http://www.opengis.net/spec/ogcapi-records-1/1.0/conf/record-core";
 
@@ -50,6 +58,14 @@ fn load_config(
     registry_relay::config::load(&path)
 }
 
+#[cfg(any(
+    not(feature = "ogcapi-features"),
+    all(
+        feature = "ogcapi-features",
+        feature = "ogcapi-edr",
+        feature = "ogcapi-records"
+    )
+))]
 fn spatial_dataset() -> String {
     format!(
         r#"

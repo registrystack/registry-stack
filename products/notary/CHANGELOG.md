@@ -25,6 +25,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path while it is migrated, and use `self_attested` only for source-free
   evidence. `transitional_direct` is an intermediate-PR lane and remains a
   release blocker; it must not ship in the replacement beta or 1.0 release.
+- Registry-backed consultations can now expose one closed, typed fact map that
+  Notary verifies and reuses across direct and CEL-derived claims. Supported
+  public facts are Boolean, bounded String, exact JSON-safe Integer, full-date,
+  Presence, and explicitly nullable variants; floating-point Number remains
+  rejected. Generated country configurations may declare bounded full-date
+  request variables, such as an age calculation date, while CEL remains limited
+  to the consultation's allow-listed facts, those declared variables, and the
+  frozen date helpers. Missing or undeclared variables fail before Relay or any
+  source is called.
+- Registry-backed `/v1/batch-evaluations` now requires a caller-bound
+  `Idempotency-Key`, preflights every item before the first Relay call, and
+  executes bounded, independently authorized single-subject consultations.
+  Results preserve input order and per-item outcomes. Private child identities
+  let an exact retry reuse completed durable Relay work without coalescing
+  across subjects or sending a multi-subject Relay request; conflicting outer
+  key reuse returns `409`.
 - Notary audit records now retain the evaluation ID, a conservative marker that
   Relay dispatch was attempted, and every consultation ID returned before the
   evaluation closes, for restricted cross-service correlation. The marker
@@ -33,6 +49,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cancellation, reconcile it from Relay's audit using the forwarded Notary
   evaluation ID. Relay IDs never enter public claim results, provenance, debug
   output, or error bodies.
+- The product-owned country fixture harness now validates the production
+  Notary config, authenticates through the static credential verifier, derives
+  scopes from compiled claims, binds exact Relay profile contracts, and runs
+  the production runtime and isolated CEL worker without a direct source
+  capability. Authentication, scope, purpose, and malformed-input fixtures
+  retain value-free zero-call evidence.
+- The internal CEL worker protocol now owns escaped request strings and uses a
+  tagged success/error response. Multiline authored policies and successful
+  JSON `null` results therefore survive the bounded process protocol without
+  weakening expression hashing, environment stripping, or worker limits.
 
 ## [0.9.0] - 2026-07-10
 

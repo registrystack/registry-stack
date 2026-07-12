@@ -282,10 +282,11 @@
       },
       "control_fields": {},
       "selector": {
-        "type": "http_anchor",
-        "input": "uin",
+        "type": "http_exact_and",
         "operation": "lookup-birth-record",
-        "location": { "type": "codec", "role": "dci_idtype_value" }
+        "components": {
+          "uin": { "type": "codec", "role": "dci_exact_predicate" }
+        }
       },
       "cardinality": "probe_two",
       "reject_unknown_fields": true
@@ -305,7 +306,25 @@
           "query": {},
           "headers": {},
           "body": null,
-          "request_codec": "open_crvs_dci_exact_v1",
+          "request_codec": "dci_exact_v1",
+          "dci": {
+            "protocol_version": "1.0.0",
+            "sender_id": "registry-relay",
+            "registry_type": "ns:org:RegistryType:Civil",
+            "registry_event_type": "birth",
+            "record_type": "spdci-extensions-dci:Person",
+            "identifier_type": "UIN",
+            "exact_and": {
+              "uin": {
+                "field": "UIN",
+                "response_pointer": "/identifier/0/identifier_value"
+              }
+            },
+            "locale": "eng",
+            "page_number": 1,
+            "jwks_operation": "fetch-signing-keys",
+            "response_verifier": "dci_jws_v1"
+          },
           "step_limits": {
             "max_request_bytes": 16384,
             "timeout_ms": 10000,
@@ -319,7 +338,7 @@
             "max_bytes": 65536,
             "max_records": 2,
             "normalization": "json_array_probe_two",
-            "cardinality": { "mechanism": "open_crvs_dci_probe_two" },
+            "cardinality": { "mechanism": "dci_probe_two" },
             "schema": {
               "type": "array",
               "nullable": false,
@@ -425,6 +444,22 @@
             "accepted_statuses": [200],
             "output_mapping": {}
           }
+        }
+      ],
+      "verification_operations": [
+        {
+          "id": "fetch-signing-keys",
+          "primitive": "jwks_v1",
+          "destination_slot": "opencrvs-data",
+          "method": "GET",
+          "path": "/.well-known/jwks.json",
+          "step_limits": {
+            "max_request_bytes": 16384,
+            "timeout_ms": 10000,
+            "max_in_flight": 1
+          },
+          "max_response_bytes": 65536,
+          "accepted_statuses": [200]
         }
       ],
       "steps": ["lookup-birth-record"],

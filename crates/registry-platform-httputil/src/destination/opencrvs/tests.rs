@@ -30,6 +30,52 @@ fn body(raw: impl AsRef<[u8]>) -> DataDestinationBody {
     }
 }
 
+#[test]
+fn structured_exact_and_binds_every_signed_record_component() {
+    let components = [
+        SignedDciExactComponent {
+            response_pointer: "/person/birthDate",
+            expected_value: "2001-02-03",
+        },
+        SignedDciExactComponent {
+            response_pointer: "/person/familyName",
+            expected_value: "N'Dour",
+        },
+    ];
+    let expectation = SignedDciExpectation::new_generic_exact_and(
+        MESSAGE_ID,
+        SENDER_ID,
+        Some(RECEIVER_ID),
+        &components,
+        "1.0.0",
+        "ns:org:RegistryType:Civil",
+        "spdci-extensions-dci:Person",
+        "eng",
+        1,
+        2,
+        1024,
+        4096,
+    )
+    .expect("structured expectation");
+    let records = vec![json!({
+        "person": {"birthDate": "2001-02-03", "familyName": "N'Dour"}
+    })];
+    assert_eq!(
+        validate_record_selector(&records, &expectation.selector),
+        Ok(())
+    );
+    let mismatched = vec![json!({
+        "person": {"birthDate": "2001-02-03", "familyName": "Other"}
+    })];
+    assert_eq!(
+        validate_record_selector(&mismatched, &expectation.selector),
+        Err(SignedDciDecodeError::SelectorBindingViolation)
+    );
+    let diagnostic = format!("{expectation:?}");
+    assert!(!diagnostic.contains("2001-02-03"));
+    assert!(!diagnostic.contains("N'Dour"));
+}
+
 fn private_key() -> PrivateJwk {
     PrivateJwk::parse(RSA_JWK).expect("test RSA JWK")
 }

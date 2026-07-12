@@ -255,12 +255,12 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
         f"registry-notary-{tag}-linux-amd64",
         "SHA256SUMS",
     ]
-    # registryctl ships extra native binaries the hermetic linux/amd64 builder
-    # cannot produce. They are optional so backfilling a release that predates
-    # them (or any future amd64-only tag) does not fail.
+    # These binaries were introduced after the earliest supported release
+    # tags. Keep them optional so historical capsule backfills remain possible.
     optional_binary_names = [
         f"registryctl-{tag}-macos-arm64",
         f"registryctl-{tag}-linux-arm64",
+        f"registry-relay-rhai-worker-{tag}-linux-amd64",
     ]
     optional_release_file_names = [f"registryctl-{tag}-image-lock.json"]
     image_names = [

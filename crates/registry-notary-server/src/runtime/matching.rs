@@ -639,6 +639,7 @@ pub(super) fn minimized_context_for_binding(
             minimized
         }),
         on_behalf_of: None,
+        variables: context.variables.clone(),
     }
 }
 

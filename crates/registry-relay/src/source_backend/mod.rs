@@ -8,7 +8,7 @@
 mod datafusion;
 mod materialization;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
@@ -22,8 +22,8 @@ use crate::consultation::SnapshotGenerationId;
 use crate::source_plan::{CompiledConsultationRegistry, CompiledSourcePlan, SourcePlanKind};
 
 pub(crate) use datafusion::{
-    execute_snapshot_exact, SnapshotExactBackendError, SnapshotExactBackendResult,
-    SnapshotExactRecord,
+    decode_snapshot_rows, execute_snapshot_exact, SnapshotExactBackendError,
+    SnapshotExactBackendResult, SnapshotExactRecord,
 };
 pub(crate) use materialization::{
     ActiveSnapshotCandidate, SnapshotMaterializationCandidate, SnapshotMaterializationCoordinator,
@@ -130,25 +130,25 @@ impl fmt::Debug for PublishedSnapshotHandle {
 }
 
 struct SnapshotSlot {
-    profile_id: Box<str>,
-    profile_version: u64,
-    binding_hash: Box<str>,
+    dependent_plans: BTreeSet<(Box<str>, u64, Box<str>)>,
     state: AtomicU8,
     handle: ArcSwapOption<PublishedSnapshotHandle>,
 }
 
 impl SnapshotSlot {
     fn matches_plan(&self, plan: &CompiledSourcePlan) -> bool {
-        self.profile_id.as_ref() == plan.profile().id().as_str()
-            && self.profile_version == plan.profile().version().get()
-            && self.binding_hash.as_ref() == plan.binding_hash()
+        self.dependent_plans.contains(&(
+            plan.profile().id().as_str().into(),
+            plan.profile().version().get(),
+            plan.binding_hash().into(),
+        ))
     }
 }
 
 /// Immutable registry of SnapshotExact publication slots.
 ///
-/// V1 requires a one-to-one provider/profile mapping. This keeps publication,
-/// freshness, rollback, and readiness authority unambiguous.
+/// One immutable publication slot may serve several compatible consultation
+/// profiles. Each profile remains independently authorized and readiness-gated.
 pub(crate) struct PublishedSnapshotRegistry {
     by_provider: BTreeMap<Box<str>, Arc<SnapshotSlot>>,
 }
@@ -157,7 +157,7 @@ impl PublishedSnapshotRegistry {
     pub(crate) fn compile(
         registry: &CompiledConsultationRegistry,
     ) -> Result<Self, SnapshotRegistryError> {
-        let mut by_provider = BTreeMap::new();
+        let mut dependencies = BTreeMap::<Box<str>, BTreeSet<(Box<str>, u64, Box<str>)>>::new();
         for plan in registry
             .plans_for_concrete_activation()
             .filter(|plan| plan.kind() == SourcePlanKind::SnapshotExact)
@@ -166,22 +166,26 @@ impl PublishedSnapshotRegistry {
                 .snapshot_binding()
                 .ok_or(SnapshotRegistryError::InvalidPlan)?;
             let provider: Box<str> = binding.table_provider().into();
-            let slot = Arc::new(SnapshotSlot {
-                profile_id: plan.profile().id().as_str().into(),
-                profile_version: plan.profile().version().get(),
-                binding_hash: plan.binding_hash().into(),
-                state: AtomicU8::new(SLOT_UNAVAILABLE),
-                handle: ArcSwapOption::empty(),
-            });
-            if by_provider.insert(provider, slot).is_some() {
-                return Err(SnapshotRegistryError::DuplicateProvider);
-            }
+            dependencies.entry(provider).or_default().insert((
+                plan.profile().id().as_str().into(),
+                plan.profile().version().get(),
+                plan.binding_hash().into(),
+            ));
         }
+        let by_provider = dependencies
+            .into_iter()
+            .map(|(provider, dependent_plans)| {
+                (
+                    provider,
+                    Arc::new(SnapshotSlot {
+                        dependent_plans,
+                        state: AtomicU8::new(SLOT_UNAVAILABLE),
+                        handle: ArcSwapOption::empty(),
+                    }),
+                )
+            })
+            .collect();
         Ok(Self { by_provider })
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.by_provider.is_empty()
     }
 
     pub(crate) fn begin_publication(
@@ -258,10 +262,24 @@ impl PublishedSnapshotRegistry {
                 .is_some_and(|current| Arc::ptr_eq(&current, handle))
     }
 
+    #[cfg(test)]
     pub(crate) fn all_ready(&self) -> bool {
         self.by_provider.values().all(|slot| {
             slot.state.load(Ordering::Acquire) == SLOT_READY && slot.handle.load().is_some()
         })
+    }
+
+    pub(crate) fn is_ready(&self, plan: &CompiledSourcePlan) -> bool {
+        let Some(binding) = plan.snapshot_binding() else {
+            return true;
+        };
+        self.by_provider
+            .get(binding.table_provider())
+            .is_some_and(|slot| {
+                slot.matches_plan(plan)
+                    && slot.state.load(Ordering::Acquire) == SLOT_READY
+                    && slot.handle.load().is_some()
+            })
     }
 }
 
@@ -303,8 +321,6 @@ impl Drop for SnapshotPublicationGuard {
 pub(crate) enum SnapshotRegistryError {
     #[error("snapshot exact plan is invalid")]
     InvalidPlan,
-    #[error("snapshot exact provider is duplicated")]
-    DuplicateProvider,
     #[error("snapshot exact provider is unknown")]
     UnknownProvider,
     #[error("snapshot exact publication is already in progress")]
@@ -334,9 +350,11 @@ mod tests {
 
     fn registry() -> Arc<PublishedSnapshotRegistry> {
         let slot = Arc::new(SnapshotSlot {
-            profile_id: "synthetic.profile".into(),
-            profile_version: 1,
-            binding_hash: format!("sha256:{}", "a".repeat(64)).into(),
+            dependent_plans: BTreeSet::from([(
+                "synthetic.profile".into(),
+                1,
+                format!("sha256:{}", "a".repeat(64)).into(),
+            )]),
             state: AtomicU8::new(SLOT_UNAVAILABLE),
             handle: ArcSwapOption::empty(),
         });
@@ -355,6 +373,44 @@ mod tests {
             empty_provider(),
         )
         .expect("valid snapshot handle")
+    }
+
+    #[test]
+    fn compatible_profiles_capture_one_shared_immutable_publication() {
+        let compiled = crate::source_plan::shared_snapshot_registry_fixture();
+        let plans = compiled
+            .plans_for_concrete_activation()
+            .filter(|plan| plan.kind() == SourcePlanKind::SnapshotExact)
+            .collect::<Vec<_>>();
+        assert_eq!(plans.len(), 2);
+        let snapshots = PublishedSnapshotRegistry::compile(&compiled)
+            .expect("compatible shared provider compiles");
+        assert_eq!(snapshots.by_provider.len(), 1);
+        let provider = plans[0]
+            .snapshot_binding()
+            .expect("snapshot binding")
+            .table_provider();
+        snapshots
+            .begin_publication(provider)
+            .expect("publication starts")
+            .publish(handle("01JZ0000000000000000000001", 1_750_000_000_000));
+        let first = snapshots.capture(plans[0]).expect("first profile ready");
+        let second = snapshots.capture(plans[1]).expect("second profile ready");
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn unavailable_snapshot_marks_only_its_dependent_profiles_unready() {
+        let compiled = crate::source_plan::shared_snapshot_registry_fixture();
+        let snapshot_plan = compiled
+            .plans_for_concrete_activation()
+            .next()
+            .expect("snapshot plan");
+        let unrelated = crate::source_plan::dhis2_runtime_vector_plan_fixture();
+        let snapshots =
+            PublishedSnapshotRegistry::compile(&compiled).expect("snapshot registry compiles");
+        assert!(!snapshots.is_ready(snapshot_plan));
+        assert!(snapshots.is_ready(&unrelated));
     }
 
     #[test]

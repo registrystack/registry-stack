@@ -355,6 +355,7 @@ pub(super) fn denied_batch_item_matching_policy_audit_identity(
         target: Some(item.target.clone()),
         relationship: item.relationship.clone(),
         on_behalf_of: item.on_behalf_of.clone(),
+        variables: Default::default(),
         claims: request.claims.clone(),
         disclosure: request.disclosure.clone(),
         format: request.format.clone(),

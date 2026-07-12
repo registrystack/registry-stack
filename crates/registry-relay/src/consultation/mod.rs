@@ -22,6 +22,7 @@ pub(crate) mod commitments;
 )]
 pub(crate) mod executor;
 mod identifiers;
+pub mod offline_fixture;
 pub mod operator;
 #[allow(
     dead_code,
@@ -42,6 +43,7 @@ mod service;
 mod types;
 mod workload;
 
+pub(crate) use identifiers::NotaryBatchChildIdentity;
 pub use identifiers::{
     ConsultationId, ConsultationIdentifierError, ConsultationKey, NotaryEvaluationId,
     ResolvedConsultationProfile,

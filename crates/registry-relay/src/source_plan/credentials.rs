@@ -1,10 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Closed, restart-only Basic and OAuth credentials for compiled consultations.
-
-#![allow(
-    dead_code,
-    reason = "the provider is staged immediately before consultation executor integration"
-)]
+//! Closed, restart-only source credentials for compiled consultations.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -26,15 +21,82 @@ use crate::consultation::{
     IntegrationPackHash, OperationId, ProfileContractHash, ProfileId, ProfileVersion,
 };
 
+use super::compiler::CompiledApiKeyPlacement;
 use super::compiler::CompiledCredentialOperation;
 use super::registry::CompiledConsultationRegistry;
 use super::{
-    CompiledOperation, CompiledRequestCodec, CompiledSourceAuth, CompiledSourcePlan,
-    CompiledSourcePlanRegistry, ReadMethod,
+    CompiledOperation, CompiledSourceAuth, CompiledSourcePlan, CompiledSourcePlanRegistry,
 };
 
 const MAX_BASIC_COMPONENT_BYTES: usize = 4 * 1024;
 const BASIC_SCHEME_PREFIX_BYTES: usize = b"Basic ".len();
+
+/// Validate exact config-to-plan credential closure without reading sources.
+pub(crate) fn validate_source_credential_catalog(
+    config: &ConsultationSourceCredentialCatalogConfig,
+    registry: &CompiledConsultationRegistry,
+) -> Result<(), SourceCredentialProviderError> {
+    validate_source_credential_catalog_for_plans(config, registry.source_plans_for_credentials())
+}
+
+fn validate_source_credential_catalog_for_plans(
+    config: &ConsultationSourceCredentialCatalogConfig,
+    plans: &CompiledSourcePlanRegistry,
+) -> Result<(), SourceCredentialProviderError> {
+    let entries = config.entries();
+    validate_catalog_structure(entries)?;
+    let basic = compile_registry_requirements(plans)?;
+    let bearer = compile_static_bearer_registry_requirements(plans)?;
+    let api_header =
+        compile_api_key_registry_requirements(plans, CompiledSourceAuth::ApiKeyHeader)?;
+    let api_query = compile_api_key_registry_requirements(plans, CompiledSourceAuth::ApiKeyQuery)?;
+    let oauth = compile_oauth_registry_requirements(plans)?;
+    validate_catalog_closure(
+        &entries
+            .iter()
+            .filter(|entry| entry.is_basic())
+            .collect::<Vec<_>>(),
+        &basic,
+    )?;
+    validate_catalog_closure(
+        &entries
+            .iter()
+            .filter(|entry| entry.is_static_bearer())
+            .collect::<Vec<_>>(),
+        &bearer,
+    )?;
+    validate_catalog_closure(
+        &entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    ConsultationSourceCredentialConfig::ApiKeyHeader { .. }
+                )
+            })
+            .collect::<Vec<_>>(),
+        &api_header,
+    )?;
+    validate_catalog_closure(
+        &entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    ConsultationSourceCredentialConfig::ApiKeyQuery { .. }
+                )
+            })
+            .collect::<Vec<_>>(),
+        &api_query,
+    )?;
+    validate_catalog_closure(
+        &entries
+            .iter()
+            .filter(|entry| entry.is_oauth_client_credentials())
+            .collect::<Vec<_>>(),
+        &oauth,
+    )
+}
 
 /// Value-free startup and binding failures.
 ///
@@ -58,9 +120,7 @@ pub(crate) enum SourceCredentialProviderError {
     CredentialGenerationMismatch,
     #[error("compiled consultation source authentication is not supported by this provider")]
     AuthenticationKindMismatch,
-    #[error("compiled HTTP Basic operation is outside the closed V1 request shape")]
-    BasicOperationShapeMismatch,
-    #[error("compiled OAuth operation is outside the exact OpenCRVS request shape")]
+    #[error("compiled OAuth operation is outside the closed client-credentials shape")]
     OAuthOperationShapeMismatch,
     #[error("consultation source-credential environment material could not be loaded")]
     EnvironmentLoadFailed,
@@ -132,6 +192,10 @@ struct StoredOAuthClientCredential {
     client_secret: Zeroizing<Vec<u8>>,
 }
 
+struct StoredStaticBearerCredential {
+    token: Zeroizing<Vec<u8>>,
+}
+
 impl fmt::Debug for StoredOAuthClientCredential {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("StoredOAuthClientCredential(<redacted>)")
@@ -141,6 +205,12 @@ impl fmt::Debug for StoredOAuthClientCredential {
 impl fmt::Debug for StoredBasicCredential {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("StoredBasicCredential(<redacted>)")
+    }
+}
+
+impl fmt::Debug for StoredStaticBearerCredential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("StoredStaticBearerCredential(<redacted>)")
     }
 }
 
@@ -263,8 +333,9 @@ impl CompiledBasicSourceCredentialProvider {
             {
                 let capability = self.authorization_for(plan, operation)?;
                 let empty_query_values = vec![""; operation.query().len()];
+                let empty_header_values = vec![b"".as_slice(); operation.headers().len()];
                 capability
-                    .render(&empty_query_values)
+                    .render(None, &empty_query_values, &empty_header_values, None)
                     .map_err(|_| SourceCredentialProviderError::BasicMaterialTooLarge)?;
             }
         }
@@ -283,7 +354,186 @@ impl fmt::Debug for CompiledBasicSourceCredentialProvider {
     }
 }
 
-/// Restart-only OAuth client credentials closed over exact OpenCRVS plans.
+/// Immutable static-bearer closure bound to exact compiled operations.
+pub(crate) struct CompiledStaticBearerSourceCredentialProvider {
+    credentials: BTreeMap<CredentialKey, StoredStaticBearerCredential>,
+    operation_bindings: BTreeMap<OperationBindingKey, CredentialKey>,
+}
+
+impl CompiledStaticBearerSourceCredentialProvider {
+    pub(crate) fn compile_for_consultations(
+        config: &ConsultationSourceCredentialCatalogConfig,
+        registry: &CompiledConsultationRegistry,
+    ) -> Result<Self, SourceCredentialProviderError> {
+        Self::compile(config, registry.source_plans_for_credentials())
+    }
+
+    fn compile(
+        config: &ConsultationSourceCredentialCatalogConfig,
+        registry: &CompiledSourcePlanRegistry,
+    ) -> Result<Self, SourceCredentialProviderError> {
+        let entries = config.entries();
+        validate_catalog_structure(entries)?;
+        let requirements = compile_static_bearer_registry_requirements(registry)?;
+        let header_requirements =
+            compile_api_key_registry_requirements(registry, CompiledSourceAuth::ApiKeyHeader)?;
+        let query_requirements =
+            compile_api_key_registry_requirements(registry, CompiledSourceAuth::ApiKeyQuery)?;
+        let bearer_entries = entries
+            .iter()
+            .filter(|entry| entry.is_static_bearer())
+            .collect::<Vec<_>>();
+        validate_catalog_closure(&bearer_entries, &requirements)?;
+        let header_entries = entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    ConsultationSourceCredentialConfig::ApiKeyHeader { .. }
+                )
+            })
+            .collect::<Vec<_>>();
+        let query_entries = entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    ConsultationSourceCredentialConfig::ApiKeyQuery { .. }
+                )
+            })
+            .collect::<Vec<_>>();
+        validate_catalog_closure(&header_entries, &header_requirements)?;
+        validate_catalog_closure(&query_entries, &query_requirements)?;
+
+        let mut credentials = BTreeMap::new();
+        for entry in bearer_entries {
+            let ConsultationSourceCredentialConfig::StaticBearer { token_env, .. } = entry else {
+                return Err(SourceCredentialProviderError::AuthenticationKindMismatch);
+            };
+            let token = read_environment_bytes(token_env.as_str())?;
+            if token.is_empty()
+                || token.len() > MAX_DESTINATION_HEADER_VALUE_BYTES.saturating_sub(7)
+                || contains_control(token.as_slice())
+            {
+                return Err(SourceCredentialProviderError::EnvironmentLoadFailed);
+            }
+            if credentials
+                .values()
+                .any(|stored: &StoredStaticBearerCredential| stored.token == token)
+            {
+                return Err(SourceCredentialProviderError::DuplicateCredentialMaterial);
+            }
+            credentials.insert(
+                CredentialKey::new(entry.reference().as_str(), entry.generation()),
+                StoredStaticBearerCredential { token },
+            );
+        }
+        for entry in header_entries.into_iter().chain(query_entries) {
+            let value_env = match entry {
+                ConsultationSourceCredentialConfig::ApiKeyHeader { value_env, .. }
+                | ConsultationSourceCredentialConfig::ApiKeyQuery { value_env, .. } => value_env,
+                _ => return Err(SourceCredentialProviderError::AuthenticationKindMismatch),
+            };
+            let token = read_environment_bytes(value_env.as_str())?;
+            if token.is_empty()
+                || token.len() > MAX_DESTINATION_HEADER_VALUE_BYTES
+                || contains_control(token.as_slice())
+            {
+                return Err(SourceCredentialProviderError::EnvironmentLoadFailed);
+            }
+            if credentials
+                .values()
+                .any(|stored: &StoredStaticBearerCredential| stored.token == token)
+            {
+                return Err(SourceCredentialProviderError::DuplicateCredentialMaterial);
+            }
+            credentials.insert(
+                CredentialKey::new(entry.reference().as_str(), entry.generation()),
+                StoredStaticBearerCredential { token },
+            );
+        }
+        let mut operation_bindings = BTreeMap::new();
+        for (reference, requirement) in requirements {
+            let credential = CredentialKey::new(&reference, requirement.generation);
+            for operation in requirement.operations {
+                operation_bindings.insert(operation, credential.clone());
+            }
+        }
+        for (reference, requirement) in header_requirements.into_iter().chain(query_requirements) {
+            let credential = CredentialKey::new(&reference, requirement.generation);
+            for operation in requirement.operations {
+                operation_bindings.insert(operation, credential.clone());
+            }
+        }
+        Ok(Self {
+            credentials,
+            operation_bindings,
+        })
+    }
+
+    pub(crate) fn authorization_for<'operation>(
+        &self,
+        plan: &'operation CompiledSourcePlan,
+        operation: &'operation CompiledOperation,
+    ) -> Result<StaticBearerAuthorizationCapability<'operation>, SourceCredentialProviderError>
+    {
+        if operation.auth() != CompiledSourceAuth::StaticBearer
+            || !plan
+                .operations()
+                .any(|candidate| std::ptr::eq(candidate, operation))
+        {
+            return Err(SourceCredentialProviderError::OperationBindingMismatch);
+        }
+        let key = self
+            .operation_bindings
+            .get(&OperationBindingKey::from_plan_operation(plan, operation))
+            .and_then(|key| self.credentials.get(key))
+            .ok_or(SourceCredentialProviderError::OperationBindingMismatch)?;
+        let authorization = DestinationAuthorizationValue::bearer(key.token.to_vec())
+            .map_err(|_| SourceCredentialProviderError::OperationBindingMismatch)?;
+        Ok(StaticBearerAuthorizationCapability {
+            operation,
+            authorization,
+        })
+    }
+
+    pub(crate) fn api_key_for<'operation>(
+        &self,
+        plan: &'operation CompiledSourcePlan,
+        operation: &'operation CompiledOperation,
+    ) -> Result<ApiKeyCapability<'operation>, SourceCredentialProviderError> {
+        if !matches!(
+            operation.auth(),
+            CompiledSourceAuth::ApiKeyHeader | CompiledSourceAuth::ApiKeyQuery
+        ) || !plan
+            .operations()
+            .any(|candidate| std::ptr::eq(candidate, operation))
+        {
+            return Err(SourceCredentialProviderError::OperationBindingMismatch);
+        }
+        let key = self
+            .operation_bindings
+            .get(&OperationBindingKey::from_plan_operation(plan, operation))
+            .and_then(|key| self.credentials.get(key))
+            .ok_or(SourceCredentialProviderError::OperationBindingMismatch)?;
+        let mut value = Zeroizing::new(Vec::with_capacity(key.token.len()));
+        value.extend_from_slice(&key.token);
+        Ok(ApiKeyCapability { operation, value })
+    }
+}
+
+impl fmt::Debug for CompiledStaticBearerSourceCredentialProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompiledStaticBearerSourceCredentialProvider")
+            .field("credential_count", &self.credentials.len())
+            .field("operation_binding_count", &self.operation_bindings.len())
+            .field("credential_material", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Restart-only OAuth client credentials closed over exact compiled operations.
 ///
 /// Raw client identifiers and secrets remain in zeroizing memory. The provider
 /// is not cloneable or serializable and can mint only an operation-bound,
@@ -454,6 +704,16 @@ pub(crate) struct BasicAuthorizationCapability<'operation> {
     authorization: DestinationAuthorizationValue,
 }
 
+pub(crate) struct StaticBearerAuthorizationCapability<'operation> {
+    operation: &'operation CompiledOperation,
+    authorization: DestinationAuthorizationValue,
+}
+
+pub(crate) struct ApiKeyCapability<'operation> {
+    operation: &'operation CompiledOperation,
+    value: Zeroizing<Vec<u8>>,
+}
+
 impl<'operation> BasicAuthorizationCapability<'operation> {
     /// Consume the authorization while rendering its exact compiled request.
     ///
@@ -462,20 +722,118 @@ impl<'operation> BasicAuthorizationCapability<'operation> {
     /// explicit compiler/provider decision rather than a generic escape hatch.
     pub(crate) fn render(
         self,
+        path_segment: Option<&str>,
         query_values: &[&str],
+        header_values: &[&[u8]],
+        body: Option<Zeroizing<Vec<u8>>>,
     ) -> Result<DataDestinationRequest, DestinationRequestError> {
-        self.operation.transport_template().render(
-            query_values,
-            &[],
-            Some(self.authorization),
-            None,
-        )
+        match path_segment {
+            Some(path_segment) => self
+                .operation
+                .transport_template()
+                .render_zeroizing_with_path_segment(
+                    path_segment,
+                    query_values,
+                    header_values,
+                    Some(self.authorization),
+                    body,
+                ),
+            None => self.operation.transport_template().render_zeroizing(
+                query_values,
+                header_values,
+                Some(self.authorization),
+                body,
+            ),
+        }
     }
 }
 
 impl fmt::Debug for BasicAuthorizationCapability<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("BasicAuthorizationCapability(<operation-bound, redacted>)")
+    }
+}
+
+impl StaticBearerAuthorizationCapability<'_> {
+    pub(crate) fn render(
+        self,
+        path_segment: Option<&str>,
+        query_values: &[&str],
+        header_values: &[&[u8]],
+        body: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<DataDestinationRequest, DestinationRequestError> {
+        match path_segment {
+            Some(path_segment) => self
+                .operation
+                .transport_template()
+                .render_zeroizing_with_path_segment(
+                    path_segment,
+                    query_values,
+                    header_values,
+                    Some(self.authorization),
+                    body,
+                ),
+            None => self.operation.transport_template().render_zeroizing(
+                query_values,
+                header_values,
+                Some(self.authorization),
+                body,
+            ),
+        }
+    }
+}
+
+impl fmt::Debug for StaticBearerAuthorizationCapability<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("StaticBearerAuthorizationCapability(<operation-bound, redacted>)")
+    }
+}
+
+impl ApiKeyCapability<'_> {
+    pub(crate) fn render(
+        self,
+        path_segment: Option<&str>,
+        query_values: &[&str],
+        header_values: &[&[u8]],
+        body: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<DataDestinationRequest, DestinationRequestError> {
+        let mut query_values = query_values.to_vec();
+        let mut header_values = header_values.to_vec();
+        match self
+            .operation
+            .api_key()
+            .ok_or(DestinationRequestError::InvalidTarget)?
+        {
+            CompiledApiKeyPlacement::Header { .. } => header_values.push(self.value.as_slice()),
+            CompiledApiKeyPlacement::Query { .. } => query_values.push(
+                std::str::from_utf8(self.value.as_slice())
+                    .map_err(|_| DestinationRequestError::InvalidTarget)?,
+            ),
+        }
+        match path_segment {
+            Some(path_segment) => self
+                .operation
+                .transport_template()
+                .render_zeroizing_with_path_segment(
+                    path_segment,
+                    &query_values,
+                    &header_values,
+                    None,
+                    body,
+                ),
+            None => self.operation.transport_template().render_zeroizing(
+                &query_values,
+                &header_values,
+                None,
+                body,
+            ),
+        }
+    }
+}
+
+impl fmt::Debug for ApiKeyCapability<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ApiKeyCapability(<operation-bound, redacted>)")
     }
 }
 
@@ -521,15 +879,6 @@ fn compile_registry_requirements(
         if basic_operations.is_empty() {
             continue;
         }
-        if basic_operations.iter().any(|operation| {
-            operation.method() != ReadMethod::Get
-                || operation.headers().len() != 0
-                || operation.body().is_some()
-                || operation.request_codec() != CompiledRequestCodec::None
-                || operation.request_signer().is_some()
-        }) {
-            return Err(SourceCredentialProviderError::BasicOperationShapeMismatch);
-        }
         if plan.operations().any(|operation| {
             matches!(
                 operation.auth(),
@@ -561,6 +910,88 @@ fn compile_registry_requirements(
     Ok(requirements)
 }
 
+fn compile_static_bearer_registry_requirements(
+    registry: &CompiledSourcePlanRegistry,
+) -> Result<BTreeMap<Box<str>, CredentialRequirement>, SourceCredentialProviderError> {
+    let mut requirements: BTreeMap<Box<str>, CredentialRequirement> = BTreeMap::new();
+    for plan in registry.iter() {
+        let operations = plan
+            .operations()
+            .filter(|operation| operation.auth() == CompiledSourceAuth::StaticBearer)
+            .collect::<Vec<_>>();
+        if operations.is_empty() {
+            continue;
+        }
+        if plan.operations().any(|operation| {
+            matches!(
+                operation.auth(),
+                CompiledSourceAuth::Basic | CompiledSourceAuth::OAuthClientCredentials
+            )
+        }) {
+            return Err(SourceCredentialProviderError::AuthenticationKindMismatch);
+        }
+        let Some((reference, generation)) = plan.credential_reference() else {
+            return Err(SourceCredentialProviderError::AuthenticationKindMismatch);
+        };
+        let requirement =
+            requirements
+                .entry(reference.into())
+                .or_insert_with(|| CredentialRequirement {
+                    generation,
+                    operations: Vec::new(),
+                });
+        if requirement.generation != generation {
+            return Err(SourceCredentialProviderError::CredentialGenerationMismatch);
+        }
+        requirement.operations.extend(
+            operations
+                .into_iter()
+                .map(|operation| OperationBindingKey::from_plan_operation(plan, operation)),
+        );
+    }
+    Ok(requirements)
+}
+
+fn compile_api_key_registry_requirements(
+    registry: &CompiledSourcePlanRegistry,
+    auth: CompiledSourceAuth,
+) -> Result<BTreeMap<Box<str>, CredentialRequirement>, SourceCredentialProviderError> {
+    let mut requirements: BTreeMap<Box<str>, CredentialRequirement> = BTreeMap::new();
+    for plan in registry.iter() {
+        let operations = plan
+            .operations()
+            .filter(|operation| operation.auth() == auth)
+            .collect::<Vec<_>>();
+        if operations.is_empty() {
+            continue;
+        }
+        if plan.operations().any(|operation| {
+            operation.auth() != CompiledSourceAuth::None && operation.auth() != auth
+        }) {
+            return Err(SourceCredentialProviderError::AuthenticationKindMismatch);
+        }
+        let Some((reference, generation)) = plan.credential_reference() else {
+            return Err(SourceCredentialProviderError::AuthenticationKindMismatch);
+        };
+        let requirement =
+            requirements
+                .entry(reference.into())
+                .or_insert_with(|| CredentialRequirement {
+                    generation,
+                    operations: Vec::new(),
+                });
+        if requirement.generation != generation {
+            return Err(SourceCredentialProviderError::CredentialGenerationMismatch);
+        }
+        requirement.operations.extend(
+            operations
+                .into_iter()
+                .map(|operation| OperationBindingKey::from_plan_operation(plan, operation)),
+        );
+    }
+    Ok(requirements)
+}
+
 fn compile_oauth_registry_requirements(
     registry: &CompiledSourcePlanRegistry,
 ) -> Result<BTreeMap<Box<str>, CredentialRequirement>, SourceCredentialProviderError> {
@@ -569,13 +1000,9 @@ fn compile_oauth_registry_requirements(
         let Some(credential_operation) = plan.credential_operation() else {
             continue;
         };
-        let operations = plan.operations().collect::<Vec<_>>();
-        if operations.len() != 1
-            || !operations[0].is_open_crvs_dci_exact_v1()
-            || operations[0].auth() != CompiledSourceAuth::OAuthClientCredentials
-            || operations[0].embedded_open_crvs_jwks().is_none()
-            || !credential_operation.parser().is_no_expiry()
-            || plan.oauth_cache_identity().is_some()
+        if !plan
+            .operations()
+            .any(|operation| operation.auth() == CompiledSourceAuth::OAuthClientCredentials)
         {
             return Err(SourceCredentialProviderError::OAuthOperationShapeMismatch);
         }
@@ -649,24 +1076,29 @@ fn read_environment_bytes(name: &str) -> Result<Zeroizing<Vec<u8>>, SourceCreden
 fn validate_global_credential_material(
     entries: &[ConsultationSourceCredentialConfig],
 ) -> Result<(), SourceCredentialProviderError> {
-    let mut material = Vec::<(Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>)>::new();
+    let mut material = Vec::<Vec<Zeroizing<Vec<u8>>>>::new();
     for entry in entries {
-        let [left_env, right_env] = entry.environment_names();
-        let left = read_environment_bytes(left_env.as_str())?;
-        let right = read_environment_bytes(right_env.as_str())?;
-        if left.is_empty()
-            || right.is_empty()
-            || contains_control(left.as_slice())
-            || contains_control(right.as_slice())
+        let components = entry
+            .environment_names()
+            .into_iter()
+            .map(|name| read_environment_bytes(name.as_str()))
+            .collect::<Result<Vec<_>, _>>()?;
+        if components
+            .iter()
+            .any(|value| value.is_empty() || contains_control(value.as_slice()))
         {
             return Err(SourceCredentialProviderError::EnvironmentLoadFailed);
         }
-        if material.iter().any(|(stored_left, stored_right)| {
-            stored_left.as_slice() == left.as_slice() && stored_right.as_slice() == right.as_slice()
+        if material.iter().any(|stored| {
+            stored.len() == components.len()
+                && stored
+                    .iter()
+                    .zip(&components)
+                    .all(|(left, right)| left.as_slice() == right.as_slice())
         }) {
             return Err(SourceCredentialProviderError::DuplicateCredentialMaterial);
         }
-        material.push((left, right));
+        material.push(components);
     }
     Ok(())
 }

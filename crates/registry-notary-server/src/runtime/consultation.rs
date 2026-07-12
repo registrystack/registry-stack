@@ -6,17 +6,24 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::{Arc, Mutex, Once, OnceLock};
 
-use registry_notary_core::EvidenceAuthProfileId;
+use base64::Engine as _;
+use registry_notary_core::{EvidenceAuthProfileId, RelayFactContract};
+use registry_platform_crypto::canonicalize_json;
+use registry_platform_httputil::destination::json::ProjectedJsonScalar;
+use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use tokio::sync::Notify;
 use ulid::Ulid;
 use zeroize::Zeroizing;
 
 use crate::relay_client::{
-    RelayClientError, RelayConsultationOutcome, RelayMatchData, VerifiedRelayClient,
+    RelayClientError, RelayConsultationOutcome, RelayInputNames, RelayMatchData,
+    VerifiedRelayClient,
 };
 
 pub(crate) const MAX_CONSULTATION_GROUPS_V1: usize = 16;
+pub(crate) const MAX_BATCH_CONSULTATION_GROUPS_V1: usize = 256;
 const MAX_CHECKED_SCOPES_V1: usize = 16;
 const MAX_PRINCIPAL_ID_BYTES: usize = 256;
 const MAX_PROFILE_ID_BYTES: usize = 96;
@@ -27,12 +34,120 @@ const MAX_INPUT_VALUE_BYTES: usize = 256;
 const MAX_OUTPUT_NAME_BYTES: usize = 96;
 const MAX_OUTPUT_STRING_BYTES: usize = 64 * 1024;
 
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum RuntimeRelayExpectedResult {
+    FactMap(BTreeMap<String, RelayFactContract>),
+    ProjectedString(Box<str>),
+    PresenceOnly,
+}
+
+impl RuntimeRelayExpectedResult {
+    pub(crate) fn fact_map(
+        facts: BTreeMap<String, RelayFactContract>,
+    ) -> Result<Self, ConsultationPlanError> {
+        if facts.is_empty() || facts.len() > 64 {
+            return Err(ConsultationPlanError::InvalidGroupKey);
+        }
+        Ok(Self::FactMap(facts))
+    }
+
+    pub(crate) fn projected_string(
+        name: impl Into<Box<str>>,
+    ) -> Result<Self, ConsultationPlanError> {
+        let name = name.into();
+        if !input_name(&name, MAX_OUTPUT_NAME_BYTES) {
+            return Err(ConsultationPlanError::InvalidGroupKey);
+        }
+        Ok(Self::ProjectedString(name))
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    pub(crate) const fn fact_contracts(&self) -> Option<&BTreeMap<String, RelayFactContract>> {
+        match self {
+            Self::FactMap(facts) => Some(facts),
+            Self::ProjectedString(_) | Self::PresenceOnly => None,
+        }
+    }
+}
+
+impl fmt::Debug for RuntimeRelayExpectedResult {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RuntimeRelayExpectedResult([REDACTED])")
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct RelayClientSelectionV1 {
+    profile_id: Box<str>,
+    profile_version: Box<str>,
+    profile_contract_hash: Box<str>,
+    purpose: Box<str>,
+    input_names: Box<[String]>,
+    expected_result: RuntimeRelayExpectedResult,
+}
+
+impl RelayClientSelectionV1 {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        profile_id: impl Into<Box<str>>,
+        profile_version: impl Into<Box<str>>,
+        profile_contract_hash: impl Into<Box<str>>,
+        purpose: impl Into<Box<str>>,
+        input_names: impl Into<RelayInputNames>,
+        expected_result: RuntimeRelayExpectedResult,
+    ) -> Result<Self, ConsultationPlanError> {
+        let profile_id = profile_id.into();
+        let profile_version = profile_version.into();
+        let profile_contract_hash = profile_contract_hash.into();
+        let purpose = purpose.into();
+        let mut input_names = input_names.into().into_vec();
+        input_names.sort();
+        input_names.dedup();
+        if !stable_id(&profile_id, MAX_PROFILE_ID_BYTES)
+            || !canonical_version(&profile_version)
+            || !sha256_uri(&profile_contract_hash)
+            || !valid_purpose(&purpose)
+            || !(1..=4).contains(&input_names.len())
+            || input_names
+                .iter()
+                .any(|name| !input_name(name, MAX_INPUT_NAME_BYTES))
+        {
+            return Err(ConsultationPlanError::InvalidGroupKey);
+        }
+        Ok(Self {
+            profile_id,
+            profile_version,
+            profile_contract_hash,
+            purpose,
+            input_names: input_names.into_boxed_slice(),
+            expected_result,
+        })
+    }
+
+    fn from_key(key: &ConsultationGroupKeyV1) -> Self {
+        Self {
+            profile_id: key.profile_id.clone(),
+            profile_version: key.profile_version.clone(),
+            profile_contract_hash: key.profile_contract_hash.clone(),
+            purpose: key.canonical_purpose.clone(),
+            input_names: key.canonical_inputs.keys().cloned().collect(),
+            expected_result: key.expected_result.clone(),
+        }
+    }
+}
+
+impl fmt::Debug for RelayClientSelectionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RelayClientSelectionV1([REDACTED])")
+    }
+}
+
 /// The complete typed equality boundary for request-scoped consultation reuse.
 ///
 /// This type deliberately implements neither `Debug` nor `Serialize`. It can
 /// contain authenticated principal and subject-selector material and must
 /// remain request-scoped memory only.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub(crate) struct ConsultationGroupKeyV1 {
     evaluation_id: Ulid,
     auth_profile_id: EvidenceAuthProfileId,
@@ -43,13 +158,41 @@ pub(crate) struct ConsultationGroupKeyV1 {
     profile_contract_hash: Box<str>,
     canonical_purpose: Box<str>,
     canonical_inputs: BTreeMap<String, Zeroizing<String>>,
+    expected_result: RuntimeRelayExpectedResult,
 }
 
 impl ConsultationGroupKeyV1 {
     /// Build one canonical key after Notary has completed all
     /// pre-consultation gates.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        evaluation_id: Ulid,
+        auth_profile_id: EvidenceAuthProfileId,
+        principal_id: String,
+        checked_scopes: Vec<String>,
+        profile_id: impl Into<Box<str>>,
+        profile_version: impl Into<Box<str>>,
+        profile_contract_hash: impl Into<Box<str>>,
+        canonical_purpose: impl Into<Box<str>>,
+        canonical_inputs: BTreeMap<String, Zeroizing<String>>,
+    ) -> Result<Self, ConsultationPlanError> {
+        Self::new_with_expected_result(
+            evaluation_id,
+            auth_profile_id,
+            principal_id,
+            checked_scopes,
+            profile_id,
+            profile_version,
+            profile_contract_hash,
+            canonical_purpose,
+            canonical_inputs,
+            RuntimeRelayExpectedResult::projected_string("registration_status")?,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_expected_result(
         evaluation_id: Ulid,
         auth_profile_id: EvidenceAuthProfileId,
         principal_id: String,
@@ -59,6 +202,7 @@ impl ConsultationGroupKeyV1 {
         profile_contract_hash: impl Into<Box<str>>,
         canonical_purpose: impl Into<Box<str>>,
         canonical_inputs: BTreeMap<String, Zeroizing<String>>,
+        expected_result: RuntimeRelayExpectedResult,
     ) -> Result<Self, ConsultationPlanError> {
         let profile_id = profile_id.into();
         let profile_version = profile_version.into();
@@ -90,6 +234,7 @@ impl ConsultationGroupKeyV1 {
             profile_contract_hash,
             canonical_purpose,
             canonical_inputs,
+            expected_result,
         })
     }
 
@@ -136,15 +281,30 @@ impl ConsultationGroupKeyV1 {
         &self.canonical_purpose
     }
 
-    /// Return the one canonical profile input. The value remains owned by a
-    /// zeroizing allocation for the lifetime of the request key.
+    /// Return the canonical profile inputs in bytewise key order. Values
+    /// remain owned by zeroizing allocations for the request lifetime.
     #[must_use]
-    pub(crate) fn canonical_input(&self) -> (&str, &str) {
-        let (name, value) = self
-            .canonical_inputs
-            .first_key_value()
-            .expect("ConsultationGroupKeyV1 construction requires one input");
-        (name, value.as_str())
+    pub(crate) const fn canonical_inputs(&self) -> &BTreeMap<String, Zeroizing<String>> {
+        &self.canonical_inputs
+    }
+
+    fn with_canonical_inputs(
+        mut self,
+        inputs: BTreeMap<String, Zeroizing<String>>,
+    ) -> Result<Self, RelayClientError> {
+        if !valid_canonical_inputs(&inputs) {
+            return Err(RelayClientError::InvalidRequest);
+        }
+        self.canonical_inputs = inputs;
+        Ok(self)
+    }
+
+    #[must_use]
+    #[cfg(feature = "registry-notary-cel")]
+    pub(crate) const fn expected_fact_contracts(
+        &self,
+    ) -> Option<&BTreeMap<String, RelayFactContract>> {
+        self.expected_result.fact_contracts()
     }
 }
 
@@ -161,6 +321,106 @@ impl Ord for ConsultationGroupKeyV1 {
             .then_with(|| self.canonical_purpose.cmp(&other.canonical_purpose))
             .then_with(|| compare_canonical_inputs(&self.canonical_inputs, &other.canonical_inputs))
     }
+}
+
+impl PartialEq for ConsultationGroupKeyV1 {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for ConsultationGroupKeyV1 {}
+
+/// Opaque restart-stable identity for one item-local Relay consultation.
+///
+/// The type deliberately exposes neither its preimage nor `Display`. Its
+/// redacted `Debug` implementation is safe for error paths.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct BatchChildIdentityV1(Box<str>);
+
+/// Canonical, value-bearing preimage used only while deriving an opaque child
+/// identity. It is deliberately not serializable through a general-purpose
+/// interface and its diagnostics are value-free.
+struct BatchConsultationGroupCommitmentV1<'a> {
+    key: &'a ConsultationGroupKeyV1,
+}
+
+impl BatchConsultationGroupCommitmentV1<'_> {
+    fn canonical_json(&self) -> Result<Vec<u8>, ConsultationPlanError> {
+        let key = self.key;
+        let caller = serde_json::json!({
+            "auth_profile_id": key.auth_profile_id.as_str(),
+            "principal_id": key.principal_id.as_str(),
+            "checked_scopes_sorted": key.checked_scopes_sorted,
+        });
+        let commitment = serde_json::json!({
+            "authenticated_evaluation_caller_binding": caller,
+            "profile": {
+                "id": key.profile_id.as_ref(),
+                "version": key.profile_version.as_ref(),
+                "contract_hash": key.profile_contract_hash.as_ref(),
+            },
+            "canonical_purpose": key.canonical_purpose.as_ref(),
+            "canonical_inputs": key.canonical_inputs.iter().map(|(name, value)| {
+                (name.clone(), Value::String(value.as_str().to_string()))
+            }).collect::<Map<String, Value>>(),
+        });
+        canonicalize_json(&commitment).map_err(|_| ConsultationPlanError::InvalidGroupKey)
+    }
+}
+
+impl fmt::Debug for BatchConsultationGroupCommitmentV1<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BatchConsultationGroupCommitmentV1([REDACTED])")
+    }
+}
+
+impl BatchChildIdentityV1 {
+    pub(crate) fn derive(
+        outer_key: &str,
+        item_position: usize,
+        key: &ConsultationGroupKeyV1,
+    ) -> Result<Self, ConsultationPlanError> {
+        if outer_key.is_empty() || outer_key.len() > 256 {
+            return Err(ConsultationPlanError::InvalidGroupKey);
+        }
+        let item_position =
+            u64::try_from(item_position).map_err(|_| ConsultationPlanError::InvalidGroupKey)?;
+        let commitment = BatchConsultationGroupCommitmentV1 { key }.canonical_json()?;
+
+        let mut outer = Sha256::new();
+        frame_hash(&mut outer, b"registry.notary.batch-outer.v1");
+        frame_hash(&mut outer, key.auth_profile_id.as_str().as_bytes());
+        frame_hash(&mut outer, key.principal_id.as_bytes());
+        for scope in &key.checked_scopes_sorted {
+            frame_hash(&mut outer, scope.as_bytes());
+        }
+        frame_hash(&mut outer, outer_key.as_bytes());
+        let outer = outer.finalize();
+
+        let mut child = Sha256::new();
+        frame_hash(&mut child, b"registry.notary.relay-batch-child.v1");
+        frame_hash(&mut child, &outer);
+        frame_hash(&mut child, &item_position.to_be_bytes());
+        frame_hash(&mut child, &commitment);
+        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(child.finalize());
+        Ok(Self(encoded.into_boxed_str()))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for BatchChildIdentityV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BatchChildIdentityV1([REDACTED])")
+    }
+}
+
+fn frame_hash(hash: &mut Sha256, bytes: &[u8]) {
+    hash.update(u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_be_bytes());
+    hash.update(bytes);
 }
 
 impl PartialOrd for ConsultationGroupKeyV1 {
@@ -358,8 +618,88 @@ impl fmt::Debug for RuntimeRelayOutput {
 
 /// Match-only data released by the verified Relay client.
 pub(crate) enum RuntimeRelayMatchData {
+    FactMap(RuntimeRelayFactMap),
     ProjectedString(RuntimeRelayOutput),
     PresenceOnly,
+}
+
+pub(crate) struct RuntimeRelayFactMap {
+    fields: BTreeMap<Box<str>, RuntimeRelayFactValue>,
+}
+
+enum RuntimeRelayFactValue {
+    Null,
+    Boolean(bool),
+    Integer(i64),
+    String(Zeroizing<String>),
+}
+
+impl RuntimeRelayFactMap {
+    #[cfg(feature = "registry-notary-cel")]
+    pub(crate) fn from_json(fields: BTreeMap<String, Value>) -> Result<Self, RelayClientError> {
+        let fields = fields
+            .into_iter()
+            .map(|(name, value)| {
+                let value = match value {
+                    Value::Null => RuntimeRelayFactValue::Null,
+                    Value::Bool(value) => RuntimeRelayFactValue::Boolean(value),
+                    Value::Number(value) => value
+                        .as_i64()
+                        .map(RuntimeRelayFactValue::Integer)
+                        .ok_or(RelayClientError::InvalidResult)?,
+                    Value::String(value) => RuntimeRelayFactValue::String(Zeroizing::new(value)),
+                    Value::Array(_) | Value::Object(_) => {
+                        return Err(RelayClientError::InvalidResult)
+                    }
+                };
+                Ok((name.into_boxed_str(), value))
+            })
+            .collect::<Result<BTreeMap<_, _>, RelayClientError>>()?;
+        Ok(Self { fields })
+    }
+
+    fn from_relay(facts: &crate::relay_client::RelayFactMap) -> Result<Self, RelayClientError> {
+        let fields = facts
+            .fields()
+            .map(|(name, value)| {
+                let value = match value {
+                    ProjectedJsonScalar::Null => RuntimeRelayFactValue::Null,
+                    ProjectedJsonScalar::Boolean(value) => RuntimeRelayFactValue::Boolean(*value),
+                    ProjectedJsonScalar::Integer(value) => RuntimeRelayFactValue::Integer(*value),
+                    ProjectedJsonScalar::String(value) => {
+                        RuntimeRelayFactValue::String(Zeroizing::new(value.to_string()))
+                    }
+                    ProjectedJsonScalar::Number(_) => return Err(RelayClientError::InvalidResult),
+                };
+                Ok((name.into(), value))
+            })
+            .collect::<Result<BTreeMap<_, _>, RelayClientError>>()?;
+        Ok(Self { fields })
+    }
+
+    pub(crate) fn to_json_object(&self) -> Map<String, Value> {
+        self.fields
+            .iter()
+            .map(|(name, value)| {
+                let value = match value {
+                    RuntimeRelayFactValue::Null => Value::Null,
+                    RuntimeRelayFactValue::Boolean(value) => Value::Bool(*value),
+                    RuntimeRelayFactValue::Integer(value) => Value::Number((*value).into()),
+                    RuntimeRelayFactValue::String(value) => Value::String(value.to_string()),
+                };
+                (name.to_string(), value)
+            })
+            .collect()
+    }
+}
+
+impl fmt::Debug for RuntimeRelayFactMap {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RuntimeRelayFactMap")
+            .field("fields", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl fmt::Debug for RuntimeRelayMatchData {
@@ -412,7 +752,19 @@ impl RuntimeRelayConsultationResult {
     pub(crate) const fn output(&self) -> Option<&RuntimeRelayOutput> {
         match self.match_data.as_ref() {
             Some(RuntimeRelayMatchData::ProjectedString(output)) => Some(output),
-            Some(RuntimeRelayMatchData::PresenceOnly) | None => None,
+            Some(RuntimeRelayMatchData::FactMap(_) | RuntimeRelayMatchData::PresenceOnly)
+            | None => None,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn facts(&self) -> Option<&RuntimeRelayFactMap> {
+        match self.match_data.as_ref() {
+            Some(RuntimeRelayMatchData::FactMap(facts)) => Some(facts),
+            Some(
+                RuntimeRelayMatchData::ProjectedString(_) | RuntimeRelayMatchData::PresenceOnly,
+            )
+            | None => None,
         }
     }
 
@@ -440,12 +792,168 @@ impl fmt::Debug for RuntimeRelayConsultationResult {
 pub(crate) trait ActivatedRelayConsultations: Send + Sync + fmt::Debug {
     async fn check_ready(&self) -> Result<(), RelayClientError>;
 
+    async fn readiness(&self) -> RelayProfileReadiness {
+        RelayProfileReadiness::single(self.check_ready().await.is_ok())
+    }
+
+    fn profile_count(&self) -> usize {
+        1
+    }
+
     fn validate(&self, key: &ConsultationGroupKeyV1) -> Result<(), RelayClientError>;
+
+    fn canonicalize(
+        &self,
+        key: ConsultationGroupKeyV1,
+    ) -> Result<ConsultationGroupKeyV1, RelayClientError> {
+        self.validate(&key)?;
+        Ok(key)
+    }
 
     async fn execute(
         &self,
         key: &ConsultationGroupKeyV1,
     ) -> Result<RuntimeRelayConsultationResult, RelayClientError>;
+
+    async fn execute_batch(
+        &self,
+        key: &ConsultationGroupKeyV1,
+        _child_identity: &BatchChildIdentityV1,
+    ) -> Result<RuntimeRelayConsultationResult, RelayClientError> {
+        self.execute(key).await
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RelayProfileReadiness {
+    total: usize,
+    ready: usize,
+}
+
+impl RelayProfileReadiness {
+    const fn single(ready: bool) -> Self {
+        Self {
+            total: 1,
+            ready: ready as usize,
+        }
+    }
+
+    pub(crate) const fn all_failed(total: usize) -> Self {
+        Self { total, ready: 0 }
+    }
+
+    fn add(&mut self, other: Self) {
+        self.total += other.total;
+        self.ready += other.ready;
+    }
+
+    pub(crate) const fn total(self) -> usize {
+        self.total
+    }
+
+    pub(crate) const fn ready(self) -> usize {
+        self.ready
+    }
+
+    pub(crate) const fn failed(self) -> usize {
+        self.total - self.ready
+    }
+
+    pub(crate) const fn is_ready(self) -> bool {
+        self.total > 0 && self.ready == self.total
+    }
+}
+
+pub(crate) struct ActivatedRelayClientSet {
+    clients: BTreeMap<RelayClientSelectionV1, Arc<dyn ActivatedRelayConsultations>>,
+}
+
+impl ActivatedRelayClientSet {
+    pub(crate) fn new(
+        entries: impl IntoIterator<
+            Item = (RelayClientSelectionV1, Arc<dyn ActivatedRelayConsultations>),
+        >,
+    ) -> Result<Self, ConsultationPlanError> {
+        let mut clients = BTreeMap::new();
+        for (selection, client) in entries {
+            if clients.insert(selection, client).is_some() {
+                return Err(ConsultationPlanError::InvalidGroupKey);
+            }
+        }
+        if clients.is_empty() {
+            return Err(ConsultationPlanError::InvalidGroupKey);
+        }
+        Ok(Self { clients })
+    }
+
+    fn client_for(
+        &self,
+        key: &ConsultationGroupKeyV1,
+    ) -> Result<&Arc<dyn ActivatedRelayConsultations>, RelayClientError> {
+        self.clients
+            .get(&RelayClientSelectionV1::from_key(key))
+            .ok_or(RelayClientError::InvalidRequest)
+    }
+}
+
+impl fmt::Debug for ActivatedRelayClientSet {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ActivatedRelayClientSet")
+            .field("clients", &"[REDACTED]")
+            .finish()
+    }
+}
+
+#[async_trait::async_trait]
+impl ActivatedRelayConsultations for ActivatedRelayClientSet {
+    async fn check_ready(&self) -> Result<(), RelayClientError> {
+        if self.readiness().await.is_ready() {
+            Ok(())
+        } else {
+            Err(RelayClientError::Unavailable)
+        }
+    }
+
+    async fn readiness(&self) -> RelayProfileReadiness {
+        let mut readiness = RelayProfileReadiness::default();
+        for client in self.clients.values() {
+            readiness.add(client.readiness().await);
+        }
+        readiness
+    }
+
+    fn profile_count(&self) -> usize {
+        self.clients.len()
+    }
+
+    fn validate(&self, key: &ConsultationGroupKeyV1) -> Result<(), RelayClientError> {
+        self.client_for(key)?.validate(key)
+    }
+
+    fn canonicalize(
+        &self,
+        key: ConsultationGroupKeyV1,
+    ) -> Result<ConsultationGroupKeyV1, RelayClientError> {
+        self.client_for(&key)?.canonicalize(key)
+    }
+
+    async fn execute(
+        &self,
+        key: &ConsultationGroupKeyV1,
+    ) -> Result<RuntimeRelayConsultationResult, RelayClientError> {
+        self.client_for(key)?.execute(key).await
+    }
+
+    async fn execute_batch(
+        &self,
+        key: &ConsultationGroupKeyV1,
+        child_identity: &BatchChildIdentityV1,
+    ) -> Result<RuntimeRelayConsultationResult, RelayClientError> {
+        self.client_for(key)?
+            .execute_batch(key, child_identity)
+            .await
+    }
 }
 
 #[async_trait::async_trait]
@@ -456,16 +964,30 @@ impl ActivatedRelayConsultations for VerifiedRelayClient {
 
     fn validate(&self, key: &ConsultationGroupKeyV1) -> Result<(), RelayClientError> {
         let profile = self.profile();
-        let (input_name, input_value) = key.canonical_input();
         if profile.pin().id() != key.profile_id()
             || profile.pin().version() != key.profile_version()
             || profile.pin().contract_hash() != key.profile_contract_hash()
             || profile.purpose() != key.canonical_purpose()
-            || profile.input_name() != input_name
+            || profile
+                .input_names()
+                .iter()
+                .ne(key.canonical_inputs().keys())
         {
             return Err(RelayClientError::InvalidRequest);
         }
-        self.validate_execute_input(&key.evaluation_id().to_string(), input_value)
+        self.canonicalize_execute_inputs(&key.evaluation_id().to_string(), key.canonical_inputs())
+            .map(|_| ())
+    }
+
+    fn canonicalize(
+        &self,
+        key: ConsultationGroupKeyV1,
+    ) -> Result<ConsultationGroupKeyV1, RelayClientError> {
+        let inputs = self.canonicalize_execute_inputs(
+            &key.evaluation_id().to_string(),
+            key.canonical_inputs(),
+        )?;
+        key.with_canonical_inputs(inputs)
     }
 
     async fn execute(
@@ -473,33 +995,57 @@ impl ActivatedRelayConsultations for VerifiedRelayClient {
         key: &ConsultationGroupKeyV1,
     ) -> Result<RuntimeRelayConsultationResult, RelayClientError> {
         self.validate(key)?;
-        let (_, input_value) = key.canonical_input();
         let result = self
-            .execute(
+            .execute_inputs(
                 &key.evaluation_id().to_string(),
-                Zeroizing::new(input_value.to_string()),
+                key.canonical_inputs().clone(),
             )
             .await?;
-        let outcome = match result.outcome() {
-            RelayConsultationOutcome::Match => RuntimeRelayOutcome::Match,
-            RelayConsultationOutcome::NoMatch => RuntimeRelayOutcome::NoMatch,
-            RelayConsultationOutcome::Ambiguous => RuntimeRelayOutcome::Ambiguous,
-        };
-        let match_data = match result.match_data() {
-            Some(RelayMatchData::ProjectedString(output)) => Some(
-                RuntimeRelayOutput::new(output.name(), Zeroizing::new(output.value().to_string()))
-                    .map(RuntimeRelayMatchData::ProjectedString)?,
-            ),
-            Some(RelayMatchData::PresenceOnly) => Some(RuntimeRelayMatchData::PresenceOnly),
-            None => None,
-        };
-        RuntimeRelayConsultationResult::new(
-            result.consultation_id(),
-            outcome,
-            match_data,
-            result.provenance().relay_acquired_at(),
-        )
+        relay_result_to_runtime(result)
     }
+
+    async fn execute_batch(
+        &self,
+        key: &ConsultationGroupKeyV1,
+        child_identity: &BatchChildIdentityV1,
+    ) -> Result<RuntimeRelayConsultationResult, RelayClientError> {
+        self.validate(key)?;
+        let result = self
+            .execute_batch_inputs(
+                &key.evaluation_id().to_string(),
+                key.canonical_inputs().clone(),
+                child_identity.as_str(),
+            )
+            .await?;
+        relay_result_to_runtime(result)
+    }
+}
+
+fn relay_result_to_runtime(
+    result: crate::relay_client::RelayConsultationResult,
+) -> Result<RuntimeRelayConsultationResult, RelayClientError> {
+    let outcome = match result.outcome() {
+        RelayConsultationOutcome::Match => RuntimeRelayOutcome::Match,
+        RelayConsultationOutcome::NoMatch => RuntimeRelayOutcome::NoMatch,
+        RelayConsultationOutcome::Ambiguous => RuntimeRelayOutcome::Ambiguous,
+    };
+    let match_data = match result.match_data() {
+        Some(RelayMatchData::FactMap(facts)) => Some(RuntimeRelayMatchData::FactMap(
+            RuntimeRelayFactMap::from_relay(facts)?,
+        )),
+        Some(RelayMatchData::ProjectedString(output)) => Some(
+            RuntimeRelayOutput::new(output.name(), Zeroizing::new(output.value().to_string()))
+                .map(RuntimeRelayMatchData::ProjectedString)?,
+        ),
+        Some(RelayMatchData::PresenceOnly) => Some(RuntimeRelayMatchData::PresenceOnly),
+        None => None,
+    };
+    RuntimeRelayConsultationResult::new(
+        result.consultation_id(),
+        outcome,
+        match_data,
+        result.provenance().relay_acquired_at(),
+    )
 }
 
 type SharedConsultationResult = Result<Arc<RuntimeRelayConsultationResult>, RelayClientError>;
@@ -529,6 +1075,7 @@ impl CoalescedConsultation {
         activated: Arc<dyn ActivatedRelayConsultations>,
         audit: Arc<EvaluationAuditCollector>,
         key: ConsultationGroupKeyV1,
+        child_identity: Option<BatchChildIdentityV1>,
     ) {
         let state = Arc::clone(self);
         self.started.call_once(move || {
@@ -541,7 +1088,12 @@ impl CoalescedConsultation {
             // so an audit can reconcile a late Relay completion when present.
             audit.record_relay_forwarded();
             tokio::spawn(async move {
-                let execution = tokio::spawn(async move { activated.execute(&key).await });
+                let execution = tokio::spawn(async move {
+                    match child_identity.as_ref() {
+                        Some(identity) => activated.execute_batch(&key, identity).await,
+                        None => activated.execute(&key).await,
+                    }
+                });
                 let result = match execution.await {
                     Ok(result) => result.map(Arc::new),
                     Err(_) => Err(RelayClientError::Unavailable),
@@ -608,9 +1160,18 @@ impl RequestScopedConsultationCoordinator {
         self.groups.is_empty()
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn consult(
         &self,
         key: &ConsultationGroupKeyV1,
+    ) -> Result<Arc<RuntimeRelayConsultationResult>, RelayClientError> {
+        self.consult_with_child(key, None).await
+    }
+
+    async fn consult_with_child(
+        &self,
+        key: &ConsultationGroupKeyV1,
+        child_identity: Option<&BatchChildIdentityV1>,
     ) -> Result<Arc<RuntimeRelayConsultationResult>, RelayClientError> {
         let cell = self
             .groups
@@ -620,6 +1181,7 @@ impl RequestScopedConsultationCoordinator {
             Arc::clone(&self.activated),
             Arc::clone(&self.audit),
             key.clone(),
+            child_identity.cloned(),
         );
         cell.wait().await
     }
@@ -644,6 +1206,7 @@ pub(crate) struct RequestScopedRelayPlan {
     keys_by_claim: BTreeMap<String, ConsultationGroupKeyV1>,
     coordinator: RequestScopedConsultationCoordinator,
     audit: Arc<EvaluationAuditCollector>,
+    child_identities: BTreeMap<ConsultationGroupKeyV1, BatchChildIdentityV1>,
 }
 
 impl RequestScopedRelayPlan {
@@ -652,8 +1215,53 @@ impl RequestScopedRelayPlan {
         activated: Arc<dyn ActivatedRelayConsultations>,
         audit: Arc<EvaluationAuditCollector>,
     ) -> Result<Self, ConsultationPlanError> {
+        Self::new_internal(
+            entries.into_iter().map(|(claim, key)| (claim, key, None)),
+            activated,
+            audit,
+        )
+    }
+
+    pub(crate) fn new_batch(
+        entries: impl IntoIterator<Item = (String, ConsultationGroupKeyV1)>,
+        outer_key: &str,
+        item_position: usize,
+        activated: Arc<dyn ActivatedRelayConsultations>,
+        audit: Arc<EvaluationAuditCollector>,
+    ) -> Result<Self, ConsultationPlanError> {
+        Self::new_internal(
+            entries
+                .into_iter()
+                .map(|(claim, key)| (claim, key, Some((outer_key, item_position)))),
+            activated,
+            audit,
+        )
+    }
+
+    fn new_internal<'a>(
+        entries: impl IntoIterator<Item = (String, ConsultationGroupKeyV1, Option<(&'a str, usize)>)>,
+        activated: Arc<dyn ActivatedRelayConsultations>,
+        audit: Arc<EvaluationAuditCollector>,
+    ) -> Result<Self, ConsultationPlanError> {
         let mut keys_by_claim = BTreeMap::new();
-        for (claim_id, key) in entries {
+        let mut child_identities = BTreeMap::new();
+        for (claim_id, key, child_context) in entries {
+            let key = activated
+                .canonicalize(key)
+                .map_err(|_| ConsultationPlanError::InvalidGroupKey)?;
+            if let Some((outer_key, item_position)) = child_context {
+                let child_identity = BatchChildIdentityV1::derive(outer_key, item_position, &key)?;
+                match child_identities.entry(key.clone()) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(child_identity);
+                    }
+                    std::collections::btree_map::Entry::Occupied(entry)
+                        if entry.get() == &child_identity => {}
+                    std::collections::btree_map::Entry::Occupied(_) => {
+                        return Err(ConsultationPlanError::InvalidGroupKey);
+                    }
+                }
+            }
             if claim_id.is_empty()
                 || activated.validate(&key).is_err()
                 || keys_by_claim.insert(claim_id, key).is_some()
@@ -670,7 +1278,12 @@ impl RequestScopedRelayPlan {
             keys_by_claim,
             coordinator,
             audit,
+            child_identities,
         })
+    }
+
+    pub(crate) fn group_count(&self) -> usize {
+        self.coordinator.groups.len()
     }
 
     pub(crate) async fn consult(
@@ -681,7 +1294,10 @@ impl RequestScopedRelayPlan {
             .keys_by_claim
             .get(claim_id)
             .ok_or(RelayClientError::InvalidRequest)?;
-        let result = self.coordinator.consult(key).await?;
+        let result = self
+            .coordinator
+            .consult_with_child(key, self.child_identities.get(key))
+            .await?;
         self.audit
             .record_relay_consultation(result.consultation_id());
         Ok(result)
@@ -753,7 +1369,7 @@ fn valid_purpose(value: &str) -> bool {
 }
 
 fn valid_canonical_inputs(inputs: &BTreeMap<String, Zeroizing<String>>) -> bool {
-    inputs.len() == 1
+    (1..=4).contains(&inputs.len())
         && inputs.iter().all(|(name, value)| {
             input_name(name, MAX_INPUT_NAME_BYTES)
                 && !value.is_empty()
@@ -828,6 +1444,7 @@ mod tests {
     #[derive(Debug)]
     struct CountingActivated {
         calls: AtomicUsize,
+        readiness_checks: AtomicUsize,
         failure: Option<RelayClientError>,
         delay: Duration,
     }
@@ -836,6 +1453,7 @@ mod tests {
         fn success() -> Self {
             Self {
                 calls: AtomicUsize::new(0),
+                readiness_checks: AtomicUsize::new(0),
                 failure: None,
                 delay: Duration::from_millis(20),
             }
@@ -844,6 +1462,7 @@ mod tests {
         fn failure(error: RelayClientError) -> Self {
             Self {
                 calls: AtomicUsize::new(0),
+                readiness_checks: AtomicUsize::new(0),
                 failure: Some(error),
                 delay: Duration::from_millis(20),
             }
@@ -852,12 +1471,17 @@ mod tests {
         fn calls(&self) -> usize {
             self.calls.load(Ordering::SeqCst)
         }
+
+        fn readiness_checks(&self) -> usize {
+            self.readiness_checks.load(Ordering::SeqCst)
+        }
     }
 
     #[async_trait::async_trait]
     impl ActivatedRelayConsultations for CountingActivated {
         async fn check_ready(&self) -> Result<(), RelayClientError> {
-            Ok(())
+            self.readiness_checks.fetch_add(1, Ordering::SeqCst);
+            self.failure.map_or(Ok(()), Err)
         }
 
         fn validate(&self, _key: &ConsultationGroupKeyV1) -> Result<(), RelayClientError> {
@@ -938,7 +1562,7 @@ mod tests {
         assert_eq!(key.profile_version(), "1");
         assert_eq!(key.profile_contract_hash(), CONTRACT_HASH);
         assert_eq!(key.canonical_purpose(), "benefit-verification");
-        assert_eq!(key.canonical_input(), ("subject_id", TARGET_VALUE));
+        assert_eq!(key.canonical_inputs()["subject_id"].as_str(), TARGET_VALUE);
         let activated = Arc::new(CountingActivated::success());
         let coordinator = coordinator(vec![key.clone()], &activated);
 
@@ -972,6 +1596,7 @@ mod tests {
         let key = group_key(1);
         let activated = Arc::new(CountingActivated {
             calls: AtomicUsize::new(0),
+            readiness_checks: AtomicUsize::new(0),
             failure: None,
             delay: Duration::from_millis(100),
         });
@@ -1007,6 +1632,7 @@ mod tests {
         key.evaluation_id = evaluation_id;
         let activated = Arc::new(CountingActivated {
             calls: AtomicUsize::new(0),
+            readiness_checks: AtomicUsize::new(0),
             failure: None,
             delay: Duration::from_millis(100),
         });
@@ -1110,6 +1736,17 @@ mod tests {
         mismatch.canonical_inputs = canonical_inputs("subject_id", "different-target");
         keys.push(mismatch);
 
+        let mut mismatch = base.clone();
+        mismatch.expected_result = RuntimeRelayExpectedResult::PresenceOnly;
+        assert!(base == mismatch, "result decoding is not a group-key field");
+
+        let mut mismatch = base.clone();
+        mismatch.canonical_inputs.insert(
+            "birth_date".to_string(),
+            Zeroizing::new("2000-01-02".to_string()),
+        );
+        keys.push(mismatch);
+
         let canonical_scope_order = group_key_with_scopes(
             1,
             vec![
@@ -1134,6 +1771,155 @@ mod tests {
             .await
             .expect("base result remains coalesced");
         assert_eq!(activated.calls(), keys.len());
+    }
+
+    #[test]
+    fn batch_child_identity_is_canonical_position_bound_and_redacted() {
+        let base = group_key_with_scopes(
+            1,
+            vec![
+                "registry:scope:z".to_string(),
+                "registry:scope:a".to_string(),
+            ],
+        );
+        let reordered = group_key_with_scopes(
+            2,
+            vec![
+                "registry:scope:a".to_string(),
+                "registry:scope:z".to_string(),
+            ],
+        );
+        let first = BatchChildIdentityV1::derive("outer-key", 3, &base)
+            .expect("first child identity derives");
+        let canonical_repeat = BatchChildIdentityV1::derive("outer-key", 3, &reordered)
+            .expect("canonical repeat derives");
+        let next_position = BatchChildIdentityV1::derive("outer-key", 4, &base)
+            .expect("next-position child identity derives");
+        let next_outer = BatchChildIdentityV1::derive("other-outer-key", 3, &base)
+            .expect("next-outer child identity derives");
+
+        assert_eq!(first, canonical_repeat);
+        assert_ne!(first, next_position);
+        assert_ne!(first, next_outer);
+        assert_eq!(first.as_str().len(), 43);
+        let debug = format!("{first:?}");
+        assert_eq!(debug, "BatchChildIdentityV1([REDACTED])");
+        assert!(!debug.contains(TARGET_VALUE));
+        assert_eq!(
+            format!("{:?}", BatchConsultationGroupCommitmentV1 { key: &base }),
+            "BatchConsultationGroupCommitmentV1([REDACTED])"
+        );
+    }
+
+    #[test]
+    fn batch_child_identity_changes_for_each_canonical_input_field() {
+        let base = group_key(1);
+        let base_child = BatchChildIdentityV1::derive("outer-key", 0, &base)
+            .expect("base child identity derives");
+        let mut changed_name = base.clone();
+        changed_name.canonical_inputs = canonical_inputs("person_id", TARGET_VALUE);
+        let mut changed_value = base.clone();
+        changed_value.canonical_inputs = canonical_inputs("subject_id", "other-target");
+        let mut added_input = base.clone();
+        added_input.canonical_inputs.insert(
+            "birth_date".to_string(),
+            Zeroizing::new("2000-01-02".to_string()),
+        );
+
+        for changed in [changed_name, changed_value, added_input] {
+            assert_ne!(
+                base_child,
+                BatchChildIdentityV1::derive("outer-key", 0, &changed)
+                    .expect("changed child identity derives")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn activated_client_set_dispatches_each_exact_selection_independently() {
+        let first_key = group_key(1);
+        let mut second_key = group_key(1);
+        second_key.profile_id = "example.other-status.exact".into();
+        second_key.canonical_purpose = "other-verification".into();
+
+        let first = Arc::new(CountingActivated::success());
+        let second = Arc::new(CountingActivated::success());
+        let first_bound: Arc<dyn ActivatedRelayConsultations> = first.clone();
+        let second_bound: Arc<dyn ActivatedRelayConsultations> = second.clone();
+        let clients = Arc::new(
+            ActivatedRelayClientSet::new([
+                (RelayClientSelectionV1::from_key(&first_key), first_bound),
+                (RelayClientSelectionV1::from_key(&second_key), second_bound),
+            ])
+            .expect("two exact clients activate"),
+        );
+        let bound: Arc<dyn ActivatedRelayConsultations> = clients;
+        bound
+            .check_ready()
+            .await
+            .expect("every exact client remains ready");
+        let audit = Arc::new(EvaluationAuditCollector::new());
+        audit.begin_evaluation();
+        let coordinator = RequestScopedConsultationCoordinator::new(
+            [first_key.clone(), second_key.clone()],
+            bound,
+            audit,
+        )
+        .expect("both selections are preplanned");
+
+        coordinator
+            .consult(&first_key)
+            .await
+            .expect("first selection executes");
+        coordinator
+            .consult(&second_key)
+            .await
+            .expect("second selection executes");
+
+        assert_eq!(first.calls(), 1);
+        assert_eq!(second.calls(), 1);
+        assert_eq!(first.readiness_checks(), 1);
+        assert_eq!(second.readiness_checks(), 1);
+    }
+
+    #[tokio::test]
+    async fn activated_client_set_keeps_readiness_and_dispatch_per_profile() {
+        let ready_key = group_key(1);
+        let mut unavailable_key = group_key(2);
+        unavailable_key.profile_id = "example.snapshot-status.exact".into();
+
+        let ready = Arc::new(CountingActivated::success());
+        let unavailable = Arc::new(CountingActivated::failure(RelayClientError::Unavailable));
+        let ready_bound: Arc<dyn ActivatedRelayConsultations> = ready.clone();
+        let unavailable_bound: Arc<dyn ActivatedRelayConsultations> = unavailable.clone();
+        let clients = ActivatedRelayClientSet::new([
+            (RelayClientSelectionV1::from_key(&ready_key), ready_bound),
+            (
+                RelayClientSelectionV1::from_key(&unavailable_key),
+                unavailable_bound,
+            ),
+        ])
+        .expect("two exact clients remain independently addressable");
+
+        let readiness = clients.readiness().await;
+        assert_eq!(readiness.total(), 2);
+        assert_eq!(readiness.ready(), 1);
+        assert_eq!(readiness.failed(), 1);
+        assert!(!readiness.is_ready());
+
+        clients
+            .execute(&ready_key)
+            .await
+            .expect("the unrelated ready profile still executes");
+        assert_eq!(ready.calls(), 1);
+        assert_eq!(
+            clients
+                .execute(&unavailable_key)
+                .await
+                .expect_err("the unavailable profile fails closed"),
+            RelayClientError::Unavailable
+        );
+        assert_eq!(unavailable.calls(), 1);
     }
 
     #[test]
@@ -1202,7 +1988,7 @@ mod tests {
     }
 
     #[test]
-    fn result_shape_is_sealed_projected_string_presence_or_no_match_data() {
+    fn result_shape_is_sealed_fact_map_legacy_presence_or_no_match_data() {
         RuntimeRelayConsultationResult::new(
             Ulid::from_parts(2, 1),
             RuntimeRelayOutcome::Match,
@@ -1210,6 +1996,20 @@ mod tests {
             OffsetDateTime::UNIX_EPOCH,
         )
         .expect_err("match requires one output");
+
+        let facts = RuntimeRelayConsultationResult::new(
+            Ulid::from_parts(2, 1),
+            RuntimeRelayOutcome::Match,
+            Some(RuntimeRelayMatchData::FactMap(RuntimeRelayFactMap {
+                fields: BTreeMap::from([("exists".into(), RuntimeRelayFactValue::Boolean(true))]),
+            })),
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .expect("typed fact map is explicit match data");
+        assert_eq!(
+            Value::Object(facts.facts().unwrap().to_json_object()),
+            serde_json::json!({"exists": true})
+        );
 
         let presence = RuntimeRelayConsultationResult::new(
             Ulid::from_parts(2, 1),

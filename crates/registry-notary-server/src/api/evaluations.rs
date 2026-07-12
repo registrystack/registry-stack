@@ -2,6 +2,7 @@
 //! Evaluation, batch evaluation, and rendering handlers.
 
 use super::*;
+use crate::runtime::registry_backed_batch_requested;
 
 pub(super) async fn evaluate(
     headers: HeaderMap,
@@ -386,68 +387,19 @@ pub(super) async fn batch_evaluate(
         &request.items,
     );
     let audit_request = request.clone();
-    if let Some(key) = idempotency_key(&headers) {
-        let request_hash = match batch_request_hash(&request) {
-            Ok(hash) => hash,
-            Err(error) => return evidence_error_response(error),
-        };
-        let scoped_key = batch_idempotency_key(&principal.principal_id, key);
-        match state.store.idempotent_batch(&scoped_key, &request_hash) {
-            Ok(Some(result)) => {
-                let mut response = Json(result.clone()).into_response();
-                let batch_audit_purposes = audit_purposes.clone();
-                attach_evidence_audit_with_purposes(
-                    &mut response,
-                    "batch_evaluate",
-                    None,
-                    &requested_claims,
-                    Some(requested_subject_count as u64),
-                    audit_purposes,
-                );
-                if let Err(error) = attach_batch_evaluate_response_audit(
-                    &mut response,
-                    &state.self_attestation_rate_keys,
-                    evidence,
-                    &audit_request,
-                    &result,
-                    batch_audit_purposes.as_deref(),
-                ) {
-                    return evidence_error_response(error);
-                }
-                let sidecar_config_hashes = state
-                    .source
-                    .observed_sidecar_config_hashes(evidence, &requested_claims)
-                    .await;
-                attach_source_sidecar_config_hashes(&mut response, sidecar_config_hashes);
-                return response;
-            }
-            Ok(None) => {}
-            Err(error) => return evidence_error_response(error),
-        }
+    let registry_backed_batch = match registry_backed_batch_requested(evidence, &request) {
+        Ok(value) => value,
+        Err(error) => return evidence_error_response(error),
+    };
+    if registry_backed_batch
+        && idempotency_key(&headers).is_none_or(|key| key.is_empty() || key.len() > 256)
+    {
+        return evidence_error_response(EvidenceError::ConsultationInvalidRequest);
     }
     if let Err(error) = validate_batch_subject_limit(evidence, &request) {
         return evidence_error_response(error);
     }
     let batch_cost = u32::try_from(request.items.len()).unwrap_or(u32::MAX);
-    if let Err(error) = state
-        .machine_quota_limiter
-        .check_and_consume(&principal.principal_id, batch_cost)
-    {
-        let quota_error = EvidenceError::MachineQuotaExceeded {
-            retry_after_seconds: error.retry_after_seconds,
-        };
-        let mut response = evidence_error_response(quota_error);
-        attach_evidence_audit_with_purposes(
-            &mut response,
-            "batch_evaluate_denied",
-            None,
-            &requested_claims,
-            None,
-            audit_purposes,
-        );
-        attach_zero_source_no_forward_audit(&mut response);
-        return response;
-    }
     let runtime = state.runtime();
     let evaluation_future = runtime.batch_evaluate(
         Arc::clone(&state.evidence),
@@ -458,6 +410,7 @@ pub(super) async fn batch_evaluate(
         BatchEvaluateOptions {
             header_purpose: purpose_header(&headers),
             idempotency_key: idempotency_key(&headers),
+            owner_quota: Some((&state.machine_quota_limiter, batch_cost)),
             memo_observer: None,
         },
     );
@@ -495,7 +448,22 @@ pub(super) async fn batch_evaluate(
             attach_source_sidecar_config_hashes(&mut response, sidecar_config_hashes);
             response
         }
-        Err(error) => evidence_error_response(error),
+        Err(error) => {
+            let owner_quota_denial = matches!(error, EvidenceError::MachineQuotaExceeded { .. });
+            let mut response = evidence_error_response(error);
+            if owner_quota_denial {
+                attach_evidence_audit_with_purposes(
+                    &mut response,
+                    "batch_evaluate_denied",
+                    None,
+                    &requested_claims,
+                    None,
+                    audit_purposes,
+                );
+                attach_zero_source_no_forward_audit(&mut response);
+            }
+            response
+        }
     }
 }
 

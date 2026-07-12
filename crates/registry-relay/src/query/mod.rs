@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Entity query API over DataFusion table registrations.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use datafusion::arrow::json::writer::{JsonArray, WriterBuilder};
@@ -69,6 +69,12 @@ pub(crate) struct SnapshotExactQueryRows {
     rows: Vec<Value>,
 }
 
+/// One compiler-owned component of an exact snapshot selector.
+pub(crate) struct SnapshotExactPredicate<'a> {
+    pub(crate) physical_field: &'a str,
+    pub(crate) canonical_value: &'a str,
+}
+
 impl SnapshotExactQueryRows {
     pub(crate) fn into_rows(self) -> Vec<Value> {
         self.rows
@@ -81,6 +87,7 @@ impl SnapshotExactQueryRows {
 ///
 /// This boundary has no cursor, sorting, relationship, aggregate, spatial,
 /// standards, collection, or caller-selected query behavior.
+#[cfg(test)]
 pub(crate) async fn read_snapshot_exact(
     ctx: &SessionContext,
     provider: Arc<dyn TableProvider>,
@@ -90,8 +97,39 @@ pub(crate) async fn read_snapshot_exact(
     probe_limit: usize,
     deadline: Instant,
 ) -> Result<SnapshotExactQueryRows, SnapshotExactQueryError> {
-    if key_field.is_empty()
-        || canonical_key.is_empty()
+    read_snapshot_exact_and(
+        ctx,
+        provider,
+        &[SnapshotExactPredicate {
+            physical_field: key_field,
+            canonical_value: canonical_key,
+        }],
+        projection,
+        probe_limit,
+        deadline,
+    )
+    .await
+}
+
+/// Execute the closed one-to-four component exact-AND snapshot selector.
+pub(crate) async fn read_snapshot_exact_and(
+    ctx: &SessionContext,
+    provider: Arc<dyn TableProvider>,
+    predicates: &[SnapshotExactPredicate<'_>],
+    projection: &[SnapshotExactProjection],
+    probe_limit: usize,
+    deadline: Instant,
+) -> Result<SnapshotExactQueryRows, SnapshotExactQueryError> {
+    if !(1..=4).contains(&predicates.len())
+        || predicates.iter().any(|predicate| {
+            predicate.physical_field.is_empty() || predicate.canonical_value.is_empty()
+        })
+        || predicates
+            .iter()
+            .map(|predicate| predicate.physical_field)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != predicates.len()
         || projection.is_empty()
         || !matches!(probe_limit, 1 | 2)
         || projection
@@ -105,8 +143,18 @@ pub(crate) async fn read_snapshot_exact(
         let mut frame = ctx
             .read_table(provider)
             .map_err(|_| SnapshotExactQueryError::Unavailable)?;
+        let mut predicates = predicates.iter();
+        let first = predicates
+            .next()
+            .ok_or(SnapshotExactQueryError::InvalidContract)?;
+        let filter = predicates.fold(
+            col(first.physical_field).eq(lit(first.canonical_value)),
+            |filter, predicate| {
+                filter.and(col(predicate.physical_field).eq(lit(predicate.canonical_value)))
+            },
+        );
         frame = frame
-            .filter(col(key_field).eq(lit(canonical_key)))
+            .filter(filter)
             .map_err(|_| SnapshotExactQueryError::Unavailable)?;
         frame = frame
             .select(

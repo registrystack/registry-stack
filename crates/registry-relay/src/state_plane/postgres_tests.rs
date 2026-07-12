@@ -40,10 +40,12 @@ use crate::consultation::{
         PreparedAtomicConsultationAttempt, PreparedAuditedConsultationDispatch,
         TerminalCompletionTestPoint, ValidatedConsultationBackendResult,
     },
-    OperationId,
+    response::PublishableConsultationResponse,
+    ConsultationId, ConsultationOutcome, NotaryEvaluationId, OperationId,
 };
 use crate::source_plan::{
-    dhis2_completion_seed_fixture, maximum_completion_seed_fixture, normal_completion_seed_fixture,
+    bounded_runtime_vector_plan_fixture, dhis2_completion_seed_fixture,
+    maximum_completion_seed_fixture, normal_completion_seed_fixture,
     open_crvs_completion_seed_fixture, rhai_five_operation_two_slot_completion_seed_fixture,
     semantic_alias_completion_seed_fixture, snapshot_completion_seed_fixture,
 };
@@ -54,7 +56,7 @@ use super::{
     install_postgres_state_plane_v1, AuditChainKeyEpochId, AuditPseudonymKeyringLockKey,
     AuditPseudonymLookupEpoch, AuditPseudonymMaintenanceDatabaseRole,
     AuditPseudonymReaderDatabaseRole, AuditedConsultationDispatch,
-    AuthorizedAuditPseudonymLookupSubset, CompletionAttemptReference,
+    AuthorizedAuditPseudonymLookupSubset, BatchChildReplayContext, CompletionAttemptReference,
     ConsultationCompletionOutcome, ConsultationPermitSet, ConsultationPersistenceError,
     DispatchOperationId, DispatchPermitBudget, DispatchPermitKind, EffectiveQuotaLimits,
     KeyringInitializationOutcome, KnownCompletionDisposition, KnownConsultationCompletionFacts,
@@ -282,6 +284,33 @@ fn completion_seed_value(
     let credential_count = if credential_operation.is_some() { 1 } else { 0 };
     let data_count = data_slot_allowed_operations.len() as i64;
     let is_snapshot = plan_kind == "snapshot_exact";
+    let acquisition_fields = if is_snapshot {
+        json!({
+            "registration_status": {
+                "type": "string",
+                "nullable": false,
+                "max_bytes": 65536,
+            },
+            "source_observed_at": {
+                "type": "string",
+                "nullable": false,
+                "max_bytes": 64,
+            },
+            "source_revision": {
+                "type": "string",
+                "nullable": false,
+                "max_bytes": 32,
+            },
+        })
+    } else {
+        json!({
+            "registration_status": {
+                "type": "string",
+                "nullable": false,
+                "max_bytes": 65536,
+            },
+        })
+    };
     json!({
         "schema": "registry.relay.consultation-completion-seed/v1",
         "correlation": {"notary_evaluation_id": null},
@@ -318,19 +347,28 @@ fn completion_seed_value(
             "class": if is_snapshot { "materialized_snapshot" } else { "source_projected_exact" },
             "schema": {
                 "type": "acquisition_union",
-                "fields": {
-                    "registration_status": {
-                        "type": "string",
-                        "nullable": false,
-                        "max_bytes": 65536,
-                    },
-                },
+                "fields": acquisition_fields,
             },
             "disclosure_fields": ["registration_status"],
             "public_outcomes": ["match", "no_match"],
             "provenance_contract": {
-                "source_observed_at": null,
-                "source_revision": null,
+                "source_observed_at": if is_snapshot {
+                    json!({
+                        "type": "acquired_rfc3339",
+                        "field": "source_observed_at",
+                    })
+                } else {
+                    Value::Null
+                },
+                "source_revision": if is_snapshot {
+                    json!({
+                        "type": "acquired_string",
+                        "field": "source_revision",
+                        "max_bytes": 32,
+                    })
+                } else {
+                    Value::Null
+                },
                 "snapshot_generation": if is_snapshot { "required" } else { "absent" },
                 "snapshot_published_at": if is_snapshot { "required" } else { "absent" },
             },
@@ -1706,6 +1744,379 @@ fn order_chain(mut envelopes: Vec<AuditEnvelope>) -> Vec<AuditEnvelope> {
     ordered
 }
 
+async fn exercise_batch_child_replay_reservation_contract(
+    database_url: &str,
+    admin: &Client,
+    owner_role: &str,
+    runtime_role: &str,
+    runtime_password: &str,
+    attacker_role: &str,
+    attacker_password: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    const RESERVE: &str =
+        "SELECT * FROM relay_state_api.consultation_batch_child_reserve_v1($1, $2, $3)";
+    const RELEASE: &str = "SELECT relay_state_api.consultation_batch_child_release_v1($1, $2, $3)";
+    let (runtime, runtime_driver) =
+        postgres_client_as(database_url, runtime_role, runtime_password).await?;
+    runtime.batch_execute(RUNTIME_SESSION_LIMITS_SQL).await?;
+    let child_key = vec![0x11_u8; 32];
+    let binding = vec![0x22_u8; 32];
+    let different_binding = vec![0x33_u8; 32];
+    let first_operation = Ulid::new().to_string();
+    let second_operation = Ulid::new().to_string();
+
+    let reserved = runtime
+        .query_one(RESERVE, &[&child_key, &binding, &first_operation])
+        .await?;
+    assert_eq!(reserved.get::<_, &str>("outcome"), "reserved");
+    assert_eq!(
+        reserved.get::<_, Option<&str>>("stored_operation_id"),
+        Some(first_operation.as_str())
+    );
+    assert!(reserved
+        .get::<_, Option<&str>>("terminal_payload")
+        .is_none());
+
+    let in_progress = runtime
+        .query_one(RESERVE, &[&child_key, &binding, &second_operation])
+        .await?;
+    assert_eq!(in_progress.get::<_, &str>("outcome"), "in_progress");
+    assert_eq!(
+        in_progress.get::<_, Option<&str>>("stored_operation_id"),
+        Some(first_operation.as_str())
+    );
+
+    let conflict = runtime
+        .query_one(
+            RESERVE,
+            &[&child_key, &different_binding, &second_operation],
+        )
+        .await?;
+    assert_eq!(conflict.get::<_, &str>("outcome"), "conflict");
+    assert!(conflict
+        .get::<_, Option<&str>>("stored_operation_id")
+        .is_none());
+    set_role(admin, owner_role).await?;
+    let zero_dispatch = admin
+        .query_one(
+            "SELECT \
+                (SELECT count(*) FROM relay_state_private.consultation_quota_bucket) AS quota_rows, \
+                (SELECT count(*) FROM relay_state_private.dispatch_permit) AS permit_rows, \
+                (SELECT count(*) FROM relay_state_private.audit_phase) AS audit_rows",
+            &[],
+        )
+        .await?;
+    assert_eq!(zero_dispatch.get::<_, i64>("quota_rows"), 0);
+    assert_eq!(zero_dispatch.get::<_, i64>("permit_rows"), 0);
+    assert_eq!(zero_dispatch.get::<_, i64>("audit_rows"), 0);
+    reset_role(admin).await?;
+
+    let (attacker, attacker_driver) =
+        postgres_client_as(database_url, attacker_role, attacker_password).await?;
+    let denied = attacker
+        .query_one(RESERVE, &[&child_key, &binding, &second_operation])
+        .await
+        .expect_err("unbound role cannot execute the private replay capability");
+    assert_eq!(denied.code(), Some(&SqlState::INSUFFICIENT_PRIVILEGE));
+    let private_read = runtime
+        .query_one(
+            "SELECT child_key FROM relay_state_private.consultation_batch_child_replay LIMIT 1",
+            &[],
+        )
+        .await
+        .expect_err("runtime has no direct private replay-table access");
+    assert_eq!(private_read.code(), Some(&SqlState::INSUFFICIENT_PRIVILEGE));
+    drop(attacker);
+    attacker_driver.abort();
+
+    let released: bool = runtime
+        .query_one(RELEASE, &[&child_key, &binding, &first_operation])
+        .await?
+        .get(0);
+    assert!(released);
+    let reserved_again = runtime
+        .query_one(RESERVE, &[&child_key, &binding, &second_operation])
+        .await?;
+    assert_eq!(reserved_again.get::<_, &str>("outcome"), "reserved");
+
+    set_role(admin, owner_role).await?;
+    admin
+        .execute(
+            "UPDATE relay_state_private.consultation_batch_child_replay \
+             SET created_at = expired.at, expires_at = expired.at + interval '15 minutes' \
+             FROM (SELECT clock_timestamp() - interval '16 minutes' AS at) AS expired \
+             WHERE child_key = $1",
+            &[&child_key],
+        )
+        .await?;
+    reset_role(admin).await?;
+    let third_operation = Ulid::new().to_string();
+    let after_expiry = runtime
+        .query_one(RESERVE, &[&child_key, &binding, &third_operation])
+        .await?;
+    assert_eq!(after_expiry.get::<_, &str>("outcome"), "reserved");
+    assert_eq!(
+        after_expiry.get::<_, Option<&str>>("stored_operation_id"),
+        Some(third_operation.as_str())
+    );
+
+    set_role(admin, owner_role).await?;
+    let mismatched_terminal = serde_json::to_string(&json!({
+        "schema": "registry.relay.batch-terminal/v1",
+        "consultation_id": Ulid::new().to_string(),
+        "outcome": "no_match",
+        "data": null,
+        "profile": {"id": "synthetic.profile", "version": "1", "contract_hash": format!("sha256:{}", "a".repeat(64))},
+        "provenance": {
+            "relay_acquired_at": "2026-07-12T12:00:00.000Z",
+            "source_observed_at": null,
+            "source_revision": null,
+            "acquisition_class": "source_projected_exact",
+            "integration_pack": {"id": "synthetic.pack", "version": "1", "hash": format!("sha256:{}", "b".repeat(64))},
+            "policy_id": "synthetic.policy",
+            "policy_hash": format!("sha256:{}", "c".repeat(64)),
+            "consent": {"outcome": "not_required", "verifier_id": null, "verifier_revision": null, "checked_at": null, "expires_at": null, "revocation_status": "not_applicable"}
+        }
+    }))?;
+    let mismatch = admin
+        .execute(
+            "UPDATE relay_state_private.consultation_batch_child_replay \
+             SET state = 'terminal', terminal_payload = $2::text::jsonb \
+             WHERE child_key = $1",
+            &[&child_key, &mismatched_terminal],
+        )
+        .await
+        .expect_err("terminal consultation id must equal the durable operation id");
+    assert_eq!(mismatch.code(), Some(&SqlState::CHECK_VIOLATION));
+    reset_role(admin).await?;
+
+    let final_release: bool = runtime
+        .query_one(RELEASE, &[&child_key, &binding, &third_operation])
+        .await?
+        .get(0);
+    assert!(final_release);
+    drop(runtime);
+    runtime_driver.abort();
+    eprintln!("batch child replay reservation contract passed");
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn exercise_batch_terminal_publication_contract(
+    database_url: &str,
+    admin: &Client,
+    owner_role: &str,
+    runtime_role: &str,
+    runtime_password: &str,
+    plane: &PostgresDurableAuditStatePlane,
+    fence: &PostgresServingFence,
+    keyring: &PostgresAuditPseudonymKeyringRuntime,
+) -> Result<(), Box<dyn std::error::Error>> {
+    const RESERVE: &str =
+        "SELECT * FROM relay_state_api.consultation_batch_child_reserve_v1($1, $2, $3)";
+    let consultation_id = ConsultationId::generate();
+    let operation_id = DurableAuditOperationId::parse(&consultation_id.to_canonical_string())?;
+    let seed = completion_seed_value(
+        "bounded_http",
+        None,
+        &["lookup-registration"],
+        &[vec!["lookup-registration"]],
+    );
+    let write = atomic_consultation_attempt_write(
+        &operation_id,
+        &pseudonym_key_id("epoch-1"),
+        &seed,
+        "batch-terminal-publication",
+    );
+    let attempt_authority = fence
+        .authorize_consultation_attempt(
+            DispatchPermitBudget::new(Duration::from_secs(10))?,
+            ConsultationPermitSet::from_counts(0, 1)?,
+        )
+        .await?;
+    let prepared = PreparedAtomicConsultationAttempt::for_state_test(
+        write,
+        seed,
+        &pseudonym_key_id("epoch-1"),
+        attempt_authority,
+        keyring.current_write_authority().await?.authorize_use()?,
+        future_decision_expiry_unix_ms(),
+    )?;
+    let mut dispatch = plane
+        .write_attempt_with_completion_intent(prepared)
+        .await?
+        .into_dispatch_for_state_test();
+    let permit = dispatch
+        .next_data_permit_mut()?
+        .expect("batch terminal test has one data permit");
+    fence
+        .authorize_and_dispatch(
+            permit,
+            &OperationId::try_from("lookup-registration")?,
+            |_deadline| async {},
+        )
+        .await?;
+
+    let child_key = [0x44_u8; 32];
+    let binding_digest = [0x55_u8; 32];
+    let (runtime, runtime_driver) =
+        postgres_client_as(database_url, runtime_role, runtime_password).await?;
+    runtime.batch_execute(RUNTIME_SESSION_LIMITS_SQL).await?;
+    let reserved = runtime
+        .query_one(
+            RESERVE,
+            &[
+                &child_key.as_slice(),
+                &binding_digest.as_slice(),
+                &operation_id.as_str(),
+            ],
+        )
+        .await?;
+    assert_eq!(reserved.get::<_, &str>("outcome"), "reserved");
+    let batch = BatchChildReplayContext::for_test(child_key, binding_digest, &operation_id);
+
+    let plan = bounded_runtime_vector_plan_fixture();
+    let first_evaluation = NotaryEvaluationId::try_parse("01JYZZZZZZZZZZZZZZZZZZZZZZ")?;
+    let replay_evaluation = NotaryEvaluationId::try_parse("01JYZZZZZZZZZZZZZZZZZZZZZY")?;
+    let acquired_at_unix_ms = current_unix_ms();
+    let initial_response = PublishableConsultationResponse::batch_no_match_for_state_test(
+        consultation_id,
+        first_evaluation,
+        plan.runtime_profile(),
+        acquired_at_unix_ms,
+    )?;
+    let terminal_payload = initial_response.batch_terminal_json_for_state_test()?;
+    let mismatched_id = Ulid::new().to_string();
+    let invalid_terminal = zeroize::Zeroizing::new(terminal_payload.replacen(
+        operation_id.as_str(),
+        &mismatched_id,
+        1,
+    ));
+    let facts = KnownConsultationCompletionFacts::public_for_live_test(
+        PublicConsultationOutcome::NoMatch,
+        acquired_at_unix_ms,
+        None,
+        None,
+    )?;
+    assert!(matches!(
+        plane
+            .finalize_validated_batch_consultation_for_test(
+                &mut dispatch,
+                &facts,
+                &batch,
+                invalid_terminal.as_str(),
+                keyring.current_write_authority().await?.authorize_use()?,
+            )
+            .await,
+        Err(ConsultationPersistenceError::InvalidInput)
+    ));
+    assert!(dispatch.lifecycle_is_armed());
+    set_role(admin, owner_role).await?;
+    let rolled_back = admin
+        .query_one(
+            "SELECT \
+                (SELECT count(*) FROM relay_state_private.audit_phase \
+                 WHERE operation_id=$1 AND phase='completion') AS completions, \
+                (SELECT state FROM relay_state_private.consultation_batch_child_replay \
+                 WHERE child_key=$2) AS replay_state",
+            &[&operation_id.as_str(), &child_key.as_slice()],
+        )
+        .await?;
+    assert_eq!(rolled_back.get::<_, i64>("completions"), 0);
+    assert_eq!(rolled_back.get::<_, &str>("replay_state"), "reserved");
+    reset_role(admin).await?;
+
+    let publication = plane
+        .finalize_validated_batch_consultation_for_test(
+            &mut dispatch,
+            &facts,
+            &batch,
+            terminal_payload.as_str(),
+            keyring.current_write_authority().await?.authorize_use()?,
+        )
+        .await?;
+    assert!(matches!(
+        publication,
+        KnownCompletionDisposition::Published(_)
+    ));
+    assert!(!dispatch.lifecycle_is_armed());
+
+    set_role(admin, owner_role).await?;
+    let before_replay = admin
+        .query_one(
+            "SELECT \
+                (SELECT count(*) FROM relay_state_private.consultation_quota_bucket) AS quota_rows, \
+                (SELECT count(*) FROM relay_state_private.dispatch_permit \
+                 WHERE operation_id=$1 AND dispatched_at IS NOT NULL) AS dispatched_rows, \
+                (SELECT count(*) FROM relay_state_private.audit_phase \
+                 WHERE operation_id=$1 AND phase='completion') AS completion_rows",
+            &[&operation_id.as_str()],
+        )
+        .await?;
+    reset_role(admin).await?;
+    let duplicate_operation = Ulid::new().to_string();
+    let replay = runtime
+        .query_one(
+            RESERVE,
+            &[
+                &child_key.as_slice(),
+                &binding_digest.as_slice(),
+                &duplicate_operation.as_str(),
+            ],
+        )
+        .await?;
+    assert_eq!(replay.get::<_, &str>("outcome"), "replay");
+    assert_eq!(
+        replay.get::<_, Option<&str>>("stored_operation_id"),
+        Some(operation_id.as_str())
+    );
+    let persisted_terminal = replay
+        .get::<_, Option<String>>("terminal_payload")
+        .expect("terminal replay retains the closed payload");
+    let replay_body = PublishableConsultationResponse::replay_http_body_for_state_test(
+        zeroize::Zeroizing::new(persisted_terminal),
+        operation_id.as_str(),
+        plan.runtime_profile(),
+        replay_evaluation,
+    )?;
+    let replay_json: Value = serde_json::from_slice(&replay_body)?;
+    assert_eq!(replay_json["consultation_id"], operation_id.as_str());
+    assert_eq!(
+        replay_json["notary_evaluation_id"],
+        replay_evaluation.to_canonical_string()
+    );
+    assert_ne!(
+        replay_json["notary_evaluation_id"],
+        first_evaluation.to_canonical_string()
+    );
+    set_role(admin, owner_role).await?;
+    let after_replay = admin
+        .query_one(
+            "SELECT \
+                (SELECT count(*) FROM relay_state_private.consultation_quota_bucket) AS quota_rows, \
+                (SELECT count(*) FROM relay_state_private.dispatch_permit \
+                 WHERE operation_id=$1 AND dispatched_at IS NOT NULL) AS dispatched_rows, \
+                (SELECT count(*) FROM relay_state_private.audit_phase \
+                 WHERE operation_id=$1 AND phase='completion') AS completion_rows",
+            &[&operation_id.as_str()],
+        )
+        .await?;
+    reset_role(admin).await?;
+    for column in ["quota_rows", "dispatched_rows", "completion_rows"] {
+        assert_eq!(
+            after_replay.get::<_, i64>(column),
+            before_replay.get::<_, i64>(column),
+            "exact replay must not charge quota, dispatch source, or complete twice"
+        );
+    }
+    assert_eq!(after_replay.get::<_, i64>("dispatched_rows"), 1);
+    assert_eq!(after_replay.get::<_, i64>("completion_rows"), 1);
+    drop(runtime);
+    runtime_driver.abort();
+    eprintln!("batch terminal publication and fresh-id replay contract passed");
+    Ok(())
+}
+
 #[test]
 #[ignore = "requires dedicated REGISTRY_RELAY_STATE_PLANE_POSTGRES_TEST_URL"]
 fn postgres_state_plane_enforces_role_catalog_and_chain_contract() {
@@ -2064,6 +2475,17 @@ WHERE metadata.singleton = true
     assert_eq!(metadata.get::<_, &str>(3), chain_key_epoch_id.as_str());
     assert!(!metadata.get::<_, bool>(4));
     assert!(metadata.get::<_, bool>(5));
+
+    exercise_batch_child_replay_reservation_contract(
+        &database_url,
+        &admin,
+        &owner_role,
+        &runtime_role_name,
+        &runtime_password,
+        &attacker_role,
+        &attacker_password,
+    )
+    .await?;
 
     exercise_postgres_quota_contract(
         &admin,
@@ -2968,6 +3390,18 @@ WHERE metadata.singleton = true
     .await?;
     assert_eq!(fence_one.generation(), 1);
 
+    exercise_batch_terminal_publication_contract(
+        &database_url,
+        &admin,
+        &owner_role,
+        &runtime_role_name,
+        &runtime_password,
+        &plane_one,
+        &fence_one,
+        &keyring_runtime,
+    )
+    .await?;
+
     let pseudonym_operation = DurableAuditOperationId::from_ulid(Ulid::new());
     let pseudonym_seed = completion_seed_value("snapshot_exact", None, &[], &[]);
     set_role(&admin, &owner_role).await?;
@@ -3044,6 +3478,13 @@ WHERE metadata.singleton = true
         )
         .await?
         .try_get(0)?;
+    let compiler_snapshot_seed_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&compiler_snapshot_seed)?],
+        )
+        .await?
+        .try_get(0)?;
     let mut open_crvs_positive_lifetime = compiler_open_crvs_seed.clone();
     open_crvs_positive_lifetime["bounds"]["credential_token_lifetime_ms"] = json!(60_000);
     let open_crvs_positive_lifetime_valid: bool = admin
@@ -3053,27 +3494,27 @@ WHERE metadata.singleton = true
         )
         .await?
         .try_get(0)?;
-    let mut open_crvs_broken_jwks = compiler_open_crvs_seed.clone();
-    open_crvs_broken_jwks["authorized_operation_union"][2]["operation_id"] =
-        json!("opencrvs-search.keys");
-    open_crvs_broken_jwks["dispatch"]["permit_bindings"][1]["allowed_operation_ids"] =
-        json!(["opencrvs-search.keys"]);
-    let open_crvs_broken_jwks_valid: bool = admin
+    let mut authored_verification_name = compiler_open_crvs_seed.clone();
+    authored_verification_name["authorized_operation_union"][1]["operation_id"] =
+        json!("inspect-signing-keys");
+    authored_verification_name["dispatch"]["permit_bindings"][1]["allowed_operation_ids"] =
+        json!(["inspect-signing-keys"]);
+    let authored_verification_name_valid: bool = admin
         .query_one(
             "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
-            &[&serde_json::to_string(&open_crvs_broken_jwks)?],
+            &[&serde_json::to_string(&authored_verification_name)?],
         )
         .await?
         .try_get(0)?;
-    let mut open_crvs_misordered_jwks = compiler_open_crvs_seed.clone();
-    open_crvs_misordered_jwks["dispatch"]["permit_bindings"][1]["allowed_operation_ids"] =
+    let mut authored_verification_order = compiler_open_crvs_seed.clone();
+    authored_verification_order["dispatch"]["permit_bindings"][1]["allowed_operation_ids"] =
         json!(["opencrvs-search"]);
-    open_crvs_misordered_jwks["dispatch"]["permit_bindings"][2]["allowed_operation_ids"] =
-        json!(["opencrvs-search.jwks"]);
-    let open_crvs_misordered_jwks_valid: bool = admin
+    authored_verification_order["dispatch"]["permit_bindings"][2]["allowed_operation_ids"] =
+        json!(["fetch-signing-keys"]);
+    let authored_verification_order_valid: bool = admin
         .query_one(
             "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
-            &[&serde_json::to_string(&open_crvs_misordered_jwks)?],
+            &[&serde_json::to_string(&authored_verification_order)?],
         )
         .await?
         .try_get(0)?;
@@ -3162,16 +3603,20 @@ WHERE metadata.singleton = true
         "the compiler's cache-disabled OpenCRVS seed must satisfy SQL"
     );
     assert!(
+        compiler_snapshot_seed_valid,
+        "the compiler's SnapshotExact seed must satisfy SQL"
+    );
+    assert!(
         !open_crvs_positive_lifetime_valid,
         "presence-only OAuth must use null, never an expiry-bound lifetime"
     );
     assert!(
-        !open_crvs_broken_jwks_valid,
-        "presence-only OAuth must retain the derived JWKS operation identity"
+        authored_verification_name_valid,
+        "presence-only OAuth must accept an explicitly authored verification operation identity"
     );
     assert!(
-        !open_crvs_misordered_jwks_valid,
-        "presence-only OAuth must dispatch JWKS before the DCI search"
+        authored_verification_order_valid,
+        "the seed validator must not infer verification order from operation names"
     );
     assert!(
         compiler_semantic_alias_seed_valid,
@@ -3391,8 +3836,8 @@ WHERE metadata.singleton = true
     let snapshot_facts = KnownConsultationCompletionFacts::public_for_snapshot_test(
         PublicConsultationOutcome::NoMatch,
         snapshot_acquired_at_unix_ms,
-        None,
-        None,
+        Some(snapshot_acquired_at_unix_ms),
+        Some("snapshot-revision-1"),
         &snapshot_generation,
         snapshot_acquired_at_unix_ms,
     )?;
@@ -3865,7 +4310,7 @@ WHERE metadata.singleton = true
         .collect::<Result<Vec<_>, _>>()?;
     let ordered_chain = order_chain(stored_envelopes);
     let verification = verify_chain(&ordered_chain, &test_chain_hasher)?;
-    assert_eq!(verification.records, 14);
+    assert_eq!(verification.records, 16);
     let head: Vec<u8> = admin
         .query_one(
             "SELECT record_hash FROM relay_state_private.audit_chain_head WHERE singleton = true",
@@ -5765,8 +6210,8 @@ WHERE metadata.singleton = true
     let known_rotation_facts = KnownConsultationCompletionFacts::public_for_snapshot_test(
         PublicConsultationOutcome::NoMatch,
         known_rotation_observed_at,
-        None,
-        None,
+        Some(known_rotation_observed_at),
+        Some("snapshot-revision-2"),
         &Ulid::new().to_string(),
         known_rotation_observed_at,
     )?;

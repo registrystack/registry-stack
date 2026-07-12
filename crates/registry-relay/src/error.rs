@@ -176,6 +176,8 @@ pub enum AuthError {
 pub enum ConsultationError {
     #[error("invalid consultation request")]
     InvalidRequest,
+    #[error("consultation batch child conflicts with durable state")]
+    Conflict,
     #[error("invalid consultation credentials")]
     InvalidCredentials,
     #[error("consultation denied")]
@@ -800,6 +802,7 @@ impl ConsultationError {
     fn code(&self) -> &'static str {
         match self {
             Self::InvalidRequest => "consultation.invalid_request",
+            Self::Conflict => "consultation.batch_child_conflict",
             Self::InvalidCredentials => "auth.invalid_credentials",
             Self::Denied => "consultation.denied",
             Self::ProfileNotFound => "consultation.profile_not_found",
@@ -811,6 +814,7 @@ impl ConsultationError {
     fn http_status(&self) -> StatusCode {
         match self {
             Self::InvalidRequest => StatusCode::BAD_REQUEST,
+            Self::Conflict => StatusCode::CONFLICT,
             Self::InvalidCredentials => StatusCode::UNAUTHORIZED,
             Self::Denied => StatusCode::FORBIDDEN,
             Self::ProfileNotFound => StatusCode::NOT_FOUND,
@@ -822,6 +826,7 @@ impl ConsultationError {
     fn title(&self) -> &'static str {
         match self {
             Self::InvalidRequest => "Invalid consultation request",
+            Self::Conflict => "Consultation batch child conflict",
             Self::InvalidCredentials => "Invalid credentials",
             Self::Denied => "Consultation denied",
             Self::ProfileNotFound => "Consultation profile not found",
@@ -833,6 +838,7 @@ impl ConsultationError {
     fn detail(&self) -> &'static str {
         match self {
             Self::InvalidRequest => "the consultation request is invalid",
+            Self::Conflict => "the batch child identity conflicts with a prior request",
             Self::InvalidCredentials => "service authentication failed",
             Self::Denied => "the consultation is not permitted",
             Self::ProfileNotFound => "the requested consultation profile is not available",

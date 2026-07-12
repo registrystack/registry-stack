@@ -788,6 +788,7 @@ fn claim(
         evidence_mode: registry_notary_core::ClaimEvidenceMode::TransitionalDirect,
         value: ClaimValueConfig {
             value_type: "boolean".to_string(),
+            nullable: false,
             unit: None,
         },
         semantics: None,
@@ -922,6 +923,7 @@ fn evaluate_request(target: EvidenceEntity, claim: &str) -> EvaluateRequest {
             attributes: BTreeMap::new(),
         }),
         on_behalf_of: None,
+        variables: Default::default(),
         claims: vec![ClaimRef::new(claim)],
         disclosure: Some("value".to_string()),
         format: None,
@@ -1456,6 +1458,7 @@ async fn default_context_batch_read_runs_concurrently_and_preserves_order() {
                     target,
                     relationship: None,
                     on_behalf_of: None,
+                    variables: Default::default(),
                 },
             )
         })
@@ -2544,6 +2547,7 @@ async fn machine_evaluate_without_target_is_rejected_before_source_read() {
                 target: None,
                 relationship: None,
                 on_behalf_of: None,
+                variables: Default::default(),
                 claims: vec![ClaimRef::new("person-is-alive")],
                 disclosure: None,
                 format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),

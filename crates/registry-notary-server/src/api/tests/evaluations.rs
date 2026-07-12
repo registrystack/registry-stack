@@ -58,6 +58,7 @@ async fn ambiguous_relay_response_keeps_ids_only_in_restricted_audit_context() {
                     "tracked_entity".to_string(),
                     registry_notary_core::RelayConsultationInput::TargetId,
                 )]),
+                facts: BTreeMap::new(),
             },
         )]),
     };

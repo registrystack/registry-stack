@@ -25,11 +25,14 @@ fn compile_selector_binding(
         .as_ref()
         .ok_or(SourcePlanCompileError::CompilerInvariant)?;
     let (source, location) = match &reviewed.selector {
-        ExactSelectorDocument::HttpAnchor {
-            input,
+        ExactSelectorDocument::HttpExactAnd {
             operation: root_operation,
-            location,
+            components,
         } if root_operation == &operation.id => {
+            let (input, location) = components
+                .iter()
+                .next()
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?;
             let input_index = indexes
                 .inputs
                 .get(input.as_str())
@@ -40,7 +43,27 @@ fn compile_selector_binding(
                 location,
             )
         }
-        ExactSelectorDocument::HttpAnchor { .. } => {
+        ExactSelectorDocument::HttpExactAnd { components, .. }
+            if operation.input_selector.is_some() =>
+        {
+            let input = components
+                .keys()
+                .next()
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+            let input_index = indexes
+                .inputs
+                .get(input.as_str())
+                .copied()
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+            (
+                CompiledSelectorSource::ConsultationInput { input_index },
+                operation
+                    .input_selector
+                    .as_ref()
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+            )
+        }
+        ExactSelectorDocument::HttpExactAnd { .. } => {
             let relation = operation
                 .relation_selector
                 .as_ref()
@@ -64,7 +87,7 @@ fn compile_selector_binding(
                 &relation.location,
             )
         }
-        ExactSelectorDocument::SnapshotKey { .. } => {
+        ExactSelectorDocument::SnapshotExactAnd { .. } => {
             return Err(SourcePlanCompileError::CompilerInvariant);
         }
     };
@@ -77,12 +100,21 @@ fn compile_selector_binding(
                 .ok_or(SourcePlanCompileError::CompilerInvariant)?;
             CompiledSelectorLocation::Query { component_index }
         }
+        RequestSelectorLocationDocument::Path { parameter } => {
+            if !operation.path_parameters.contains_key(parameter) {
+                return Err(SourcePlanCompileError::CompilerInvariant);
+            }
+            CompiledSelectorLocation::PathSegment
+        }
         RequestSelectorLocationDocument::Body { pointer } => CompiledSelectorLocation::Body {
             pointer: compile_json_pointer(pointer)?,
         },
         RequestSelectorLocationDocument::Codec {
             role: CodecSelectorRoleDocument::DciIdtypeValue,
         } => CompiledSelectorLocation::DciIdtypeValue,
+        RequestSelectorLocationDocument::Codec {
+            role: CodecSelectorRoleDocument::DciExactPredicate,
+        } => CompiledSelectorLocation::DciExactPredicate,
     };
     Ok(CompiledSelectorBinding { source, location })
 }
@@ -90,7 +122,7 @@ fn compile_selector_binding(
 pub(super) fn compile_operation_descriptors(
     pack: &IntegrationPackArtifact,
     acquisition_class: AcquisitionClass,
-    cardinality: SourceCardinality,
+    _cardinality: SourceCardinality,
     total_deadline_ms: u32,
     application_base_path: &str,
     indexes: &OperationCompilationIndexes<'_, '_>,
@@ -99,6 +131,7 @@ pub(super) fn compile_operation_descriptors(
     let parameter_indexes = indexes.parameters;
     let operation_indexes = indexes.operations;
     let prior_slot_indexes = indexes.prior_slots;
+    let prior_output_bounds = prior_output_expression_bounds(&pack.document.spec.plan.operations);
     pack.document
         .spec
         .plan
@@ -109,8 +142,10 @@ pub(super) fn compile_operation_descriptors(
                 .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
             let selector = compile_selector_binding(pack, operation, indexes)?;
             let disclosed_fields = operation
-                .acquisition_fields
-                .iter()
+                .response
+                .output_mapping
+                .keys()
+                .chain(operation.response.presence_outputs.iter())
                 .map(|field| {
                     AcquiredField::try_from(field.as_str())
                         .map_err(|_| SourcePlanCompileError::CompilerInvariant)
@@ -167,9 +202,7 @@ pub(super) fn compile_operation_descriptors(
                 RequestCodecDocument::None => CompiledRequestCodec::None,
                 RequestCodecDocument::Json => CompiledRequestCodec::Json,
                 RequestCodecDocument::DciExactV1 => CompiledRequestCodec::DciExactV1,
-                RequestCodecDocument::OpenCrvsDciExactV1 => {
-                    CompiledRequestCodec::OpenCrvsDciExactV1
-                }
+                RequestCodecDocument::FhirR4Search => CompiledRequestCodec::FhirR4Search,
             };
             let request_signer = operation.request_signer.map(|signer| match signer {
                 RequestSignerDocument::DciJwsV1 => CompiledRequestSigner::DciJwsV1,
@@ -177,7 +210,7 @@ pub(super) fn compile_operation_descriptors(
             let step_limits = operation
                 .step_limits
                 .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-            let query_bounds = operation
+            let mut query_bounds = operation
                 .query
                 .iter()
                 .map(|(name, expression)| {
@@ -187,11 +220,12 @@ pub(super) fn compile_operation_descriptors(
                             expression,
                             &pack.document.spec.input_slots,
                             &pack.document.spec.deployment_parameters,
+                            &prior_output_bounds,
                         ),
                     )
                 })
                 .collect::<Vec<_>>();
-            let header_bounds = operation
+            let mut header_bounds = operation
                 .headers
                 .iter()
                 .map(|(name, expression)| {
@@ -201,12 +235,13 @@ pub(super) fn compile_operation_descriptors(
                             expression,
                             &pack.document.spec.input_slots,
                             &pack.document.spec.deployment_parameters,
+                            &prior_output_bounds,
                         ),
                     )
                 })
                 .collect::<Vec<_>>();
-            let max_body_bytes = if request_codec == CompiledRequestCodec::OpenCrvsDciExactV1 {
-                OPEN_CRVS_DCI_REQUEST_BODY_MAX_BYTES
+            let max_body_bytes = if request_codec == CompiledRequestCodec::DciExactV1 {
+                MAX_DCI_EXACT_REQUEST_BODY_BYTES
             } else {
                 operation
                     .body
@@ -216,6 +251,7 @@ pub(super) fn compile_operation_descriptors(
                             body,
                             &pack.document.spec.input_slots,
                             &pack.document.spec.deployment_parameters,
+                            &prior_output_bounds,
                         )
                     })
                     .transpose()
@@ -226,23 +262,54 @@ pub(super) fn compile_operation_descriptors(
                 ReadMethod::Get => DestinationMethod::Get,
                 ReadMethod::ReadOnlyPost => DestinationMethod::ReviewedReadOnlyPost,
             };
-            let (auth, authorization_template) = match operation.auth {
+            let (auth, api_key, authorization_template) = match &operation.auth {
                 SourceAuthDocument::None => (
                     CompiledSourceAuth::None,
+                    None,
                     DestinationAuthorizationTemplate::Forbidden,
                 ),
                 SourceAuthDocument::Basic { max_value_bytes } => (
                     CompiledSourceAuth::Basic,
+                    None,
                     DestinationAuthorizationTemplate::Basic {
-                        max_value_bytes: usize::from(max_value_bytes),
+                        max_value_bytes: usize::from(*max_value_bytes),
                     },
                 ),
                 SourceAuthDocument::StaticBearer { max_value_bytes } => (
                     CompiledSourceAuth::StaticBearer,
+                    None,
                     DestinationAuthorizationTemplate::Bearer {
-                        max_value_bytes: usize::from(max_value_bytes),
+                        max_value_bytes: usize::from(*max_value_bytes),
                     },
                 ),
+                SourceAuthDocument::ApiKeyHeader {
+                    name,
+                    max_value_bytes,
+                } => {
+                    header_bounds.push((name.as_str(), usize::from(*max_value_bytes)));
+                    (
+                        CompiledSourceAuth::ApiKeyHeader,
+                        Some(super::CompiledApiKeyPlacement::Header {
+                            name: name.as_str().into(),
+                            max_value_bytes: *max_value_bytes,
+                        }),
+                        DestinationAuthorizationTemplate::Forbidden,
+                    )
+                }
+                SourceAuthDocument::ApiKeyQuery {
+                    name,
+                    max_value_bytes,
+                } => {
+                    query_bounds.push((name.as_str(), usize::from(*max_value_bytes)));
+                    (
+                        CompiledSourceAuth::ApiKeyQuery,
+                        Some(super::CompiledApiKeyPlacement::Query {
+                            name: name.as_str().into(),
+                            max_value_bytes: *max_value_bytes,
+                        }),
+                        DestinationAuthorizationTemplate::Forbidden,
+                    )
+                }
                 SourceAuthDocument::OAuthClientCredentials => {
                     let max_value_bytes = pack
                         .document
@@ -257,21 +324,34 @@ pub(super) fn compile_operation_descriptors(
                         .ok_or(SourcePlanCompileError::CompilerInvariant)?;
                     (
                         CompiledSourceAuth::OAuthClientCredentials,
+                        None,
                         DestinationAuthorizationTemplate::Bearer { max_value_bytes },
                     )
                 }
             };
-            let fixed_path = destination_fixed_path(application_base_path, &operation.path);
-            let body_template = if operation.body.is_some()
-                || request_codec == CompiledRequestCodec::OpenCrvsDciExactV1
-            {
-                DestinationBodyTemplate::Required {
-                    max_bytes: max_body_bytes,
-                }
-            } else {
-                DestinationBodyTemplate::Forbidden
-            };
-            let transport_template = if request_codec == CompiledRequestCodec::OpenCrvsDciExactV1 {
+            let (operation_fixed_path, path_parameter) = operation_path_parts(operation)
+                .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+            let fixed_path = destination_fixed_path(application_base_path, operation_fixed_path);
+            let path_segment = path_parameter
+                .map(|(_, expression)| {
+                    compile_value_expression(
+                        expression,
+                        input_indexes,
+                        parameter_indexes,
+                        operation_indexes,
+                        prior_slot_indexes,
+                    )
+                })
+                .transpose()?;
+            let body_template =
+                if operation.body.is_some() || request_codec == CompiledRequestCodec::DciExactV1 {
+                    DestinationBodyTemplate::Required {
+                        max_bytes: max_body_bytes,
+                    }
+                } else {
+                    DestinationBodyTemplate::Forbidden
+                };
+            let transport_template = if request_codec == CompiledRequestCodec::DciExactV1 {
                 DataDestinationRequestTemplate::new_with_exact_headers(
                     destination_method,
                     &fixed_path,
@@ -280,6 +360,32 @@ pub(super) fn compile_operation_descriptors(
                         ("accept", b"application/json"),
                         ("content-type", b"application/json"),
                     ],
+                    authorization_template,
+                    body_template,
+                    step_limits.max_request_bytes as usize,
+                )
+            } else if request_codec == CompiledRequestCodec::FhirR4Search {
+                DataDestinationRequestTemplate::new_with_exact_headers(
+                    destination_method,
+                    &fixed_path,
+                    &query_bounds,
+                    &[("accept", b"application/fhir+json")],
+                    authorization_template,
+                    body_template,
+                    step_limits.max_request_bytes as usize,
+                )
+            } else if let Some((_, expression)) = path_parameter {
+                DataDestinationRequestTemplate::new_with_path_segment(
+                    destination_method,
+                    &fixed_path,
+                    expression_max_bytes(
+                        expression,
+                        &pack.document.spec.input_slots,
+                        &pack.document.spec.deployment_parameters,
+                        &prior_output_bounds,
+                    ),
+                    &query_bounds,
+                    &header_bounds,
                     authorization_template,
                     body_template,
                     step_limits.max_request_bytes as usize,
@@ -305,10 +411,28 @@ pub(super) fn compile_operation_descriptors(
             let projection = compile_projection(operation)?;
             let response = compile_response(operation)?;
             let response_decoder = compile_closed_json_decoder(&response)?;
-            let open_crvs_jwks = if request_codec == CompiledRequestCodec::OpenCrvsDciExactV1 {
-                let jwks_id = OperationId::try_from(format!("{}.jwks", operation.id).as_str())
+            let cardinality = match operation.response.max_records {
+                1 => SourceCardinality::Singleton,
+                2 => SourceCardinality::AmbiguityProbe,
+                _ => return Err(SourcePlanCompileError::CompilerInvariant),
+            };
+            let dci = if request_codec == CompiledRequestCodec::DciExactV1 {
+                let document = operation
+                    .dci
+                    .as_ref()
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+                let verification = pack
+                    .document
+                    .spec
+                    .plan
+                    .verification_operations
+                    .iter()
+                    .find(|candidate| candidate.id == document.jwks_operation)
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+                let verification_id = OperationId::try_from(verification.id.as_str())
                     .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
-                let fixed_path: Box<str> = OPEN_CRVS_JWKS_PATH.into();
+                let fixed_path: Box<str> =
+                    destination_fixed_path(application_base_path, verification.path.as_str());
                 let transport_template = DataDestinationRequestTemplate::new(
                     DestinationMethod::Get,
                     &fixed_path,
@@ -316,24 +440,62 @@ pub(super) fn compile_operation_descriptors(
                     &[],
                     DestinationAuthorizationTemplate::Forbidden,
                     DestinationBodyTemplate::Forbidden,
-                    step_limits.max_request_bytes as usize,
+                    verification.step_limits.max_request_bytes as usize,
                 )
                 .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
-                Some(CompiledEmbeddedJwksOperation {
-                    id: jwks_id,
-                    fixed_path,
-                    transport_template,
-                    response_max_bytes: u32::try_from(OPEN_CRVS_JWKS_MAX_RESPONSE_BYTES)
-                        .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
-                    request_timeout_ms: step_limits.timeout_ms,
+                Some(CompiledDciExact {
+                    protocol_version: document.protocol_version.as_str().into(),
+                    sender_id: document.sender_id.as_str().into(),
+                    receiver_id: document.receiver_id.as_deref().map(Into::into),
+                    registry_type: document.registry_type.as_deref().map(Into::into),
+                    registry_event_type: document.registry_event_type.as_deref().map(Into::into),
+                    record_type: document.record_type.as_deref().map(Into::into),
+                    selector: match document.exact_and.is_empty() {
+                        false => super::CompiledDciSelector::ExactAnd {
+                            components: document
+                                .exact_and
+                                .iter()
+                                .map(|(input, component)| {
+                                    Ok(super::CompiledDciExactComponent {
+                                        input_index: *input_indexes
+                                            .get(input.as_str())
+                                            .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+                                        field: component.field.as_str().into(),
+                                        response_pointer: component
+                                            .response_pointer
+                                            .as_str()
+                                            .into(),
+                                    })
+                                })
+                                .collect::<Result<Box<[_]>, SourcePlanCompileError>>()?,
+                            identifier_type: document.identifier_type.as_deref().map(Into::into),
+                        },
+                        true => return Err(SourcePlanCompileError::CompilerInvariant),
+                    },
+                    locale: document.locale.as_str().into(),
+                    page_number: document.page_number,
+                    verification: CompiledVerificationOperation {
+                        id: verification_id,
+                        fixed_path,
+                        transport_template,
+                        response_max_bytes: verification.max_response_bytes,
+                        request_timeout_ms: verification.step_limits.timeout_ms,
+                    },
                 })
             } else {
                 None
             };
+            let fhir = operation
+                .fhir
+                .as_ref()
+                .map(|fhir| super::CompiledFhirR4Search {
+                    resource_type: fhir.resource_type.as_str().into(),
+                });
             Ok(CompiledOperation {
                 id,
                 method: operation.method,
                 fixed_path,
+                path_segment,
                 query,
                 headers,
                 body,
@@ -343,6 +505,7 @@ pub(super) fn compile_operation_descriptors(
                 request_timeout_ms: step_limits.timeout_ms,
                 request_max_in_flight: step_limits.max_in_flight,
                 auth,
+                api_key,
                 selector,
                 projection,
                 transport_template,
@@ -353,7 +516,8 @@ pub(super) fn compile_operation_descriptors(
                 total_deadline_ms,
                 acquired_fields,
                 disclosed_fields,
-                open_crvs_jwks,
+                dci,
+                fhir,
             })
         })
         .collect()
@@ -377,12 +541,17 @@ pub(super) fn compile_input_slots(
                     CompiledInputCanonicalization::AsciiLowercase
                 }
             };
+            let input_type = match input.input_type {
+                InputTypeDocument::String => CompiledInputType::String,
+                InputTypeDocument::FullDate => CompiledInputType::FullDate,
+            };
             Ok(CompiledInputSlot {
                 name: name.as_str().into(),
                 profile_contract_hash: profile_contract_hash.clone(),
                 slot_index: u16::try_from(slot_index)
                     .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
                 max_bytes: input.max_bytes,
+                input_type,
                 canonicalization,
                 matcher: CompiledInputMatcher { pattern },
             })
@@ -545,6 +714,17 @@ fn compile_response(
             })
         })
         .collect::<Result<Box<[_]>, _>>()?;
+    let presence_outputs = operation
+        .response
+        .presence_outputs
+        .iter()
+        .map(|field| {
+            Ok::<_, SourcePlanCompileError>(CompiledPresenceOutput {
+                field: AcquiredField::try_from(field.as_str())
+                    .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
+            })
+        })
+        .collect::<Result<Box<[_]>, _>>()?;
     let prior_outputs = operation
         .response
         .prior_outputs
@@ -554,13 +734,12 @@ fn compile_response(
                 name: name.as_str().into(),
                 pointer: compile_json_pointer(&output.pointer)?,
                 shape: compile_prior_scalar_shape(output)?,
+                date: output.output_type == OutputTypeDocument::Date,
             })
         })
         .collect::<Result<Box<[_]>, _>>()?;
     let cardinality = match &operation.response.cardinality {
-        CardinalityMechanismDocument::OpenCrvsDciProbeTwo => {
-            CompiledCardinalityMechanism::OpenCrvsDciProbeTwo
-        }
+        CardinalityMechanismDocument::DciProbeTwo => CompiledCardinalityMechanism::DciProbeTwo,
         CardinalityMechanismDocument::ProbeQueryParameter { parameter } => operation
             .query
             .keys()
@@ -615,9 +794,22 @@ fn compile_response(
             .accepted_statuses
             .clone()
             .into_boxed_slice(),
+        no_match_statuses: operation
+            .response
+            .status_outcomes
+            .no_match
+            .clone()
+            .into_boxed_slice(),
+        ambiguous_statuses: operation
+            .response
+            .status_outcomes
+            .ambiguous
+            .clone()
+            .into_boxed_slice(),
         normalization,
         schema: compile_response_schema(&operation.response.schema),
         outputs,
+        presence_outputs,
         prior_outputs,
         cardinality,
     })
@@ -642,7 +834,7 @@ pub(super) fn compile_closed_json_decoder(
             field_index: records_field_index,
         },
     };
-    let projections = response
+    let mut projections = response
         .outputs
         .iter()
         .map(|output| {
@@ -650,6 +842,20 @@ pub(super) fn compile_closed_json_decoder(
                 .map_err(|_| SourcePlanCompileError::CompilerInvariant)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    projections.extend(
+        response
+            .prior_outputs
+            .iter()
+            .enumerate()
+            .map(|(index, output)| {
+                ClosedJsonScalarProjection::new(
+                    &format!("registry.internal.prior.{index}"),
+                    output.extraction_pointer().tokens(),
+                )
+                .map_err(|_| SourcePlanCompileError::CompilerInvariant)
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    );
 
     ClosedJsonDecoder::new(schema, root, projections)
         .map_err(|_| SourcePlanCompileError::CompilerInvariant)
@@ -733,15 +939,11 @@ fn compile_prior_scalar_shape(
                 .maximum
                 .ok_or(SourcePlanCompileError::CompilerInvariant)?,
         }),
-        OutputTypeDocument::Number => Ok(CompiledScalarShape::Number {
+        OutputTypeDocument::Date => Ok(CompiledScalarShape::String {
             nullable: output.nullable,
-            minimum: output
-                .minimum
-                .ok_or(SourcePlanCompileError::CompilerInvariant)?,
-            maximum: output
-                .maximum
-                .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+            max_bytes: 10,
         }),
+        OutputTypeDocument::Presence => Err(SourcePlanCompileError::CompilerInvariant),
     }
 }
 

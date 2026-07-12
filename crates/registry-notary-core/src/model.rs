@@ -34,6 +34,8 @@ pub const MAX_RATE_LIMIT_BUCKET_LEN: usize = 128;
 pub const MAX_TOKEN_CLAIM_VALUE_LEN: usize = 512;
 pub const MAX_VERIFIED_CLAIM_NAME_LEN: usize = 256;
 pub const MAX_VERIFIED_CLAIM_VALUE_LEN: usize = 512;
+pub const MAX_REQUEST_VARIABLES_V1: usize = 16;
+pub const MAX_REQUEST_VARIABLE_NAME_BYTES_V1: usize = 96;
 
 pub type BoundedClaimId = Bounded<MAX_BOUNDED_CLAIM_ID_LEN>;
 pub type BoundedCorrelationId = Bounded<MAX_CORRELATION_ID_LEN>;
@@ -42,6 +44,88 @@ pub type ConfigMetadata = Bounded<MAX_CONFIG_METADATA_LEN>;
 pub type RateLimitBucket = Bounded<MAX_RATE_LIMIT_BUCKET_LEN>;
 pub type VerifiedClaimName = Bounded<MAX_VERIFIED_CLAIM_NAME_LEN>;
 pub type VerifiedClaimValue = Bounded<MAX_VERIFIED_CLAIM_VALUE_LEN>;
+
+/// Closed v1 request variables. The first contract admits only named RFC 3339
+/// full-date strings, with service configuration deciding which names exist.
+#[derive(Clone, Default, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(transparent)]
+pub struct RequestVariables(BTreeMap<String, String>);
+
+impl fmt::Debug for RequestVariables {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RequestVariables([REDACTED])")
+    }
+}
+
+impl RequestVariables {
+    pub fn try_new(values: BTreeMap<String, String>) -> Result<Self, &'static str> {
+        if values.len() > MAX_REQUEST_VARIABLES_V1
+            || values.iter().any(|(name, value)| {
+                !is_request_variable_name(name) || !is_rfc3339_full_date(value)
+            })
+        {
+            return Err("request variables must be bounded named RFC 3339 full-date strings");
+        }
+        Ok(Self(values))
+    }
+
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.0.get(name).map(String::as_str)
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+        self.0
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<'de> Deserialize<'de> for RequestVariables {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let values = BTreeMap::<String, String>::deserialize(deserializer)?;
+        Self::try_new(values).map_err(de::Error::custom)
+    }
+}
+
+#[must_use]
+pub fn is_request_variable_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && value.len() <= MAX_REQUEST_VARIABLE_NAME_BYTES_V1
+        && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
+}
+
+#[must_use]
+pub fn is_rfc3339_full_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes
+            .iter()
+            .enumerate()
+            .any(|(index, byte)| !matches!(index, 4 | 7) && !byte.is_ascii_digit())
+    {
+        return false;
+    }
+    let number = |range: std::ops::Range<usize>| value[range].parse::<u16>().ok();
+    let (Some(year), Some(month), Some(day)) = (number(0..4), number(5..7), number(8..10)) else {
+        return false;
+    };
+    let Ok(month) = time::Month::try_from(u8::try_from(month).unwrap_or(0)) else {
+        return false;
+    };
+    time::Date::from_calendar_date(i32::from(year), month, u8::try_from(day).unwrap_or(0)).is_ok()
+}
 
 /// The authentication trust profile that produced an [`EvidencePrincipal`].
 ///
@@ -750,6 +834,8 @@ pub struct EvaluateRequest {
     pub relationship: Option<EvidenceRelationship>,
     #[serde(default)]
     pub on_behalf_of: Option<EvidenceOnBehalfOf>,
+    #[serde(default, skip_serializing_if = "RequestVariables::is_empty")]
+    pub variables: RequestVariables,
     pub claims: Vec<ClaimRef>,
     #[serde(default)]
     pub disclosure: Option<String>,
@@ -774,6 +860,7 @@ impl EvaluateRequest {
             target: target.clone(),
             relationship: self.relationship.clone(),
             on_behalf_of: self.on_behalf_of.clone(),
+            variables: self.variables.clone(),
         })
     }
 }
@@ -788,6 +875,8 @@ pub struct EvidenceRequestContext {
     pub relationship: Option<EvidenceRelationship>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_behalf_of: Option<EvidenceOnBehalfOf>,
+    #[serde(default, skip_serializing_if = "RequestVariables::is_empty")]
+    pub variables: RequestVariables,
 }
 
 impl EvidenceRequestContext {
@@ -838,6 +927,12 @@ impl EvidenceRequestContext {
                 self.requester
                     .as_ref()
                     .and_then(|requester| requester.identifier_value(scheme))
+                    .map(|value| Value::String(value.to_string()))
+            }
+            _ if path.starts_with("variables.") => {
+                let name = path.strip_prefix("variables.")?;
+                self.variables
+                    .get(name)
                     .map(|value| Value::String(value.to_string()))
             }
             _ => None,
@@ -1042,6 +1137,7 @@ impl BatchEvaluateItemRequest {
             target: self.target.clone(),
             relationship: self.relationship.clone(),
             on_behalf_of: self.on_behalf_of.clone(),
+            variables: RequestVariables::default(),
         }
     }
 }
@@ -1933,6 +2029,48 @@ mod tests {
             Some("national_id")
         );
         assert_eq!(target.attributes["date_of_birth"], json!("1990-01-15"));
+    }
+
+    #[test]
+    fn evaluate_request_variables_are_closed_bounded_full_dates() {
+        let request: EvaluateRequest = serde_json::from_value(json!({
+            "target": { "type": "person", "id": "person-1" },
+            "variables": { "as_of_date": "2026-01-01" },
+            "claims": ["age-band"]
+        }))
+        .expect("declared-shape request variable parses");
+        assert_eq!(request.variables.get("as_of_date"), Some("2026-01-01"));
+        assert_eq!(
+            request
+                .request_context()
+                .and_then(|context| context.lookup_value("variables.as_of_date")),
+            Some(json!("2026-01-01"))
+        );
+        let debug = format!("{:?}", request.variables);
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains("2026-01-01"));
+
+        for variables in [
+            json!({ "AsOf": "2026-01-01" }),
+            json!({ "as_of_date": "2026-02-30" }),
+            json!({ "as_of_date": 20260101 }),
+        ] {
+            assert!(serde_json::from_value::<EvaluateRequest>(json!({
+                "target": { "type": "person", "id": "person-1" },
+                "variables": variables,
+                "claims": ["age-band"]
+            }))
+            .is_err());
+        }
+        let too_many = (0..=MAX_REQUEST_VARIABLES_V1)
+            .map(|index| (format!("date_{index}"), json!("2026-01-01")))
+            .collect::<serde_json::Map<_, _>>();
+        assert!(serde_json::from_value::<EvaluateRequest>(json!({
+            "target": { "type": "person", "id": "person-1" },
+            "variables": too_many,
+            "claims": ["age-band"]
+        }))
+        .is_err());
     }
 
     #[test]

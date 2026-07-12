@@ -349,7 +349,8 @@ pub(super) use document::*;
 mod parsing;
 use parsing::hash_document;
 pub(super) use parsing::{
-    parse_integration_pack, parse_private_binding, parse_public_contract, sha256_label,
+    author_integration_pack, author_public_contract, parse_integration_pack, parse_private_binding,
+    parse_public_contract, sha256_label,
 };
 
 mod policy;
@@ -358,10 +359,8 @@ pub(super) use policy::derive_consultation_policy;
 mod validation;
 #[cfg(test)]
 pub(super) use validation::validate_response_schema;
+pub(super) use validation::MAX_DCI_EXACT_REQUEST_BODY_BYTES;
 pub(super) use validation::{decode_pointer_tokens, response_record_schema};
-pub(super) use validation::{
-    OPEN_CRVS_DCI_REQUEST_BODY_MAX_BYTES, OPEN_CRVS_JWKS_MAX_RESPONSE_BYTES, OPEN_CRVS_JWKS_PATH,
-};
 
 mod bounds;
 pub(super) use bounds::*;

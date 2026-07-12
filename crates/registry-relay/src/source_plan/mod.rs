@@ -6,6 +6,7 @@
     reason = "WP1B stages the closed artifact compiler before the executor integration"
 )]
 mod artifact;
+pub mod authoring;
 #[allow(
     dead_code,
     reason = "WP1B stages the closed artifact compiler before the executor integration"
@@ -29,30 +30,42 @@ pub use artifact::{
 };
 pub use compiler::{
     CompiledBodyTemplate, CompiledCardinalityMechanism, CompiledInputCanonicalization,
-    CompiledInputMatcher, CompiledInputSlot, CompiledInputValue, CompiledJsonPointer,
-    CompiledNamedBodyField, CompiledNamedExpression, CompiledOperation, CompiledOutputMapping,
-    CompiledPriorOutputSlot, CompiledProjectionMechanism, CompiledRequestCodec,
-    CompiledRequestSigner, CompiledResponse, CompiledResponseField, CompiledResponseNormalization,
-    CompiledResponseSchema, CompiledScalarShape, CompiledSelectorBinding, CompiledSelectorLocation,
-    CompiledSelectorSource, CompiledSnapshotBinding, CompiledSnapshotRefreshClass,
-    CompiledSourceAuth, CompiledSourcePlan, CompiledSourcePlanRegistry, CompiledStep,
-    CompiledStepPredicate, CompiledValueExpression, PinnedEvidenceArtifact,
-    PinnedSourcePlanArtifact, RhaiWorkerCapability, SourcePlanArtifactBundle,
-    SourcePlanCompileError,
+    CompiledInputMatcher, CompiledInputSlot, CompiledInputType, CompiledInputValue,
+    CompiledJsonPointer, CompiledNamedBodyField, CompiledNamedExpression, CompiledOperation,
+    CompiledOutputMapping, CompiledPriorOutputSlot, CompiledProjectionMechanism,
+    CompiledRequestCodec, CompiledRequestSigner, CompiledResponse, CompiledResponseField,
+    CompiledResponseNormalization, CompiledResponseSchema, CompiledScalarShape,
+    CompiledSelectorBinding, CompiledSelectorLocation, CompiledSelectorSource,
+    CompiledSnapshotBinding, CompiledSnapshotRefreshClass, CompiledSourceAuth, CompiledSourcePlan,
+    CompiledSourcePlanRegistry, CompiledStatusOutcome, CompiledStep, CompiledStepPredicate,
+    CompiledValueExpression, PinnedEvidenceArtifact, PinnedSourcePlanArtifact,
+    RhaiWorkerCapability, SourcePlanArtifactBundle, SourcePlanCompileError,
 };
+pub(crate) use compiler::{CompiledDciSelector, CompiledRhaiFactType, ParsedOAuth2AccessToken};
 #[allow(
     unused_imports,
     reason = "consumed by the consultation executor integration immediately following this slice"
 )]
 pub(crate) use credentials::{
-    BasicAuthorizationCapability, CompiledBasicSourceCredentialProvider,
-    CompiledOAuthSourceCredentialProvider, OAuthClientCredentialsCapability,
-    SourceCredentialProviderError,
+    validate_source_credential_catalog, BasicAuthorizationCapability,
+    CompiledBasicSourceCredentialProvider, CompiledOAuthSourceCredentialProvider,
+    CompiledStaticBearerSourceCredentialProvider, OAuthClientCredentialsCapability,
+    SourceCredentialProviderError, StaticBearerAuthorizationCapability,
 };
+pub(crate) use registry::initialize_rhai_worker_capabilities;
 pub use registry::{
     CompiledConsultationRegistry, CompiledConsultationRegistryError,
     InitializedConsentVerifierRegistry,
 };
+
+pub(crate) const SELECTOR_INPUT_NAME_MAX_BYTES: usize = 64;
+
+pub(crate) fn valid_selector_input_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && name.len() <= SELECTOR_INPUT_NAME_MAX_BYTES
+        && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
+}
 
 #[cfg(test)]
 #[allow(unused_imports, reason = "consumed by cross-layer state-plane tests")]
@@ -64,5 +77,6 @@ pub(crate) use compiler::{
     normal_completion_seed_fixture, open_crvs_completion_seed_fixture,
     open_crvs_runtime_vector_plan_fixture, open_crvs_runtime_vector_registry_fixture,
     rhai_five_operation_two_slot_completion_seed_fixture, rhai_runtime_vector_plan_fixture,
-    semantic_alias_completion_seed_fixture, snapshot_completion_seed_fixture,
+    semantic_alias_completion_seed_fixture, shared_snapshot_registry_fixture,
+    signed_dci_expiring_oauth_runtime_plan_fixture, snapshot_completion_seed_fixture,
 };

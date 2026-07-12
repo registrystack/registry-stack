@@ -8,7 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use registry_notary_server::cel_worker::{
-    CelWorkerRequest, CelWorkerResponse, CEL_WORKER_PROTOCOL_V1,
+    CelWorkerRequest, CelWorkerResponse, CelWorkerResponseOutcome, CEL_WORKER_PROTOCOL_V1,
 };
 use serde_json::Value;
 
@@ -22,7 +22,7 @@ fn main() {
             Ok(line) => line,
             Err(_) => process::exit(2),
         };
-        let request = match serde_json::from_str::<CelWorkerRequest<'_>>(&line) {
+        let request = match serde_json::from_str::<CelWorkerRequest>(&line) {
             Ok(request) => request,
             Err(_) => {
                 write_response(&mut stdout, None, None, Some("invalid_request"));
@@ -39,7 +39,7 @@ fn main() {
             continue;
         }
 
-        match request.expression {
+        match request.expression.as_str() {
             "fixture.hang" => loop {
                 thread::sleep(Duration::from_secs(60));
             },
@@ -127,11 +127,17 @@ fn write_response(
     value: Option<Value>,
     error: Option<&str>,
 ) {
+    let outcome = match (value, error) {
+        (Some(value), None) => CelWorkerResponseOutcome::Success { value },
+        (None, Some(error)) => CelWorkerResponseOutcome::Error {
+            error: error.to_string(),
+        },
+        _ => panic!("fixture response must be exactly one of success or error"),
+    };
     let response = CelWorkerResponse {
         protocol: CEL_WORKER_PROTOCOL_V1.to_string(),
         policy_hash: policy_hash.map(str::to_string),
-        value,
-        error: error.map(str::to_string),
+        outcome,
     };
     serde_json::to_writer(&mut *stdout, &response).expect("write fixture response");
     stdout

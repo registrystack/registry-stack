@@ -202,6 +202,7 @@ async fn evaluate_sends_safe_headers_and_parses_metadata() {
         .target_identifier("NATIONAL_ID", "subject-1")
         .target_identifier_issuer("civil_registry")
         .relationship("self")
+        .request_variable_date("as_of_date", "2026-01-01")
         .claim("claim-a")
         .request_id("req-123")
         .send()
@@ -556,6 +557,7 @@ async fn purpose_conflict_fails_client_side() {
                 )),
                 relationship: None,
                 on_behalf_of: None,
+                variables: Default::default(),
                 claims: vec![registry_notary_core::ClaimRef::new("claim-a")],
                 disclosure: None,
                 format: None,
@@ -594,6 +596,7 @@ async fn raw_evaluate_preserves_body_only_purpose() {
                 )),
                 relationship: None,
                 on_behalf_of: None,
+                variables: Default::default(),
                 claims: vec![registry_notary_core::ClaimRef::new("claim-a")],
                 disclosure: None,
                 format: None,
@@ -1137,6 +1140,7 @@ async fn evaluate_handler(headers: HeaderMap, body: Bytes) -> Response {
         }])
     );
     assert_eq!(parsed["relationship"]["type"], json!("self"));
+    assert_eq!(parsed["variables"]["as_of_date"], json!("2026-01-01"));
     (
         StatusCode::OK,
         [("x-request-id", "req-123")],

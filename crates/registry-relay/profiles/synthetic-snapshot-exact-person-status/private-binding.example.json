@@ -6,7 +6,7 @@
   "integration_pack": {
     "id": "synthetic.snapshot.person-status",
     "version": "1",
-    "hash": "sha256:cc490a9b51255611f3dc3b529952a185c22a32c260644b095d6b3bf6ac52fab6"
+    "hash": "sha256:0825769c7a1d88ffae41a012963ebc81e1147eb6fed425e7aa69fa7b8ccc3523"
   },
   "tenant": "synthetic-government",
   "registry_instance": "synthetic-benefits-primary",
@@ -28,6 +28,19 @@
   },
   "materialization": {
     "table_provider": "synthetic_snapshot__people",
+    "mapping": {
+      "key": {
+        "input": "person_id",
+        "physical_field": "subject_key",
+        "physical_type": "utf8",
+        "comparison": "binary_equality"
+      },
+      "projection": {
+        "registration_status": "registration_status_text",
+        "source_observed_at": "observed_at_text",
+        "source_revision": "revision_text"
+      }
+    },
     "max_snapshot_age_ms": 86400000,
     "max_source_records": 4,
     "max_source_bytes": 4096,

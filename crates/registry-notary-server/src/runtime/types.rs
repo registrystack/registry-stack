@@ -118,6 +118,7 @@ impl MatchingPolicyAudit {
 pub struct BatchEvaluateOptions<'a> {
     pub header_purpose: Option<&'a str>,
     pub idempotency_key: Option<&'a str>,
+    pub owner_quota: Option<(&'a crate::MachineQuotaLimiter, u32)>,
     /// Test-only observer: when set, the runtime uses this `MemoState` as the
     /// per-batch memo instead of constructing its own, letting tests read
     /// `hits()` / `misses()` after the call returns. Production callers leave
@@ -238,6 +239,7 @@ pub(super) struct CelEvaluationContext<'a> {
     pub(super) bindings: &'a CelBindingsConfig,
     pub(super) claims: &'a BTreeMap<String, ClaimResultInternal>,
     pub(super) sources: &'a BTreeMap<String, Value>,
+    pub(super) variables: &'a registry_notary_core::RequestVariables,
     pub(super) subject: Option<&'a SubjectRequest>,
     pub(super) target: &'a EvidenceEntity,
     pub(super) purpose: &'a str,

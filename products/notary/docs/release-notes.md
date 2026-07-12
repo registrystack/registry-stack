@@ -12,6 +12,24 @@
   doctor checks, and keeps Relay correlation in restricted audit only. Set
   Notary `server.request_timeout` to at least 30 seconds and restrict the token
   file to the Notary service account.
+- New country configurations can map one verified Relay consultation into
+  Boolean, bounded String, exact Integer, full-date, Presence, and nullable
+  facts, then reuse that fact map across direct claims and CEL derivations.
+  Declare any full-date evaluation inputs under `evidence.variables` and send
+  them in `request.variables`; undeclared or missing inputs are rejected before
+  Notary contacts Relay or a source. Existing legacy projected-string and
+  presence consultations remain supported during migration.
+- Country fixture evaluation now reuses Notary's production authentication,
+  policy, consultation, disclosure, and isolated CEL paths. The co-shipped
+  internal CEL protocol also preserves multiline expressions and successful
+  null results through a tagged response; old and new worker binaries remain
+  intentionally version-aligned and mixed versions fail closed.
+- Registry-backed batch evaluation requires a caller-supplied
+  `Idempotency-Key` and authorizes the complete batch before source access.
+  Notary preserves ordered per-item results while running bounded independent
+  single-subject Relay consultations. Exact retries reuse private durable child
+  identities without repeating completed source work; Notary does not send a
+  multi-subject Relay consultation or claim native upstream bulk optimization.
 
 ## 0.9.0
 

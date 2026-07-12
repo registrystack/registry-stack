@@ -3,8 +3,11 @@
 
 use std::fmt;
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use thiserror::Error;
 use ulid::Ulid;
+use zeroize::Zeroizing;
 
 use crate::source_plan::CompiledSourcePlan;
 
@@ -19,6 +22,9 @@ pub enum ConsultationIdentifierError {
     /// A Notary evaluation id is not one canonical uppercase ULID.
     #[error("invalid Notary evaluation identifier")]
     InvalidNotaryEvaluationId,
+    /// A Notary batch child id is not one exact base64url SHA-256 value.
+    #[error("invalid Notary batch child identifier")]
+    InvalidNotaryBatchChildId,
 }
 
 /// The public profile id and version selected by the fixed v1 route.
@@ -160,6 +166,46 @@ impl NotaryEvaluationId {
     #[must_use]
     pub fn to_canonical_string(self) -> String {
         self.0.to_string()
+    }
+}
+
+/// Opaque, deterministic Notary batch-child identity accepted only at the
+/// authenticated workload boundary.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct NotaryBatchChildIdentity(Box<str>);
+
+impl NotaryBatchChildIdentity {
+    pub(crate) fn try_parse(value: &str) -> Result<Self, ConsultationIdentifierError> {
+        if value.len() != 43
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(ConsultationIdentifierError::InvalidNotaryBatchChildId);
+        }
+        let decoded = URL_SAFE_NO_PAD
+            .decode(value)
+            .map_err(|_| ConsultationIdentifierError::InvalidNotaryBatchChildId)?;
+        if decoded.len() != 32 || URL_SAFE_NO_PAD.encode(&decoded) != value {
+            return Err(ConsultationIdentifierError::InvalidNotaryBatchChildId);
+        }
+        Ok(Self(value.into()))
+    }
+
+    pub(super) fn decoded_key(&self) -> Zeroizing<[u8; 32]> {
+        let decoded = URL_SAFE_NO_PAD
+            .decode(self.0.as_bytes())
+            .expect("validated batch child identity remains canonical base64url");
+        let key: [u8; 32] = decoded
+            .try_into()
+            .expect("validated batch child identity remains 32 bytes");
+        Zeroizing::new(key)
+    }
+}
+
+impl fmt::Debug for NotaryBatchChildIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("NotaryBatchChildIdentity([REDACTED])")
     }
 }
 

@@ -45,12 +45,13 @@
       },
       "control_fields": {},
       "selector": {
-        "type": "http_anchor",
-        "input": "subject_id",
+        "type": "http_exact_and",
         "operation": "lookup-status",
-        "location": {
-          "type": "query",
-          "parameter": "subject_id"
+        "components": {
+          "subject_id": {
+            "type": "query",
+            "parameter": "subject_id"
+          }
         }
       },
       "cardinality": "probe_two",
@@ -59,7 +60,8 @@
     "output": {
       "registration_status": {
         "type": "string",
-        "nullable": false
+        "nullable": false,
+        "max_bytes": 64
       }
     },
     "plan": {

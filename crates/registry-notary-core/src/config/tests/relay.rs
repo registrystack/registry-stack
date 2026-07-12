@@ -31,6 +31,7 @@ fn registry_mode(consultation_name: &str) -> ClaimEvidenceMode {
                     "subject_id".to_string(),
                     RelayConsultationInput::TargetId,
                 )]),
+                facts: std::collections::BTreeMap::new(),
             },
         )]),
     }
@@ -202,8 +203,69 @@ rule:
   source: person_status
 "#
     ))
-    .expect_err("only the symbolic target.id mapping is accepted");
+    .expect_err("only a closed symbolic target mapping is accepted");
     assert!(!error.to_string().contains(sensitive_target));
+}
+
+#[test]
+fn consultation_accepts_bounded_named_target_identifiers() {
+    let claim: ClaimDefinition = serde_norway::from_str(
+        r#"
+id: named-identifier
+title: Named identifier
+version: "1"
+subject_type: person
+evidence_mode:
+  type: registry_backed
+  consultations:
+    birth_record:
+      profile:
+        id: example.birth-record.exact
+        version: "1"
+        contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      inputs:
+        uin: request.target.identifiers.UIN
+purpose: civil-registration-verification
+required_scopes: [registry:consult:birth-record]
+value:
+  type: boolean
+rule:
+  type: exists
+  source: birth_record
+"#,
+    )
+    .expect("named target identifier mapping parses");
+
+    let ClaimEvidenceMode::RegistryBacked { consultations } = claim.evidence_mode else {
+        panic!("registry-backed mode")
+    };
+    let mapping = consultations["birth_record"].inputs["uin"].clone();
+    assert_eq!(mapping.request_path(), "request.target.identifiers.UIN");
+    assert_eq!(mapping.request_context_path(), "target.identifiers.UIN");
+    assert_eq!(
+        serde_json::to_value(mapping).expect("mapping serializes"),
+        "request.target.identifiers.UIN"
+    );
+
+    for invalid in [
+        "request.target.identifiers.",
+        "request.target.identifiers.1UIN",
+        "request.target.identifiers.UIN/other",
+        "request.target.identifiers.UIN value",
+    ] {
+        let yaml = format!(
+            r#"
+profile:
+  id: example.birth-record.exact
+  version: "1"
+  contract_hash: {CONTRACT_HASH}
+inputs:
+  uin: {invalid}
+"#,
+        );
+        serde_norway::from_str::<RelayConsultationConfig>(&yaml)
+            .expect_err("invalid target identifier mapping is rejected");
+    }
 }
 
 #[test]
@@ -223,7 +285,7 @@ fn registry_backed_claim_accepts_one_pinned_consultation() {
 }
 
 #[test]
-fn initial_relay_activation_shape_is_one_shared_product_journey() {
+fn relay_activation_allows_independent_profiles_purposes_inputs_and_outputs() {
     let mut config = valid_registry_backed_config();
     let mut exists = config.evidence.claims[0].clone();
     exists.id = "person-status-present".to_string();
@@ -243,29 +305,106 @@ fn initial_relay_activation_shape_is_one_shared_product_journey() {
         .validate()
         .expect("an exists-only journey selects the explicit presence-only Relay contract");
 
-    let mut different_profile = config.clone();
+    let mut independent = config.clone();
     let ClaimEvidenceMode::RegistryBacked { consultations } =
-        &mut different_profile.evidence.claims[1].evidence_mode
+        &mut independent.evidence.claims[1].evidence_mode
     else {
         panic!("registry-backed mode")
     };
-    consultations
+    let consultation = consultations
         .get_mut("person_status")
-        .expect("consultation")
-        .profile
-        .version = "2".to_string();
-    expect_mode_error(
-        &different_profile,
-        "one shared profile, purpose, and input name",
-    );
+        .expect("consultation");
+    consultation.profile.id = "example.other-status.exact".to_string();
+    consultation.profile.version = "2".to_string();
+    consultation.inputs = BTreeMap::from([(
+        "uin".to_string(),
+        RelayConsultationInput::TargetIdentifier("request.target.identifiers.UIN".to_string()),
+    )]);
+    independent.evidence.claims[1].purpose = Some("civil-registration-verification".to_string());
+    independent.evidence.claims[1].rule = RuleConfig::Extract {
+        source: "person_status".to_string(),
+        field: "other_status".to_string(),
+    };
+    independent.evidence.claims[1].value.value_type = "string".to_string();
+    independent
+        .validate()
+        .expect("independent Relay client identities may coexist");
 
-    let mut different_output = config;
+    let mut different_output = config.clone();
     different_output.evidence.claims[1].rule = RuleConfig::Extract {
         source: "person_status".to_string(),
         field: "other_status".to_string(),
     };
     different_output.evidence.claims[1].value.value_type = "string".to_string();
     expect_mode_error(&different_output, "one shared string output");
+}
+
+#[test]
+fn registry_backed_consultation_accepts_one_to_four_injective_inputs() {
+    let mut config = valid_registry_backed_config();
+    let ClaimEvidenceMode::RegistryBacked { consultations } =
+        &mut config.evidence.claims[0].evidence_mode
+    else {
+        panic!("registry-backed mode")
+    };
+    consultations
+        .get_mut("person_status")
+        .expect("consultation")
+        .inputs = BTreeMap::from([
+        ("subject_id".to_string(), RelayConsultationInput::TargetId),
+        (
+            "birth_date".to_string(),
+            RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.birth_date".to_string(),
+            ),
+        ),
+        (
+            "country_code".to_string(),
+            RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.country_code".to_string(),
+            ),
+        ),
+        (
+            "registry_id".to_string(),
+            RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.registry_id".to_string(),
+            ),
+        ),
+    ]);
+    config.validate().expect("four typed inputs are valid");
+
+    let ClaimEvidenceMode::RegistryBacked { consultations } =
+        &mut config.evidence.claims[0].evidence_mode
+    else {
+        panic!("registry-backed mode")
+    };
+    consultations
+        .get_mut("person_status")
+        .expect("consultation")
+        .inputs
+        .insert(
+            "fifth_input".to_string(),
+            RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.fifth_input".to_string(),
+            ),
+        );
+    expect_mode_error(&config, "one to four");
+
+    let mut duplicate_mapping = valid_registry_backed_config();
+    let ClaimEvidenceMode::RegistryBacked { consultations } =
+        &mut duplicate_mapping.evidence.claims[0].evidence_mode
+    else {
+        panic!("registry-backed mode")
+    };
+    consultations
+        .get_mut("person_status")
+        .expect("consultation")
+        .inputs
+        .insert(
+            "duplicate_subject".to_string(),
+            RelayConsultationInput::TargetId,
+        );
+    expect_mode_error(&duplicate_mapping, "injectively");
 }
 
 #[test]
@@ -305,7 +444,9 @@ fn registry_backed_claim_enforces_gates_cardinality_and_rule_binding() {
 
     let mut config = valid_registry_backed_config();
     config.evidence.claims[0].operations.batch_evaluate.enabled = true;
-    expect_mode_error(&config, "cannot enable batch_evaluate");
+    config
+        .validate()
+        .expect("registry-backed claims may enable the pre-1.0 batch contract");
 
     let mut config = valid_registry_backed_config();
     let ClaimEvidenceMode::RegistryBacked { consultations } =
@@ -374,7 +515,7 @@ fn registry_backed_claim_matches_relay_identifier_and_scalar_contract() {
         .expect("consultation")
         .inputs
         .clear();
-    expect_mode_error(&config, "exactly one target.id mapping");
+    expect_mode_error(&config, "one to four target identifier mappings");
 
     let mut config = valid_registry_backed_config();
     config.evidence.claims[0].rule = RuleConfig::Exists {
@@ -772,4 +913,123 @@ fn transitional_direct_preserves_rule_source_validation() {
         error,
         EvidenceConfigError::UnknownRuleSourceBinding { .. }
     ));
+}
+
+#[test]
+fn registry_backed_cel_accepts_one_complete_typed_fact_map_and_full_date_variable() {
+    let mut config = valid_registry_backed_config();
+    config.evidence.variables.insert(
+        "as_of_date".to_string(),
+        RequestVariableConfig {
+            from: "request.variables.as_of_date".to_string(),
+            value_type: RequestVariableType::Date,
+        },
+    );
+    let claim = &mut config.evidence.claims[0];
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+        panic!("registry-backed mode")
+    };
+    let consultation = consultations
+        .get_mut("person_status")
+        .expect("consultation exists");
+    consultation.facts = BTreeMap::from([
+        ("exists".to_string(), RelayFactContract::Presence),
+        (
+            "date_of_birth".to_string(),
+            RelayFactContract::Date { nullable: true },
+        ),
+        (
+            "sequence".to_string(),
+            RelayFactContract::Integer {
+                nullable: false,
+                minimum: 0,
+                maximum: 9_007_199_254_740_991,
+            },
+        ),
+        (
+            "status".to_string(),
+            RelayFactContract::String {
+                nullable: false,
+                max_bytes: 64,
+            },
+        ),
+    ]);
+    claim.rule = RuleConfig::Cel {
+        expression: "person_status.exists && person_status.date_of_birth != null ? date.age_on(person_status.date_of_birth, as_of_date) >= 18 : false".to_string(),
+        bindings: CelBindingsConfig::default(),
+    };
+    claim.value.value_type = "boolean".to_string();
+    claim.value.nullable = false;
+    config
+        .validate()
+        .expect("typed registry CEL config validates");
+
+    let mut generic_number = config.clone();
+    generic_number.evidence.claims[0].value.value_type = "number".to_string();
+    expect_mode_error(&generic_number, "generic Number is not supported");
+
+    config
+        .evidence
+        .variables
+        .get_mut("as_of_date")
+        .expect("variable exists")
+        .from = "request.target.attributes.as_of_date".to_string();
+    assert!(matches!(
+        config.validate(),
+        Err(EvidenceConfigError::InvalidRequestVariableConfig { .. })
+    ));
+}
+
+#[test]
+fn authored_typed_fact_and_variable_yaml_shape_is_closed() {
+    let evidence: EvidenceConfig = serde_norway::from_str(
+        r#"
+enabled: true
+variables:
+  as_of_date:
+    from: request.variables.as_of_date
+    type: date
+"#,
+    )
+    .expect("authored request-variable union parses");
+    assert_eq!(
+        evidence.variables["as_of_date"].value_type,
+        RequestVariableType::Date
+    );
+
+    let consultation: RelayConsultationConfig = serde_norway::from_str(
+        r#"
+profile:
+  id: opencrvs.birth-record.exact
+  version: "1"
+  contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+inputs:
+  uin: request.target.identifiers.UIN
+facts:
+  exists: { type: presence }
+  active: { type: boolean, nullable: false }
+  date_of_birth: { type: date, nullable: true }
+  sequence: { type: integer, nullable: false, minimum: 0, maximum: 9007199254740991 }
+  given_name: { type: string, nullable: true, max_bytes: 128 }
+"#,
+    )
+    .expect("authored typed consultation parses");
+    assert_eq!(consultation.facts.len(), 5);
+    assert!(matches!(
+        consultation.facts.get("date_of_birth"),
+        Some(RelayFactContract::Date { nullable: true })
+    ));
+
+    assert!(serde_norway::from_str::<RelayConsultationConfig>(
+        r#"
+profile:
+  id: opencrvs.birth-record.exact
+  version: "1"
+  contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+inputs: { uin: request.target.identifiers.UIN }
+facts:
+  score: { type: number, nullable: false }
+"#,
+    )
+    .is_err());
 }

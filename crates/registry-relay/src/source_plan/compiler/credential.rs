@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 
 use registry_platform_crypto::parse_json_strict;
 use registry_platform_httputil::destination::{
-    CredentialDestinationRequest, CredentialDestinationRequestTemplate,
+    CredentialDestinationBody, CredentialDestinationRequest, CredentialDestinationRequestTemplate,
 };
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -77,26 +77,30 @@ pub(crate) enum CredentialOperationFailure {
 }
 
 /// Opaque parsed access token retained only in zeroizing memory.
-pub(crate) struct ParsedOAuth2AccessToken {
-    value: Zeroizing<String>,
-    usable_lifetime_ms: Option<NonZeroU32>,
+pub(crate) enum ParsedOAuth2AccessToken {
+    Local {
+        value: Zeroizing<String>,
+        usable_lifetime_ms: Option<NonZeroU32>,
+    },
+    Transport(registry_platform_httputil::destination::oauth::ParsedBearerToken),
 }
 
 impl fmt::Debug for ParsedOAuth2AccessToken {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ParsedOAuth2AccessToken")
-            .field("value", &"[REDACTED]")
-            .field("usable_lifetime_ms", &self.usable_lifetime_ms)
-            .finish()
+        formatter.write_str("ParsedOAuth2AccessToken([REDACTED])")
     }
 }
 
 impl ParsedOAuth2AccessToken {
     pub(crate) const fn usable_lifetime_ms(&self) -> Option<u32> {
-        match self.usable_lifetime_ms {
-            Some(value) => Some(value.get()),
-            None => None,
+        match self {
+            Self::Local {
+                usable_lifetime_ms, ..
+            } => match usable_lifetime_ms {
+                Some(value) => Some(value.get()),
+                None => None,
+            },
+            Self::Transport(value) => value.usable_lifetime_ms(),
         }
     }
 
@@ -106,10 +110,17 @@ impl ParsedOAuth2AccessToken {
         registry_platform_httputil::destination::DestinationAuthorizationValue,
         CredentialOperationFailure,
     > {
-        registry_platform_httputil::destination::DestinationAuthorizationValue::bearer(
-            self.value.as_bytes().to_vec(),
-        )
-        .map_err(|_| CredentialOperationFailure::MalformedResponse)
+        match self {
+            Self::Local { value, .. } => {
+                registry_platform_httputil::destination::DestinationAuthorizationValue::bearer(
+                    value.as_bytes().to_vec(),
+                )
+                .map_err(|_| CredentialOperationFailure::MalformedResponse)
+            }
+            Self::Transport(value) => value
+                .authorization()
+                .map_err(|_| CredentialOperationFailure::MalformedResponse),
+        }
     }
 }
 
@@ -237,10 +248,44 @@ impl CompiledOAuth2TokenParser {
                 Some(usable)
             }
         };
-        Ok(ParsedOAuth2AccessToken {
+        Ok(ParsedOAuth2AccessToken::Local {
             value: access_token,
             usable_lifetime_ms,
         })
+    }
+
+    pub(crate) fn parse_body(
+        &self,
+        status: u16,
+        body: CredentialDestinationBody,
+    ) -> Result<ParsedOAuth2AccessToken, CredentialOperationFailure> {
+        use registry_platform_httputil::destination::oauth::{
+            decode_strict_oauth_token, StrictOAuthTokenSchema,
+        };
+
+        if self.accepted_statuses.binary_search(&status).is_err() {
+            return Err(CredentialOperationFailure::Status);
+        }
+        let schema = match self.schema {
+            CompiledOAuth2TokenSchema::StrictAccessTokenBearerExpiresIn => {
+                StrictOAuthTokenSchema::BearerWithExpiresIn
+            }
+            CompiledOAuth2TokenSchema::StrictAccessTokenBearerNoExpiry => {
+                StrictOAuthTokenSchema::BearerWithoutExpiry
+            }
+        };
+        let parsed = decode_strict_oauth_token(
+            body,
+            schema,
+            self.max_response_bytes as usize,
+            usize::from(self.access_token_max_bytes),
+            self.expires_in_min_seconds,
+            self.expires_in_max_seconds,
+            self.max_token_lifetime_ms,
+            self.expiry_safety_skew_ms,
+        )
+        .map_err(|_| CredentialOperationFailure::MalformedResponse)?;
+        Ok(ParsedOAuth2AccessToken::Transport(parsed))
     }
 }
 

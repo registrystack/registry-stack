@@ -31,7 +31,7 @@ use zeroize::Zeroizing;
 const PROFILE_ID: &str = "dhis2.tracker.enrollment-status.exact";
 const PROFILE_VERSION: &str = "1";
 const CONTRACT_HASH: &str =
-    "sha256:a2d0e7588bc1bbeb0caf3247703a15d81830875f5e84dd257f7dc163d3a4ecb6";
+    "sha256:d44a58740cf51b68d9a011380814568e6c569e35057d4350a4fb429b24289ea7";
 const PURPOSE: &str = "program-enrollment-verification";
 const INPUT_NAME: &str = "tracked_entity";
 const INPUT_VALUE: &str = "PQfMcpmXeFE";
@@ -74,6 +74,8 @@ struct Observation {
     exact_content_type: bool,
     exact_purpose: bool,
     exact_evaluation_id: bool,
+    has_valid_batch_child_identity: bool,
+    batch_child_identity_absent: bool,
     exact_body: bool,
     forbidden_ambient_headers_absent: bool,
 }
@@ -275,6 +277,16 @@ async fn observe_request(
             .get("registry-notary-evaluation-id")
             .is_some_and(|value| expected_evaluation_id.is_some_and(|expected| value == expected)),
     };
+    let has_valid_batch_child_identity = headers
+        .get("registry-notary-batch-child-id")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.len() == 43
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        });
+    let batch_child_identity_absent = !headers.contains_key("registry-notary-batch-child-id");
     let forbidden_ambient_headers_absent = [
         header::COOKIE.as_str(),
         "forwarded",
@@ -297,6 +309,8 @@ async fn observe_request(
         exact_content_type,
         exact_purpose,
         exact_evaluation_id,
+        has_valid_batch_child_identity,
+        batch_child_identity_absent,
         exact_body,
         forbidden_ambient_headers_absent,
     }
@@ -366,6 +380,64 @@ fn presence_contract_value() -> Value {
         }
     });
     contract
+}
+
+fn typed_fact_contract_value() -> Value {
+    let mut contract = contract_value();
+    contract["spec"]["output"] = json!({
+        "active": { "type": "boolean", "nullable": false },
+        "birth_date": { "type": "date", "nullable": true, "max_bytes": 10 },
+        "exists": { "type": "presence", "nullable": false },
+        "sequence": {
+            "type": "integer",
+            "nullable": false,
+            "minimum": 0,
+            "maximum": 9_007_199_254_740_991_i64
+        },
+        "status": { "type": "string", "nullable": false, "max_bytes": 64 }
+    });
+    contract["spec"]["acquisition"]["fields"] = json!({
+        "active": { "type": "boolean", "nullable": false },
+        "birth_date": { "type": "string", "nullable": true, "max_bytes": 10 },
+        "sequence": {
+            "type": "integer",
+            "nullable": false,
+            "minimum": 0,
+            "maximum": 9_007_199_254_740_991_i64
+        },
+        "status": { "type": "string", "nullable": false, "max_bytes": 64 }
+    });
+    contract
+}
+
+fn typed_fact_expectation() -> RelayExpectedResult {
+    RelayExpectedResult::fact_map(BTreeMap::from([
+        (
+            "active".to_string(),
+            RelayFactContract::Boolean { nullable: false },
+        ),
+        (
+            "birth_date".to_string(),
+            RelayFactContract::Date { nullable: true },
+        ),
+        ("exists".to_string(), RelayFactContract::Presence),
+        (
+            "sequence".to_string(),
+            RelayFactContract::Integer {
+                nullable: false,
+                minimum: 0,
+                maximum: 9_007_199_254_740_991,
+            },
+        ),
+        (
+            "status".to_string(),
+            RelayFactContract::String {
+                nullable: false,
+                max_bytes: 64,
+            },
+        ),
+    ]))
+    .expect("valid typed fact expectation")
 }
 
 fn snapshot_contract_value() -> Value {
@@ -464,10 +536,10 @@ fn result_value() -> Value {
             "integration_pack": {
                 "id": "dhis2.tracker.enrollment-status",
                 "version": "1",
-                "hash": "sha256:ec0136be504e3f98539f9e0ec10e59532ff793dbadc2e66ea1c017a632da6ac4"
+                "hash": "sha256:c3965741e1d2da615a82a6ede91d0477c8c29204c675e043169bcc654915597f"
             },
             "policy_id": "relay.dhis2.tracker.enrollment-status.exact",
-            "policy_hash": "sha256:0456a93b515b9d60aff9f06633c792f4e63ede2f7657ef37bb2f58a840380b1f",
+            "policy_hash": "sha256:807d95f054244dc6e881672324d7e2468fe179af312f67f2bd162d523743bed9",
             "consent": {
                 "outcome": "not_required",
                 "verifier_id": null,
@@ -829,6 +901,8 @@ async fn assembled_notary_relay_journey_activates_and_coalesces_two_claims() {
     assert_eq!(observations.len(), 2);
     assert_eq!(observations[0].operation, ObservedOperation::Metadata);
     assert_eq!(observations[1].operation, ObservedOperation::Execute);
+    assert!(observations[0].batch_child_identity_absent);
+    assert!(observations[1].batch_child_identity_absent);
     assert!(observations.iter().all(all_shape_checks_pass));
 
     let public_wire = serde_json::to_string(&public).expect("public response serializes");
@@ -881,6 +955,162 @@ async fn exact_profile_and_execute_journey_is_strict_and_bounded() {
     assert_eq!(observations[0].operation, ObservedOperation::Metadata);
     assert_eq!(observations[1].operation, ObservedOperation::Execute);
     assert!(observations.iter().all(all_shape_checks_pass));
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn batch_execute_propagates_one_bounded_opaque_child_identity() {
+    let token_file = TestTokenFile::new(&test_token());
+    let server = FakeRelay::start(metadata_response(), result_response()).await;
+    let client = verified(&server, &token_file).await;
+    client
+        .execute_batch_inputs(
+            EVALUATION_ID,
+            BTreeMap::from([(
+                INPUT_NAME.to_string(),
+                Zeroizing::new(INPUT_VALUE.to_string()),
+            )]),
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        )
+        .await
+        .unwrap();
+    let observations = server.observations().await;
+    assert!(observations[0].batch_child_identity_absent);
+    assert!(!observations[1].batch_child_identity_absent);
+    assert!(observations[1].has_valid_batch_child_identity);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn batch_child_terminal_replay_accepts_a_fresh_notary_evaluation_id() {
+    let token_file = TestTokenFile::new(&test_token());
+    let server =
+        FakeRelay::start_echoing_evaluation_id(metadata_response(), result_response()).await;
+    let client = verified(&server, &token_file).await;
+    let child_identity = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    let fresh_evaluation_id = ulid::Ulid::from_parts(3, 7).to_string();
+
+    let first = client
+        .execute_batch_inputs(
+            EVALUATION_ID,
+            BTreeMap::from([(
+                INPUT_NAME.to_string(),
+                Zeroizing::new(INPUT_VALUE.to_string()),
+            )]),
+            child_identity,
+        )
+        .await
+        .expect("first batch child result validates");
+    let replay = client
+        .execute_batch_inputs(
+            &fresh_evaluation_id,
+            BTreeMap::from([(
+                INPUT_NAME.to_string(),
+                Zeroizing::new(INPUT_VALUE.to_string()),
+            )]),
+            child_identity,
+        )
+        .await
+        .expect("terminal child replay validates against the fresh evaluation id");
+
+    assert_eq!(first.consultation_id(), replay.consultation_id());
+    let observations = server.observations().await;
+    assert_eq!(observations.len(), 3);
+    assert!(observations[0].batch_child_identity_absent);
+    assert!(observations[1..]
+        .iter()
+        .all(|observation| observation.has_valid_batch_child_identity
+            && !observation.batch_child_identity_absent
+            && observation.exact_evaluation_id));
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn multi_input_profile_canonicalizes_every_typed_input_and_rejects_partial_maps() {
+    let token_file = TestTokenFile::new(&test_token());
+    let mut contract = contract_value();
+    contract["spec"]["inputs"] = json!({
+        "birth_date": {
+            "type": "full_date",
+            "max_bytes": 10,
+            "pattern": "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$",
+            "canonicalization": "identity"
+        },
+        "country_code": {
+            "type": "string",
+            "max_bytes": 2,
+            "pattern": "^[a-z][a-z]$",
+            "canonicalization": "ascii_lowercase"
+        },
+        "tracked_entity": contract["spec"]["inputs"]["tracked_entity"].clone()
+    });
+    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+    let metadata = WireResponse::ok(
+        serde_json::to_vec(&metadata_value_for_contract(&contract, &contract_hash)).unwrap(),
+    );
+    let server = FakeRelay::start(metadata, result_response()).await;
+    let destination = ServiceHopDataDestinationPolicy::new(
+        "registry-notary-relay",
+        &server.origin,
+        DestinationProfile::LoopbackDevelopmentHttp,
+        &[],
+    )
+    .unwrap();
+    let client = RelayConsultationClient::new(
+        destination,
+        token_file.credential(),
+        RelayProfilePin::new(PROFILE_ID, PROFILE_VERSION, contract_hash.as_str()).unwrap(),
+        PURPOSE,
+        vec![
+            "tracked_entity".to_string(),
+            "country_code".to_string(),
+            "birth_date".to_string(),
+        ],
+        RelayExpectedResult::projected_string(OUTPUT_NAME).unwrap(),
+    )
+    .unwrap()
+    .verify_profile()
+    .await
+    .expect("the exact three-input profile activates");
+
+    let canonical = client
+        .canonicalize_execute_inputs(
+            EVALUATION_ID,
+            &BTreeMap::from([
+                (
+                    "tracked_entity".to_string(),
+                    Zeroizing::new(INPUT_VALUE.to_string()),
+                ),
+                ("country_code".to_string(), Zeroizing::new("TH".to_string())),
+                (
+                    "birth_date".to_string(),
+                    Zeroizing::new("2000-01-02".to_string()),
+                ),
+            ]),
+        )
+        .expect("all typed values canonicalize");
+    assert_eq!(canonical["country_code"].as_str(), "th");
+    assert_eq!(canonical["birth_date"].as_str(), "2000-01-02");
+
+    assert!(matches!(
+        client.canonicalize_execute_inputs(
+            EVALUATION_ID,
+            &BTreeMap::from([(
+                "tracked_entity".to_string(),
+                Zeroizing::new(INPUT_VALUE.to_string()),
+            )]),
+        ),
+        Err(RelayClientError::InvalidRequest)
+    ));
+    let mut invalid_date = canonical;
+    invalid_date.insert(
+        "birth_date".to_string(),
+        Zeroizing::new("2000-02-31".to_string()),
+    );
+    assert!(matches!(
+        client.canonicalize_execute_inputs(EVALUATION_ID, &invalid_date),
+        Err(RelayClientError::InvalidRequest)
+    ));
     server.shutdown().await;
 }
 
@@ -1088,6 +1318,87 @@ async fn presence_only_result_rejects_payloads_and_wrong_outcome_shapes() {
             RelayClientError::InvalidResult
         );
     }
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn typed_fact_map_verifies_exact_schema_and_rejects_number_or_bad_date() {
+    let token_file = TestTokenFile::new(&test_token());
+    let contract = typed_fact_contract_value();
+    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+    let mut result = result_value();
+    result["profile"]["contract_hash"] = json!(contract_hash);
+    result["data"] = json!({
+        "active": true,
+        "birth_date": "2010-06-15",
+        "exists": true,
+        "sequence": 42,
+        "status": "ACTIVE"
+    });
+    let server = FakeRelay::start(
+        WireResponse::ok(
+            serde_json::to_vec(&metadata_value_for_contract(&contract, &contract_hash)).unwrap(),
+        ),
+        WireResponse::ok(serde_json::to_vec(&result).unwrap()),
+    )
+    .await;
+    let client = client_with_result(
+        &server,
+        &token_file,
+        &contract_hash,
+        typed_fact_expectation(),
+    )
+    .verify_profile()
+    .await
+    .expect("typed fact profile verifies");
+    let executed = client
+        .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+        .await
+        .expect("typed fact result verifies");
+    let Some(RelayMatchData::FactMap(facts)) = executed.match_data() else {
+        panic!("typed fact map is released")
+    };
+    assert_eq!(facts.fields().len(), 5);
+
+    let mut bad_date = result_value();
+    bad_date["profile"]["contract_hash"] = json!(contract_hash);
+    bad_date["data"] = json!({
+        "active": true,
+        "birth_date": "2010-02-30",
+        "exists": true,
+        "sequence": 42,
+        "status": "ACTIVE"
+    });
+    server
+        .set_execute(WireResponse::ok(serde_json::to_vec(&bad_date).unwrap()))
+        .await;
+    assert_eq!(
+        client
+            .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+            .await
+            .expect_err("invalid full-date fails closed"),
+        RelayClientError::InvalidResult
+    );
+    server.shutdown().await;
+
+    let mut number_contract = typed_fact_contract_value();
+    number_contract["spec"]["output"]["sequence"]["type"] = json!("number");
+    let number_hash = typed_hash(CONTRACT_DOMAIN, &number_contract);
+    let server = FakeRelay::start(
+        WireResponse::ok(
+            serde_json::to_vec(&metadata_value_for_contract(&number_contract, &number_hash))
+                .unwrap(),
+        ),
+        result_response(),
+    )
+    .await;
+    assert_eq!(
+        client_with_result(&server, &token_file, &number_hash, typed_fact_expectation(),)
+            .verify_profile()
+            .await
+            .expect_err("generic Number output is rejected"),
+        RelayClientError::InvalidProfileMetadata
+    );
     server.shutdown().await;
 }
 
@@ -1443,6 +1754,79 @@ async fn independently_reconstructed_policy_rejects_a_stale_policy_digest() {
             .verify_profile()
             .await
             .unwrap_err(),
+        RelayClientError::InvalidProfileMetadata
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn non_default_country_workload_is_accepted_only_with_its_exact_policy_hash() {
+    let token_file = TestTokenFile::new(&test_token());
+    let mut contract = contract_value();
+    contract["spec"]["authorization"]["workload"] = json!("health-registry-notary");
+    let policy_preimage = json!({
+        "schema": POLICY_SCHEMA,
+        "enforcement_profile": POLICY_ENFORCEMENT_PROFILE,
+        "rule_set": POLICY_RULE_SET,
+        "id": contract["spec"]["authorization"]["policy"]["id"].clone(),
+        "action": POLICY_ACTION,
+        "target": {
+            "profile": {
+                "id": contract["id"].clone(),
+                "version": contract["version"].clone()
+            },
+            "integration_pack": contract["spec"]["integration_pack"].clone()
+        },
+        "authorization": {
+            "workload": "health-registry-notary",
+            "required_scope": contract["spec"]["authorization"]["required_scope"].clone(),
+            "purposes": [PURPOSE],
+            "legal_basis": contract["spec"]["authorization"]["legal_basis"].clone(),
+            "consent": { "required": false },
+            "mandatory_obligations": []
+        },
+        "decision": {
+            "permit": POLICY_PERMIT,
+            "decision_cache": "disabled",
+            "max_decision_age_ms": contract["spec"]["authorization"]["policy"]
+                ["max_decision_age_ms"].clone(),
+            "unavailable": "deny"
+        }
+    });
+    contract["spec"]["authorization"]["policy"]["hash"] =
+        json!(typed_hash(POLICY_HASH_DOMAIN, &policy_preimage));
+    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+    let server = FakeRelay::start(
+        WireResponse::ok(
+            serde_json::to_vec(&metadata_value_for_contract(&contract, &contract_hash)).unwrap(),
+        ),
+        result_response(),
+    )
+    .await;
+    client_with_hash(&server, &token_file, &contract_hash)
+        .verify_profile()
+        .await
+        .expect("a bounded non-default country workload is accepted when policy-hash-bound");
+    server.shutdown().await;
+
+    contract["spec"]["authorization"]["workload"] = json!("registry-notary");
+    let stale_policy_contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+    let server = FakeRelay::start(
+        WireResponse::ok(
+            serde_json::to_vec(&metadata_value_for_contract(
+                &contract,
+                &stale_policy_contract_hash,
+            ))
+            .unwrap(),
+        ),
+        result_response(),
+    )
+    .await;
+    assert_eq!(
+        client_with_hash(&server, &token_file, &stale_policy_contract_hash)
+            .verify_profile()
+            .await
+            .expect_err("changing only the workload invalidates the exact policy binding"),
         RelayClientError::InvalidProfileMetadata
     );
     server.shutdown().await;

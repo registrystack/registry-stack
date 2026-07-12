@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use thiserror::Error;
@@ -434,62 +434,58 @@ impl ParsedPurpose {
     }
 }
 
-/// One generically parsed string input awaiting profile-specific validation.
+/// One to four generically parsed selector components awaiting profile validation.
 ///
 /// This type intentionally implements neither `Debug` nor serialization. The
 /// value is zeroized when dropped and is visible only inside Relay. This type
 /// does not prove the profile's key, pattern, or canonicalization rule.
 #[derive(PartialEq, Eq)]
-pub struct ParsedSingleStringInput {
-    name: Box<str>,
-    value: Zeroizing<String>,
+pub struct ParsedSelectorInputs {
+    values: BTreeMap<Box<str>, Zeroizing<String>>,
 }
 
-impl ParsedSingleStringInput {
+impl ParsedSelectorInputs {
     /// Maximum decoded structural input-name bytes accepted by v1.
-    pub(crate) const MAX_NAME_BYTES: usize = MAX_STABLE_ID_BYTES;
+    pub(crate) const MAX_NAME_BYTES: usize = crate::source_plan::SELECTOR_INPUT_NAME_MAX_BYTES;
     /// Maximum decoded subject-value bytes accepted by v1.
     pub(crate) const MAX_VALUE_BYTES: usize = MAX_CANONICAL_INPUT_BYTES;
 
     /// Apply the generic one-key and bounded-string parsing rules.
     pub fn try_parse(name: &str, value: &str) -> Result<Self, ConsultationValidationError> {
-        Self::try_parse_zeroizing(
+        Self::try_parse_components([(
             Zeroizing::new(name.to_owned()),
             Zeroizing::new(value.to_owned()),
-        )
+        )])
     }
 
-    /// Validate a string already placed under a zeroizing owner by a strict
-    /// request visitor. Rejected values are scrubbed on every return path.
-    pub(crate) fn try_parse_zeroizing(
-        name: Zeroizing<String>,
-        value: Zeroizing<String>,
+    pub(crate) fn try_parse_components(
+        components: impl IntoIterator<Item = (Zeroizing<String>, Zeroizing<String>)>,
     ) -> Result<Self, ConsultationValidationError> {
-        let mut name_bytes = name.bytes();
-        let valid_name = matches!(name_bytes.next(), Some(b'a'..=b'z'))
-            && name.len() <= MAX_STABLE_ID_BYTES
-            && name_bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'));
-        if !valid_name {
+        let mut values = BTreeMap::new();
+        for (name, value) in components {
+            if !crate::source_plan::valid_selector_input_name(&name) {
+                return Err(ConsultationValidationError::InvalidParsedInputName);
+            }
+            let valid_value = !value.is_empty()
+                && value.len() <= MAX_CANONICAL_INPUT_BYTES
+                && value.chars().all(|character| !character.is_control());
+            if !valid_value {
+                return Err(ConsultationValidationError::InvalidParsedInputValue);
+            }
+            if values.insert(name.as_str().into(), value).is_some() {
+                return Err(ConsultationValidationError::InvalidParsedInputName);
+            }
+        }
+        if !(1..=4).contains(&values.len()) {
             return Err(ConsultationValidationError::InvalidParsedInputName);
         }
-
-        let valid_value = !value.is_empty()
-            && value.len() <= MAX_CANONICAL_INPUT_BYTES
-            && value.chars().all(|character| !character.is_control());
-        if !valid_value {
-            return Err(ConsultationValidationError::InvalidParsedInputValue);
-        }
-
-        Ok(Self {
-            name: name.as_str().into(),
-            value,
-        })
+        Ok(Self { values })
     }
 
     /// Return the parsed input name, which is safe request structure.
     #[must_use]
     pub fn name(&self) -> &str {
-        &self.name
+        self.values.first_key_value().map_or("", |(name, _)| name)
     }
 
     /// Return the subject value only inside Relay's private validation stages.
@@ -497,15 +493,25 @@ impl ParsedSingleStringInput {
     /// This accessor is deliberately crate-private. Public API and backend
     /// types cannot serialize or debug the raw selector.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn value_for_internal_use(&self) -> &str {
-        &self.value
+        self.values.first_key_value().map_or("", |(_, value)| value)
+    }
+
+    pub(crate) fn values(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+        self.values
+            .iter()
+            .map(|(name, value)| (name.as_ref(), value.as_str()))
     }
 
     #[cfg(test)]
     fn expose_value_for_test(&self) -> &str {
-        &self.value
+        self.value_for_internal_use()
     }
 }
+
+/// Backward-compatible internal name for the original one-component constructor.
+pub type ParsedSingleStringInput = ParsedSelectorInputs;
 
 /// The public acquisition meaning of a reviewed source plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -808,7 +814,7 @@ pub struct PreAuthorizationConsultationCore {
     profile: ProfileIdentity,
     selector_provenance: SelectorProvenance,
     purpose: ParsedPurpose,
-    input: ParsedSingleStringInput,
+    input: ParsedSelectorInputs,
     footprint: DeclaredOperationFootprint,
 }
 
@@ -825,7 +831,7 @@ impl PreAuthorizationConsultationCore {
         resolved: super::ResolvedConsultationProfile,
         plan: &crate::source_plan::CompiledSourcePlan,
         purpose: ParsedPurpose,
-        input: ParsedSingleStringInput,
+        input: ParsedSelectorInputs,
     ) -> Result<Self, ConsultationValidationError> {
         let profile = plan.runtime_profile();
         if !resolved.matches_exact_plan(plan) {
@@ -845,7 +851,7 @@ impl PreAuthorizationConsultationCore {
         profile: ProfileIdentity,
         selector_provenance: SelectorProvenance,
         purpose: ParsedPurpose,
-        input: ParsedSingleStringInput,
+        input: ParsedSelectorInputs,
         footprint: DeclaredOperationFootprint,
     ) -> Self {
         Self {
@@ -878,7 +884,7 @@ impl PreAuthorizationConsultationCore {
 
     /// Return the parsed input container without exposing its value.
     #[must_use]
-    pub const fn parsed_input(&self) -> &ParsedSingleStringInput {
+    pub const fn parsed_input(&self) -> &ParsedSelectorInputs {
         &self.input
     }
 
@@ -1031,6 +1037,13 @@ mod tests {
 
     #[test]
     fn parsed_input_rejects_unsafe_shapes_without_implicit_normalization() {
+        let name_64 = format!("a{}", "0".repeat(63));
+        let name_65 = format!("a{}", "0".repeat(64));
+        assert!(ParsedSingleStringInput::try_parse(&name_64, "12345").is_ok());
+        assert_eq!(
+            ParsedSingleStringInput::try_parse(&name_65, "12345").err(),
+            Some(ConsultationValidationError::InvalidParsedInputName)
+        );
         assert!(ParsedSingleStringInput::try_parse("subject_id", " 12345 ").is_ok());
         assert_eq!(
             ParsedSingleStringInput::try_parse("subject-id", "12345").err(),

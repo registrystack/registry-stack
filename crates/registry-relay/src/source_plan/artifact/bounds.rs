@@ -1,12 +1,43 @@
 //! Request, credential, destination, and execution-bound validation.
 
 use super::*;
+
+pub(in super::super) fn prior_output_expression_bounds(
+    operations: &[HttpOperationDocument],
+) -> BTreeMap<(String, String), usize> {
+    let mut bounds = BTreeMap::new();
+    for operation in operations {
+        for (name, output) in &operation.response.prior_outputs {
+            let scalar_bytes = match output.output_type {
+                OutputTypeDocument::String => output
+                    .max_bytes
+                    .map_or(usize::from(MAX_INPUT_BYTES), usize::from),
+                OutputTypeDocument::Boolean => 5,
+                OutputTypeDocument::Integer => output
+                    .minimum
+                    .into_iter()
+                    .chain(output.maximum)
+                    .map(|value| value.to_string().len())
+                    .max()
+                    .unwrap_or(usize::from(MAX_INPUT_BYTES)),
+                OutputTypeDocument::Date => 10,
+                OutputTypeDocument::Presence => usize::from(MAX_INPUT_BYTES),
+            };
+            bounds.insert(
+                (operation.id.clone(), name.clone()),
+                scalar_bytes.max(usize::from(output.nullable) * 4),
+            );
+        }
+    }
+    bounds
+}
 pub(in super::super) fn validate_request_shape(
     operation: &HttpOperationDocument,
     inputs: &BTreeMap<String, InputDocument>,
     parameters: &BTreeMap<String, ParameterDeclarationDocument>,
     bounds: LimitsDocument,
     oauth_authorization_max_bytes: Option<usize>,
+    prior_output_bounds: &BTreeMap<(String, String), usize>,
 ) -> Result<(), SourcePlanArtifactError> {
     let codec = operation
         .request_codec
@@ -23,6 +54,12 @@ pub(in super::super) fn validate_request_shape(
         ),
         (ReadMethod::Get, RequestCodecDocument::None, false, None)
             | (
+                ReadMethod::Get,
+                RequestCodecDocument::FhirR4Search,
+                false,
+                None
+            )
+            | (
                 ReadMethod::ReadOnlyPost,
                 RequestCodecDocument::Json,
                 true,
@@ -36,24 +73,27 @@ pub(in super::super) fn validate_request_shape(
             )
             | (
                 ReadMethod::ReadOnlyPost,
-                RequestCodecDocument::OpenCrvsDciExactV1,
+                RequestCodecDocument::DciExactV1,
                 false,
                 None
             )
     );
-    let auth_bytes = match operation.auth {
+    let auth_bytes = match &operation.auth {
         SourceAuthDocument::OAuthClientCredentials => {
             oauth_authorization_max_bytes.ok_or(SourcePlanArtifactError::InvalidPlan)?
         }
         _ => operation.auth.max_value_bytes(),
     };
-    let auth_shape_matches = match operation.auth {
+    let auth_shape_matches = match &operation.auth {
         SourceAuthDocument::None => true,
         SourceAuthDocument::Basic { .. } => {
             (7..=MAX_REQUEST_HEADER_VALUE_BYTES).contains(&auth_bytes)
         }
         SourceAuthDocument::StaticBearer { .. } | SourceAuthDocument::OAuthClientCredentials => {
             (8..=MAX_REQUEST_HEADER_VALUE_BYTES).contains(&auth_bytes)
+        }
+        SourceAuthDocument::ApiKeyHeader { .. } | SourceAuthDocument::ApiKeyQuery { .. } => {
+            (1..=MAX_REQUEST_HEADER_VALUE_BYTES).contains(&auth_bytes)
         }
     };
     if !shape_matches
@@ -67,7 +107,17 @@ pub(in super::super) fn validate_request_shape(
         return Err(SourcePlanArtifactError::InvalidPlan);
     }
 
-    let mut target_bytes = operation.path.len();
+    let (fixed_path, path_parameter) = operation_path_parts(operation)?;
+    let mut target_bytes = fixed_path.len();
+    if let Some((_, expression)) = path_parameter {
+        target_bytes = target_bytes
+            .checked_add(
+                expression_max_bytes(expression, inputs, parameters, prior_output_bounds)
+                    .checked_mul(3)
+                    .ok_or(SourcePlanArtifactError::InvalidLimits)?,
+            )
+            .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+    }
     if !operation.query.is_empty() {
         target_bytes = target_bytes
             .checked_add(1)
@@ -82,7 +132,7 @@ pub(in super::super) fn validate_request_shape(
                     .and_then(|name_bytes| total.checked_add(name_bytes + 1))
             })
             .and_then(|total| {
-                expression_max_bytes(expression, inputs, parameters)
+                expression_max_bytes(expression, inputs, parameters, prior_output_bounds)
                     .checked_mul(3)
                     .and_then(|value| total.checked_add(value))
             })
@@ -98,7 +148,7 @@ pub(in super::super) fn validate_request_shape(
         "authorization".len() + auth_bytes
     };
     for (name, expression) in &operation.headers {
-        let value_bytes = expression_max_bytes(expression, inputs, parameters);
+        let value_bytes = expression_max_bytes(expression, inputs, parameters, prior_output_bounds);
         if value_bytes > MAX_REQUEST_HEADER_VALUE_BYTES {
             return Err(SourcePlanArtifactError::InvalidLimits);
         }
@@ -107,23 +157,28 @@ pub(in super::super) fn validate_request_shape(
             .and_then(|total| total.checked_add(value_bytes))
             .ok_or(SourcePlanArtifactError::InvalidLimits)?;
     }
-    if codec == RequestCodecDocument::OpenCrvsDciExactV1 {
+    if codec == RequestCodecDocument::DciExactV1 {
         header_bytes = header_bytes
             .checked_add("accept".len() + b"application/json".len())
             .and_then(|total| total.checked_add("content-type".len() + b"application/json".len()))
+            .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+    }
+    if codec == RequestCodecDocument::FhirR4Search {
+        header_bytes = header_bytes
+            .checked_add("accept".len() + b"application/fhir+json".len())
             .ok_or(SourcePlanArtifactError::InvalidLimits)?;
     }
     if header_bytes > MAX_REQUEST_HEADER_BYTES {
         return Err(SourcePlanArtifactError::InvalidLimits);
     }
 
-    let body_bytes = if codec == RequestCodecDocument::OpenCrvsDciExactV1 {
-        OPEN_CRVS_DCI_REQUEST_BODY_MAX_BYTES
+    let body_bytes = if codec == RequestCodecDocument::DciExactV1 {
+        MAX_DCI_EXACT_REQUEST_BODY_BYTES
     } else {
         operation
             .body
             .as_ref()
-            .map(|body| body_template_max_bytes(body, inputs, parameters))
+            .map(|body| body_template_max_bytes(body, inputs, parameters, prior_output_bounds))
             .transpose()?
             .unwrap_or(0)
     };
@@ -141,6 +196,7 @@ pub(in super::super) fn expression_max_bytes(
     expression: &ValueExpressionDocument,
     inputs: &BTreeMap<String, InputDocument>,
     parameters: &BTreeMap<String, ParameterDeclarationDocument>,
+    prior_output_bounds: &BTreeMap<(String, String), usize>,
 ) -> usize {
     match expression {
         ValueExpressionDocument::Literal { value } => value.len(),
@@ -153,7 +209,10 @@ pub(in super::super) fn expression_max_bytes(
             .get(name)
             .and_then(|declaration| declaration.allowed_values.iter().map(String::len).max())
             .unwrap_or(MAX_STABLE_TEXT_BYTES),
-        ValueExpressionDocument::PriorStepOutput { .. } => usize::from(MAX_INPUT_BYTES),
+        ValueExpressionDocument::PriorStepOutput { step, output } => prior_output_bounds
+            .get(&(step.clone(), output.clone()))
+            .copied()
+            .unwrap_or(usize::from(MAX_INPUT_BYTES)),
     }
 }
 
@@ -161,22 +220,26 @@ pub(in super::super) fn body_template_max_bytes(
     template: &BodyTemplateDocument,
     inputs: &BTreeMap<String, InputDocument>,
     parameters: &BTreeMap<String, ParameterDeclarationDocument>,
+    prior_output_bounds: &BTreeMap<(String, String), usize>,
 ) -> Result<usize, SourcePlanArtifactError> {
     match template {
         BodyTemplateDocument::Null => Ok(4),
         BodyTemplateDocument::Boolean { value } => Ok(if *value { 4 } else { 5 }),
         BodyTemplateDocument::Integer { value } => Ok(value.to_string().len()),
         BodyTemplateDocument::StringLiteral { value } => json_string_max_bytes(value.len()),
-        BodyTemplateDocument::Expression { value } => {
-            json_string_max_bytes(expression_max_bytes(value, inputs, parameters))
-        }
+        BodyTemplateDocument::Expression { value } => json_string_max_bytes(expression_max_bytes(
+            value,
+            inputs,
+            parameters,
+            prior_output_bounds,
+        )),
         BodyTemplateDocument::Array { items } => {
             let mut total = 2_usize;
             for (index, item) in items.iter().enumerate() {
                 total = total
                     .checked_add(usize::from(index > 0))
                     .and_then(|value| {
-                        body_template_max_bytes(item, inputs, parameters)
+                        body_template_max_bytes(item, inputs, parameters, prior_output_bounds)
                             .ok()
                             .and_then(|bytes| value.checked_add(bytes))
                     })
@@ -190,7 +253,8 @@ pub(in super::super) fn body_template_max_bytes(
                 let name_bytes = json_string_max_bytes(name.len())?
                     .checked_add(1)
                     .ok_or(SourcePlanArtifactError::InvalidLimits)?;
-                let value_bytes = body_template_max_bytes(value, inputs, parameters)?;
+                let value_bytes =
+                    body_template_max_bytes(value, inputs, parameters, prior_output_bounds)?;
                 total = total
                     .checked_add(usize::from(index > 0))
                     .and_then(|total| total.checked_add(name_bytes))
@@ -221,6 +285,21 @@ pub(in super::super) fn normalize_status_set(
     statuses.sort_unstable();
     if statuses.windows(2).any(|pair| pair[0] == pair[1])
         || statuses.iter().any(|status| !(200..=299).contains(status))
+    {
+        return Err(SourcePlanArtifactError::InvalidSet);
+    }
+    Ok(())
+}
+
+pub(in super::super) fn normalize_data_status_set(
+    statuses: &mut [u16],
+) -> Result<(), SourcePlanArtifactError> {
+    if statuses.is_empty() || statuses.len() > 8 {
+        return Err(SourcePlanArtifactError::InvalidSet);
+    }
+    statuses.sort_unstable();
+    if statuses.windows(2).any(|pair| pair[0] == pair[1])
+        || statuses.iter().any(|status| !(100..=599).contains(status))
     {
         return Err(SourcePlanArtifactError::InvalidSet);
     }
@@ -329,7 +408,12 @@ pub(in super::super) fn validate_credential_operation(
         (
             None,
             None,
-            Some(SourceAuthDocument::Basic { .. } | SourceAuthDocument::StaticBearer { .. }),
+            Some(
+                SourceAuthDocument::Basic { .. }
+                | SourceAuthDocument::StaticBearer { .. }
+                | SourceAuthDocument::ApiKeyHeader { .. }
+                | SourceAuthDocument::ApiKeyQuery { .. },
+            ),
         ) if bounds.max_credential_exchanges == 0 => Ok(()),
         (Some(operation), Some(slot), Some(SourceAuthDocument::OAuthClientCredentials))
             if bounds.max_credential_exchanges == 1 =>
@@ -599,7 +683,12 @@ pub(in super::super) fn validate_prior_step_references(
             .iter()
             .find(|operation| operation.id == *step)
             .ok_or(SourcePlanArtifactError::InvalidPlan)?;
-        for expression in operation.query.values().chain(operation.headers.values()) {
+        for expression in operation
+            .path_parameters
+            .values()
+            .chain(operation.query.values())
+            .chain(operation.headers.values())
+        {
             validate_prior_expression(expression, &completed, true)?;
         }
         if let Some(body) = &operation.body {
@@ -608,6 +697,39 @@ pub(in super::super) fn validate_prior_step_references(
         completed.insert(step.as_str(), operation);
     }
     Ok(())
+}
+
+pub(in super::super) type OperationPathParts<'a> =
+    (&'a str, Option<(&'a str, &'a ValueExpressionDocument)>);
+
+pub(in super::super) fn operation_path_parts(
+    operation: &HttpOperationDocument,
+) -> Result<OperationPathParts<'_>, SourcePlanArtifactError> {
+    match operation.path_parameters.len() {
+        0 => {
+            validate_fixed_path(&operation.path)?;
+            Ok((&operation.path, None))
+        }
+        1 => {
+            let (name, expression) = operation
+                .path_parameters
+                .iter()
+                .next()
+                .ok_or(SourcePlanArtifactError::InvalidPlan)?;
+            validate_stable_text(name)?;
+            let suffix = format!("{{{name}}}");
+            let fixed = operation
+                .path
+                .strip_suffix(&suffix)
+                .ok_or(SourcePlanArtifactError::InvalidPlan)?;
+            if fixed.is_empty() || !fixed.ends_with('/') {
+                return Err(SourcePlanArtifactError::InvalidPlan);
+            }
+            validate_fixed_path(fixed)?;
+            Ok((fixed, Some((name, expression))))
+        }
+        _ => Err(SourcePlanArtifactError::InvalidPlan),
+    }
 }
 
 pub(in super::super) fn validate_step_conditions(
@@ -653,9 +775,27 @@ pub(in super::super) fn validate_step_condition(
     };
     validate_stable_text(step)?;
     validate_stable_text(output)?;
-    let declaration = completed
+    let source = completed
         .get(step.as_str())
-        .and_then(|operation| operation.response.prior_outputs.get(output))
+        .ok_or(SourcePlanArtifactError::InvalidExpression)?;
+    let presence = output == "presence"
+        || source
+            .response
+            .presence_outputs
+            .iter()
+            .any(|candidate| candidate == output);
+    if presence {
+        return matches!(
+            condition,
+            StepConditionDocument::Exists { .. } | StepConditionDocument::BooleanEquals { .. }
+        )
+        .then_some(())
+        .ok_or(SourcePlanArtifactError::InvalidExpression);
+    }
+    let declaration = source
+        .response
+        .prior_outputs
+        .get(output)
         .ok_or(SourcePlanArtifactError::InvalidExpression)?;
     let type_matches = match condition {
         StepConditionDocument::Exists { .. } => true,
@@ -720,7 +860,12 @@ pub(in super::super) fn validate_prior_expression(
         .prior_outputs
         .get(output)
         .ok_or(SourcePlanArtifactError::InvalidExpression)?;
-    if requires_string && declared.output_type != OutputTypeDocument::String {
+    if requires_string
+        && !matches!(
+            declared.output_type,
+            OutputTypeDocument::String | OutputTypeDocument::Date
+        )
+    {
         return Err(SourcePlanArtifactError::InvalidExpression);
     }
     Ok(())

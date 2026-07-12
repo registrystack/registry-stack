@@ -69,8 +69,8 @@
         }
       },
       "selector": {
-        "type": "snapshot_key",
-        "input": "person_id"
+        "type": "snapshot_exact_and",
+        "components": { "person_id": "snapshot_key" }
       },
       "cardinality": "probe_two",
       "reject_unknown_fields": true
@@ -78,7 +78,8 @@
     "output": {
       "registration_status": {
         "type": "string",
-        "nullable": false
+        "nullable": false,
+        "max_bytes": 32
       }
     },
     "plan": {
@@ -91,20 +92,7 @@
       "snapshot": {
         "max_snapshot_age_ms": 86400000,
         "unavailable": "unavailable",
-        "immutable_generation": true,
-        "mapping": {
-          "key": {
-            "input": "person_id",
-            "physical_field": "subject_key",
-            "physical_type": "utf8",
-            "comparison": "binary_equality"
-          },
-          "projection": {
-            "registration_status": "registration_status_text",
-            "source_observed_at": "observed_at_text",
-            "source_revision": "revision_text"
-          }
-        }
+        "immutable_generation": true
       },
       "rhai": null
     },

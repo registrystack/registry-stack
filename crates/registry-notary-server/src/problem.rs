@@ -22,6 +22,7 @@ pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
         EvidenceError::MultipleCredentials => StatusCode::BAD_REQUEST,
         EvidenceError::SelfAttestationInvalidToken => StatusCode::UNAUTHORIZED,
         EvidenceError::InvalidRequest
+        | EvidenceError::ConsultationInvalidRequest
         | EvidenceError::TargetIdentifierMissing
         | EvidenceError::TargetAttributesInsufficient
         | EvidenceError::RequesterIdentifierMissing
@@ -71,6 +72,7 @@ pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
         EvidenceError::ClaimVersionNotFound => "Claim version not found",
         EvidenceError::OperationUnsupported => "Claim operation unsupported",
         EvidenceError::InvalidRequest => "Invalid evidence request",
+        EvidenceError::ConsultationInvalidRequest => "Invalid consultation request",
         EvidenceError::DisclosureNotAllowed => "Disclosure not allowed",
         EvidenceError::SourceNotFound => "Target not found",
         EvidenceError::SourceAmbiguous => "Target match ambiguous",
@@ -126,6 +128,9 @@ pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
         EvidenceError::ClaimVersionNotFound => "the requested claim version is not available",
         EvidenceError::OperationUnsupported => "the requested operation is not enabled",
         EvidenceError::InvalidRequest => "the evidence request is invalid",
+        EvidenceError::ConsultationInvalidRequest => {
+            "the registry-backed batch consultation request is invalid"
+        }
         EvidenceError::DisclosureNotAllowed => "the requested disclosure profile is not allowed",
         EvidenceError::SourceNotFound => "the target could not be uniquely matched",
         EvidenceError::SourceAmbiguous => "the target match is ambiguous",

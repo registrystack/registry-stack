@@ -34,6 +34,8 @@ tokio = { version = "1", features = [
     "fs",
     "net",
     "macros",
+    "process",
+    "io-util",
     "sync",
     "time",
 ] }
@@ -74,6 +76,7 @@ tokio-util = { version = "0.7" }
 # ─── serialization / config ──────────────────────────────────────────────────
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
+rhai.workspace = true
 # Optional Crosswalk CEL mapping support. Disabled by default so the core VC
 # path does not pull in the mapping dependency graph.
 crosswalk-core = { workspace = true, optional = true }
@@ -118,6 +121,9 @@ registry-platform-ops = { workspace = true }
 
 # ─── errors ──────────────────────────────────────────────────────────────────
 thiserror = { version = "2" }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31.3", default-features = false, features = ["process", "resource"] }
 
 # ─── openapi ─────────────────────────────────────────────────────────────────
 ogcapi-types = { version = "0.3.0", optional = true, features = ["features"] }

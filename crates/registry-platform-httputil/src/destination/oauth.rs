@@ -7,6 +7,7 @@
 //! contract can remain distinct if a product actually requires one.
 
 use std::fmt;
+use std::num::NonZeroU32;
 
 use registry_platform_canonical_json::parse_json_strict;
 use serde_json::Value;
@@ -147,6 +148,137 @@ pub struct FreshBearerToken {
     authorization: DestinationAuthorizationValue,
 }
 
+/// Closed OAuth response contract for generic client-credentials operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrictOAuthTokenSchema {
+    BearerWithExpiresIn,
+    BearerWithoutExpiry,
+}
+
+/// Value-free failures from the generic strict OAuth response decoder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum StrictOAuthTokenDecodeError {
+    #[error("OAuth token response violates its reviewed contract")]
+    ResponseContractViolation,
+    #[error("OAuth token response expiry violates its reviewed contract")]
+    InvalidExpiry,
+    #[error("OAuth bearer token violates its reviewed bound or grammar")]
+    InvalidAccessToken,
+}
+
+/// One parsed bearer token whose bytes remain opaque and zeroizing.
+#[must_use = "the parsed bearer capability must be consumed or explicitly dropped"]
+pub struct ParsedBearerToken {
+    value: Zeroizing<String>,
+    usable_lifetime_ms: Option<NonZeroU32>,
+}
+
+impl ParsedBearerToken {
+    pub fn authorization(
+        &self,
+    ) -> Result<DestinationAuthorizationValue, StrictOAuthTokenDecodeError> {
+        DestinationAuthorizationValue::bearer(self.value.as_bytes().to_vec())
+            .map_err(|_| StrictOAuthTokenDecodeError::InvalidAccessToken)
+    }
+
+    #[must_use]
+    pub const fn usable_lifetime_ms(&self) -> Option<u32> {
+        match self.usable_lifetime_ms {
+            Some(value) => Some(value.get()),
+            None => None,
+        }
+    }
+}
+
+impl fmt::Debug for ParsedBearerToken {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ParsedBearerToken([REDACTED])")
+    }
+}
+
+/// Decode exactly one reviewed OAuth token shape without exposing response or token bytes.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_strict_oauth_token(
+    body: CredentialDestinationBody,
+    schema: StrictOAuthTokenSchema,
+    max_response_bytes: usize,
+    access_token_max_bytes: usize,
+    expires_in_min_seconds: Option<u32>,
+    expires_in_max_seconds: Option<u32>,
+    max_token_lifetime_ms: Option<u32>,
+    expiry_safety_skew_ms: Option<u32>,
+) -> Result<ParsedBearerToken, StrictOAuthTokenDecodeError> {
+    let BoundedDestinationBody { bytes, slot: _ } = body;
+    if bytes.len() > max_response_bytes {
+        return Err(StrictOAuthTokenDecodeError::ResponseContractViolation);
+    }
+    let parsed = parse_json_strict(bytes.as_slice())
+        .map_err(|_| StrictOAuthTokenDecodeError::ResponseContractViolation)?;
+    drop(bytes);
+    let mut sensitive = SensitiveJsonValue::new(parsed);
+    let Value::Object(object) = sensitive.value_mut() else {
+        return Err(StrictOAuthTokenDecodeError::ResponseContractViolation);
+    };
+    let expected_members = match schema {
+        StrictOAuthTokenSchema::BearerWithExpiresIn => 3,
+        StrictOAuthTokenSchema::BearerWithoutExpiry => 2,
+    };
+    if object.len() != expected_members
+        || !object.contains_key("access_token")
+        || !object.contains_key("token_type")
+        || (matches!(schema, StrictOAuthTokenSchema::BearerWithExpiresIn)
+            != object.contains_key("expires_in"))
+    {
+        return Err(StrictOAuthTokenDecodeError::ResponseContractViolation);
+    }
+    if object.get("token_type").and_then(Value::as_str) != Some("Bearer") {
+        return Err(StrictOAuthTokenDecodeError::ResponseContractViolation);
+    }
+    let Value::String(access_token) = object
+        .remove("access_token")
+        .ok_or(StrictOAuthTokenDecodeError::ResponseContractViolation)?
+    else {
+        return Err(StrictOAuthTokenDecodeError::ResponseContractViolation);
+    };
+    let value = Zeroizing::new(access_token);
+    if value.len() > access_token_max_bytes || !is_oauth_bearer_token(value.as_bytes()) {
+        return Err(StrictOAuthTokenDecodeError::InvalidAccessToken);
+    }
+    let usable_lifetime_ms = match schema {
+        StrictOAuthTokenSchema::BearerWithoutExpiry => None,
+        StrictOAuthTokenSchema::BearerWithExpiresIn => {
+            let expires_in = object
+                .remove("expires_in")
+                .and_then(|value| value.as_u64())
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?;
+            let minimum =
+                expires_in_min_seconds.ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?;
+            let maximum =
+                expires_in_max_seconds.ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?;
+            if !(minimum..=maximum).contains(&expires_in) {
+                return Err(StrictOAuthTokenDecodeError::InvalidExpiry);
+            }
+            let lifetime_ms = expires_in
+                .checked_mul(1_000)
+                .ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?
+                .min(max_token_lifetime_ms.ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?);
+            Some(
+                lifetime_ms
+                    .checked_sub(
+                        expiry_safety_skew_ms.ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?,
+                    )
+                    .and_then(NonZeroU32::new)
+                    .ok_or(StrictOAuthTokenDecodeError::InvalidExpiry)?,
+            )
+        }
+    };
+    Ok(ParsedBearerToken {
+        value,
+        usable_lifetime_ms,
+    })
+}
+
 impl FreshBearerToken {
     /// Consume this one-use capability into a destination authorization value.
     #[must_use]
@@ -215,6 +347,55 @@ mod tests {
         assert_eq!(
             format!("{:?}", token.into_authorization()),
             "DestinationAuthorizationValue([REDACTED])"
+        );
+    }
+
+    #[test]
+    fn generic_decoder_closes_expiring_and_no_expiry_shapes_without_exposing_bytes() {
+        let expiring = decode_strict_oauth_token(
+            body(br#"{"access_token":"abc","token_type":"Bearer","expires_in":60}"#),
+            StrictOAuthTokenSchema::BearerWithExpiresIn,
+            1_024,
+            64,
+            Some(30),
+            Some(120),
+            Some(120_000),
+            Some(5_000),
+        )
+        .expect("reviewed expiring response");
+        assert_eq!(expiring.usable_lifetime_ms(), Some(55_000));
+        assert_eq!(format!("{expiring:?}"), "ParsedBearerToken([REDACTED])");
+        assert_eq!(
+            format!("{:?}", expiring.authorization().expect("authorization")),
+            "DestinationAuthorizationValue([REDACTED])"
+        );
+
+        let no_expiry = decode_strict_oauth_token(
+            body(br#"{"access_token":"abc","token_type":"Bearer"}"#),
+            StrictOAuthTokenSchema::BearerWithoutExpiry,
+            1_024,
+            64,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("reviewed no-expiry response");
+        assert_eq!(no_expiry.usable_lifetime_ms(), None);
+
+        assert_eq!(
+            decode_strict_oauth_token(
+                body(br#"{"access_token":"abc","token_type":"Bearer","expires_in":4}"#),
+                StrictOAuthTokenSchema::BearerWithExpiresIn,
+                1_024,
+                64,
+                Some(30),
+                Some(120),
+                Some(120_000),
+                Some(5_000),
+            )
+            .err(),
+            Some(StrictOAuthTokenDecodeError::InvalidExpiry)
         );
     }
 

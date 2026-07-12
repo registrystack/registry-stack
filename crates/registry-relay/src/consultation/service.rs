@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Concrete consultation service for the maintained product journeys.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -29,13 +29,18 @@ use crate::config::{
 };
 use crate::ingest::declared_schema::DeclaredSchema;
 use crate::ingest::IngestRegistry;
+#[cfg(all(target_os = "linux", not(test)))]
+use crate::rhai_worker::WorkerProcess;
 use crate::source_backend::{PublishedSnapshotRegistry, SnapshotMaterializationCoordinator};
 use crate::source_plan::{
+    initialize_rhai_worker_capabilities, validate_source_credential_catalog,
     CompiledBasicSourceCredentialProvider, CompiledConsultationRegistry,
     CompiledOAuthSourceCredentialProvider, CompiledResponseSchema, CompiledScalarShape,
-    CompiledSourcePlan, InitializedConsentVerifierRegistry, SourcePlanKind,
+    CompiledSourcePlan, CompiledStaticBearerSourceCredentialProvider,
+    InitializedConsentVerifierRegistry, SourcePlanKind,
 };
 use crate::state_plane::{
+    BatchChildReplayContext, BatchChildReplayReservation, ConsultationCompletionOutcome,
     ConsultationPermitSet, ConsultationStatePlaneReadiness, ConsultationStatePlaneRuntime,
     EffectiveQuotaLimits, PublicQuotaLimits, QuotaKey, QuotaReservation,
 };
@@ -48,6 +53,7 @@ use super::commitments::{
 use super::executor::ConcreteExecutorKind;
 use super::policy::evaluate_compiled_policy;
 use super::pseudonym::AuditPseudonymMaterialProvider;
+use super::response::PublishableConsultationResponse;
 use super::{
     AuthenticatedConsultationWorkload, AuthenticatedNotaryWorkload, ClientClaimSelector,
     ConfiguredAudience, ConfiguredClientBinding, ConfiguredIssuer, ConfiguredOidcWorkloadProof,
@@ -90,6 +96,7 @@ pub(crate) enum ConsultationDenialReason {
     NotFound,
     RateLimited,
     Capacity,
+    Conflict,
 }
 
 impl ConsultationDenialReason {
@@ -101,6 +108,7 @@ impl ConsultationDenialReason {
             Self::NotFound => "not_found",
             Self::RateLimited => "rate_limited",
             Self::Capacity => "capacity",
+            Self::Conflict => "batch_child_conflict",
         }
     }
 
@@ -111,6 +119,7 @@ impl ConsultationDenialReason {
             Self::NotFound => status == 404,
             Self::RateLimited => status == 429,
             Self::Capacity => status == 503,
+            Self::Conflict => status == 409,
             Self::InvalidRequest => {
                 (status >= 400 && status <= 499)
                     && status != 401
@@ -199,6 +208,8 @@ pub(crate) enum ConsultationServiceError {
     ProfileNotFound,
     #[error("consultation request is invalid")]
     InvalidRequest,
+    #[error("consultation batch child conflicts with durable state")]
+    Conflict,
     #[error("consultation quota is exhausted")]
     RateLimited(ConsultationRetryAfter),
     #[error("consultation service is unavailable")]
@@ -289,6 +300,7 @@ struct ActivatedProfile {
     workload_binding: ConsultationWorkloadBinding,
     quota_limits: ActivatedQuotaLimits,
     semaphore: Arc<Semaphore>,
+    rhai_worker_semaphore: Option<Arc<Semaphore>>,
     metadata: Arc<[u8]>,
     executor: ConcreteExecutorKind,
     dispatch_budget: crate::state_plane::DispatchPermitBudget,
@@ -298,9 +310,10 @@ struct CompiledServiceActivation {
     registry: CompiledConsultationRegistry,
     fixed_notary_identity: ConfiguredOidcWorkloadProof,
     profiles: BTreeMap<ConsultationKey, ActivatedProfile>,
-    basic_credentials: CompiledBasicSourceCredentialProvider,
-    oauth_credentials: CompiledOAuthSourceCredentialProvider,
-    pseudonym_materials: AuditPseudonymMaterialProvider,
+    basic_credentials: Option<CompiledBasicSourceCredentialProvider>,
+    static_bearer_credentials: Option<CompiledStaticBearerSourceCredentialProvider>,
+    oauth_credentials: Option<CompiledOAuthSourceCredentialProvider>,
+    pseudonym_materials: Option<AuditPseudonymMaterialProvider>,
     snapshots: Arc<PublishedSnapshotRegistry>,
 }
 
@@ -310,6 +323,7 @@ pub struct ConsultationService {
     fixed_notary_identity: ConfiguredOidcWorkloadProof,
     profiles: BTreeMap<ConsultationKey, ActivatedProfile>,
     basic_credentials: CompiledBasicSourceCredentialProvider,
+    static_bearer_credentials: CompiledStaticBearerSourceCredentialProvider,
     oauth_credentials: CompiledOAuthSourceCredentialProvider,
     pseudonym_materials: AuditPseudonymMaterialProvider,
     snapshots: Arc<PublishedSnapshotRegistry>,
@@ -328,7 +342,7 @@ impl ConsultationService {
         config: &Config,
         artifacts: VerifiedConsultationArtifactClosure,
     ) -> Result<(), ConsultationServiceActivationError> {
-        compile_service_activation(config, artifacts).map(drop)
+        compile_service_activation(config, artifacts, false).map(drop)
     }
 
     /// Compile every process-local capability, then connect the concrete state
@@ -339,7 +353,16 @@ impl ConsultationService {
         chain_hasher: AuditChainHasher,
         datafusion: Arc<SessionContext>,
     ) -> Result<Arc<Self>, ConsultationServiceActivationError> {
-        let compiled = compile_service_activation(config, artifacts)?;
+        let compiled = compile_service_activation(config, artifacts, true)?;
+        let basic_credentials = compiled
+            .basic_credentials
+            .ok_or(ConsultationServiceActivationError::SourceCredentials)?;
+        let static_bearer_credentials = compiled
+            .static_bearer_credentials
+            .ok_or(ConsultationServiceActivationError::SourceCredentials)?;
+        let oauth_credentials = compiled
+            .oauth_credentials
+            .ok_or(ConsultationServiceActivationError::SourceCredentials)?;
         let consultation = config
             .consultation
             .as_ref()
@@ -375,11 +398,10 @@ impl ConsultationService {
                 return Err(ConsultationServiceActivationError::StatePlane);
             }
         };
-        if compiled
+        let pseudonym_materials = compiled
             .pseudonym_materials
-            .bind_write(current_authority)
-            .is_err()
-        {
+            .ok_or(ConsultationServiceActivationError::PseudonymMaterial)?;
+        if pseudonym_materials.bind_write(current_authority).is_err() {
             let _ = state_plane.shutdown().await;
             return Err(ConsultationServiceActivationError::PseudonymMaterial);
         }
@@ -393,9 +415,10 @@ impl ConsultationService {
             registry: compiled.registry,
             fixed_notary_identity: compiled.fixed_notary_identity,
             profiles: compiled.profiles,
-            basic_credentials: compiled.basic_credentials,
-            oauth_credentials: compiled.oauth_credentials,
-            pseudonym_materials: compiled.pseudonym_materials,
+            basic_credentials,
+            static_bearer_credentials,
+            oauth_credentials,
+            pseudonym_materials,
             snapshots: compiled.snapshots,
             datafusion,
             materializations,
@@ -438,7 +461,6 @@ impl ConsultationService {
             Err(_) => false,
         };
         if !material_ready
-            || (!self.snapshots.is_empty() && !self.snapshots.all_ready())
             || !self.admission_open.load(Ordering::Acquire)
             || !self.audit_healthy.load(Ordering::Acquire)
         {
@@ -471,10 +493,13 @@ impl ConsultationService {
             &activated.workload_binding,
         )
         .map_err(|_| ConsultationServiceError::Denied)?;
-        let (resolved_profile, _) = self
+        let (resolved_profile, plan) = self
             .registry
             .resolve_for_authenticated_workload(key, &workload)
             .ok_or(ConsultationServiceError::Unavailable)?;
+        if !self.snapshots.is_ready(plan) {
+            return Err(ConsultationServiceError::Unavailable);
+        }
         Ok(ResolvedConsultationContext {
             key: key.clone(),
             resolved_profile,
@@ -565,7 +590,7 @@ impl ConsultationService {
             .profiles
             .get(&key)
             .ok_or(ConsultationServiceError::Unavailable)?;
-        let (purpose, input, notary_evaluation_id) = envelope.into_parts();
+        let (purpose, input, notary_evaluation_id, batch_child_identity) = envelope.into_parts();
         if !plan
             .runtime_profile()
             .purposes()
@@ -582,11 +607,54 @@ impl ConsultationService {
         .map_err(|_| ConsultationServiceError::Unavailable)?;
         let canonical = CanonicalConsultationInputs::try_from_resolved_core(plan, core)
             .map_err(map_request_commitment_error)?;
-        let consent = VerifiedConsentAuthority::consent_not_required(canonical)
-            .map_err(|_| ConsultationServiceError::Unavailable)?;
+        let batch_binding = batch_child_identity
+            .as_ref()
+            .map(|child| canonical.batch_child_replay_binding(child, &workload))
+            .transpose()
+            .map_err(map_request_commitment_error)?;
+        let consultation_id = ConsultationId::generate();
+        let batch_context = if let Some(binding) = batch_binding {
+            match self
+                .state_plane
+                .audit()
+                .reserve_batch_child_replay(binding, consultation_id)
+                .await
+                .map_err(|_| ConsultationServiceError::Unavailable)?
+            {
+                BatchChildReplayReservation::Reserved(context) => Some(context),
+                BatchChildReplayReservation::Replay(replay) => {
+                    let (original_consultation_id, persisted) = replay.into_parts();
+                    return PublishableConsultationResponse::replay_http_body(
+                        persisted,
+                        &original_consultation_id,
+                        plan.runtime_profile(),
+                        notary_evaluation_id,
+                    )
+                    .map_err(|_| ConsultationServiceError::Unavailable);
+                }
+                BatchChildReplayReservation::InProgress => {
+                    return Err(ConsultationServiceError::Unavailable);
+                }
+                BatchChildReplayReservation::Conflict => {
+                    return Err(ConsultationServiceError::Conflict);
+                }
+            }
+        } else {
+            None
+        };
+        let consent = match VerifiedConsentAuthority::consent_not_required(canonical) {
+            Ok(consent) => consent,
+            Err(_) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
+                return Err(ConsultationServiceError::Unavailable);
+            }
+        };
         let _local_permit = match Arc::clone(&activated.semaphore).try_acquire_owned() {
             Ok(permit) => permit,
             Err(_) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
                 self.record_denial_inner(
                     ConsultationDenialRoute::Execute,
                     503,
@@ -596,6 +664,54 @@ impl ConsultationService {
                 return Err(ConsultationServiceError::Unavailable);
             }
         };
+        let _rhai_worker_permit = if let Some(semaphore) = &activated.rhai_worker_semaphore {
+            match Arc::clone(semaphore).try_acquire_owned() {
+                Ok(permit) => Some(permit),
+                Err(_) => {
+                    release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                        .await?;
+                    self.record_denial_inner(
+                        ConsultationDenialRoute::Execute,
+                        503,
+                        ConsultationDenialReason::Capacity,
+                    )
+                    .await?;
+                    return Err(ConsultationServiceError::Unavailable);
+                }
+            }
+        } else {
+            None
+        };
+        let authority = match self
+            .state_plane
+            .pseudonym_keyring()
+            .current_write_authority()
+            .await
+        {
+            Ok(authority) => authority,
+            Err(_) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
+                return Err(ConsultationServiceError::Unavailable);
+            }
+        };
+        let committer = match self.pseudonym_materials.bind_write(authority) {
+            Ok(committer) => committer,
+            Err(_) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
+                return Err(ConsultationServiceError::Unavailable);
+            }
+        };
+        let pseudonym_inputs = match build_pseudonym_inputs(consent) {
+            Ok(inputs) => inputs,
+            Err(error) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
+                return Err(map_request_commitment_error(error));
+            }
+        };
+        let pseudonyms = committer.prepare_attempt(pseudonym_inputs);
         let reservation = self
             .state_plane
             .quota()
@@ -603,86 +719,138 @@ impl ConsultationService {
                 QuotaKey::from_authenticated(&workload, plan.profile()),
                 activated.quota_limits.effective(),
             )
-            .await
-            .map_err(|_| ConsultationServiceError::Unavailable)?;
+            .await;
         let quota = match reservation {
-            QuotaReservation::Allowed(grant) => grant,
-            QuotaReservation::Exhausted(exhaustion) => {
+            Ok(QuotaReservation::Allowed(grant)) => grant,
+            Ok(QuotaReservation::Exhausted(exhaustion)) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
                 let retry_after =
                     ConsultationRetryAfter::from_duration(exhaustion.into_retry_after())
                         .ok_or(ConsultationServiceError::Unavailable)?;
                 return Err(ConsultationServiceError::RateLimited(retry_after));
             }
+            Err(_) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
+                return Err(ConsultationServiceError::Unavailable);
+            }
         };
-        let authority = self
-            .state_plane
-            .pseudonym_keyring()
-            .current_write_authority()
-            .await
-            .map_err(|_| ConsultationServiceError::Unavailable)?;
-        let committer = self
-            .pseudonym_materials
-            .bind_write(authority)
-            .map_err(|_| ConsultationServiceError::Unavailable)?;
-        let pseudonym_inputs =
-            build_pseudonym_inputs(consent).map_err(map_request_commitment_error)?;
-        let pseudonyms = committer.prepare_attempt(pseudonym_inputs);
-        let decision = evaluate_compiled_policy(pseudonyms, &workload, quota)
-            .map_err(map_authorization_commitment_error)?;
-        let attempt =
-            authorize_consultation_attempt(decision).map_err(map_authorization_commitment_error)?;
-        let (credential_permits, data_permits) = activated.executor.permit_counts();
-        let permit_set = ConsultationPermitSet::from_counts(credential_permits, data_permits)
-            .map_err(|_| ConsultationServiceError::Unavailable)?;
-        let fence = self
+        let decision = match evaluate_compiled_policy(pseudonyms, &workload, quota) {
+            Ok(decision) => decision,
+            Err(error) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
+                return Err(map_authorization_commitment_error(error));
+            }
+        };
+        let attempt = match authorize_consultation_attempt(decision) {
+            Ok(attempt) => attempt,
+            Err(error) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
+                return Err(map_authorization_commitment_error(error));
+            }
+        };
+        let (credential_permits, data_permits) = match activated.executor.permit_counts(plan) {
+            Ok(counts) => counts,
+            Err(_) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
+                return Err(ConsultationServiceError::Unavailable);
+            }
+        };
+        let permit_set = match ConsultationPermitSet::from_counts(credential_permits, data_permits)
+        {
+            Ok(permits) => permits,
+            Err(_) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
+                return Err(ConsultationServiceError::Unavailable);
+            }
+        };
+        let fence = match self
             .state_plane
             .serving_fence()
             .authorize_consultation_attempt(activated.dispatch_budget, permit_set)
             .await
-            .map_err(|_| ConsultationServiceError::Unavailable)?;
-        let consultation_id = ConsultationId::generate();
-        let prepared = prepare_atomic_consultation_attempt(
+        {
+            Ok(fence) => fence,
+            Err(_) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
+                return Err(ConsultationServiceError::Unavailable);
+            }
+        };
+        let prepared = match prepare_atomic_consultation_attempt(
             consultation_id,
             notary_evaluation_id,
             attempt,
             fence,
-        )
-        .map_err(|_| ConsultationServiceError::Unavailable)?;
-        let audited = self
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
+                return Err(ConsultationServiceError::Unavailable);
+            }
+        };
+        let audited = match self
             .state_plane
             .audit()
             .write_attempt_with_completion_intent(prepared)
             .await
-            .map_err(|_| ConsultationServiceError::Unavailable)?;
+        {
+            Ok(audited) => audited,
+            Err(_) => {
+                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                    .await?;
+                return Err(ConsultationServiceError::Unavailable);
+            }
+        };
         match audited
             .execute_concrete_consultation(
                 activated.executor,
                 self.state_plane.serving_fence(),
                 &self.basic_credentials,
+                &self.static_bearer_credentials,
                 &self.oauth_credentials,
                 &self.snapshots,
                 &self.datafusion,
             )
             .await
         {
-            Ok(executed) => match self
-                .state_plane
-                .audit()
-                .finalize_concrete_consultation(executed, self.state_plane.pseudonym_keyring())
-                .await
-                .map_err(|_| ConsultationServiceError::Unavailable)?
-            {
-                FinalizedConcreteConsultation::Published(response) => Ok(response.into_http_body()),
-                FinalizedConcreteConsultation::FinalizedFailure(_) => {
-                    Err(ConsultationServiceError::Unavailable)
+            Ok(executed) => {
+                match self
+                    .state_plane
+                    .audit()
+                    .finalize_concrete_consultation(
+                        executed,
+                        self.state_plane.pseudonym_keyring(),
+                        batch_context,
+                    )
+                    .await
+                    .map_err(|_| ConsultationServiceError::Unavailable)?
+                {
+                    FinalizedConcreteConsultation::Published(response) => {
+                        Ok((*response).into_http_body())
+                    }
+                    FinalizedConcreteConsultation::FinalizedFailure(_) => {
+                        Err(ConsultationServiceError::Unavailable)
+                    }
                 }
-            },
+            }
             Err(unfinished) => {
-                self.state_plane
+                let receipt = self
+                    .state_plane
                     .audit()
                     .close_unfinished_consultation(unfinished, self.state_plane.pseudonym_keyring())
                     .await
                     .map_err(|_| ConsultationServiceError::Unavailable)?;
+                if receipt.outcome() == ConsultationCompletionOutcome::NotStarted {
+                    release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                        .await?;
+                }
                 Err(ConsultationServiceError::Unavailable)
             }
         }
@@ -784,6 +952,20 @@ impl ConsultationService {
     }
 }
 
+async fn release_batch_child_before_dispatch(
+    state_plane: &ConsultationStatePlaneRuntime,
+    context: Option<&BatchChildReplayContext>,
+) -> Result<(), ConsultationServiceError> {
+    if let Some(context) = context {
+        state_plane
+            .audit()
+            .release_batch_child_replay(context)
+            .await
+            .map_err(|_| ConsultationServiceError::Unavailable)?;
+    }
+    Ok(())
+}
+
 fn trusted_timestamp_unix_ms() -> Option<i64> {
     i64::try_from(
         SystemTime::now()
@@ -801,6 +983,7 @@ const fn tracked_execute_denial(
         ConsultationServiceError::InvalidRequest => {
             Some((400, ConsultationDenialReason::InvalidRequest))
         }
+        ConsultationServiceError::Conflict => Some((409, ConsultationDenialReason::Conflict)),
         ConsultationServiceError::Denied => Some((403, ConsultationDenialReason::Denied)),
         ConsultationServiceError::RateLimited(_) => {
             Some((429, ConsultationDenialReason::RateLimited))
@@ -852,18 +1035,24 @@ fn complete_denial_write(
 fn compile_service_activation(
     config: &Config,
     artifacts: VerifiedConsultationArtifactClosure,
+    production: bool,
 ) -> Result<CompiledServiceActivation, ConsultationServiceActivationError> {
     let consultation = config
         .consultation
         .as_ref()
         .ok_or(ConsultationServiceActivationError::MissingConfiguration)?;
     let fixed_notary_identity = compile_fixed_notary_identity(config, consultation)?;
+    let rhai_workers = initialize_rhai_worker_capabilities(&artifacts)
+        .map_err(|_| ConsultationServiceActivationError::RegistryActivation)?;
     let registry = CompiledConsultationRegistry::compile(
         artifacts,
-        &[],
+        &rhai_workers,
         &InitializedConsentVerifierRegistry::empty(),
     )
     .map_err(|_| ConsultationServiceActivationError::RegistryActivation)?;
+    if production {
+        validate_production_rhai_worker_platform(&registry)?;
+    }
     validate_snapshot_config_bindings(config, &registry)?;
     let mut profiles = BTreeMap::new();
     for plan in registry.plans_for_concrete_activation() {
@@ -872,18 +1061,45 @@ fn compile_service_activation(
             return Err(ConsultationServiceActivationError::RegistryActivation);
         }
     }
-    let basic_credentials = CompiledBasicSourceCredentialProvider::compile_for_consultations(
-        &consultation.source_credentials,
-        &registry,
-    )
-    .map_err(|_| ConsultationServiceActivationError::SourceCredentials)?;
-    let oauth_credentials = CompiledOAuthSourceCredentialProvider::compile_for_consultations(
-        &consultation.source_credentials,
-        &registry,
-    )
-    .map_err(|_| ConsultationServiceActivationError::SourceCredentials)?;
-    let pseudonym_materials = AuditPseudonymMaterialProvider::compile(consultation)
-        .map_err(|_| ConsultationServiceActivationError::PseudonymMaterial)?;
+    let (basic_credentials, static_bearer_credentials, oauth_credentials) = if production {
+        (
+            Some(
+                CompiledBasicSourceCredentialProvider::compile_for_consultations(
+                    &consultation.source_credentials,
+                    &registry,
+                )
+                .map_err(|_| ConsultationServiceActivationError::SourceCredentials)?,
+            ),
+            Some(
+                CompiledStaticBearerSourceCredentialProvider::compile_for_consultations(
+                    &consultation.source_credentials,
+                    &registry,
+                )
+                .map_err(|_| ConsultationServiceActivationError::SourceCredentials)?,
+            ),
+            Some(
+                CompiledOAuthSourceCredentialProvider::compile_for_consultations(
+                    &consultation.source_credentials,
+                    &registry,
+                )
+                .map_err(|_| ConsultationServiceActivationError::SourceCredentials)?,
+            ),
+        )
+    } else {
+        validate_source_credential_catalog(&consultation.source_credentials, &registry)
+            .map_err(|_| ConsultationServiceActivationError::SourceCredentials)?;
+        (None, None, None)
+    };
+    let pseudonym_materials = if production {
+        Some(
+            AuditPseudonymMaterialProvider::compile(consultation)
+                .map_err(|_| ConsultationServiceActivationError::PseudonymMaterial)?,
+        )
+    } else {
+        AuditPseudonymMaterialProvider::validate_catalog(consultation)
+            .map_err(|_| ConsultationServiceActivationError::PseudonymMaterial)?;
+        None
+    };
     let snapshots = Arc::new(
         PublishedSnapshotRegistry::compile(&registry)
             .map_err(|_| ConsultationServiceActivationError::UnsupportedPlan)?,
@@ -893,10 +1109,66 @@ fn compile_service_activation(
         fixed_notary_identity,
         profiles,
         basic_credentials,
+        static_bearer_credentials,
         oauth_credentials,
         pseudonym_materials,
         snapshots,
     })
+}
+
+#[cfg(target_os = "linux")]
+fn validate_production_rhai_worker_platform(
+    registry: &CompiledConsultationRegistry,
+) -> Result<(), ConsultationServiceActivationError> {
+    validate_production_rhai_worker_requirement(
+        registry
+            .plans_for_concrete_activation()
+            .any(|plan| plan.kind() == crate::source_plan::SourcePlanKind::SandboxedRhai),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+fn validate_production_rhai_worker_platform(
+    registry: &CompiledConsultationRegistry,
+) -> Result<(), ConsultationServiceActivationError> {
+    validate_production_rhai_worker_requirement(
+        registry
+            .plans_for_concrete_activation()
+            .any(|plan| plan.kind() == crate::source_plan::SourcePlanKind::SandboxedRhai),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn validate_production_rhai_worker_requirement(
+    has_rhai: bool,
+) -> Result<(), ConsultationServiceActivationError> {
+    #[cfg(test)]
+    let _ = has_rhai;
+    #[cfg(not(test))]
+    if has_rhai && WorkerProcess::dedicated_executable().is_err() {
+        return Err(ConsultationServiceActivationError::UnsupportedPlan);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn validate_production_rhai_worker_requirement(
+    has_rhai: bool,
+) -> Result<(), ConsultationServiceActivationError> {
+    if has_rhai {
+        Err(ConsultationServiceActivationError::UnsupportedPlan)
+    } else {
+        Ok(())
+    }
+}
+
+fn compiled_rhai_worker_semaphore(
+    runtime: &crate::source_plan::runtime_profile::CompiledRuntimeProfile,
+) -> Option<Arc<Semaphore>> {
+    runtime
+        .dispatch()
+        .sandboxed_rhai_limits()
+        .map(|limits| Arc::new(Semaphore::new(usize::from(limits.concurrency()))))
 }
 
 fn validate_snapshot_config_bindings(
@@ -925,25 +1197,6 @@ fn validate_snapshot_config_bindings(
             .ok_or(ConsultationServiceActivationError::UnsupportedPlan)?;
         let declared = DeclaredSchema::from(&resource.schema);
         if !declared.strict {
-            return Err(ConsultationServiceActivationError::UnsupportedPlan);
-        }
-        let mut reviewed_physical_fields = binding
-            .projection()
-            .map(|(_, physical)| physical)
-            .collect::<BTreeSet<_>>();
-        if let Some((_, physical)) = binding.source_observed_at_extraction() {
-            reviewed_physical_fields.insert(physical);
-        }
-        if let Some((_, physical, _)) = binding.source_revision_extraction() {
-            reviewed_physical_fields.insert(physical);
-        }
-        if declared
-            .fields
-            .iter()
-            .map(|field| field.name.as_str())
-            .collect::<BTreeSet<_>>()
-            != reviewed_physical_fields
-        {
             return Err(ConsultationServiceActivationError::UnsupportedPlan);
         }
         for (logical, physical) in binding.projection() {
@@ -976,11 +1229,39 @@ fn validate_snapshot_config_bindings(
                 return Err(ConsultationServiceActivationError::UnsupportedPlan);
             }
         }
-        if declared
-            .field(binding.key_physical_field())
-            .is_none_or(|field| field.ty != FieldType::String || field.nullable)
-        {
+        if binding.keys().any(|(_, physical)| {
+            declared
+                .field(physical)
+                .is_none_or(|field| field.ty != FieldType::String || field.nullable)
+        }) {
             return Err(ConsultationServiceActivationError::UnsupportedPlan);
+        }
+        for (logical, physical) in [
+            binding.source_observed_at_extraction(),
+            binding
+                .source_revision_extraction()
+                .map(|(logical, physical, _)| (logical, physical)),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let acquired = plan
+                .runtime_profile()
+                .acquisition()
+                .fields()
+                .find(|field| field.name() == logical)
+                .ok_or(ConsultationServiceActivationError::UnsupportedPlan)?;
+            let configured = declared
+                .field(physical)
+                .ok_or(ConsultationServiceActivationError::UnsupportedPlan)?;
+            if !matches!(
+                acquired.schema(),
+                CompiledResponseSchema::Scalar(CompiledScalarShape::String { .. })
+            ) || configured.ty != FieldType::String
+                || acquired.schema().nullable() != configured.nullable
+            {
+                return Err(ConsultationServiceActivationError::UnsupportedPlan);
+            }
         }
     }
     Ok(())
@@ -1053,6 +1334,7 @@ fn compile_profile_activation(
     let effective = EffectiveQuotaLimits::lowered_from(public, effective_rate, effective_burst)
         .map_err(|_| ConsultationServiceActivationError::InvalidQuotaLimits)?;
     let max_in_flight = usize::from(runtime.effective_limits().max_in_flight());
+    let rhai_worker_semaphore = compiled_rhai_worker_semaphore(runtime);
     let metadata = Arc::from(protected_metadata_bytes(plan)?.into_boxed_slice());
     let workload_binding = ConsultationWorkloadBinding::new(
         ConsultationWorkloadRole::Notary,
@@ -1068,6 +1350,7 @@ fn compile_profile_activation(
             workload_binding,
             quota_limits: ActivatedQuotaLimits { public, effective },
             semaphore: Arc::new(Semaphore::new(max_in_flight)),
+            rhai_worker_semaphore,
             metadata,
             executor,
             dispatch_budget: executor
@@ -1153,6 +1436,7 @@ mod tests {
     use super::*;
     use crate::source_plan::{
         bounded_runtime_vector_plan_fixture, dhis2_runtime_vector_plan_fixture,
+        rhai_runtime_vector_plan_fixture,
     };
 
     fn fixed_identity() -> ConfiguredOidcWorkloadProof {
@@ -1168,7 +1452,7 @@ mod tests {
     }
 
     #[test]
-    fn profile_activation_accepts_only_basic_get_and_precomputes_public_metadata() {
+    fn profile_activation_accepts_capability_bounded_http_and_precomputes_public_metadata() {
         let plan = dhis2_runtime_vector_plan_fixture();
         let (key, activated) = compile_profile_activation(&plan, &fixed_identity()).unwrap();
         assert_eq!(key.id(), plan.profile().id());
@@ -1197,10 +1481,35 @@ mod tests {
         assert!(!metadata.as_object().unwrap().contains_key("contract"));
         assert_eq!(metadata.as_object().unwrap().len(), 2);
 
+        let bounded = bounded_runtime_vector_plan_fixture();
+        let (_, activated) = compile_profile_activation(&bounded, &fixed_identity())
+            .expect("bounded HTTP capability activates");
+        assert_eq!(activated.executor, ConcreteExecutorKind::BoundedHttp);
+    }
+
+    #[test]
+    fn sandboxed_rhai_activation_enforces_the_compiled_worker_concurrency_permit() {
+        let plan = rhai_runtime_vector_plan_fixture();
+        let worker =
+            compiled_rhai_worker_semaphore(plan.runtime_profile()).expect("Rhai worker semaphore");
+        assert_eq!(worker.available_permits(), 1);
+        let first = Arc::clone(&worker)
+            .try_acquire_owned()
+            .expect("first worker permit");
+        assert!(Arc::clone(&worker).try_acquire_owned().is_err());
+        drop(first);
+        assert!(Arc::clone(&worker).try_acquire_owned().is_ok());
+    }
+
+    #[test]
+    fn production_rhai_activation_requires_the_linux_process_sandbox() {
+        assert_eq!(validate_production_rhai_worker_requirement(false), Ok(()));
+        #[cfg(target_os = "linux")]
+        assert_eq!(validate_production_rhai_worker_requirement(true), Ok(()));
+        #[cfg(not(target_os = "linux"))]
         assert_eq!(
-            compile_profile_activation(&bounded_runtime_vector_plan_fixture(), &fixed_identity(),)
-                .err(),
-            Some(ConsultationServiceActivationError::UnsupportedPlan)
+            validate_production_rhai_worker_requirement(true),
+            Err(ConsultationServiceActivationError::UnsupportedPlan)
         );
     }
 
@@ -1396,6 +1705,10 @@ mod tests {
         assert_eq!(
             tracked_execute_denial(ConsultationServiceError::Denied),
             Some((403, ConsultationDenialReason::Denied))
+        );
+        assert_eq!(
+            tracked_execute_denial(ConsultationServiceError::Conflict),
+            Some((409, ConsultationDenialReason::Conflict))
         );
         let rate_limited = ConsultationServiceError::RateLimited(
             ConsultationRetryAfter::from_duration(Duration::from_secs(2)).unwrap(),

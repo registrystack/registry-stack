@@ -45,12 +45,13 @@
       },
       "control_fields": {},
       "selector": {
-        "type": "http_anchor",
-        "input": "tracked_entity",
+        "type": "http_exact_and",
         "operation": "lookup-enrollment-status",
-        "location": {
-          "type": "query",
-          "parameter": "trackedEntity"
+        "components": {
+          "tracked_entity": {
+            "type": "query",
+            "parameter": "trackedEntity"
+          }
         }
       },
       "cardinality": "probe_two",
@@ -59,7 +60,8 @@
     "output": {
       "status": {
         "type": "string",
-        "nullable": false
+        "nullable": false,
+        "max_bytes": 32
       }
     },
     "plan": {

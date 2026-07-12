@@ -17,6 +17,16 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(target_os = "linux")]
+use std::{
+    collections::BTreeMap,
+    io::Read as _,
+    net::{TcpListener as StdTcpListener, ToSocketAddrs as _},
+    process::Stdio,
+    sync::atomic::{AtomicBool, Ordering},
+    sync::Mutex as StdMutex,
+};
+
 use axum::{
     body::{to_bytes, Body},
     http::{header, HeaderValue, Method, Request, StatusCode},
@@ -29,22 +39,31 @@ use postgres_native_tls::MakeTlsConnector;
 use rand_core::{OsRng, RngCore as _};
 use registry_notary_server::{compile_notary_runtime, notary_router_from_runtime};
 use registry_platform_audit::AuditChainProfile;
+#[cfg(target_os = "linux")]
+use registry_platform_crypto::canonicalize_json;
 use reqwest::Url;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use thiserror::Error;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
     sync::watch,
     task::JoinHandle,
 };
+#[cfg(target_os = "linux")]
+use tokio::{
+    process::{Child, Command},
+    time::{sleep, Duration, Instant},
+};
 use tokio_postgres::{Client, Config as PostgresConfig};
 use tower::ServiceExt;
 use ulid::Ulid;
 use zeroize::Zeroizing;
 
+use registry_relay::source_plan::authoring::compile_private_binding;
 use registry_relay::{
     audit::{AuditPipeline, InMemorySink},
     config,
@@ -77,6 +96,20 @@ const NOTARY_DHIS2_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_DHIS2_API_KEY_HASH"
 const NOTARY_OPENCRVS_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_OPENCRVS_API_KEY_HASH";
 const NOTARY_SYNTHETIC_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_SYNTHETIC_SNAPSHOT_API_KEY_HASH";
 const NOTARY_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_AUDIT_HASH_SECRET";
+#[cfg(target_os = "linux")]
+const RHAI_RELAY_BINARY_ENV: &str = "REGISTRY_RELAY_LIVE_RELAY_BINARY";
+#[cfg(target_os = "linux")]
+const RHAI_REGISTRYCTL_BINARY_ENV: &str = "REGISTRY_RELAY_LIVE_REGISTRYCTL_BINARY";
+#[cfg(target_os = "linux")]
+const RHAI_SOURCE_USERNAME_ENV: &str = "HEALTH_REGISTRY_USERNAME";
+#[cfg(target_os = "linux")]
+const RHAI_SOURCE_PASSWORD_ENV: &str = "HEALTH_REGISTRY_PASSWORD";
+#[cfg(target_os = "linux")]
+const RHAI_ISSUER_JWK_ENV: &str = "REGISTRY_NOTARY_ISSUER_JWK";
+#[cfg(target_os = "linux")]
+const RHAI_SOURCE_CERT_PATH_ENV: &str = "REGISTRY_RELAY_LIVE_SOURCE_CERT_PATH";
+#[cfg(target_os = "linux")]
+const RHAI_SOURCE_KEY_PATH_ENV: &str = "REGISTRY_RELAY_LIVE_SOURCE_KEY_PATH";
 
 const PROFILE_VERSION: &str = "1";
 const ISSUER: &str = "https://relay-live-issuer.example.test";
@@ -96,6 +129,8 @@ const MINIMIZATION_FILE: &str = "evidence/minimization.json";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum JourneyProfile {
     Dhis2,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Dhis2SandboxedRhai,
     OpenCrvs,
     SyntheticSnapshot,
 }
@@ -104,6 +139,9 @@ impl JourneyProfile {
     fn directory(self) -> &'static str {
         match self {
             Self::Dhis2 => "profiles/dhis2-2.41.9-enrollment-status",
+            Self::Dhis2SandboxedRhai => {
+                "../registryctl/tests/fixtures/country-authoring/dhis2-sandboxed-rhai"
+            }
             Self::OpenCrvs => "profiles/opencrvs-1.9.0-rc.1-farajaland-birth-record-exists",
             Self::SyntheticSnapshot => "profiles/synthetic-snapshot-exact-person-status",
         }
@@ -112,6 +150,7 @@ impl JourneyProfile {
     fn profile_id(self) -> &'static str {
         match self {
             Self::Dhis2 => "dhis2.tracker.enrollment-status.exact",
+            Self::Dhis2SandboxedRhai => "fictional-health-registry.health-verification.health",
             Self::OpenCrvs => "opencrvs.dci.farajaland.birth-record-exists.exact",
             Self::SyntheticSnapshot => "synthetic.snapshot.person-status.exact",
         }
@@ -120,6 +159,7 @@ impl JourneyProfile {
     fn purpose(self) -> &'static str {
         match self {
             Self::Dhis2 => "program-enrollment-verification",
+            Self::Dhis2SandboxedRhai => "programme-enrollment-verification",
             Self::OpenCrvs => "civil-registration-verification",
             Self::SyntheticSnapshot => "benefit-status-verification",
         }
@@ -128,6 +168,7 @@ impl JourneyProfile {
     fn required_scope(self) -> &'static str {
         match self {
             Self::Dhis2 => "registry:consult:dhis2-enrollment-status",
+            Self::Dhis2SandboxedRhai => "registry:consult:health-verification",
             Self::OpenCrvs => "registry:consult:opencrvs-birth-record",
             Self::SyntheticSnapshot => "registry:consult:synthetic-snapshot-person-status",
         }
@@ -136,6 +177,7 @@ impl JourneyProfile {
     fn notary_api_key_hash_env(self) -> &'static str {
         match self {
             Self::Dhis2 => NOTARY_DHIS2_API_KEY_HASH_ENV,
+            Self::Dhis2SandboxedRhai => "PROGRAMME_VERIFIER_TOKEN_HASH",
             Self::OpenCrvs => NOTARY_OPENCRVS_API_KEY_HASH_ENV,
             Self::SyntheticSnapshot => NOTARY_SYNTHETIC_API_KEY_HASH_ENV,
         }
@@ -144,6 +186,7 @@ impl JourneyProfile {
     fn pack_id(self) -> &'static str {
         match self {
             Self::Dhis2 => "dhis2.tracker.enrollment-status",
+            Self::Dhis2SandboxedRhai => "fictional-health-registry.fictional-dhis2-health-record",
             Self::OpenCrvs => "opencrvs.dci.farajaland.birth-record-exists",
             Self::SyntheticSnapshot => "synthetic.snapshot.person-status",
         }
@@ -152,13 +195,16 @@ impl JourneyProfile {
     fn pack_hash(self) -> &'static str {
         match self {
             Self::Dhis2 => {
-                "sha256:ec0136be504e3f98539f9e0ec10e59532ff793dbadc2e66ea1c017a632da6ac4"
+                "sha256:c3965741e1d2da615a82a6ede91d0477c8c29204c675e043169bcc654915597f"
+            }
+            Self::Dhis2SandboxedRhai => {
+                "sha256:8732042fbe873ef34d86658197673b70eab8e6e52897093d355937ef1bf51165"
             }
             Self::OpenCrvs => {
-                "sha256:04297b0429cf311c79dedd332f45d1fd7ee9d9e4b56d2c77d793fdeeeeb986aa"
+                "sha256:2217affdb8ea79a7197926800ee5f3eb5a003e9ad3acaaa6dc54c00e2ac06b58"
             }
             Self::SyntheticSnapshot => {
-                "sha256:cc490a9b51255611f3dc3b529952a185c22a32c260644b095d6b3bf6ac52fab6"
+                "sha256:0825769c7a1d88ffae41a012963ebc81e1147eb6fed425e7aa69fa7b8ccc3523"
             }
         }
     }
@@ -166,6 +212,7 @@ impl JourneyProfile {
     fn source_environment(self) -> Option<[&'static str; 2]> {
         match self {
             Self::Dhis2 => Some([DHIS2_USERNAME_ENV, DHIS2_PASSWORD_ENV]),
+            Self::Dhis2SandboxedRhai => None,
             Self::OpenCrvs => Some([OPENCRVS_CLIENT_ID_ENV, OPENCRVS_CLIENT_SECRET_ENV]),
             Self::SyntheticSnapshot => None,
         }
@@ -174,6 +221,7 @@ impl JourneyProfile {
     fn selector(self) -> Zeroizing<String> {
         match self {
             Self::Dhis2 => Zeroizing::new("PQfMcpmXeFE".to_string()),
+            Self::Dhis2SandboxedRhai => Zeroizing::new("A0000000001".to_string()),
             Self::OpenCrvs => Zeroizing::new(format!("{:010}", OsRng.next_u64() % 10_000_000_000)),
             Self::SyntheticSnapshot => Zeroizing::new("per-2001".to_string()),
         }
@@ -196,6 +244,12 @@ enum LiveJourneyError {
     PseudonymInitialization,
     #[error("the maintained consultation artifacts could not be staged")]
     ArtifactStaging,
+    #[error("the governed country-authored Rhai closure could not be built")]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    CountryBuild,
+    #[error("the governed Rhai source fixture failed")]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    SourceFixture,
     #[error("the maintained consultation runtime configuration did not load")]
     ConfigLoad,
     #[error("the live OIDC JWKS server could not start")]
@@ -216,6 +270,9 @@ enum LiveJourneyError {
     RouterAssembly,
     #[error("the protected Relay listener could not be started")]
     RelayListener,
+    #[error("the production Relay process failed")]
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    RelayProcess,
     #[error("the reloadable Relay workload credential could not be staged")]
     RelayCredentialStaging,
     #[error("the maintained Notary runtime configuration did not load")]
@@ -264,6 +321,18 @@ async fn live_dhis2_consultation_lifecycle() {
     }
 }
 
+/// Run via `scripts/run-live-consultation-journey.sh rhai`. The country-authored
+/// closure, loopback source, real Relay executable, isolated one-shot workers,
+/// Notary, and PostgreSQL state plane all run inside the governed Linux runner.
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires the explicit Linux Rhai runner and a disposable TLS PostgreSQL 16 instance"]
+async fn live_dhis2_sandboxed_rhai_consultation_lifecycle() {
+    if let Err(error) = run_live_rhai_consultation_lifecycle().await {
+        panic!("live DHIS2 SandboxedRhai consultation lifecycle failed: {error}");
+    }
+}
+
 /// Run via `scripts/run-live-consultation-journey.sh opencrvs`. A fresh random valid
 /// UIN is used only in memory and is expected to produce a closed `no_match`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -300,9 +369,12 @@ fn maintained_operator_example_stages_through_real_loader() {
             Path::new("/tmp/registry-relay-live-test-ca.pem"),
             "http://127.0.0.1:1/keys",
         )
-        .unwrap_or_else(|_| panic!("the maintained operator example did not stage"));
-        let loaded = config::load_with_metadata(&staged.config_path)
-            .unwrap_or_else(|_| panic!("the staged maintained operator example did not load"));
+        .unwrap_or_else(|error| {
+            panic!("the {profile:?} maintained operator example did not stage: {error}")
+        });
+        let loaded = config::load_with_metadata(&staged.config_path).unwrap_or_else(|error| {
+            panic!("the staged {profile:?} maintained operator example did not load: {error}")
+        });
         assert!(loaded.runtime.consultation.is_some());
         assert!(loaded.consultation_artifacts.is_some());
     }
@@ -390,6 +462,9 @@ async fn run_live_consultation_lifecycle(profile: JourneyProfile) -> Result<(), 
             }
             let source_base_url = required_secret_environment(match profile {
                 JourneyProfile::Dhis2 => DHIS2_BASE_URL_ENV,
+                JourneyProfile::Dhis2SandboxedRhai => {
+                    unreachable!("Rhai source is owned by its governed runner")
+                }
                 JourneyProfile::OpenCrvs => OPENCRVS_BASE_URL_ENV,
                 JourneyProfile::SyntheticSnapshot => unreachable!("synthetic source is local"),
             })?;
@@ -583,6 +658,150 @@ async fn run_live_consultation_lifecycle(profile: JourneyProfile) -> Result<(), 
     cleanup
 }
 
+#[cfg(target_os = "linux")]
+async fn run_live_rhai_consultation_lifecycle() -> Result<(), LiveJourneyError> {
+    let profile = JourneyProfile::Dhis2SandboxedRhai;
+    let admin_database_url = required_secret_environment(ADMIN_DATABASE_URL_ENV)?;
+    let postgres_ca_path = required_path_environment(POSTGRES_CA_PATH_ENV)?;
+    let relay_binary = required_path_environment(RHAI_RELAY_BINARY_ENV)?;
+    let registryctl_binary = required_path_environment(RHAI_REGISTRYCTL_BINARY_ENV)?;
+    let source_username = random_secret();
+    let source_password = random_secret();
+    let source =
+        RhaiSourceFixture::start(source_username.as_str(), source_password.as_str()).await?;
+    let jwks = LiveJwksServer::start().await?;
+
+    let mut environment = ScopedEnvironment::default();
+    let audit_secret = random_secret();
+    let pseudonym_secret = random_secret();
+    let notary_audit_secret = random_secret();
+    let notary_api_key = random_secret();
+    let notary_api_key_hash = sha256_uri(notary_api_key.as_bytes());
+    let issuer_jwk = live_issuer_jwk()?;
+    environment.set(AUDIT_SECRET_ENV, audit_secret.as_str());
+    environment.set(PSEUDONYM_SECRET_ENV, pseudonym_secret.as_str());
+    environment.set(NOTARY_AUDIT_SECRET_ENV, notary_audit_secret.as_str());
+    environment.set(profile.notary_api_key_hash_env(), &notary_api_key_hash);
+    environment.set(RHAI_SOURCE_USERNAME_ENV, source_username.as_str());
+    environment.set(RHAI_SOURCE_PASSWORD_ENV, source_password.as_str());
+    environment.set(RHAI_ISSUER_JWK_ENV, issuer_jwk.as_str());
+
+    let (mut database, database_urls) =
+        LiveDatabase::provision(admin_database_url.as_str(), postgres_ca_path.as_path()).await?;
+    environment.set(RUNTIME_DATABASE_URL_ENV, database_urls.runtime.as_str());
+    environment.set(
+        MAINTENANCE_DATABASE_URL_ENV,
+        database_urls.maintenance.as_str(),
+    );
+    environment.set(READER_DATABASE_URL_ENV, database_urls.reader.as_str());
+
+    let execution = async {
+        let staged = GeneratedRhaiProfile::build(
+            &registryctl_binary,
+            source.base_url(),
+            source.allowed_private_cidr(),
+            postgres_ca_path.as_path(),
+            jwks.jwks_url(),
+        )
+        .await?;
+        let loaded = config::load_with_metadata(&staged.relay_config)
+            .map_err(|_| LiveJourneyError::ConfigLoad)?;
+        let now = current_unix_ms()?;
+        let active_write_deadline_unix_ms = now + 30 * 60 * 1_000;
+        let first_bootstrap = bootstrap_live_state(
+            &loaded.runtime,
+            database.owner_role(),
+            active_write_deadline_unix_ms,
+        )
+        .await?;
+        if first_bootstrap.state_plane != BootstrapStatePlaneStatus::InstalledOrAttested
+            || first_bootstrap.keyring != BootstrapKeyringStatus::Initialized
+        {
+            return Err(LiveJourneyError::PseudonymInitialization);
+        }
+
+        let bearer = jwks.mint_bearer(profile)?;
+        let relay_token_file = staged.stage_relay_token(bearer.as_str())?;
+        let notary_audit_path = staged.notary_audit_path();
+        let bind = reserve_loopback_address().await?;
+        let mut relay = LiveRelayProcess::start(&relay_binary, &staged.relay_config, bind).await?;
+        relay.wait_ready().await?;
+        let notary_config =
+            staged.load_notary_config(relay.base_url(), &relay_token_file, &notary_audit_path)?;
+        let notary_runtime = compile_notary_runtime(notary_config)
+            .map_err(|_| LiveJourneyError::NotaryActivation)?
+            .activate_relay()
+            .await
+            .map_err(|_| LiveJourneyError::NotaryActivation)?;
+        let notary_app = notary_router_from_runtime(notary_runtime)
+            .map_err(|_| LiveJourneyError::NotaryActivation)?;
+        assert_notary_relay_ready(notary_app.clone()).await?;
+
+        let journey = execute_notary_journey(
+            profile,
+            notary_app,
+            &JourneySensitiveValues {
+                source_base_url: source.base_url(),
+                notary_api_key: notary_api_key.as_str(),
+                relay_bearer: bearer.as_str(),
+                source_principal: source_username.as_str(),
+                source_secret: source_password.as_str(),
+            },
+            &notary_audit_path,
+        )
+        .await;
+        let closed_diagnostic = if journey.is_err() {
+            match database.classify_safe_execute_failure().await {
+                LiveJourneyError::ExecuteMissingDurableCompletion
+                | LiveJourneyError::ExecuteUnavailable => None,
+                diagnostic => Some(diagnostic),
+            }
+        } else {
+            None
+        };
+        let journey = closed_diagnostic.map_or(journey, Err)?;
+        database
+            .assert_safe_durable_evidence(profile, &journey)
+            .await?;
+        source.assert_complete().await?;
+        relay.shutdown().await
+    }
+    .await;
+    let cleanup = database.cleanup().await;
+    drop(jwks);
+
+    execution?;
+    cleanup
+}
+
+#[cfg(target_os = "linux")]
+fn live_issuer_jwk() -> Result<Zeroizing<String>, LiveJourneyError> {
+    let signing = SigningKey::generate(&mut OsRng);
+    let verifying = signing.verifying_key();
+    serde_json::to_string(&json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "alg": "EdDSA",
+        "kid": "country-issuer-key",
+        "d": URL_SAFE_NO_PAD.encode(signing.to_bytes()),
+        "x": URL_SAFE_NO_PAD.encode(verifying.as_bytes()),
+    }))
+    .map(Zeroizing::new)
+    .map_err(|_| LiveJourneyError::NotaryActivation)
+}
+
+#[cfg(target_os = "linux")]
+async fn reserve_loopback_address() -> Result<std::net::SocketAddr, LiveJourneyError> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|_| LiveJourneyError::RelayListener)?;
+    let address = listener
+        .local_addr()
+        .map_err(|_| LiveJourneyError::RelayListener)?;
+    drop(listener);
+    Ok(address)
+}
+
 async fn assert_notary_relay_ready(app: Router) -> Result<(), LiveJourneyError> {
     let request = Request::builder()
         .method(Method::GET)
@@ -669,11 +888,24 @@ async fn execute_notary_journey(
         .header("data-purpose", profile.purpose())
         .body(Body::from(
             serde_json::to_vec(&json!({
-                "target": {"type": "person", "id": selector.as_str()},
+                "target": match profile {
+                    JourneyProfile::Dhis2SandboxedRhai => json!({
+                        "type": "person",
+                        "identifiers": [{
+                            "scheme": "dhis2_tracked_entity",
+                            "value": selector.as_str()
+                        }]
+                    }),
+                    _ => json!({"type": "person", "id": selector.as_str()}),
+                },
                 "claims": match profile {
                     JourneyProfile::Dhis2 => json!([
                         {"id": "dhis2-enrollment-known", "version": "1"},
                         {"id": "dhis2-enrollment-status", "version": "1"}
+                    ]),
+                    JourneyProfile::Dhis2SandboxedRhai => json!([
+                        {"id": "tracked-entity-first-name", "version": "1"},
+                        {"id": "programme-code", "version": "1"}
                     ]),
                     JourneyProfile::OpenCrvs => json!([
                         {"id": "opencrvs-birth-record-exists", "version": "1"}
@@ -684,7 +916,11 @@ async fn execute_notary_journey(
                     ]),
                 },
                 "disclosure": "value",
-                "purpose": profile.purpose()
+                "purpose": profile.purpose(),
+                "variables": match profile {
+                    JourneyProfile::Dhis2SandboxedRhai => json!({"as_of_date": "2026-01-01"}),
+                    _ => json!({}),
+                }
             }))
             .map_err(|_| LiveJourneyError::NotaryRequest)?,
         ))
@@ -714,6 +950,7 @@ fn validate_minimized_notary_response(
 ) -> Result<String, LiveJourneyError> {
     let expected_result_count = match profile {
         JourneyProfile::Dhis2 => 2,
+        JourneyProfile::Dhis2SandboxedRhai => 2,
         JourneyProfile::OpenCrvs => 1,
         JourneyProfile::SyntheticSnapshot => 2,
     };
@@ -758,6 +995,21 @@ fn validate_minimized_notary_response(
                 .ok_or(LiveJourneyError::NotaryResponse)?;
             if status.is_empty() || status.len() > 32 || status.chars().any(char::is_control) {
                 return Err(LiveJourneyError::NotaryResponse);
+            }
+        }
+        JourneyProfile::Dhis2SandboxedRhai => {
+            for (claim, expected) in [
+                ("tracked-entity-first-name", json!("Nia")),
+                ("programme-code", json!("CHILD")),
+            ] {
+                let actual = results
+                    .iter()
+                    .find(|result| result.get("claim_id").and_then(Value::as_str) == Some(claim))
+                    .and_then(|result| result.get("value"))
+                    .ok_or(LiveJourneyError::NotaryResponse)?;
+                if actual != &expected {
+                    return Err(LiveJourneyError::NotaryResponse);
+                }
             }
         }
         JourneyProfile::OpenCrvs => {
@@ -911,6 +1163,272 @@ impl Drop for LiveRelayServer {
     }
 }
 
+#[cfg(target_os = "linux")]
+struct LiveRelayProcess {
+    base_url: String,
+    child: Child,
+}
+
+#[cfg(target_os = "linux")]
+impl LiveRelayProcess {
+    async fn start(
+        binary: &Path,
+        config: &Path,
+        bind: std::net::SocketAddr,
+    ) -> Result<Self, LiveJourneyError> {
+        let child = Command::new(binary)
+            .arg("--config")
+            .arg(config)
+            .arg("--bind")
+            .arg(bind.to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|_| LiveJourneyError::RelayProcess)?;
+        Ok(Self {
+            base_url: format!("http://{bind}"),
+            child,
+        })
+    }
+
+    fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    async fn wait_ready(&mut self) -> Result<(), LiveJourneyError> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .map_err(|_| LiveJourneyError::RelayProcess)?;
+        loop {
+            if self
+                .child
+                .try_wait()
+                .map_err(|_| LiveJourneyError::RelayProcess)?
+                .is_some()
+            {
+                return Err(LiveJourneyError::RelayProcess);
+            }
+            if let Ok(response) = client.get(format!("{}/ready", self.base_url)).send().await {
+                if response.status().is_success() {
+                    return Ok(());
+                }
+            }
+            if Instant::now() >= deadline {
+                return Err(LiveJourneyError::ConsultationNotReady);
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn shutdown(&mut self) -> Result<(), LiveJourneyError> {
+        self.child
+            .kill()
+            .await
+            .map_err(|_| LiveJourneyError::ConsultationShutdown)?;
+        self.child
+            .wait()
+            .await
+            .map_err(|_| LiveJourneyError::ConsultationShutdown)?;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct RhaiSourceFixture {
+    base_url: String,
+    allowed_private_cidr: String,
+    state: Arc<RhaiSourceState>,
+    task: JoinHandle<()>,
+}
+
+#[cfg(target_os = "linux")]
+struct RhaiSourceState {
+    expected_authorization_hash: [u8; 32],
+    calls: StdMutex<BTreeMap<&'static str, usize>>,
+    authorization_failed: AtomicBool,
+    shutdown: AtomicBool,
+}
+
+#[cfg(target_os = "linux")]
+impl RhaiSourceFixture {
+    async fn start(username: &str, password: &str) -> Result<Self, LiveJourneyError> {
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
+        let expected_authorization_hash =
+            Sha256::digest(format!("Basic {encoded}").as_bytes()).into();
+        let certificate = fs::read(required_path_environment(RHAI_SOURCE_CERT_PATH_ENV)?)
+            .map_err(|_| LiveJourneyError::SourceFixture)?;
+        let private_key = fs::read(required_path_environment(RHAI_SOURCE_KEY_PATH_ENV)?)
+            .map_err(|_| LiveJourneyError::SourceFixture)?;
+        let identity = native_tls::Identity::from_pkcs8(&certificate, &private_key)
+            .map_err(|_| LiveJourneyError::SourceFixture)?;
+        let acceptor =
+            native_tls::TlsAcceptor::new(identity).map_err(|_| LiveJourneyError::SourceFixture)?;
+        let source_ip = ("rhai-runner", 443)
+            .to_socket_addrs()
+            .map_err(|_| LiveJourneyError::SourceFixture)?
+            .find_map(|address| match address.ip() {
+                std::net::IpAddr::V4(ip) if !ip.is_loopback() => Some(ip),
+                _ => None,
+            })
+            .ok_or(LiveJourneyError::SourceFixture)?;
+        let listener =
+            StdTcpListener::bind("0.0.0.0:0").map_err(|_| LiveJourneyError::SourceFixture)?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|_| LiveJourneyError::SourceFixture)?;
+        let address = listener
+            .local_addr()
+            .map_err(|_| LiveJourneyError::SourceFixture)?;
+        let state = Arc::new(RhaiSourceState {
+            expected_authorization_hash,
+            calls: StdMutex::new(BTreeMap::new()),
+            authorization_failed: AtomicBool::new(false),
+            shutdown: AtomicBool::new(false),
+        });
+        let task_state = Arc::clone(&state);
+        let task = tokio::task::spawn_blocking(move || {
+            while !task_state.shutdown.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        if let Ok(mut stream) = acceptor.accept(stream) {
+                            serve_rhai_source_request(&task_state, &mut stream);
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    Err(_) => return,
+                }
+            }
+        });
+        Ok(Self {
+            base_url: format!("https://rhai-runner:{}", address.port()),
+            allowed_private_cidr: format!("{source_ip}/32"),
+            state,
+            task,
+        })
+    }
+
+    fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    fn allowed_private_cidr(&self) -> &str {
+        &self.allowed_private_cidr
+    }
+
+    async fn assert_complete(&self) -> Result<(), LiveJourneyError> {
+        if self.state.authorization_failed.load(Ordering::SeqCst) {
+            return Err(LiveJourneyError::SourceFixture);
+        }
+        let calls = self
+            .state
+            .calls
+            .lock()
+            .map_err(|_| LiveJourneyError::SourceFixture)?;
+        let expected = BTreeMap::from([
+            ("identity", 1),
+            ("child_program", 1),
+            ("care", 1),
+            ("tb_program", 1),
+        ]);
+        if *calls != expected {
+            return Err(LiveJourneyError::SourceFixture);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for RhaiSourceFixture {
+    fn drop(&mut self) {
+        self.state.shutdown.store(true, Ordering::SeqCst);
+        self.task.abort();
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn serve_rhai_source_request(
+    state: &RhaiSourceState,
+    stream: &mut native_tls::TlsStream<std::net::TcpStream>,
+) {
+    let mut request = [0_u8; 16 * 1024];
+    let Ok(read) = stream.read(&mut request) else {
+        return;
+    };
+    let request = &request[..read];
+    let header_end = request
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap_or(request.len());
+    let head = &request[..header_end];
+    let first_line_end = head
+        .windows(2)
+        .position(|window| window == b"\r\n")
+        .unwrap_or(head.len());
+    let first_line = &head[..first_line_end];
+    let operation = if first_line.starts_with(b"GET /api/tracker/trackedEntities?") {
+        Some("identity")
+    } else if first_line.starts_with(b"GET /api/tracker/enrollments/child-program?") {
+        Some("child_program")
+    } else if first_line.starts_with(b"GET /api/tracker/events/care?") {
+        Some("care")
+    } else if first_line.starts_with(b"GET /api/tracker/enrollments/tb-program?") {
+        Some("tb_program")
+    } else {
+        None
+    };
+    let authorization = head
+        .split(|byte| *byte == b'\n')
+        .map(|line| line.strip_suffix(b"\r").unwrap_or(line))
+        .find_map(|line| line.strip_prefix(b"authorization: "));
+    let observed = authorization.map(Sha256::digest).map(Into::into);
+    if observed != Some(state.expected_authorization_hash) {
+        state.authorization_failed.store(true, Ordering::SeqCst);
+        write_rhai_source_response(stream, 401, b"{}");
+        return;
+    }
+    let Some(operation) = operation else {
+        write_rhai_source_response(stream, 404, b"{}");
+        return;
+    };
+    if let Ok(mut calls) = state.calls.lock() {
+        *calls.entry(operation).or_default() += 1;
+    } else {
+        write_rhai_source_response(stream, 500, b"{}");
+        return;
+    }
+    let body: &[u8] = match operation {
+        "identity" => br#"{"trackedEntities":[{"first_name":"Nia","last_name":"Example","date_of_birth":"2017-06-15"}]}"#,
+        "child_program" => br#"{"enrollments":[{"active":true,"programme_code":"CHILD","reconciliation_reference":"REF-0001"}]}"#,
+        "care" => br#"{"maternal_postnatal_active":true,"child_health_visit_recorded":true}"#,
+        "tb_program" => br#"{"enrollments":[{"active":false}]}"#,
+        _ => b"{}",
+    };
+    write_rhai_source_response(stream, 200, body);
+}
+
+#[cfg(target_os = "linux")]
+fn write_rhai_source_response(
+    stream: &mut native_tls::TlsStream<std::net::TcpStream>,
+    status: u16,
+    body: &[u8],
+) {
+    let reason = if status == 200 { "OK" } else { "Error" };
+    let head = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body);
+    let _ = stream.flush();
+}
+
 struct LiveJwksServer {
     signing: SigningKey,
     jwks_url: String,
@@ -975,11 +1493,19 @@ impl LiveJwksServer {
             .duration_since(UNIX_EPOCH)
             .map_err(|_| LiveJourneyError::TokenMint)?
             .as_secs();
+        let principal = match profile {
+            JourneyProfile::Dhis2SandboxedRhai => "health-registry-notary",
+            _ => NOTARY_PRINCIPAL,
+        };
+        let audience = match profile {
+            JourneyProfile::Dhis2SandboxedRhai => "registry-relay",
+            _ => AUDIENCE,
+        };
         let claims = json!({
             "iss": ISSUER,
-            "aud": AUDIENCE,
-            "sub": NOTARY_PRINCIPAL,
-            "azp": NOTARY_PRINCIPAL,
+            "aud": audience,
+            "sub": principal,
+            "azp": principal,
             "iat": now,
             "exp": now + 300,
             "scope": profile.required_scope()
@@ -1045,10 +1571,22 @@ impl StagedProfile {
         if profile == JourneyProfile::SyntheticSnapshot {
             let fixture_directory = directory.path().join("fixtures");
             fs::create_dir(&fixture_directory).map_err(|_| LiveJourneyError::ArtifactStaging)?;
-            copy_artifact(
-                &source_root.join("fixtures/people.csv"),
-                &fixture_directory.join("people.csv"),
-            )?;
+            let fixture_path = fixture_directory.join("people.csv");
+            copy_artifact(&source_root.join("fixtures/people.csv"), &fixture_path)?;
+            let fixture =
+                fs::read_to_string(&fixture_path).map_err(|_| LiveJourneyError::ArtifactStaging)?;
+            const FIXTURE_OBSERVED_AT: &str = "2026-07-11T12:00:00Z";
+            if fixture.matches(FIXTURE_OBSERVED_AT).count() != 4 {
+                return Err(LiveJourneyError::ArtifactStaging);
+            }
+            let observed_at = OffsetDateTime::now_utc()
+                .format(&Rfc3339)
+                .map_err(|_| LiveJourneyError::ArtifactStaging)?;
+            fs::write(
+                &fixture_path,
+                fixture.replace(FIXTURE_OBSERVED_AT, &observed_at),
+            )
+            .map_err(|_| LiveJourneyError::ArtifactStaging)?;
         }
 
         let binding = if profile == JourneyProfile::SyntheticSnapshot {
@@ -1063,6 +1601,10 @@ impl StagedProfile {
         let binding_path = directory.path().join("private-binding.json");
         fs::write(&binding_path, &binding_bytes).map_err(|_| LiveJourneyError::ArtifactStaging)?;
         let binding_sha = sha256_uri(&binding_bytes);
+        let binding_typed_hash = compile_private_binding(&binding_bytes)
+            .map_err(|_| LiveJourneyError::ArtifactStaging)?
+            .typed_hash()
+            .to_string();
 
         // Start from the maintained operator example, then replace only the
         // deployment-private values needed by this disposable proof. The real
@@ -1070,6 +1612,22 @@ impl StagedProfile {
         // including every maintained artifact pin.
         let mut yaml = fs::read_to_string(source_root.join(CONFIG_EXAMPLE_FILE))
             .map_err(|_| LiveJourneyError::ArtifactStaging)?;
+        if profile == JourneyProfile::SyntheticSnapshot {
+            replace_once(
+                &mut yaml,
+                "          path: ./fixtures/people.csv",
+                &format!(
+                    "          path: {}",
+                    yaml_string(
+                        directory
+                            .path()
+                            .join("fixtures/people.csv")
+                            .to_str()
+                            .ok_or(LiveJourneyError::ArtifactStaging)?
+                    )?
+                ),
+            )?;
+        }
         replace_once(
             &mut yaml,
             r#"    issuer: "https://identity.example.gov""#,
@@ -1097,15 +1655,17 @@ impl StagedProfile {
         )?;
         let example_binding_bytes = fs::read(source_root.join("private-binding.example.json"))
             .map_err(|_| LiveJourneyError::ArtifactStaging)?;
-        let example_binding_reference = format!(
-            "      - path: private-binding.example.json\n        sha256: {}",
-            sha256_uri(&example_binding_bytes)
-        );
+        let example_binding_typed_hash = compile_private_binding(&example_binding_bytes)
+            .map_err(|_| LiveJourneyError::ArtifactStaging)?
+            .typed_hash()
+            .to_string();
         replace_once(
             &mut yaml,
-            &example_binding_reference,
-            &format!("      - path: private-binding.json\n        sha256: {binding_sha}"),
+            "      - path: private-binding.example.json",
+            "      - path: private-binding.json",
         )?;
+        replace_once(&mut yaml, &example_binding_typed_hash, &binding_typed_hash)?;
+        replace_once(&mut yaml, &sha256_uri(&example_binding_bytes), &binding_sha)?;
 
         let config_path = directory.path().join("relay.yaml");
         fs::write(&config_path, yaml).map_err(|_| LiveJourneyError::ArtifactStaging)?;
@@ -1181,6 +1741,194 @@ impl StagedProfile {
     }
 }
 
+#[cfg(target_os = "linux")]
+struct GeneratedRhaiProfile {
+    directory: TempDir,
+    relay_config: PathBuf,
+    notary_config: PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+impl GeneratedRhaiProfile {
+    async fn build(
+        registryctl: &Path,
+        source_base_url: &str,
+        source_private_cidr: &str,
+        postgres_ca_path: &Path,
+        jwks_url: &str,
+    ) -> Result<Self, LiveJourneyError> {
+        let directory = tempfile::tempdir().map_err(|_| LiveJourneyError::ArtifactStaging)?;
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(JourneyProfile::Dhis2SandboxedRhai.directory());
+        let project = directory.path().join("country");
+        copy_tree_closed(&source, &project)?;
+        let status = Command::new(registryctl)
+            .arg("build")
+            .arg("--project")
+            .arg(&project)
+            .arg("--environment")
+            .arg("local")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map_err(|_| LiveJourneyError::CountryBuild)?;
+        if !status.success() {
+            return Err(LiveJourneyError::CountryBuild);
+        }
+        let build = project.join(".registry-stack/build/local/private");
+        let relay_config = build.join("relay/config/relay.yaml");
+        let notary_config = build.join("notary/config/notary.yaml");
+        let mut relay =
+            fs::read_to_string(&relay_config).map_err(|_| LiveJourneyError::ArtifactStaging)?;
+        let binding_path =
+            build.join("relay/config/artifacts/private-bindings/health-verification-health.json");
+        let original_binding =
+            fs::read(&binding_path).map_err(|_| LiveJourneyError::ArtifactStaging)?;
+        let mut binding: Value = serde_json::from_slice(&original_binding)
+            .map_err(|_| LiveJourneyError::ArtifactStaging)?;
+        let original_typed_hash = typed_private_binding_hash(&binding)?;
+        let original_raw_hash = sha256_uri(&original_binding);
+        binding["data_destination"]["origin"] = json!(source_base_url);
+        binding["data_destination"]["dns_family"] = json!("ipv4_only");
+        binding["data_destination"]["allowed_private_cidrs"] = json!([source_private_cidr]);
+        let mut binding_bytes =
+            canonicalize_json(&binding).map_err(|_| LiveJourneyError::ArtifactStaging)?;
+        binding_bytes.push(b'\n');
+        let compiled_binding = compile_private_binding(&binding_bytes)
+            .map_err(|_| LiveJourneyError::ArtifactStaging)?;
+        let binding_typed_hash = compiled_binding.typed_hash().to_string();
+        let binding_raw_hash = sha256_uri(&binding_bytes);
+        fs::write(&binding_path, &binding_bytes).map_err(|_| LiveJourneyError::ArtifactStaging)?;
+        replace_once(&mut relay, &original_typed_hash, &binding_typed_hash)?;
+        replace_once(&mut relay, &original_raw_hash, &binding_raw_hash)?;
+        replace_once(
+            &mut relay,
+            "    issuer: https://workload-issuer.internal.invalid",
+            &format!("    issuer: {}", yaml_string(ISSUER)?),
+        )?;
+        replace_once(
+            &mut relay,
+            "    jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json",
+            &format!(
+                "    jwks_url: {}\n    allow_dev_insecure_fetch_urls: true",
+                yaml_string(jwks_url)?
+            ),
+        )?;
+        replace_once(
+            &mut relay,
+            "    database_url_env: REGISTRY_RELAY_CONSULTATION_DATABASE_URL",
+            &format!(
+                "    database_url_env: REGISTRY_RELAY_CONSULTATION_DATABASE_URL\n    root_certificate_path: {}",
+                yaml_string(
+                    postgres_ca_path
+                        .to_str()
+                        .ok_or(LiveJourneyError::ArtifactStaging)?
+                )?
+            ),
+        )?;
+        fs::write(&relay_config, relay).map_err(|_| LiveJourneyError::ArtifactStaging)?;
+        Ok(Self {
+            directory,
+            relay_config,
+            notary_config,
+        })
+    }
+
+    fn stage_relay_token(&self, token: &str) -> Result<PathBuf, LiveJourneyError> {
+        let path = self.directory.path().join("relay-workload.jwt");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|_| LiveJourneyError::RelayCredentialStaging)?;
+        file.write_all(token.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|_| LiveJourneyError::RelayCredentialStaging)?;
+        Ok(path)
+    }
+
+    fn notary_audit_path(&self) -> PathBuf {
+        self.directory.path().join("notary-audit.jsonl")
+    }
+
+    fn load_notary_config(
+        &self,
+        relay_base_url: &str,
+        token_file: &Path,
+        audit_path: &Path,
+    ) -> Result<registry_notary_core::StandaloneRegistryNotaryConfig, LiveJourneyError> {
+        let mut yaml = fs::read_to_string(&self.notary_config)
+            .map_err(|_| LiveJourneyError::NotaryConfigLoad)?;
+        replace_once(
+            &mut yaml,
+            "    base_url: https://health-relay.internal.invalid",
+            &format!(
+                "    base_url: {}\n    allow_insecure_localhost: true",
+                yaml_string(relay_base_url)?
+            ),
+        )?;
+        replace_once(
+            &mut yaml,
+            "    token_file: /run/secrets/relay-workload-token",
+            &format!(
+                "    token_file: {}",
+                yaml_string(
+                    token_file
+                        .to_str()
+                        .ok_or(LiveJourneyError::NotaryConfigLoad)?
+                )?
+            ),
+        )?;
+        replace_once(
+            &mut yaml,
+            "  sink: stdout",
+            &format!(
+                "  sink: file\n  path: {}",
+                yaml_string(
+                    audit_path
+                        .to_str()
+                        .ok_or(LiveJourneyError::NotaryConfigLoad)?
+                )?
+            ),
+        )?;
+        serde_norway::from_str(&yaml).map_err(|_| LiveJourneyError::NotaryConfigLoad)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn copy_tree_closed(source: &Path, destination: &Path) -> Result<(), LiveJourneyError> {
+    if source
+        .symlink_metadata()
+        .map_err(|_| LiveJourneyError::ArtifactStaging)?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(LiveJourneyError::ArtifactStaging);
+    }
+    fs::create_dir(destination).map_err(|_| LiveJourneyError::ArtifactStaging)?;
+    for entry in fs::read_dir(source).map_err(|_| LiveJourneyError::ArtifactStaging)? {
+        let entry = entry.map_err(|_| LiveJourneyError::ArtifactStaging)?;
+        let file_type = entry
+            .file_type()
+            .map_err(|_| LiveJourneyError::ArtifactStaging)?;
+        let target = destination.join(entry.file_name());
+        if file_type.is_symlink() {
+            return Err(LiveJourneyError::ArtifactStaging);
+        }
+        if file_type.is_dir() {
+            copy_tree_closed(&entry.path(), &target)?;
+        } else if file_type.is_file() {
+            copy_artifact(&entry.path(), &target)?;
+        } else {
+            return Err(LiveJourneyError::ArtifactStaging);
+        }
+    }
+    Ok(())
+}
+
 fn live_private_binding(
     profile: JourneyProfile,
     source_base_url: &str,
@@ -1207,6 +1955,7 @@ fn live_private_binding(
     // production bindings otherwise retain the strict dual-stack default.
     let data_destination_id = match profile {
         JourneyProfile::Dhis2 => "dhis2-live-data",
+        JourneyProfile::Dhis2SandboxedRhai => return Err(LiveJourneyError::InvalidSourceBaseUrl),
         JourneyProfile::OpenCrvs => "opencrvs-live-data",
         JourneyProfile::SyntheticSnapshot => return Err(LiveJourneyError::InvalidSourceBaseUrl),
     };
@@ -1221,6 +1970,7 @@ fn live_private_binding(
     }
     let credential_destination = match profile {
         JourneyProfile::Dhis2 => Value::Null,
+        JourneyProfile::Dhis2SandboxedRhai => return Err(LiveJourneyError::InvalidSourceBaseUrl),
         JourneyProfile::OpenCrvs => {
             let mut credential = destination.clone();
             credential.insert("id".to_string(), json!("opencrvs-live-oauth"));
@@ -1237,6 +1987,9 @@ fn live_private_binding(
                 8_192,
                 10_000,
             ),
+            JourneyProfile::Dhis2SandboxedRhai => {
+                return Err(LiveJourneyError::InvalidSourceBaseUrl)
+            }
             JourneyProfile::OpenCrvs => (
                 "opencrvs-live",
                 "dci-crvs-api",
@@ -1500,13 +2253,24 @@ SELECT
                 1,
                 json!([{"kind": "data", "ordinal": 0, "operation_id": "lookup-enrollment-status"}]),
             ),
+            JourneyProfile::Dhis2SandboxedRhai => (
+                "match",
+                0,
+                4,
+                json!([
+                    {"kind": "data", "ordinal": 0, "operation_id": "identity"},
+                    {"kind": "data", "ordinal": 1, "operation_id": "child_program"},
+                    {"kind": "data", "ordinal": 2, "operation_id": "care"},
+                    {"kind": "data", "ordinal": 3, "operation_id": "tb_program"}
+                ]),
+            ),
             JourneyProfile::OpenCrvs => (
                 "no_match",
                 1,
                 2,
                 json!([
                     {"kind": "credential", "ordinal": 0, "operation_id": "acquire-opencrvs-token"},
-                    {"kind": "data", "ordinal": 0, "operation_id": "lookup-birth-record.jwks"},
+                    {"kind": "data", "ordinal": 0, "operation_id": "fetch-signing-keys"},
                     {"kind": "data", "ordinal": 1, "operation_id": "lookup-birth-record"}
                 ]),
             ),
@@ -1670,6 +2434,23 @@ fn sha256_uri(bytes: &[u8]) -> String {
         write!(&mut encoded, "{byte:02x}").expect("writing to a string cannot fail");
     }
     encoded
+}
+
+#[cfg(target_os = "linux")]
+fn typed_private_binding_hash(binding: &Value) -> Result<String, LiveJourneyError> {
+    use std::fmt::Write as _;
+
+    let canonical = canonicalize_json(binding).map_err(|_| LiveJourneyError::ArtifactStaging)?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"registry.relay.consultation-binding.v1\0");
+    hasher.update(canonical);
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity("sha256:".len() + digest.len() * 2);
+    encoded.push_str("sha256:");
+    for byte in digest {
+        write!(&mut encoded, "{byte:02x}").expect("writing to a string cannot fail");
+    }
+    Ok(encoded)
 }
 
 fn yaml_string(value: &str) -> Result<String, LiveJourneyError> {

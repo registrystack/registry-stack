@@ -98,6 +98,11 @@ fn basic_registry() -> CompiledSourcePlanRegistry {
     compile_registry_set(&[&contract], &[&pack], &[&binding])
 }
 
+fn api_key_registry(mode: &str, name: &str) -> CompiledSourcePlanRegistry {
+    let (contract, pack, binding) = api_key_artifacts(mode, name);
+    compile_registry_set(&[&contract], &[&pack], &[&binding])
+}
+
 fn basic_and_oauth_registry() -> CompiledSourcePlanRegistry {
     let (contract, pack, binding) = basic_artifacts();
     compile_registry_set(
@@ -141,6 +146,44 @@ fn basic_artifacts() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         .expect("binding limits")
         .remove("max_token_lifetime_ms");
     let binding = serde_json::to_vec(&binding).expect("Basic source binding JSON");
+    (contract, pack, binding)
+}
+
+fn api_key_artifacts(mode: &str, name: &str) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mut pack = parse_json_strict(OAUTH_PACK).expect("strict source-plan pack");
+    pack["id"] = json!(format!("synthetic.person-status.{mode}"));
+    pack["spec"]["plan"]["operations"][0]["auth"] = json!({
+        "mode": mode,
+        "name": name,
+        "max_value_bytes": 128
+    });
+    pack["spec"]["plan"]["credential_destination_slot"] = Value::Null;
+    pack["spec"]["plan"]["credential_operation"] = Value::Null;
+    pack["spec"]["bounds"]["max_credential_exchanges"] = json!(0);
+    let pack = serde_json::to_vec(&pack).expect("API-key source-plan pack JSON");
+    let pack_hash = typed_hash(PACK_DOMAIN, &pack);
+
+    let mut contract = parse_json_strict(OAUTH_CONTRACT).expect("strict source contract");
+    contract["id"] = json!(format!("synthetic.person-status.{mode}"));
+    contract["spec"]["integration_pack"]["id"] = json!(format!("synthetic.person-status.{mode}"));
+    contract["spec"]["integration_pack"]["hash"] = Value::String(pack_hash.clone());
+    contract["spec"]["bounds"]["max_credential_exchanges"] = json!(0);
+    contract["spec"]["authorization"]["policy"]["id"] =
+        json!(format!("relay.synthetic.person-status.{mode}"));
+    refresh_policy_hash(&mut contract);
+    let contract = serde_json::to_vec(&contract).expect("API-key source contract JSON");
+
+    let mut binding = parse_json_strict(OAUTH_BINDING).expect("strict source binding");
+    binding["profile"]["id"] = json!(format!("synthetic.person-status.{mode}"));
+    binding["integration_pack"]["id"] = json!(format!("synthetic.person-status.{mode}"));
+    binding["integration_pack"]["hash"] = Value::String(pack_hash);
+    binding["credential_destination"] = Value::Null;
+    binding["credential"]["ref"] = json!(format!("people-{mode}-reader"));
+    binding["limits"]
+        .as_object_mut()
+        .expect("binding limits")
+        .remove("max_token_lifetime_ms");
+    let binding = serde_json::to_vec(&binding).expect("API-key source binding JSON");
     (contract, pack, binding)
 }
 
@@ -332,6 +375,131 @@ fn oauth_provider_closes_before_environment_access_and_mints_only_bound_requests
 }
 
 #[test]
+fn api_key_runtime_capabilities_keep_sentinel_material_out_of_diagnostics() {
+    const SENTINEL: &str = "relay-api-key-secret-sentinel-4c5f73b2";
+
+    for (kind, mode, name) in [
+        ("api_key_header", "api_key_header", "x-country-api-key"),
+        ("api_key_query", "api_key_query", "apiKey"),
+    ] {
+        let value_env = unique_env_name(kind);
+        let _value = EnvironmentGuard::set(value_env.clone(), SENTINEL);
+        let registry = api_key_registry(mode, name);
+        let config = catalog_from_yaml(&format!(
+            "- type: {kind}\n  ref: people-{mode}-reader\n  generation: 7\n  value_env: {value_env}\n"
+        ));
+        let provider = CompiledStaticBearerSourceCredentialProvider::compile(&config, &registry)
+            .expect("exact API-key closure compiles");
+        let plan = registry.iter().next().expect("one API-key plan");
+        let operation = plan.operations().next().expect("one API-key operation");
+        let capability = provider
+            .api_key_for(plan, operation)
+            .expect("operation-bound API-key capability");
+        let query = vec![""; operation.query().len()];
+        let headers = vec![b"".as_slice(); operation.headers().len()];
+        let request = capability
+            .render(None, &query, &headers, None)
+            .expect("bounded API-key request renders");
+
+        for diagnostic in [
+            format!("{config:?}"),
+            format!("{provider:?}"),
+            format!("{request:?}"),
+        ] {
+            assert!(!diagnostic.contains(SENTINEL));
+            assert!(!diagnostic.contains(&value_env));
+        }
+    }
+}
+
+#[test]
+fn api_key_query_sentinel_stays_out_of_relay_retained_urls_logs_metrics_audit_and_evidence_but_upstream_url_retention_remains(
+) {
+    const SENTINEL: &str = "relay-api-key-query-secret-sentinel-91d7eac4";
+    let value_env = unique_env_name("API_KEY_QUERY_RETENTION_BOUNDARY");
+    let _value = EnvironmentGuard::set(value_env.clone(), SENTINEL);
+    let registry = api_key_registry("api_key_query", "apiKey");
+    let config = catalog_from_yaml(&format!(
+        "- type: api_key_query\n  ref: people-api_key_query-reader\n  generation: 7\n  value_env: {value_env}\n"
+    ));
+    let provider = CompiledStaticBearerSourceCredentialProvider::compile(&config, &registry)
+        .expect("exact query API-key closure compiles");
+    let plan = registry.iter().next().expect("one query API-key plan");
+    let operation = plan
+        .operations()
+        .next()
+        .expect("one query API-key operation");
+    let capability = provider
+        .api_key_for(plan, operation)
+        .expect("operation-bound query API-key capability");
+    let query = vec![""; operation.query().len()];
+    let headers = vec![b"".as_slice(); operation.headers().len()];
+    let request = capability
+        .render(None, &query, &headers, None)
+        .expect("bounded query API-key request renders");
+
+    let retained_url = format!("{:?}", plan.data_destination());
+    let request_log = format!("outbound source request: {request:?}");
+    // The credential layer exposes only reviewed profile, pack, and operation
+    // identities for metric labels, never the rendered target.
+    let metric_labels = format!(
+        "profile={:?},integration_pack={:?},operation={:?}",
+        plan.profile(),
+        plan.integration_pack(),
+        operation.id()
+    );
+    let runtime = plan.runtime_profile();
+    // Completion and durable-audit persistence is compiled from this exact,
+    // secret-free runtime context rather than from the rendered request.
+    let audit_context = serde_json::to_string(&json!({
+        "credential_destination_id": runtime.credential_destination_id(),
+        "data_destination_id": runtime.data_destination_id(),
+        "credential_reference": runtime.credential_reference(),
+        "credential_generation": runtime.credential_generation(),
+        "authorized_operation_union": runtime.authorized_operation_union().collect::<Vec<_>>(),
+        "permit_bindings": runtime.permit_bindings().collect::<Vec<_>>(),
+    }))
+    .expect("retained completion/audit context renders");
+    let retained_evidence = format!(
+        "contract={} evidence={:?}",
+        String::from_utf8_lossy(plan.canonical_public_contract()),
+        [
+            OAUTH_CONFORMANCE,
+            OAUTH_NEGATIVE_SECURITY,
+            OAUTH_MINIMIZATION
+        ]
+    );
+
+    for (surface, rendered) in [
+        ("retained destination URL", retained_url),
+        ("request log", request_log),
+        ("metric labels", metric_labels),
+        ("completion/audit context", audit_context),
+        ("retained evidence", retained_evidence),
+    ] {
+        assert!(
+            !rendered.contains(SENTINEL),
+            "query API-key material must be absent from the Relay {surface} surface"
+        );
+        assert!(
+            !rendered.contains(&value_env),
+            "the environment source name must be absent from the Relay {surface} surface"
+        );
+    }
+    assert!(
+        format!("{request:?}").contains("target: \"[REDACTED]\""),
+        "logging a rendered request must redact its complete target"
+    );
+    assert!(
+        matches!(
+            operation.api_key(),
+            Some(CompiledApiKeyPlacement::Query { name, .. }) if name.as_ref() == "apiKey"
+        ),
+        "query placement necessarily carries the secret in the outbound upstream URL; upstream and proxy URL retention remains a deployment boundary"
+    );
+}
+
+#[test]
 fn oauth_provider_rejects_wrong_kind_generation_duplicate_env_and_material() {
     let registry = open_crvs_runtime_vector_registry_fixture();
     let client_id_env = unique_env_name("OPENCRVS_WRONG_CLIENT_ID");
@@ -428,6 +596,24 @@ fn basic_provider_closes_only_basic_subset_of_mixed_registry() {
             .authorization_for(oauth_plan, oauth_operation)
             .unwrap_err(),
         SourceCredentialProviderError::OperationBindingMismatch
+    );
+}
+
+#[test]
+fn structural_credential_validation_never_reads_secret_sources() {
+    let username_env = unique_env_name("STRUCTURAL_USERNAME");
+    let password_env = unique_env_name("STRUCTURAL_PASSWORD");
+    let _username = EnvironmentGuard::missing(username_env.clone());
+    let _password = EnvironmentGuard::missing(password_env.clone());
+    let catalog = catalog("people-basic-reader", 7, &username_env, &password_env);
+    let registry = basic_registry();
+    assert_eq!(
+        validate_source_credential_catalog_for_plans(&catalog, &registry),
+        Ok(())
+    );
+    assert_eq!(
+        CompiledBasicSourceCredentialProvider::compile(&catalog, &registry).unwrap_err(),
+        SourceCredentialProviderError::EnvironmentLoadFailed
     );
 }
 
@@ -682,7 +868,12 @@ fn success_precomputes_exact_payload_and_only_renders_bound_operation() {
         .expect("exact operation receives capability");
     assert!(!format!("{capability:?}").contains(username));
     capability
-        .render(&["registration_status", "2", "benefits", "Person-42"])
+        .render(
+            None,
+            &["registration_status", "2", "benefits", "Person-42"],
+            &[],
+            None,
+        )
         .expect("capability renders only through its compiled operation");
 
     let oauth = oauth_registry();

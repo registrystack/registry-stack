@@ -2627,10 +2627,23 @@ fn generated_http_pack_semantics(
                     FactType::Date => "date",
                 }
             };
-            (
-                name.clone(),
-                json!({ "type": output_type, "nullable": fact.nullable }),
-            )
+            let mut declaration = json!({ "type": output_type, "nullable": fact.nullable });
+            match fact.fact_type {
+                FactType::String => {
+                    declaration["max_bytes"] = json!(fact.max_bytes);
+                }
+                FactType::Integer => {
+                    let schema = fact_source_schema(&integration.document, fact)
+                        .expect("validated integer fact source schema");
+                    if let SchemaNode::Integer { min, max } = schema {
+                        declaration["minimum"] = json!(min);
+                        declaration["maximum"] = json!(max);
+                    }
+                }
+                FactType::Date => declaration["max_bytes"] = json!(10),
+                FactType::Boolean | FactType::Presence => {}
+            }
+            (name.clone(), declaration)
         })
         .collect::<Map<String, Value>>();
     let root_operation_id = data_operations[0].0;
@@ -2768,18 +2781,27 @@ fn generated_snapshot_pack_semantics(
             }
         };
         fields.insert(field.to_string(), schema);
-        output.insert(
-            fact_name.clone(),
-            json!({
-                "type": match fact.fact_type {
-                    FactType::Boolean | FactType::Presence => "boolean",
-                    FactType::Integer => "integer",
-                    FactType::String => "string",
-                    FactType::Date => "date",
-                },
-                "nullable": fact.nullable,
-            }),
-        );
+        output.insert(fact_name.clone(), {
+            let mut declaration = json!({
+            "type": match fact.fact_type {
+                FactType::Boolean | FactType::Presence => "boolean",
+                FactType::Integer => "integer",
+                FactType::String => "string",
+                FactType::Date => "date",
+            },
+            "nullable": fact.nullable,
+            });
+            match fact.fact_type {
+                FactType::String => declaration["max_bytes"] = json!(fact.max_bytes),
+                FactType::Integer => {
+                    declaration["minimum"] = json!(-((1_i64 << 53) - 1));
+                    declaration["maximum"] = json!((1_i64 << 53) - 1);
+                }
+                FactType::Date => declaration["max_bytes"] = json!(10),
+                FactType::Boolean | FactType::Presence => {}
+            }
+            declaration
+        });
     }
     let max_matches = match snapshot.cardinality {
         CardinalityMode::Singleton => 1,
@@ -3775,7 +3797,7 @@ fn generated_rhai_template(_alias: &str, integration: &LoadedIntegration) -> Res
         "script": source,
         "script_hash": sha256_uri(script),
         "entrypoint": "consult",
-        "memory_bytes": 64 * 1024 * 1024,
+        "memory_bytes": 128 * 1024 * 1024,
         "cpu_ms": 250,
         "ipc_frame_bytes": 256 * 1024,
         "instructions": 100_000,
@@ -3929,7 +3951,7 @@ fn private_binding_document(
         json!({
             "callable_operations": integration_operations(&integration.document).keys().collect::<Vec<_>>(),
             "max_calls": integration.document.bounds.calls,
-            "memory_bytes": 64 * 1024 * 1024,
+            "memory_bytes": 128 * 1024 * 1024,
             "cpu_ms": 250,
             "ipc_frame_bytes": 256 * 1024,
             "instructions": 100_000,
@@ -8604,9 +8626,11 @@ mod tests {
             let bytes = serde_yaml::to_string(&tampered).expect("tampered config serializes");
             let error = validate_generated_relay(bytes.as_bytes(), &compiled.relay_private)
                 .expect_err("tampered binding pin must fail closed");
+            let diagnostic = format!("{error:#}");
             assert!(
-                format!("{error:#}").contains("binding"),
-                "unexpected {field} diagnostic: {error:#}"
+                diagnostic.contains("binding")
+                    || diagnostic.contains("generated Relay config failed production loading"),
+                "unexpected {field} diagnostic: {diagnostic}"
             );
         }
     }

@@ -11,6 +11,13 @@ pub use runtime::{
     NotaryRouters, NotaryRuntimeSnapshot, ResolvedCredential, StandaloneServerError,
 };
 
+#[cfg(feature = "registry-notary-cel")]
+pub use runtime::{
+    OfflineAuthentication, OfflineClaimView, OfflineNotaryErrorClass, OfflineNotaryEvidence,
+    OfflineNotaryHarness, OfflineNotaryHarnessError, OfflineNotaryRequest,
+    OfflineRelayConsultation, OfflineRelayOutcome,
+};
+
 pub(crate) use runtime::{
     audit_error_response, constant_time_eq, current_request_correlation_id,
     generate_numeric_tx_code, generate_opaque_token, new_request_correlation_id,

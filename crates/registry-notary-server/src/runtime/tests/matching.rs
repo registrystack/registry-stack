@@ -24,6 +24,7 @@
             },
             relationship: None,
             on_behalf_of: None,
+            variables: Default::default(),
         };
 
         let default_trusted_policy = TrustedPolicyContext::default();
@@ -262,6 +263,7 @@
             target: EvidenceEntity::new("Person"),
             relationship: None,
             on_behalf_of: None,
+            variables: Default::default(),
         };
 
         let effect = expect_pdp_permit(matching_pdp_decision(
@@ -305,6 +307,7 @@
             target: EvidenceEntity::new("Person"),
             relationship: None,
             on_behalf_of: None,
+            variables: Default::default(),
         };
 
         expect_pdp_denial(
@@ -382,6 +385,7 @@
             target: EvidenceEntity::new("Person"),
             relationship: None,
             on_behalf_of: None,
+            variables: Default::default(),
         };
 
         expect_pdp_denial(
@@ -432,6 +436,7 @@
             target: EvidenceEntity::new("Person"),
             relationship: None,
             on_behalf_of: None,
+            variables: Default::default(),
         };
 
         let effect = expect_pdp_permit(matching_pdp_decision(
@@ -576,6 +581,7 @@
             target: EvidenceEntity::new("Person"),
             relationship: None,
             on_behalf_of: None,
+            variables: Default::default(),
         };
         let default_trusted_policy = TrustedPolicyContext::default();
 
@@ -696,6 +702,7 @@
             target: EvidenceEntity::new("Person"),
             relationship: None,
             on_behalf_of: None,
+            variables: Default::default(),
         };
         let purpose_constraints = test_purpose_constraints("benefits");
 

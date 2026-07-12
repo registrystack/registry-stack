@@ -84,15 +84,48 @@ pub enum OpenCrvsDciV190Rc1DecodeError {
     RecordContractViolation,
 }
 
+/// Product-neutral name for the reviewed signed DCI response failure set.
+pub type SignedDciDecodeError = OpenCrvsDciV190Rc1DecodeError;
+/// Product-neutral name for the reviewed signed DCI expectation failure.
+pub type SignedDciExpectationError = OpenCrvsDciV190Rc1ExpectationError;
+
 /// Request-bound values for one pinned OpenCRVS exact DCI response.
 pub struct OpenCrvsDciV190Rc1Expectation {
     message_id: Box<str>,
     sender_id: Box<str>,
     receiver_id: Option<Box<str>>,
-    expected_uin: Zeroizing<String>,
+    selector: SignedDciSelectorExpectation,
+    protocol_version: Box<str>,
+    registry_type: Box<str>,
+    record_type: Box<str>,
+    locale: Box<str>,
+    page_number: u64,
+    page_size: u64,
     max_jwks_bytes: usize,
     max_response_bytes: usize,
 }
+
+enum SignedDciSelectorExpectation {
+    IdtypeValue {
+        identifier_type: Box<str>,
+        value: Zeroizing<String>,
+    },
+    ExactAnd(Box<[SignedDciExpectedComponent]>),
+}
+
+struct SignedDciExpectedComponent {
+    response_pointer: Box<[Box<str>]>,
+    value: Zeroizing<String>,
+}
+
+/// One request-bound response location in a structured DCI exact-AND selector.
+pub struct SignedDciExactComponent<'a> {
+    pub response_pointer: &'a str,
+    pub expected_value: &'a str,
+}
+
+/// Product-neutral signed DCI request/response expectation.
+pub type SignedDciExpectation = OpenCrvsDciV190Rc1Expectation;
 
 impl OpenCrvsDciV190Rc1Expectation {
     /// Compile exact request correlation, identities, and response byte bounds.
@@ -104,10 +137,54 @@ impl OpenCrvsDciV190Rc1Expectation {
         max_jwks_bytes: usize,
         max_response_bytes: usize,
     ) -> Result<Self, OpenCrvsDciV190Rc1ExpectationError> {
+        Self::new_generic(
+            message_id,
+            sender_id,
+            receiver_id,
+            expected_uin,
+            OPENCRVS_DCI_VERSION,
+            OPENCRVS_REGISTRY_TYPE,
+            OPENCRVS_RECORD_TYPE,
+            "UIN",
+            OPENCRVS_LOCALE,
+            OPENCRVS_PAGE_NUMBER,
+            OPENCRVS_PAGE_SIZE,
+            max_jwks_bytes,
+            max_response_bytes,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_generic(
+        message_id: &str,
+        sender_id: &str,
+        receiver_id: Option<&str>,
+        expected_selector: &str,
+        protocol_version: &str,
+        registry_type: &str,
+        record_type: &str,
+        identifier_type: &str,
+        locale: &str,
+        page_number: u64,
+        page_size: u64,
+        max_jwks_bytes: usize,
+        max_response_bytes: usize,
+    ) -> Result<Self, OpenCrvsDciV190Rc1ExpectationError> {
         if !valid_expected_identifier(message_id)
             || !valid_expected_identifier(sender_id)
             || receiver_id.is_some_and(|value| !valid_expected_identifier(value))
-            || !valid_expected_selector(expected_uin)
+            || !valid_expected_selector(expected_selector)
+            || [
+                protocol_version,
+                registry_type,
+                record_type,
+                identifier_type,
+                locale,
+            ]
+            .iter()
+            .any(|value| !valid_expected_identifier(value))
+            || page_number == 0
+            || !(1..=2).contains(&page_size)
             || !(1..=MAX_OPENCRVS_JWKS_BYTES).contains(&max_jwks_bytes)
             || !(1..=MAX_OPENCRVS_SIGNED_RESPONSE_BYTES).contains(&max_response_bytes)
         {
@@ -117,7 +194,79 @@ impl OpenCrvsDciV190Rc1Expectation {
             message_id: message_id.into(),
             sender_id: sender_id.into(),
             receiver_id: receiver_id.map(Into::into),
-            expected_uin: Zeroizing::new(expected_uin.to_owned()),
+            selector: SignedDciSelectorExpectation::IdtypeValue {
+                identifier_type: identifier_type.into(),
+                value: Zeroizing::new(expected_selector.to_owned()),
+            },
+            protocol_version: protocol_version.into(),
+            registry_type: registry_type.into(),
+            record_type: record_type.into(),
+            locale: locale.into(),
+            page_number,
+            page_size,
+            max_jwks_bytes,
+            max_response_bytes,
+        })
+    }
+
+    /// Compile the same signed envelope with a one-to-four-component exact-AND
+    /// response binding instead of the legacy idtype-value selector.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_generic_exact_and(
+        message_id: &str,
+        sender_id: &str,
+        receiver_id: Option<&str>,
+        components: &[SignedDciExactComponent<'_>],
+        protocol_version: &str,
+        registry_type: &str,
+        record_type: &str,
+        locale: &str,
+        page_number: u64,
+        page_size: u64,
+        max_jwks_bytes: usize,
+        max_response_bytes: usize,
+    ) -> Result<Self, OpenCrvsDciV190Rc1ExpectationError> {
+        if !valid_expected_identifier(message_id)
+            || !valid_expected_identifier(sender_id)
+            || receiver_id.is_some_and(|value| !valid_expected_identifier(value))
+            || [protocol_version, registry_type, record_type, locale]
+                .iter()
+                .any(|value| !valid_expected_identifier(value))
+            || !(1..=4).contains(&components.len())
+            || page_number == 0
+            || !(1..=2).contains(&page_size)
+            || !(1..=MAX_OPENCRVS_JWKS_BYTES).contains(&max_jwks_bytes)
+            || !(1..=MAX_OPENCRVS_SIGNED_RESPONSE_BYTES).contains(&max_response_bytes)
+        {
+            return Err(OpenCrvsDciV190Rc1ExpectationError::InvalidExpectation);
+        }
+        let mut pointers = std::collections::BTreeSet::new();
+        let components = components
+            .iter()
+            .map(|component| {
+                let response_pointer = decode_pointer(component.response_pointer)?;
+                if !pointers.insert(response_pointer.clone())
+                    || !valid_expected_selector(component.expected_value)
+                {
+                    return Err(OpenCrvsDciV190Rc1ExpectationError::InvalidExpectation);
+                }
+                Ok(SignedDciExpectedComponent {
+                    response_pointer,
+                    value: Zeroizing::new(component.expected_value.to_owned()),
+                })
+            })
+            .collect::<Result<Box<[_]>, _>>()?;
+        Ok(Self {
+            message_id: message_id.into(),
+            sender_id: sender_id.into(),
+            receiver_id: receiver_id.map(Into::into),
+            selector: SignedDciSelectorExpectation::ExactAnd(components),
+            protocol_version: protocol_version.into(),
+            registry_type: registry_type.into(),
+            record_type: record_type.into(),
+            locale: locale.into(),
+            page_number,
+            page_size,
             max_jwks_bytes,
             max_response_bytes,
         })
@@ -134,7 +283,7 @@ impl fmt::Debug for OpenCrvsDciV190Rc1Expectation {
                 "receiver_id",
                 &self.receiver_id.as_ref().map(|_| "[REDACTED]"),
             )
-            .field("expected_uin", &"[REDACTED]")
+            .field("selector", &"[REDACTED]")
             .field("max_jwks_bytes", &self.max_jwks_bytes)
             .field("max_response_bytes", &self.max_response_bytes)
             .finish()
@@ -146,6 +295,9 @@ pub struct OpenCrvsDciV190Rc1Decoder<'decoder> {
     expected: OpenCrvsDciV190Rc1Expectation,
     record_decoder: &'decoder ClosedJsonDecoder,
 }
+
+/// Product-neutral signed DCI and JWKS verifier.
+pub type SignedDciDecoder<'decoder> = OpenCrvsDciV190Rc1Decoder<'decoder>;
 
 impl<'decoder> OpenCrvsDciV190Rc1Decoder<'decoder> {
     /// Bind a request expectation to the complete logical-record schema.
@@ -213,7 +365,7 @@ impl<'decoder> OpenCrvsDciV190Rc1Decoder<'decoder> {
             .value()
             .as_array()
             .ok_or(OpenCrvsDciV190Rc1DecodeError::RecordContractViolation)?;
-        validate_record_selector(records, self.expected.expected_uin.as_str())?;
+        validate_record_selector(records, &self.expected.selector)?;
         let mut bytes = Zeroizing::new(Vec::new());
         bytes.push(b'[');
         for (index, record) in records.iter().enumerate() {
@@ -239,6 +391,26 @@ impl<'decoder> OpenCrvsDciV190Rc1Decoder<'decoder> {
             return Ok(ClosedJsonOutcome::Ambiguous);
         }
         Ok(decoded)
+    }
+
+    /// Verify caller-owned offline fixture bytes with the exact production
+    /// JWKS, JWS, envelope, selector, and record decoder path.
+    #[doc(hidden)]
+    pub fn decode_offline_fixture(
+        &self,
+        jwks_bytes: &[u8],
+        response_bytes: &[u8],
+    ) -> Result<ClosedJsonOutcome, OpenCrvsDciV190Rc1DecodeError> {
+        self.decode(
+            BoundedDestinationBody {
+                bytes: Zeroizing::new(jwks_bytes.to_vec()),
+                slot: PhantomData,
+            },
+            BoundedDestinationBody {
+                bytes: Zeroizing::new(response_bytes.to_vec()),
+                slot: PhantomData,
+            },
+        )
     }
 }
 
@@ -500,7 +672,7 @@ fn validate_envelope(
         ],
         &["receiver_id"],
     )?;
-    if required_string(header, "version")? != OPENCRVS_DCI_VERSION
+    if required_string(header, "version")? != expected.protocol_version.as_ref()
         || required_string(header, "action")? != "on-search"
         || required_bool(header, "is_msg_encrypted")?
         || parse_rfc3339(required_string(header, "message_ts")?).is_err()
@@ -568,10 +740,10 @@ fn validate_envelope(
         &["version", "reg_type", "reg_record_type", "reg_records"],
         &[],
     )?;
-    if required_string(data, "version")? != OPENCRVS_DCI_VERSION
-        || required_string(data, "reg_type")? != OPENCRVS_REGISTRY_TYPE
-        || required_string(data, "reg_record_type")? != OPENCRVS_RECORD_TYPE
-        || required_string(response, "locale")? != OPENCRVS_LOCALE
+    if required_string(data, "version")? != expected.protocol_version.as_ref()
+        || required_string(data, "reg_type")? != expected.registry_type.as_ref()
+        || required_string(data, "reg_record_type")? != expected.record_type.as_ref()
+        || required_string(response, "locale")? != expected.locale.as_ref()
     {
         return Err(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation);
     }
@@ -579,7 +751,7 @@ fn validate_envelope(
         .get("reg_records")
         .and_then(Value::as_array)
         .ok_or(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)?;
-    if records.len() > OPENCRVS_PAGE_SIZE as usize
+    if records.len() > expected.page_size as usize
         || records.iter().any(|record| !record.is_object())
     {
         return Err(OpenCrvsDciV190Rc1DecodeError::CardinalityViolation);
@@ -600,10 +772,10 @@ fn validate_envelope(
         .map_err(|_| OpenCrvsDciV190Rc1DecodeError::PaginationViolation)?;
     if required_u64(pagination, "page_number")
         .map_err(|_| OpenCrvsDciV190Rc1DecodeError::PaginationViolation)?
-        != OPENCRVS_PAGE_NUMBER
+        != expected.page_number
         || required_u64(pagination, "page_size")
             .map_err(|_| OpenCrvsDciV190Rc1DecodeError::PaginationViolation)?
-            != OPENCRVS_PAGE_SIZE
+            != expected.page_size
         || pagination_total_count < records.len() as u64
         || (pagination_total_count == 0) != records.is_empty()
     {
@@ -632,29 +804,91 @@ fn take_records(response: &mut Value) -> Result<Vec<Value>, OpenCrvsDciV190Rc1De
 
 fn validate_record_selector(
     records: &[Value],
-    expected_uin: &str,
+    expected: &SignedDciSelectorExpectation,
 ) -> Result<(), OpenCrvsDciV190Rc1DecodeError> {
     for record in records {
-        let first_identifier = record
-            .as_object()
-            .and_then(|record| record.get("identifier"))
-            .and_then(Value::as_array)
-            .and_then(|identifiers| identifiers.first())
-            .and_then(Value::as_object)
-            .ok_or(OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation)?;
-        if first_identifier
-            .get("identifier_type")
-            .and_then(Value::as_str)
-            != Some("UIN")
-            || first_identifier
-                .get("identifier_value")
-                .and_then(Value::as_str)
-                != Some(expected_uin)
-        {
-            return Err(OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation);
+        match expected {
+            SignedDciSelectorExpectation::IdtypeValue {
+                identifier_type,
+                value,
+            } => {
+                let first_identifier = record
+                    .as_object()
+                    .and_then(|record| record.get("identifier"))
+                    .and_then(Value::as_array)
+                    .and_then(|identifiers| identifiers.first())
+                    .and_then(Value::as_object)
+                    .ok_or(OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation)?;
+                if first_identifier
+                    .get("identifier_type")
+                    .and_then(Value::as_str)
+                    != Some(identifier_type)
+                    || first_identifier
+                        .get("identifier_value")
+                        .and_then(Value::as_str)
+                        != Some(value.as_str())
+                {
+                    return Err(OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation);
+                }
+            }
+            SignedDciSelectorExpectation::ExactAnd(components) => {
+                for component in components {
+                    if resolve_pointer(record, &component.response_pointer).and_then(Value::as_str)
+                        != Some(component.value.as_str())
+                    {
+                        return Err(OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation);
+                    }
+                }
+            }
         }
     }
     Ok(())
+}
+
+fn decode_pointer(pointer: &str) -> Result<Box<[Box<str>]>, OpenCrvsDciV190Rc1ExpectationError> {
+    if !pointer.starts_with('/') || pointer.len() > 512 {
+        return Err(OpenCrvsDciV190Rc1ExpectationError::InvalidExpectation);
+    }
+    pointer[1..]
+        .split('/')
+        .map(|token| {
+            let mut decoded = String::new();
+            let mut chars = token.chars();
+            while let Some(character) = chars.next() {
+                if character == '~' {
+                    decoded.push(match chars.next() {
+                        Some('0') => '~',
+                        Some('1') => '/',
+                        _ => return Err(OpenCrvsDciV190Rc1ExpectationError::InvalidExpectation),
+                    });
+                } else if character.is_control() {
+                    return Err(OpenCrvsDciV190Rc1ExpectationError::InvalidExpectation);
+                } else {
+                    decoded.push(character);
+                }
+            }
+            (!decoded.is_empty())
+                .then(|| decoded.into_boxed_str())
+                .ok_or(OpenCrvsDciV190Rc1ExpectationError::InvalidExpectation)
+        })
+        .collect()
+}
+
+fn resolve_pointer<'a>(mut value: &'a Value, tokens: &[Box<str>]) -> Option<&'a Value> {
+    for token in tokens {
+        value = match value {
+            Value::Object(object) => object.get(token.as_ref())?,
+            Value::Array(array) => {
+                let index = token.parse::<usize>().ok()?;
+                if token.as_ref() != index.to_string() {
+                    return None;
+                }
+                array.get(index)?
+            }
+            _ => return None,
+        };
+    }
+    Some(value)
 }
 
 fn exact_object<'a>(

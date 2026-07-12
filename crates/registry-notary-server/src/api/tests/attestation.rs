@@ -366,6 +366,7 @@ fn self_attestation_derives_missing_request_identity_from_token_binding() {
         target: None,
         relationship: None,
         on_behalf_of: None,
+        variables: Default::default(),
         claims: vec![ClaimRef::from("person-is-alive")],
         disclosure: Some("predicate".to_string()),
         format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),

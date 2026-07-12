@@ -39,6 +39,7 @@ use zeroize::Zeroizing;
 
 use crate::{is_cloud_metadata_ip, DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT};
 
+pub mod fhir;
 pub mod input_pattern;
 pub mod json;
 pub mod oauth;
@@ -1454,6 +1455,24 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
         )
     }
 
+    /// Render one path-segment request while retaining a sensitive body in zeroizing storage.
+    pub fn render_zeroizing_with_path_segment(
+        &self,
+        path_segment: &str,
+        query_values: &[&str],
+        header_values: &[&[u8]],
+        authorization: Option<DestinationAuthorizationValue>,
+        body: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<BoundedDestinationRequest<S>, DestinationRequestError> {
+        self.render_zeroizing_parts(
+            Some(path_segment),
+            query_values,
+            header_values,
+            authorization,
+            body,
+        )
+    }
+
     /// Render a request while retaining a caller-produced sensitive body in zeroizing storage.
     pub fn render_zeroizing(
         &self,
@@ -2012,6 +2031,13 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
             .ok_or(DestinationResponseMediaTypeError::NotExactJson)
     }
 
+    /// Require the exact FHIR R4 JSON media type before decoding a Bundle.
+    pub fn require_fhir_json_content_type(&self) -> Result<(), DestinationResponseMediaTypeError> {
+        closed_utf8_json_content_type(self.response.headers(), "application/fhir+json")
+            .then_some(())
+            .ok_or(DestinationResponseMediaTypeError::NotExactFhirJson)
+    }
+
     /// Consume the response body under both the operation deadline and byte cap.
     pub async fn read_bounded(
         self,
@@ -2069,15 +2095,34 @@ fn exact_json_content_type(headers: &HeaderMap) -> bool {
 }
 
 fn closed_json_content_type(headers: &HeaderMap) -> bool {
+    closed_utf8_json_content_type(headers, "application/json")
+}
+
+fn closed_utf8_json_content_type(headers: &HeaderMap, expected_type: &str) -> bool {
     let mut values = headers.get_all(CONTENT_TYPE).iter();
-    matches!(
-        (values.next(), values.next()),
-        (Some(value), None)
-            if matches!(
-                value.as_bytes(),
-                b"application/json" | b"application/json; charset=utf-8"
-            )
-    )
+    let (Some(value), None) = (values.next(), values.next()) else {
+        return false;
+    };
+    let Ok(value) = value.to_str() else {
+        return false;
+    };
+    let mut parts = value.split(';');
+    let Some(media_type) = parts.next() else {
+        return false;
+    };
+    if !media_type.trim().eq_ignore_ascii_case(expected_type) {
+        return false;
+    }
+    let Some(parameter) = parts.next() else {
+        return true;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+    let Some((name, value)) = parameter.split_once('=') else {
+        return false;
+    };
+    name.trim().eq_ignore_ascii_case("charset") && value.trim().eq_ignore_ascii_case("utf-8")
 }
 
 /// Value-free strict response-media-type failure.
@@ -2085,6 +2130,8 @@ fn closed_json_content_type(headers: &HeaderMap) -> bool {
 pub enum DestinationResponseMediaTypeError {
     #[error("destination response media type is not exactly application/json")]
     NotExactJson,
+    #[error("destination response media type is not exactly application/fhir+json")]
+    NotExactFhirJson,
 }
 
 /// Value-free bounded response-read failures.
@@ -2853,16 +2900,22 @@ mod tests {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         assert!(closed_json_content_type(&headers));
 
-        headers.insert(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/json; charset=utf-8"),
-        );
-        assert!(closed_json_content_type(&headers));
+        for accepted in [
+            "application/json; charset=utf-8",
+            "application/json;charset=UTF-8",
+            "Application/JSON ; CHARSET = UTF-8",
+        ] {
+            headers.insert(
+                CONTENT_TYPE,
+                HeaderValue::from_str(accepted).expect("test media type"),
+            );
+            assert!(closed_json_content_type(&headers));
+        }
 
         for rejected in [
-            "application/json;charset=utf-8",
-            "application/json; charset=UTF-8",
             "application/json; profile=example",
+            "application/json; charset=utf-8; profile=example",
+            "application/json; charset=us-ascii",
             "text/json",
         ] {
             headers.insert(

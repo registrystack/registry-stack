@@ -40,6 +40,9 @@ pub struct EvidenceConfig {
     pub max_credential_validity_seconds: u64,
     #[serde(default)]
     pub allowed_purposes: Vec<String>,
+    /// Closed union of request variables declared by authored services.
+    #[serde(default)]
+    pub variables: BTreeMap<String, RequestVariableConfig>,
     #[serde(default)]
     pub claims: Vec<ClaimDefinition>,
     #[serde(default)]

@@ -6,20 +6,22 @@
       "schema": "registry.relay.consultation-predicate-plan.v1",
       "kind": "snapshot_exact",
       "operations": [],
-      "snapshot_selector": {
-        "source": {
-          "kind": "consultation_input",
-          "input": "subject_id"
-        },
-        "location": {
-          "kind": "materialized_snapshot_key",
-          "physical_field": "subject_key",
-          "physical_type": "utf8",
-          "comparison": "binary_equality"
+      "snapshot_selectors": [
+        {
+          "source": {
+            "kind": "consultation_input",
+            "input": "subject_id"
+          },
+          "location": {
+            "kind": "materialized_snapshot_key",
+            "physical_field": "subject_key",
+            "physical_type": "utf8",
+            "comparison": "binary_equality"
+          }
         }
-      }
+      ]
     },
-    "digest": "sha256:edbe19e94cdc13e064216777d664d21ffcc0ac78f2e25c686cc28ac1bd04226e"
+    "digest": "sha256:9cdbdafd868f1fb7bd80402ee557e48e1de1b41115861efbdd234182798493ac"
   },
   "physical_projection": {
     "domain": "registry.relay.consultation-physical-projection.v1",
@@ -28,9 +30,14 @@
       "plan_kind": "snapshot_exact",
       "operations": [],
       "snapshot_projection": {
-        "key_physical_field": "subject_key",
-        "key_physical_type": "utf8",
-        "key_comparison": "binary_equality",
+        "keys": [
+          {
+            "input": "subject_id",
+            "physical_field": "subject_key",
+            "physical_type": "utf8",
+            "comparison": "binary_equality"
+          }
+        ],
         "fields": [
           {
             "logical_field": "registration_status",
@@ -41,6 +48,6 @@
         "source_revision": null
       }
     },
-    "digest": "sha256:2f1b42c442d4cbef4f8b169dbf5584b39e750dec9ac2ecfb61d3d88e9bf60be2"
+    "digest": "sha256:13de89ae8797bc227cbcff73df485e70e4527fe9a039cf9951571097166dccc3"
   }
 }

@@ -1434,6 +1434,7 @@ fn shared_binding_claim(id: &str) -> ClaimDefinition {
         evidence_mode: registry_notary_core::ClaimEvidenceMode::TransitionalDirect,
         value: ClaimValueConfig {
             value_type: "number".to_string(),
+            nullable: false,
             unit: None,
         },
         semantics: None,

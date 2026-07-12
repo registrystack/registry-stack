@@ -6,6 +6,20 @@ pub(in super::super) fn parse_public_contract(
     bytes: &[u8],
     expected_hash: &str,
 ) -> Result<PublicContractArtifact, SourcePlanArtifactError> {
+    parse_public_contract_inner(bytes, Some(expected_hash), false)
+}
+
+pub(in super::super) fn author_public_contract(
+    bytes: &[u8],
+) -> Result<PublicContractArtifact, SourcePlanArtifactError> {
+    parse_public_contract_inner(bytes, None, true)
+}
+
+fn parse_public_contract_inner(
+    bytes: &[u8],
+    expected_hash: Option<&str>,
+    rewrite_policy_hash: bool,
+) -> Result<PublicContractArtifact, SourcePlanArtifactError> {
     let mut document: PublicContractDocument = parse_document(bytes)?;
     if document.schema != CONTRACT_SCHEMA {
         return Err(SourcePlanArtifactError::UnsupportedSchema);
@@ -33,7 +47,7 @@ pub(in super::super) fn parse_public_contract(
         &document.spec.output,
         &acquired_fields,
     )?;
-    let authorization = validate_authorization(&mut document.spec.authorization)?;
+    let mut authorization = validate_authorization(&mut document.spec.authorization)?;
     let cardinality = cardinality_from_bounds(document.spec.bounds)?;
     validate_public_behavior(&mut document.spec.public_behavior, cardinality)?;
     validate_materialization_contract(&mut document.spec, &acquired_fields)?;
@@ -43,12 +57,15 @@ pub(in super::super) fn parse_public_contract(
     // it before hashing the contract so the contract hash binds the verified
     // digest rather than an arbitrary well-formed declaration.
     let derived_policy = derive_consultation_policy(&document)?;
-    if authorization.policy_identity.hash() != &derived_policy.hash {
+    if rewrite_policy_hash {
+        document.spec.authorization.policy.hash = derived_policy.hash.as_str().to_owned();
+        authorization = validate_authorization(&mut document.spec.authorization)?;
+    } else if authorization.policy_identity.hash() != &derived_policy.hash {
         return Err(SourcePlanArtifactError::PolicyHashMismatch);
     }
 
     let (canonical_json, digest) = hash_document(CONTRACT_HASH_DOMAIN, &document)?;
-    if digest != expected_hash {
+    if expected_hash.is_some_and(|expected| digest != expected) {
         return Err(SourcePlanArtifactError::HashMismatch);
     }
     let contract_hash = ProfileContractHash::try_from(digest.as_str())
@@ -79,6 +96,19 @@ pub(in super::super) fn parse_public_contract(
 pub(in super::super) fn parse_integration_pack(
     bytes: &[u8],
     expected_hash: &str,
+) -> Result<IntegrationPackArtifact, SourcePlanArtifactError> {
+    parse_integration_pack_inner(bytes, Some(expected_hash))
+}
+
+pub(in super::super) fn author_integration_pack(
+    bytes: &[u8],
+) -> Result<IntegrationPackArtifact, SourcePlanArtifactError> {
+    parse_integration_pack_inner(bytes, None)
+}
+
+fn parse_integration_pack_inner(
+    bytes: &[u8],
+    expected_hash: Option<&str>,
 ) -> Result<IntegrationPackArtifact, SourcePlanArtifactError> {
     let mut document: IntegrationPackDocument = parse_document(bytes)?;
     if document.schema != PACK_SCHEMA {
@@ -121,7 +151,7 @@ pub(in super::super) fn parse_integration_pack(
         .validate_for_acquisition(document.spec.acquisition.class)?;
 
     let (canonical_json, digest) = hash_document(PACK_HASH_DOMAIN, &document)?;
-    if digest != expected_hash {
+    if expected_hash.is_some_and(|expected| digest != expected) {
         return Err(SourcePlanArtifactError::HashMismatch);
     }
     let hash = IntegrationPackHash::try_from(digest.as_str())
@@ -209,6 +239,35 @@ pub(in super::super) fn parse_private_binding(
     };
     if let Some(materialization) = &document.materialization {
         validate_stable_text(&materialization.table_provider)?;
+        let mapping = &materialization.mapping;
+        if mapping.key.is_some() != mapping.keys.is_empty() {
+            return Err(SourcePlanArtifactError::InvalidAcquisition);
+        }
+        let keys = mapping
+            .key
+            .iter()
+            .map(|key| (key.input.as_str(), key))
+            .chain(mapping.keys.iter().map(|(name, key)| (name.as_str(), key)))
+            .collect::<Vec<_>>();
+        if !(1..=4).contains(&keys.len()) {
+            return Err(SourcePlanArtifactError::InvalidAcquisition);
+        }
+        let mut physical_fields = BTreeSet::new();
+        for (name, key) in &keys {
+            validate_stable_text(name)?;
+            validate_stable_text(&key.input)?;
+            validate_stable_text(&key.physical_field)?;
+            if *name != key.input || !physical_fields.insert(key.physical_field.as_str()) {
+                return Err(SourcePlanArtifactError::InvalidAcquisition);
+            }
+        }
+        for (logical, physical) in &materialization.mapping.projection {
+            validate_stable_text(logical)?;
+            validate_stable_text(physical)?;
+            if !physical_fields.insert(physical.as_str()) {
+                return Err(SourcePlanArtifactError::InvalidAcquisition);
+            }
+        }
         for value in [
             materialization.max_snapshot_age_ms,
             materialization.max_source_records,

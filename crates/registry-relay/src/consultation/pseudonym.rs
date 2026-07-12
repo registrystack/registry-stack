@@ -58,20 +58,14 @@ pub(crate) struct AuditPseudonymMaterialProvider {
 }
 
 impl AuditPseudonymMaterialProvider {
-    /// Load and derive every configured material exactly once at startup.
-    ///
-    /// Structural validation runs before any environment access. Material
-    /// loading then fails closed on every platform error, and equal derived
-    /// material under distinct key ids is rejected before this provider can be
-    /// installed in a runtime snapshot.
-    pub(crate) fn compile(
+    /// Validate public catalog structure without reading any secret source.
+    pub(crate) fn validate_catalog(
         config: &ConsultationConfig,
-    ) -> Result<Self, AuditPseudonymMaterialProviderError> {
+    ) -> Result<(), AuditPseudonymMaterialProviderError> {
         let entries = config.audit_pseudonym_materials.entries();
         if entries.is_empty() || entries.len() > MAX_AUDIT_PSEUDONYM_MATERIALS {
             return Err(AuditPseudonymMaterialProviderError::CatalogOutOfBounds);
         }
-
         let mut key_ids = BTreeSet::new();
         let mut source_names = BTreeSet::new();
         for entry in entries {
@@ -82,6 +76,20 @@ impl AuditPseudonymMaterialProvider {
                 return Err(AuditPseudonymMaterialProviderError::DuplicateSourceReference);
             }
         }
+        Ok(())
+    }
+
+    /// Load and derive every configured material exactly once at startup.
+    ///
+    /// Structural validation runs before any environment access. Material
+    /// loading then fails closed on every platform error, and equal derived
+    /// material under distinct key ids is rejected before this provider can be
+    /// installed in a runtime snapshot.
+    pub(crate) fn compile(
+        config: &ConsultationConfig,
+    ) -> Result<Self, AuditPseudonymMaterialProviderError> {
+        Self::validate_catalog(config)?;
+        let entries = config.audit_pseudonym_materials.entries();
 
         let mut materials = BTreeMap::new();
         for entry in entries {
@@ -350,6 +358,21 @@ mod tests {
             ]))
             .unwrap_err(),
             AuditPseudonymMaterialProviderError::DuplicateSourceReference
+        );
+    }
+
+    #[test]
+    fn structural_catalog_validation_never_reads_secret_sources() {
+        let missing = unique_env_name("STRUCTURAL_ONLY");
+        let _guard = EnvironmentGuard::missing(missing.clone());
+        let config = config(&[("epoch-a", &missing)]);
+        assert_eq!(
+            AuditPseudonymMaterialProvider::validate_catalog(&config),
+            Ok(())
+        );
+        assert_eq!(
+            AuditPseudonymMaterialProvider::compile(&config).unwrap_err(),
+            AuditPseudonymMaterialProviderError::SourceLoadFailed
         );
     }
 

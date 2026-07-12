@@ -1,22 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Exact OpenCRVS v1.9.0-rc.1 birth-record existence journey.
+//! Product-neutral signed DCI exact-search capability.
 //!
-//! The journey deliberately stays product-specific: one fresh OAuth exchange,
-//! one fresh same-origin JWKS exchange, and one signed DCI exact search. It
-//! releases only closed cardinality, never a source record or selector.
+//! The reviewed pack supplies protocol identities, fixed paths, locale,
+//! cardinality, and the named JWKS verification operation. The executor owns
+//! OAuth, JWS/JWKS verification, correlation, and closed result release.
 
-use registry_platform_httputil::destination::oauth::{FreshBearerToken, NoExpiryOAuthTokenDecoder};
 use registry_platform_httputil::destination::opencrvs::{
-    OpenCrvsDciV190Rc1DecodeError, OpenCrvsDciV190Rc1Decoder, OpenCrvsDciV190Rc1Expectation,
+    SignedDciDecodeError, SignedDciDecoder, SignedDciExactComponent, SignedDciExpectation,
 };
 use registry_platform_httputil::destination::DataDestinationBody;
 use time::OffsetDateTime;
 
-use crate::source_plan::codec::dci::{DciExactSearchRequest, DciExactSearchRequestInput};
+use crate::source_plan::codec::dci::{
+    DciExactAndComponentInput, DciExactAndSearchRequestInput, DciExactSearchRequest,
+    DciExactSearchRequestInput,
+};
 use crate::source_plan::runtime_profile::CompiledConsentProfile;
 use crate::source_plan::{
-    CompiledOAuthSourceCredentialProvider, CompiledProjectionMechanism, CompiledRequestCodec,
-    CompiledResponseNormalization, CompiledSelectorLocation, CompiledSelectorSource,
+    CompiledDciSelector, CompiledOAuthSourceCredentialProvider, CompiledProjectionMechanism,
+    CompiledRequestCodec, CompiledResponseNormalization, CompiledSelectorLocation,
     CompiledSourceAuth, CompiledSourcePlan, ReadMethod, SourcePlanKind,
 };
 use crate::state_plane::{
@@ -29,33 +31,21 @@ use super::{
     PublicResultPreparationError,
 };
 use crate::consultation::audit::PendingPublicationContext;
-use crate::consultation::commitments::{SealedConsultationExecution, TrustedConsultationTime};
+use crate::consultation::commitments::{
+    BoundConsultationExecution, SealedConsultationExecution, TrustedConsultationTime,
+};
 use crate::consultation::response::PublishableConsultationResponse;
-
-const OPENCRVS_PROTOCOL_VERSION: &str = "1.0.0";
-const OPENCRVS_SENDER_ID: &str = "registry-relay";
-const OPENCRVS_REGISTRY_TYPE: &str = "ns:org:RegistryType:Civil";
-const OPENCRVS_RECORD_TYPE: &str = "spdci-extensions-dci:Person";
-const OPENCRVS_IDENTIFIER_TYPE: &str = "UIN";
-const OPENCRVS_SEARCH_PATH: &str = "/registry/sync/search";
-const OPENCRVS_JWKS_PATH: &str = "/.well-known/jwks.json";
-const OPENCRVS_REQUESTED_MAXIMUM: u8 = 2;
-
-enum CredentialDispatchResult {
-    Token(FreshBearerToken),
-    KnownFailure(KnownFailureClass),
-}
 
 enum DataBodyDispatchResult {
     Body(DataDestinationBody),
     KnownFailure(KnownFailureClass),
 }
 
-pub(super) fn validate_open_crvs_dci_exact_activation(
+pub(super) fn validate_signed_dci_exact_activation(
     plan: &CompiledSourcePlan,
 ) -> Result<(), ConcreteExecutorActivationError> {
     if plan.kind() != SourcePlanKind::BoundedHttp
-        || plan.inputs().len() != 1
+        || !(1..=4).contains(&plan.inputs().len())
         || plan.operations().len() != 1
         || plan.steps().len() != 1
         || plan.compiled_steps().len() != 1
@@ -78,9 +68,10 @@ pub(super) fn validate_open_crvs_dci_exact_activation(
         .compiled_steps()
         .next()
         .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?;
-    let jwks = operation
-        .embedded_open_crvs_jwks()
+    let dci = operation
+        .dci_exact()
         .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?;
+    let jwks = dci.verification();
     if step.condition().is_some()
         || step.condition_source_index().is_some()
         || step.condition_output_slot_index().is_some()
@@ -91,69 +82,106 @@ pub(super) fn validate_open_crvs_dci_exact_activation(
             operation,
         )
         || operation.method() != ReadMethod::ReadOnlyPost
-        || operation.fixed_path() != OPENCRVS_SEARCH_PATH
         || operation.auth() != CompiledSourceAuth::OAuthClientCredentials
         || operation.query().len() != 0
         || operation.headers().len() != 0
         || operation.body().is_some()
-        || operation.request_codec() != CompiledRequestCodec::OpenCrvsDciExactV1
+        || operation.request_codec() != CompiledRequestCodec::DciExactV1
         || operation.request_signer().is_some()
-        || operation.max_source_records() != OPENCRVS_REQUESTED_MAXIMUM
+        || !(1..=2).contains(&operation.max_source_records())
         || operation.projection() != &CompiledProjectionMechanism::BoundedFullRecord
         || operation.response().normalization() != CompiledResponseNormalization::ArrayProbeTwo
-        || operation.response().outputs().len() != 0
-        || operation.response().prior_outputs().len() != 0
         || operation.response().accepted_statuses().collect::<Vec<_>>() != [200]
-        || jwks.fixed_path() != OPENCRVS_JWKS_PATH
     {
         return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
 
-    if !matches!(
-        operation.selector().source(),
-        CompiledSelectorSource::ConsultationInput { input_index: 0 }
-    ) || !matches!(
-        operation.selector().location(),
-        CompiledSelectorLocation::DciIdtypeValue
-    ) || plan
-        .inputs()
-        .next()
-        .is_none_or(|input| input.name().is_empty())
-    {
+    let selector_valid = match dci.selector() {
+        CompiledDciSelector::ExactAnd {
+            components,
+            identifier_type,
+        } => {
+            components.len() == plan.inputs().len()
+                && identifier_type
+                    .as_ref()
+                    .is_none_or(|_| components.len() == 1)
+                && components
+                    .iter()
+                    .enumerate()
+                    .all(|(index, component)| component.input_index() == index)
+                && matches!(
+                    operation.selector().location(),
+                    CompiledSelectorLocation::DciExactPredicate
+                )
+        }
+    };
+    if !selector_valid || plan.inputs().any(|input| input.name().is_empty()) {
         return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
 
-    let credential = plan
-        .credential_operation()
-        .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?;
-    let token_response_max_bytes = usize::try_from(credential.parser().max_response_bytes())
-        .map_err(|_| ConcreteExecutorActivationError::UnsupportedPlan)?;
     let jwks_max_bytes = usize::try_from(jwks.response_max_bytes())
         .map_err(|_| ConcreteExecutorActivationError::UnsupportedPlan)?;
     let response_max_bytes = usize::try_from(operation.response_max_bytes())
         .map_err(|_| ConcreteExecutorActivationError::UnsupportedPlan)?;
-    if !credential.parser().is_no_expiry()
-        || NoExpiryOAuthTokenDecoder::new(
-            token_response_max_bytes,
-            usize::from(credential.parser().access_token_max_bytes()),
-        )
-        .is_err()
-        || OpenCrvsDciV190Rc1Expectation::new(
+    let expectation_valid = match dci.selector() {
+        CompiledDciSelector::ExactAnd {
+            components: _,
+            identifier_type: Some(identifier_type),
+        } => SignedDciExpectation::new_generic(
             "01JZ0000000000000000000000",
-            OPENCRVS_SENDER_ID,
-            None,
+            dci.sender_id(),
+            dci.receiver_id(),
             "1234567890",
+            dci.protocol_version(),
+            dci.registry_type()
+                .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?,
+            dci.record_type()
+                .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?,
+            identifier_type,
+            dci.locale(),
+            u64::from(dci.page_number()),
+            u64::from(operation.max_source_records()),
             jwks_max_bytes,
             response_max_bytes,
         )
-        .is_err()
-    {
+        .is_ok(),
+        CompiledDciSelector::ExactAnd {
+            components,
+            identifier_type: None,
+        } => {
+            let samples = components
+                .iter()
+                .map(|component| SignedDciExactComponent {
+                    response_pointer: component.response_pointer(),
+                    expected_value: "sample",
+                })
+                .collect::<Vec<_>>();
+            SignedDciExpectation::new_generic_exact_and(
+                "01JZ0000000000000000000000",
+                dci.sender_id(),
+                dci.receiver_id(),
+                &samples,
+                dci.protocol_version(),
+                dci.registry_type()
+                    .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?,
+                dci.record_type()
+                    .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?,
+                dci.locale(),
+                u64::from(dci.page_number()),
+                u64::from(operation.max_source_records()),
+                jwks_max_bytes,
+                response_max_bytes,
+            )
+            .is_ok()
+        }
+    };
+    if !expectation_valid {
         return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
     Ok(())
 }
 
-pub(super) async fn execute_open_crvs_dci_exact(
+pub(super) async fn execute_signed_dci_exact(
     dispatch: &mut AuditedConsultationDispatch,
     execution: SealedConsultationExecution<'_>,
     publication: PendingPublicationContext,
@@ -164,24 +192,25 @@ pub(super) async fn execute_open_crvs_dci_exact(
     let bound = execution
         .into_bound()
         .map_err(|_| ConcreteExecutorUnfinished)?;
-    validate_open_crvs_dci_exact_activation(bound.plan())
-        .map_err(|_| ConcreteExecutorUnfinished)?;
+    execute_signed_dci_exact_bound(dispatch, bound, publication, quota, fence, credentials).await
+}
+
+pub(super) async fn execute_signed_dci_exact_bound(
+    dispatch: &mut AuditedConsultationDispatch,
+    bound: BoundConsultationExecution<'_>,
+    publication: PendingPublicationContext,
+    quota: QuotaGrant,
+    fence: &PostgresServingFence,
+    credentials: &CompiledOAuthSourceCredentialProvider,
+) -> Result<ConcreteExecutorProof<PublishableConsultationResponse>, ConcreteExecutorUnfinished> {
+    validate_signed_dci_exact_activation(bound.plan()).map_err(|_| ConcreteExecutorUnfinished)?;
     let operation = bound
         .plan()
         .operations()
         .next()
         .ok_or(ConcreteExecutorUnfinished)?;
-    let credential_operation = bound
-        .plan()
-        .credential_operation()
-        .ok_or(ConcreteExecutorUnfinished)?;
-    let jwks_operation = operation
-        .embedded_open_crvs_jwks()
-        .ok_or(ConcreteExecutorUnfinished)?;
-    let credential_destination = bound
-        .plan()
-        .credential_destination()
-        .ok_or(ConcreteExecutorUnfinished)?;
+    let dci = operation.dci_exact().ok_or(ConcreteExecutorUnfinished)?;
+    let jwks_operation = dci.verification();
     let data_destination = bound
         .plan()
         .data_destination()
@@ -195,20 +224,57 @@ pub(super) async fn execute_open_crvs_dci_exact(
         .ok_or(ConcreteExecutorUnfinished)?;
     let message_timestamp = OffsetDateTime::from_unix_timestamp_nanos(timestamp_nanos)
         .map_err(|_| ConcreteExecutorUnfinished)?;
-    let dci_request = DciExactSearchRequest::try_new(DciExactSearchRequestInput {
-        protocol_version: OPENCRVS_PROTOCOL_VERSION,
-        message_id: &message_id,
-        message_timestamp,
-        sender_id: OPENCRVS_SENDER_ID,
-        receiver_id: None,
-        registry_type: Some(OPENCRVS_REGISTRY_TYPE),
-        registry_event_type: Some("birth"),
-        record_type: Some(OPENCRVS_RECORD_TYPE),
-        identifier_type: OPENCRVS_IDENTIFIER_TYPE,
-        selector: bound.input().as_str(),
-        requested_max: OPENCRVS_REQUESTED_MAXIMUM,
-        signature: None,
-    })
+    let request_components = match dci.selector() {
+        CompiledDciSelector::ExactAnd { components, .. } => components
+            .iter()
+            .map(|component| {
+                Ok(DciExactAndComponentInput {
+                    field: component.field(),
+                    value: bound
+                        .input(component.input_index())
+                        .ok_or(ConcreteExecutorUnfinished)?
+                        .as_str(),
+                })
+            })
+            .collect::<Result<Vec<_>, ConcreteExecutorUnfinished>>()?,
+    };
+    let dci_request = match dci.selector() {
+        CompiledDciSelector::ExactAnd {
+            identifier_type: Some(identifier_type),
+            ..
+        } => DciExactSearchRequest::try_new(DciExactSearchRequestInput {
+            protocol_version: dci.protocol_version(),
+            message_id: &message_id,
+            message_timestamp,
+            sender_id: dci.sender_id(),
+            receiver_id: dci.receiver_id(),
+            registry_type: dci.registry_type(),
+            registry_event_type: dci.registry_event_type(),
+            record_type: dci.record_type(),
+            identifier_type,
+            selector: bound.input(0).ok_or(ConcreteExecutorUnfinished)?.as_str(),
+            requested_max: operation.max_source_records(),
+            page_number: dci.page_number(),
+            signature: None,
+        }),
+        CompiledDciSelector::ExactAnd {
+            identifier_type: None,
+            ..
+        } => DciExactSearchRequest::try_new_exact_and(DciExactAndSearchRequestInput {
+            protocol_version: dci.protocol_version(),
+            message_id: &message_id,
+            message_timestamp,
+            sender_id: dci.sender_id(),
+            receiver_id: dci.receiver_id(),
+            registry_type: dci.registry_type(),
+            registry_event_type: dci.registry_event_type(),
+            record_type: dci.record_type(),
+            components: &request_components,
+            requested_max: operation.max_source_records(),
+            page_number: dci.page_number(),
+            signature: None,
+        }),
+    }
     .map_err(|_| ConcreteExecutorUnfinished)?;
     let request_body = dci_request
         .to_json_body()
@@ -220,82 +286,9 @@ pub(super) async fn execute_open_crvs_dci_exact(
         return Err(ConcreteExecutorUnfinished);
     }
 
-    let token_response_max_bytes =
-        usize::try_from(credential_operation.parser().max_response_bytes())
-            .map_err(|_| ConcreteExecutorUnfinished)?;
-    let token_decoder = NoExpiryOAuthTokenDecoder::new(
-        token_response_max_bytes,
-        usize::from(credential_operation.parser().access_token_max_bytes()),
-    )
-    .map_err(|_| ConcreteExecutorUnfinished)?;
-    let credential_request = credentials
-        .credentials_for(bound.plan(), credential_operation)
-        .and_then(|capability| {
-            capability.render().map_err(|_| {
-                crate::source_plan::SourceCredentialProviderError::OperationBindingMismatch
-            })
-        })
-        .map_err(|_| ConcreteExecutorUnfinished)?;
-    let credential_permit = dispatch
-        .credential_permit_mut()
-        .map_err(|_| ConcreteExecutorUnfinished)?
-        .ok_or(ConcreteExecutorUnfinished)?;
-    let credential_result = fence
-        .authorize_and_dispatch(
-            credential_permit,
-            credential_operation.id(),
-            |deadline| async move {
-                let deadline =
-                    match operation_deadline(deadline, credential_operation.request_timeout_ms()) {
-                        Ok(deadline) => deadline,
-                        Err(_) => {
-                            return CredentialDispatchResult::KnownFailure(
-                                KnownFailureClass::CredentialUnavailable,
-                            );
-                        }
-                    };
-                let response = match credential_destination
-                    .send_with_deadline(credential_request, deadline)
-                    .await
-                {
-                    Ok(response) => response,
-                    Err(_) => {
-                        return CredentialDispatchResult::KnownFailure(
-                            KnownFailureClass::CredentialUnavailable,
-                        );
-                    }
-                };
-                if response.status().as_u16() != 200 {
-                    return CredentialDispatchResult::KnownFailure(
-                        KnownFailureClass::CredentialUnavailable,
-                    );
-                }
-                if response.require_json_content_type().is_err() {
-                    return CredentialDispatchResult::KnownFailure(
-                        KnownFailureClass::CredentialUnavailable,
-                    );
-                }
-                let body = match response.read_bounded(token_response_max_bytes).await {
-                    Ok(body) => body,
-                    Err(_) => {
-                        return CredentialDispatchResult::KnownFailure(
-                            KnownFailureClass::CredentialUnavailable,
-                        );
-                    }
-                };
-                match token_decoder.decode(body) {
-                    Ok(token) => CredentialDispatchResult::Token(token),
-                    Err(_) => CredentialDispatchResult::KnownFailure(
-                        KnownFailureClass::CredentialUnavailable,
-                    ),
-                }
-            },
-        )
-        .await
-        .map_err(|_| ConcreteExecutorUnfinished)?;
-    let token = match credential_result {
-        CredentialDispatchResult::Token(token) => token,
-        CredentialDispatchResult::KnownFailure(failure) => {
+    let token = match super::execute_oauth_credential(dispatch, &bound, fence, credentials).await? {
+        super::CredentialDispatchResultV1::Token(token) => token,
+        super::CredentialDispatchResultV1::KnownFailure(failure) => {
             drop(quota);
             return Ok(ConcreteExecutorProof::known_failure(failure));
         }
@@ -355,7 +348,9 @@ pub(super) async fn execute_open_crvs_dci_exact(
         }
     };
 
-    let authorization = token.into_authorization();
+    let authorization = token
+        .bearer_authorization()
+        .map_err(|_| ConcreteExecutorUnfinished)?;
     let data_request = operation
         .transport_template()
         .render_zeroizing(
@@ -367,16 +362,59 @@ pub(super) async fn execute_open_crvs_dci_exact(
         .map_err(|_| ConcreteExecutorUnfinished)?;
     let response_max_bytes =
         usize::try_from(operation.response_max_bytes()).map_err(|_| ConcreteExecutorUnfinished)?;
-    let expectation = OpenCrvsDciV190Rc1Expectation::new(
-        &message_id,
-        OPENCRVS_SENDER_ID,
-        None,
-        bound.input().as_str(),
-        jwks_max_bytes,
-        response_max_bytes,
-    )
+    let expectation_components = match dci.selector() {
+        CompiledDciSelector::ExactAnd { components, .. } => components
+            .iter()
+            .map(|component| {
+                Ok(SignedDciExactComponent {
+                    response_pointer: component.response_pointer(),
+                    expected_value: bound
+                        .input(component.input_index())
+                        .ok_or(ConcreteExecutorUnfinished)?
+                        .as_str(),
+                })
+            })
+            .collect::<Result<Vec<_>, ConcreteExecutorUnfinished>>()?,
+    };
+    let expectation = match dci.selector() {
+        CompiledDciSelector::ExactAnd {
+            identifier_type: Some(identifier_type),
+            ..
+        } => SignedDciExpectation::new_generic(
+            &message_id,
+            dci.sender_id(),
+            dci.receiver_id(),
+            bound.input(0).ok_or(ConcreteExecutorUnfinished)?.as_str(),
+            dci.protocol_version(),
+            dci.registry_type().ok_or(ConcreteExecutorUnfinished)?,
+            dci.record_type().ok_or(ConcreteExecutorUnfinished)?,
+            identifier_type,
+            dci.locale(),
+            u64::from(dci.page_number()),
+            u64::from(operation.max_source_records()),
+            jwks_max_bytes,
+            response_max_bytes,
+        ),
+        CompiledDciSelector::ExactAnd {
+            identifier_type: None,
+            ..
+        } => SignedDciExpectation::new_generic_exact_and(
+            &message_id,
+            dci.sender_id(),
+            dci.receiver_id(),
+            &expectation_components,
+            dci.protocol_version(),
+            dci.registry_type().ok_or(ConcreteExecutorUnfinished)?,
+            dci.record_type().ok_or(ConcreteExecutorUnfinished)?,
+            dci.locale(),
+            u64::from(dci.page_number()),
+            u64::from(operation.max_source_records()),
+            jwks_max_bytes,
+            response_max_bytes,
+        ),
+    }
     .map_err(|_| ConcreteExecutorUnfinished)?;
-    let decoder = OpenCrvsDciV190Rc1Decoder::new(expectation, operation.response_decoder());
+    let decoder = SignedDciDecoder::new(expectation, operation.response_decoder());
     let data_permit = dispatch
         .next_data_permit_mut()
         .map_err(|_| ConcreteExecutorUnfinished)?
@@ -386,9 +424,9 @@ pub(super) async fn execute_open_crvs_dci_exact(
             let deadline = match operation_deadline(deadline, operation.request_timeout_ms()) {
                 Ok(deadline) => deadline,
                 Err(_) => {
-                    return super::InnerDispatchResult::Known(
+                    return super::InnerDispatchResult::Known(Box::new(
                         ConcreteExecutorProof::known_failure(KnownFailureClass::SourceUnavailable),
-                    );
+                    ));
                 }
             };
             let response = match data_destination
@@ -397,42 +435,46 @@ pub(super) async fn execute_open_crvs_dci_exact(
             {
                 Ok(response) => response,
                 Err(_) => {
-                    return super::InnerDispatchResult::Known(
+                    return super::InnerDispatchResult::Known(Box::new(
                         ConcreteExecutorProof::known_failure(KnownFailureClass::SourceUnavailable),
-                    );
+                    ));
                 }
             };
             let status = response.status().as_u16();
             if status != 200 {
-                return super::InnerDispatchResult::Known(ConcreteExecutorProof::known_failure(
-                    map_unaccepted_status(status),
+                return super::InnerDispatchResult::Known(Box::new(
+                    ConcreteExecutorProof::known_failure(map_unaccepted_status(status)),
                 ));
             }
             if response.require_json_content_type().is_err() {
-                return super::InnerDispatchResult::Known(ConcreteExecutorProof::known_failure(
-                    KnownFailureClass::ResponseContractViolation,
+                return super::InnerDispatchResult::Known(Box::new(
+                    ConcreteExecutorProof::known_failure(
+                        KnownFailureClass::ResponseContractViolation,
+                    ),
                 ));
             }
             let response_body = match response.read_bounded(response_max_bytes).await {
                 Ok(body) => body,
                 Err(error) => {
-                    return super::InnerDispatchResult::Known(
+                    return super::InnerDispatchResult::Known(Box::new(
                         ConcreteExecutorProof::known_failure(map_response_error(error)),
-                    );
+                    ));
                 }
             };
             let decoded = match decoder.decode(jwks_body, response_body) {
                 Ok(decoded) => decoded,
                 Err(error) => {
-                    return super::InnerDispatchResult::Known(
-                        ConcreteExecutorProof::known_failure(map_opencrvs_decode_error(error)),
-                    );
+                    return super::InnerDispatchResult::Known(Box::new(
+                        ConcreteExecutorProof::known_failure(map_signed_dci_decode_error(error)),
+                    ));
                 }
             };
             match prepare_public_result(publication, runtime_profile, decoded) {
-                Ok(proof) => super::InnerDispatchResult::Known(proof),
+                Ok(proof) => super::InnerDispatchResult::Known(Box::new(proof)),
                 Err(PublicResultPreparationError::KnownFailure(failure)) => {
-                    super::InnerDispatchResult::Known(ConcreteExecutorProof::known_failure(failure))
+                    super::InnerDispatchResult::Known(Box::new(
+                        ConcreteExecutorProof::known_failure(failure),
+                    ))
                 }
                 Err(PublicResultPreparationError::Unfinished) => {
                     super::InnerDispatchResult::Unfinished
@@ -443,30 +485,28 @@ pub(super) async fn execute_open_crvs_dci_exact(
         .map_err(|_| ConcreteExecutorUnfinished)?;
     drop(quota);
     match result {
-        super::InnerDispatchResult::Known(proof) => Ok(proof),
+        super::InnerDispatchResult::Known(proof) => Ok(*proof),
         super::InnerDispatchResult::Unfinished => Err(ConcreteExecutorUnfinished),
     }
 }
 
-const fn map_opencrvs_decode_error(error: OpenCrvsDciV190Rc1DecodeError) -> KnownFailureClass {
+const fn map_signed_dci_decode_error(error: SignedDciDecodeError) -> KnownFailureClass {
     match error {
-        OpenCrvsDciV190Rc1DecodeError::CardinalityViolation => {
-            KnownFailureClass::CardinalityViolation
-        }
-        OpenCrvsDciV190Rc1DecodeError::SourceRejected => KnownFailureClass::SourceUnavailable,
-        OpenCrvsDciV190Rc1DecodeError::JwksTooLarge
-        | OpenCrvsDciV190Rc1DecodeError::ResponseTooLarge
-        | OpenCrvsDciV190Rc1DecodeError::InvalidJwks
-        | OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse
-        | OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected
-        | OpenCrvsDciV190Rc1DecodeError::SignatureVerificationFailed
-        | OpenCrvsDciV190Rc1DecodeError::SignedPayloadMismatch
-        | OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation
-        | OpenCrvsDciV190Rc1DecodeError::CorrelationViolation
-        | OpenCrvsDciV190Rc1DecodeError::IdentityViolation
-        | OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation
-        | OpenCrvsDciV190Rc1DecodeError::PaginationViolation
-        | OpenCrvsDciV190Rc1DecodeError::RecordContractViolation => {
+        SignedDciDecodeError::CardinalityViolation => KnownFailureClass::CardinalityViolation,
+        SignedDciDecodeError::SourceRejected => KnownFailureClass::SourceUnavailable,
+        SignedDciDecodeError::JwksTooLarge
+        | SignedDciDecodeError::ResponseTooLarge
+        | SignedDciDecodeError::InvalidJwks
+        | SignedDciDecodeError::InvalidSignedResponse
+        | SignedDciDecodeError::SigningKeyRejected
+        | SignedDciDecodeError::SignatureVerificationFailed
+        | SignedDciDecodeError::SignedPayloadMismatch
+        | SignedDciDecodeError::EnvelopeContractViolation
+        | SignedDciDecodeError::CorrelationViolation
+        | SignedDciDecodeError::IdentityViolation
+        | SignedDciDecodeError::SelectorBindingViolation
+        | SignedDciDecodeError::PaginationViolation
+        | SignedDciDecodeError::RecordContractViolation => {
             KnownFailureClass::ResponseContractViolation
         }
     }

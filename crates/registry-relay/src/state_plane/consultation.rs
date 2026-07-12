@@ -15,12 +15,15 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::time::Instant;
 use tokio_postgres::{Error as PostgresError, Row};
+use zeroize::Zeroizing;
 
 use crate::consultation::audit::{
     PreparedAtomicConsultationStateView, TerminalConsultationStateView,
 };
 #[cfg(test)]
 use crate::consultation::audit::{TerminalCompletionTestHook, TerminalCompletionTestPoint};
+use crate::consultation::commitments::BatchChildReplayBinding;
+use crate::consultation::ConsultationId;
 
 use super::audit::PostgresDurableAuditStatePlane;
 use super::fence::{
@@ -58,6 +61,12 @@ SELECT * FROM relay_state_api.consultation_completion_cas_normal_v1(
     $15, $16, $17, $18, $19, $20
 )
 "#;
+const BATCH_NORMAL_COMPLETION_CAS_SQL: &str = r#"
+SELECT * FROM relay_state_api.consultation_completion_cas_normal_batch_v1(
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+    $15, $16, $17, $18, $19, $20, $21, $22, $23
+)
+"#;
 const UNFINISHED_COMPLETION_CAS_SQL: &str = r#"
 SELECT * FROM relay_state_api.consultation_completion_cas_unfinished_v1(
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
@@ -68,6 +77,12 @@ const RECOVERY_COMPLETION_CAS_SQL: &str = r#"
 SELECT * FROM relay_state_api.consultation_completion_cas_recovery_v1(
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
 )
+"#;
+const BATCH_CHILD_RESERVE_SQL: &str = r#"
+SELECT * FROM relay_state_api.consultation_batch_child_reserve_v1($1, $2, $3)
+"#;
+const BATCH_CHILD_RELEASE_SQL: &str = r#"
+SELECT relay_state_api.consultation_batch_child_release_v1($1, $2, $3) AS released
 "#;
 
 const MAX_CAS_ATTEMPTS: usize = 8;
@@ -91,6 +106,68 @@ pub(crate) enum ConsultationPersistenceError {
     ProtocolDrift,
     #[error("consultation persistence is unavailable")]
     Unavailable,
+}
+
+pub(crate) struct BatchChildReplayContext {
+    child_key: [u8; 32],
+    binding_digest: [u8; 32],
+    operation_id: Box<str>,
+}
+
+impl std::fmt::Debug for BatchChildReplayContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("BatchChildReplayContext([REDACTED])")
+    }
+}
+
+pub(crate) struct BatchTerminalReplay {
+    operation_id: Box<str>,
+    value: Zeroizing<String>,
+}
+
+impl std::fmt::Debug for BatchTerminalReplay {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("BatchTerminalReplay([REDACTED])")
+    }
+}
+
+pub(crate) enum BatchChildReplayReservation {
+    Reserved(BatchChildReplayContext),
+    Replay(BatchTerminalReplay),
+    InProgress,
+    Conflict,
+}
+
+impl BatchChildReplayContext {
+    pub(crate) fn from_binding(
+        binding: BatchChildReplayBinding,
+        operation_id: DurableAuditOperationId,
+    ) -> Self {
+        Self {
+            child_key: *binding.child_key(),
+            binding_digest: *binding.binding_digest(),
+            operation_id: operation_id.as_str().into(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        child_key: [u8; 32],
+        binding_digest: [u8; 32],
+        operation_id: &DurableAuditOperationId,
+    ) -> Self {
+        Self {
+            child_key,
+            binding_digest,
+            operation_id: operation_id.as_str().into(),
+        }
+    }
+}
+
+impl BatchTerminalReplay {
+    pub(crate) fn into_parts(self) -> (Box<str>, Zeroizing<String>) {
+        (self.operation_id, self.value)
+    }
 }
 
 /// Immutable, canonical, non-pseudonym context shared by every completion.
@@ -553,6 +630,89 @@ enum ActiveConsultationFinalization {
 }
 
 impl PostgresDurableAuditStatePlane {
+    pub(crate) async fn reserve_batch_child_replay(
+        &self,
+        binding: BatchChildReplayBinding,
+        consultation_id: ConsultationId,
+    ) -> Result<BatchChildReplayReservation, ConsultationPersistenceError> {
+        let operation_id = DurableAuditOperationId::parse(&consultation_id.to_canonical_string())
+            .map_err(|_| ConsultationPersistenceError::InvalidInput)?;
+        let context = BatchChildReplayContext::from_binding(binding, operation_id.clone());
+        let deadline = Instant::now() + MAX_ELAPSED;
+        let client = tokio::time::timeout_at(deadline, self.client.lock())
+            .await
+            .map_err(|_| ConsultationPersistenceError::Unavailable)?;
+        let row = consultation_query(
+            deadline,
+            client.query_one(
+                BATCH_CHILD_RESERVE_SQL,
+                &[
+                    &context.child_key.as_slice(),
+                    &context.binding_digest.as_slice(),
+                    &context.operation_id.as_ref(),
+                ],
+            ),
+        )
+        .await?;
+        let outcome = required_str(&row, "outcome")?;
+        let stored_operation_id = row
+            .try_get::<_, Option<String>>("stored_operation_id")
+            .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+        let terminal_payload = row
+            .try_get::<_, Option<String>>("terminal_payload")
+            .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
+        match outcome {
+            "reserved"
+                if stored_operation_id.as_deref() == Some(context.operation_id.as_ref())
+                    && terminal_payload.is_none() =>
+            {
+                Ok(BatchChildReplayReservation::Reserved(context))
+            }
+            "replay" if stored_operation_id.is_some() => terminal_payload
+                .zip(stored_operation_id)
+                .map(|(value, operation_id)| {
+                    BatchChildReplayReservation::Replay(BatchTerminalReplay {
+                        operation_id: operation_id.into_boxed_str(),
+                        value: Zeroizing::new(value),
+                    })
+                })
+                .ok_or(ConsultationPersistenceError::ProtocolDrift),
+            "in_progress" if stored_operation_id.is_some() && terminal_payload.is_none() => {
+                Ok(BatchChildReplayReservation::InProgress)
+            }
+            "conflict" if stored_operation_id.is_none() && terminal_payload.is_none() => {
+                Ok(BatchChildReplayReservation::Conflict)
+            }
+            _ => Err(ConsultationPersistenceError::ProtocolDrift),
+        }
+    }
+
+    pub(crate) async fn release_batch_child_replay(
+        &self,
+        context: &BatchChildReplayContext,
+    ) -> Result<(), ConsultationPersistenceError> {
+        let deadline = Instant::now() + MAX_ELAPSED;
+        let client = tokio::time::timeout_at(deadline, self.client.lock())
+            .await
+            .map_err(|_| ConsultationPersistenceError::Unavailable)?;
+        let row = consultation_query(
+            deadline,
+            client.query_one(
+                BATCH_CHILD_RELEASE_SQL,
+                &[
+                    &context.child_key.as_slice(),
+                    &context.binding_digest.as_slice(),
+                    &context.operation_id.as_ref(),
+                ],
+            ),
+        )
+        .await?;
+        row.try_get::<_, bool>("released")
+            .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?
+            .then_some(())
+            .ok_or(ConsultationPersistenceError::StateConflict)
+    }
+
     pub(crate) async fn write_attempt_with_state_view(
         &self,
         mut attempt: PreparedAtomicConsultationStateView<'_, '_>,
@@ -761,6 +921,7 @@ impl PostgresDurableAuditStatePlane {
         &self,
         mut terminal: TerminalConsultationStateView<'_>,
         facts: &KnownConsultationCompletionFacts,
+        batch: Option<(&BatchChildReplayContext, &str)>,
         pseudonym_authority: ActiveAuditPseudonymWriteEpoch,
         #[cfg(test)] test_hook: Option<&mut TerminalCompletionTestHook>,
     ) -> Result<TerminalCompletionAttempt<KnownCompletionDisposition>, ConsultationPersistenceError>
@@ -772,6 +933,7 @@ impl PostgresDurableAuditStatePlane {
                     .ok_or(ConsultationPersistenceError::InvalidInput)?,
                 Some(facts),
                 ActiveCompletionMode::Known,
+                batch,
                 pseudonym_authority,
                 #[cfg(test)]
                 test_hook,
@@ -814,6 +976,7 @@ impl PostgresDurableAuditStatePlane {
                     .ok_or(ConsultationPersistenceError::InvalidInput)?,
                 None,
                 ActiveCompletionMode::Unfinished,
+                None,
                 pseudonym_authority,
                 #[cfg(test)]
                 test_hook,
@@ -855,6 +1018,7 @@ impl PostgresDurableAuditStatePlane {
                 &mut dispatch,
                 Some(&facts),
                 ActiveCompletionMode::Known,
+                None,
                 pseudonym_authority,
                 #[cfg(test)]
                 None,
@@ -874,6 +1038,38 @@ impl PostgresDurableAuditStatePlane {
     }
 
     #[cfg(test)]
+    pub(crate) async fn finalize_validated_batch_consultation_for_test(
+        &self,
+        dispatch: &mut AuditedConsultationDispatch,
+        facts: &KnownConsultationCompletionFacts,
+        batch: &BatchChildReplayContext,
+        terminal_payload: &str,
+        pseudonym_authority: ActiveAuditPseudonymWriteEpoch,
+    ) -> Result<KnownCompletionDisposition, ConsultationPersistenceError> {
+        let completion = self
+            .finalize_active_consultation(
+                dispatch,
+                Some(facts),
+                ActiveCompletionMode::Known,
+                Some((batch, terminal_payload)),
+                pseudonym_authority,
+                None,
+            )
+            .await?;
+        let ActiveConsultationFinalization::Completed {
+            stored_identity,
+            outcome,
+        } = completion
+        else {
+            return Err(ConsultationPersistenceError::StateConflict);
+        };
+        if outcome != ConsultationCompletionOutcome::KnownComplete {
+            return Err(ConsultationPersistenceError::ProtocolDrift);
+        }
+        Ok(known_disposition(facts, stored_identity))
+    }
+
+    #[cfg(test)]
     pub(crate) async fn close_unfinished_consultation_for_test(
         &self,
         dispatch: AuditedConsultationDispatch,
@@ -885,6 +1081,7 @@ impl PostgresDurableAuditStatePlane {
                 &mut dispatch,
                 None,
                 ActiveCompletionMode::Unfinished,
+                None,
                 pseudonym_authority,
                 #[cfg(test)]
                 None,
@@ -911,6 +1108,7 @@ impl PostgresDurableAuditStatePlane {
         dispatch: &mut AuditedConsultationDispatch,
         facts: Option<&KnownConsultationCompletionFacts>,
         mode: ActiveCompletionMode,
+        batch: Option<(&BatchChildReplayContext, &str)>,
         pseudonym_authority: ActiveAuditPseudonymWriteEpoch,
         #[cfg(test)] mut test_hook: Option<&mut TerminalCompletionTestHook>,
     ) -> Result<ActiveConsultationFinalization, ConsultationPersistenceError> {
@@ -997,38 +1195,58 @@ impl PostgresDurableAuditStatePlane {
                 .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
             let envelope_json = serde_json::to_string(&envelope)
                 .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?;
-            let cas = consultation_query(
-                deadline,
-                client.query_one(
-                    match mode {
-                        ActiveCompletionMode::Known => NORMAL_COMPLETION_CAS_SQL,
-                        ActiveCompletionMode::Unfinished => UNFINISHED_COMPLETION_CAS_SQL,
-                    },
-                    &[
-                        &dispatch.operation_id.as_str(),
-                        &dispatch.lock_key.as_i64(),
-                        &dispatch.holder_id,
-                        &dispatch.fence_generation,
-                        &dispatch.deadline_unix_ms,
-                        &permit_kinds,
-                        &permit_ordinals,
-                        &current_key_id,
-                        &current_generation,
-                        &current_digest.as_slice(),
-                        &completion.payload_digest().as_bytes().as_slice(),
-                        &generation,
-                        &snapshot.predecessor.as_ref().map(<[u8; 32]>::as_slice),
-                        &envelope.envelope_id,
-                        &envelope.timestamp_unix_ms,
-                        &record_json,
-                        &envelope_json,
-                        &envelope.record_hash.as_slice(),
-                        &self.chain_key_epoch_id.as_str(),
-                        &self.keyring_lock_key.as_i64(),
-                    ],
-                ),
-            )
-            .await?;
+            let completion_payload_digest = completion.payload_digest();
+            let completion_payload_digest_bytes = completion_payload_digest.as_bytes();
+            let ordinary_parameters: &[&(dyn tokio_postgres::types::ToSql + Sync)] = &[
+                &dispatch.operation_id.as_str(),
+                &dispatch.lock_key.as_i64(),
+                &dispatch.holder_id,
+                &dispatch.fence_generation,
+                &dispatch.deadline_unix_ms,
+                &permit_kinds,
+                &permit_ordinals,
+                &current_key_id,
+                &current_generation,
+                &current_digest.as_slice(),
+                &completion_payload_digest_bytes.as_slice(),
+                &generation,
+                &snapshot.predecessor.as_ref().map(<[u8; 32]>::as_slice),
+                &envelope.envelope_id,
+                &envelope.timestamp_unix_ms,
+                &record_json,
+                &envelope_json,
+                &envelope.record_hash.as_slice(),
+                &self.chain_key_epoch_id.as_str(),
+                &self.keyring_lock_key.as_i64(),
+            ];
+            let cas = if let Some((batch, terminal_payload)) = batch {
+                if !matches!(mode, ActiveCompletionMode::Known) {
+                    return Err(ConsultationPersistenceError::InvalidInput);
+                }
+                let child_key = batch.child_key.as_slice();
+                let binding_digest = batch.binding_digest.as_slice();
+                let mut parameters = ordinary_parameters.to_vec();
+                parameters.push(&child_key);
+                parameters.push(&binding_digest);
+                parameters.push(&terminal_payload);
+                consultation_query(
+                    deadline,
+                    client.query_one(BATCH_NORMAL_COMPLETION_CAS_SQL, &parameters),
+                )
+                .await?
+            } else {
+                consultation_query(
+                    deadline,
+                    client.query_one(
+                        match mode {
+                            ActiveCompletionMode::Known => NORMAL_COMPLETION_CAS_SQL,
+                            ActiveCompletionMode::Unfinished => UNFINISHED_COMPLETION_CAS_SQL,
+                        },
+                        ordinary_parameters,
+                    ),
+                )
+                .await?
+            };
             match required_str(&cas, "outcome")? {
                 "inserted" | "identical_duplicate" => {
                     if required_str(&cas, "completion_outcome")? != completion_outcome.as_str() {

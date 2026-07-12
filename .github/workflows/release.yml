@@ -187,12 +187,14 @@ jobs:
           cp target/release/registryctl "dist/bin/registryctl-${{ needs.verify.outputs.tag }}-linux-amd64"
           cp target/release/registry-manifest "dist/bin/registry-manifest-${{ needs.verify.outputs.tag }}-linux-amd64"
           cp target/release/registry-relay "dist/bin/registry-relay-${{ needs.verify.outputs.tag }}-linux-amd64"
+          cp target/release/registry-relay-rhai-worker "dist/bin/registry-relay-rhai-worker-${{ needs.verify.outputs.tag }}-linux-amd64"
           cp dist/image-bin/registry-notary "dist/bin/registry-notary-${{ needs.verify.outputs.tag }}-linux-amd64"
           mv dist/image-bin/registry-notary-pkcs11 dist/image-bin/registry-notary
           cp target/release/registry-notary-source-adapter-sidecar dist/image-bin/registry-notary-openfn-sidecar
           cp target/release/registry-relay dist/image-bin/registry-relay
+          cp target/release/registry-relay-rhai-worker dist/image-bin/registry-relay-rhai-worker
           printf '%s\n' "${RELEASE_BUILDER_IMAGE}" > dist/image-bin/RELEASE_BUILDER_IMAGE
-          chmod 0755 dist/bin/* dist/image-bin/registry-notary dist/image-bin/registry-notary-openfn-sidecar dist/image-bin/registry-relay
+          chmod 0755 dist/bin/* dist/image-bin/registry-notary dist/image-bin/registry-notary-openfn-sidecar dist/image-bin/registry-relay dist/image-bin/registry-relay-rhai-worker
           (cd dist/bin && sha256sum -- * > SHA256SUMS)
           (cd dist/image-bin && sha256sum -- * > SHA256SUMS)
 
@@ -341,7 +343,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          chmod 0755 dist/image-bin/registry-notary dist/image-bin/registry-notary-openfn-sidecar dist/image-bin/registry-relay
+          chmod 0755 dist/image-bin/registry-notary dist/image-bin/registry-notary-openfn-sidecar dist/image-bin/registry-relay dist/image-bin/registry-relay-rhai-worker
           (cd dist/image-bin && sha256sum --check SHA256SUMS)
           mkdir -p dist/images dist/sbom dist/grype
           cp dist/image-bin/SHA256SUMS dist/images/image-binaries.SHA256SUMS

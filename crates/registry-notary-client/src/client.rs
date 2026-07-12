@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use registry_notary_core::{
     BatchEvaluateRequest, ClaimRef, CredentialIssueRequest, EvaluateRequest, EvidenceEntity,
     EvidenceIdentifier, EvidenceOnBehalfOf, EvidenceRelationship, RenderEvaluationRequest,
-    RenderRequest, FORMAT_CLAIM_RESULT_JSON,
+    RenderRequest, RequestVariables, FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_platform_httputil::read_bounded;
 use reqwest::{Method, StatusCode, Url};
@@ -479,6 +479,7 @@ impl RegistryNotaryClient {
             requester: None,
             relationship: None,
             on_behalf_of: None,
+            variables: BTreeMap::new(),
             claims: Vec::new(),
             disclosure: None,
             format: None,
@@ -1182,6 +1183,7 @@ pub struct EvaluateBuilder<'a> {
     requester: Option<EvidenceEntity>,
     relationship: Option<EvidenceRelationship>,
     on_behalf_of: Option<EvidenceOnBehalfOf>,
+    variables: BTreeMap<String, String>,
     claims: Vec<ClaimRef>,
     disclosure: Option<String>,
     format: Option<String>,
@@ -1292,6 +1294,17 @@ impl<'a> EvaluateBuilder<'a> {
         self
     }
 
+    /// Add one declared RFC 3339 full-date request variable.
+    #[must_use]
+    pub fn request_variable_date(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.variables.insert(name.into(), value.into());
+        self
+    }
+
     /// Set the identifier type for the first target identifier.
     ///
     /// Prefer [`Self::target_identifier`] for new code.
@@ -1366,11 +1379,14 @@ impl<'a> EvaluateBuilder<'a> {
 
     /// Send the evaluation request.
     pub async fn send(self) -> Result<NotaryResponse<Evaluation>, NotaryClientError> {
+        let variables = RequestVariables::try_new(self.variables)
+            .map_err(|_| NotaryClientBuildError::RequestSerialization)?;
         let request = EvaluateRequest {
             requester: self.requester,
             target: Some(self.target),
             relationship: self.relationship,
             on_behalf_of: self.on_behalf_of,
+            variables,
             claims: self.claims,
             disclosure: self.disclosure,
             format: self.format,

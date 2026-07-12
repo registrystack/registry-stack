@@ -165,8 +165,8 @@ impl CelWorker {
         let started_at = Instant::now();
         let policy_hash = cel_policy_hash(expression);
         let request = CelWorkerRequest {
-            protocol: CEL_WORKER_PROTOCOL_V1,
-            expression,
+            protocol: CEL_WORKER_PROTOCOL_V1.to_string(),
+            expression: expression.to_string(),
             policy_hash: Some(policy_hash.clone()),
             allow_regex: self.config.allow_regex,
             limits: self.config.limits.clone(),
@@ -207,20 +207,22 @@ impl CelWorker {
             self.record_evaluation(&error, started_at.elapsed());
             return Err(error);
         }
-        if let Some(result) = response.value {
-            self.record_evaluation_success(started_at.elapsed());
-            return Ok(result);
-        }
-        let error = match response.error.as_deref() {
-            Some("compile") => Err(CelWorkerError::Compile),
-            Some("evaluate") => Err(CelWorkerError::Evaluate),
-            Some("invalid_request") => Err(CelWorkerError::Protocol),
-            _ => Err(CelWorkerError::Protocol),
+        let result = match response.outcome {
+            CelWorkerResponseOutcome::Success { value } => {
+                self.record_evaluation_success(started_at.elapsed());
+                return Ok(value);
+            }
+            CelWorkerResponseOutcome::Error { error } => match error.as_str() {
+                "compile" => Err(CelWorkerError::Compile),
+                "evaluate" => Err(CelWorkerError::Evaluate),
+                "invalid_request" => Err(CelWorkerError::Protocol),
+                _ => Err(CelWorkerError::Protocol),
+            },
         };
-        if let Err(error) = &error {
+        if let Err(error) = &result {
             self.record_evaluation(error, started_at.elapsed());
         }
-        error
+        result
     }
 
     pub async fn snapshot(&self) -> Result<WorkerPoolSnapshot, CelWorkerError> {
@@ -357,9 +359,9 @@ impl CelWorkerError {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct CelWorkerRequest<'a> {
-    pub protocol: &'a str,
-    pub expression: &'a str,
+pub struct CelWorkerRequest {
+    pub protocol: String,
+    pub expression: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_hash: Option<String>,
     #[serde(default)]
@@ -374,10 +376,15 @@ pub struct CelWorkerResponse {
     pub protocol: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub policy_hash: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    #[serde(flatten)]
+    pub outcome: CelWorkerResponseOutcome,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum CelWorkerResponseOutcome {
+    Success { value: Value },
+    Error { error: String },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -436,13 +443,14 @@ pub fn run_stdio_worker() {
             Ok(None) => break,
             Err(_) => process::exit(2),
         }
-        let response = match serde_json::from_slice::<CelWorkerRequest<'_>>(line.trim_ascii_end()) {
+        let response = match serde_json::from_slice::<CelWorkerRequest>(line.trim_ascii_end()) {
             Ok(request) => handle_worker_request(request),
             Err(_) => CelWorkerResponse {
                 protocol: CEL_WORKER_PROTOCOL_V1.to_string(),
                 policy_hash: None,
-                value: None,
-                error: Some("invalid_request".to_string()),
+                outcome: CelWorkerResponseOutcome::Error {
+                    error: "invalid_request".to_string(),
+                },
             },
         };
         if serde_json::to_writer(&mut stdout, &response).is_err() {
@@ -490,11 +498,11 @@ fn read_worker_stdin_frame<R: BufRead>(
     }
 }
 
-fn handle_worker_request(request: CelWorkerRequest<'_>) -> CelWorkerResponse {
+fn handle_worker_request(request: CelWorkerRequest) -> CelWorkerResponse {
     if request.protocol != CEL_WORKER_PROTOCOL_V1 {
         return worker_error(None, "invalid_request");
     }
-    let policy_hash = cel_policy_hash(request.expression);
+    let policy_hash = cel_policy_hash(&request.expression);
     if request
         .policy_hash
         .as_deref()
@@ -502,11 +510,11 @@ fn handle_worker_request(request: CelWorkerRequest<'_>) -> CelWorkerResponse {
     {
         return worker_error(Some(policy_hash), "invalid_request");
     }
-    if !request.allow_regex && cel_expression_uses_regex(request.expression) {
+    if !request.allow_regex && cel_expression_uses_regex(&request.expression) {
         return worker_error(Some(policy_hash), "compile");
     }
     let security_limits = SecurityLimits::from(&request.limits);
-    if security_limits.check_expr(request.expression).is_err()
+    if security_limits.check_expr(&request.expression).is_err()
         || validate_worker_json_limits(&request.root_bindings, &request.limits).is_err()
     {
         return worker_error(Some(policy_hash), "invalid_request");
@@ -517,14 +525,13 @@ fn handle_worker_request(request: CelWorkerRequest<'_>) -> CelWorkerResponse {
     let mut runtime = MappingRuntime::new(RuntimeOptions::default());
     runtime.limits = security_limits;
     match runtime.evaluate_cel_expression_with_input(
-        request.expression,
+        &request.expression,
         StandaloneExpressionInput::new(bindings.into_iter().collect()),
     ) {
         Ok(value) => CelWorkerResponse {
             protocol: CEL_WORKER_PROTOCOL_V1.to_string(),
             policy_hash: Some(policy_hash),
-            value: Some(value),
-            error: None,
+            outcome: CelWorkerResponseOutcome::Success { value },
         },
         Err(StandaloneEvalError::Compile(_))
         | Err(StandaloneEvalError::InvalidBindingName { .. }) => {
@@ -537,8 +544,9 @@ fn worker_error(policy_hash: Option<String>, error: &str) -> CelWorkerResponse {
     CelWorkerResponse {
         protocol: CEL_WORKER_PROTOCOL_V1.to_string(),
         policy_hash,
-        value: None,
-        error: Some(error.to_string()),
+        outcome: CelWorkerResponseOutcome::Error {
+            error: error.to_string(),
+        },
     }
 }
 

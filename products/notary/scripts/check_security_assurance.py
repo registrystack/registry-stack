@@ -209,6 +209,11 @@ def crates_tree_root() -> Path:
     return ROOT if (ROOT / "crates").is_dir() else MONOREPO_ROOT
 
 
+def is_runtime_route_source(crate: Path, path: Path) -> bool:
+    relative = path.relative_to(crate / "src")
+    return path.name != "tests.rs" and "tests" not in relative.parts
+
+
 def validate_route_sources(inventory: object | None = None) -> None:
     if inventory is None:
         inventory = load_json(SECURITY_DIR / "route-inventory.json")
@@ -225,7 +230,7 @@ def validate_route_sources(inventory: object | None = None) -> None:
         str(path.relative_to(crates_base))
         for crate in (crates_base / "crates").glob("registry-notary*")
         for path in (crate / "src").rglob("*.rs")
-        if path.is_file()
+        if path.is_file() and is_runtime_route_source(crate, path)
     )
     for route in inventory["routes"]:
         source = route.get("source")

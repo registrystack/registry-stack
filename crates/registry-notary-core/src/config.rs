@@ -23,8 +23,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::deployment::DeploymentConfig;
 use crate::model::{
-    DisclosureProfile, EvidenceAuthorizationDetails, FORMAT_SD_JWT_VC,
-    SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_SIGNING_ALG,
+    is_request_variable_name, DisclosureProfile, EvidenceAuthorizationDetails, FORMAT_SD_JWT_VC,
+    MAX_REQUEST_VARIABLES_V1, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_SIGNING_ALG,
 };
 
 mod audit;

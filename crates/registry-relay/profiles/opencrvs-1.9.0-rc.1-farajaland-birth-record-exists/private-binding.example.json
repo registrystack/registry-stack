@@ -6,7 +6,7 @@
   "integration_pack": {
     "id": "opencrvs.dci.farajaland.birth-record-exists",
     "version": "1",
-    "hash": "sha256:04297b0429cf311c79dedd332f45d1fd7ee9d9e4b56d2c77d793fdeeeeb986aa"
+    "hash": "sha256:2217affdb8ea79a7197926800ee5f3eb5a003e9ad3acaaa6dc54c00e2ac06b58"
   },
   "tenant": "example-government",
   "registry_instance": "opencrvs-primary",

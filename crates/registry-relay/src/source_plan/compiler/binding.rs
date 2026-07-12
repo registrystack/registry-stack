@@ -87,28 +87,57 @@ pub(super) fn compile_snapshot_binding(
         .materialization
         .as_ref()
         .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-    let reviewed = pack
-        .document
+    pack.document
         .spec
         .plan
         .snapshot
         .as_ref()
         .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+    let mapping = &private.mapping;
+    let keys = mapping
+        .key
+        .iter()
+        .map(|key| (key.input.as_str(), key))
+        .chain(mapping.keys.iter().map(|(name, key)| (name.as_str(), key)))
+        .collect::<Vec<_>>();
+    let acquisition_fields = pack
+        .document
+        .spec
+        .acquisition
+        .fields
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    if keys.iter().map(|(name, _)| *name).collect::<BTreeSet<_>>()
+        != pack
+            .document
+            .spec
+            .input_slots
+            .keys()
+            .map(String::as_str)
+            .collect()
+        || mapping
+            .projection
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>()
+            != acquisition_fields
+    {
+        return Err(SourcePlanCompileError::ContractMismatch);
+    }
     let refresh_class = match public.refresh_class {
         MaterializationRefreshClassDocument::OperatorTriggered => {
             CompiledSnapshotRefreshClass::OperatorTriggered
         }
         MaterializationRefreshClassDocument::Scheduled => CompiledSnapshotRefreshClass::Scheduled,
     };
-    let projection = reviewed
-        .mapping
+    let projection = mapping
         .projection
         .iter()
         .map(|(logical, physical)| (logical.as_str().into(), physical.as_str().into()))
         .collect::<Box<[_]>>();
     let physical_for = |logical: &str| {
-        reviewed
-            .mapping
+        mapping
             .projection
             .get(logical)
             .map(|physical| physical.as_str().into())
@@ -152,8 +181,10 @@ pub(super) fn compile_snapshot_binding(
         refresh_class,
         immutable_generation: public.immutable_generation,
         digest_bound_active_pointer: public.digest_bound_active_pointer,
-        key_input: reviewed.mapping.key.input.as_str().into(),
-        key_physical_field: reviewed.mapping.key.physical_field.as_str().into(),
+        keys: keys
+            .into_iter()
+            .map(|(name, key)| (name.into(), key.physical_field.as_str().into()))
+            .collect(),
         projection,
         source_observed_at,
         source_revision,
@@ -283,15 +314,15 @@ pub(super) fn validate_effective_source_bytes(
                     total.checked_add(u64::from(operation.response.max_bytes))
                 })
                 .ok_or(SourcePlanCompileError::BindingWidening)?;
-            if pack.document.spec.plan.operations.iter().any(|operation| {
-                operation.request_codec == Some(RequestCodecDocument::OpenCrvsDciExactV1)
-            }) {
-                declared
-                    .checked_add(OPEN_CRVS_JWKS_MAX_RESPONSE_BYTES)
-                    .ok_or(SourcePlanCompileError::BindingWidening)?
-            } else {
-                declared
-            }
+            pack.document
+                .spec
+                .plan
+                .verification_operations
+                .iter()
+                .try_fold(declared, |total, operation| {
+                    total.checked_add(u64::from(operation.max_response_bytes))
+                })
+                .ok_or(SourcePlanCompileError::BindingWidening)?
         }
         SourcePlanKind::SandboxedRhai => {
             let maximum_data_response_bytes = pack
@@ -353,12 +384,23 @@ pub(super) fn validate_contract_implementation(
 ) -> Result<(), SourcePlanCompileError> {
     let contract_spec = &contract.document.spec;
     let pack_spec = &pack.document.spec;
+    let pack_can_ambiguous = pack_spec.bounds.max_source_matches == 2
+        || pack_spec
+            .plan
+            .operations
+            .iter()
+            .any(|operation| !operation.response.status_outcomes.ambiguous.is_empty());
+    let contract_can_ambiguous = contract_spec
+        .public_behavior
+        .outcomes
+        .contains(&OutcomeDocument::Ambiguous);
     let exact = pack_spec.input_slots == contract_spec.inputs
         && pack_spec.acquisition == contract_spec.acquisition
         && pack_spec.source_provenance == contract_spec.source_provenance
         && pack_spec.output_mode == contract_spec.output_mode
         && pack_spec.output == contract_spec.output
-        && pack_spec.bounds == contract_spec.bounds;
+        && pack_spec.bounds == contract_spec.bounds
+        && pack_can_ambiguous == contract_can_ambiguous;
     exact
         .then_some(())
         .ok_or(SourcePlanCompileError::ContractMismatch)
@@ -641,20 +683,10 @@ pub(super) fn reject_destination_overlap(
         Url::parse(&data.origin).map_err(|_| SourcePlanCompileError::UnsafeDestination)?;
     let credential_origin =
         Url::parse(&credential.origin).map_err(|_| SourcePlanCompileError::UnsafeDestination)?;
-    let open_crvs_exact = pack.document.spec.plan.operations.len() == 1
-        && pack.document.spec.plan.operations[0].request_codec
-            == Some(RequestCodecDocument::OpenCrvsDciExactV1);
-    if open_crvs_exact {
-        if data.id != credential.id
-            && data_origin == credential_origin
-            && data.application_base_path == "/"
-            && credential.application_base_path == "/"
-        {
-            Ok(())
-        } else {
-            Err(SourcePlanCompileError::UnsafeDestination)
-        }
-    } else if data.id == credential.id || data_origin == credential_origin {
+    let signed_dci = pack.document.spec.plan.operations.len() == 1
+        && pack.document.spec.plan.verification_operations.len() == 1
+        && pack.document.spec.plan.operations[0].dci.is_some();
+    if data.id == credential.id || (data_origin == credential_origin && !signed_dci) {
         Err(SourcePlanCompileError::UnsafeDestination)
     } else {
         Ok(())

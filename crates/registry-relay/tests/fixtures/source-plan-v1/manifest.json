@@ -11,37 +11,37 @@
       "name": "integration_pack",
       "file": "integration-pack.json",
       "domain_label": "registry.relay.integration-pack.v1",
-      "expected_hash": "sha256:2aa6d87bf5c6c04ce0b8982e5ee28bf0d56b4432991c5679b0d342389ec2cb5c"
+      "expected_hash": "sha256:e31ef30d326046840f0594e1fbcc934653552e902bf0caf6d383bd5507e4281c"
     },
     {
       "name": "consultation_policy",
       "file": "consultation-policy.json",
       "domain_label": "registry.relay.consultation-policy.v1",
-      "expected_hash": "sha256:28ece7689edff4f02c39fcb1b7d7abb63eddd3c29c2701898e7a53fe15a2cd17"
+      "expected_hash": "sha256:709e7ca0f319cfe957f72c3d6241f983dcf5fbb9ba4c511699bfc71df71bc544"
     },
     {
       "name": "consultation_policy_utf8_ordering",
       "file": "consultation-policy-utf8-ordering.json",
       "domain_label": "registry.relay.consultation-policy.v1",
-      "expected_hash": "sha256:e529a505e9c29746942dc35a10aa173efa3928422d2c121f516b9fcd3e556f32"
+      "expected_hash": "sha256:bd97ff3e7d0ce14d08363ac075c1f6fa21f0ee28da21cb92d1d9c7f3c070b85a"
     },
     {
       "name": "public_contract",
       "file": "public-contract.json",
       "domain_label": "registry.relay.consultation-contract.v1",
-      "expected_hash": "sha256:2c2b1d85d7fae354d6780d64fdd521fe223bdfebefec0525e3b3cc2155c37111"
+      "expected_hash": "sha256:e026a256a94f48dc645ae9317a3ae3f36d1634c0080f481d7ad6f11adcb8baec"
     },
     {
       "name": "public_contract_utf8_ordering",
       "file": "public-contract-utf8-ordering.json",
       "domain_label": "registry.relay.consultation-contract.v1",
-      "expected_hash": "sha256:54c5f70a2b39d6fc514337c67a9638f9c95f8528674c9b037ed151b394042e49"
+      "expected_hash": "sha256:d7adb80306f2702e9eed4b5964594e80525ae2fe3ba21c6bd8f478045aa3de20"
     },
     {
       "name": "private_binding",
       "file": "private-binding.json",
       "domain_label": "registry.relay.consultation-binding.v1",
-      "expected_hash": "sha256:10cdb75edb3b772575dea22ced33417a528840fd1d2c420441cbef335daf7e7a"
+      "expected_hash": "sha256:415607d174a62750109b5ad18d333d1c276b80a918d8b4ad671a40d6f2d630b9"
     }
   ],
   "cross_references": [

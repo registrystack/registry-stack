@@ -96,7 +96,7 @@ impl fmt::Debug for ConsultationEvidenceArtifactConfig {
 pub struct ConsultationArtifactClosureConfig {
     pub public_contracts: Vec<ConsultationTypedArtifactReferenceConfig>,
     pub integration_packs: Vec<ConsultationTypedArtifactReferenceConfig>,
-    pub private_bindings: Vec<ConsultationArtifactReferenceConfig>,
+    pub private_bindings: Vec<ConsultationTypedArtifactReferenceConfig>,
     pub evidence: Vec<ConsultationEvidenceArtifactConfig>,
     #[serde(default)]
     pub rhai_scripts: Vec<ConsultationArtifactReferenceConfig>,
@@ -236,7 +236,7 @@ impl VerifiedConsultationEvidenceArtifact {
 pub struct VerifiedConsultationArtifactClosure {
     public_contracts: Box<[VerifiedTypedConsultationArtifact]>,
     integration_packs: Box<[VerifiedTypedConsultationArtifact]>,
-    private_bindings: Box<[VerifiedConsultationArtifact]>,
+    private_bindings: Box<[VerifiedTypedConsultationArtifact]>,
     evidence: Box<[VerifiedConsultationEvidenceArtifact]>,
     rhai_scripts: Box<[VerifiedConsultationArtifact]>,
 }
@@ -267,7 +267,7 @@ impl VerifiedConsultationArtifactClosure {
         &self.integration_packs
     }
 
-    pub(crate) fn private_bindings(&self) -> &[VerifiedConsultationArtifact] {
+    pub(crate) fn private_bindings(&self) -> &[VerifiedTypedConsultationArtifact] {
         &self.private_bindings
     }
 
@@ -304,9 +304,13 @@ impl VerifiedConsultationArtifactClosure {
                 .collect(),
             private_bindings: private_bindings
                 .into_iter()
-                .map(|bytes| VerifiedConsultationArtifact {
-                    sha256: sha256_uri(&bytes).into_boxed_str(),
-                    bytes: bytes.into_boxed_slice(),
+                .map(|bytes| {
+                    let authored = crate::source_plan::authoring::compile_private_binding(&bytes)
+                        .expect("test private binding compiles");
+                    VerifiedTypedConsultationArtifact {
+                        artifact_hash: authored.typed_hash().into(),
+                        bytes: bytes.into_boxed_slice(),
+                    }
                 })
                 .collect(),
             evidence: evidence
@@ -407,11 +411,12 @@ impl SignedBundleRuntimeFiles {
 
     fn artifact_path(
         &self,
-        normalized: &str,
+        configured: &str,
         expected_sha256: &str,
     ) -> Result<PathBuf, ConsultationArtifactClosureError> {
-        match self.files.get(normalized) {
-            Some(actual) if actual == expected_sha256 => Ok(self.root.join(normalized)),
+        let bundle_path = self.metadata_bundle_path(Path::new(configured))?;
+        match self.files.get(&bundle_path) {
+            Some(actual) if actual == expected_sha256 => Ok(self.root.join(bundle_path)),
             Some(_) => Err(ConsultationArtifactClosureError::HashMismatch),
             None => Err(ConsultationArtifactClosureError::MissingArtifact),
         }
@@ -431,7 +436,7 @@ impl SignedBundleRuntimeFiles {
             .and_then(|consultation| consultation.artifacts.as_ref())
         {
             for path in artifacts.paths() {
-                referenced.insert(normalized_bundle_path(path)?);
+                referenced.insert(self.metadata_bundle_path(path)?);
             }
         }
         let present = self.files.keys().cloned().collect::<BTreeSet<_>>();
@@ -499,7 +504,7 @@ impl ConsultationArtifactClosureConfig {
             validate_typed_reference(artifact, &mut paths, &mut hashes)?;
         }
         for artifact in &self.private_bindings {
-            validate_file_reference(artifact, &mut paths, &mut hashes)?;
+            validate_typed_reference(artifact, &mut paths, &mut hashes)?;
         }
         for artifact in &self.evidence {
             validate_reference_parts(&artifact.path, &artifact.sha256, &mut paths, &mut hashes)?;
@@ -618,15 +623,25 @@ pub(crate) fn load_consultation_artifacts(
         .private_bindings
         .iter()
         .map(|artifact| {
-            load_file_artifact(
-                artifact,
+            let bytes = load_artifact(
+                artifact.path.as_path(),
+                &artifact.sha256,
                 MAX_TYPED_ARTIFACT_BYTES,
                 local_root,
                 signed_files,
                 &mut total_bytes,
-            )
+            )?;
+            let authored = crate::source_plan::authoring::compile_private_binding(&bytes)
+                .map_err(|_| ConsultationArtifactClosureError::HashMismatch)?;
+            if authored.typed_hash() != artifact.hash {
+                return Err(ConsultationArtifactClosureError::HashMismatch);
+            }
+            Ok(VerifiedTypedConsultationArtifact {
+                bytes,
+                artifact_hash: artifact.hash.clone().into_boxed_str(),
+            })
         })
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<_, ConsultationArtifactClosureError>>()?;
     let mut class_counts = BTreeMap::<ConsultationEvidenceClassConfig, usize>::new();
     let mut class_bytes = BTreeMap::<ConsultationEvidenceClassConfig, u64>::new();
     let evidence = closure
@@ -844,13 +859,6 @@ mod tests {
         format!("sha256:{byte:064x}")
     }
 
-    fn file(path: &str, byte: u8) -> ConsultationArtifactReferenceConfig {
-        ConsultationArtifactReferenceConfig {
-            path: path.into(),
-            sha256: hash(byte),
-        }
-    }
-
     fn typed(path: &str, byte: u8) -> ConsultationTypedArtifactReferenceConfig {
         ConsultationTypedArtifactReferenceConfig {
             path: path.into(),
@@ -863,7 +871,7 @@ mod tests {
         ConsultationArtifactClosureConfig {
             public_contracts: vec![typed("consultation/contracts/example.json", 1)],
             integration_packs: vec![typed("consultation/packs/example.json", 2)],
-            private_bindings: vec![file("consultation/bindings/example.json", 3)],
+            private_bindings: vec![typed("consultation/bindings/example.json", 3)],
             evidence: vec![ConsultationEvidenceArtifactConfig {
                 class: ConsultationEvidenceClassConfig::Conformance,
                 path: "consultation/evidence/example.txt".into(),
@@ -1014,6 +1022,29 @@ mod tests {
                 .unwrap(),
             "metadata/manifest.yaml"
         );
+
+        let artifact_hash = hash(3);
+        let signed_files = SignedBundleRuntimeFiles {
+            root: PathBuf::from("/bundle"),
+            primary_config_path: "config/relay.yaml".to_string(),
+            files: BTreeMap::from([
+                ("config/relay.yaml".to_string(), hash(1)),
+                (
+                    "config/artifacts/pack.json".to_string(),
+                    artifact_hash.clone(),
+                ),
+            ]),
+        };
+        assert_eq!(
+            signed_files
+                .artifact_path("artifacts/pack.json", &artifact_hash)
+                .unwrap(),
+            PathBuf::from("/bundle/config/artifacts/pack.json")
+        );
+        assert_eq!(
+            signed_files.artifact_path("../artifacts/pack.json", &artifact_hash),
+            Err(ConsultationArtifactClosureError::MissingArtifact)
+        );
     }
 
     #[test]
@@ -1056,6 +1087,7 @@ mod tests {
                     }],
                     "private_bindings": [{
                         "path": "bindings/example.json",
+                        "hash": hash(13),
                         "sha256": hash(3)
                     }],
                     "evidence": [{

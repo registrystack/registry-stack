@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::artifact::{
-    IntegrationPackArtifact, PrivateBindingArtifact, PublicContractArtifact, RequestCodecDocument,
+    IntegrationPackArtifact, PrivateBindingArtifact, PublicContractArtifact,
     SourceObservedAtDocument, SourcePlanKind, SourcePlanLimits, SourceRevisionDocument,
 };
 use super::compiler::{
@@ -190,24 +190,30 @@ fn compile_predicate_plan_digest(
     let plan = match (kind, dispatch, rhai) {
         (SourcePlanKind::SnapshotExact, CompiledDispatchProfile::SnapshotExact, None) => {
             let snapshot = snapshot.ok_or(SourcePlanCompileError::CompilerInvariant)?;
-            let input = input_names
-                .iter()
-                .copied()
-                .find(|input| *input == snapshot.key_input())
-                .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+            let selectors = snapshot
+                .keys()
+                .map(|(input, physical)| {
+                    input_names
+                        .contains(&input)
+                        .then(|| {
+                            json!({
+                                "source": {"kind": "consultation_input", "input": input},
+                                "location": {
+                                    "kind": "materialized_snapshot_key",
+                                    "physical_field": physical,
+                                    "physical_type": "utf8",
+                                    "comparison": "binary_equality",
+                                },
+                            })
+                        })
+                        .ok_or(SourcePlanCompileError::CompilerInvariant)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             json!({
                 "schema": "registry.relay.consultation-predicate-plan.v1",
                 "kind": "snapshot_exact",
                 "operations": operation_preimages,
-                "snapshot_selector": {
-                    "source": {"kind": "consultation_input", "input": input},
-                    "location": {
-                        "kind": "materialized_snapshot_key",
-                        "physical_field": snapshot.key_physical_field(),
-                        "physical_type": "utf8",
-                        "comparison": "binary_equality",
-                    },
-                },
+                "snapshot_selectors": selectors,
             })
         }
         (SourcePlanKind::BoundedHttp, CompiledDispatchProfile::BoundedHttp { .. }, None) => {
@@ -275,12 +281,14 @@ fn compile_physical_projection_digest(
                 "cardinality": cardinality_preimage(operation)?,
                 "output_mappings": outputs,
             });
-            if let Some(jwks) = operation.embedded_open_crvs_jwks() {
-                preimage["request_codec"] = Value::String("open_crvs_dci_exact_v1".into());
-                preimage["embedded_jwks"] = json!({
-                    "operation_id": jwks.id().as_str(),
-                    "fixed_path": jwks.fixed_path(),
-                    "response_max_bytes": jwks.response_max_bytes(),
+            if let Some(dci) = operation.dci_exact() {
+                let verification = dci.verification();
+                preimage["request_codec"] = Value::String("dci_exact_v1".into());
+                preimage["verification"] = json!({
+                    "primitive": "dci_jws_v1",
+                    "operation_id": verification.id().as_str(),
+                    "fixed_path": verification.fixed_path(),
+                    "response_max_bytes": verification.response_max_bytes(),
                     "order": "before_data_operation",
                 });
             }
@@ -290,9 +298,12 @@ fn compile_physical_projection_digest(
     operation_preimages.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
     let snapshot_projection = snapshot.map(|snapshot| {
         json!({
-            "key_physical_field": snapshot.key_physical_field(),
-            "key_physical_type": "utf8",
-            "key_comparison": "binary_equality",
+            "keys": snapshot.keys().map(|(input, physical)| json!({
+                "input": input,
+                "physical_field": physical,
+                "physical_type": "utf8",
+                "comparison": "binary_equality",
+            })).collect::<Vec<_>>(),
             "fields": snapshot
                 .projection()
                 .map(|(logical, physical)| json!({
@@ -361,12 +372,14 @@ fn predicate_operation_preimage(
         "projection": projection_preimage(operation)?,
         "cardinality": cardinality_preimage(operation)?,
     });
-    if let Some(jwks) = operation.embedded_open_crvs_jwks() {
-        preimage["request_codec"] = Value::String("open_crvs_dci_exact_v1".into());
-        preimage["embedded_jwks"] = json!({
-            "operation_id": jwks.id().as_str(),
-            "fixed_path": jwks.fixed_path(),
-            "response_max_bytes": jwks.response_max_bytes(),
+    if let Some(dci) = operation.dci_exact() {
+        let verification = dci.verification();
+        preimage["request_codec"] = Value::String("dci_exact_v1".into());
+        preimage["verification"] = json!({
+            "primitive": "dci_jws_v1",
+            "operation_id": verification.id().as_str(),
+            "fixed_path": verification.fixed_path(),
+            "response_max_bytes": verification.response_max_bytes(),
             "order": "before_data_operation",
         });
     }
@@ -410,6 +423,10 @@ fn selector_location_preimage(
                 .map(|component| component.name())
                 .ok_or(SourcePlanCompileError::CompilerInvariant)?,
         })),
+        CompiledSelectorLocation::PathSegment => Ok(json!({
+            "kind": "path_segment",
+            "ordinal": 0,
+        })),
         CompiledSelectorLocation::Body { pointer } => Ok(json!({
             "kind": "body",
             "pointer_tokens": pointer.tokens().collect::<Vec<_>>(),
@@ -417,6 +434,10 @@ fn selector_location_preimage(
         CompiledSelectorLocation::DciIdtypeValue => Ok(json!({
             "kind": "codec",
             "role": "dci_idtype_value",
+        })),
+        CompiledSelectorLocation::DciExactPredicate => Ok(json!({
+            "kind": "codec",
+            "role": "dci_exact_predicate",
         })),
         // A future closed path-segment selector must commit only its compiled
         // fixed segment ordinal/role here. It must never place a rendered path
@@ -569,9 +590,7 @@ fn projection_preimage(operation: &CompiledOperation) -> Result<Value, SourcePla
 
 fn cardinality_preimage(operation: &CompiledOperation) -> Result<Value, SourcePlanCompileError> {
     match operation.response().cardinality() {
-        CompiledCardinalityMechanism::OpenCrvsDciProbeTwo => {
-            Ok(json!({"kind": "open_crvs_dci_probe_two"}))
-        }
+        CompiledCardinalityMechanism::DciProbeTwo => Ok(json!({"kind": "dci_probe_two"})),
         CompiledCardinalityMechanism::ProbeQueryParameter { query_index } => Ok(json!({
             "kind": "probe_query_parameter",
             "parameter": operation
@@ -621,6 +640,23 @@ fn bounded_step_preimage(
                 CompiledStepPredicate::IntegerEquals(value) => {
                     json!({"kind": "integer_equals", "value": value})
                 }
+            },
+        }),
+        (Some(source_index), None, Some(predicate)) if step.condition_uses_presence() => json!({
+            "source": {
+                "operation_id": operations
+                    .get(source_index)
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?
+                    .id()
+                    .as_str(),
+                "output": "presence",
+            },
+            "predicate": match predicate {
+                CompiledStepPredicate::Exists => json!({"kind": "exists"}),
+                CompiledStepPredicate::BooleanEquals(value) => {
+                    json!({"kind": "boolean_equals", "value": value})
+                }
+                _ => return Err(SourcePlanCompileError::CompilerInvariant),
             },
         }),
         _ => return Err(SourcePlanCompileError::CompilerInvariant),
@@ -703,10 +739,7 @@ pub(super) fn measure_completion_seed(
 ) -> Result<CompletionSeedSizing, SourcePlanCompileError> {
     let operations = &pack.document.spec.plan.operations;
     let credential_operation = pack.document.spec.plan.credential_operation.as_ref();
-    let open_crvs_jwks_operation_id = operations
-        .iter()
-        .find(|operation| operation.request_codec == Some(RequestCodecDocument::OpenCrvsDciExactV1))
-        .map(|operation| format!("{}.jwks", operation.id));
+    let verification_operations = &pack.document.spec.plan.verification_operations;
     let mut authorized_operation_union = credential_operation
         .iter()
         .map(|operation| ("credential", operation.id.as_str()))
@@ -715,10 +748,12 @@ pub(super) fn measure_completion_seed(
                 .iter()
                 .map(|operation| ("data", operation.id.as_str())),
         )
+        .chain(
+            verification_operations
+                .iter()
+                .map(|operation| ("data", operation.id.as_str())),
+        )
         .collect::<Vec<_>>();
-    if let Some(operation_id) = &open_crvs_jwks_operation_id {
-        authorized_operation_union.push(("data", operation_id));
-    }
     authorized_operation_union.sort_unstable();
     let compiled_authorized_operation_union = authorized_operation_union
         .iter()
@@ -743,12 +778,12 @@ pub(super) fn measure_completion_seed(
     let data_permit_operations = match pack.document.spec.plan.kind {
         SourcePlanKind::SnapshotExact => Vec::new(),
         SourcePlanKind::BoundedHttp => {
-            if let Some(jwks_operation_id) = &open_crvs_jwks_operation_id {
+            if let [verification] = verification_operations.as_slice() {
                 let main_operation = operations
                     .first()
                     .ok_or(SourcePlanCompileError::CompilerInvariant)?;
                 vec![
-                    vec![jwks_operation_id.as_str()],
+                    vec![verification.id.as_str()],
                     vec![main_operation.id.as_str()],
                 ]
             } else {

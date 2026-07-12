@@ -11,16 +11,18 @@ use std::sync::{Arc, Mutex};
 use crosswalk_core::{
     ErrorSeverity, MappingRuntime, RuntimeOptions, SecurityLimits, StandaloneExpressionInput,
 };
+#[cfg(test)]
+use registry_notary_core::RelayConsultationInput;
 use registry_notary_core::{
-    detect_dependency_cycle, missing_context_error, parse_source_lookup_reference, AccessMode,
-    BatchClaimResultView, BatchEvaluateRequest, BatchEvaluateResponse, BatchItemError,
-    BatchItemResponse, BatchItemStatus, BatchStatus, BatchSummary, BoundedClaimId,
-    BoundedCorrelationId, BulkMode, CelBindingsConfig, ClaimDefinition, ClaimEvidenceMode,
-    ClaimProvenance, ClaimRef, ClaimResultView, CredentialProfileConfig, DisclosureDowngrade,
-    DisclosureProfile, EvaluateRequest, EvidenceAuthorizationDetails, EvidenceConfig,
-    EvidenceEntity, EvidenceEntityRef, EvidenceError, EvidenceFormat, EvidencePrincipal,
-    EvidenceRequestContext, MatchingMetadata, ProvenanceUsed, RegistryNotaryCelConfig,
-    RelayConsultationInput, RenderRequest, RuleConfig, SelfAttestationConfig,
+    detect_dependency_cycle, is_rfc3339_full_date, missing_context_error,
+    parse_source_lookup_reference, AccessMode, BatchClaimResultView, BatchEvaluateRequest,
+    BatchEvaluateResponse, BatchItemError, BatchItemResponse, BatchItemStatus, BatchStatus,
+    BatchSummary, BoundedClaimId, BoundedCorrelationId, BulkMode, CelBindingsConfig,
+    ClaimDefinition, ClaimEvidenceMode, ClaimProvenance, ClaimRef, ClaimResultView,
+    CredentialProfileConfig, DisclosureDowngrade, DisclosureProfile, EvaluateRequest,
+    EvidenceAuthorizationDetails, EvidenceConfig, EvidenceEntity, EvidenceEntityRef, EvidenceError,
+    EvidenceFormat, EvidencePrincipal, EvidenceRequestContext, MatchingMetadata, ProvenanceUsed,
+    RegistryNotaryCelConfig, RenderRequest, RuleConfig, SelfAttestationConfig,
     SelfAttestationDenialCode, SourceBindingConfig, SourceCapability, SourceLookupReference,
     SourceRuntimeSummary, StoredSelfAttestationMetadata, SubjectRequest, TargetRefView,
     FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC, MAX_CLAIM_DEPENDENCY_EDGES_V1,
@@ -78,14 +80,19 @@ use access::*;
 pub use catalog::*;
 #[cfg(feature = "registry-notary-cel")]
 pub(crate) use cel::validate_cel_claims_for_startup;
-#[cfg(not(test))]
-use consultation::ConsultationGroupKeyV1;
-#[cfg(test)]
 pub(crate) use consultation::ConsultationGroupKeyV1;
+#[cfg(test)]
+#[cfg(feature = "registry-notary-cel")]
+use consultation::RuntimeRelayFactMap;
 pub(crate) use consultation::{
-    ActivatedRelayConsultations, EvaluationAuditSnapshot, RuntimeRelayConsultationResult,
+    ActivatedRelayClientSet, ActivatedRelayConsultations, EvaluationAuditSnapshot,
+    RelayClientSelectionV1, RelayProfileReadiness, RuntimeRelayConsultationResult,
+    RuntimeRelayExpectedResult,
 };
-use consultation::{EvaluationAuditCollector, RequestScopedRelayPlan, RuntimeRelayOutcome};
+use consultation::{
+    EvaluationAuditCollector, RequestScopedRelayPlan, RuntimeRelayOutcome,
+    MAX_BATCH_CONSULTATION_GROUPS_V1,
+};
 #[cfg(test)]
 use consultation::{RuntimeRelayMatchData, RuntimeRelayOutput};
 use disclosure::*;

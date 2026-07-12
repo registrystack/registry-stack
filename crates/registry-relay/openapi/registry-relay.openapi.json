@@ -1174,7 +1174,7 @@
       },
       "ConsultationExecuteRequest": {
         "additionalProperties": false,
-        "description": "The exact consultation-v1 request envelope. The selected profile contract names the one accepted input. The complete encoded request body is limited to 8 KiB.",
+        "description": "The exact consultation-v1 request envelope. The selected profile contract names one to four required typed components of one exact subject selector. The complete encoded request body is limited to 8 KiB.",
         "properties": {
           "inputs": {
             "additionalProperties": {
@@ -1182,11 +1182,12 @@
               "minLength": 1,
               "type": "string"
             },
-            "description": "Exactly one profile-defined input name mapped to one string value.",
-            "maxProperties": 1,
+            "description": "One to four profile-defined component names mapped to string values. Names are ASCII and limited to 64 bytes. Each value is limited to 256 UTF-8 bytes and is validated and canonicalized under its profile-declared string or full-date contract. Every declared component is required; unknown, missing, or duplicate components fail before source access.",
+            "maxProperties": 4,
             "minProperties": 1,
             "propertyNames": {
-              "pattern": "^[a-z][a-z0-9_]{0,95}$"
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9_]{0,63}$"
             },
             "type": "object"
           }
@@ -1220,6 +1221,50 @@
       },
       "ConsultationResult": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "data": {
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "integer",
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "type": "object"
+                  },
+                  "outcome": {
+                    "const": "match"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "data": {
+                    "type": "null"
+                  },
+                  "outcome": {
+                    "const": "no_match"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "data": {
+                    "type": "null"
+                  },
+                  "outcome": {
+                    "const": "ambiguous"
+                  }
+                }
+              }
+            ]
+          }
+        ],
         "description": "Closed consultation-v1 result. Relay publishes it only after durable completion succeeds.",
         "properties": {
           "consultation_id": {
@@ -1233,7 +1278,7 @@
                 "additionalProperties": {
                   "type": [
                     "string",
-                    "number",
+                    "integer",
                     "boolean",
                     "null"
                   ]
@@ -1244,7 +1289,7 @@
                 "type": "null"
               }
             ],
-            "description": "Profile-approved scalar fields, or an empty object for a presence-only `match`; null for `no_match` and `ambiguous`."
+            "description": "For `match`, the exact profile-approved fact fields, or an empty object for a presence-only result. For `no_match` and `ambiguous`, null. Public facts are bounded strings or full dates, JSON-safe integers, booleans, presence booleans, and explicitly nullable variants; floating-point values are not part of consultation v1."
           },
           "notary_evaluation_id": {
             "description": "Registry Notary evaluation id when supplied on the request.",
@@ -1377,6 +1422,16 @@
                 "type": "string"
               },
               "relay_acquired_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "snapshot_generation_id": {
+                "description": "Server-generated immutable snapshot generation. Required only for `materialized_snapshot` results and omitted for live acquisition.",
+                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                "type": "string"
+              },
+              "snapshot_published_at": {
+                "description": "Server-owned snapshot publication time bound to the immutable generation. Required only for `materialized_snapshot` results and omitted for live acquisition.",
                 "format": "date-time",
                 "type": "string"
               },
@@ -4720,7 +4775,7 @@
     },
     "/v1/consultations/{profile_id}/versions/{profile_version}": {
       "get": {
-        "description": "Returns the hash-pinned public contract for one exact consultation profile. The response is protected and visible only to the configured Registry Notary OIDC workload with the profile's exact required scope. `contract` is the canonical profile contract itself; this generic operation deliberately does not generate a separate OpenAPI schema for every profile.",
+        "description": "Returns the hash-pinned public contract for one exact consultation profile. The response is protected and visible only to the configured Registry Notary OIDC workload with the profile's exact required scope. `contract_json` is the canonical profile contract itself; this generic operation deliberately does not generate a separate OpenAPI schema for every profile.",
         "operationId": "get_consultation_profile",
         "parameters": [
           {
@@ -4871,7 +4926,7 @@
     },
     "/v1/consultations/{profile_id}/versions/{profile_version}/execute": {
       "post": {
-        "description": "Executes one exact, purpose-bound consultation for the configured Registry Notary OIDC workload with the profile's exact required scope. The request is a single profile-named string input, and Relay returns only the profile-approved result envelope and provenance.",
+        "description": "Executes one exact, purpose-bound, single-subject consultation for the configured Registry Notary OIDC workload with the profile's exact required scope. The request supplies the profile's one to four required typed selector components, and Relay returns only the profile-approved result envelope and provenance. This route does not accept a subject batch.",
         "operationId": "execute_consultation",
         "parameters": [
           {
@@ -4923,7 +4978,9 @@
             "application/json": {
               "example": {
                 "inputs": {
-                  "subject_id": "profile-defined string"
+                  "date_of_birth": "1990-04-12",
+                  "family_name": "Diallo",
+                  "given_name": "Amina"
                 }
               },
               "schema": {
@@ -5043,6 +5100,31 @@
               }
             },
             "description": "The exact profile id and version are not visible to this workload. Stable code: `consultation.profile_not_found`."
+          },
+          "409": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemDetails"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "consultation.batch_child_conflict"
+                        },
+                        "status": {
+                          "const": 409
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The authenticated Notary batch child identity conflicts with prior durable state. Stable code: `consultation.batch_child_conflict`."
           },
           "429": {
             "content": {

@@ -656,6 +656,7 @@ impl SourceReader for HttpEvidenceSources {
                                             ),
                                             relationship: None,
                                             on_behalf_of: None,
+                                            variables: Default::default(),
                                         },
                                     )
                                 })

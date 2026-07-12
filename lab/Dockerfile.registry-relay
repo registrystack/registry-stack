@@ -12,6 +12,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/workspace/registry-stack/target \
     cargo build --release --locked -p registry-relay --features "${REGISTRY_RELAY_FEATURES}" && \
     cp /workspace/registry-stack/target/release/registry-relay /usr/local/bin/registry-relay && \
+    cp /workspace/registry-stack/target/release/registry-relay-rhai-worker /usr/local/bin/registry-relay-rhai-worker && \
     mkdir -p \
         /workspace/runtime-root/etc/registry-relay \
         /workspace/runtime-root/var/lib/registry-relay/cache \
@@ -23,6 +24,7 @@ FROM gcr.io/distroless/cc-debian12:nonroot@sha256:bd2899c12b335c827750ccf2359879
 
 COPY --from=builder --chown=65532:65532 /workspace/runtime-root/ /
 COPY --from=builder /usr/local/bin/registry-relay /usr/local/bin/registry-relay
+COPY --from=builder /usr/local/bin/registry-relay-rhai-worker /usr/local/bin/registry-relay-rhai-worker
 COPY --from=registry_platform_src /LICENSE /licenses/registry-relay/LICENSE
 
 WORKDIR /var/lib/registry-relay

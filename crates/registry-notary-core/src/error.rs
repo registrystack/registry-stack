@@ -18,6 +18,8 @@ pub enum EvidenceError {
     OperationUnsupported,
     #[error("evidence request is invalid")]
     InvalidRequest,
+    #[error("registry-backed batch consultation request is invalid")]
+    ConsultationInvalidRequest,
     #[error("requested disclosure is not allowed")]
     DisclosureNotAllowed,
     #[error("source record was not found")]
@@ -122,6 +124,7 @@ impl EvidenceError {
             Self::ClaimVersionNotFound => "claim.version_not_found",
             Self::OperationUnsupported => "claim.operation_unsupported",
             Self::InvalidRequest => "request.invalid",
+            Self::ConsultationInvalidRequest => "consultation.invalid_request",
             Self::DisclosureNotAllowed => "claim.disclosure_not_allowed",
             Self::SourceNotFound => "target.not_found",
             Self::SourceAmbiguous => "target.match_ambiguous",

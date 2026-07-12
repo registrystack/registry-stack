@@ -272,6 +272,25 @@ mod security_tests {
             },
         )
 
+    def test_route_source_scan_ignores_test_only_router_modules(self):
+        self.write_contracts(self.entry())
+        test_module = (
+            self.root
+            / "crates"
+            / "registry-notary-server"
+            / "src"
+            / "relay_client"
+            / "tests.rs"
+        )
+        test_module.parent.mkdir(parents=True)
+        test_module.write_text(
+            'use axum::{routing::post, Router};\n'
+            'fn fake_upstream() -> Router { '
+            'Router::new().route("/relay-only", post(handler)) }\n'
+        )
+
+        self.module.validate_route_sources()
+
 
 if __name__ == "__main__":
     unittest.main()

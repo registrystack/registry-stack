@@ -21,22 +21,23 @@ use crate::consultation::{
 };
 
 use super::artifact::{
-    body_template_max_bytes, decode_pointer_tokens, expression_max_bytes, parse_input_pattern,
-    parse_integration_pack, parse_private_binding, parse_public_contract, response_record_schema,
-    sha256_label, BodyTemplateDocument, BoundedInputPattern, CanonicalizationDocument,
-    CardinalityMechanismDocument, CodecSelectorRoleDocument, CredentialFailurePolicyDocument,
-    DestinationDnsFamilyDocument, DestinationDocument, EvidenceClass, ExactSelectorDocument,
-    HttpOperationDocument, IntegrationPackArtifact, MaterializationRefreshClassDocument,
+    body_template_max_bytes, decode_pointer_tokens, expression_max_bytes, operation_path_parts,
+    parse_input_pattern, parse_integration_pack, parse_private_binding, parse_public_contract,
+    prior_output_expression_bounds, response_record_schema, sha256_label, BodyTemplateDocument,
+    BoundedInputPattern, CanonicalizationDocument, CardinalityMechanismDocument,
+    CodecSelectorRoleDocument, CredentialFailurePolicyDocument, DestinationDnsFamilyDocument,
+    DestinationDocument, EvidenceClass, ExactSelectorDocument, HttpOperationDocument,
+    InputTypeDocument, IntegrationPackArtifact, MaterializationRefreshClassDocument,
     OAuth2ClientCredentialsRequestFormatDocument, OAuth2TokenCacheModeDocument,
-    OAuth2TokenResponseSchemaDocument, OAuth2TokenTypeDocument, OutputTypeDocument,
-    PriorOutputBindingDocument, PrivateBindingArtifact, ProjectionMechanismDocument,
-    PublicContractArtifact, ReadMethod, RequestCodecDocument, RequestSelectorLocationDocument,
-    RequestSignerDocument, ResponseNormalizationDocument, ResponseSchemaDocument,
-    SourceAuthDocument, SourceCardinality, SourceObservedAtDocument, SourcePlanArtifactError,
-    SourcePlanKind, SourcePlanLimits, SourceRevisionDocument, StepConditionDocument,
-    ValueExpressionDocument, MAX_ARTIFACTS_PER_BUNDLE, MAX_EVIDENCE_CLASS_BYTES,
-    MAX_EVIDENCE_FILES_PER_CLASS, MAX_EVIDENCE_FILE_BYTES, OPEN_CRVS_DCI_REQUEST_BODY_MAX_BYTES,
-    OPEN_CRVS_JWKS_MAX_RESPONSE_BYTES, OPEN_CRVS_JWKS_PATH,
+    OAuth2TokenResponseSchemaDocument, OAuth2TokenTypeDocument, OutcomeDocument,
+    OutputTypeDocument, PriorOutputBindingDocument, PrivateBindingArtifact,
+    ProjectionMechanismDocument, PublicContractArtifact, ReadMethod, RequestCodecDocument,
+    RequestSelectorLocationDocument, RequestSignerDocument, ResponseNormalizationDocument,
+    ResponseSchemaDocument, SourceAuthDocument, SourceCardinality, SourceObservedAtDocument,
+    SourcePlanArtifactError, SourcePlanKind, SourcePlanLimits, SourceRevisionDocument,
+    StepConditionDocument, ValueExpressionDocument, MAX_ARTIFACTS_PER_BUNDLE,
+    MAX_DCI_EXACT_REQUEST_BODY_BYTES, MAX_EVIDENCE_CLASS_BYTES, MAX_EVIDENCE_FILES_PER_CLASS,
+    MAX_EVIDENCE_FILE_BYTES,
 };
 use super::completion_seed::{measure_completion_seed, MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1};
 use super::identifiers::{CredentialReferenceId, SourceDestinationId};
@@ -285,6 +286,13 @@ pub enum CompiledInputCanonicalization {
     AsciiLowercase,
 }
 
+/// Closed selector scalar type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompiledInputType {
+    String,
+    FullDate,
+}
+
 /// A bounded matcher compiled from the restricted anchored input grammar.
 ///
 /// It retains no regex source string and performs bounded dynamic-programming
@@ -316,6 +324,7 @@ pub struct CompiledInputSlot {
     profile_contract_hash: ProfileContractHash,
     slot_index: u16,
     max_bytes: u16,
+    input_type: CompiledInputType,
     canonicalization: CompiledInputCanonicalization,
     matcher: CompiledInputMatcher,
 }
@@ -387,24 +396,38 @@ impl CompiledInputSlot {
         self.max_bytes
     }
 
+    #[must_use]
+    pub const fn input_type(&self) -> CompiledInputType {
+        self.input_type
+    }
+
     /// Canonicalize and validate a candidate, returning no value on mismatch.
     #[must_use]
     pub fn canonicalize_and_validate(&self, value: &str) -> Option<CompiledInputValue> {
-        if value.len() > usize::from(self.max_bytes) || !value.is_ascii() {
+        if value.len() > usize::from(self.max_bytes) {
             return None;
         }
         let canonical = match self.canonicalization {
             CompiledInputCanonicalization::Identity => value.to_owned(),
             CompiledInputCanonicalization::AsciiLowercase => value.to_ascii_lowercase(),
         };
-        self.matcher
-            .is_match(&canonical)
-            .then(|| CompiledInputValue {
-                value: Zeroizing::new(canonical),
-                profile_contract_hash: self.profile_contract_hash.clone(),
-                slot_name: self.name.clone(),
-                slot_index: self.slot_index,
-            })
+        let type_valid = match self.input_type {
+            CompiledInputType::String => true,
+            CompiledInputType::FullDate => {
+                canonical.len() == 10
+                    && time::Date::parse(
+                        &canonical,
+                        &time::macros::format_description!("[year]-[month]-[day]"),
+                    )
+                    .is_ok()
+            }
+        };
+        (type_valid && self.matcher.is_match(&canonical)).then(|| CompiledInputValue {
+            value: Zeroizing::new(canonical),
+            profile_contract_hash: self.profile_contract_hash.clone(),
+            slot_name: self.name.clone(),
+            slot_index: self.slot_index,
+        })
     }
 }
 
@@ -417,8 +440,8 @@ pub enum CompiledRequestCodec {
     Json,
     /// Exact DCI v1 request encoding.
     DciExactV1,
-    /// Exact unsigned OpenCRVS DCI v1 search request and signed response flow.
-    OpenCrvsDciExactV1,
+    /// Closed fixed-resource FHIR R4 GET search.
+    FhirR4Search,
 }
 
 /// Request signature mechanism frozen by the reviewed operation.
@@ -437,8 +460,44 @@ pub enum CompiledSourceAuth {
     Basic,
     /// Bearer authorization rendered only from the bound credential capability.
     StaticBearer,
+    /// Fixed reviewed header name with an environment-only value.
+    ApiKeyHeader,
+    /// Fixed reviewed query name with an environment-only value.
+    ApiKeyQuery,
     /// OAuth client credentials with an isolated token cache identity.
     OAuthClientCredentials,
+}
+
+/// Compiler-owned API-key injection slot. The name is public plan metadata;
+/// the value never enters the artifact graph.
+pub(crate) enum CompiledApiKeyPlacement {
+    Header {
+        name: Box<str>,
+        max_value_bytes: u16,
+    },
+    Query {
+        name: Box<str>,
+        max_value_bytes: u16,
+    },
+}
+
+impl CompiledApiKeyPlacement {
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::Header { name, .. } | Self::Query { name, .. } => name,
+        }
+    }
+
+    pub(crate) const fn max_value_bytes(&self) -> u16 {
+        match self {
+            Self::Header {
+                max_value_bytes, ..
+            }
+            | Self::Query {
+                max_value_bytes, ..
+            } => *max_value_bytes,
+        }
+    }
 }
 
 /// A value source whose document references have already been resolved.
@@ -473,8 +532,10 @@ pub enum CompiledSelectorSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompiledSelectorLocation {
     Query { component_index: usize },
+    PathSegment,
     Body { pointer: CompiledJsonPointer },
     DciIdtypeValue,
+    DciExactPredicate,
 }
 
 /// Non-decorative selector binding consumed by the request renderer or codec.
@@ -697,6 +758,7 @@ pub struct CompiledPriorOutputSlot {
     name: Box<str>,
     pointer: CompiledJsonPointer,
     shape: CompiledScalarShape,
+    date: bool,
 }
 
 impl CompiledPriorOutputSlot {
@@ -715,6 +777,10 @@ impl CompiledPriorOutputSlot {
     pub const fn shape(&self) -> &CompiledScalarShape {
         &self.shape
     }
+
+    pub(crate) const fn is_date(&self) -> bool {
+        self.date
+    }
 }
 
 /// One public logical output and its compiled private extraction pointer.
@@ -722,6 +788,19 @@ impl CompiledPriorOutputSlot {
 pub struct CompiledOutputMapping {
     field: AcquiredField,
     pointer: CompiledJsonPointer,
+}
+
+/// One explicit fact derived only from the normalized operation outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledPresenceOutput {
+    field: AcquiredField,
+}
+
+impl CompiledPresenceOutput {
+    #[must_use]
+    pub fn field(&self) -> &str {
+        self.field.as_str()
+    }
 }
 
 impl CompiledOutputMapping {
@@ -738,7 +817,7 @@ impl CompiledOutputMapping {
 /// Concrete response-cardinality enforcement compiled from request-linked proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompiledCardinalityMechanism {
-    OpenCrvsDciProbeTwo,
+    DciProbeTwo,
     ProbeQueryParameter { query_index: usize },
     ProbeBodyInteger { pointer: CompiledJsonPointer },
     ReviewedRequestTemplateProbe { evidence_hash: Box<str> },
@@ -767,9 +846,12 @@ pub struct CompiledResponse {
     max_bytes: u32,
     max_records: u8,
     accepted_statuses: Box<[u16]>,
+    no_match_statuses: Box<[u16]>,
+    ambiguous_statuses: Box<[u16]>,
     normalization: CompiledResponseNormalization,
     schema: CompiledResponseSchema,
     outputs: Box<[CompiledOutputMapping]>,
+    presence_outputs: Box<[CompiledPresenceOutput]>,
     prior_outputs: Box<[CompiledPriorOutputSlot]>,
     cardinality: CompiledCardinalityMechanism,
 }
@@ -790,6 +872,17 @@ impl CompiledResponse {
     }
 
     #[must_use]
+    pub fn status_outcome(&self, status: u16) -> Option<CompiledStatusOutcome> {
+        if self.no_match_statuses.binary_search(&status).is_ok() {
+            Some(CompiledStatusOutcome::NoMatch)
+        } else if self.ambiguous_statuses.binary_search(&status).is_ok() {
+            Some(CompiledStatusOutcome::Ambiguous)
+        } else {
+            None
+        }
+    }
+
+    #[must_use]
     pub const fn normalization(&self) -> CompiledResponseNormalization {
         self.normalization
     }
@@ -803,6 +896,10 @@ impl CompiledResponse {
         self.outputs.iter()
     }
 
+    pub fn presence_outputs(&self) -> impl ExactSizeIterator<Item = &CompiledPresenceOutput> {
+        self.presence_outputs.iter()
+    }
+
     pub fn prior_outputs(&self) -> impl ExactSizeIterator<Item = &CompiledPriorOutputSlot> {
         self.prior_outputs.iter()
     }
@@ -813,11 +910,18 @@ impl CompiledResponse {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompiledStatusOutcome {
+    NoMatch,
+    Ambiguous,
+}
+
 /// Immutable structural metadata for one compiled data operation.
 pub struct CompiledOperation {
     id: OperationId,
     method: ReadMethod,
     fixed_path: Box<str>,
+    path_segment: Option<CompiledValueExpression>,
     query: Box<[CompiledNamedExpression]>,
     headers: Box<[CompiledNamedExpression]>,
     body: Option<CompiledBodyTemplate>,
@@ -827,6 +931,7 @@ pub struct CompiledOperation {
     request_timeout_ms: u32,
     request_max_in_flight: u16,
     auth: CompiledSourceAuth,
+    api_key: Option<CompiledApiKeyPlacement>,
     selector: CompiledSelectorBinding,
     projection: CompiledProjectionMechanism,
     transport_template: DataDestinationRequestTemplate,
@@ -837,11 +942,22 @@ pub struct CompiledOperation {
     total_deadline_ms: u32,
     acquired_fields: BTreeSet<AcquiredField>,
     disclosed_fields: BTreeSet<AcquiredField>,
-    open_crvs_jwks: Option<CompiledEmbeddedJwksOperation>,
+    dci: Option<CompiledDciExact>,
+    fhir: Option<CompiledFhirR4Search>,
 }
 
-/// Fixed same-origin JWKS exchange embedded by the exact OpenCRVS codec.
-pub(crate) struct CompiledEmbeddedJwksOperation {
+pub(crate) struct CompiledFhirR4Search {
+    resource_type: Box<str>,
+}
+
+impl CompiledFhirR4Search {
+    pub(crate) fn resource_type(&self) -> &str {
+        &self.resource_type
+    }
+}
+
+/// Fixed same-origin verification exchange selected by a reviewed primitive.
+pub(crate) struct CompiledVerificationOperation {
     id: OperationId,
     fixed_path: Box<str>,
     transport_template: DataDestinationRequestTemplate,
@@ -849,10 +965,10 @@ pub(crate) struct CompiledEmbeddedJwksOperation {
     request_timeout_ms: u32,
 }
 
-impl fmt::Debug for CompiledEmbeddedJwksOperation {
+impl fmt::Debug for CompiledVerificationOperation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("CompiledEmbeddedJwksOperation")
+            .debug_struct("CompiledVerificationOperation")
             .field("id", &self.id)
             .field("fixed_path", &self.fixed_path)
             .field("response_max_bytes", &self.response_max_bytes)
@@ -860,7 +976,7 @@ impl fmt::Debug for CompiledEmbeddedJwksOperation {
     }
 }
 
-impl CompiledEmbeddedJwksOperation {
+impl CompiledVerificationOperation {
     pub(crate) const fn id(&self) -> &OperationId {
         &self.id
     }
@@ -882,6 +998,87 @@ impl CompiledEmbeddedJwksOperation {
     }
 }
 
+/// Product-neutral, pack-owned parameters for an exact signed DCI search.
+pub(crate) struct CompiledDciExact {
+    protocol_version: Box<str>,
+    sender_id: Box<str>,
+    receiver_id: Option<Box<str>>,
+    registry_type: Option<Box<str>>,
+    registry_event_type: Option<Box<str>>,
+    record_type: Option<Box<str>>,
+    selector: CompiledDciSelector,
+    locale: Box<str>,
+    page_number: u16,
+    verification: CompiledVerificationOperation,
+}
+
+pub(crate) enum CompiledDciSelector {
+    ExactAnd {
+        components: Box<[CompiledDciExactComponent]>,
+        identifier_type: Option<Box<str>>,
+    },
+}
+
+pub(crate) struct CompiledDciExactComponent {
+    input_index: usize,
+    field: Box<str>,
+    response_pointer: Box<str>,
+}
+
+impl CompiledDciExactComponent {
+    pub(crate) const fn input_index(&self) -> usize {
+        self.input_index
+    }
+    pub(crate) fn field(&self) -> &str {
+        &self.field
+    }
+    pub(crate) fn response_pointer(&self) -> &str {
+        &self.response_pointer
+    }
+}
+
+impl fmt::Debug for CompiledDciExact {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CompiledDciExact")
+            .field("verification", &self.verification)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CompiledDciExact {
+    pub(crate) fn protocol_version(&self) -> &str {
+        &self.protocol_version
+    }
+    pub(crate) fn sender_id(&self) -> &str {
+        &self.sender_id
+    }
+    pub(crate) fn receiver_id(&self) -> Option<&str> {
+        self.receiver_id.as_deref()
+    }
+    pub(crate) fn registry_type(&self) -> Option<&str> {
+        self.registry_type.as_deref()
+    }
+    pub(crate) fn registry_event_type(&self) -> Option<&str> {
+        self.registry_event_type.as_deref()
+    }
+    pub(crate) fn record_type(&self) -> Option<&str> {
+        self.record_type.as_deref()
+    }
+    pub(crate) const fn selector(&self) -> &CompiledDciSelector {
+        &self.selector
+    }
+    pub(crate) fn locale(&self) -> &str {
+        &self.locale
+    }
+    pub(crate) const fn page_number(&self) -> u16 {
+        self.page_number
+    }
+    pub(crate) const fn verification(&self) -> &CompiledVerificationOperation {
+        &self.verification
+    }
+}
+
 /// One compiled, bounded predicate that can only skip its owning fixed step.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompiledStepPredicate {
@@ -900,6 +1097,7 @@ pub struct CompiledStep {
     operation_index: usize,
     condition_source_index: Option<usize>,
     condition_output_slot_index: Option<usize>,
+    condition_presence: bool,
     condition: Option<CompiledStepPredicate>,
 }
 
@@ -928,6 +1126,11 @@ impl CompiledStep {
     #[must_use]
     pub const fn condition_output_slot_index(&self) -> Option<usize> {
         self.condition_output_slot_index
+    }
+
+    #[must_use]
+    pub const fn condition_uses_presence(&self) -> bool {
+        self.condition_presence
     }
 
     /// Return the reviewed bounded condition, if the fixed step is conditional.
@@ -971,6 +1174,10 @@ impl CompiledOperation {
     #[must_use]
     pub fn fixed_path(&self) -> &str {
         &self.fixed_path
+    }
+
+    pub(crate) const fn path_segment(&self) -> Option<&CompiledValueExpression> {
+        self.path_segment.as_ref()
     }
 
     /// Return this exchange's response-body ceiling.
@@ -1041,12 +1248,8 @@ impl CompiledOperation {
     }
 
     #[must_use]
-    pub const fn is_open_crvs_dci_exact_v1(&self) -> bool {
-        matches!(self.request_codec, CompiledRequestCodec::OpenCrvsDciExactV1)
-    }
-
-    pub(crate) const fn embedded_open_crvs_jwks(&self) -> Option<&CompiledEmbeddedJwksOperation> {
-        self.open_crvs_jwks.as_ref()
+    pub(crate) const fn dci_exact(&self) -> Option<&CompiledDciExact> {
+        self.dci.as_ref()
     }
 
     #[must_use]
@@ -1072,6 +1275,14 @@ impl CompiledOperation {
     #[must_use]
     pub const fn auth(&self) -> CompiledSourceAuth {
         self.auth
+    }
+
+    pub(crate) const fn api_key(&self) -> Option<&CompiledApiKeyPlacement> {
+        self.api_key.as_ref()
+    }
+
+    pub(crate) const fn fhir_r4_search(&self) -> Option<&CompiledFhirR4Search> {
+        self.fhir.as_ref()
     }
 
     #[must_use]
@@ -1118,8 +1329,7 @@ pub struct CompiledSnapshotBinding {
     refresh_class: CompiledSnapshotRefreshClass,
     immutable_generation: bool,
     digest_bound_active_pointer: bool,
-    key_input: Box<str>,
-    key_physical_field: Box<str>,
+    keys: Box<[(Box<str>, Box<str>)]>,
     projection: Box<[(Box<str>, Box<str>)]>,
     source_observed_at: Option<(Box<str>, Box<str>)>,
     source_revision: Option<(Box<str>, Box<str>, u16)>,
@@ -1209,21 +1419,16 @@ impl CompiledSnapshotBinding {
         self.digest_bound_active_pointer
     }
 
-    /// Return the one canonical consultation input consumed by the exact key.
-    #[must_use]
-    pub fn key_input(&self) -> &str {
-        &self.key_input
-    }
-
-    /// Return the reviewed physical snapshot field compared with the input.
-    #[must_use]
-    pub fn key_physical_field(&self) -> &str {
-        &self.key_physical_field
+    /// Iterate the complete injective exact-AND input-to-physical mapping.
+    pub fn keys(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+        self.keys
+            .iter()
+            .map(|(input, physical)| (input.as_ref(), physical.as_ref()))
     }
 
     /// SnapshotExact always compares a physical UTF-8 scalar by byte equality.
     #[must_use]
-    pub const fn key_uses_utf8_binary_equality(&self) -> bool {
+    pub const fn keys_use_utf8_binary_equality(&self) -> bool {
         true
     }
 
@@ -1402,6 +1607,42 @@ pub struct CompiledSourcePlan {
     credential_operation: Option<CompiledCredentialOperation>,
     steps: Vec<CompiledStep>,
     runtime_binding: RuntimePrivateBinding,
+    rhai_program: Option<CompiledRhaiProgram>,
+    rhai_facts: Box<[CompiledRhaiFact]>,
+}
+
+struct CompiledRhaiProgram {
+    script: Box<str>,
+    entrypoint: Box<str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CompiledRhaiFactType {
+    String { max_bytes: u32 },
+    Boolean,
+    Integer { minimum: i64, maximum: i64 },
+    Date,
+    Presence,
+}
+
+pub(crate) struct CompiledRhaiFact {
+    name: Box<str>,
+    fact_type: CompiledRhaiFactType,
+    nullable: bool,
+}
+
+impl CompiledRhaiFact {
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) const fn fact_type(&self) -> CompiledRhaiFactType {
+        self.fact_type
+    }
+
+    pub(crate) const fn nullable(&self) -> bool {
+        self.nullable
+    }
 }
 
 impl fmt::Debug for CompiledSourcePlan {
@@ -1423,6 +1664,11 @@ impl CompiledSourcePlan {
     #[must_use]
     pub(crate) const fn runtime_profile(&self) -> &CompiledRuntimeProfile {
         &self.runtime_profile
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn runtime_profile_mut_for_test(&mut self) -> &mut CompiledRuntimeProfile {
+        &mut self.runtime_profile
     }
 
     /// Return the complete public profile identity.
@@ -1474,6 +1720,16 @@ impl CompiledSourcePlan {
 
     pub(crate) const fn credential_operation(&self) -> Option<&CompiledCredentialOperation> {
         self.credential_operation.as_ref()
+    }
+
+    pub(crate) fn rhai_program(&self) -> Option<(&str, &str)> {
+        self.rhai_program
+            .as_ref()
+            .map(|program| (program.script.as_ref(), program.entrypoint.as_ref()))
+    }
+
+    pub(crate) fn rhai_facts(&self) -> impl ExactSizeIterator<Item = &CompiledRhaiFact> {
+        self.rhai_facts.iter()
     }
 
     /// Iterate closed input slots in the same index order used by expressions.
@@ -1561,6 +1817,87 @@ impl fmt::Debug for CompiledSourcePlanRegistry {
 }
 
 impl CompiledSourcePlanRegistry {
+    /// Validate a generated artifact bundle with the exact runtime compiler,
+    /// including SandboxedRhai worker-limit and script-surface checks.
+    ///
+    /// This is an offline authoring gate only. It does not return or expose a
+    /// worker capability, and runtime activation still requires the separate
+    /// verified startup closure to initialize its non-config workers.
+    pub fn compile_for_authoring_validation(
+        bundle: &SourcePlanArtifactBundle<'_>,
+    ) -> Result<Self, SourcePlanCompileError> {
+        let packs = parse_packs(bundle.integration_packs)?;
+        let bindings = parse_bindings(bundle.private_bindings)?;
+        let mut workers = Vec::new();
+        for pack in packs.values() {
+            if pack.document.spec.plan.kind != SourcePlanKind::SandboxedRhai {
+                continue;
+            }
+            let reviewed = pack
+                .document
+                .spec
+                .plan
+                .rhai
+                .as_ref()
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+            let binding = bindings
+                .values()
+                .find(|binding| binding.pack_identity == *pack.identity())
+                .and_then(|binding| binding.document.capabilities.sandboxed_rhai.as_ref())
+                .ok_or(SourcePlanCompileError::RhaiNotEnabled)?;
+            let limits = RhaiWorkerLimits {
+                max_calls: binding.max_calls,
+                memory_bytes: binding.memory_bytes,
+                cpu_ms: binding.cpu_ms,
+                ipc_frame_bytes: binding.ipc_frame_bytes,
+                instructions: binding.instructions,
+                call_depth: binding.call_depth,
+                string_bytes: binding.string_bytes,
+                array_items: binding.array_items,
+                map_entries: binding.map_entries,
+                output_bytes: binding.output_bytes,
+                concurrency: binding.concurrency,
+            };
+            let worker_limits = crate::rhai_worker::WorkerLimits {
+                max_operations: limits.instructions,
+                max_call_levels: usize::from(limits.call_depth),
+                max_expr_depth: usize::from(limits.call_depth),
+                max_string_bytes: usize::try_from(limits.string_bytes)
+                    .map_err(|_| SourcePlanCompileError::RhaiWorkerMismatch)?,
+                max_array_items: usize::try_from(limits.array_items)
+                    .map_err(|_| SourcePlanCompileError::RhaiWorkerMismatch)?,
+                max_map_entries: usize::try_from(limits.map_entries)
+                    .map_err(|_| SourcePlanCompileError::RhaiWorkerMismatch)?,
+                max_output_bytes: usize::try_from(limits.output_bytes)
+                    .map_err(|_| SourcePlanCompileError::RhaiWorkerMismatch)?,
+                max_ipc_frame_bytes: usize::try_from(limits.ipc_frame_bytes)
+                    .map_err(|_| SourcePlanCompileError::RhaiWorkerMismatch)?,
+                max_memory_bytes: limits.memory_bytes,
+                wall_time_ms: u64::from(limits.cpu_ms),
+            };
+            crate::rhai_worker::probe_script(&reviewed.script, &reviewed.entrypoint, worker_limits)
+                .map_err(|_| SourcePlanCompileError::RhaiWorkerMismatch)?;
+            let callable = binding
+                .callable_operations
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            workers.push(RhaiWorkerCapability::from_initialized_worker(
+                pack.identity().hash().as_str(),
+                &callable,
+                limits,
+            )?);
+        }
+        let closed = SourcePlanArtifactBundle {
+            public_contracts: bundle.public_contracts,
+            integration_packs: bundle.integration_packs,
+            private_bindings: bundle.private_bindings,
+            evidence: bundle.evidence,
+            rhai_workers: &workers,
+        };
+        Self::compile(&closed)
+    }
+
     /// Strictly ingest and compile the complete startup artifact graph.
     pub fn compile(bundle: &SourcePlanArtifactBundle<'_>) -> Result<Self, SourcePlanCompileError> {
         let artifact_count = bundle
@@ -1757,6 +2094,7 @@ fn compile_one(
 ) -> Result<CompiledSourcePlan, SourcePlanCompileError> {
     validate_cross_references(&contract, pack, &binding)?;
     validate_contract_implementation(&contract, pack)?;
+    validate_profile_bound_source_headers(&contract, pack)?;
     validate_materialization_binding(&contract, pack, &binding)?;
     let binding_limits = validate_binding_narrowing(&contract, pack, &binding)?;
     validate_parameters(pack, &binding)?;
@@ -2004,6 +2342,52 @@ fn compile_one(
         oauth_cache,
         snapshot,
     };
+    let rhai_program = pack
+        .document
+        .spec
+        .plan
+        .rhai
+        .as_ref()
+        .map(|rhai| CompiledRhaiProgram {
+            script: rhai.script.as_str().into(),
+            entrypoint: rhai.entrypoint.as_str().into(),
+        });
+    let rhai_facts = if rhai_program.is_some() {
+        runtime_profile
+            .output()
+            .map(|field| CompiledRhaiFact {
+                name: field.name().into(),
+                fact_type: match field.shape() {
+                    super::runtime_profile::CompiledOutputShape::String { max_bytes, .. } => {
+                        CompiledRhaiFactType::String { max_bytes }
+                    }
+                    super::runtime_profile::CompiledOutputShape::Boolean { .. } => {
+                        CompiledRhaiFactType::Boolean
+                    }
+                    super::runtime_profile::CompiledOutputShape::Integer {
+                        minimum,
+                        maximum,
+                        ..
+                    } => CompiledRhaiFactType::Integer { minimum, maximum },
+                    super::runtime_profile::CompiledOutputShape::Date { .. } => {
+                        CompiledRhaiFactType::Date
+                    }
+                    super::runtime_profile::CompiledOutputShape::Presence => {
+                        CompiledRhaiFactType::Presence
+                    }
+                },
+                nullable: match field.shape() {
+                    super::runtime_profile::CompiledOutputShape::String { nullable, .. }
+                    | super::runtime_profile::CompiledOutputShape::Boolean { nullable }
+                    | super::runtime_profile::CompiledOutputShape::Integer { nullable, .. }
+                    | super::runtime_profile::CompiledOutputShape::Date { nullable } => nullable,
+                    super::runtime_profile::CompiledOutputShape::Presence => false,
+                },
+            })
+            .collect::<Box<[_]>>()
+    } else {
+        Box::new([])
+    };
     Ok(CompiledSourcePlan {
         runtime_profile,
         contract,
@@ -2012,7 +2396,40 @@ fn compile_one(
         credential_operation,
         steps,
         runtime_binding,
+        rhai_program,
+        rhai_facts,
     })
+}
+
+fn validate_profile_bound_source_headers(
+    contract: &PublicContractArtifact,
+    pack: &IntegrationPackArtifact,
+) -> Result<(), SourcePlanCompileError> {
+    for operation in &pack.document.spec.plan.operations {
+        let Some(ValueExpressionDocument::Literal { value }) =
+            operation.headers.get("data-purpose")
+        else {
+            if operation.fhir.is_some() {
+                return Err(SourcePlanCompileError::Artifact(
+                    SourcePlanArtifactError::InvalidPlan,
+                ));
+            }
+            continue;
+        };
+        if !exact_profile_bound_source_purpose(
+            &contract.document.spec.authorization.purposes,
+            value,
+        ) {
+            return Err(SourcePlanCompileError::Artifact(
+                SourcePlanArtifactError::InvalidPlan,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn exact_profile_bound_source_purpose(purposes: &[String], fixed: &str) -> bool {
+    matches!(purposes, [purpose] if purpose == fixed)
 }
 
 fn validate_completion_sizing(
@@ -2040,50 +2457,77 @@ fn compile_steps(
                 .get(operation.as_str())
                 .copied()
                 .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-            let (condition_source_index, condition_output_slot_index, condition) =
-                match plan.step_conditions.get(operation) {
-                    None => (None, None, None),
-                    Some(condition) => {
-                        let (source, output, predicate) = match condition {
-                            StepConditionDocument::Exists { step, output } => {
-                                (step, output, CompiledStepPredicate::Exists)
-                            }
-                            StepConditionDocument::StringEquals {
-                                step,
-                                output,
-                                value,
-                            } => (
-                                step,
-                                output,
-                                CompiledStepPredicate::StringEquals(value.clone().into_boxed_str()),
-                            ),
-                            StepConditionDocument::BooleanEquals {
-                                step,
-                                output,
-                                value,
-                            } => (step, output, CompiledStepPredicate::BooleanEquals(*value)),
-                            StepConditionDocument::IntegerEquals {
-                                step,
-                                output,
-                                value,
-                            } => (step, output, CompiledStepPredicate::IntegerEquals(*value)),
-                        };
-                        let source_index = operation_indexes
-                            .get(source.as_str())
-                            .copied()
-                            .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-                        let output_slot_index = prior_slot_indexes
-                            .get(source.as_str())
-                            .and_then(|slots| slots.get(output.as_str()))
-                            .copied()
-                            .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-                        (Some(source_index), Some(output_slot_index), Some(predicate))
-                    }
-                };
+            let (
+                condition_source_index,
+                condition_output_slot_index,
+                condition_presence,
+                condition,
+            ) = match plan.step_conditions.get(operation) {
+                None => (None, None, false, None),
+                Some(condition) => {
+                    let (source, output, predicate) = match condition {
+                        StepConditionDocument::Exists { step, output } => {
+                            (step, output, CompiledStepPredicate::Exists)
+                        }
+                        StepConditionDocument::StringEquals {
+                            step,
+                            output,
+                            value,
+                        } => (
+                            step,
+                            output,
+                            CompiledStepPredicate::StringEquals(value.clone().into_boxed_str()),
+                        ),
+                        StepConditionDocument::BooleanEquals {
+                            step,
+                            output,
+                            value,
+                        } => (step, output, CompiledStepPredicate::BooleanEquals(*value)),
+                        StepConditionDocument::IntegerEquals {
+                            step,
+                            output,
+                            value,
+                        } => (step, output, CompiledStepPredicate::IntegerEquals(*value)),
+                    };
+                    let source_index = operation_indexes
+                        .get(source.as_str())
+                        .copied()
+                        .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+                    let source_operation = plan
+                        .operations
+                        .iter()
+                        .find(|operation| operation.id == *source)
+                        .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+                    let presence = output == "presence"
+                        || source_operation
+                            .response
+                            .presence_outputs
+                            .iter()
+                            .any(|candidate| candidate == output);
+                    let output_slot_index = if presence {
+                        None
+                    } else {
+                        Some(
+                            prior_slot_indexes
+                                .get(source.as_str())
+                                .and_then(|slots| slots.get(output.as_str()))
+                                .copied()
+                                .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+                        )
+                    };
+                    (
+                        Some(source_index),
+                        output_slot_index,
+                        presence,
+                        Some(predicate),
+                    )
+                }
+            };
             Ok(CompiledStep {
                 operation_index,
                 condition_source_index,
                 condition_output_slot_index,
+                condition_presence,
                 condition,
             })
         })
@@ -2123,5 +2567,6 @@ pub(crate) use tests::{
     normal_completion_seed_fixture, open_crvs_completion_seed_fixture,
     open_crvs_runtime_vector_plan_fixture, open_crvs_runtime_vector_registry_fixture,
     rhai_five_operation_two_slot_completion_seed_fixture, rhai_runtime_vector_plan_fixture,
-    semantic_alias_completion_seed_fixture, snapshot_completion_seed_fixture,
+    semantic_alias_completion_seed_fixture, shared_snapshot_registry_fixture,
+    signed_dci_expiring_oauth_runtime_plan_fixture, snapshot_completion_seed_fixture,
 };

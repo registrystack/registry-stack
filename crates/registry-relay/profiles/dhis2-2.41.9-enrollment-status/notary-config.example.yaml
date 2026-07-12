@@ -44,7 +44,7 @@ evidence:
             profile:
               id: dhis2.tracker.enrollment-status.exact
               version: "1"
-              contract_hash: sha256:a2d0e7588bc1bbeb0caf3247703a15d81830875f5e84dd257f7dc163d3a4ecb6
+              contract_hash: sha256:d44a58740cf51b68d9a011380814568e6c569e35057d4350a4fb429b24289ea7
             inputs:
               tracked_entity: target.id
       value:
@@ -70,7 +70,7 @@ evidence:
             profile:
               id: dhis2.tracker.enrollment-status.exact
               version: "1"
-              contract_hash: sha256:a2d0e7588bc1bbeb0caf3247703a15d81830875f5e84dd257f7dc163d3a4ecb6
+              contract_hash: sha256:d44a58740cf51b68d9a011380814568e6c569e35057d4350a4fb429b24289ea7
             inputs:
               tracked_entity: target.id
       value:

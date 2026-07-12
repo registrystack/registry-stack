@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Strict, single-origin Registry Relay consultation client.
 //!
-//! The client deliberately models one product journey rather than a generic
-//! HTTP connector. Startup verifies one hash-pinned consultation profile over
-//! the same authenticated Relay connection used for execution. Runtime calls
-//! can then select only that profile's exact route, purpose, input, and closed
-//! output fields.
+//! Startup verifies one hash-pinned consultation profile over the same
+//! authenticated Relay connection used for execution. Runtime calls can then
+//! select only that profile's exact route, purpose, input, and closed typed
+//! fact map.
 //!
 //! Notary independently re-hashes the narrowed public contract and its sole v1
 //! policy preimage before accepting Relay's metadata identity. Relay is the
 //! sole cryptographic and semantic verifier of the workload JWT on every
 //! protected request.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;
 use std::io::Read as _;
@@ -19,6 +19,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use axum::http::StatusCode;
+use registry_notary_core::{is_rfc3339_full_date, RelayFactContract};
 use registry_platform_crypto::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::destination::input_pattern::{
     BoundedInputPattern, MAX_BOUNDED_INPUT_BYTES, MAX_BOUNDED_INPUT_PATTERN_BYTES,
@@ -69,7 +70,6 @@ const MAX_RESPONSE_ARRAY_ITEMS: u16 = 256;
 const MAX_RESPONSE_FIELD_NAME_BYTES: usize = 128;
 const MAX_JSON_INTEROPERABLE_INTEGER: u64 = (1_u64 << 53) - 1;
 const PRESENCE_RESULT_GUARD_FIELD: &str = "__notary_presence_contract_guard";
-const RELAY_WORKLOAD: &str = "registry-notary";
 const CONTRACT_SCHEMA: &str = "registry.relay.consultation-contract.v1";
 const RESULT_SCHEMA: &str = "registry.relay.consultation-result.v1";
 const CONTRACT_HASH_DOMAIN: &[u8] = b"registry.relay.consultation-contract.v1\0";
@@ -83,6 +83,7 @@ const MAX_TOKEN_FILE_PATH_BYTES: usize = 4_096;
 const MAX_TOKEN_FILE_BYTES: usize = TOKEN_MAX_BYTES + 2;
 const MAX_RELAY_SOURCE_TIMEOUT_MS: i64 = 20_000;
 const MAX_SNAPSHOT_AGE_MS: u64 = 31 * 24 * 60 * 60 * 1_000;
+const BATCH_CHILD_IDENTITY_MAX_BYTES: usize = 43;
 
 /// The hash-pinned public profile identity selected at Notary startup.
 #[derive(Clone, PartialEq, Eq)]
@@ -143,7 +144,7 @@ impl fmt::Debug for RelayProfilePin {
     }
 }
 
-/// The one configured string output that must exist in the verified profile.
+/// Legacy exact string output retained for checkpoint profile compatibility.
 #[derive(Clone, PartialEq, Eq)]
 pub struct RelayExpectedOutput {
     name: Box<str>,
@@ -181,14 +182,46 @@ impl fmt::Debug for RelayExpectedOutput {
 /// confirmed by the hash-pinned Relay metadata before evaluations are served.
 #[derive(Clone, PartialEq, Eq)]
 pub enum RelayExpectedResult {
+    FactMap(BTreeMap<String, RelayFactContract>),
     ProjectedString(RelayExpectedOutput),
     PresenceOnly,
 }
 
 impl RelayExpectedResult {
+    /// Require one complete closed typed fact map.
+    pub fn fact_map(facts: BTreeMap<String, RelayFactContract>) -> Result<Self, RelayClientError> {
+        if facts.is_empty()
+            || facts.len() > MAX_ACQUIRED_FIELDS
+            || facts
+                .iter()
+                .any(|(name, fact)| !stable_id(name, OUTPUT_NAME_MAX_BYTES) || !valid_fact(fact))
+        {
+            return Err(RelayClientError::InvalidConfiguration);
+        }
+        Ok(Self::FactMap(facts))
+    }
+
     /// Require one exact non-null string output.
     pub fn projected_string(name: impl Into<Box<str>>) -> Result<Self, RelayClientError> {
         RelayExpectedOutput::new(name).map(Self::ProjectedString)
+    }
+}
+
+fn valid_fact(fact: &RelayFactContract) -> bool {
+    match fact {
+        RelayFactContract::String { max_bytes, .. } => {
+            (1..=MAX_PUBLIC_STRING_BYTES).contains(max_bytes)
+        }
+        RelayFactContract::Integer {
+            minimum, maximum, ..
+        } => {
+            minimum <= maximum
+                && *minimum >= -(MAX_JSON_INTEROPERABLE_INTEGER as i64)
+                && *maximum <= MAX_JSON_INTEROPERABLE_INTEGER as i64
+        }
+        RelayFactContract::Boolean { .. }
+        | RelayFactContract::Date { .. }
+        | RelayFactContract::Presence => true,
     }
 }
 
@@ -252,12 +285,46 @@ pub struct RelayConsultationClient {
     destination: ServiceHopDataDestinationPolicy,
     metadata_request: DataDestinationRequestTemplate,
     execute_request: DataDestinationRequestTemplate,
+    execute_batch_request: DataDestinationRequestTemplate,
     metadata_decoder: ClosedJsonDecoder,
     credential: RelayWorkloadCredentialFile,
     pin: RelayProfilePin,
     purpose: Box<str>,
-    input_name: Box<str>,
+    input_names: Box<[String]>,
     expected_result: RelayExpectedResult,
+}
+
+#[doc(hidden)]
+pub enum RelayInputNames {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl From<&str> for RelayInputNames {
+    fn from(value: &str) -> Self {
+        Self::One(value.to_string())
+    }
+}
+
+impl From<String> for RelayInputNames {
+    fn from(value: String) -> Self {
+        Self::One(value)
+    }
+}
+
+impl From<Vec<String>> for RelayInputNames {
+    fn from(value: Vec<String>) -> Self {
+        Self::Many(value)
+    }
+}
+
+impl RelayInputNames {
+    pub(crate) fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::One(value) => vec![value],
+            Self::Many(values) => values,
+        }
+    }
 }
 
 impl RelayConsultationClient {
@@ -267,12 +334,19 @@ impl RelayConsultationClient {
         credential: RelayWorkloadCredentialFile,
         pin: RelayProfilePin,
         purpose: impl Into<Box<str>>,
-        input_name: impl Into<Box<str>>,
+        input_names: impl Into<RelayInputNames>,
         expected_result: RelayExpectedResult,
     ) -> Result<Self, RelayClientError> {
         let purpose = purpose.into();
-        let input_name = input_name.into();
-        if !valid_purpose(&purpose) || !stable_id(&input_name, INPUT_NAME_MAX_BYTES) {
+        let mut input_names = input_names.into().into_vec();
+        input_names.sort();
+        input_names.dedup();
+        if !valid_purpose(&purpose)
+            || !(1..=4).contains(&input_names.len())
+            || input_names
+                .iter()
+                .any(|name| !stable_id(name, INPUT_NAME_MAX_BYTES))
+        {
             return Err(RelayClientError::InvalidConfiguration);
         }
 
@@ -309,17 +383,41 @@ impl RelayConsultationClient {
             MAX_WIRE_REQUEST_BYTES,
         )
         .map_err(|_| RelayClientError::InvalidConfiguration)?;
+        let execute_batch_request = DataDestinationRequestTemplate::new(
+            DestinationMethod::ReviewedReadOnlyPost,
+            &execute_path,
+            &[],
+            &[
+                ("accept", "application/json".len()),
+                ("content-type", "application/json".len()),
+                ("data-purpose", PURPOSE_MAX_BYTES),
+                ("registry-notary-evaluation-id", 26),
+                (
+                    "registry-notary-batch-child-id",
+                    BATCH_CHILD_IDENTITY_MAX_BYTES,
+                ),
+            ],
+            DestinationAuthorizationTemplate::Bearer {
+                max_value_bytes: MAX_DESTINATION_HEADER_VALUE_BYTES,
+            },
+            DestinationBodyTemplate::Required {
+                max_bytes: MAX_REQUEST_BYTES,
+            },
+            MAX_WIRE_REQUEST_BYTES,
+        )
+        .map_err(|_| RelayClientError::InvalidConfiguration)?;
         let metadata_decoder = metadata_decoder()?;
 
         Ok(Self {
             destination,
             metadata_request,
             execute_request,
+            execute_batch_request,
             metadata_decoder,
             credential,
             pin,
             purpose,
-            input_name,
+            input_names: input_names.into_boxed_slice(),
             expected_result,
         })
     }
@@ -334,7 +432,7 @@ impl RelayConsultationClient {
             &self.credential,
             &self.pin,
             &self.purpose,
-            &self.input_name,
+            &self.input_names,
             &self.expected_result,
         )
         .await?;
@@ -345,6 +443,7 @@ impl RelayConsultationClient {
             destination: self.destination,
             metadata_request: self.metadata_request,
             execute_request: self.execute_request,
+            execute_batch_request: self.execute_batch_request,
             metadata_decoder: self.metadata_decoder,
             result_decoder,
             credential: self.credential,
@@ -362,7 +461,7 @@ async fn fetch_verified_profile(
     credential: &RelayWorkloadCredentialFile,
     pin: &RelayProfilePin,
     purpose: &str,
-    input_name: &str,
+    input_names: &[String],
     expected_result: &RelayExpectedResult,
 ) -> Result<VerifiedRelayProfile, RelayClientError> {
     let deadline = operation_deadline()?;
@@ -397,7 +496,7 @@ async fn fetch_verified_profile(
         record.into_fields(),
         pin,
         purpose,
-        input_name,
+        input_names,
         expected_result,
     )?;
     require_deadline(deadline)?;
@@ -421,6 +520,7 @@ pub struct VerifiedRelayClient {
     destination: ServiceHopDataDestinationPolicy,
     metadata_request: DataDestinationRequestTemplate,
     execute_request: DataDestinationRequestTemplate,
+    execute_batch_request: DataDestinationRequestTemplate,
     metadata_decoder: ClosedJsonDecoder,
     result_decoder: ClosedJsonDecoder,
     credential: RelayWorkloadCredentialFile,
@@ -447,7 +547,7 @@ impl VerifiedRelayClient {
             &self.credential,
             &self.profile.pin,
             &self.profile.purpose,
-            &self.profile.input_name,
+            &self.profile.input_names,
             &expected_result,
         )
         .await
@@ -456,31 +556,74 @@ impl VerifiedRelayClient {
 
     /// Validate the caller-owned request fields without acquiring capacity,
     /// reading credentials, or touching the network.
-    pub(crate) fn validate_execute_input(
+    pub(crate) fn canonicalize_execute_inputs(
         &self,
         evaluation_id: &str,
-        input: &str,
-    ) -> Result<(), RelayClientError> {
-        if !canonical_ulid(evaluation_id)
-            || input.is_empty()
-            || input.len() > usize::from(self.profile.input_max_bytes)
-            || input.len() > INPUT_VALUE_MAX_BYTES
-            || input.chars().any(char::is_control)
-            || !self.profile.input_pattern.is_match(input)
-        {
+        inputs: &BTreeMap<String, Zeroizing<String>>,
+    ) -> Result<BTreeMap<String, Zeroizing<String>>, RelayClientError> {
+        if !canonical_ulid(evaluation_id) || inputs.len() != self.profile.inputs.len() {
             return Err(RelayClientError::InvalidRequest);
         }
-        Ok(())
+        let mut canonical = BTreeMap::new();
+        for (name, contract) in &self.profile.inputs {
+            let value = inputs.get(name).ok_or(RelayClientError::InvalidRequest)?;
+            let value = contract.canonicalize(value)?;
+            canonical.insert(name.clone(), value);
+        }
+        Ok(canonical)
     }
 
     /// Execute one purpose-bound consultation. The evaluation id and input are
     /// validated before either value reaches the transport.
+    #[allow(dead_code)]
     pub async fn execute(
         &self,
         evaluation_id: &str,
         input: Zeroizing<String>,
     ) -> Result<RelayConsultationResult, RelayClientError> {
-        self.validate_execute_input(evaluation_id, &input)?;
+        let Some(input_name) = self.profile.input_names.first() else {
+            return Err(RelayClientError::InvalidConfiguration);
+        };
+        if self.profile.input_names.len() != 1 {
+            return Err(RelayClientError::InvalidRequest);
+        }
+        self.execute_inputs(evaluation_id, BTreeMap::from([(input_name.clone(), input)]))
+            .await
+    }
+
+    pub(crate) async fn execute_inputs(
+        &self,
+        evaluation_id: &str,
+        inputs: BTreeMap<String, Zeroizing<String>>,
+    ) -> Result<RelayConsultationResult, RelayClientError> {
+        self.execute_inputs_with_batch_child(evaluation_id, inputs, None)
+            .await
+    }
+
+    pub(crate) async fn execute_batch_inputs(
+        &self,
+        evaluation_id: &str,
+        inputs: BTreeMap<String, Zeroizing<String>>,
+        batch_child_identity: &str,
+    ) -> Result<RelayConsultationResult, RelayClientError> {
+        if batch_child_identity.len() != BATCH_CHILD_IDENTITY_MAX_BYTES
+            || !batch_child_identity
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(RelayClientError::InvalidRequest);
+        }
+        self.execute_inputs_with_batch_child(evaluation_id, inputs, Some(batch_child_identity))
+            .await
+    }
+
+    async fn execute_inputs_with_batch_child(
+        &self,
+        evaluation_id: &str,
+        inputs: BTreeMap<String, Zeroizing<String>>,
+        batch_child_identity: Option<&str>,
+    ) -> Result<RelayConsultationResult, RelayClientError> {
+        let inputs = self.canonicalize_execute_inputs(evaluation_id, &inputs)?;
         let deadline = operation_deadline()?;
         let _permit = timeout_at(deadline, self.permits.acquire())
             .await
@@ -489,14 +632,8 @@ impl VerifiedRelayClient {
         require_deadline(deadline)?;
 
         let mut body = Zeroizing::new(Vec::with_capacity(128));
-        serde_json::to_writer(
-            &mut *body,
-            &ExecuteRequestBody {
-                input_name: &self.profile.input_name,
-                input_value: &input,
-            },
-        )
-        .map_err(|_| RelayClientError::InvalidRequest)?;
+        serde_json::to_writer(&mut *body, &ExecuteRequestBody { inputs: &inputs })
+            .map_err(|_| RelayClientError::InvalidRequest)?;
         if body.len() > MAX_REQUEST_BYTES {
             return Err(RelayClientError::InvalidRequest);
         }
@@ -509,10 +646,28 @@ impl VerifiedRelayClient {
             self.profile.purpose.as_bytes(),
             evaluation_id.as_bytes(),
         ];
-        let request = self
-            .execute_request
-            .render_zeroizing(&[], &headers, Some(authorization), Some(body))
-            .map_err(|_| RelayClientError::InvalidRequest)?;
+        let batch_headers: [&[u8]; 5] = [
+            headers[0],
+            headers[1],
+            headers[2],
+            headers[3],
+            batch_child_identity.unwrap_or_default().as_bytes(),
+        ];
+        let request = match batch_child_identity {
+            Some(_) => self.execute_batch_request.render_zeroizing(
+                &[],
+                &batch_headers,
+                Some(authorization),
+                Some(body),
+            ),
+            None => self.execute_request.render_zeroizing(
+                &[],
+                &headers,
+                Some(authorization),
+                Some(body),
+            ),
+        }
+        .map_err(|_| RelayClientError::InvalidRequest)?;
         require_deadline(deadline)?;
         let response = self
             .destination
@@ -560,15 +715,84 @@ impl fmt::Debug for VerifiedRelayClient {
 pub struct VerifiedRelayProfile {
     pin: RelayProfilePin,
     purpose: Box<str>,
-    input_name: Box<str>,
-    input_max_bytes: u16,
+    input_names: Box<[String]>,
+    inputs: BTreeMap<String, VerifiedRelayInput>,
     max_in_flight: usize,
-    input_pattern: BoundedInputPattern,
     acquisition_class: RelayAcquisitionClass,
     integration_pack: RelayArtifactIdentity,
     policy: RelayPolicyIdentity,
     source_provenance: VerifiedRelaySourceProvenance,
     result: VerifiedRelayResult,
+}
+
+struct VerifiedRelayInput {
+    kind: VerifiedRelayInputKind,
+    max_bytes: u16,
+    pattern: BoundedInputPattern,
+    canonicalization: VerifiedRelayCanonicalization,
+}
+
+#[derive(Clone, Copy)]
+enum VerifiedRelayInputKind {
+    String,
+    FullDate,
+}
+
+#[derive(Clone, Copy)]
+enum VerifiedRelayCanonicalization {
+    Identity,
+    AsciiLowercase,
+}
+
+impl VerifiedRelayInput {
+    fn compile(input: &RelayInputContract) -> Result<Self, RelayClientError> {
+        if input.max_bytes == 0
+            || usize::from(input.max_bytes) > INPUT_VALUE_MAX_BYTES
+            || input.pattern.len() > MAX_BOUNDED_INPUT_PATTERN_BYTES
+        {
+            return Err(RelayClientError::InvalidProfileMetadata);
+        }
+        let kind = match input.kind.as_str() {
+            "string" => VerifiedRelayInputKind::String,
+            "full_date" => VerifiedRelayInputKind::FullDate,
+            _ => return Err(RelayClientError::InvalidProfileMetadata),
+        };
+        let canonicalization = match input.canonicalization.as_str() {
+            "identity" => VerifiedRelayCanonicalization::Identity,
+            "ascii_lowercase" => VerifiedRelayCanonicalization::AsciiLowercase,
+            _ => return Err(RelayClientError::InvalidProfileMetadata),
+        };
+        let pattern = BoundedInputPattern::compile(&input.pattern)
+            .map_err(|_| RelayClientError::InvalidProfileMetadata)?;
+        Ok(Self {
+            kind,
+            max_bytes: input.max_bytes,
+            pattern,
+            canonicalization,
+        })
+    }
+
+    fn canonicalize(&self, value: &str) -> Result<Zeroizing<String>, RelayClientError> {
+        if value.is_empty()
+            || value.len() > usize::from(self.max_bytes)
+            || value.len() > INPUT_VALUE_MAX_BYTES
+            || value.chars().any(char::is_control)
+        {
+            return Err(RelayClientError::InvalidRequest);
+        }
+        let canonical = match self.canonicalization {
+            VerifiedRelayCanonicalization::Identity => value.to_owned(),
+            VerifiedRelayCanonicalization::AsciiLowercase => value.to_ascii_lowercase(),
+        };
+        let type_valid = match self.kind {
+            VerifiedRelayInputKind::String => true,
+            VerifiedRelayInputKind::FullDate => is_rfc3339_full_date(&canonical),
+        };
+        if !type_valid || !self.pattern.is_match(&canonical) {
+            return Err(RelayClientError::InvalidRequest);
+        }
+        Ok(Zeroizing::new(canonical))
+    }
 }
 
 impl VerifiedRelayProfile {
@@ -583,13 +807,14 @@ impl VerifiedRelayProfile {
     }
 
     #[must_use]
-    pub fn input_name(&self) -> &str {
-        &self.input_name
+    pub fn input_names(&self) -> &[String] {
+        &self.input_names
     }
 
     #[cfg(test)]
     fn output_name(&self) -> Option<&str> {
         match &self.result {
+            VerifiedRelayResult::FactMap(_) => None,
             VerifiedRelayResult::ProjectedString(output) => Some(&output.name),
             VerifiedRelayResult::PresenceOnly => None,
         }
@@ -615,6 +840,7 @@ struct VerifiedRelayOutput {
 }
 
 enum VerifiedRelayResult {
+    FactMap(BTreeMap<String, RelayFactContract>),
     ProjectedString(VerifiedRelayOutput),
     PresenceOnly,
 }
@@ -622,6 +848,7 @@ enum VerifiedRelayResult {
 impl VerifiedRelayResult {
     fn expected(&self) -> RelayExpectedResult {
         match self {
+            Self::FactMap(facts) => RelayExpectedResult::FactMap(facts.clone()),
             Self::ProjectedString(output) => {
                 RelayExpectedResult::ProjectedString(RelayExpectedOutput {
                     name: output.name.clone(),
@@ -705,8 +932,30 @@ impl fmt::Debug for RelayOutputValue {
 
 /// Match-only data contract verified against the pinned Relay profile.
 pub(crate) enum RelayMatchData {
+    FactMap(RelayFactMap),
     ProjectedString(RelayOutputValue),
     PresenceOnly,
+}
+
+pub(crate) struct RelayFactMap {
+    fields: BTreeMap<Box<str>, ProjectedJsonScalar>,
+}
+
+impl RelayFactMap {
+    pub(crate) fn fields(&self) -> impl ExactSizeIterator<Item = (&str, &ProjectedJsonScalar)> {
+        self.fields
+            .iter()
+            .map(|(name, value)| (name.as_ref(), value))
+    }
+}
+
+impl fmt::Debug for RelayFactMap {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RelayFactMap")
+            .field("fields", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl fmt::Debug for RelayMatchData {
@@ -760,7 +1009,7 @@ impl RelayConsultationResult {
     pub const fn data(&self) -> Option<&RelayOutputValue> {
         match self.match_data.as_ref() {
             Some(RelayMatchData::ProjectedString(output)) => Some(output),
-            Some(RelayMatchData::PresenceOnly) | None => None,
+            Some(RelayMatchData::FactMap(_) | RelayMatchData::PresenceOnly) | None => None,
         }
     }
 
@@ -819,8 +1068,7 @@ pub enum RelayClientError {
 }
 
 struct ExecuteRequestBody<'a> {
-    input_name: &'a str,
-    input_value: &'a str,
+    inputs: &'a BTreeMap<String, Zeroizing<String>>,
 }
 
 impl Serialize for ExecuteRequestBody<'_> {
@@ -829,21 +1077,23 @@ impl Serialize for ExecuteRequestBody<'_> {
         S: Serializer,
     {
         let mut root = serializer.serialize_struct("ConsultationExecuteRequest", 1)?;
-        root.serialize_field("inputs", &SingleInput(self))?;
+        root.serialize_field("inputs", &SerializableInputs(self.inputs))?;
         root.end()
     }
 }
 
-struct SingleInput<'a>(&'a ExecuteRequestBody<'a>);
+struct SerializableInputs<'a>(&'a BTreeMap<String, Zeroizing<String>>);
 
-impl Serialize for SingleInput<'_> {
+impl Serialize for SerializableInputs<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut inputs = serializer.serialize_map(Some(1))?;
-        inputs.serialize_entry(self.0.input_name, self.0.input_value)?;
-        inputs.end()
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (name, value) in self.0 {
+            map.serialize_entry(name, value.as_str())?;
+        }
+        map.end()
     }
 }
 
@@ -876,6 +1126,13 @@ fn metadata_decoder() -> Result<ClosedJsonDecoder, RelayClientError> {
 
 fn result_decoder(profile: &VerifiedRelayProfile) -> Result<ClosedJsonDecoder, RelayClientError> {
     let data = match &profile.result {
+        VerifiedRelayResult::FactMap(facts) => object(
+            true,
+            facts
+                .iter()
+                .map(|(name, fact)| field(name, true, relay_fact_schema(fact)?))
+                .collect::<Result<Vec<_>, RelayClientError>>()?,
+        )?,
         VerifiedRelayResult::ProjectedString(output) => object(
             true,
             vec![field(
@@ -1003,6 +1260,19 @@ fn result_decoder(profile: &VerifiedRelayProfile) -> Result<ClosedJsonDecoder, R
             22
         };
     let presence = match &profile.result {
+        VerifiedRelayResult::FactMap(facts) => {
+            for (index, name) in facts.keys().enumerate() {
+                projections.push(projection(
+                    &format!("r{:02}", data_projection_offset + index),
+                    &["data", name],
+                )?);
+            }
+            vec![ClosedJsonPresenceProjection::new(
+                &format!("r{:02}", data_projection_offset + facts.len()),
+                ["data"],
+            )
+            .map_err(|_| RelayClientError::InvalidConfiguration)?]
+        }
         VerifiedRelayResult::ProjectedString(output) => {
             projections.push(projection(
                 &format!("r{data_projection_offset:02}"),
@@ -1033,11 +1303,29 @@ fn result_decoder(profile: &VerifiedRelayProfile) -> Result<ClosedJsonDecoder, R
     .map_err(|_| RelayClientError::InvalidConfiguration)
 }
 
+fn relay_fact_schema(fact: &RelayFactContract) -> Result<ClosedJsonSchema, RelayClientError> {
+    match fact {
+        RelayFactContract::Boolean { nullable } => Ok(ClosedJsonSchema::boolean(*nullable)),
+        RelayFactContract::Integer {
+            nullable,
+            minimum,
+            maximum,
+        } => ClosedJsonSchema::integer(*nullable, *minimum, *maximum)
+            .map_err(|_| RelayClientError::InvalidConfiguration),
+        RelayFactContract::String {
+            nullable,
+            max_bytes,
+        } => string(*nullable, *max_bytes),
+        RelayFactContract::Date { nullable } => string(*nullable, 10),
+        RelayFactContract::Presence => Ok(ClosedJsonSchema::boolean(false)),
+    }
+}
+
 fn parse_verified_profile(
     fields: Box<[ProjectedJsonField]>,
     pin: &RelayProfilePin,
     purpose: &str,
-    input_name: &str,
+    input_names: &[String],
     expected_result: &RelayExpectedResult,
 ) -> Result<VerifiedRelayProfile, RelayClientError> {
     let mut fields = FieldCursor::new(fields, RelayClientError::InvalidProfileMetadata);
@@ -1061,7 +1349,7 @@ fn parse_verified_profile(
     }
     let contract: RelayContractDocument = serde_json::from_value(contract_value)
         .map_err(|_| RelayClientError::InvalidProfileMetadata)?;
-    validate_contract_document(contract, pin, purpose, input_name, expected_result)
+    validate_contract_document(contract, pin, purpose, input_names, expected_result)
 }
 
 #[derive(Deserialize)]
@@ -1212,6 +1500,12 @@ struct RelayOutputContract {
     #[serde(rename = "type")]
     kind: RelayOutputType,
     nullable: bool,
+    #[serde(default)]
+    max_bytes: Option<u32>,
+    #[serde(default)]
+    minimum: Option<i64>,
+    #[serde(default)]
+    maximum: Option<i64>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -1220,7 +1514,8 @@ enum RelayOutputType {
     String,
     Boolean,
     Integer,
-    Number,
+    Date,
+    Presence,
 }
 
 #[derive(Deserialize)]
@@ -1314,7 +1609,7 @@ fn validate_contract_document(
     contract: RelayContractDocument,
     pin: &RelayProfilePin,
     purpose: &str,
-    input_name: &str,
+    input_names: &[String],
     expected_result: &RelayExpectedResult,
 ) -> Result<VerifiedRelayProfile, RelayClientError> {
     if contract.schema != CONTRACT_SCHEMA
@@ -1326,22 +1621,14 @@ fn validate_contract_document(
         return Err(RelayClientError::InvalidProfileMetadata);
     }
     let spec = contract.spec;
-    let (returned_input_name, input) = spec
-        .inputs
-        .first_key_value()
-        .filter(|_| spec.inputs.len() == 1)
-        .ok_or(RelayClientError::InvalidProfileMetadata)?;
-    if returned_input_name != input_name
-        || input.kind != "string"
-        || input.max_bytes == 0
-        || usize::from(input.max_bytes) > INPUT_VALUE_MAX_BYTES
-        || input.pattern.len() > MAX_BOUNDED_INPUT_PATTERN_BYTES
-        || input.canonicalization != "identity"
-    {
+    if !(1..=4).contains(&spec.inputs.len()) || spec.inputs.keys().ne(input_names.iter()) {
         return Err(RelayClientError::InvalidProfileMetadata);
     }
-    let input_pattern = BoundedInputPattern::compile(&input.pattern)
-        .map_err(|_| RelayClientError::InvalidProfileMetadata)?;
+    let inputs = spec
+        .inputs
+        .iter()
+        .map(|(name, input)| VerifiedRelayInput::compile(input).map(|input| (name.clone(), input)))
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
 
     let pack = spec.integration_pack;
     if !stable_id(&pack.id, PROFILE_ID_MAX_BYTES)
@@ -1374,7 +1661,7 @@ fn validate_contract_document(
     )?;
 
     let authorization = spec.authorization;
-    if authorization.workload != RELAY_WORKLOAD
+    if !stable_id(&authorization.workload, PROFILE_ID_MAX_BYTES)
         || !valid_scope(&authorization.required_scope)
         || authorization.purposes.as_slice() != [purpose]
         || !stable_id(&authorization.legal_basis, PROFILE_ID_MAX_BYTES)
@@ -1424,6 +1711,70 @@ fn validate_contract_document(
     }
 
     let result = match (expected_result, spec.output_mode) {
+        (RelayExpectedResult::FactMap(expected), RelayOutputMode::ProjectedFields)
+            if expected.len() == spec.output.len() =>
+        {
+            for (name, fact) in expected {
+                let output = spec
+                    .output
+                    .get(name)
+                    .ok_or(RelayClientError::InvalidProfileMetadata)?;
+                let expected_nullable = fact.nullable();
+                let type_matches = matches!(
+                    (fact, output.kind),
+                    (RelayFactContract::String { .. }, RelayOutputType::String)
+                        | (RelayFactContract::Boolean { .. }, RelayOutputType::Boolean)
+                        | (RelayFactContract::Integer { .. }, RelayOutputType::Integer)
+                        | (RelayFactContract::Date { .. }, RelayOutputType::Date)
+                        | (RelayFactContract::Presence, RelayOutputType::Presence)
+                );
+                if !type_matches || output.nullable != expected_nullable {
+                    return Err(RelayClientError::InvalidProfileMetadata);
+                }
+                let output_contract_matches = match fact {
+                    RelayFactContract::String {
+                        nullable,
+                        max_bytes,
+                    } => {
+                        output.max_bytes == Some(*max_bytes)
+                            && output.minimum.is_none()
+                            && output.maximum.is_none()
+                            && output.nullable == *nullable
+                    }
+                    RelayFactContract::Boolean { nullable } => {
+                        output.max_bytes.is_none()
+                            && output.minimum.is_none()
+                            && output.maximum.is_none()
+                            && output.nullable == *nullable
+                    }
+                    RelayFactContract::Integer {
+                        nullable,
+                        minimum,
+                        maximum,
+                    } => {
+                        output.max_bytes.is_none()
+                            && output.minimum == Some(*minimum)
+                            && output.maximum == Some(*maximum)
+                            && output.nullable == *nullable
+                    }
+                    RelayFactContract::Date { nullable } => {
+                        output.max_bytes == Some(10)
+                            && output.minimum.is_none()
+                            && output.maximum.is_none()
+                            && output.nullable == *nullable
+                    }
+                    RelayFactContract::Presence => {
+                        output.max_bytes.is_none()
+                            && output.minimum.is_none()
+                            && output.maximum.is_none()
+                    }
+                };
+                if !output_contract_matches {
+                    return Err(RelayClientError::InvalidProfileMetadata);
+                }
+            }
+            VerifiedRelayResult::FactMap(expected.clone())
+        }
         (RelayExpectedResult::ProjectedString(expected), RelayOutputMode::ProjectedFields) => {
             let output = spec
                 .output
@@ -1477,7 +1828,7 @@ fn validate_contract_document(
             "integration_pack": integration_pack,
         },
         "authorization": {
-            "workload": RELAY_WORKLOAD,
+            "workload": authorization.workload.as_str(),
             "required_scope": authorization.required_scope.as_str(),
             "purposes": [purpose],
             "legal_basis": authorization.legal_basis.as_str(),
@@ -1498,11 +1849,10 @@ fn validate_contract_document(
     Ok(VerifiedRelayProfile {
         pin: pin.clone(),
         purpose: purpose.into(),
-        input_name: input_name.into(),
-        input_max_bytes: input.max_bytes,
+        input_names: input_names.to_vec().into_boxed_slice(),
+        inputs,
         max_in_flight: usize::try_from(bounds.max_in_flight)
             .map_err(|_| RelayClientError::InvalidProfileMetadata)?,
-        input_pattern,
         acquisition_class,
         integration_pack: RelayArtifactIdentity {
             id: pack.id.into_boxed_str(),
@@ -1807,6 +2157,39 @@ fn parse_result(
         }
     }
     let match_data = match &profile.result {
+        VerifiedRelayResult::FactMap(facts) => {
+            let projected = facts
+                .iter()
+                .map(|(name, fact)| {
+                    let value = fields.scalar()?;
+                    let valid = if outcome == RelayConsultationOutcome::Match {
+                        relay_fact_value_valid(fact, &value)
+                    } else {
+                        matches!(value, ProjectedJsonScalar::Null)
+                    };
+                    if !valid {
+                        return Err(RelayClientError::InvalidResult);
+                    }
+                    Ok((name.clone().into_boxed_str(), value))
+                })
+                .collect::<Result<BTreeMap<_, _>, RelayClientError>>()?;
+            let data_present = fields.boolean()?;
+            match (outcome, data_present) {
+                (RelayConsultationOutcome::Match, true) => {
+                    Some(RelayMatchData::FactMap(RelayFactMap { fields: projected }))
+                }
+                (
+                    RelayConsultationOutcome::NoMatch | RelayConsultationOutcome::Ambiguous,
+                    false,
+                ) if projected
+                    .values()
+                    .all(|value| matches!(value, ProjectedJsonScalar::Null)) =>
+                {
+                    None
+                }
+                _ => return Err(RelayClientError::InvalidResult),
+            }
+        }
         VerifiedRelayResult::ProjectedString(output) => {
             let scalar = fields.scalar()?;
             let data_present = fields.boolean()?;
@@ -1851,6 +2234,20 @@ fn parse_result(
         match_data,
         provenance: RelayConsultationProvenance { relay_acquired_at },
     })
+}
+
+fn relay_fact_value_valid(fact: &RelayFactContract, value: &ProjectedJsonScalar) -> bool {
+    match (fact, value) {
+        (RelayFactContract::Boolean { .. }, ProjectedJsonScalar::Boolean(_))
+        | (RelayFactContract::Integer { .. }, ProjectedJsonScalar::Integer(_))
+        | (RelayFactContract::String { .. }, ProjectedJsonScalar::String(_))
+        | (RelayFactContract::Presence, ProjectedJsonScalar::Boolean(_)) => true,
+        (RelayFactContract::Date { .. }, ProjectedJsonScalar::String(value)) => {
+            is_rfc3339_full_date(value)
+        }
+        (fact, ProjectedJsonScalar::Null) => fact.nullable(),
+        _ => false,
+    }
 }
 
 struct FieldCursor {

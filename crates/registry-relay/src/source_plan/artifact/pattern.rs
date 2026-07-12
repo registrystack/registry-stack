@@ -34,7 +34,7 @@ pub(super) fn validate_stable_text(value: &str) -> Result<(), SourcePlanArtifact
 
 pub(super) fn validate_query_name(value: &str) -> Result<(), SourcePlanArtifactError> {
     let mut bytes = value.bytes();
-    let valid = matches!(bytes.next(), Some(b'a'..=b'z' | b'A'..=b'Z'))
+    let valid = matches!(bytes.next(), Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'))
         && value.len() <= 96
         && bytes.all(|byte| {
             matches!(
@@ -103,6 +103,7 @@ mod tests {
             "trackedEntity",
             "selector:subject",
             "XTrace",
+            "_elements",
         ] {
             assert_eq!(validate_query_name(valid), Ok(()), "rejected {valid:?}");
         }

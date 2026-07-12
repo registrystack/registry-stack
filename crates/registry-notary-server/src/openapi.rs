@@ -660,7 +660,8 @@ fn build_openapi_document() -> Value {
                             "name": "Idempotency-Key",
                             "in": "header",
                             "required": false,
-                            "schema": { "type": "string" }
+                            "description": "Required for every registry-backed batch. Direct-source batches retain the legacy optional contract. The value is caller-bound and may contain 1 to 256 bytes.",
+                            "schema": { "type": "string", "minLength": 1, "maxLength": 256 }
                         }
                     ],
                     "requestBody": {
@@ -673,7 +674,7 @@ fn build_openapi_document() -> Value {
                     },
                     "responses": {
                         "200": { "description": "Per-item claim evaluation results" },
-                        "400": { "description": "Invalid request" },
+                        "400": { "description": "Invalid request, including a registry-backed batch without a valid Idempotency-Key or an item that fails whole-batch preflight" },
                         "401": { "description": "Missing or invalid credential" },
                         "403": { "description": "Not authorized for requested claim, purpose, disclosure, or format" },
                         "406": { "description": "Requested format is not acceptable" },
@@ -1873,6 +1874,21 @@ fn evaluate_request_schema() -> Value {
             "target": { "$ref": "#/components/schemas/EvidenceEntity" },
             "relationship": { "$ref": "#/components/schemas/EvidenceRelationship" },
             "on_behalf_of": { "$ref": "#/components/schemas/EvidenceOnBehalfOf" },
+            "variables": {
+                "type": "object",
+                "maxProperties": 16,
+                "propertyNames": {
+                    "type": "string",
+                    "maxLength": 96,
+                    "pattern": "^[a-z][a-z0-9_]{0,95}$"
+                },
+                "additionalProperties": {
+                    "type": "string",
+                    "format": "date",
+                    "minLength": 10,
+                    "maxLength": 10
+                }
+            },
             "claims": {
                 "type": "array",
                 "items": { "$ref": "#/components/schemas/ClaimRef" }
@@ -2236,7 +2252,7 @@ fn claim_result_view_schema() -> Value {
             "target_ref": { "$ref": "#/components/schemas/TargetRefView" },
             "matching": { "$ref": "#/components/schemas/MatchingMetadata" },
             "value": {
-                "type": "object",
+                "type": ["object", "array", "string", "number", "integer", "boolean", "null"],
                 "description": "Claim value. The runtime may return any JSON value."
             },
             "satisfied": { "type": ["boolean", "null"] },
@@ -2313,7 +2329,7 @@ fn batch_claim_result_view_schema() -> Value {
             "claim_version": { "type": "string" },
             "value_type": { "type": "string" },
             "value": {
-                "type": "object",
+                "type": ["object", "array", "string", "number", "integer", "boolean", "null"],
                 "description": "Claim value. The runtime may return any JSON value."
             },
             "satisfied": { "type": ["boolean", "null"] },
@@ -3210,7 +3226,8 @@ fn problem_example(status: u16, code: &str, title: &str, detail: &str) -> Value 
         "title": title,
         "status": status,
         "detail": detail,
-        "code": code
+        "code": code,
+        "request_id": "01J00000000000000000000000"
     })
 }
 
@@ -3222,7 +3239,8 @@ fn admin_error_example(status: u16, code: &str, title: &str, detail: &str) -> Va
         "status": status,
         "detail": detail,
         "message": detail,
-        "code": code
+        "code": code,
+        "request_id": "01J00000000000000000000000"
     })
 }
 
@@ -4200,6 +4218,7 @@ mod tests {
         assert!(evaluate_example.get("target_ref").is_some());
         assert!(evaluate_example.get("requester_ref").is_some());
         assert!(evaluate_example.get("matching").is_some());
+        assert!(evaluate_example["value"].is_boolean());
 
         let batch_item_example = &doc["paths"]["/v1/batch-evaluations"]["post"]["responses"]["200"]
             ["content"]["application/json"]["example"]["items"][0];
@@ -4207,11 +4226,25 @@ mod tests {
         assert!(batch_item_example.get("target_ref").is_some());
         assert!(batch_item_example.get("requester_ref").is_some());
         assert!(batch_item_example.get("matching").is_some());
+        assert!(batch_item_example["claim_results"][0]["value"].is_boolean());
+        assert_eq!(
+            doc["components"]["schemas"]["ClaimResultView"]["properties"]["value"]["type"],
+            json!(["object", "array", "string", "number", "integer", "boolean", "null"])
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["BatchClaimResultView"]["properties"]["value"]["type"],
+            json!(["object", "array", "string", "number", "integer", "boolean", "null"])
+        );
 
         let evaluate_request = &doc["components"]["schemas"]["EvaluateRequest"]["properties"];
         assert!(evaluate_request.get("subject").is_none());
         assert!(evaluate_request.get("id_type").is_none());
         assert!(evaluate_request.get("target").is_some());
+        assert_eq!(evaluate_request["variables"]["maxProperties"], json!(16));
+        assert_eq!(
+            evaluate_request["variables"]["additionalProperties"]["format"],
+            json!("date")
+        );
         assert_eq!(
             doc["components"]["schemas"]["EvaluateRequest"]["required"],
             json!(["claims"])
@@ -4310,6 +4343,35 @@ mod tests {
                 ["content"]["application/problem+json"]["example"]["code"],
             json!("evaluation.not_found")
         );
+    }
+
+    #[test]
+    fn every_problem_example_carries_the_required_request_id() {
+        let doc = serde_json::to_value(openapi_document()).expect("document serializes");
+        for (path, path_item) in doc["paths"].as_object().expect("paths are an object") {
+            for (method, operation) in path_item.as_object().expect("path item is an object") {
+                let Some(responses) = operation
+                    .get("responses")
+                    .and_then(serde_json::Value::as_object)
+                else {
+                    continue;
+                };
+                for (status, response) in responses {
+                    let Some(example) = response
+                        .pointer("/content/application~1problem+json/example")
+                        .filter(|example| example.is_object())
+                    else {
+                        continue;
+                    };
+                    assert!(
+                        example["request_id"]
+                            .as_str()
+                            .is_some_and(|value| !value.is_empty()),
+                        "problem example must include request_id for {method} {path} {status}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

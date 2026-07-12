@@ -20,6 +20,25 @@ const SYNTHETIC_NEGATIVE_SECURITY_EVIDENCE: &[u8] =
     b"synthetic registry negative security evidence v1\n";
 const SYNTHETIC_MINIMIZATION_EVIDENCE: &[u8] = b"synthetic registry minimization proof v1\n";
 
+#[test]
+fn fixed_source_purpose_requires_one_exact_profile_purpose() {
+    assert!(exact_profile_bound_source_purpose(
+        &["benefit-verification".to_owned()],
+        "benefit-verification"
+    ));
+    assert!(!exact_profile_bound_source_purpose(
+        &[
+            "benefit-verification".to_owned(),
+            "case-management".to_owned(),
+        ],
+        "benefit-verification"
+    ));
+    assert!(!exact_profile_bound_source_purpose(
+        &["case-management".to_owned()],
+        "benefit-verification"
+    ));
+}
+
 // These exact portable inputs are also verified by `verify-vectors.mjs`.
 // Changing one requires an artifact schema/version decision, not a snapshot refresh.
 const VECTOR_MANIFEST: &[u8] =
@@ -70,21 +89,21 @@ const OPENCRVS_MINIMIZATION: &[u8] = include_bytes!(
     "../../../profiles/opencrvs-1.9.0-rc.1-farajaland-birth-record-exists/evidence/minimization.json"
 );
 const DHIS2_PACK_HASH: &str =
-    "sha256:ec0136be504e3f98539f9e0ec10e59532ff793dbadc2e66ea1c017a632da6ac4";
+    "sha256:c3965741e1d2da615a82a6ede91d0477c8c29204c675e043169bcc654915597f";
 const DHIS2_POLICY_HASH: &str =
-    "sha256:0456a93b515b9d60aff9f06633c792f4e63ede2f7657ef37bb2f58a840380b1f";
+    "sha256:807d95f054244dc6e881672324d7e2468fe179af312f67f2bd162d523743bed9";
 const DHIS2_CONTRACT_HASH: &str =
-    "sha256:a2d0e7588bc1bbeb0caf3247703a15d81830875f5e84dd257f7dc163d3a4ecb6";
+    "sha256:d44a58740cf51b68d9a011380814568e6c569e35057d4350a4fb429b24289ea7";
 const DHIS2_BINDING_HASH: &str =
-    "sha256:aa6172d3995b11dbc082ce744dcb46c40d5c28217d4e325a323fa595f42410ce";
+    "sha256:dc19787f51f4997175726c804fc5822485f2ed5b4d9ca7a007bcebb2adcd42c0";
 const OPENCRVS_PACK_HASH: &str =
-    "sha256:04297b0429cf311c79dedd332f45d1fd7ee9d9e4b56d2c77d793fdeeeeb986aa";
+    "sha256:2217affdb8ea79a7197926800ee5f3eb5a003e9ad3acaaa6dc54c00e2ac06b58";
 const OPENCRVS_POLICY_HASH: &str =
-    "sha256:46d029297071f13fb6887af1b6b5a32fbc3105192a6b93f8ae0c758a33be2697";
+    "sha256:4f55cf5327296565d3f12c318a251dc96477dcb9d8850be9ab0534c3053c790b";
 const OPENCRVS_CONTRACT_HASH: &str =
-    "sha256:4bd7d0086dbfd6c5209d83178dc620474d746b3f2271147fcbe7d691376bb23c";
+    "sha256:4153c6c95c0454c6278a239ed096715f08547666b03e5d8b7003f32d6c29e4a6";
 const OPENCRVS_BINDING_HASH: &str =
-    "sha256:112e810e6edc2c1b9c63554dfb906bdf1984aa28851043734f4f4e333c1adfbe";
+    "sha256:635e4e1626998ae43226980da87a94c70450203149bfb6477a545f8017d9336d";
 
 fn vector_manifest() -> &'static Value {
     static MANIFEST: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
@@ -296,10 +315,11 @@ fn open_crvs_fixture() -> Fixture {
         "fields": {"record": record_schema.clone()},
         "control_fields": {},
         "selector": {
-            "type": "http_anchor",
-            "input": "uin",
+            "type": "http_exact_and",
             "operation": "opencrvs-search",
-            "location": {"type": "codec", "role": "dci_idtype_value"}
+            "components": {
+                "uin": {"type": "codec", "role": "dci_exact_predicate"}
+            }
         },
         "cardinality": "probe_two",
         "reject_unknown_fields": true
@@ -317,7 +337,22 @@ fn open_crvs_fixture() -> Fixture {
         "query": {},
         "headers": {},
         "body": null,
-        "request_codec": "open_crvs_dci_exact_v1",
+        "request_codec": "dci_exact_v1",
+        "dci": {
+            "protocol_version": "1.0.0",
+            "sender_id": "registry-relay",
+            "registry_type": "ns:org:RegistryType:Civil",
+            "registry_event_type": "birth",
+            "record_type": "spdci-extensions-dci:Person",
+            "identifier_type": "UIN",
+            "exact_and": {
+                "uin": {"field": "UIN", "response_pointer": "/identifier/0/identifier_value"}
+            },
+            "locale": "eng",
+            "page_number": 1,
+            "jwks_operation": "fetch-signing-keys",
+            "response_verifier": "dci_jws_v1"
+        },
         "step_limits": {
             "max_request_bytes": 16384,
             "timeout_ms": 10000,
@@ -331,7 +366,7 @@ fn open_crvs_fixture() -> Fixture {
             "max_bytes": 65536,
             "max_records": 2,
             "normalization": "json_array_probe_two",
-            "cardinality": {"mechanism": "open_crvs_dci_probe_two"},
+            "cardinality": {"mechanism": "dci_probe_two"},
             "schema": {
                 "type": "array",
                 "nullable": false,
@@ -348,6 +383,20 @@ fn open_crvs_fixture() -> Fixture {
             "accepted_statuses": [200],
             "output_mapping": {}
         }
+    }]);
+    fixture.pack_value["spec"]["plan"]["verification_operations"] = json!([{
+        "id": "fetch-signing-keys",
+        "primitive": "jwks_v1",
+        "destination_slot": "registry-data",
+        "method": "GET",
+        "path": "/.well-known/jwks.json",
+        "step_limits": {
+            "max_request_bytes": 16384,
+            "timeout_ms": 10000,
+            "max_in_flight": 1
+        },
+        "max_response_bytes": 65536,
+        "accepted_statuses": [200]
     }]);
     fixture.pack_value["spec"]["plan"]["steps"] = json!(["opencrvs-search"]);
     fixture.pack_value["spec"]["plan"]
@@ -823,7 +872,7 @@ fn open_crvs_exact_presence_plan_compiles_embedded_jwks_and_fresh_oauth() {
     let registry = compile(&fixture).expect("exact OpenCRVS plan compiles");
     let plan = registry.iter().next().expect("one plan");
     let operation = plan.operations().next().expect("one authored operation");
-    assert!(operation.is_open_crvs_dci_exact_v1());
+    assert!(operation.dci_exact().is_some());
     assert_eq!(operation.disclosed_fields().len(), 0);
     assert_eq!(operation.acquired_fields().collect::<Vec<_>>(), ["record"]);
     assert_eq!(operation.response().outputs().len(), 0);
@@ -847,8 +896,11 @@ fn open_crvs_exact_presence_plan_compiles_embedded_jwks_and_fresh_oauth() {
     let request_debug = format!("{request:?}");
     assert!(request_debug.contains("ReviewedReadOnlyPost"));
     assert!(request_debug.contains("[REDACTED]"));
-    let jwks = operation.embedded_open_crvs_jwks().expect("embedded JWKS");
-    assert_eq!(jwks.id().as_str(), "opencrvs-search.jwks");
+    let jwks = operation
+        .dci_exact()
+        .map(|dci| dci.verification())
+        .expect("embedded JWKS");
+    assert_eq!(jwks.id().as_str(), "fetch-signing-keys");
     assert_eq!(jwks.fixed_path(), "/.well-known/jwks.json");
     assert_eq!(jwks.response_max_bytes(), 65_536);
     assert_eq!(
@@ -857,15 +909,15 @@ fn open_crvs_exact_presence_plan_compiles_embedded_jwks_and_fresh_oauth() {
             .collect::<Vec<_>>(),
         [
             ("credential", "acquire-token"),
+            ("data", "fetch-signing-keys"),
             ("data", "opencrvs-search"),
-            ("data", "opencrvs-search.jwks"),
         ]
     );
     assert_eq!(
         plan.runtime_profile().permit_bindings().collect::<Vec<_>>(),
         [
             ("credential", 0, vec!["acquire-token"]),
-            ("data", 0, vec!["opencrvs-search.jwks"]),
+            ("data", 0, vec!["fetch-signing-keys"]),
             ("data", 1, vec!["opencrvs-search"]),
         ]
     );
@@ -878,7 +930,7 @@ fn open_crvs_exact_presence_plan_compiles_embedded_jwks_and_fresh_oauth() {
             .iter()
             .map(OperationId::as_str)
             .collect::<Vec<_>>(),
-        ["opencrvs-search.jwks", "opencrvs-search"]
+        ["fetch-signing-keys", "opencrvs-search"]
     );
     assert_eq!(plan.runtime_profile().credential_token_lifetime_ms(), None);
     assert!(plan.oauth_cache_identity().is_none());
@@ -905,13 +957,6 @@ fn open_crvs_exact_shape_rejects_optional_flexibility_and_unsafe_origin_changes(
     type FixtureMutation = Box<dyn Fn(&mut Fixture)>;
     let cases: Vec<(&str, FixtureMutation)> = vec![
         (
-            "projected output",
-            Box::new(|fixture| {
-                fixture.pack_value["spec"]["output_mode"] = json!("projected_fields");
-                fixture.contract_value["spec"]["output_mode"] = json!("projected_fields");
-            }),
-        ),
-        (
             "operator query",
             Box::new(|fixture| {
                 fixture.pack_value["spec"]["plan"]["operations"][0]["query"] =
@@ -926,54 +971,9 @@ fn open_crvs_exact_shape_rejects_optional_flexibility_and_unsafe_origin_changes(
             }),
         ),
         (
-            "expiring token",
+            "missing verification operation",
             Box::new(|fixture| {
-                fixture.pack_value["spec"]["plan"]["credential_operation"]["response"] = json!({
-                    "max_bytes": 16384,
-                    "accepted_statuses": [200],
-                    "schema": "strict_access_token_bearer_expires_in",
-                    "access_token_max_bytes": 4089,
-                    "token_type": "Bearer",
-                    "expires_in_min_seconds": 60,
-                    "expires_in_max_seconds": 3600,
-                    "max_token_lifetime_ms": 3600000,
-                    "expiry_safety_skew_ms": 30000
-                });
-            }),
-        ),
-        (
-            "different credential origin",
-            Box::new(|fixture| {
-                fixture.binding_value["credential_destination"]["origin"] =
-                    json!("https://identity.example.test/");
-            }),
-        ),
-        (
-            "credential path",
-            Box::new(|fixture| {
-                fixture.pack_value["spec"]["plan"]["credential_operation"]["path"] =
-                    json!("/oauth/token");
-            }),
-        ),
-        (
-            "credential destination prefix",
-            Box::new(|fixture| {
-                fixture.binding_value["credential_destination"]["application_base_path"] =
-                    json!("/identity");
-            }),
-        ),
-        (
-            "main subdeadline",
-            Box::new(|fixture| {
-                fixture.pack_value["spec"]["plan"]["operations"][0]["step_limits"]["timeout_ms"] =
-                    json!(4_000);
-            }),
-        ),
-        (
-            "credential subdeadline",
-            Box::new(|fixture| {
-                fixture.pack_value["spec"]["plan"]["credential_operation"]["request"]
-                    ["timeout_ms"] = json!(4_000);
+                fixture.pack_value["spec"]["plan"]["verification_operations"] = json!([]);
             }),
         ),
     ];
@@ -982,6 +982,29 @@ fn open_crvs_exact_shape_rejects_optional_flexibility_and_unsafe_origin_changes(
         mutation(&mut fixture);
         fixture.refresh_all();
         assert!(compile(&fixture).is_err(), "accepted {label}");
+    }
+}
+
+#[test]
+fn dci_exact_rejects_malformed_reviewed_protocol_constants_before_activation() {
+    for (field, invalid) in [
+        ("protocol_version", "01.0.0"),
+        ("sender_id", "contains a space"),
+        ("identifier_type", ""),
+        ("locale", "en\nUS"),
+    ] {
+        let mut fixture = open_crvs_fixture();
+        fixture.pack_value["spec"]["plan"]["operations"][0]["dci"][field] = json!(invalid);
+        fixture.refresh_all();
+        assert!(
+            matches!(
+                compile(&fixture),
+                Err(SourcePlanCompileError::Artifact(
+                    SourcePlanArtifactError::InvalidPlan
+                ))
+            ),
+            "accepted malformed DCI constant {field}"
+        );
     }
 }
 
@@ -1052,6 +1075,28 @@ pub(crate) fn open_crvs_runtime_vector_plan_fixture() -> CompiledSourcePlan {
         .into_values()
         .next()
         .expect("one exact OpenCRVS vector plan")
+}
+
+pub(crate) fn signed_dci_expiring_oauth_runtime_plan_fixture() -> CompiledSourcePlan {
+    let mut fixture = open_crvs_fixture();
+    fixture.pack_value["spec"]["plan"]["credential_operation"]["response"] = json!({
+        "max_bytes": 16384,
+        "accepted_statuses": [200],
+        "schema": "strict_access_token_bearer_expires_in",
+        "access_token_max_bytes": 4089,
+        "token_type": "Bearer",
+        "expires_in_min_seconds": 60,
+        "expires_in_max_seconds": 3600,
+        "max_token_lifetime_ms": 3600000,
+        "expiry_safety_skew_ms": 30000
+    });
+    fixture.refresh_all();
+    compile(&fixture)
+        .expect("signed DCI with expiring OAuth compiles")
+        .plans
+        .into_values()
+        .next()
+        .expect("one signed DCI plan")
 }
 
 pub(crate) fn maintained_open_crvs_runtime_plan_fixture() -> CompiledSourcePlan {
@@ -1220,9 +1265,9 @@ fn two_step_fixture() -> Fixture {
         "max_bytes": 32
     });
     fixture.pack_value["spec"]["output"]["eligibility"] =
-        json!({"type": "string", "nullable": false});
+        json!({"type": "string", "nullable": false, "max_bytes": 32});
     fixture.contract_value["spec"]["output"]["eligibility"] =
-        json!({"type": "string", "nullable": false});
+        json!({"type": "string", "nullable": false, "max_bytes": 32});
 
     let first = &mut fixture.pack_value["spec"]["plan"]["operations"][0];
     first["query"]["fields"]["value"] = json!("registration_status,route");
@@ -1294,16 +1339,14 @@ fn two_step_fixture() -> Fixture {
 
 fn semantic_alias_fixture() -> Fixture {
     let mut fixture = fixture();
-    let disclosed_schema =
-        fixture.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"].take();
-    fixture.pack_value["spec"]["reviewed_acquisition"]["fields"] =
-        json!({"status": disclosed_schema});
-    fixture.pack_value["spec"]["plan"]["operations"][0]["acquisition_fields"] = json!(["status"]);
+    fixture.pack_value["spec"]["plan"]["operations"][0]["acquisition_fields"] =
+        json!(["registration_status"]);
     fixture.pack_value["spec"]["plan"]["operations"][0]["response"]["output_mapping"] =
         json!({"status": "/registration_status"});
-    fixture.pack_value["spec"]["output"] = json!({"status": {"type": "string", "nullable": false}});
+    fixture.pack_value["spec"]["output"] =
+        json!({"status": {"type": "string", "nullable": false, "max_bytes": 64}});
     fixture.contract_value["spec"]["output"] =
-        json!({"status": {"type": "string", "nullable": false}});
+        json!({"status": {"type": "string", "nullable": false, "max_bytes": 64}});
     fixture.refresh_all();
     fixture
 }
@@ -1332,7 +1375,7 @@ fn rhai_five_operation_fixture() -> Fixture {
         .map(|index| {
             (
                 format!("status_{index}"),
-                json!({"type": "string", "nullable": false}),
+                json!({"type": "string", "nullable": false, "max_bytes": 64}),
             )
         })
         .collect::<serde_json::Map<_, _>>();
@@ -1542,6 +1585,49 @@ pub(crate) fn snapshot_completion_seed_fixture() -> Value {
     completion_seed_value(&snapshot_fixture())
 }
 
+pub(crate) fn shared_snapshot_registry_fixture() -> crate::source_plan::CompiledConsultationRegistry
+{
+    let first = snapshot_fixture();
+    let mut second = snapshot_fixture();
+    second.contract_value["id"] = json!("synthetic.person-status.snapshot-second");
+    second.binding_value["profile"]["id"] = second.contract_value["id"].clone();
+    second.refresh_all();
+
+    let contracts = [
+        PinnedSourcePlanArtifact::new(&first.contract, &first.contract_hash),
+        PinnedSourcePlanArtifact::new(&second.contract, &second.contract_hash),
+    ];
+    let packs = [PinnedSourcePlanArtifact::new(&first.pack, &first.pack_hash)];
+    let bindings = [first.binding.as_slice(), second.binding.as_slice()];
+    let evidence_hashes = [
+        raw_hash(SYNTHETIC_CONFORMANCE_EVIDENCE),
+        raw_hash(SYNTHETIC_NEGATIVE_SECURITY_EVIDENCE),
+        raw_hash(SYNTHETIC_MINIMIZATION_EVIDENCE),
+    ];
+    let evidence = [
+        PinnedEvidenceArtifact::new(
+            EvidenceClass::Conformance,
+            SYNTHETIC_CONFORMANCE_EVIDENCE,
+            &evidence_hashes[0],
+        ),
+        PinnedEvidenceArtifact::new(
+            EvidenceClass::NegativeSecurity,
+            SYNTHETIC_NEGATIVE_SECURITY_EVIDENCE,
+            &evidence_hashes[1],
+        ),
+        PinnedEvidenceArtifact::new(
+            EvidenceClass::Minimization,
+            SYNTHETIC_MINIMIZATION_EVIDENCE,
+            &evidence_hashes[2],
+        ),
+    ];
+    let source_plans = CompiledSourcePlanRegistry::compile(
+        &SourcePlanArtifactBundle::new(&contracts, &packs, &bindings).with_evidence(&evidence),
+    )
+    .expect("two profiles share one compatible snapshot materialization");
+    crate::source_plan::CompiledConsultationRegistry::from_source_plans_for_test(source_plans)
+}
+
 pub(crate) fn semantic_alias_completion_seed_fixture() -> Value {
     completion_seed_value(&semantic_alias_fixture())
 }
@@ -1591,8 +1677,8 @@ fn snapshot_fixture() -> Fixture {
     fixture.pack_value["spec"]["acquisition"]["class"] = json!("materialized_snapshot");
     fixture.pack_value["spec"]["reviewed_acquisition"]["class"] = json!("materialized_snapshot");
     fixture.pack_value["spec"]["reviewed_acquisition"]["selector"] = json!({
-        "type": "snapshot_key",
-        "input": "subject_id"
+        "type": "snapshot_exact_and",
+        "components": {"subject_id": "snapshot_key"}
     });
     fixture.pack_value["spec"]["plan"]["kind"] = json!("snapshot_exact");
     fixture.pack_value["spec"]["plan"]["data_destination_slot"] = Value::Null;
@@ -1607,18 +1693,7 @@ fn snapshot_fixture() -> Fixture {
     fixture.pack_value["spec"]["plan"]["snapshot"] = json!({
         "max_snapshot_age_ms": 86_400_000,
         "unavailable": "unavailable",
-        "immutable_generation": true,
-        "mapping": {
-            "key": {
-                "input": "subject_id",
-                "physical_field": "subject_key",
-                "physical_type": "utf8",
-                "comparison": "binary_equality"
-            },
-            "projection": {
-                "registration_status": "registration_status_text"
-            }
-        }
+        "immutable_generation": true
     });
     fixture.pack_value["spec"]["bounds"]["max_credential_exchanges"] = json!(0);
     fixture.pack_value["spec"]["bounds"]["max_data_exchanges"] = json!(0);
@@ -1648,6 +1723,17 @@ fn snapshot_fixture() -> Fixture {
     fixture.binding_value["credential"] = Value::Null;
     fixture.binding_value["materialization"] = json!({
         "table_provider": "people-snapshot",
+        "mapping": {
+            "key": {
+                "input": "subject_id",
+                "physical_field": "subject_key",
+                "physical_type": "utf8",
+                "comparison": "binary_equality"
+            },
+            "projection": {
+                "registration_status": "registration_status_text"
+            }
+        },
         "max_snapshot_age_ms": 43_200_000,
         "max_source_records": 500,
         "max_source_bytes": 524_288,
@@ -1785,7 +1871,7 @@ fn maintained_opencrvs_birth_record_exists_pack_compiles_to_exact_closed_exchang
     assert!(plan.oauth_cache_identity().is_none());
 
     let operation = plan.operations().next().expect("OpenCRVS search operation");
-    assert!(operation.is_open_crvs_dci_exact_v1());
+    assert!(operation.dci_exact().is_some());
     assert_eq!(operation.total_deadline_ms(), 20_000);
     assert_eq!(operation.max_source_records(), 2);
     assert_eq!(operation.acquired_fields().collect::<Vec<_>>(), ["record"]);
@@ -1794,7 +1880,7 @@ fn maintained_opencrvs_birth_record_exists_pack_compiles_to_exact_closed_exchang
         plan.runtime_profile().permit_bindings().collect::<Vec<_>>(),
         [
             ("credential", 0, vec!["acquire-opencrvs-token"]),
-            ("data", 0, vec!["lookup-birth-record.jwks"]),
+            ("data", 0, vec!["fetch-signing-keys"]),
             ("data", 1, vec!["lookup-birth-record"]),
         ]
     );
@@ -3177,6 +3263,181 @@ fn semantic_output_aliases_are_distinct_from_complete_raw_acquisition() {
 }
 
 #[test]
+fn mixed_presence_and_nullable_alias_outputs_compile_without_rewriting_raw_acquisition() {
+    let mut fixture = semantic_alias_fixture();
+    fixture.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]["fields"]
+        ["registration_status"]["schema"]["nullable"] = json!(true);
+    fixture.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"]
+        ["nullable"] = json!(true);
+    fixture.pack_value["spec"]["acquisition"]["fields"]["registration_status"]["nullable"] =
+        json!(true);
+    fixture.contract_value["spec"]["acquisition"]["fields"]["registration_status"]["nullable"] =
+        json!(true);
+    fixture.pack_value["spec"]["output"] = json!({
+        "exists": {"type": "presence", "nullable": false},
+        "status": {"type": "string", "nullable": true, "max_bytes": 64}
+    });
+    fixture.contract_value["spec"]["output"] = fixture.pack_value["spec"]["output"].clone();
+    fixture.pack_value["spec"]["plan"]["operations"][0]["response"]["presence_outputs"] =
+        json!(["exists"]);
+    fixture.refresh_all();
+
+    let registry = compile(&fixture).expect("mixed scalar and presence fact contract");
+    let plan = registry.iter().next().expect("plan");
+    let operation = plan.operations().next().expect("operation");
+    assert_eq!(
+        operation.acquired_fields().collect::<Vec<_>>(),
+        ["registration_status"]
+    );
+    assert_eq!(
+        operation.disclosed_fields().collect::<Vec<_>>(),
+        ["exists", "status"]
+    );
+    assert_eq!(
+        operation
+            .response()
+            .presence_outputs()
+            .map(|field| field.field())
+            .collect::<Vec<_>>(),
+        ["exists"]
+    );
+}
+
+#[test]
+fn full_date_fact_requires_an_exact_ten_byte_string_source() {
+    let mut valid = semantic_alias_fixture();
+    valid.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]["fields"]
+        ["registration_status"]["schema"]["max_bytes"] = json!(10);
+    valid.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"]
+        ["max_bytes"] = json!(10);
+    valid.pack_value["spec"]["acquisition"]["fields"]["registration_status"]["max_bytes"] =
+        json!(10);
+    valid.contract_value["spec"]["acquisition"]["fields"]["registration_status"]["max_bytes"] =
+        json!(10);
+    valid.pack_value["spec"]["output"]["status"]["type"] = json!("date");
+    valid.pack_value["spec"]["output"]["status"]["max_bytes"] = json!(10);
+    valid.contract_value["spec"]["output"]["status"]["type"] = json!("date");
+    valid.contract_value["spec"]["output"]["status"]["max_bytes"] = json!(10);
+    valid.refresh_all();
+    compile(&valid).expect("ten-byte string backs a full-date fact");
+
+    let mut invalid = valid;
+    invalid.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]["fields"]
+        ["registration_status"]["schema"]["max_bytes"] = json!(11);
+    invalid.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"]
+        ["max_bytes"] = json!(11);
+    invalid.pack_value["spec"]["acquisition"]["fields"]["registration_status"]["max_bytes"] =
+        json!(11);
+    invalid.contract_value["spec"]["acquisition"]["fields"]["registration_status"]["max_bytes"] =
+        json!(11);
+    invalid.refresh_all();
+    assert!(matches!(
+        compile(&invalid),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidAcquisition
+        ))
+    ));
+}
+
+#[test]
+fn reviewed_status_outcomes_bypass_record_decoding_and_are_disjoint() {
+    let mut valid = fixture();
+    valid.pack_value["spec"]["bounds"]["max_source_matches"] = json!(2);
+    valid.contract_value["spec"]["bounds"]["max_source_matches"] = json!(2);
+    valid.pack_value["spec"]["reviewed_acquisition"]["cardinality"] = json!("probe_two");
+    valid.pack_value["spec"]["plan"]["operations"][0]["response"]["max_records"] = json!(1);
+    valid.pack_value["spec"]["plan"]["operations"][0]["response"]["normalization"] =
+        json!("json_object");
+    let record =
+        valid.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"].take();
+    valid.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"] = record;
+    valid.pack_value["spec"]["plan"]["operations"][0]["response"]["cardinality"] = json!({
+        "mechanism": "source_enforced_singleton",
+        "conformance_evidence": valid.pack_value["spec"]["evidence"]["conformance"][0].clone()
+    });
+    valid.pack_value["spec"]["plan"]["operations"][0]["response"]["accepted_statuses"] =
+        json!([200, 404, 409]);
+    valid.pack_value["spec"]["plan"]["operations"][0]["response"]["status_outcomes"] =
+        json!({"no_match": [404], "ambiguous": [409]});
+    valid.contract_value["spec"]["public_behavior"]["outcomes"] =
+        json!(["match", "no_match", "ambiguous"]);
+    valid.refresh_all();
+
+    let registry = compile(&valid).expect("reviewed status outcomes");
+    let response = registry
+        .iter()
+        .next()
+        .expect("plan")
+        .operations()
+        .next()
+        .expect("operation")
+        .response();
+    assert_eq!(
+        response.status_outcome(404),
+        Some(CompiledStatusOutcome::NoMatch)
+    );
+    assert_eq!(
+        response.status_outcome(409),
+        Some(CompiledStatusOutcome::Ambiguous)
+    );
+    assert_eq!(response.status_outcome(200), None);
+
+    let mut overlap = valid;
+    overlap.pack_value["spec"]["plan"]["operations"][0]["response"]["status_outcomes"]
+        ["ambiguous"] = json!([404]);
+    overlap.refresh_all();
+    assert!(matches!(
+        compile(&overlap),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidAcquisition
+        ))
+    ));
+}
+
+#[test]
+fn one_declared_input_path_segment_compiles_as_a_non_injectable_selector() {
+    let mut fixture = fixture();
+    let input = fixture.pack_value["spec"]["plan"]["operations"][0]["query"]["subject_id"].take();
+    fixture.pack_value["spec"]["plan"]["operations"][0]["query"]
+        .as_object_mut()
+        .expect("query")
+        .remove("subject_id");
+    fixture.pack_value["spec"]["plan"]["operations"][0]["path"] =
+        json!("/api/v2/spp/Individual/{individual_id}");
+    fixture.pack_value["spec"]["plan"]["operations"][0]["path_parameters"] =
+        json!({"individual_id": input});
+    fixture.pack_value["spec"]["reviewed_acquisition"]["selector"]["components"]["subject_id"] =
+        json!({"type": "path", "parameter": "individual_id"});
+    fixture.refresh_all();
+
+    let registry = compile(&fixture).expect("closed path selector");
+    let operation = registry
+        .iter()
+        .next()
+        .expect("plan")
+        .operations()
+        .next()
+        .expect("operation");
+    assert_eq!(operation.fixed_path(), "/api/v2/spp/Individual/");
+    assert!(operation.path_segment().is_some());
+    assert_eq!(
+        operation.selector().location(),
+        &CompiledSelectorLocation::PathSegment
+    );
+
+    let mut second = fixture;
+    second.pack_value["spec"]["plan"]["operations"][0]["path_parameters"]["extra"] =
+        json!({"source": "literal", "value": "fixed"});
+    second.refresh_all();
+    assert!(matches!(
+        compile(&second),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidPlan
+        ))
+    ));
+}
+
+#[test]
 fn completion_seed_static_shape_matches_the_frozen_sql_contract() {
     let seed = completion_seed_value(&fixture());
     assert_eq!(
@@ -3503,6 +3764,184 @@ fn rhai_uses_five_reviewed_callables_but_two_effective_exchange_slots() {
     for permit in &permits[1..] {
         assert_eq!(permit["allowed_operation_ids"], json!(callable));
     }
+}
+
+#[test]
+fn authoring_validation_initializes_reviewed_rhai_capabilities_without_bypassing_compilation() {
+    let mut fixture = rhai_five_operation_fixture();
+    let script = "fn consult(input, prior) { #{ operations: [], facts: #{} } }";
+    fixture.pack_value["spec"]["plan"]["rhai"]["script"] = json!(script);
+    fixture.pack_value["spec"]["plan"]["rhai"]["script_hash"] = json!(raw_hash(script.as_bytes()));
+    fixture.refresh_all();
+    let contracts = [PinnedSourcePlanArtifact::new(
+        &fixture.contract,
+        &fixture.contract_hash,
+    )];
+    let packs = [PinnedSourcePlanArtifact::new(
+        &fixture.pack,
+        &fixture.pack_hash,
+    )];
+    let bindings = [fixture.binding.as_slice()];
+    let conformance_hash = raw_hash(SYNTHETIC_CONFORMANCE_EVIDENCE);
+    let negative_security_hash = raw_hash(SYNTHETIC_NEGATIVE_SECURITY_EVIDENCE);
+    let minimization_hash = raw_hash(SYNTHETIC_MINIMIZATION_EVIDENCE);
+    let evidence = [
+        PinnedEvidenceArtifact::new(
+            EvidenceClass::Conformance,
+            SYNTHETIC_CONFORMANCE_EVIDENCE,
+            &conformance_hash,
+        ),
+        PinnedEvidenceArtifact::new(
+            EvidenceClass::NegativeSecurity,
+            SYNTHETIC_NEGATIVE_SECURITY_EVIDENCE,
+            &negative_security_hash,
+        ),
+        PinnedEvidenceArtifact::new(
+            EvidenceClass::Minimization,
+            SYNTHETIC_MINIMIZATION_EVIDENCE,
+            &minimization_hash,
+        ),
+    ];
+    let registry = CompiledSourcePlanRegistry::compile_for_authoring_validation(
+        &SourcePlanArtifactBundle::new(&contracts, &packs, &bindings).with_evidence(&evidence),
+    )
+    .expect("offline authoring validates the exact executable Rhai closure");
+    assert_eq!(registry.len(), 1);
+}
+
+#[test]
+fn sandboxed_rhai_prior_outputs_preserve_the_reviewed_full_date_type() {
+    let mut fixture = rhai_five_operation_fixture();
+    fixture.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]["fields"]
+        ["status_0"]["schema"] = json!({
+        "type": "string",
+        "nullable": false,
+        "max_bytes": 10
+    });
+    fixture.pack_value["spec"]["plan"]["operations"][0]["response"]["prior_outputs"]
+        .as_object_mut()
+        .expect("root prior outputs")
+        .insert(
+            "status_0".to_string(),
+            json!({
+                "pointer": "/status_0",
+                "type": "date",
+                "nullable": false,
+                "max_bytes": 10
+            }),
+        );
+    fixture.pack_value["spec"]["output"]["status_0"] =
+        json!({"type": "date", "nullable": false, "max_bytes": 10});
+    fixture.contract_value["spec"]["output"]["status_0"] =
+        json!({"type": "date", "nullable": false, "max_bytes": 10});
+    for operation in fixture.pack_value["spec"]["plan"]["operations"]
+        .as_array_mut()
+        .expect("Rhai operations")
+    {
+        operation["response"]["output_mapping"] = json!({});
+        operation["response"]["presence_outputs"] = json!([]);
+    }
+    sync_complete_acquisition_from_responses(&mut fixture);
+    fixture.refresh_all();
+    let normalized = super::super::artifact::author_integration_pack(&fixture.pack)
+        .expect("date-prior integration pack normalizes");
+    fixture.pack_value = parse_json_strict(normalized.canonical_json()).expect("canonical pack");
+    fixture.refresh_all();
+    super::super::artifact::parse_integration_pack(&fixture.pack, &fixture.pack_hash)
+        .expect("date-prior integration pack validates");
+    let worker = RhaiWorkerCapability::from_initialized_worker(
+        &fixture.pack_hash,
+        &RHAI_FIVE_CALLABLES,
+        rhai_test_worker_limits(2),
+    )
+    .expect("date-prior Rhai worker");
+    let registry = compile_with_rhai_workers(&fixture, &[worker]).expect("date prior compiles");
+    let slot = registry
+        .iter()
+        .next()
+        .expect("plan")
+        .operations()
+        .next()
+        .expect("operation")
+        .response()
+        .prior_outputs()
+        .find(|slot| slot.name() == "status_0")
+        .expect("date prior slot");
+    assert!(slot.is_date());
+    assert!(matches!(
+        slot.shape(),
+        CompiledScalarShape::String {
+            nullable: false,
+            max_bytes: 10
+        }
+    ));
+}
+
+#[test]
+fn sandboxed_rhai_terminal_fact_contract_retains_each_scalar_bound() {
+    let string_fixture = rhai_five_operation_fixture();
+    let string_worker = RhaiWorkerCapability::from_initialized_worker(
+        &string_fixture.pack_hash,
+        &RHAI_FIVE_CALLABLES,
+        rhai_test_worker_limits(2),
+    )
+    .expect("string-bound Rhai worker");
+    let string_registry = compile_with_rhai_workers(&string_fixture, &[string_worker])
+        .expect("string-bound Rhai plan");
+    let string_bounds = string_registry
+        .iter()
+        .next()
+        .expect("string plan")
+        .rhai_facts()
+        .map(CompiledRhaiFact::fact_type)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        string_bounds,
+        vec![CompiledRhaiFactType::String { max_bytes: 64 }; 5]
+    );
+
+    let mut integer_fixture = rhai_five_operation_fixture();
+    for (index, operation) in integer_fixture.pack_value["spec"]["plan"]["operations"]
+        .as_array_mut()
+        .expect("Rhai operations")
+        .iter_mut()
+        .enumerate()
+    {
+        operation["response"]["schema"]["items"]["fields"][format!("status_{index}")]["schema"] = json!({
+            "type": "integer",
+            "nullable": false,
+            "minimum": -2,
+            "maximum": 2
+        });
+    }
+    for index in 0..5 {
+        integer_fixture.pack_value["spec"]["output"][format!("status_{index}")] =
+            json!({"type": "integer", "nullable": false, "minimum": -2, "maximum": 2});
+        integer_fixture.contract_value["spec"]["output"][format!("status_{index}")] =
+            json!({"type": "integer", "nullable": false, "minimum": -2, "maximum": 2});
+    }
+    sync_complete_acquisition_from_responses(&mut integer_fixture);
+    integer_fixture.refresh_all();
+    let integer_worker = RhaiWorkerCapability::from_initialized_worker(
+        &integer_fixture.pack_hash,
+        &RHAI_FIVE_CALLABLES,
+        rhai_test_worker_limits(2),
+    )
+    .expect("integer-bound Rhai worker");
+    let integer_registry = compile_with_rhai_workers(&integer_fixture, &[integer_worker])
+        .expect("integer-bound Rhai plan");
+    assert!(integer_registry
+        .iter()
+        .next()
+        .expect("integer plan")
+        .rhai_facts()
+        .all(|fact| matches!(
+            fact.fact_type(),
+            CompiledRhaiFactType::Integer {
+                minimum: -2,
+                maximum: 2
+            }
+        )));
 }
 
 #[test]
@@ -4326,18 +4765,27 @@ fn request_shape_matches_platform_canonicalization_and_all_budget_layers() {
         ))
     ));
 
-    for statuses in [json!([200, 200]), json!([302])] {
-        let mut fixture = fixture();
-        fixture.pack_value["spec"]["plan"]["operations"][0]["response"]["accepted_statuses"] =
-            statuses;
-        fixture.refresh_all();
-        assert!(matches!(
-            compile(&fixture),
-            Err(SourcePlanCompileError::Artifact(
-                SourcePlanArtifactError::InvalidSet
-            ))
-        ));
-    }
+    let mut duplicate_status = fixture();
+    duplicate_status.pack_value["spec"]["plan"]["operations"][0]["response"]["accepted_statuses"] =
+        json!([200, 200]);
+    duplicate_status.refresh_all();
+    assert!(matches!(
+        compile(&duplicate_status),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidSet
+        ))
+    ));
+
+    let mut unclassified_redirect = fixture();
+    unclassified_redirect.pack_value["spec"]["plan"]["operations"][0]["response"]
+        ["accepted_statuses"] = json!([200, 302]);
+    unclassified_redirect.refresh_all();
+    assert!(matches!(
+        compile(&unclassified_redirect),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidAcquisition
+        ))
+    ));
 
     let mut auth_bound = fixture();
     auth_bound.pack_value["spec"]["plan"]["credential_operation"]["response"]
@@ -4429,6 +4877,59 @@ fn basic_and_static_bearer_use_bound_credentials_without_oauth_destination() {
 }
 
 #[test]
+fn api_keys_compile_only_into_fixed_noncolliding_credential_slots() {
+    for (auth, expected) in [
+        (
+            json!({"mode":"api_key_header","name":"x-api-key","max_value_bytes":128}),
+            CompiledSourceAuth::ApiKeyHeader,
+        ),
+        (
+            json!({"mode":"api_key_query","name":"api_key","max_value_bytes":128}),
+            CompiledSourceAuth::ApiKeyQuery,
+        ),
+    ] {
+        let mut fixture = fixture();
+        fixture.pack_value["spec"]["plan"]["operations"][0]["auth"] = auth;
+        fixture.pack_value["spec"]["plan"]["credential_destination_slot"] = Value::Null;
+        fixture.pack_value["spec"]["plan"]["credential_operation"] = Value::Null;
+        fixture.pack_value["spec"]["bounds"]["max_credential_exchanges"] = json!(0);
+        fixture.contract_value["spec"]["bounds"]["max_credential_exchanges"] = json!(0);
+        fixture.binding_value["credential_destination"] = Value::Null;
+        fixture.binding_value["limits"]
+            .as_object_mut()
+            .expect("binding limits")
+            .remove("max_token_lifetime_ms");
+        fixture.refresh_all();
+        let registry = compile(&fixture).expect("fixed API-key provider");
+        let operation = registry
+            .iter()
+            .next()
+            .expect("plan")
+            .operations()
+            .next()
+            .expect("operation");
+        assert_eq!(operation.auth(), expected);
+        assert_eq!(
+            operation
+                .api_key()
+                .map(|placement| placement.max_value_bytes()),
+            Some(128)
+        );
+        assert!(!format!("{operation:?}").contains("api_key"));
+    }
+
+    for auth in [
+        json!({"mode":"api_key_header","name":"authorization","max_value_bytes":128}),
+        json!({"mode":"api_key_query","name":"fields","max_value_bytes":128}),
+    ] {
+        let mut fixture = fixture();
+        fixture.pack_value["spec"]["plan"]["operations"][0]["auth"] = auth;
+        fixture.refresh_all();
+        assert!(compile(&fixture).is_err());
+    }
+}
+
+#[test]
 fn rejects_ambiguous_steps_and_auth_bypassing_headers() {
     let mut fixture = fixture();
     fixture.pack_value["spec"]["plan"]["steps"] = json!(["lookup-status", "lookup-status"]);
@@ -4497,6 +4998,57 @@ fn compiles_named_prior_outputs_and_bounded_conditions_to_indexes() {
         second.condition(),
         Some(CompiledStepPredicate::StringEquals(value)) if value.as_ref() == "eligible-path"
     ));
+}
+
+#[test]
+fn presence_condition_direct_input_anchor_and_mixed_step_cardinality_compile_together() {
+    let mut fixture = two_step_fixture();
+    fixture.pack_value["spec"]["output"]["exists"] = json!({"type": "presence", "nullable": false});
+    fixture.contract_value["spec"]["output"]["exists"] =
+        json!({"type": "presence", "nullable": false});
+    fixture.pack_value["spec"]["plan"]["operations"][0]["response"]["presence_outputs"] =
+        json!(["exists"]);
+    fixture.pack_value["spec"]["plan"]["step_conditions"] = json!({
+        "lookup-eligibility": {
+            "predicate": "boolean_equals",
+            "step": "lookup-status",
+            "output": "exists",
+            "value": true
+        }
+    });
+    let second = &mut fixture.pack_value["spec"]["plan"]["operations"][1];
+    second
+        .as_object_mut()
+        .expect("second operation")
+        .remove("relation_selector");
+    second["query"]["subject_id"] = json!({"source": "consultation_input", "name": "subject_id"});
+    second["input_selector"] = json!({"type": "query", "parameter": "subject_id"});
+    let conformance = fixture.pack_value["spec"]["evidence"]["conformance"][0].clone();
+    let second = &mut fixture.pack_value["spec"]["plan"]["operations"][1];
+    second["response"]["max_records"] = json!(1);
+    second["response"]["normalization"] = json!("json_object");
+    second["response"]["schema"] = second["response"]["schema"]["items"].take();
+    second["response"]["cardinality"] = json!({
+        "mechanism": "source_enforced_singleton",
+        "conformance_evidence": conformance
+    });
+    fixture.refresh_all();
+
+    let registry = compile(&fixture).expect("mixed cardinality direct-input flow");
+    let plan = registry.iter().next().expect("plan");
+    let operations = plan.operations().collect::<Vec<_>>();
+    assert_eq!(operations[0].max_source_records(), 2);
+    assert_eq!(operations[1].max_source_records(), 1);
+    assert_eq!(
+        operations[1].selector().source(),
+        CompiledSelectorSource::ConsultationInput { input_index: 0 }
+    );
+    let second = plan
+        .compiled_steps()
+        .nth(1)
+        .expect("conditional second step");
+    assert!(second.condition_uses_presence());
+    assert_eq!(second.condition_output_slot_index(), None);
 }
 
 #[test]
@@ -4768,7 +5320,7 @@ fn json_body_bounds_account_for_six_byte_control_character_escapes() {
     };
     assert_eq!(json_string_max_bytes(1_000), Ok(6_002));
     assert_eq!(
-        body_template_max_bytes(&body, &BTreeMap::new(), &BTreeMap::new()),
+        body_template_max_bytes(&body, &BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new(),),
         Ok(6_002)
     );
 }
@@ -5174,9 +5726,11 @@ fn snapshot_plan_compiles_without_a_live_transport_capability() {
     assert_eq!(snapshot.consultation_live_destinations(), 0);
     assert!(snapshot.immutable_generation());
     assert!(snapshot.digest_bound_active_pointer());
-    assert_eq!(snapshot.key_input(), "subject_id");
-    assert_eq!(snapshot.key_physical_field(), "subject_key");
-    assert!(snapshot.key_uses_utf8_binary_equality());
+    assert_eq!(
+        snapshot.keys().collect::<Vec<_>>(),
+        vec![("subject_id", "subject_key")]
+    );
+    assert!(snapshot.keys_use_utf8_binary_equality());
     assert_eq!(
         snapshot.projection().collect::<Vec<_>>(),
         [("registration_status", "registration_status_text")]
@@ -5248,11 +5802,11 @@ fn snapshot_exact_mapping_is_closed_injective_and_hash_committed() {
         let mut fixture = snapshot_fixture();
         match pointer {
             "key_field" => {
-                fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["key"]
-                    ["physical_field"] = mutation;
+                fixture.binding_value["materialization"]["mapping"]["key"]["physical_field"] =
+                    mutation;
             }
             "projection" => {
-                fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]
+                fixture.binding_value["materialization"]["mapping"]["projection"]
                     ["registration_status"] = mutation;
             }
             _ => unreachable!("closed test mutation"),
@@ -5263,17 +5817,17 @@ fn snapshot_exact_mapping_is_closed_injective_and_hash_committed() {
 
     for mutate in [
         |fixture: &mut Fixture| {
-            fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]
+            fixture.binding_value["materialization"]["mapping"]["projection"]
                 .as_object_mut()
                 .expect("projection")
                 .remove("registration_status");
         },
         |fixture: &mut Fixture| {
-            fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]["unreviewed"] =
+            fixture.binding_value["materialization"]["mapping"]["projection"]["unreviewed"] =
                 json!("unreviewed_physical");
         },
         |fixture: &mut Fixture| {
-            fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]
+            fixture.binding_value["materialization"]["mapping"]["projection"]
                 ["registration_status"] = json!("subject_key");
         },
     ] {
@@ -5284,7 +5838,7 @@ fn snapshot_exact_mapping_is_closed_injective_and_hash_committed() {
             compile(&fixture),
             Err(SourcePlanCompileError::Artifact(
                 SourcePlanArtifactError::InvalidAcquisition
-            ))
+            )) | Err(SourcePlanCompileError::ContractMismatch)
         ));
     }
 
@@ -5292,30 +5846,31 @@ fn snapshot_exact_mapping_is_closed_injective_and_hash_committed() {
         (
             "input",
             json!("different_input"),
-            SourcePlanArtifactError::InvalidAcquisition,
+            Err(SourcePlanCompileError::ContractMismatch),
         ),
         (
             "physical_type",
             json!("unicode_casefold"),
-            SourcePlanArtifactError::ClosedSchema,
+            Err(SourcePlanCompileError::Artifact(
+                SourcePlanArtifactError::ClosedSchema,
+            )),
         ),
         (
             "comparison",
             json!("text_equality"),
-            SourcePlanArtifactError::ClosedSchema,
+            Err(SourcePlanCompileError::Artifact(
+                SourcePlanArtifactError::ClosedSchema,
+            )),
         ),
     ] {
         let mut fixture = snapshot_fixture();
-        fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["key"][member] = value;
+        fixture.binding_value["materialization"]["mapping"]["key"][member] = value;
         fixture.refresh_all();
-        assert!(matches!(
-            compile(&fixture),
-            Err(SourcePlanCompileError::Artifact(error)) if error == expected
-        ));
+        assert_eq!(compile(&fixture).map(|_| ()), expected);
     }
 
     let mut unknown = snapshot_fixture();
-    unknown.pack_value["spec"]["plan"]["snapshot"]["mapping"]["key"]["collation"] = json!("binary");
+    unknown.binding_value["materialization"]["mapping"]["key"]["collation"] = json!("binary");
     unknown.refresh_all();
     assert!(matches!(
         compile(&unknown),
@@ -5338,9 +5893,9 @@ proptest! {
         prop_assume!(projected_field != "registration_status_text");
         let baseline = runtime_digests(&snapshot_fixture());
         let mut fixture = snapshot_fixture();
-        fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["key"]["physical_field"] =
+        fixture.binding_value["materialization"]["mapping"]["key"]["physical_field"] =
             json!(key_field);
-        fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]
+        fixture.binding_value["materialization"]["mapping"]["projection"]
             ["registration_status"] = json!(projected_field);
         fixture.refresh_all();
         let mutated = runtime_digests(&fixture);
@@ -5380,9 +5935,9 @@ fn snapshot_exact_compiles_reviewed_provenance_extraction() {
         "source_observed_at",
         "source_revision"
     ]);
-    fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]["source_observed_at"] =
+    fixture.binding_value["materialization"]["mapping"]["projection"]["source_observed_at"] =
         json!("observed_at_text");
-    fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]["source_revision"] =
+    fixture.binding_value["materialization"]["mapping"]["projection"]["source_revision"] =
         json!("revision_text");
     fixture.refresh_all();
 
@@ -5403,7 +5958,7 @@ fn snapshot_exact_compiles_reviewed_provenance_extraction() {
         json!(32)
     );
 
-    fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]["source_revision"] =
+    fixture.binding_value["materialization"]["mapping"]["projection"]["source_revision"] =
         json!("observed_at_text");
     fixture.refresh_all();
     assert!(matches!(

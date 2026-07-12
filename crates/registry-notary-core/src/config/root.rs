@@ -202,6 +202,24 @@ impl StandaloneRegistryNotaryConfig {
         {
             return Err(EvidenceConfigError::InvalidPurpose);
         }
+        if self.evidence.variables.len() > MAX_REQUEST_VARIABLES_V1 {
+            return Err(EvidenceConfigError::InvalidRequestVariableConfig {
+                reason: format!(
+                    "at most {MAX_REQUEST_VARIABLES_V1} request variables may be declared"
+                ),
+            });
+        }
+        for (name, variable) in &self.evidence.variables {
+            if !is_request_variable_name(name)
+                || variable.from != format!("request.variables.{name}")
+                || variable.value_type != RequestVariableType::Date
+            {
+                return Err(EvidenceConfigError::InvalidRequestVariableConfig {
+                    reason: "v1 variables must use a stable name, the exact matching request.variables path, and type date"
+                        .to_string(),
+                });
+            }
+        }
         self.credential_status.validate()?;
         for (connection_id, connection) in &self.evidence.source_connections {
             if connection.max_in_flight < 1 {

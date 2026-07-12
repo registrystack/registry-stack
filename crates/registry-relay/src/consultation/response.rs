@@ -5,19 +5,24 @@
 //! returns a publication grant, the complete candidate response remains in a
 //! zeroizing owner and cannot be converted into an HTTP body.
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::io::{self, Write};
 
-use registry_platform_httputil::destination::json::{ProjectedJsonRecord, ProjectedJsonScalar};
+use registry_platform_httputil::destination::json::ProjectedJsonScalar;
+use serde::de::Error as _;
 use serde::ser::{SerializeMap, Serializer};
-use serde::Serialize;
+use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
 use crate::source_backend::{PublishedSnapshotHandle, SnapshotExactRecord};
-use crate::source_plan::runtime_profile::CompiledRuntimeProfile;
+use crate::source_plan::runtime_profile::{
+    CompiledOutputShape, CompiledRuntimeProfile, CompiledSourceObservedAtContract,
+    CompiledSourceRevisionContract,
+};
 use crate::state_plane::ConsultationPublicationGrant;
 
 use super::{AcquisitionClass, ConsultationId, ConsultationOutcome, NotaryEvaluationId};
@@ -41,6 +46,188 @@ pub(crate) enum ConsultationResponseError {
 #[must_use = "candidate consultation output requires a durable publication grant"]
 pub(crate) struct PublishableConsultationResponse {
     bytes: Zeroizing<Vec<u8>>,
+    terminal: BatchTerminalPayload,
+}
+
+/// Closed, evaluation-id-free terminal result retained for an authenticated
+/// Notary batch child. It is constructed before either the first response or
+/// a replay response is serialized, so both paths use the same renderer.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct BatchTerminalPayload {
+    schema: BatchTerminalSchema,
+    consultation_id: String,
+    outcome: BatchTerminalOutcome,
+    data: Option<BTreeMap<String, BatchTerminalScalar>>,
+    profile: BatchTerminalProfile,
+    provenance: BatchTerminalProvenance,
+}
+
+#[derive(Serialize, Deserialize)]
+enum BatchTerminalSchema {
+    #[serde(rename = "registry.relay.batch-terminal/v1")]
+    V1,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum BatchTerminalOutcome {
+    Match,
+    NoMatch,
+    Ambiguous,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BatchTerminalProfile {
+    id: String,
+    version: String,
+    contract_hash: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BatchTerminalProvenance {
+    relay_acquired_at: String,
+    source_observed_at: Option<String>,
+    source_revision: Option<String>,
+    acquisition_class: String,
+    integration_pack: BatchTerminalIntegrationPack,
+    policy_id: String,
+    policy_hash: String,
+    consent: BatchTerminalConsent,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot_generation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot_published_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BatchTerminalIntegrationPack {
+    id: String,
+    version: String,
+    hash: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BatchTerminalConsent {
+    outcome: String,
+    verifier_id: Option<String>,
+    verifier_revision: Option<String>,
+    checked_at: Option<String>,
+    expires_at: Option<String>,
+    revocation_status: String,
+}
+
+enum BatchTerminalScalar {
+    Null,
+    String(Zeroizing<String>),
+    Boolean(bool),
+    Integer(i64),
+}
+
+impl Serialize for BatchTerminalScalar {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Null => serializer.serialize_none(),
+            Self::String(value) => serializer.serialize_str(value),
+            Self::Boolean(value) => serializer.serialize_bool(*value),
+            Self::Integer(value) => serializer.serialize_i64(*value),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BatchTerminalScalar {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::Null => Ok(Self::Null),
+            serde_json::Value::String(value) => Ok(Self::String(Zeroizing::new(value))),
+            serde_json::Value::Bool(value) => Ok(Self::Boolean(value)),
+            serde_json::Value::Number(value) => value
+                .as_i64()
+                .map(Self::Integer)
+                .ok_or_else(|| D::Error::custom("batch terminal scalar is not a signed integer")),
+            _ => Err(D::Error::custom("batch terminal value is not a scalar")),
+        }
+    }
+}
+
+impl fmt::Debug for BatchTerminalPayload {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BatchTerminalPayload([REDACTED])")
+    }
+}
+
+/// Closed typed fact map produced only by a capability decoder.
+pub(super) struct ValidatedFactMap {
+    fields: Box<[(Box<str>, ProjectedJsonScalar)]>,
+}
+
+impl ValidatedFactMap {
+    pub(super) fn try_new(
+        profile: &CompiledRuntimeProfile,
+        mut fields: Vec<(Box<str>, ProjectedJsonScalar)>,
+    ) -> Result<Self, ConsultationResponseError> {
+        fields.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+        if fields
+            .windows(2)
+            .any(|pair| pair[0].0.as_ref() == pair[1].0.as_ref())
+            || fields.len() != profile.output().len()
+        {
+            return Err(ConsultationResponseError::Serialization);
+        }
+        for (name, value) in &fields {
+            let output = profile
+                .output_field(name)
+                .ok_or(ConsultationResponseError::Serialization)?;
+            let valid = match (output.shape(), value) {
+                (
+                    CompiledOutputShape::String { max_bytes, .. },
+                    ProjectedJsonScalar::String(value),
+                ) => value.as_str().len() <= usize::try_from(max_bytes).unwrap_or(usize::MAX),
+                (CompiledOutputShape::Boolean { .. }, ProjectedJsonScalar::Boolean(_))
+                | (CompiledOutputShape::Presence, ProjectedJsonScalar::Boolean(_)) => true,
+                (
+                    CompiledOutputShape::Integer {
+                        minimum, maximum, ..
+                    },
+                    ProjectedJsonScalar::Integer(value),
+                ) => (minimum..=maximum).contains(value),
+                (CompiledOutputShape::Date { .. }, ProjectedJsonScalar::String(value)) => {
+                    valid_full_date(value)
+                }
+                (
+                    CompiledOutputShape::String { nullable: true, .. }
+                    | CompiledOutputShape::Boolean { nullable: true }
+                    | CompiledOutputShape::Integer { nullable: true, .. }
+                    | CompiledOutputShape::Date { nullable: true },
+                    ProjectedJsonScalar::Null,
+                ) => true,
+                _ => false,
+            };
+            if !valid {
+                return Err(ConsultationResponseError::Serialization);
+            }
+        }
+        Ok(Self {
+            fields: fields.into_boxed_slice(),
+        })
+    }
+
+    pub(super) fn fields(&self) -> impl ExactSizeIterator<Item = (&str, &ProjectedJsonScalar)> {
+        self.fields
+            .iter()
+            .map(|(name, value)| (name.as_ref(), value))
+    }
 }
 
 impl PublishableConsultationResponse {
@@ -50,7 +237,7 @@ impl PublishableConsultationResponse {
         notary_evaluation_id: Option<NotaryEvaluationId>,
         profile: &CompiledRuntimeProfile,
         outcome: ConsultationOutcome,
-        record: Option<&ProjectedJsonRecord>,
+        facts: Option<&ValidatedFactMap>,
         relay_acquired_at_unix_ms: i64,
     ) -> Result<Self, ConsultationResponseError> {
         Self::serialize_validated_live_result(
@@ -58,7 +245,7 @@ impl PublishableConsultationResponse {
             notary_evaluation_id,
             profile,
             outcome,
-            record.map(ProjectedRecord::Platform),
+            facts.map(ProjectedRecord::Facts),
             relay_acquired_at_unix_ms,
         )
     }
@@ -78,7 +265,15 @@ impl PublishableConsultationResponse {
         if profile.footprint().acquisition_class() != AcquisitionClass::MaterializedSnapshot {
             return Err(ConsultationResponseError::Serialization);
         }
-        let output_fields = profile.output().map(|field| field.name()).collect();
+        let output_fields = profile
+            .output()
+            .map(|field| {
+                (
+                    field.name(),
+                    matches!(field.shape(), CompiledOutputShape::Presence),
+                )
+            })
+            .collect();
         Self::serialize_validated_result(
             consultation_id,
             notary_evaluation_id,
@@ -132,9 +327,6 @@ impl PublishableConsultationResponse {
         let source_observed_at = provenance.source_observed_at()?;
         let snapshot_generation_id = provenance.snapshot_generation_id();
         let snapshot_published_at = provenance.snapshot_published_at()?;
-        let consultation_id = consultation_id.to_canonical_string();
-        let notary_evaluation_id =
-            notary_evaluation_id.map(NotaryEvaluationId::to_canonical_string);
         let profile_identity = profile.profile();
         let integration_pack = profile.integration_pack();
         let policy = profile.authorization().policy();
@@ -143,58 +335,110 @@ impl PublishableConsultationResponse {
             (ConsultationOutcome::NoMatch | ConsultationOutcome::Ambiguous, None) => None,
             _ => return Err(ConsultationResponseError::Serialization),
         };
-        let envelope = ConsultationResult {
-            schema: "registry.relay.consultation-result.v1",
-            consultation_id: &consultation_id,
-            notary_evaluation_id: notary_evaluation_id.as_deref(),
-            profile: ResponseProfile {
-                id: profile_identity.id().as_str(),
+        let terminal = BatchTerminalPayload {
+            schema: BatchTerminalSchema::V1,
+            consultation_id: consultation_id.to_canonical_string(),
+            outcome: BatchTerminalOutcome::from_consultation(outcome),
+            data: data
+                .map(ProjectedRecord::into_terminal_fields)
+                .transpose()?,
+            profile: BatchTerminalProfile {
+                id: profile_identity.id().as_str().to_owned(),
                 version: profile_identity.version().to_string(),
-                contract_hash: profile_identity.contract_hash().as_str(),
+                contract_hash: profile_identity.contract_hash().as_str().to_owned(),
             },
-            outcome: outcome_str(outcome),
-            data,
-            provenance: ResponseProvenance {
-                relay_acquired_at: &relay_acquired_at,
-                source_observed_at: source_observed_at.as_deref(),
-                source_revision: provenance.source_revision(),
-                acquisition_class: acquisition_class_str(profile.footprint().acquisition_class()),
-                integration_pack: ResponseIntegrationPack {
-                    id: integration_pack.id().as_str(),
+            provenance: BatchTerminalProvenance {
+                relay_acquired_at,
+                source_observed_at,
+                source_revision: provenance.source_revision().map(str::to_owned),
+                acquisition_class: acquisition_class_str(profile.footprint().acquisition_class())
+                    .to_owned(),
+                integration_pack: BatchTerminalIntegrationPack {
+                    id: integration_pack.id().as_str().to_owned(),
                     version: integration_pack.version().to_string(),
-                    hash: integration_pack.hash().as_str(),
+                    hash: integration_pack.hash().as_str().to_owned(),
                 },
-                policy_id: policy.id().as_str(),
-                policy_hash: policy.hash().as_str(),
-                consent: ResponseConsent {
-                    outcome: "not_required",
+                policy_id: policy.id().as_str().to_owned(),
+                policy_hash: policy.hash().as_str().to_owned(),
+                consent: BatchTerminalConsent {
+                    outcome: "not_required".to_owned(),
                     verifier_id: None,
                     verifier_revision: None,
                     checked_at: None,
                     expires_at: None,
-                    revocation_status: "not_applicable",
+                    revocation_status: "not_applicable".to_owned(),
                 },
-                snapshot_generation_id: snapshot_generation_id.as_deref(),
-                snapshot_published_at: snapshot_published_at.as_deref(),
+                snapshot_generation_id,
+                snapshot_published_at,
             },
         };
         let configured_limit =
             usize::try_from(profile.effective_limits().max_public_response_bytes())
                 .map_err(|_| ConsultationResponseError::ResponseTooLarge)?;
         let limit = configured_limit.min(MAX_CONSULTATION_RESPONSE_BYTES);
-        if limit == 0 {
-            return Err(ConsultationResponseError::ResponseTooLarge);
+        let bytes = terminal.render(notary_evaluation_id, limit)?;
+        Ok(Self { bytes, terminal })
+    }
+
+    pub(super) fn batch_terminal_json(
+        &self,
+    ) -> Result<Zeroizing<String>, ConsultationResponseError> {
+        serde_json::to_string(&self.terminal)
+            .map(Zeroizing::new)
+            .map_err(|_| ConsultationResponseError::Serialization)
+    }
+
+    pub(super) fn replay_http_body(
+        persisted: Zeroizing<String>,
+        expected_consultation_id: &str,
+        profile: &CompiledRuntimeProfile,
+        notary_evaluation_id: Option<NotaryEvaluationId>,
+    ) -> Result<Vec<u8>, ConsultationResponseError> {
+        let terminal = BatchTerminalPayload::from_persisted(persisted.as_str())?;
+        if terminal.consultation_id != expected_consultation_id {
+            return Err(ConsultationResponseError::Serialization);
         }
-        let mut bytes = Zeroizing::new(Vec::with_capacity(limit));
-        let mut writer = BoundedResponseWriter::new(&mut bytes, limit);
-        if serde_json::to_writer(&mut writer, &envelope).is_err() {
-            return Err(if writer.exceeded {
-                ConsultationResponseError::ResponseTooLarge
-            } else {
-                ConsultationResponseError::Serialization
-            });
-        }
-        Ok(Self { bytes })
+        let mut bytes = terminal.render_replay(profile, notary_evaluation_id)?;
+        Ok(std::mem::take(bytes.as_mut()))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn batch_no_match_for_state_test(
+        consultation_id: ConsultationId,
+        notary_evaluation_id: NotaryEvaluationId,
+        profile: &CompiledRuntimeProfile,
+        relay_acquired_at_unix_ms: i64,
+    ) -> Result<Self, ConsultationResponseError> {
+        Self::from_validated_live_result(
+            consultation_id,
+            Some(notary_evaluation_id),
+            profile,
+            ConsultationOutcome::NoMatch,
+            None,
+            relay_acquired_at_unix_ms,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn batch_terminal_json_for_state_test(
+        &self,
+    ) -> Result<Zeroizing<String>, ConsultationResponseError> {
+        self.batch_terminal_json()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replay_http_body_for_state_test(
+        persisted: Zeroizing<String>,
+        expected_consultation_id: &str,
+        profile: &CompiledRuntimeProfile,
+        notary_evaluation_id: NotaryEvaluationId,
+    ) -> Result<Vec<u8>, ConsultationResponseError> {
+        Self::replay_http_body(
+            persisted,
+            expected_consultation_id,
+            profile,
+            Some(notary_evaluation_id),
+        )
     }
 
     /// Declassify the already validated public bytes only while consuming the
@@ -206,6 +450,229 @@ impl PublishableConsultationResponse {
     #[cfg(test)]
     fn bytes_for_test(&self) -> &[u8] {
         &self.bytes
+    }
+}
+
+impl BatchTerminalOutcome {
+    const fn from_consultation(outcome: ConsultationOutcome) -> Self {
+        match outcome {
+            ConsultationOutcome::Match => Self::Match,
+            ConsultationOutcome::NoMatch => Self::NoMatch,
+            ConsultationOutcome::Ambiguous => Self::Ambiguous,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Match => "match",
+            Self::NoMatch => "no_match",
+            Self::Ambiguous => "ambiguous",
+        }
+    }
+}
+
+impl BatchTerminalPayload {
+    pub(super) fn from_persisted(value: &str) -> Result<Self, ConsultationResponseError> {
+        let terminal: Self =
+            serde_json::from_str(value).map_err(|_| ConsultationResponseError::Serialization)?;
+        let canonical_id = ulid::Ulid::from_string(&terminal.consultation_id)
+            .ok()
+            .filter(|id| id.to_string() == terminal.consultation_id)
+            .ok_or(ConsultationResponseError::Serialization)?;
+        let _ = canonical_id;
+        match (terminal.outcome, terminal.data.as_ref()) {
+            (BatchTerminalOutcome::Match, Some(data)) if !data.is_empty() => {}
+            (BatchTerminalOutcome::NoMatch | BatchTerminalOutcome::Ambiguous, None) => {}
+            _ => return Err(ConsultationResponseError::Serialization),
+        }
+        Ok(terminal)
+    }
+
+    pub(super) fn render_replay(
+        &self,
+        profile: &CompiledRuntimeProfile,
+        notary_evaluation_id: Option<NotaryEvaluationId>,
+    ) -> Result<Zeroizing<Vec<u8>>, ConsultationResponseError> {
+        self.validate_profile(profile)?;
+        let limit = usize::try_from(profile.effective_limits().max_public_response_bytes())
+            .map_err(|_| ConsultationResponseError::ResponseTooLarge)?
+            .min(MAX_CONSULTATION_RESPONSE_BYTES);
+        self.render(notary_evaluation_id, limit)
+    }
+
+    fn validate_profile(
+        &self,
+        profile: &CompiledRuntimeProfile,
+    ) -> Result<(), ConsultationResponseError> {
+        if self.profile.id != profile.profile().id().as_str()
+            || self.profile.version != profile.profile().version().to_string()
+            || self.profile.contract_hash != profile.profile().contract_hash().as_str()
+            || self.provenance.acquisition_class
+                != acquisition_class_str(profile.footprint().acquisition_class())
+            || self.provenance.integration_pack.id != profile.integration_pack().id().as_str()
+            || self.provenance.integration_pack.version
+                != profile.integration_pack().version().to_string()
+            || self.provenance.integration_pack.hash != profile.integration_pack().hash().as_str()
+            || self.provenance.policy_id != profile.authorization().policy().id().as_str()
+            || self.provenance.policy_hash != profile.authorization().policy().hash().as_str()
+            || self.provenance.consent.outcome != "not_required"
+            || self.provenance.consent.revocation_status != "not_applicable"
+            || self.provenance.consent.verifier_id.is_some()
+            || self.provenance.consent.verifier_revision.is_some()
+            || self.provenance.consent.checked_at.is_some()
+            || self.provenance.consent.expires_at.is_some()
+            || !valid_rfc3339_milliseconds(&self.provenance.relay_acquired_at)
+        {
+            return Err(ConsultationResponseError::Serialization);
+        }
+        let provenance = profile.acquisition_provenance();
+        let source_observed_valid = match provenance.source_observed_at() {
+            CompiledSourceObservedAtContract::Absent => {
+                self.provenance.source_observed_at.is_none()
+            }
+            CompiledSourceObservedAtContract::AcquiredRfc3339 { .. } => self
+                .provenance
+                .source_observed_at
+                .as_deref()
+                .is_some_and(valid_rfc3339_milliseconds),
+        };
+        let source_revision_valid = match provenance.source_revision() {
+            CompiledSourceRevisionContract::Absent => self.provenance.source_revision.is_none(),
+            CompiledSourceRevisionContract::AcquiredString { max_bytes, .. } => self
+                .provenance
+                .source_revision
+                .as_deref()
+                .is_some_and(|value| !value.is_empty() && value.len() <= usize::from(*max_bytes)),
+        };
+        let snapshot_generation_valid = if provenance.snapshot_generation_required() {
+            self.provenance
+                .snapshot_generation_id
+                .as_deref()
+                .and_then(|value| ulid::Ulid::from_string(value).ok())
+                .is_some_and(|id| {
+                    id.to_string()
+                        == self
+                            .provenance
+                            .snapshot_generation_id
+                            .as_deref()
+                            .unwrap_or_default()
+                })
+        } else {
+            self.provenance.snapshot_generation_id.is_none()
+        };
+        let snapshot_published_valid = if provenance.snapshot_published_at_required() {
+            self.provenance
+                .snapshot_published_at
+                .as_deref()
+                .is_some_and(valid_rfc3339_milliseconds)
+        } else {
+            self.provenance.snapshot_published_at.is_none()
+        };
+        if !source_observed_valid
+            || !source_revision_valid
+            || !snapshot_generation_valid
+            || !snapshot_published_valid
+        {
+            return Err(ConsultationResponseError::Serialization);
+        }
+        if let Some(data) = &self.data {
+            if data.len() != profile.output().len() {
+                return Err(ConsultationResponseError::Serialization);
+            }
+            for (name, value) in data {
+                let field = profile
+                    .output_field(name)
+                    .ok_or(ConsultationResponseError::Serialization)?;
+                let valid = match (field.shape(), value) {
+                    (
+                        CompiledOutputShape::String { max_bytes, .. },
+                        BatchTerminalScalar::String(value),
+                    ) => value.len() <= usize::try_from(max_bytes).unwrap_or(usize::MAX),
+                    (CompiledOutputShape::Date { .. }, BatchTerminalScalar::String(value)) => {
+                        valid_full_date(value)
+                    }
+                    (
+                        CompiledOutputShape::Boolean { .. } | CompiledOutputShape::Presence,
+                        BatchTerminalScalar::Boolean(_),
+                    ) => true,
+                    (
+                        CompiledOutputShape::Integer {
+                            minimum, maximum, ..
+                        },
+                        BatchTerminalScalar::Integer(value),
+                    ) => (minimum..=maximum).contains(value),
+                    (
+                        CompiledOutputShape::String { nullable: true, .. }
+                        | CompiledOutputShape::Boolean { nullable: true }
+                        | CompiledOutputShape::Integer { nullable: true, .. }
+                        | CompiledOutputShape::Date { nullable: true },
+                        BatchTerminalScalar::Null,
+                    ) => true,
+                    _ => false,
+                };
+                if !valid {
+                    return Err(ConsultationResponseError::Serialization);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn render(
+        &self,
+        notary_evaluation_id: Option<NotaryEvaluationId>,
+        limit: usize,
+    ) -> Result<Zeroizing<Vec<u8>>, ConsultationResponseError> {
+        if limit == 0 || limit > MAX_CONSULTATION_RESPONSE_BYTES {
+            return Err(ConsultationResponseError::ResponseTooLarge);
+        }
+        let notary_evaluation_id =
+            notary_evaluation_id.map(NotaryEvaluationId::to_canonical_string);
+        let envelope = ConsultationResult {
+            schema: "registry.relay.consultation-result.v1",
+            consultation_id: &self.consultation_id,
+            notary_evaluation_id: notary_evaluation_id.as_deref(),
+            profile: ResponseProfile {
+                id: &self.profile.id,
+                version: &self.profile.version,
+                contract_hash: &self.profile.contract_hash,
+            },
+            outcome: self.outcome.as_str(),
+            data: self.data.as_ref(),
+            provenance: ResponseProvenance {
+                relay_acquired_at: &self.provenance.relay_acquired_at,
+                source_observed_at: self.provenance.source_observed_at.as_deref(),
+                source_revision: self.provenance.source_revision.as_deref(),
+                acquisition_class: &self.provenance.acquisition_class,
+                integration_pack: ResponseIntegrationPack {
+                    id: &self.provenance.integration_pack.id,
+                    version: &self.provenance.integration_pack.version,
+                    hash: &self.provenance.integration_pack.hash,
+                },
+                policy_id: &self.provenance.policy_id,
+                policy_hash: &self.provenance.policy_hash,
+                consent: ResponseConsent {
+                    outcome: &self.provenance.consent.outcome,
+                    verifier_id: self.provenance.consent.verifier_id.as_deref(),
+                    verifier_revision: self.provenance.consent.verifier_revision.as_deref(),
+                    checked_at: self.provenance.consent.checked_at.as_deref(),
+                    expires_at: self.provenance.consent.expires_at.as_deref(),
+                    revocation_status: &self.provenance.consent.revocation_status,
+                },
+                snapshot_generation_id: self.provenance.snapshot_generation_id.as_deref(),
+                snapshot_published_at: self.provenance.snapshot_published_at.as_deref(),
+            },
+        };
+        let mut bytes = Zeroizing::new(Vec::with_capacity(limit));
+        let mut writer = BoundedResponseWriter::new(&mut bytes, limit);
+        if serde_json::to_writer(&mut writer, &envelope).is_err() {
+            return Err(if writer.exceeded {
+                ConsultationResponseError::ResponseTooLarge
+            } else {
+                ConsultationResponseError::Serialization
+            });
+        }
+        Ok(bytes)
     }
 }
 
@@ -226,14 +693,14 @@ struct ConsultationResult<'a> {
     notary_evaluation_id: Option<&'a str>,
     profile: ResponseProfile<'a>,
     outcome: &'static str,
-    data: Option<ProjectedRecord<'a>>,
+    data: Option<&'a BTreeMap<String, BatchTerminalScalar>>,
     provenance: ResponseProvenance<'a>,
 }
 
 #[derive(Serialize)]
 struct ResponseProfile<'a> {
     id: &'a str,
-    version: String,
+    version: &'a str,
     contract_hash: &'a str,
 }
 
@@ -242,7 +709,7 @@ struct ResponseProvenance<'a> {
     relay_acquired_at: &'a str,
     source_observed_at: Option<&'a str>,
     source_revision: Option<&'a str>,
-    acquisition_class: &'static str,
+    acquisition_class: &'a str,
     integration_pack: ResponseIntegrationPack<'a>,
     policy_id: &'a str,
     policy_hash: &'a str,
@@ -256,28 +723,108 @@ struct ResponseProvenance<'a> {
 #[derive(Serialize)]
 struct ResponseIntegrationPack<'a> {
     id: &'a str,
-    version: String,
+    version: &'a str,
     hash: &'a str,
 }
 
 #[derive(Serialize)]
 struct ResponseConsent<'a> {
-    outcome: &'static str,
+    outcome: &'a str,
     verifier_id: Option<&'a str>,
     verifier_revision: Option<&'a str>,
     checked_at: Option<&'a str>,
     expires_at: Option<&'a str>,
-    revocation_status: &'static str,
+    revocation_status: &'a str,
 }
 
 enum ProjectedRecord<'a> {
-    Platform(&'a ProjectedJsonRecord),
+    Facts(&'a ValidatedFactMap),
     Snapshot {
         fields: &'a serde_json::Map<String, serde_json::Value>,
-        output_fields: Vec<&'a str>,
+        output_fields: Vec<(&'a str, bool)>,
     },
     #[cfg(test)]
     Test(&'a [(&'a str, TestProjectedScalar<'a>)]),
+}
+
+impl ProjectedRecord<'_> {
+    fn into_terminal_fields(
+        self,
+    ) -> Result<BTreeMap<String, BatchTerminalScalar>, ConsultationResponseError> {
+        let mut output = BTreeMap::new();
+        match self {
+            Self::Facts(facts) => {
+                for (name, value) in facts.fields() {
+                    let value = match value {
+                        ProjectedJsonScalar::Null => BatchTerminalScalar::Null,
+                        ProjectedJsonScalar::String(value) => {
+                            BatchTerminalScalar::String(Zeroizing::new(value.as_str().to_owned()))
+                        }
+                        ProjectedJsonScalar::Boolean(value) => BatchTerminalScalar::Boolean(*value),
+                        ProjectedJsonScalar::Integer(value) => BatchTerminalScalar::Integer(*value),
+                        ProjectedJsonScalar::Number(_) => {
+                            return Err(ConsultationResponseError::Serialization);
+                        }
+                    };
+                    output.insert(name.to_owned(), value);
+                }
+            }
+            Self::Snapshot {
+                fields,
+                output_fields,
+            } => {
+                for (name, presence) in output_fields {
+                    let value = if presence {
+                        BatchTerminalScalar::Boolean(true)
+                    } else {
+                        terminal_scalar_from_json(
+                            fields
+                                .get(name)
+                                .ok_or(ConsultationResponseError::Serialization)?,
+                        )?
+                    };
+                    output.insert(name.to_owned(), value);
+                }
+            }
+            #[cfg(test)]
+            Self::Test(fields) => {
+                for (name, value) in fields {
+                    let value = match value {
+                        TestProjectedScalar::Null => BatchTerminalScalar::Null,
+                        TestProjectedScalar::String(value) => {
+                            BatchTerminalScalar::String(Zeroizing::new((*value).to_owned()))
+                        }
+                        TestProjectedScalar::Boolean(value) => BatchTerminalScalar::Boolean(*value),
+                        TestProjectedScalar::Integer(value) => BatchTerminalScalar::Integer(*value),
+                        TestProjectedScalar::Number(_) => {
+                            return Err(ConsultationResponseError::Serialization);
+                        }
+                    };
+                    output.insert((*name).to_owned(), value);
+                }
+            }
+        }
+        Ok(output)
+    }
+}
+
+fn terminal_scalar_from_json(
+    value: &serde_json::Value,
+) -> Result<BatchTerminalScalar, ConsultationResponseError> {
+    match value {
+        serde_json::Value::Null => Ok(BatchTerminalScalar::Null),
+        serde_json::Value::String(value) => {
+            Ok(BatchTerminalScalar::String(Zeroizing::new(value.clone())))
+        }
+        serde_json::Value::Bool(value) => Ok(BatchTerminalScalar::Boolean(*value)),
+        serde_json::Value::Number(value) => value
+            .as_i64()
+            .map(BatchTerminalScalar::Integer)
+            .ok_or(ConsultationResponseError::Serialization),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            Err(ConsultationResponseError::Serialization)
+        }
+    }
 }
 
 impl Serialize for ProjectedRecord<'_> {
@@ -286,10 +833,10 @@ impl Serialize for ProjectedRecord<'_> {
         S: Serializer,
     {
         match self {
-            Self::Platform(record) => {
-                let mut map = serializer.serialize_map(Some(record.len()))?;
-                for field in record.fields() {
-                    map.serialize_entry(field.name(), &ProjectedScalar(field.value()))?;
+            Self::Facts(facts) => {
+                let mut map = serializer.serialize_map(Some(facts.fields.len()))?;
+                for (name, value) in facts.fields() {
+                    map.serialize_entry(name, &ProjectedScalar(value))?;
                 }
                 map.end()
             }
@@ -298,11 +845,15 @@ impl Serialize for ProjectedRecord<'_> {
                 output_fields,
             } => {
                 let mut map = serializer.serialize_map(Some(output_fields.len()))?;
-                for name in output_fields {
-                    let value = fields.get(*name).ok_or_else(|| {
-                        serde::ser::Error::custom("snapshot output field is unavailable")
-                    })?;
-                    map.serialize_entry(*name, value)?;
+                for (name, presence) in output_fields {
+                    if *presence {
+                        map.serialize_entry(*name, &true)?;
+                    } else {
+                        let value = fields.get(*name).ok_or_else(|| {
+                            serde::ser::Error::custom("snapshot output field is unavailable")
+                        })?;
+                        map.serialize_entry(*name, value)?;
+                    }
                 }
                 map.end()
             }
@@ -460,6 +1011,36 @@ fn rfc3339_milliseconds(unix_ms: i64) -> Result<String, ConsultationResponseErro
         .map_err(|_| ConsultationResponseError::InvalidTime)
 }
 
+fn valid_full_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes
+            .iter()
+            .enumerate()
+            .any(|(index, byte)| !matches!(index, 4 | 7) && !byte.is_ascii_digit())
+    {
+        return false;
+    }
+    let number = |range: std::ops::Range<usize>| value[range].parse::<u16>().ok();
+    let (Some(year), Some(month), Some(day)) = (number(0..4), number(5..7), number(8..10)) else {
+        return false;
+    };
+    let Ok(month) = time::Month::try_from(u8::try_from(month).unwrap_or(0)) else {
+        return false;
+    };
+    time::Date::from_calendar_date(i32::from(year), month, u8::try_from(day).unwrap_or(0)).is_ok()
+}
+
+fn valid_rfc3339_milliseconds(value: &str) -> bool {
+    value.len() == 24
+        && value.as_bytes().get(19) == Some(&b'.')
+        && value.as_bytes().get(23) == Some(&b'Z')
+        && value.as_bytes()[20..23].iter().all(u8::is_ascii_digit)
+        && OffsetDateTime::parse(value, &Rfc3339).is_ok()
+}
+
 const fn outcome_str(outcome: ConsultationOutcome) -> &'static str {
     match outcome {
         ConsultationOutcome::Match => "match",
@@ -512,6 +1093,66 @@ mod tests {
         assert_eq!(
             acquisition_class_str(AcquisitionClass::MaterializedSnapshot),
             "materialized_snapshot"
+        );
+    }
+
+    #[test]
+    fn final_fact_validation_enforces_compiled_string_and_integer_bounds() {
+        let string_plan = dhis2_runtime_vector_plan_fixture();
+        assert!(ValidatedFactMap::try_new(
+            string_plan.runtime_profile(),
+            vec![(
+                "status".into(),
+                ProjectedJsonScalar::String(Zeroizing::new("x".repeat(32))),
+            )],
+        )
+        .is_ok());
+        assert!(ValidatedFactMap::try_new(
+            string_plan.runtime_profile(),
+            vec![(
+                "status".into(),
+                ProjectedJsonScalar::String(Zeroizing::new("x".repeat(33))),
+            )],
+        )
+        .is_err());
+
+        let mut integer_plan = dhis2_runtime_vector_plan_fixture();
+        integer_plan
+            .runtime_profile_mut_for_test()
+            .replace_output_shape_for_test(
+                "status",
+                CompiledOutputShape::Integer {
+                    nullable: false,
+                    minimum: -2,
+                    maximum: 2,
+                },
+            )
+            .expect("test output shape");
+        assert!(ValidatedFactMap::try_new(
+            integer_plan.runtime_profile(),
+            vec![("status".into(), ProjectedJsonScalar::Integer(2))],
+        )
+        .is_ok());
+        assert!(ValidatedFactMap::try_new(
+            integer_plan.runtime_profile(),
+            vec![("status".into(), ProjectedJsonScalar::Integer(3))],
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn snapshot_projection_derives_presence_without_a_physical_field() {
+        let fields = serde_json::Map::from_iter([(
+            "registration_status".to_owned(),
+            Value::String("active".to_owned()),
+        )]);
+        let projected = ProjectedRecord::Snapshot {
+            fields: &fields,
+            output_fields: vec![("exists", true), ("registration_status", false)],
+        };
+        assert_eq!(
+            serde_json::to_value(projected).expect("snapshot projection"),
+            json!({"exists": true, "registration_status": "active"})
         );
     }
 

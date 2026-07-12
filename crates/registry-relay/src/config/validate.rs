@@ -4606,6 +4606,7 @@ datasets: []
         sha256: {}
     private_bindings:
       - path: bindings/test.json
+        hash: {}
         sha256: {}
     evidence: []
 "#,
@@ -4613,6 +4614,7 @@ datasets: []
             hash('a'),
             hash('2'),
             hash('b'),
+            hash('3'),
             hash('c')
         )
     }

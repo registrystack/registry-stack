@@ -43,11 +43,8 @@ pub(super) async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>)
     };
     let (relay_total, relay_ok, relay_failed) = match state.as_ref() {
         Some(Extension(state)) if state.relay_required() => {
-            if state.relay_ready().await {
-                (1, 1, 0)
-            } else {
-                (1, 0, 1)
-            }
+            let readiness = state.relay_readiness().await;
+            (readiness.total(), readiness.ready(), readiness.failed())
         }
         _ => (0, 0, 0),
     };

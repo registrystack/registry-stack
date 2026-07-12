@@ -20,7 +20,7 @@
     "integration_pack": {
       "id": "synthetic.snapshot.person-status",
       "version": "1",
-      "hash": "sha256:cc490a9b51255611f3dc3b529952a185c22a32c260644b095d6b3bf6ac52fab6"
+      "hash": "sha256:0825769c7a1d88ffae41a012963ebc81e1147eb6fed425e7aa69fa7b8ccc3523"
     },
     "acquisition": {
       "class": "materialized_snapshot",
@@ -56,7 +56,8 @@
     "output": {
       "registration_status": {
         "type": "string",
-        "nullable": false
+        "nullable": false,
+        "max_bytes": 32
       }
     },
     "authorization": {
@@ -68,7 +69,7 @@
       "legal_basis": "public_task",
       "policy": {
         "id": "relay.synthetic.snapshot.person-status.exact",
-        "hash": "sha256:9267efe7eedb6a080df546c017a1c2ee641589827b2ab4eeabe2d16eab3e7054",
+        "hash": "sha256:bd3f0b342212d53d0327404ab9d691fa293209f0a1e1d9b7feff3e59896826c8",
         "decision_cache": "disabled",
         "max_decision_age_ms": 1000,
         "unavailable": "deny"

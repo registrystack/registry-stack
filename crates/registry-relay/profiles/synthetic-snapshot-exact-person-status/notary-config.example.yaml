@@ -43,7 +43,7 @@ evidence:
             profile:
               id: synthetic.snapshot.person-status.exact
               version: "1"
-              contract_hash: sha256:6ec4b791fac13188c5d0cdec6ef48588655b22a9207086b7e495837bc52a66d2
+              contract_hash: sha256:4c92251face2f70003931b4d49a160ca52f47b5bf29d83e48216b82c6d01b773
             inputs:
               person_id: target.id
       value:
@@ -69,7 +69,7 @@ evidence:
             profile:
               id: synthetic.snapshot.person-status.exact
               version: "1"
-              contract_hash: sha256:6ec4b791fac13188c5d0cdec6ef48588655b22a9207086b7e495837bc52a66d2
+              contract_hash: sha256:4c92251face2f70003931b4d49a160ca52f47b5bf29d83e48216b82c6d01b773
             inputs:
               person_id: target.id
       value:

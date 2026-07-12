@@ -270,8 +270,16 @@ impl OperationalLogFormat {
     }
 }
 
+fn main() -> ExitCode {
+    if registry_relay::rhai_worker::is_worker_invocation(env::args_os()) {
+        return registry_relay::rhai_worker::run_worker_stdio();
+    }
+
+    async_main()
+}
+
 #[tokio::main]
-async fn main() -> ExitCode {
+async fn async_main() -> ExitCode {
     init_tracing();
     match run().await {
         Ok(()) => ExitCode::SUCCESS,

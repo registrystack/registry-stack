@@ -44,6 +44,7 @@
             bindings: &bindings,
             claims: &claims,
             sources: &sources,
+            variables: &Default::default(),
             subject: None,
             target: &target,
             purpose: "benefits",
@@ -246,6 +247,59 @@
 
     #[cfg(feature = "registry-notary-cel")]
     #[test]
+    fn registry_cel_startup_is_limited_to_one_fact_root_and_declared_variables() {
+        let mut claim = typed_registry_claim(
+            "age-band",
+            RuleConfig::Cel {
+                expression: "enrollment.exists && enrollment.date_of_birth != null ? date.age_on(enrollment.date_of_birth, as_of_date) : null".to_string(),
+                bindings: Default::default(),
+            },
+            "integer",
+        );
+        let mut evidence = EvidenceConfig {
+            enabled: true,
+            service_id: "runtime.test".to_string(),
+            claims: vec![claim.clone()],
+            ..EvidenceConfig::default()
+        };
+        evidence.variables.insert(
+            "as_of_date".to_string(),
+            registry_notary_core::RequestVariableConfig {
+                from: "request.variables.as_of_date".to_string(),
+                value_type: registry_notary_core::RequestVariableType::Date,
+            },
+        );
+        validate_cel_claims_for_startup(&evidence, &RegistryNotaryCelConfig::default())
+            .expect("OpenCRVS-style full-date derivation preflights");
+
+        for expression in [
+            "caller.scopes.contains('admin')",
+            "capability == 'snapshot_exact'",
+            "purpose == 'other-purpose'",
+            "format == 'application/dc+sd-jwt'",
+            "disclosure == 'value'",
+            "consultation == 'other-profile'",
+            "enrollment.secret == 'x'",
+            "enrollment['date_of_birth'] != null",
+            "date.age_on(enrollment.date_of_birth, as_of_date)",
+        ] {
+            claim.rule = RuleConfig::Cel {
+                expression: expression.to_string(),
+                bindings: Default::default(),
+            };
+            evidence.claims[0] = claim.clone();
+            assert!(matches!(
+                validate_cel_claims_for_startup(
+                    &evidence,
+                    &RegistryNotaryCelConfig::default()
+                ),
+                Err(EvidenceError::InvalidRequest)
+            ));
+        }
+    }
+
+    #[cfg(feature = "registry-notary-cel")]
+    #[test]
     fn cel_startup_validation_rejects_unknown_roots_and_regex_usage() {
         assert!(validate_cel_expression_roots(
             "source.farmer.total_farmed_area < 4 && claims.prior.satisfied"
@@ -296,6 +350,14 @@
         ));
         assert!(matches!(
             validate_claim_value_type(&json!(1.5), "integer"),
+            Err(EvidenceError::RuleEvaluationFailed)
+        ));
+        assert!(matches!(
+            validate_claim_value_type(&json!(9_007_199_254_740_992_i64), "integer"),
+            Err(EvidenceError::RuleEvaluationFailed)
+        ));
+        assert!(matches!(
+            validate_claim_value_type(&json!("2026-02-30"), "date"),
             Err(EvidenceError::RuleEvaluationFailed)
         ));
         assert!(matches!(

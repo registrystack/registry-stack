@@ -115,9 +115,12 @@ impl ClaimEvidenceMode {
 pub struct RelayConsultationConfig {
     pub profile: RelayConsultationProfileRef,
     pub inputs: BTreeMap<String, RelayConsultationInput>,
+    /// Complete closed public fact schema expected from the pinned profile.
+    #[serde(default)]
+    pub facts: BTreeMap<String, RelayFactContract>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RelayConsultationProfileRef {
     pub id: String,
@@ -125,10 +128,101 @@ pub struct RelayConsultationProfileRef {
     pub contract_hash: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RelayFactContract {
+    Boolean {
+        #[serde(default)]
+        nullable: bool,
+    },
+    Integer {
+        #[serde(default)]
+        nullable: bool,
+        minimum: i64,
+        maximum: i64,
+    },
+    String {
+        #[serde(default)]
+        nullable: bool,
+        max_bytes: u32,
+    },
+    Date {
+        #[serde(default)]
+        nullable: bool,
+    },
+    Presence,
+}
+
+impl RelayFactContract {
+    #[must_use]
+    pub const fn nullable(&self) -> bool {
+        match self {
+            Self::Boolean { nullable }
+            | Self::Integer { nullable, .. }
+            | Self::String { nullable, .. }
+            | Self::Date { nullable } => *nullable,
+            Self::Presence => false,
+        }
+    }
+
+    #[must_use]
+    pub const fn value_type(&self) -> &'static str {
+        match self {
+            Self::Boolean { .. } | Self::Presence => "boolean",
+            Self::Integer { .. } => "integer",
+            Self::String { .. } => "string",
+            Self::Date { .. } => "date",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestVariableConfig {
+    pub from: String,
+    #[serde(rename = "type")]
+    pub value_type: RequestVariableType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestVariableType {
+    Date,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RelayConsultationInput {
-    #[serde(rename = "target.id")]
     TargetId,
+    TargetIdentifier(String),
+}
+
+impl RelayConsultationInput {
+    #[must_use]
+    pub fn request_path(&self) -> &str {
+        match self {
+            Self::TargetId => "target.id",
+            Self::TargetIdentifier(path) => path,
+        }
+    }
+
+    #[must_use]
+    pub fn request_context_path(&self) -> &str {
+        self.request_path()
+            .strip_prefix("request.")
+            .unwrap_or(self.request_path())
+    }
+}
+
+impl Serialize for RelayConsultationInput {
+    fn serialize<Serializer>(
+        &self,
+        serializer: Serializer,
+    ) -> Result<Serializer::Ok, Serializer::Error>
+    where
+        Serializer: serde::Serializer,
+    {
+        serializer.serialize_str(self.request_path())
+    }
 }
 
 impl<'de> Deserialize<'de> for RelayConsultationInput {
@@ -137,12 +231,17 @@ impl<'de> Deserialize<'de> for RelayConsultationInput {
         Deserializer: serde::Deserializer<'de>,
     {
         let mapping = String::deserialize(deserializer)?;
-        if mapping == "target.id" {
-            Ok(Self::TargetId)
-        } else {
-            Err(serde::de::Error::custom(
-                "unsupported consultation input mapping; v1 permits only target.id",
-            ))
+        match mapping.as_str() {
+            "target.id" => Ok(Self::TargetId),
+            _ if mapping
+                .strip_prefix("request.target.identifiers.")
+                .is_some_and(is_request_identifier_name) =>
+            {
+                Ok(Self::TargetIdentifier(mapping))
+            }
+            _ => Err(serde::de::Error::custom(
+                "unsupported consultation input mapping; v1 permits target.id or request.target.identifiers.<stable-id>",
+            )),
         }
     }
 }
@@ -185,12 +284,6 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                     "registry_backed requires required_scopes to contain at least one entry",
                 );
             }
-            if claim.operations.batch_evaluate.enabled {
-                return invalid_claim_evidence_mode(
-                    claim,
-                    "registry_backed cannot enable batch_evaluate in v1",
-                );
-            }
             if consultations.len() != 1 {
                 return invalid_claim_evidence_mode(
                     claim,
@@ -215,10 +308,26 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                             "registry_backed extract rule.field must be one top-level Relay output name",
                         );
                     }
-                    if claim.value.value_type != "string" {
+                    if let Some(fact) = consultation.facts.get(field) {
+                        if claim.value.value_type != fact.value_type()
+                            || claim.value.nullable != fact.nullable()
+                        {
+                            return invalid_claim_evidence_mode(
+                                claim,
+                                "registry_backed extract claim value type and nullability must match its declared fact",
+                            );
+                        }
+                    } else if consultation.facts.is_empty() {
+                        if claim.value.value_type != "string" {
+                            return invalid_claim_evidence_mode(
+                                claim,
+                                "registry_backed extract claim value.type must be string in v1 unless typed facts are declared",
+                            );
+                        }
+                    } else {
                         return invalid_claim_evidence_mode(
                             claim,
-                            "registry_backed extract claim value.type must be string in v1",
+                            "registry_backed extract rule.field must name a declared consultation fact",
                         );
                     }
                 }
@@ -236,10 +345,33 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                         );
                     }
                 }
-                RuleConfig::Cel { .. } | RuleConfig::Plugin { .. } => {
+                RuleConfig::Cel { bindings, .. } => {
+                    if consultation.facts.is_empty() {
+                        return invalid_claim_evidence_mode(
+                            claim,
+                            "registry_backed supports only exists and extract rules in v1 unless a complete typed consultation fact schema is declared",
+                        );
+                    }
+                    if !bindings.claims.is_empty() || !bindings.vars.is_empty() {
+                        return invalid_claim_evidence_mode(
+                            claim,
+                            "registry_backed CEL receives only its consultation facts and declared service request variables",
+                        );
+                    }
+                    if !matches!(
+                        claim.value.value_type.as_str(),
+                        "boolean" | "integer" | "string" | "date"
+                    ) {
+                        return invalid_claim_evidence_mode(
+                            claim,
+                            "registry_backed CEL result type must be boolean, integer, string, or date; generic Number is not supported",
+                        );
+                    }
+                }
+                RuleConfig::Plugin { .. } => {
                     return invalid_claim_evidence_mode(
                         claim,
-                        "registry_backed supports only exists and extract rules in v1",
+                        "registry_backed plugins are not supported",
                     );
                 }
             }
@@ -348,30 +480,11 @@ pub(in crate::config) fn validate_registry_backed_dependency_modes(
 pub(in crate::config) fn validate_relay_activation_shape(
     claims: &[ClaimDefinition],
 ) -> Result<(), EvidenceConfigError> {
-    let registry_claims: Vec<&ClaimDefinition> = claims
+    let mut facts_by_client = BTreeMap::new();
+    for claim in claims
         .iter()
         .filter(|claim| claim.evidence_mode.is_registry_backed())
-        .collect();
-    let Some(first) = registry_claims.first().copied() else {
-        return Ok(());
-    };
-    let ClaimEvidenceMode::RegistryBacked {
-        consultations: first_consultations,
-    } = &first.evidence_mode
-    else {
-        unreachable!("registry-backed claims were filtered above");
-    };
-    let (_, first_consultation) = first_consultations
-        .first_key_value()
-        .expect("individual mode validation requires one consultation");
-    let first_input = first_consultation
-        .inputs
-        .first_key_value()
-        .expect("individual mode validation requires one input")
-        .0;
-    let mut output_name: Option<&str> = None;
-
-    for claim in registry_claims {
+    {
         let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
             unreachable!("registry-backed claims were filtered above");
         };
@@ -383,34 +496,51 @@ pub(in crate::config) fn validate_relay_activation_shape(
             .first_key_value()
             .expect("individual mode validation requires one input")
             .0;
-        if consultation.profile != first_consultation.profile
-            || input_name != first_input
-            || claim.purpose != first.purpose
-        {
-            return invalid_claim_evidence_mode(
-                claim,
-                "the initial Relay journey requires one shared profile, purpose, and input name across registry_backed claims",
-            );
-        }
-        if let RuleConfig::Extract { field, .. } = &claim.rule {
-            match output_name {
-                Some(expected) if expected != field => {
-                    return invalid_claim_evidence_mode(
-                        claim,
-                        "the initial Relay journey requires one shared string output across registry_backed claims",
-                    );
-                }
-                None => output_name = Some(field),
-                Some(_) => {}
+        let client_key = (
+            consultation.profile.clone(),
+            claim
+                .purpose
+                .clone()
+                .expect("individual mode validation requires one purpose"),
+            input_name.clone(),
+        );
+        let legacy_output = consultation
+            .facts
+            .is_empty()
+            .then(|| match &claim.rule {
+                RuleConfig::Extract { field, .. } => Some(field.clone()),
+                RuleConfig::Exists { .. } => None,
+                RuleConfig::Cel { .. } | RuleConfig::Plugin { .. } => None,
+            })
+            .flatten();
+        match facts_by_client.get_mut(&client_key) {
+            Some((expected_facts, expected_legacy_output))
+                if expected_facts != &consultation.facts =>
+            {
+                return invalid_claim_evidence_mode(
+                    claim,
+                    "claims sharing one Relay profile, purpose, and input name must declare one identical result contract",
+                );
             }
+            Some((_, Some(expected)))
+                if legacy_output
+                    .as_ref()
+                    .is_some_and(|actual| actual != expected) =>
+            {
+                return invalid_claim_evidence_mode(
+                    claim,
+                    "legacy claims sharing one Relay profile, purpose, and input name must select one shared string output",
+                );
+            }
+            Some((_, expected @ None)) if legacy_output.is_some() => {
+                *expected = legacy_output;
+            }
+            None => {
+                facts_by_client.insert(client_key, (consultation.facts.clone(), legacy_output));
+            }
+            Some(_) => {}
         }
     }
-    // An extract claim pins one exact projected string output. When every
-    // claim is an existence rule, activation instead expects the profile's
-    // explicit `presence_only` result contract and derives the boolean solely
-    // from Relay's closed outcome. The two modes cannot be inferred from a
-    // missing name at the transport boundary; the server carries them as a
-    // sealed type and verifies the selected mode against Relay metadata.
     Ok(())
 }
 
@@ -510,29 +640,72 @@ fn validate_consultation(
             reason: format!("consultation profile.contract_hash {reason}"),
         }
     })?;
-    if consultation.inputs.len() != 1 {
+    if !(1..=4).contains(&consultation.inputs.len()) {
         return invalid_claim_evidence_mode(
             claim,
-            "consultation inputs must contain exactly one target.id mapping in v1",
+            "consultation inputs must contain one to four target identifier mappings in v1",
         );
     }
-    let (input_name, input) = consultation
-        .inputs
-        .first_key_value()
-        .expect("exactly one consultation input was checked above");
-    if !is_input_name(input_name) {
+    let mut request_paths = BTreeSet::new();
+    for (input_name, input) in &consultation.inputs {
+        if !is_input_name(input_name) {
+            return invalid_claim_evidence_mode(
+                claim,
+                "consultation input names must match [a-z][a-z0-9_]{0,95}",
+            );
+        }
+        if !request_paths.insert(input.request_path()) {
+            return invalid_claim_evidence_mode(
+                claim,
+                "consultation inputs must map injectively to request context paths",
+            );
+        }
+    }
+    if consultation.facts.len() > 64 {
         return invalid_claim_evidence_mode(
             claim,
-            "consultation input names must match [a-z][a-z0-9_]{0,95}",
+            "consultation facts cannot contain more than 64 entries",
         );
     }
-    if *input != RelayConsultationInput::TargetId {
-        return invalid_claim_evidence_mode(
-            claim,
-            "consultation inputs support only target.id in v1",
-        );
+    for (fact_name, fact) in &consultation.facts {
+        if !is_input_name(fact_name) {
+            return invalid_claim_evidence_mode(
+                claim,
+                "consultation fact names must match [a-z][a-z0-9_]{0,95}",
+            );
+        }
+        let valid = match fact {
+            RelayFactContract::String { max_bytes, .. } => (1..=64 * 1024).contains(max_bytes),
+            RelayFactContract::Integer {
+                minimum, maximum, ..
+            } => {
+                const MAX_SAFE_INTEGER: i64 = (1_i64 << 53) - 1;
+                minimum <= maximum && *minimum >= -MAX_SAFE_INTEGER && *maximum <= MAX_SAFE_INTEGER
+            }
+            RelayFactContract::Boolean { .. }
+            | RelayFactContract::Date { .. }
+            | RelayFactContract::Presence => true,
+        };
+        if !valid {
+            return invalid_claim_evidence_mode(
+                claim,
+                "consultation fact bounds must be positive and JSON-interoperable",
+            );
+        }
     }
     Ok(())
+}
+
+fn is_request_identifier_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'A'..=b'Z' | b'a'..=b'z'))
+        && value.len() <= 96
+        && bytes.all(|byte| {
+            matches!(
+                byte,
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-' | b'_'
+            )
+        })
 }
 
 fn is_stable_id(value: &str) -> bool {
@@ -588,8 +761,14 @@ pub struct ClaimSemanticConfig {
 pub struct ClaimValueConfig {
     #[serde(rename = "type", default)]
     pub value_type: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub nullable: bool,
     #[serde(default)]
     pub unit: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

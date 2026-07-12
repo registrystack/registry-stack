@@ -414,6 +414,23 @@ impl ClosedJsonDecoder {
     ) -> Result<ClosedJsonOutcome, ClosedJsonDecodeError> {
         decode_body(self, body)
     }
+
+    /// Decode caller-owned offline fixture bytes with this exact production
+    /// contract. The fixture path releases the same normalized projections as
+    /// [`Self::decode`] and cannot inspect a live transport body.
+    #[doc(hidden)]
+    pub fn decode_offline_fixture(
+        &self,
+        bytes: &[u8],
+    ) -> Result<ClosedJsonOutcome, ClosedJsonDecodeError> {
+        decode_body(
+            self,
+            super::super::BoundedDestinationBody {
+                bytes: zeroize::Zeroizing::new(bytes.to_vec()),
+                slot: std::marker::PhantomData,
+            },
+        )
+    }
 }
 
 impl fmt::Debug for ClosedJsonDecoder {

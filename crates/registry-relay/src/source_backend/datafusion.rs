@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 use tokio::time::Instant;
 
 use crate::consultation::ConsultationOutcome;
-use crate::query::{read_snapshot_exact, SnapshotExactProjection};
+use crate::query::{read_snapshot_exact_and, SnapshotExactPredicate, SnapshotExactProjection};
 use crate::source_plan::{
     CompiledResponseSchema, CompiledScalarShape, CompiledSourcePlan, SourceCardinality,
     SourcePlanKind,
@@ -69,7 +69,7 @@ pub(crate) async fn execute_snapshot_exact(
     ctx: &SessionContext,
     plan: &CompiledSourcePlan,
     snapshot: Arc<PublishedSnapshotHandle>,
-    canonical_input: &str,
+    canonical_inputs: &[&str],
     deadline: Instant,
 ) -> Result<SnapshotExactBackendResult, SnapshotExactBackendError> {
     if plan.kind() != SourcePlanKind::SnapshotExact {
@@ -82,16 +82,28 @@ pub(crate) async fn execute_snapshot_exact(
         .projection()
         .map(|(logical, physical)| SnapshotExactProjection::new(physical, logical))
         .collect::<Vec<_>>();
+    if canonical_inputs.len() != binding.keys().len() {
+        return Err(SnapshotExactBackendError::InvalidPlan);
+    }
+    let predicates = binding
+        .keys()
+        .zip(canonical_inputs.iter().copied())
+        .map(
+            |((_input, physical_field), canonical_value)| SnapshotExactPredicate {
+                physical_field,
+                canonical_value,
+            },
+        )
+        .collect::<Vec<_>>();
     let probe_limit = match plan.cardinality() {
         SourceCardinality::Singleton => 1,
         SourceCardinality::AmbiguityProbe => 2,
     };
-    let rows = read_snapshot_exact(
+    let rows = read_snapshot_exact_and(
         ctx,
         snapshot.provider(),
-        binding.key_physical_field(),
+        &predicates,
         &projection,
-        canonical_input,
         probe_limit,
         deadline,
     )
@@ -99,6 +111,31 @@ pub(crate) async fn execute_snapshot_exact(
     .map_err(|_| SnapshotExactBackendError::Unavailable)?
     .into_rows();
 
+    let (outcome, record, source_observed_at_unix_ms, source_revision) =
+        decode_snapshot_rows(plan, rows)?;
+    Ok(SnapshotExactBackendResult {
+        outcome,
+        record,
+        snapshot,
+        source_observed_at_unix_ms,
+        source_revision,
+    })
+}
+
+pub(crate) type DecodedSnapshotRows = (
+    ConsultationOutcome,
+    Option<SnapshotExactRecord>,
+    Option<i64>,
+    Option<Box<str>>,
+);
+
+pub(crate) fn decode_snapshot_rows(
+    plan: &CompiledSourcePlan,
+    rows: Vec<Value>,
+) -> Result<DecodedSnapshotRows, SnapshotExactBackendError> {
+    let binding = plan
+        .snapshot_binding()
+        .ok_or(SnapshotExactBackendError::InvalidPlan)?;
     let outcome = match rows.len() {
         0 => ConsultationOutcome::NoMatch,
         1 => ConsultationOutcome::Match,
@@ -127,13 +164,7 @@ pub(crate) async fn execute_snapshot_exact(
             }
             _ => return Err(SnapshotExactBackendError::ResponseContractViolation),
         };
-    Ok(SnapshotExactBackendResult {
-        outcome,
-        record,
-        snapshot,
-        source_observed_at_unix_ms,
-        source_revision,
-    })
+    Ok((outcome, record, source_observed_at_unix_ms, source_revision))
 }
 
 fn extract_source_observed_at(

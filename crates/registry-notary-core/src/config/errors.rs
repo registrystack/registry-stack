@@ -47,6 +47,8 @@ pub enum EvidenceConfigError {
     InvalidExpectedSidecarConfig { connection: String, reason: String },
     #[error("invalid evidence.relay config: {reason}")]
     InvalidRelayConfig { reason: String },
+    #[error("invalid evidence.variables config: {reason}")]
+    InvalidRequestVariableConfig { reason: String },
     #[error("claim id must not be empty")]
     InvalidClaim,
     /// REQ-DM-CLAIM-001 requires a claim's `id` to be unique across the

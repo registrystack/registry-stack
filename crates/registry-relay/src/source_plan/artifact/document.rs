@@ -49,6 +49,7 @@ pub(in super::super) struct SubjectDocument {
 #[serde(rename_all = "snake_case")]
 pub(in super::super) enum InputTypeDocument {
     String,
+    FullDate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,7 +122,8 @@ pub(in super::super) enum OutputTypeDocument {
     String,
     Boolean,
     Integer,
-    Number,
+    Date,
+    Presence,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +132,12 @@ pub(in super::super) struct OutputFieldDocument {
     #[serde(rename = "type")]
     pub(in super::super) output_type: OutputTypeDocument,
     pub(in super::super) nullable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) max_bytes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) minimum: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) maximum: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -149,26 +157,33 @@ impl OutputModeDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(in super::super) enum ExactSelectorDocument {
-    HttpAnchor {
-        input: String,
+    HttpExactAnd {
         operation: String,
-        location: RequestSelectorLocationDocument,
+        components: BTreeMap<String, RequestSelectorLocationDocument>,
     },
-    SnapshotKey {
-        input: String,
+    SnapshotExactAnd {
+        components: BTreeMap<String, SnapshotSelectorLocationDocument>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum SnapshotSelectorLocationDocument {
+    SnapshotKey,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(in super::super) enum CodecSelectorRoleDocument {
     DciIdtypeValue,
+    DciExactPredicate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(in super::super) enum RequestSelectorLocationDocument {
     Query { parameter: String },
+    Path { parameter: String },
     Body { pointer: String },
     Codec { role: CodecSelectorRoleDocument },
 }
@@ -223,12 +238,15 @@ pub(in super::super) enum ResponseSchemaDocument {
 impl ResponseSchemaDocument {
     pub(super) fn validates_public_output(&self, output: &OutputFieldDocument) -> bool {
         match (self, &output.output_type) {
-            (Self::String { nullable, .. }, OutputTypeDocument::String)
+            (
+                Self::String { nullable, .. },
+                OutputTypeDocument::String | OutputTypeDocument::Date,
+            )
             | (Self::Boolean { nullable }, OutputTypeDocument::Boolean)
-            | (Self::Integer { nullable, .. }, OutputTypeDocument::Integer)
-            | (Self::Number { nullable, .. }, OutputTypeDocument::Number) => {
+            | (Self::Integer { nullable, .. }, OutputTypeDocument::Integer) => {
                 *nullable == output.nullable
             }
+            (_, OutputTypeDocument::Presence) => !output.nullable,
             _ => false,
         }
     }
@@ -594,7 +612,68 @@ pub(in super::super) enum RequestCodecDocument {
     None,
     Json,
     DciExactV1,
-    OpenCrvsDciExactV1,
+    FhirR4Search,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct FhirR4SearchDocument {
+    pub(in super::super) resource_type: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum ResponseVerifierDocument {
+    DciJwsV1,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct DciExactDocument {
+    pub(in super::super) protocol_version: String,
+    pub(in super::super) sender_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) receiver_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) registry_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) registry_event_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) record_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) identifier_type: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(in super::super) exact_and: BTreeMap<String, DciExactPredicateDocument>,
+    pub(in super::super) locale: String,
+    pub(in super::super) page_number: u16,
+    pub(in super::super) jwks_operation: String,
+    pub(in super::super) response_verifier: ResponseVerifierDocument,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct DciExactPredicateDocument {
+    pub(in super::super) field: String,
+    pub(in super::super) response_pointer: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum VerificationPrimitiveDocument {
+    JwksV1,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct VerificationOperationDocument {
+    pub(in super::super) id: String,
+    pub(in super::super) primitive: VerificationPrimitiveDocument,
+    pub(in super::super) destination_slot: String,
+    pub(in super::super) method: ReadMethod,
+    pub(in super::super) path: String,
+    pub(in super::super) step_limits: StepLimitsDocument,
+    pub(in super::super) max_response_bytes: u32,
+    pub(in super::super) accepted_statuses: Vec<u16>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -626,7 +705,7 @@ pub(in super::super) struct StepLimitsDocument {
     pub(in super::super) max_in_flight: u16,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub(in super::super) enum SourceAuthDocument {
     None,
@@ -636,17 +715,30 @@ pub(in super::super) enum SourceAuthDocument {
     StaticBearer {
         max_value_bytes: u16,
     },
+    ApiKeyHeader {
+        name: String,
+        max_value_bytes: u16,
+    },
+    ApiKeyQuery {
+        name: String,
+        max_value_bytes: u16,
+    },
     #[serde(rename = "oauth_client_credentials")]
     OAuthClientCredentials,
 }
 
 impl SourceAuthDocument {
-    pub(super) const fn max_value_bytes(self) -> usize {
+    pub(super) const fn max_value_bytes(&self) -> usize {
         match self {
             Self::None => 0,
-            Self::Basic { max_value_bytes } | Self::StaticBearer { max_value_bytes } => {
-                max_value_bytes as usize
+            Self::Basic { max_value_bytes }
+            | Self::StaticBearer { max_value_bytes }
+            | Self::ApiKeyHeader {
+                max_value_bytes, ..
             }
+            | Self::ApiKeyQuery {
+                max_value_bytes, ..
+            } => *max_value_bytes as usize,
             Self::OAuthClientCredentials => 0,
         }
     }
@@ -669,7 +761,7 @@ pub(in super::super) enum ProjectionMechanismDocument {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mechanism", rename_all = "snake_case", deny_unknown_fields)]
 pub(in super::super) enum CardinalityMechanismDocument {
-    OpenCrvsDciProbeTwo,
+    DciProbeTwo,
     ProbeQueryParameter {
         parameter: String,
     },
@@ -696,10 +788,29 @@ pub(in super::super) struct ResponseDocument {
     pub(in super::super) cardinality: CardinalityMechanismDocument,
     pub(in super::super) schema: ResponseSchemaDocument,
     pub(in super::super) output_mapping: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in super::super) presence_outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(in super::super) prior_outputs: BTreeMap<String, PriorOutputBindingDocument>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in super::super) accepted_statuses: Vec<u16>,
+    #[serde(default, skip_serializing_if = "StatusOutcomesDocument::is_empty")]
+    pub(in super::super) status_outcomes: StatusOutcomesDocument,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct StatusOutcomesDocument {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in super::super) no_match: Vec<u16>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in super::super) ambiguous: Vec<u16>,
+}
+
+impl StatusOutcomesDocument {
+    fn is_empty(&self) -> bool {
+        self.no_match.is_empty() && self.ambiguous.is_empty()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -709,13 +820,21 @@ pub(in super::super) struct HttpOperationDocument {
     pub(in super::super) method: ReadMethod,
     pub(in super::super) destination_slot: String,
     pub(in super::super) path: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(in super::super) path_parameters: BTreeMap<String, ValueExpressionDocument>,
     pub(in super::super) query: BTreeMap<String, ValueExpressionDocument>,
     pub(in super::super) headers: BTreeMap<String, ValueExpressionDocument>,
     pub(in super::super) body: Option<BodyTemplateDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) input_selector: Option<RequestSelectorLocationDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) relation_selector: Option<RelationSelectorDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) request_codec: Option<RequestCodecDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) dci: Option<DciExactDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) fhir: Option<FhirR4SearchDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) request_signer: Option<RequestSignerDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -831,7 +950,6 @@ pub(in super::super) struct SnapshotTemplateDocument {
     pub(in super::super) max_snapshot_age_ms: u64,
     pub(in super::super) unavailable: MaterializationStaleBehaviorDocument,
     pub(in super::super) immutable_generation: bool,
-    pub(in super::super) mapping: SnapshotExactMappingDocument,
 }
 
 /// The only physical scalar type accepted by the SnapshotExact key lane.
@@ -861,7 +979,10 @@ pub(in super::super) struct SnapshotExactKeyDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in super::super) struct SnapshotExactMappingDocument {
-    pub(in super::super) key: SnapshotExactKeyDocument,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) key: Option<SnapshotExactKeyDocument>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(in super::super) keys: BTreeMap<String, SnapshotExactKeyDocument>,
     pub(in super::super) projection: BTreeMap<String, String>,
 }
 
@@ -920,6 +1041,8 @@ pub(in super::super) struct PlanTemplateDocument {
     pub(in super::super) data_destination_slot: Option<String>,
     pub(in super::super) credential_destination_slot: Option<String>,
     pub(in super::super) operations: Vec<HttpOperationDocument>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in super::super) verification_operations: Vec<VerificationOperationDocument>,
     pub(in super::super) steps: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(in super::super) step_conditions: BTreeMap<String, StepConditionDocument>,
@@ -1124,6 +1247,7 @@ pub(in super::super) struct PrivateBindingDocument {
 #[serde(deny_unknown_fields)]
 pub(in super::super) struct MaterializationBindingDocument {
     pub(in super::super) table_provider: String,
+    pub(in super::super) mapping: SnapshotExactMappingDocument,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) max_snapshot_age_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

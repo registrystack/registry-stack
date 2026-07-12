@@ -13,6 +13,7 @@ FROM gcr.io/distroless/cc-debian12:nonroot@sha256:ce0d66bc0f64aae46e6a03add867b0
 
 COPY --from=runtime-root --chown=65532:65532 /workspace/runtime-root/ /
 COPY --chmod=0755 dist/image-bin/registry-relay /usr/local/bin/registry-relay
+COPY --chmod=0755 dist/image-bin/registry-relay-rhai-worker /usr/local/bin/registry-relay-rhai-worker
 COPY LICENSE /licenses/registry-relay/LICENSE
 
 WORKDIR /var/lib/registry-relay

@@ -136,6 +136,40 @@ async fn cel_worker_evaluates_through_bounded_process_protocol() {
 }
 
 #[tokio::test]
+async fn cel_worker_protocol_accepts_json_escaped_multiline_expression() {
+    let worker = CelWorker::new(config()).await.expect("worker starts");
+    let expression = "health.exists && health.date_of_birth != null\n  ? date.age_on(health.date_of_birth, as_of_date)\n  : null";
+
+    let value = worker
+        .evaluate(
+            expression,
+            json!({
+                "health": {
+                    "exists": true,
+                    "date_of_birth": "2017-06-15",
+                },
+                "as_of_date": "2026-01-01",
+            }),
+        )
+        .await
+        .expect("escaped newlines survive the worker request envelope");
+
+    assert_eq!(value, json!(8));
+}
+
+#[tokio::test]
+async fn cel_worker_protocol_preserves_successful_null_result() {
+    let worker = CelWorker::new(config()).await.expect("worker starts");
+
+    let value = worker
+        .evaluate("null", json!({}))
+        .await
+        .expect("CEL null is a successful result");
+
+    assert_eq!(value, serde_json::Value::Null);
+}
+
+#[tokio::test]
 async fn cel_worker_evaluates_date_age_against_context_today() {
     let worker = CelWorker::new(config()).await.expect("worker starts");
 
@@ -387,6 +421,7 @@ async fn cel_stdio_worker_echoes_policy_hash() {
     let response: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("worker emits JSON");
     assert_eq!(response["policy_hash"], json!(cel_policy_hash(expression)));
+    assert_eq!(response["status"], json!("success"));
     assert_eq!(response["value"], json!(true));
 }
 
@@ -429,6 +464,7 @@ async fn cel_stdio_worker_rejects_regex_helpers_by_default() {
     let response: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("worker emits JSON");
     assert_eq!(response["policy_hash"], json!(cel_policy_hash(expression)));
+    assert_eq!(response["status"], json!("error"));
     assert_eq!(response["error"], json!("compile"));
     assert!(response.get("value").is_none());
 }

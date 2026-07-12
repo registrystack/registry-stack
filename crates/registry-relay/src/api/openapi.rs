@@ -1410,7 +1410,7 @@ fn consultation_profile_path_item() -> Value {
         "get": {
             "operationId": "get_consultation_profile",
             "summary": "Get a consultation profile contract",
-            "description": "Returns the hash-pinned public contract for one exact consultation profile. The response is protected and visible only to the configured Registry Notary OIDC workload with the profile's exact required scope. `contract` is the canonical profile contract itself; this generic operation deliberately does not generate a separate OpenAPI schema for every profile.",
+            "description": "Returns the hash-pinned public contract for one exact consultation profile. The response is protected and visible only to the configured Registry Notary OIDC workload with the profile's exact required scope. `contract_json` is the canonical profile contract itself; this generic operation deliberately does not generate a separate OpenAPI schema for every profile.",
             "tags": [TAG_CONSULTATIONS],
             "security": [{ "consultationOidc": [] }],
             "parameters": consultation_path_parameters(),
@@ -1447,7 +1447,7 @@ fn consultation_execute_path_item() -> Value {
         "post": {
             "operationId": "execute_consultation",
             "summary": "Execute a governed consultation",
-            "description": "Executes one exact, purpose-bound consultation for the configured Registry Notary OIDC workload with the profile's exact required scope. The request is a single profile-named string input, and Relay returns only the profile-approved result envelope and provenance.",
+            "description": "Executes one exact, purpose-bound, single-subject consultation for the configured Registry Notary OIDC workload with the profile's exact required scope. The request supplies the profile's one to four required typed selector components, and Relay returns only the profile-approved result envelope and provenance. This route does not accept a subject batch.",
             "tags": [TAG_CONSULTATIONS],
             "security": [{ "consultationOidc": [] }],
             "parameters": parameters,
@@ -1458,7 +1458,9 @@ fn consultation_execute_path_item() -> Value {
                         "schema": { "$ref": "#/components/schemas/ConsultationExecuteRequest" },
                         "example": {
                             "inputs": {
-                                "subject_id": "profile-defined string"
+                                "given_name": "Amina",
+                                "family_name": "Diallo",
+                                "date_of_birth": "1990-04-12"
                             }
                         }
                     }
@@ -1550,6 +1552,11 @@ fn consultation_execute_responses(success_description: &str, success_schema: &st
             404,
             "consultation.profile_not_found",
             "The exact profile id and version are not visible to this workload."
+        ),
+        "409": consultation_problem_response(
+            409,
+            "consultation.batch_child_conflict",
+            "The authenticated Notary batch child identity conflicts with prior durable state."
         ),
         "429": consultation_rate_limited_response(),
         "503": consultation_problem_response(
@@ -2950,16 +2957,17 @@ fn consultation_profile_metadata_schema() -> Value {
 fn consultation_execute_request_schema() -> Value {
     json!({
         "type": "object",
-        "description": "The exact consultation-v1 request envelope. The selected profile contract names the one accepted input. The complete encoded request body is limited to 8 KiB.",
+        "description": "The exact consultation-v1 request envelope. The selected profile contract names one to four required typed components of one exact subject selector. The complete encoded request body is limited to 8 KiB.",
         "required": ["inputs"],
         "properties": {
             "inputs": {
                 "type": "object",
-                "description": "Exactly one profile-defined input name mapped to one string value.",
+                "description": "One to four profile-defined component names mapped to string values. Names are ASCII and limited to 64 bytes. Each value is limited to 256 UTF-8 bytes and is validated and canonicalized under its profile-declared string or full-date contract. Every declared component is required; unknown, missing, or duplicate components fail before source access.",
                 "minProperties": 1,
-                "maxProperties": 1,
+                "maxProperties": 4,
                 "propertyNames": {
-                    "pattern": "^[a-z][a-z0-9_]{0,95}$"
+                    "maxLength": 64,
+                    "pattern": "^[a-z][a-z0-9_]{0,63}$"
                 },
                 "additionalProperties": {
                     "type": "string",
@@ -3022,12 +3030,12 @@ fn consultation_result_schema() -> Value {
                 "enum": ["match", "no_match", "ambiguous"]
             },
             "data": {
-                "description": "Profile-approved scalar fields, or an empty object for a presence-only `match`; null for `no_match` and `ambiguous`.",
+                "description": "For `match`, the exact profile-approved fact fields, or an empty object for a presence-only result. For `no_match` and `ambiguous`, null. Public facts are bounded strings or full dates, JSON-safe integers, booleans, presence booleans, and explicitly nullable variants; floating-point values are not part of consultation v1.",
                 "anyOf": [
                     {
                         "type": "object",
                         "additionalProperties": {
-                            "type": ["string", "number", "boolean", "null"]
+                            "type": ["string", "integer", "boolean", "null"]
                         }
                     },
                     { "type": "null" }
@@ -3127,12 +3135,49 @@ fn consultation_result_schema() -> Value {
                             }
                         },
                         "additionalProperties": false
+                    },
+                    "snapshot_generation_id": {
+                        "type": "string",
+                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+                        "description": "Server-generated immutable snapshot generation. Required only for `materialized_snapshot` results and omitted for live acquisition."
+                    },
+                    "snapshot_published_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "description": "Server-owned snapshot publication time bound to the immutable generation. Required only for `materialized_snapshot` results and omitted for live acquisition."
                     }
                 },
                 "additionalProperties": false
             }
         },
-        "additionalProperties": false
+        "additionalProperties": false,
+        "allOf": [{
+            "oneOf": [
+                {
+                    "properties": {
+                        "outcome": { "const": "match" },
+                        "data": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": ["string", "integer", "boolean", "null"]
+                            }
+                        }
+                    }
+                },
+                {
+                    "properties": {
+                        "outcome": { "const": "no_match" },
+                        "data": { "type": "null" }
+                    }
+                },
+                {
+                    "properties": {
+                        "outcome": { "const": "ambiguous" },
+                        "data": { "type": "null" }
+                    }
+                }
+            ]
+        }]
     })
 }
 
@@ -5878,7 +5923,7 @@ mod tests {
                 .keys()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
-            ["200", "400", "401", "403", "404", "429", "503"]
+            ["200", "400", "401", "403", "404", "409", "429", "503"]
         );
 
         let execute_op = &execute["post"];
@@ -5897,12 +5942,17 @@ mod tests {
                 && parameter["in"] == "header"
                 && parameter["required"] == false
         }));
+        assert!(headers.iter().all(|parameter| {
+            parameter["name"] != "Registry-Notary-Batch-Child-Id"
+                && parameter["name"] != "registry-notary-batch-child-id"
+        }));
 
         let expected_codes = [
             ("400", "consultation.invalid_request"),
             ("401", "auth.invalid_credentials"),
             ("403", "consultation.denied"),
             ("404", "consultation.profile_not_found"),
+            ("409", "consultation.batch_child_conflict"),
             ("429", "consultation.rate_limited"),
             ("503", "consultation.unavailable"),
         ];
@@ -5933,7 +5983,17 @@ mod tests {
         );
         assert_eq!(
             schemas["ConsultationExecuteRequest"]["properties"]["inputs"]["maxProperties"],
-            1
+            4
+        );
+        assert_eq!(
+            schemas["ConsultationExecuteRequest"]["properties"]["inputs"]["propertyNames"]
+                ["maxLength"],
+            64
+        );
+        assert_eq!(
+            schemas["ConsultationExecuteRequest"]["properties"]["inputs"]["propertyNames"]
+                ["pattern"],
+            "^[a-z][a-z0-9_]{0,63}$"
         );
         assert_eq!(
             schemas["ConsultationResult"]["properties"]["outcome"]["enum"],
@@ -5945,6 +6005,21 @@ mod tests {
                     .is_object()
             );
         }
+        assert_eq!(
+            schemas["ConsultationResult"]["properties"]["data"]["anyOf"][0]["additionalProperties"]
+                ["type"],
+            json!(["string", "integer", "boolean", "null"])
+        );
+        assert!(
+            schemas["ConsultationResult"]["properties"]["provenance"]["properties"]
+                ["snapshot_generation_id"]
+                .is_object()
+        );
+        assert!(
+            schemas["ConsultationResult"]["properties"]["provenance"]["properties"]
+                ["snapshot_published_at"]
+                .is_object()
+        );
     }
 
     #[test]

@@ -65,6 +65,33 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertNotIn("dist/image-bin", text)
             self.assertIn("cargo build --release --locked", text)
 
+    def test_relay_packaging_includes_dedicated_rhai_worker(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        worker = "registry-relay-rhai-worker"
+
+        for dockerfile in (
+            "crates/registry-relay/Dockerfile",
+            "crates/registry-relay/Dockerfile.demo",
+            "lab/Dockerfile.registry-relay",
+            "release/docker/Dockerfile.registry-relay",
+        ):
+            text = (ROOT / dockerfile).read_text(encoding="utf-8")
+            self.assertIn(f"/usr/local/bin/{worker}", text)
+
+        self.assertIn(
+            f'"dist/bin/{worker}-${{{{ needs.verify.outputs.tag }}}}-linux-amd64"',
+            workflow,
+        )
+        self.assertIn(f"dist/image-bin/{worker}", workflow)
+        release_dockerfile = (ROOT / "release/docker/Dockerfile.registry-relay").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            f"COPY --chmod=0755 dist/image-bin/{worker} /usr/local/bin/{worker}",
+            release_dockerfile,
+        )
+        self.assertRegex(workflow, rf"chmod 0755[^\n]*dist/image-bin/{worker}")
+
     def test_release_workflow_publishes_cross_platform_registryctl_binaries(self) -> None:
         # The hermetic linux/amd64 builder cannot produce macOS or arm64 binaries,
         # so registryctl-<tag>-macos-arm64 and -linux-arm64 are built natively on a
@@ -883,6 +910,9 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertTrue((binary_dir / "registryctl-v0.8.0-linux-amd64").is_file())
             self.assertTrue((binary_dir / "registry-manifest-v0.8.0-linux-amd64").is_file())
             self.assertTrue((binary_dir / "registry-relay-v0.8.0-linux-amd64").is_file())
+            self.assertTrue(
+                (binary_dir / "registry-relay-rhai-worker-v0.8.0-linux-amd64").is_file()
+            )
             self.assertTrue((binary_dir / "registry-notary-v0.8.0-linux-amd64").is_file())
             self.assertTrue((binary_dir / "SHA256SUMS").is_file())
             self.assertTrue((image_dir / "registry-notary.digest").is_file())
@@ -1275,6 +1305,7 @@ def write_release_asset_fixture(
         "registryctl-v0.8.0-linux-amd64",
         "registry-manifest-v0.8.0-linux-amd64",
         "registry-relay-v0.8.0-linux-amd64",
+        "registry-relay-rhai-worker-v0.8.0-linux-amd64",
         "registry-notary-v0.8.0-linux-amd64",
     ]
     if include_cross_platform:

@@ -4,19 +4,53 @@
 
 ### Added
 
+- Relay's restart-only consultation compiler now accepts generic, fully
+  authored bounded HTTP plans, exact signed DCI searches, immutable snapshot
+  plans, and release-gated SandboxedRhai orchestration. Every plan retains
+  fixed destinations, closed schemas, typed facts, bounded operation unions,
+  parent-owned credentials, and the existing authorization and audit gates.
+- Immutable snapshot profiles now keep physical provider, table, key, and
+  projection mappings in private bindings. Compatible profiles share one
+  immutable materialization slot while readiness remains isolated per profile.
+- SandboxedRhai executes in fresh, environment-scrubbed child processes. The
+  worker receives only typed inputs and prior outputs, chooses only reviewed
+  named operations, and returns a closed typed fact map under fixed resource
+  limits. Production activation is Linux-only and caps the worker address space
+  at 128 MiB so the configured memory and process isolation are enforced by the
+  operating system; non-Linux hosts retain only offline, authority-free
+  conformance checks. Release images install the dedicated
+  `registry-relay-rhai-worker` beside `registry-relay`. Standalone deployments
+  must install both release assets in the same directory under those canonical
+  executable names.
+- Relay now owns the authority-free country fixture decoder. It compiles exact
+  pinned profiles and reuses the production closed JSON, signed DCI,
+  SnapshotExact, and SandboxedRhai paths while accepting only bounded source
+  observations. Match results release only validated facts; no-match and
+  ambiguity release no fact map.
 - BREAKING: Relay now exposes a restart-only, OIDC-protected
   `/v1/consultations/{profile_id}/versions/{profile_version}` API for the exact
   configured Registry Notary workload. The first concrete journey executes one
   hash-pinned, Basic-authenticated, minimized DHIS2 GET behind PostgreSQL quota,
-  audit, dispatch-fence, and publication guarantees. Requests use one bounded
-  profile-declared input and a contract-enforced `Data-Purpose`; public results
-  use the closed `match`, `no_match`, or `ambiguous` envelope and a six-code
-  failure taxonomy. Configuration and artifacts are restart-only, source and
-  state-plane secrets remain environment-backed, and no generic proxy or
-  caller-selected source operation is exposed.
+  audit, dispatch-fence, and publication guarantees. Requests use one to four
+  required exact selector components with 64-character ASCII names and a
+  contract-enforced `Data-Purpose`; this remains one subject, not a subject
+  batch. Public results use the closed `match`, `no_match`, or `ambiguous`
+  envelope and a seven-code failure taxonomy, including
+  `409 consultation.batch_child_conflict` for conflicting durable batch-child
+  replay. The child identity stays private to Notary and Relay and is omitted
+  from the public OpenAPI contract. Configuration and artifacts are
+  restart-only, source and state-plane secrets remain environment-backed, and
+  no generic proxy or caller-selected source operation is exposed.
 
 ### Changed
 
+- Private consultation-binding references now pin both canonical raw SHA-256
+  and the domain-separated typed artifact hash. Startup verifies both before
+  compilation. Legacy product-name inference for OAuth, JWKS, and DCI has been
+  removed in favor of explicit reviewed primitives and codecs.
+- Snapshot projection and response serialization derive Presence facts from
+  the consultation outcome rather than requiring a physical presence column,
+  keeping shared materializations and offline evidence on the same path.
 - The maintained DHIS2 2.41.9 enrollment-status profile now uses a reviewed
   10-second absolute source deadline. The previous 5-second contract failed
   closed against the authorized integration instance before a terminal result.

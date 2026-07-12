@@ -31,13 +31,14 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "materialization-publication=registry.relay.postgres-materialization-publication/v1\0",
     "materialization-publication-order=attempt-before-access-atomic-completion-pointer-monotonic-generation-v1\0",
     "consultation-completion=atomic-intent-sealed-seed-plan-slots-selected-operations-known-unfinished-recovery-v1\0",
+    "consultation-batch-child-replay=authenticated-hmac-binding-reserve-before-quota-atomic-terminal-publication-fixed-retention-v1\0",
     "consultation-authorization=database-expiry-seed-timeout-exact-dispatch-prefix-v2\0",
-    "consultation-credentials=direct-data-auth-reference-distinct-fresh-opencrvs-no-expiry-jwks-v2\0",
+    "consultation-credentials=direct-data-auth-reference-distinct-authored-verification-no-expiry-v3\0",
     "serving-fence-order=fence-row-keyring-intent-permit-audit-head-v1\0",
     "key-order=utf8-bytewise-key-order-v1\0",
 );
 pub(crate) const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "sha256:85beacf26e279b0fd2e0f242b207afd05b83c5cb4e4c630ff9401ee5ffbe7f8d";
+    "sha256:94f81117b09d13cf2d7ef5ab282b779e2c8d67fcc9ba111a0d116aeb91a8d355";
 
 pub(super) const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 7_221_091_440;
 const SUPPORTED_POSTGRES_MIN_MAJOR: i32 = 16;
@@ -46,16 +47,16 @@ const SUPPORTED_POSTGRES_MAX_MAJOR: i32 = 18;
 // Filled from the semantic catalog descriptor below on disposable supported
 // PostgreSQL majors. Constraint rendering is explicitly versioned because
 // pg_get_constraintdef is not a cross-major wire contract.
-const CONSTRAINT_FINGERPRINT_PG16: &str = "b7bcbdb92177fd40eedca0f9956212ac";
-const CONSTRAINT_FINGERPRINT_PG17: &str = "b7bcbdb92177fd40eedca0f9956212ac";
-const CONSTRAINT_FINGERPRINT_PG18: &str = "fa389bad5ee266649054a94da9900742";
-const COLUMN_FINGERPRINT_PG16: &str = "69f219a12a610e40f4f9c9dd4b8ab4bd";
-const COLUMN_FINGERPRINT_PG17: &str = "69f219a12a610e40f4f9c9dd4b8ab4bd";
-const COLUMN_FINGERPRINT_PG18: &str = "69f219a12a610e40f4f9c9dd4b8ab4bd";
-const FUNCTION_FINGERPRINT_PG16: &str = "59959efcee6cb80348614f4d577643db";
-const FUNCTION_FINGERPRINT_PG17: &str = "59959efcee6cb80348614f4d577643db";
-const FUNCTION_FINGERPRINT_PG18: &str = "59959efcee6cb80348614f4d577643db";
-const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "38baceab08c18103848c34e59e247b3f";
+const CONSTRAINT_FINGERPRINT_PG16: &str = "24c9db8264b098f9c427e435bfdb6099";
+const CONSTRAINT_FINGERPRINT_PG17: &str = "24c9db8264b098f9c427e435bfdb6099";
+const CONSTRAINT_FINGERPRINT_PG18: &str = "3bd757cb3eeb226cd4a16d3bb2076dc8";
+const COLUMN_FINGERPRINT_PG16: &str = "7d7a282358345953f585b4ef89363eb8";
+const COLUMN_FINGERPRINT_PG17: &str = "7d7a282358345953f585b4ef89363eb8";
+const COLUMN_FINGERPRINT_PG18: &str = "7d7a282358345953f585b4ef89363eb8";
+const FUNCTION_FINGERPRINT_PG16: &str = "e13129b7c02802919ef6ad69e9a37e1f";
+const FUNCTION_FINGERPRINT_PG17: &str = "e13129b7c02802919ef6ad69e9a37e1f";
+const FUNCTION_FINGERPRINT_PG18: &str = "e13129b7c02802919ef6ad69e9a37e1f";
+const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "42ff331caa4856650f942962e7b11774";
 
 /// Runtime-forceable session semantics. Server/SUSET state that the runtime
 /// cannot safely repair is rejected by the attested SQL capability instead.
@@ -111,7 +112,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_fingerprint_check CHECK (
         capability_fingerprint =
-        'sha256:85beacf26e279b0fd2e0f242b207afd05b83c5cb4e4c630ff9401ee5ffbe7f8d'
+        'sha256:94f81117b09d13cf2d7ef5ab282b779e2c8d67fcc9ba111a0d116aeb91a8d355'
     ),
     CONSTRAINT state_plane_metadata_roles_distinct_check CHECK (
         owner_role_oid <> runtime_role_oid
@@ -1051,10 +1052,81 @@ BEGIN
            'source_observed_at', 'source_revision',
            'snapshot_generation', 'snapshot_published_at'
        ]::text[] <> '{}'::jsonb
-       OR v_seed #> '{acquisition,provenance_contract,source_observed_at}'
-            IS DISTINCT FROM 'null'::jsonb
-       OR v_seed #> '{acquisition,provenance_contract,source_revision}'
-            IS DISTINCT FROM 'null'::jsonb
+       OR (
+           v_seed #>> '{acquisition,class}' = 'materialized_snapshot'
+           AND (
+               (
+                   v_seed #> '{acquisition,provenance_contract,source_observed_at}'
+                        IS DISTINCT FROM 'null'::jsonb
+                   AND (
+                       jsonb_typeof(
+                           v_seed #> '{acquisition,provenance_contract,source_observed_at}'
+                       ) IS DISTINCT FROM 'object'
+                       OR relay_state_private.jsonb_object_key_count_v1(
+                           v_seed #> '{acquisition,provenance_contract,source_observed_at}'
+                       ) <> 2
+                       OR (v_seed #> '{acquisition,provenance_contract,source_observed_at}')
+                            - ARRAY['type', 'field']::text[] <> '{}'::jsonb
+                       OR v_seed #>> '{acquisition,provenance_contract,source_observed_at,type}'
+                            <> 'acquired_rfc3339'
+                       OR NOT (
+                           v_seed #> '{acquisition,schema,fields}'
+                           ? (v_seed #>> '{acquisition,provenance_contract,source_observed_at,field}')
+                       )
+                       OR v_seed #>> ARRAY[
+                           'acquisition', 'schema', 'fields',
+                           v_seed #>> '{acquisition,provenance_contract,source_observed_at,field}',
+                           'type'
+                       ] <> 'string'
+                   )
+               )
+               OR (
+                   v_seed #> '{acquisition,provenance_contract,source_revision}'
+                        IS DISTINCT FROM 'null'::jsonb
+                   AND (
+                       jsonb_typeof(
+                           v_seed #> '{acquisition,provenance_contract,source_revision}'
+                       ) IS DISTINCT FROM 'object'
+                       OR relay_state_private.jsonb_object_key_count_v1(
+                           v_seed #> '{acquisition,provenance_contract,source_revision}'
+                       ) <> 3
+                       OR (v_seed #> '{acquisition,provenance_contract,source_revision}')
+                            - ARRAY['type', 'field', 'max_bytes']::text[] <> '{}'::jsonb
+                       OR v_seed #>> '{acquisition,provenance_contract,source_revision,type}'
+                            <> 'acquired_string'
+                       OR jsonb_typeof(
+                           v_seed #> '{acquisition,provenance_contract,source_revision,max_bytes}'
+                       ) IS DISTINCT FROM 'number'
+                       OR v_seed #> '{acquisition,provenance_contract,source_revision,max_bytes}'
+                            NOT BETWEEN '1'::jsonb AND '65535'::jsonb
+                       OR NOT (
+                           v_seed #> '{acquisition,schema,fields}'
+                           ? (v_seed #>> '{acquisition,provenance_contract,source_revision,field}')
+                       )
+                       OR v_seed #>> ARRAY[
+                           'acquisition', 'schema', 'fields',
+                           v_seed #>> '{acquisition,provenance_contract,source_revision,field}',
+                           'type'
+                       ] <> 'string'
+                       OR v_seed #>> ARRAY[
+                           'acquisition', 'schema', 'fields',
+                           v_seed #>> '{acquisition,provenance_contract,source_revision,field}',
+                           'max_bytes'
+                       ] IS DISTINCT FROM
+                           v_seed #>> '{acquisition,provenance_contract,source_revision,max_bytes}'
+                   )
+               )
+           )
+       )
+       OR (
+           v_seed #>> '{acquisition,class}' <> 'materialized_snapshot'
+           AND (
+               v_seed #> '{acquisition,provenance_contract,source_observed_at}'
+                    IS DISTINCT FROM 'null'::jsonb
+               OR v_seed #> '{acquisition,provenance_contract,source_revision}'
+                    IS DISTINCT FROM 'null'::jsonb
+           )
+       )
        OR v_seed #>> '{acquisition,provenance_contract,snapshot_generation}'
             NOT IN ('required', 'absent')
        OR v_seed #>> '{acquisition,provenance_contract,snapshot_published_at}'
@@ -1408,47 +1480,18 @@ BEGIN
        OR (
            (v_seed #>> '{bounds,credential_exchanges}')::integer = 1
            AND jsonb_typeof(v_seed #> '{bounds,credential_token_lifetime_ms}') = 'null'
-           AND NOT EXISTS (
-               SELECT 1
-               FROM pg_catalog.jsonb_array_elements(
-                   v_seed -> 'authorized_operation_union'
-               ) AS jwks(value)
-               WHERE jwks.value ->> 'kind' = 'data'
-                 AND jwks.value ->> 'operation_id' ~ '\.jwks$'
-                 AND EXISTS (
-                     SELECT 1
-                     FROM pg_catalog.jsonb_array_elements(
-                         v_seed -> 'authorized_operation_union'
-                     ) AS search(value)
-                     WHERE search.value ->> 'kind' = 'data'
-                       AND search.value ->> 'operation_id' = pg_catalog.left(
-                           jwks.value ->> 'operation_id',
-                           pg_catalog.length(jwks.value ->> 'operation_id') - 5
-                       )
-                 )
-                 AND EXISTS (
-                     SELECT 1
-                     FROM pg_catalog.jsonb_array_elements(
-                         v_seed #> '{dispatch,permit_bindings}'
-                     ) AS permit(value)
-                     WHERE permit.value ->> 'kind' = 'data'
-                       AND (permit.value ->> 'ordinal')::integer = 0
-                       AND permit.value -> 'allowed_operation_ids'
-                            = pg_catalog.jsonb_build_array(jwks.value -> 'operation_id')
-                 )
-                 AND EXISTS (
-                     SELECT 1
-                     FROM pg_catalog.jsonb_array_elements(
-                         v_seed #> '{dispatch,permit_bindings}'
-                     ) AS permit(value)
-                     WHERE permit.value ->> 'kind' = 'data'
-                       AND (permit.value ->> 'ordinal')::integer = 1
-                       AND permit.value -> 'allowed_operation_ids'
-                            = pg_catalog.jsonb_build_array(pg_catalog.left(
-                                jwks.value ->> 'operation_id',
-                                pg_catalog.length(jwks.value ->> 'operation_id') - 5
-                            ))
-                 )
+           AND NOT (
+               v_seed #>> '{dispatch,plan_kind}' = 'bounded_http'
+               AND v_data_operation_count = 2
+               AND v_data_binding_count = 2
+               AND jsonb_array_length(
+                   v_seed #> '{dispatch,permit_bindings,1,allowed_operation_ids}'
+               ) = 1
+               AND jsonb_array_length(
+                   v_seed #> '{dispatch,permit_bindings,2,allowed_operation_ids}'
+               ) = 1
+               AND v_seed #>> '{dispatch,permit_bindings,1,allowed_operation_ids,0}'
+                    <> v_seed #>> '{dispatch,permit_bindings,2,allowed_operation_ids,0}'
            )
        )
     THEN
@@ -1629,7 +1672,7 @@ WITH metadata AS (
       AND schema_version = 1
       AND capability_id = 'registry.relay.postgres-durable-audit/v1'
       AND capability_fingerprint =
-        'sha256:85beacf26e279b0fd2e0f242b207afd05b83c5cb4e4c630ff9401ee5ffbe7f8d'
+        'sha256:94f81117b09d13cf2d7ef5ab282b779e2c8d67fcc9ba111a0d116aeb91a8d355'
       AND serving_fence_capability_id = 'registry.relay.postgres-serving-fence/v1'
       AND serving_fence_lock_key <> 0
       AND serving_fence_lock_key <> 7221091440
@@ -1691,7 +1734,7 @@ target_indexes AS (
           'serving_fence_state', 'consultation_completion_intent',
           'consultation_audit_context', 'dispatch_permit', 'consultation_quota_bucket',
           'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
-          'audit_pseudonym_transition_context'
+          'audit_pseudonym_transition_context', 'consultation_batch_child_replay'
       )
 ),
 target_triggers AS (
@@ -1709,7 +1752,7 @@ target_triggers AS (
           'serving_fence_state', 'consultation_completion_intent',
           'consultation_audit_context', 'dispatch_permit', 'consultation_quota_bucket',
           'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
-          'audit_pseudonym_transition_context'
+          'audit_pseudonym_transition_context', 'consultation_batch_child_replay'
       )
 ),
 target_rules AS (
@@ -1724,7 +1767,7 @@ target_rules AS (
           'serving_fence_state', 'consultation_completion_intent',
           'consultation_audit_context', 'dispatch_permit', 'consultation_quota_bucket',
           'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
-          'audit_pseudonym_transition_context'
+          'audit_pseudonym_transition_context', 'consultation_batch_child_replay'
       )
 ),
 target_policies AS (
@@ -1739,7 +1782,7 @@ target_policies AS (
           'serving_fence_state', 'consultation_completion_intent',
           'consultation_audit_context', 'dispatch_permit', 'consultation_quota_bucket',
           'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
-          'audit_pseudonym_transition_context'
+          'audit_pseudonym_transition_context', 'consultation_batch_child_replay'
       )
 ),
 target_functions AS (
@@ -1951,7 +1994,7 @@ SELECT
         SELECT 1 FROM target_schemas, metadata
         WHERE target_schemas.nspowner <> metadata.owner_role_oid
     )
-    AND (SELECT count(*) = 13 FROM target_relations)
+    AND (SELECT count(*) = 14 FROM target_relations)
     AND NOT EXISTS (
         SELECT 1 FROM target_relations, metadata
         WHERE target_relations.nspname <> 'relay_state_private'
@@ -1968,10 +2011,10 @@ SELECT
                'serving_fence_state', 'consultation_completion_intent',
                'consultation_audit_context', 'dispatch_permit', 'consultation_quota_bucket',
                'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
-               'audit_pseudonym_transition_context'
+               'audit_pseudonym_transition_context', 'consultation_batch_child_replay'
            )
     )
-    AND (SELECT count(*) = 20 FROM target_indexes)
+    AND (SELECT count(*) = 22 FROM target_indexes)
     AND NOT EXISTS (
         SELECT 1 FROM target_indexes, metadata
         WHERE target_indexes.relowner <> metadata.owner_role_oid
@@ -2004,7 +2047,9 @@ SELECT
                'consultation_audit_context_pk', 'dispatch_permit_pk',
                'dispatch_permit_takeover_idx', 'consultation_quota_bucket_pk',
                'audit_pseudonym_keyring_pk', 'audit_pseudonym_used_key_id_pk',
-               'audit_pseudonym_transition_context_pk'
+               'audit_pseudonym_transition_context_pk',
+               'consultation_batch_child_replay_pkey',
+               'consultation_batch_child_replay_operation_id_key'
            )
            OR NOT (
                (target_indexes.table_name = 'state_plane_metadata'
@@ -2046,6 +2091,11 @@ SELECT
                    AND target_indexes.index_name = 'audit_pseudonym_used_key_id_pk')
                OR (target_indexes.table_name = 'audit_pseudonym_transition_context'
                    AND target_indexes.index_name = 'audit_pseudonym_transition_context_pk')
+               OR (target_indexes.table_name = 'consultation_batch_child_replay'
+                   AND target_indexes.index_name IN (
+                       'consultation_batch_child_replay_pkey',
+                       'consultation_batch_child_replay_operation_id_key'
+                   ))
            )
            OR (
                target_indexes.index_name IN (
@@ -2056,6 +2106,7 @@ SELECT
                    'consultation_audit_context_pk', 'dispatch_permit_pk',
                    'consultation_quota_bucket_pk', 'audit_pseudonym_keyring_pk',
                    'audit_pseudonym_used_key_id_pk',
+                   'consultation_batch_child_replay_pkey',
                    'audit_pseudonym_transition_context_pk'
                ) AND NOT target_indexes.indisprimary
            )
@@ -2113,7 +2164,7 @@ SELECT
     )
     AND NOT EXISTS (SELECT 1 FROM target_rules)
     AND NOT EXISTS (SELECT 1 FROM target_policies)
-    AND (SELECT count(*) = 34 FROM target_functions)
+    AND (SELECT count(*) = 37 FROM target_functions)
     AND NOT EXISTS (
         SELECT 1 FROM target_functions, metadata
         WHERE target_functions.proowner <> metadata.owner_role_oid
@@ -2157,6 +2208,9 @@ SELECT
                             'consultation_completion_snapshot_normal_v1',
                             'consultation_completion_snapshot_recovery_v1',
                             'consultation_completion_cas_normal_v1',
+                            'consultation_batch_child_reserve_v1',
+                            'consultation_batch_child_release_v1',
+                            'consultation_completion_cas_normal_batch_v1',
                             'consultation_completion_cas_unfinished_v1',
                             'consultation_completion_cas_recovery_v1',
                             'serving_fence_acquire_v1', 'serving_fence_finalize_v1',
@@ -2196,7 +2250,7 @@ SELECT
            )
     )
     AND (SELECT count(*) FROM table_acl) = (
-        SELECT 13 * count(*) FROM metadata
+        SELECT 14 * count(*) FROM metadata
         CROSS JOIN LATERAL pg_catalog.aclexplode(
             pg_catalog.acldefault('r', metadata.owner_role_oid)
         ) AS expected_acl
@@ -2211,7 +2265,7 @@ SELECT
                'REFERENCES', 'TRIGGER', 'MAINTAIN'
            )
     )
-    AND (SELECT count(*) = 64 FROM function_acl)
+    AND (SELECT count(*) = 70 FROM function_acl)
     AND NOT EXISTS (
         SELECT 1 FROM function_acl, metadata
         WHERE function_acl.grantor <> metadata.owner_role_oid
@@ -2234,6 +2288,9 @@ SELECT
                        'consultation_completion_snapshot_normal_v1',
                        'consultation_completion_snapshot_recovery_v1',
                        'consultation_completion_cas_normal_v1',
+                       'consultation_batch_child_reserve_v1',
+                       'consultation_batch_child_release_v1',
+                       'consultation_completion_cas_normal_batch_v1',
                        'consultation_completion_cas_unfinished_v1',
                        'consultation_completion_cas_recovery_v1',
                        'audit_readiness_v1', 'serving_fence_acquire_v1',
@@ -2265,19 +2322,19 @@ SELECT
            )
     )
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN 'b7bcbdb92177fd40eedca0f9956212ac'
-            WHEN 17 THEN 'b7bcbdb92177fd40eedca0f9956212ac'
-            WHEN 18 THEN 'fa389bad5ee266649054a94da9900742'
+            WHEN 16 THEN '24c9db8264b098f9c427e435bfdb6099'
+            WHEN 17 THEN '24c9db8264b098f9c427e435bfdb6099'
+            WHEN 18 THEN '3bd757cb3eeb226cd4a16d3bb2076dc8'
             ELSE '' END FROM constraint_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '69f219a12a610e40f4f9c9dd4b8ab4bd'
-            WHEN 17 THEN '69f219a12a610e40f4f9c9dd4b8ab4bd'
-            WHEN 18 THEN '69f219a12a610e40f4f9c9dd4b8ab4bd'
+            WHEN 16 THEN '7d7a282358345953f585b4ef89363eb8'
+            WHEN 17 THEN '7d7a282358345953f585b4ef89363eb8'
+            WHEN 18 THEN '7d7a282358345953f585b4ef89363eb8'
             ELSE '' END FROM column_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '59959efcee6cb80348614f4d577643db'
-            WHEN 17 THEN '59959efcee6cb80348614f4d577643db'
-            WHEN 18 THEN '59959efcee6cb80348614f4d577643db'
+            WHEN 16 THEN 'e13129b7c02802919ef6ad69e9a37e1f'
+            WHEN 17 THEN 'e13129b7c02802919ef6ad69e9a37e1f'
+            WHEN 18 THEN 'e13129b7c02802919ef6ad69e9a37e1f'
             ELSE '' END FROM function_fingerprint, server);
 $function$;
 
@@ -4686,10 +4743,43 @@ BEGIN
                     trunc((v_provenance ->> 'relay_acquired_at_unix_ms')::numeric)
                OR (v_provenance ->> 'relay_acquired_at_unix_ms')::numeric
                     NOT BETWEEN 0 AND 9007199254740991
-               OR v_provenance -> 'source_observed_at_unix_ms'
-                    IS DISTINCT FROM 'null'::jsonb
-               OR v_provenance -> 'source_revision'
-                    IS DISTINCT FROM 'null'::jsonb
+               OR (
+                   v_seed #> '{acquisition,provenance_contract,source_observed_at}'
+                        = 'null'::jsonb
+                   AND v_provenance -> 'source_observed_at_unix_ms'
+                        IS DISTINCT FROM 'null'::jsonb
+               )
+               OR (
+                   jsonb_typeof(
+                       v_seed #> '{acquisition,provenance_contract,source_observed_at}'
+                   ) = 'object'
+                   AND (
+                       jsonb_typeof(v_provenance -> 'source_observed_at_unix_ms')
+                            <> 'number'
+                       OR (v_provenance ->> 'source_observed_at_unix_ms')::numeric <>
+                            trunc((v_provenance ->> 'source_observed_at_unix_ms')::numeric)
+                       OR (v_provenance ->> 'source_observed_at_unix_ms')::numeric
+                            NOT BETWEEN 0 AND 9007199254740991
+                       OR (v_provenance ->> 'source_observed_at_unix_ms')::numeric
+                            > (v_provenance ->> 'relay_acquired_at_unix_ms')::numeric
+                   )
+               )
+               OR (
+                   v_seed #> '{acquisition,provenance_contract,source_revision}'
+                        = 'null'::jsonb
+                   AND v_provenance -> 'source_revision'
+                        IS DISTINCT FROM 'null'::jsonb
+               )
+               OR (
+                   jsonb_typeof(
+                       v_seed #> '{acquisition,provenance_contract,source_revision}'
+                   ) = 'object'
+                   AND (
+                       jsonb_typeof(v_provenance -> 'source_revision') <> 'string'
+                       OR octet_length(v_provenance ->> 'source_revision') NOT BETWEEN 1 AND
+                            (v_seed #>> '{acquisition,provenance_contract,source_revision,max_bytes}')::integer
+                   )
+               )
                OR (
                    v_seed #>> '{acquisition,class}' = 'materialized_snapshot'
                    AND (
@@ -7195,6 +7285,356 @@ ALTER FUNCTION relay_state_api.audit_pseudonym_keyring_maintain_v1(
     bigint, bytea, bigint, bytea, bigint, bigint, bytea, text, text,
     bigint, bigint, bigint, text[], bigint[], bigint[], text, bigint
 ) OWNER TO CURRENT_USER;
+
+CREATE TABLE IF NOT EXISTS relay_state_private.consultation_batch_child_replay (
+    child_key bytea PRIMARY KEY,
+    binding_digest bytea NOT NULL,
+    operation_id text NOT NULL UNIQUE,
+    state text NOT NULL DEFAULT 'reserved',
+    terminal_payload jsonb NULL,
+    created_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    CONSTRAINT consultation_batch_child_key_check CHECK (octet_length(child_key) = 32),
+    CONSTRAINT consultation_batch_child_binding_check CHECK (octet_length(binding_digest) = 32),
+    CONSTRAINT consultation_batch_child_operation_check CHECK (
+        operation_id ~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+    ),
+    CONSTRAINT consultation_batch_child_state_check CHECK (state IN ('reserved', 'terminal')),
+    CONSTRAINT consultation_batch_child_terminal_check CHECK (
+        (state = 'reserved' AND terminal_payload IS NULL)
+        OR (
+            state = 'terminal'
+            AND jsonb_typeof(terminal_payload) = 'object'
+            AND terminal_payload ?& ARRAY[
+                'schema', 'consultation_id', 'outcome', 'data', 'profile', 'provenance'
+            ]::text[]
+            AND terminal_payload ->> 'schema' = 'registry.relay.batch-terminal/v1'
+            AND NOT terminal_payload ? 'notary_evaluation_id'
+            AND (terminal_payload - ARRAY[
+                'schema', 'consultation_id', 'outcome', 'data', 'profile', 'provenance'
+            ]::text[]) = '{}'::jsonb
+            AND terminal_payload ->> 'consultation_id' ~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+            AND terminal_payload ->> 'consultation_id' = operation_id
+            AND terminal_payload ->> 'outcome' IN ('match', 'no_match', 'ambiguous')
+            AND jsonb_typeof(terminal_payload -> 'profile') = 'object'
+            AND (terminal_payload -> 'profile') ?& ARRAY[
+                'id', 'version', 'contract_hash'
+            ]::text[]
+            AND ((terminal_payload -> 'profile') - ARRAY[
+                'id', 'version', 'contract_hash'
+            ]::text[]) = '{}'::jsonb
+            AND jsonb_typeof(terminal_payload #> '{profile,id}') = 'string'
+            AND jsonb_typeof(terminal_payload #> '{profile,version}') = 'string'
+            AND jsonb_typeof(terminal_payload #> '{profile,contract_hash}') = 'string'
+            AND jsonb_typeof(terminal_payload -> 'provenance') = 'object'
+            AND (terminal_payload -> 'provenance') ?& ARRAY[
+                'relay_acquired_at', 'source_observed_at', 'source_revision',
+                'acquisition_class', 'integration_pack', 'policy_id', 'policy_hash', 'consent'
+            ]::text[]
+            AND ((terminal_payload -> 'provenance') - ARRAY[
+                'relay_acquired_at', 'source_observed_at', 'source_revision',
+                'acquisition_class', 'integration_pack', 'policy_id', 'policy_hash', 'consent',
+                'snapshot_generation_id', 'snapshot_published_at'
+            ]::text[]) = '{}'::jsonb
+            AND jsonb_typeof(terminal_payload #> '{provenance,relay_acquired_at}') = 'string'
+            AND jsonb_typeof(terminal_payload #> '{provenance,source_observed_at}')
+                IN ('string', 'null')
+            AND jsonb_typeof(terminal_payload #> '{provenance,source_revision}')
+                IN ('string', 'null')
+            AND jsonb_typeof(terminal_payload #> '{provenance,acquisition_class}') = 'string'
+            AND jsonb_typeof(terminal_payload #> '{provenance,policy_id}') = 'string'
+            AND jsonb_typeof(terminal_payload #> '{provenance,policy_hash}') = 'string'
+            AND jsonb_typeof(terminal_payload #> '{provenance,integration_pack}') = 'object'
+            AND (terminal_payload #> '{provenance,integration_pack}') ?&
+                ARRAY['id', 'version', 'hash']::text[]
+            AND ((terminal_payload #> '{provenance,integration_pack}') -
+                ARRAY['id', 'version', 'hash']::text[]) = '{}'::jsonb
+            AND jsonb_typeof(terminal_payload #> '{provenance,integration_pack,id}') = 'string'
+            AND jsonb_typeof(terminal_payload #> '{provenance,integration_pack,version}') = 'string'
+            AND jsonb_typeof(terminal_payload #> '{provenance,integration_pack,hash}') = 'string'
+            AND jsonb_typeof(terminal_payload #> '{provenance,consent}') = 'object'
+            AND (terminal_payload #> '{provenance,consent}') ?& ARRAY[
+                'outcome', 'verifier_id', 'verifier_revision', 'checked_at', 'expires_at',
+                'revocation_status'
+            ]::text[]
+            AND ((terminal_payload #> '{provenance,consent}') - ARRAY[
+                'outcome', 'verifier_id', 'verifier_revision', 'checked_at', 'expires_at',
+                'revocation_status'
+            ]::text[]) = '{}'::jsonb
+            AND jsonb_typeof(terminal_payload #> '{provenance,consent,outcome}') = 'string'
+            AND jsonb_typeof(terminal_payload #> '{provenance,consent,verifier_id}')
+                IN ('string', 'null')
+            AND jsonb_typeof(terminal_payload #> '{provenance,consent,verifier_revision}')
+                IN ('string', 'null')
+            AND jsonb_typeof(terminal_payload #> '{provenance,consent,checked_at}')
+                IN ('string', 'null')
+            AND jsonb_typeof(terminal_payload #> '{provenance,consent,expires_at}')
+                IN ('string', 'null')
+            AND jsonb_typeof(terminal_payload #> '{provenance,consent,revocation_status}') = 'string'
+            AND (NOT (terminal_payload -> 'provenance') ? 'snapshot_generation_id'
+                 OR jsonb_typeof(terminal_payload #> '{provenance,snapshot_generation_id}') = 'string')
+            AND (NOT (terminal_payload -> 'provenance') ? 'snapshot_published_at'
+                 OR jsonb_typeof(terminal_payload #> '{provenance,snapshot_published_at}') = 'string')
+            AND (
+                (terminal_payload ->> 'outcome' = 'match'
+                 AND jsonb_typeof(terminal_payload -> 'data') = 'object'
+                 AND terminal_payload -> 'data' <> '{}'::jsonb)
+                OR
+                (terminal_payload ->> 'outcome' IN ('no_match', 'ambiguous')
+                 AND jsonb_typeof(terminal_payload -> 'data') = 'null')
+            )
+        )
+    ),
+    CONSTRAINT consultation_batch_child_retention_check CHECK (
+        expires_at = created_at + interval '15 minutes'
+    )
+);
+REVOKE ALL ON relay_state_private.consultation_batch_child_replay FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION relay_state_api.consultation_batch_child_reserve_v1(
+    p_child_key bytea,
+    p_binding_digest bytea,
+    p_operation_id text
+)
+RETURNS TABLE(outcome text, stored_operation_id text, terminal_payload text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_row relay_state_private.consultation_batch_child_replay%ROWTYPE;
+    v_runtime_oid oid;
+    v_session_oid oid;
+    v_now timestamptz := clock_timestamp();
+BEGIN
+    SELECT metadata.runtime_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid
+       OR NOT relay_state_private.capability_valid_v1()
+       OR octet_length(p_child_key) <> 32
+       OR octet_length(p_binding_digest) <> 32
+       OR p_operation_id !~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+    THEN
+        RAISE EXCEPTION 'batch child replay caller is unavailable' USING ERRCODE = '55000';
+    END IF;
+    DELETE FROM relay_state_private.consultation_batch_child_replay
+    WHERE expires_at <= v_now;
+    INSERT INTO relay_state_private.consultation_batch_child_replay(
+        child_key, binding_digest, operation_id, created_at, expires_at
+    ) VALUES (p_child_key, p_binding_digest, p_operation_id, v_now, v_now + interval '15 minutes')
+    ON CONFLICT (child_key) DO NOTHING;
+    SELECT replay.* INTO STRICT v_row
+    FROM relay_state_private.consultation_batch_child_replay AS replay
+    WHERE replay.child_key = p_child_key
+    FOR UPDATE;
+    IF v_row.binding_digest IS DISTINCT FROM p_binding_digest THEN
+        RETURN QUERY SELECT 'conflict'::text, NULL::text, NULL::text;
+    ELSIF v_row.state = 'terminal' THEN
+        RETURN QUERY SELECT 'replay'::text, v_row.operation_id, v_row.terminal_payload::text;
+    ELSIF v_row.operation_id = p_operation_id THEN
+        RETURN QUERY SELECT 'reserved'::text, v_row.operation_id, NULL::text;
+    ELSE
+        RETURN QUERY SELECT 'in_progress'::text, v_row.operation_id, NULL::text;
+    END IF;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.consultation_batch_child_release_v1(
+    p_child_key bytea, p_binding_digest bytea, p_operation_id text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_deleted integer;
+BEGIN
+    DELETE FROM relay_state_private.consultation_batch_child_replay AS replay
+    WHERE replay.child_key = p_child_key
+      AND replay.binding_digest = p_binding_digest
+      AND replay.operation_id = p_operation_id
+      AND replay.state = 'reserved'
+      AND EXISTS (
+          SELECT 1 FROM relay_state_private.state_plane_metadata AS metadata
+          JOIN pg_catalog.pg_roles AS role ON role.oid = metadata.runtime_role_oid
+          WHERE metadata.singleton = true AND role.rolname = session_user
+            AND relay_state_private.capability_valid_v1()
+      )
+    ;
+    GET DIAGNOSTICS v_deleted = ROW_COUNT;
+    RETURN v_deleted = 1;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.consultation_completion_cas_normal_batch_v1(
+    p_operation_id text, p_fence_lock_key bigint, p_holder_id text,
+    p_fence_generation bigint, p_expected_deadline_unix_ms bigint,
+    p_expected_permit_kinds text[], p_expected_permit_ordinals smallint[],
+    p_current_pseudonym_key_id text, p_current_pseudonym_generation bigint,
+    p_current_pseudonym_metadata_digest bytea, p_payload_digest bytea,
+    p_candidate_generation bigint, p_candidate_predecessor_hash bytea,
+    p_envelope_id text, p_timestamp_unix_ms bigint, p_record_json text,
+    p_envelope_json text, p_record_hash bytea, p_expected_chain_key_epoch_id text,
+    p_expected_keyring_lock_key bigint, p_child_key bytea, p_binding_digest bytea,
+    p_terminal_payload text
+)
+RETURNS TABLE(outcome text, stored_envelope_id text, stored_chain_hash bytea, completion_outcome text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_result record;
+    v_terminal jsonb;
+    v_existing jsonb;
+    v_now timestamptz := clock_timestamp();
+BEGIN
+    IF p_terminal_payload IS NULL
+       OR octet_length(p_terminal_payload) NOT BETWEEN 1 AND 65536
+    THEN
+        RAISE EXCEPTION 'batch terminal payload is invalid' USING ERRCODE = '22023';
+    END IF;
+    BEGIN
+        v_terminal := p_terminal_payload::jsonb;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE EXCEPTION 'batch terminal payload is invalid' USING ERRCODE = '22023';
+    END;
+    SELECT * INTO STRICT v_result
+    FROM relay_state_api.consultation_completion_cas_normal_v1(
+        p_operation_id, p_fence_lock_key, p_holder_id, p_fence_generation,
+        p_expected_deadline_unix_ms, p_expected_permit_kinds,
+        p_expected_permit_ordinals, p_current_pseudonym_key_id,
+        p_current_pseudonym_generation, p_current_pseudonym_metadata_digest,
+        p_payload_digest, p_candidate_generation, p_candidate_predecessor_hash,
+        p_envelope_id, p_timestamp_unix_ms, p_record_json, p_envelope_json,
+        p_record_hash, p_expected_chain_key_epoch_id, p_expected_keyring_lock_key
+    );
+    IF v_result.outcome IN ('inserted', 'identical_duplicate') THEN
+        IF jsonb_typeof(v_terminal) <> 'object'
+           OR NOT v_terminal ?& ARRAY[
+               'schema', 'consultation_id', 'outcome', 'data', 'profile', 'provenance'
+           ]::text[]
+           OR v_terminal ->> 'schema' <> 'registry.relay.batch-terminal/v1'
+           OR v_terminal ? 'notary_evaluation_id'
+           OR (v_terminal - ARRAY[
+               'schema', 'consultation_id', 'outcome', 'data', 'profile', 'provenance'
+           ]::text[]) <> '{}'::jsonb
+           OR v_terminal ->> 'consultation_id' !~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+           OR v_terminal ->> 'consultation_id' <> p_operation_id
+           OR v_terminal ->> 'outcome' NOT IN ('match', 'no_match', 'ambiguous')
+           OR jsonb_typeof(v_terminal -> 'profile') <> 'object'
+           OR NOT (v_terminal -> 'profile') ?& ARRAY['id', 'version', 'contract_hash']::text[]
+           OR ((v_terminal -> 'profile') - ARRAY['id', 'version', 'contract_hash']::text[])
+                <> '{}'::jsonb
+           OR jsonb_typeof(v_terminal #> '{profile,id}') <> 'string'
+           OR jsonb_typeof(v_terminal #> '{profile,version}') <> 'string'
+           OR jsonb_typeof(v_terminal #> '{profile,contract_hash}') <> 'string'
+           OR jsonb_typeof(v_terminal -> 'provenance') <> 'object'
+           OR NOT (v_terminal -> 'provenance') ?& ARRAY[
+               'relay_acquired_at', 'source_observed_at', 'source_revision',
+               'acquisition_class', 'integration_pack', 'policy_id', 'policy_hash', 'consent'
+           ]::text[]
+           OR ((v_terminal -> 'provenance') - ARRAY[
+               'relay_acquired_at', 'source_observed_at', 'source_revision',
+               'acquisition_class', 'integration_pack', 'policy_id', 'policy_hash', 'consent',
+               'snapshot_generation_id', 'snapshot_published_at'
+           ]::text[]) <> '{}'::jsonb
+           OR jsonb_typeof(v_terminal #> '{provenance,relay_acquired_at}') <> 'string'
+           OR jsonb_typeof(v_terminal #> '{provenance,source_observed_at}')
+                NOT IN ('string', 'null')
+           OR jsonb_typeof(v_terminal #> '{provenance,source_revision}')
+                NOT IN ('string', 'null')
+           OR jsonb_typeof(v_terminal #> '{provenance,acquisition_class}') <> 'string'
+           OR jsonb_typeof(v_terminal #> '{provenance,policy_id}') <> 'string'
+           OR jsonb_typeof(v_terminal #> '{provenance,policy_hash}') <> 'string'
+           OR jsonb_typeof(v_terminal #> '{provenance,integration_pack}') <> 'object'
+           OR NOT (v_terminal #> '{provenance,integration_pack}') ?&
+                ARRAY['id', 'version', 'hash']::text[]
+           OR ((v_terminal #> '{provenance,integration_pack}') -
+                ARRAY['id', 'version', 'hash']::text[]) <> '{}'::jsonb
+           OR jsonb_typeof(v_terminal #> '{provenance,integration_pack,id}') <> 'string'
+           OR jsonb_typeof(v_terminal #> '{provenance,integration_pack,version}') <> 'string'
+           OR jsonb_typeof(v_terminal #> '{provenance,integration_pack,hash}') <> 'string'
+           OR jsonb_typeof(v_terminal #> '{provenance,consent}') <> 'object'
+           OR NOT (v_terminal #> '{provenance,consent}') ?& ARRAY[
+               'outcome', 'verifier_id', 'verifier_revision', 'checked_at', 'expires_at',
+               'revocation_status'
+           ]::text[]
+           OR ((v_terminal #> '{provenance,consent}') - ARRAY[
+               'outcome', 'verifier_id', 'verifier_revision', 'checked_at', 'expires_at',
+               'revocation_status'
+           ]::text[]) <> '{}'::jsonb
+           OR jsonb_typeof(v_terminal #> '{provenance,consent,outcome}') <> 'string'
+           OR jsonb_typeof(v_terminal #> '{provenance,consent,verifier_id}')
+                NOT IN ('string', 'null')
+           OR jsonb_typeof(v_terminal #> '{provenance,consent,verifier_revision}')
+                NOT IN ('string', 'null')
+           OR jsonb_typeof(v_terminal #> '{provenance,consent,checked_at}')
+                NOT IN ('string', 'null')
+           OR jsonb_typeof(v_terminal #> '{provenance,consent,expires_at}')
+                NOT IN ('string', 'null')
+           OR jsonb_typeof(v_terminal #> '{provenance,consent,revocation_status}') <> 'string'
+           OR ((v_terminal -> 'provenance') ? 'snapshot_generation_id'
+               AND jsonb_typeof(v_terminal #> '{provenance,snapshot_generation_id}') <> 'string')
+           OR ((v_terminal -> 'provenance') ? 'snapshot_published_at'
+               AND jsonb_typeof(v_terminal #> '{provenance,snapshot_published_at}') <> 'string')
+           OR ((v_terminal ->> 'outcome') = 'match'
+               AND (jsonb_typeof(v_terminal -> 'data') <> 'object'
+                    OR v_terminal -> 'data' = '{}'::jsonb))
+           OR ((v_terminal ->> 'outcome') IN ('no_match', 'ambiguous')
+               AND jsonb_typeof(v_terminal -> 'data') <> 'null')
+        THEN
+            RAISE EXCEPTION 'batch terminal payload is invalid' USING ERRCODE = '22023';
+        END IF;
+        UPDATE relay_state_private.consultation_batch_child_replay AS replay
+        SET state = 'terminal', terminal_payload = v_terminal,
+            created_at = v_now, expires_at = v_now + interval '15 minutes'
+        WHERE replay.child_key = p_child_key
+          AND replay.binding_digest = p_binding_digest
+          AND replay.operation_id = p_operation_id
+          AND replay.state = 'reserved';
+        IF NOT FOUND THEN
+            SELECT replay.terminal_payload INTO v_existing
+            FROM relay_state_private.consultation_batch_child_replay AS replay
+            WHERE replay.child_key = p_child_key
+              AND replay.binding_digest = p_binding_digest
+              AND replay.operation_id = p_operation_id
+              AND replay.state = 'terminal'
+            FOR UPDATE;
+            IF NOT FOUND OR v_existing IS DISTINCT FROM v_terminal THEN
+                RAISE EXCEPTION 'batch replay reservation is unavailable' USING ERRCODE = '55000';
+            END IF;
+        END IF;
+    END IF;
+    RETURN QUERY SELECT v_result.outcome, v_result.stored_envelope_id,
+        v_result.stored_chain_hash, v_result.completion_outcome;
+END;
+$function$;
+
+ALTER FUNCTION relay_state_api.consultation_batch_child_reserve_v1(bytea, bytea, text)
+    OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.consultation_batch_child_release_v1(bytea, bytea, text)
+    OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.consultation_completion_cas_normal_batch_v1(
+    text, bigint, text, bigint, bigint, text[], smallint[], text, bigint,
+    bytea, bytea, bigint, bytea, text, bigint, text, text, bytea, text, bigint,
+    bytea, bytea, text
+) OWNER TO CURRENT_USER;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA relay_state_private FROM PUBLIC;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA relay_state_api FROM PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA relay_state_private REVOKE ALL ON FUNCTIONS FROM PUBLIC;
@@ -7783,6 +8223,17 @@ GRANT EXECUTE ON FUNCTION relay_state_api.consultation_completion_cas_normal_v1(
     text, bigint, text, bigint, bigint, text[], smallint[], text, bigint,
     bytea, bytea, bigint, bytea, text, bigint, text, text, bytea, text, bigint
 ) TO {runtime};
+GRANT EXECUTE ON FUNCTION relay_state_api.consultation_batch_child_reserve_v1(
+    bytea, bytea, text
+) TO {runtime};
+GRANT EXECUTE ON FUNCTION relay_state_api.consultation_batch_child_release_v1(
+    bytea, bytea, text
+) TO {runtime};
+GRANT EXECUTE ON FUNCTION relay_state_api.consultation_completion_cas_normal_batch_v1(
+    text, bigint, text, bigint, bigint, text[], smallint[], text, bigint,
+    bytea, bytea, bigint, bytea, text, bigint, text, text, bytea, text, bigint,
+    bytea, bytea, text
+) TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.consultation_completion_cas_unfinished_v1(
     text, bigint, text, bigint, bigint, text[], smallint[], text, bigint,
     bytea, bytea, bigint, bytea, text, bigint, text, text, bytea, text, bigint
@@ -8196,19 +8647,21 @@ mod tests {
     }
 
     #[test]
-    fn completion_seed_allows_only_the_closed_fresh_open_crvs_null_lifetime_shape() {
+    fn completion_seed_allows_only_the_closed_authored_verification_null_lifetime_shape() {
         for required in [
             "jsonb_array_length(v_seed #> '{acquisition,disclosure_fields}') NOT BETWEEN 0 AND 64",
-            "jwks.value ->> 'operation_id' ~ '\\.jwks$'",
             "jsonb_typeof(v_seed #> '{bounds,credential_token_lifetime_ms}') = 'null'",
-            "(permit.value ->> 'ordinal')::integer = 0",
-            "(permit.value ->> 'ordinal')::integer = 1",
+            "v_data_operation_count = 2",
+            "v_data_binding_count = 2",
+            "'{dispatch,permit_bindings,1,allowed_operation_ids,0}'",
+            "'{dispatch,permit_bindings,2,allowed_operation_ids,0}'",
         ] {
             assert!(
                 POSTGRES_STATE_PLANE_MIGRATION_V1.contains(required),
-                "OpenCRVS completion-seed validation omitted {required}"
+                "authored-verification completion-seed validation omitted {required}"
             );
         }
+        assert!(!POSTGRES_STATE_PLANE_MIGRATION_V1.contains("~ '\\.jwks$'"));
     }
 
     #[test]
@@ -8250,7 +8703,7 @@ mod tests {
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("SET lock_timeout = '2s'")
                 .count(),
-            34
+            37
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
@@ -8262,7 +8715,7 @@ mod tests {
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("SET synchronous_commit = 'on'")
                 .count(),
-            34
+            37
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
@@ -8393,7 +8846,7 @@ mod tests {
             AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
             MATERIALIZATION_PUBLICATION_CAPABILITY_V1,
             "database-expiry-seed-timeout-exact-dispatch-prefix-v2",
-            "direct-data-auth-reference-distinct-fresh-opencrvs-no-expiry-jwks-v2",
+            "direct-data-auth-reference-distinct-authored-verification-no-expiry-v3",
             "utf8-bytewise-key-order-v1",
         ] {
             assert!(

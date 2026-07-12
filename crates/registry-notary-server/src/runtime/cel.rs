@@ -37,7 +37,11 @@ pub(crate) fn validate_cel_claims_for_startup(
             continue;
         };
         validate_cel_policy(expression, bindings, claim, config)?;
-        validate_cel_expression_roots(expression)?;
+        if claim.evidence_mode.is_registry_backed() {
+            validate_registry_cel_expression(expression, claim)?;
+        } else {
+            validate_cel_expression_roots(expression)?;
+        }
         if !config.allow_regex && cel_expression_uses_regex(expression) {
             return Err(EvidenceError::InvalidRequest);
         }
@@ -55,7 +59,7 @@ pub(crate) fn validate_cel_claims_for_startup(
             return Err(EvidenceError::InvalidRequest);
         }
         if let Some(value) = preview.value.as_ref() {
-            validate_claim_value_type(value, &claim.value.value_type)?;
+            validate_claim_value_config(value, &claim.value)?;
         }
     }
     Ok(())
@@ -106,8 +110,17 @@ pub(super) fn validate_claim_value_type(
         "" | "unknown" => true,
         "boolean" | "bool" => value.is_boolean(),
         "number" | "float" | "double" => value.is_number(),
-        "integer" | "int" => value.as_i64().is_some() || value.as_u64().is_some(),
-        "string" | "date" | "datetime" | "date-time" | "uri" => value.is_string(),
+        "integer" | "int" => {
+            const MAX_SAFE_INTEGER: i64 = (1_i64 << 53) - 1;
+            value
+                .as_i64()
+                .is_some_and(|value| (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&value))
+                || value
+                    .as_u64()
+                    .is_some_and(|value| value <= MAX_SAFE_INTEGER as u64)
+        }
+        "date" => value.as_str().is_some_and(is_rfc3339_full_date),
+        "string" | "datetime" | "date-time" | "uri" => value.is_string(),
         "array" | "list" => value.is_array(),
         "object" => value.is_object(),
         "null" => value.is_null(),
@@ -118,6 +131,19 @@ pub(super) fn validate_claim_value_type(
     } else {
         Err(EvidenceError::RuleEvaluationFailed)
     }
+}
+
+pub(super) fn validate_claim_value_config(
+    value: &Value,
+    config: &registry_notary_core::ClaimValueConfig,
+) -> Result<(), EvidenceError> {
+    if value.is_null() {
+        return config
+            .nullable
+            .then_some(())
+            .ok_or(EvidenceError::RuleEvaluationFailed);
+    }
+    validate_claim_value_type(value, &config.value_type)
 }
 
 #[cfg(feature = "registry-notary-cel")]
@@ -175,6 +201,28 @@ pub(super) fn cel_preflight_root_bindings(
     claim: &ClaimDefinition,
     bindings: &CelBindingsConfig,
 ) -> BTreeMap<String, Value> {
+    if let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode {
+        let mut roots = BTreeMap::new();
+        if let Some((name, consultation)) = consultations.first_key_value() {
+            roots.insert(
+                name.clone(),
+                Value::Object(
+                    consultation
+                        .facts
+                        .iter()
+                        .map(|(name, fact)| (name.clone(), registry_fact_dummy_value(fact)))
+                        .collect(),
+                ),
+            );
+        }
+        for (name, variable) in &evidence.variables {
+            let value = match variable.value_type {
+                registry_notary_core::RequestVariableType::Date => json!("2026-01-01"),
+            };
+            roots.insert(name.clone(), value);
+        }
+        return roots;
+    }
     let mut sources = Map::new();
     for (alias, binding) in &claim.source_bindings {
         let mut source = Map::new();
@@ -231,6 +279,17 @@ pub(super) fn cel_preflight_root_bindings(
 }
 
 #[cfg(feature = "registry-notary-cel")]
+fn registry_fact_dummy_value(fact: &registry_notary_core::RelayFactContract) -> Value {
+    match fact {
+        registry_notary_core::RelayFactContract::Boolean { .. }
+        | registry_notary_core::RelayFactContract::Presence => Value::Bool(true),
+        registry_notary_core::RelayFactContract::Integer { minimum, .. } => json!(minimum),
+        registry_notary_core::RelayFactContract::String { .. } => json!("preflight"),
+        registry_notary_core::RelayFactContract::Date { .. } => json!("2000-01-01"),
+    }
+}
+
+#[cfg(feature = "registry-notary-cel")]
 pub(super) fn cel_dummy_value_for_type(value_type: &str) -> Value {
     match value_type {
         "boolean" | "bool" => Value::Bool(true),
@@ -256,6 +315,126 @@ pub(super) fn validate_cel_expression_roots(expression: &str) -> Result<(), Evid
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn validate_registry_cel_expression(
+    expression: &str,
+    claim: &ClaimDefinition,
+) -> Result<(), EvidenceError> {
+    if contains_unquoted_bracket(expression) {
+        return Err(EvidenceError::InvalidRequest);
+    }
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
+        return Err(EvidenceError::InvalidRequest);
+    };
+    let (consultation_name, consultation) = consultations
+        .first_key_value()
+        .filter(|_| consultations.len() == 1)
+        .ok_or(EvidenceError::InvalidRequest)?;
+    for root in cel_root_references(expression) {
+        if root != *consultation_name && root != "date" {
+            return Err(EvidenceError::InvalidRequest);
+        }
+    }
+    let compact = expression
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .map(char::from)
+        .collect::<String>();
+    for (name, fact) in &consultation.facts {
+        if !fact.nullable() {
+            continue;
+        }
+        let path = format!("{consultation_name}.{name}");
+        if !compact.contains(&path) {
+            continue;
+        }
+        let left_guard = format!("{path}!=null");
+        let right_guard = format!("null!={path}");
+        let guard_index = compact
+            .find(&left_guard)
+            .or_else(|| compact.find(&right_guard))
+            .ok_or(EvidenceError::InvalidRequest)?;
+        let question_index = compact.find('?').ok_or(EvidenceError::InvalidRequest)?;
+        if guard_index > question_index || compact[..guard_index].contains(&path) {
+            return Err(EvidenceError::InvalidRequest);
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn registry_cel_required_variables<'a>(
+    expression: &str,
+    declared: impl IntoIterator<Item = &'a str>,
+) -> BTreeSet<String> {
+    let identifiers = cel_bare_identifiers(expression);
+    declared
+        .into_iter()
+        .filter(|name| identifiers.contains(*name))
+        .map(str::to_string)
+        .collect()
+}
+
+fn cel_bare_identifiers(expression: &str) -> BTreeSet<String> {
+    let bytes = expression.as_bytes();
+    let mut identifiers = BTreeSet::new();
+    let mut index = 0;
+    let mut quote = None;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(active_quote) = quote {
+            if byte == b'\\' {
+                index = index.saturating_add(2);
+                continue;
+            }
+            if byte == active_quote {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"' | b'`') {
+            quote = Some(byte);
+            index += 1;
+            continue;
+        }
+        if !is_cel_identifier_start_byte(byte) {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        while index < bytes.len() && is_cel_identifier_continue_byte(bytes[index]) {
+            index += 1;
+        }
+        if start == 0 || bytes[start - 1] != b'.' {
+            identifiers.insert(expression[start..index].to_string());
+        }
+    }
+    identifiers
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn contains_unquoted_bracket(expression: &str) -> bool {
+    let mut quote = None;
+    let mut escaped = false;
+    for byte in expression.bytes() {
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == active_quote {
+                quote = None;
+            }
+        } else if matches!(byte, b'\'' | b'"' | b'`') {
+            quote = Some(byte);
+        } else if matches!(byte, b'[' | b']') {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(feature = "registry-notary-cel")]
@@ -308,12 +487,10 @@ pub(super) fn cel_root_references(expression: &str) -> BTreeSet<String> {
     roots
 }
 
-#[cfg(feature = "registry-notary-cel")]
 pub(super) fn is_cel_identifier_start_byte(byte: u8) -> bool {
     byte == b'_' || byte.is_ascii_alphabetic()
 }
 
-#[cfg(feature = "registry-notary-cel")]
 pub(super) fn is_cel_identifier_continue_byte(byte: u8) -> bool {
     byte == b'_' || byte.is_ascii_alphanumeric()
 }
@@ -322,6 +499,25 @@ pub(super) fn is_cel_identifier_continue_byte(byte: u8) -> bool {
 pub(super) fn cel_root_bindings(
     ctx: &CelEvaluationContext<'_>,
 ) -> Result<BTreeMap<String, Value>, EvidenceError> {
+    if ctx.claim.evidence_mode.is_registry_backed() {
+        let mut root_bindings = ctx.sources.clone();
+        for (name, declaration) in &ctx.evidence.variables {
+            let Some(value) = ctx.variables.get(name) else {
+                continue;
+            };
+            match declaration.value_type {
+                registry_notary_core::RequestVariableType::Date => {
+                    root_bindings.insert(name.clone(), Value::String(value.to_string()));
+                }
+            }
+        }
+        let root_bindings = root_bindings.into_iter().collect::<BTreeMap<_, _>>();
+        validate_cel_binding_limits(
+            &Value::Object(root_bindings.clone().into_iter().collect()),
+            ctx.config,
+        )?;
+        return Ok(root_bindings);
+    }
     let mut claim_values = Map::new();
     for (alias, binding) in &ctx.bindings.claims {
         let result = ctx

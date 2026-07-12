@@ -31,11 +31,11 @@ use crate::source_plan::runtime_profile::{
     MAX_COMPLETION_SEED_CANONICAL_BYTES_V1,
 };
 use crate::state_plane::{
-    ActiveAuditPseudonymWriteEpoch, AuditedConsultationDispatch, ConsultationCompletionReceipt,
-    ConsultationPersistenceError, ConsultationPublicationGrant, FencedConsultationAttemptAuthority,
-    KnownCompletionDisposition, KnownConsultationCompletionFacts,
-    PostgresAuditPseudonymKeyringRuntime, PostgresDurableAuditStatePlane, QuotaGrant,
-    TerminalCompletionAttempt,
+    ActiveAuditPseudonymWriteEpoch, AuditedConsultationDispatch, BatchChildReplayContext,
+    ConsultationCompletionReceipt, ConsultationPersistenceError, ConsultationPublicationGrant,
+    FencedConsultationAttemptAuthority, KnownCompletionDisposition,
+    KnownConsultationCompletionFacts, PostgresAuditPseudonymKeyringRuntime,
+    PostgresDurableAuditStatePlane, QuotaGrant, TerminalCompletionAttempt,
 };
 
 use super::commitments::{
@@ -198,34 +198,43 @@ impl RuntimeConsultationCompletionSeed {
         {
             return Err(ConsultationAuditBuildError::ProfileMismatch);
         }
-        let provenance_contract = match (
-            profile.acquisition_provenance().source_observed_at(),
-            profile.acquisition_provenance().source_revision(),
-        ) {
-            (CompiledSourceObservedAtContract::Absent, CompiledSourceRevisionContract::Absent) => {
-                json!({
-                    "source_observed_at": null,
-                    "source_revision": null,
-                    "snapshot_generation": if profile
-                        .acquisition_provenance()
-                        .snapshot_generation_required()
-                    {
-                        "required"
-                    } else {
-                        "absent"
-                    },
-                    "snapshot_published_at": if profile
-                        .acquisition_provenance()
-                        .snapshot_published_at_required()
-                    {
-                        "required"
-                    } else {
-                        "absent"
-                    },
-                })
-            }
-            _ => return Err(ConsultationAuditBuildError::ProfileMismatch),
+        let source_observed_at = match profile.acquisition_provenance().source_observed_at() {
+            CompiledSourceObservedAtContract::Absent => Value::Null,
+            CompiledSourceObservedAtContract::AcquiredRfc3339 { field, .. } => json!({
+                "type": "acquired_rfc3339",
+                "field": field.as_str(),
+            }),
         };
+        let source_revision = match profile.acquisition_provenance().source_revision() {
+            CompiledSourceRevisionContract::Absent => Value::Null,
+            CompiledSourceRevisionContract::AcquiredString {
+                field, max_bytes, ..
+            } => json!({
+                "type": "acquired_string",
+                "field": field.as_str(),
+                "max_bytes": max_bytes,
+            }),
+        };
+        let provenance_contract = json!({
+            "source_observed_at": source_observed_at,
+            "source_revision": source_revision,
+            "snapshot_generation": if profile
+                .acquisition_provenance()
+                .snapshot_generation_required()
+            {
+                "required"
+            } else {
+                "absent"
+            },
+            "snapshot_published_at": if profile
+                .acquisition_provenance()
+                .snapshot_published_at_required()
+            {
+                "required"
+            } else {
+                "absent"
+            },
+        });
         let bounds = profile.effective_limits();
         let operation_bounds = bounds.operation();
         if operation_bounds.timeout_ms == 0 || operation_bounds.timeout_ms > 20_000 {
@@ -667,7 +676,7 @@ pub(crate) enum FinalizedValidatedConsultation<T> {
 /// and its candidate bytes cannot be extracted or independently re-paired.
 #[must_use = "a finalized consultation result must be handled"]
 pub(crate) enum FinalizedConcreteConsultation {
-    Published(PublishedConcreteResponse),
+    Published(Box<PublishedConcreteResponse>),
     FinalizedFailure(ConsultationCompletionReceipt),
 }
 
@@ -698,11 +707,13 @@ impl<'profile> PreparedAuditedConsultationDispatch<'profile> {
     /// error retains the sealed dispatch for PostgreSQL to classify as
     /// `not_started` or `outcome_unknown`; only a closure-returned known result
     /// enters normal completion.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn execute_concrete_consultation(
         self,
         executor: ConcreteExecutorKind,
         fence: &crate::state_plane::PostgresServingFence,
         basic_credentials: &crate::source_plan::CompiledBasicSourceCredentialProvider,
+        static_bearer_credentials: &crate::source_plan::CompiledStaticBearerSourceCredentialProvider,
         oauth_credentials: &crate::source_plan::CompiledOAuthSourceCredentialProvider,
         snapshots: &crate::source_backend::PublishedSnapshotRegistry,
         datafusion: &datafusion::execution::context::SessionContext,
@@ -730,6 +741,7 @@ impl<'profile> PreparedAuditedConsultationDispatch<'profile> {
             quota,
             fence,
             basic_credentials,
+            static_bearer_credentials,
             oauth_credentials,
             snapshots,
             datafusion,
@@ -844,20 +856,35 @@ impl PostgresDurableAuditStatePlane {
         &self,
         executed: ExecutedAuditedConsultationDispatch<PublishableConsultationResponse>,
         keyring: &PostgresAuditPseudonymKeyringRuntime,
+        batch: Option<BatchChildReplayContext>,
     ) -> Result<FinalizedConcreteConsultation, ConsultationPersistenceError> {
+        let terminal = match &executed.validated {
+            ValidatedConsultationBackendResult::Publishable { output, .. } if batch.is_some() => {
+                Some(
+                    output
+                        .batch_terminal_json()
+                        .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?,
+                )
+            }
+            _ => None,
+        };
+        let batch_completion = batch
+            .as_ref()
+            .zip(terminal.as_ref().map(|value| value.as_str()));
         match self
             .finalize_validated_consultation_inner(
                 executed,
                 keyring,
+                batch_completion,
                 #[cfg(test)]
                 None,
             )
             .await?
         {
             FinalizedValidatedConsultationInner::Published { grant, output } => {
-                Ok(FinalizedConcreteConsultation::Published(
+                Ok(FinalizedConcreteConsultation::Published(Box::new(
                     PublishedConcreteResponse { grant, output },
-                ))
+                )))
             }
             FinalizedValidatedConsultationInner::FinalizedFailure(receipt) => {
                 Ok(FinalizedConcreteConsultation::FinalizedFailure(receipt))
@@ -873,7 +900,7 @@ impl PostgresDurableAuditStatePlane {
         keyring: &PostgresAuditPseudonymKeyringRuntime,
     ) -> Result<FinalizedValidatedConsultation<T>, ConsultationPersistenceError> {
         let finalized = self
-            .finalize_validated_consultation_inner(executed, keyring, None)
+            .finalize_validated_consultation_inner(executed, keyring, None, None)
             .await?;
         Ok(test_finalized_result(finalized))
     }
@@ -888,7 +915,7 @@ impl PostgresDurableAuditStatePlane {
         hook: TerminalCompletionTestHook,
     ) -> Result<FinalizedValidatedConsultation<T>, ConsultationPersistenceError> {
         let finalized = self
-            .finalize_validated_consultation_inner(executed, keyring, Some(hook))
+            .finalize_validated_consultation_inner(executed, keyring, None, Some(hook))
             .await?;
         Ok(test_finalized_result(finalized))
     }
@@ -897,6 +924,7 @@ impl PostgresDurableAuditStatePlane {
         &self,
         executed: ExecutedAuditedConsultationDispatch<T>,
         keyring: &PostgresAuditPseudonymKeyringRuntime,
+        batch: Option<(&BatchChildReplayContext, &str)>,
         #[cfg(test)] mut test_hook: Option<TerminalCompletionTestHook>,
     ) -> Result<FinalizedValidatedConsultationInner<T>, ConsultationPersistenceError> {
         let (mut dispatch, validated) = executed.into_parts();
@@ -914,6 +942,7 @@ impl PostgresDurableAuditStatePlane {
                         dispatch: &mut dispatch,
                     },
                     &completion_facts,
+                    batch,
                     completion_epoch,
                     #[cfg(test)]
                     test_hook.as_mut(),

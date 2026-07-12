@@ -41,7 +41,7 @@ evidence:
             profile:
               id: opencrvs.dci.farajaland.birth-record-exists.exact
               version: "1"
-              contract_hash: sha256:4bd7d0086dbfd6c5209d83178dc620474d746b3f2271147fcbe7d691376bb23c
+              contract_hash: sha256:4153c6c95c0454c6278a239ed096715f08547666b03e5d8b7003f32d6c29e4a6
             inputs:
               uin: target.id
       value:

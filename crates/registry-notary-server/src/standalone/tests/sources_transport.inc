@@ -320,6 +320,7 @@ sources:
                         ),
                         relationship: None,
                         on_behalf_of: None,
+                        variables: Default::default(),
                     },
                 )
             })
@@ -689,6 +690,7 @@ sources:
                     )),
                     relationship: None,
                     on_behalf_of: None,
+                    variables: Default::default(),
                     claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
                     disclosure: Some("value".to_string()),
                     format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
@@ -843,6 +845,7 @@ sources:
                     )),
                     relationship: None,
                     on_behalf_of: None,
+                    variables: Default::default(),
                     claims: vec![registry_notary_core::ClaimRef::from("date-of-birth")],
                     disclosure: Some("value".to_string()),
                     format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
@@ -953,6 +956,7 @@ sources:
             ),
             relationship: Some(relationship),
             on_behalf_of: None,
+            variables: Default::default(),
         };
 
         binding.lookup.input = "requester.identifiers.national_id".to_string();
@@ -1020,6 +1024,7 @@ sources:
             target,
             relationship: None,
             on_behalf_of: None,
+            variables: Default::default(),
         };
 
         let values = source_query_values_for_context(&binding, &context)
@@ -1080,6 +1085,7 @@ sources:
             target,
             relationship: None,
             on_behalf_of: None,
+            variables: Default::default(),
         };
 
         let values = source_query_values_for_context(&binding, &context)

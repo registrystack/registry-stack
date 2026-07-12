@@ -12,7 +12,9 @@ use crate::consultation::{
     ProfileId, ProfileVersion, ResolvedConsultationProfile, WorkloadId,
 };
 
-use super::artifact::{parse_integration_pack, EvidenceClass, SourcePlanKind};
+use super::artifact::{
+    parse_integration_pack, parse_private_binding, EvidenceClass, SourcePlanKind,
+};
 use super::compiler::{
     CompiledSourcePlan, CompiledSourcePlanRegistry, PinnedEvidenceArtifact,
     PinnedSourcePlanArtifact, RhaiWorkerCapability, SourcePlanArtifactBundle,
@@ -105,6 +107,23 @@ impl fmt::Debug for CompiledConsultationRegistry {
 }
 
 impl CompiledConsultationRegistry {
+    #[cfg(test)]
+    pub(crate) fn from_source_plans_for_test(source_plans: CompiledSourcePlanRegistry) -> Self {
+        let visibility = source_plans
+            .iter()
+            .map(|plan| {
+                (
+                    (plan.profile().id().clone(), plan.profile().version()),
+                    plan.runtime_profile().workload_id().clone(),
+                )
+            })
+            .collect();
+        Self {
+            source_plans,
+            visibility,
+        }
+    }
+
     /// Compile the complete verified startup closure atomically.
     ///
     /// Absence of artifacts is represented by absence of this registry, not an
@@ -264,6 +283,88 @@ impl CompiledConsultationRegistry {
     }
 }
 
+/// Initialize the exact non-config Rhai worker capability closure from the
+/// already verified artifact set. The reviewed script is compiled against the
+/// production language surface before a capability can be minted; the normal
+/// compiler pass then independently rechecks every callable and narrowed
+/// limit against its private binding.
+pub(crate) fn initialize_rhai_worker_capabilities(
+    artifacts: &VerifiedConsultationArtifactClosure,
+) -> Result<Vec<RhaiWorkerCapability>, CompiledConsultationRegistryError> {
+    let required = validate_rhai_artifact_closure(artifacts)?;
+    let bindings = artifacts
+        .private_bindings()
+        .iter()
+        .map(|artifact| parse_private_binding(artifact.bytes()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(SourcePlanCompileError::Artifact)?;
+    let mut workers = Vec::with_capacity(required);
+    for artifact in artifacts.integration_packs() {
+        let pack = parse_integration_pack(artifact.bytes(), artifact.artifact_hash())
+            .map_err(SourcePlanCompileError::Artifact)?;
+        if pack.document.spec.plan.kind != SourcePlanKind::SandboxedRhai {
+            continue;
+        }
+        let reviewed = pack
+            .document
+            .spec
+            .plan
+            .rhai
+            .as_ref()
+            .ok_or(CompiledConsultationRegistryError::RhaiArtifactClosureMismatch)?;
+        let binding = bindings
+            .iter()
+            .find(|binding| binding.pack_identity == *pack.identity())
+            .and_then(|binding| binding.document.capabilities.sandboxed_rhai.as_ref())
+            .ok_or(CompiledConsultationRegistryError::RhaiWorkerClosureMismatch)?;
+        let limits = super::compiler::RhaiWorkerLimits {
+            max_calls: binding.max_calls,
+            memory_bytes: binding.memory_bytes,
+            cpu_ms: binding.cpu_ms,
+            ipc_frame_bytes: binding.ipc_frame_bytes,
+            instructions: binding.instructions,
+            call_depth: binding.call_depth,
+            string_bytes: binding.string_bytes,
+            array_items: binding.array_items,
+            map_entries: binding.map_entries,
+            output_bytes: binding.output_bytes,
+            concurrency: binding.concurrency,
+        };
+        let worker_limits = crate::rhai_worker::WorkerLimits {
+            max_operations: limits.instructions,
+            max_call_levels: usize::from(limits.call_depth),
+            max_expr_depth: usize::from(limits.call_depth),
+            max_string_bytes: usize::try_from(limits.string_bytes)
+                .map_err(|_| CompiledConsultationRegistryError::RhaiWorkerClosureMismatch)?,
+            max_array_items: usize::try_from(limits.array_items)
+                .map_err(|_| CompiledConsultationRegistryError::RhaiWorkerClosureMismatch)?,
+            max_map_entries: usize::try_from(limits.map_entries)
+                .map_err(|_| CompiledConsultationRegistryError::RhaiWorkerClosureMismatch)?,
+            max_output_bytes: usize::try_from(limits.output_bytes)
+                .map_err(|_| CompiledConsultationRegistryError::RhaiWorkerClosureMismatch)?,
+            max_ipc_frame_bytes: usize::try_from(limits.ipc_frame_bytes)
+                .map_err(|_| CompiledConsultationRegistryError::RhaiWorkerClosureMismatch)?,
+            max_memory_bytes: limits.memory_bytes,
+            wall_time_ms: u64::from(limits.cpu_ms),
+        };
+        crate::rhai_worker::probe_script(&reviewed.script, &reviewed.entrypoint, worker_limits)
+            .map_err(|_| CompiledConsultationRegistryError::RhaiWorkerClosureMismatch)?;
+        let callable = binding
+            .callable_operations
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        workers.push(RhaiWorkerCapability::from_initialized_worker(
+            pack.identity().hash().as_str(),
+            &callable,
+            limits,
+        )?);
+    }
+    (workers.len() == required)
+        .then_some(workers)
+        .ok_or(CompiledConsultationRegistryError::RhaiWorkerClosureMismatch)
+}
+
 #[allow(
     dead_code,
     reason = "called by the restart-only startup orchestration integration slice"
@@ -336,7 +437,7 @@ mod tests {
     const CONFORMANCE: &[u8] = b"synthetic registry conformance evidence v1\n";
     const NEGATIVE_SECURITY: &[u8] = b"synthetic registry negative security evidence v1\n";
     const MINIMIZATION: &[u8] = b"synthetic registry minimization proof v1\n";
-    const RHAI_SCRIPT: &str = "fn consult() { () }";
+    const RHAI_SCRIPT: &str = "fn consult(input, prior) { #{ operations: [], facts: #{} } }";
 
     fn raw_hash(bytes: &[u8]) -> String {
         let mut encoded = String::from("sha256:");
@@ -819,6 +920,20 @@ mod tests {
         assert!(CompiledConsultationRegistry::compile(
             rhai,
             &[rhai_worker(&pack_hash)],
+            &InitializedConsentVerifierRegistry::empty(),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn verified_rhai_closure_initializes_the_exact_worker_capability() {
+        let (artifacts, _) = rhai_closure();
+        let workers = initialize_rhai_worker_capabilities(&artifacts)
+            .expect("reviewed script probes under the production worker surface");
+        assert_eq!(workers.len(), 1);
+        assert!(CompiledConsultationRegistry::compile(
+            artifacts,
+            &workers,
             &InitializedConsentVerifierRegistry::empty(),
         )
         .is_ok());

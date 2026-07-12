@@ -134,6 +134,40 @@ impl TryFrom<&str> for DciProtocolVersion {
     }
 }
 
+/// Validate the reviewed, request-invariant portion of one DCI exact profile.
+///
+/// Artifact validation calls this before compilation so an accepted profile
+/// cannot defer malformed protocol constants until its first live request.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn validate_profile_constants(
+    protocol_version: &str,
+    sender_id: &str,
+    receiver_id: Option<&str>,
+    registry_type: Option<&str>,
+    registry_event_type: Option<&str>,
+    record_type: Option<&str>,
+    identifier_type: &str,
+    locale: &str,
+    page_number: u16,
+) -> Result<(), DciCodecError> {
+    DciProtocolVersion::try_from(protocol_version)?;
+    validated_protocol_identifier(sender_id)?;
+    receiver_id.map(validated_protocol_identifier).transpose()?;
+    registry_type
+        .map(validated_protocol_identifier)
+        .transpose()?;
+    registry_event_type
+        .map(validated_protocol_identifier)
+        .transpose()?;
+    record_type.map(validated_protocol_identifier).transpose()?;
+    validated_protocol_identifier(identifier_type)?;
+    validated_protocol_identifier(locale)?;
+    if page_number == 0 {
+        return Err(DciCodecError::InvalidRequestedMaximum);
+    }
+    Ok(())
+}
+
 /// The exact source record maximum requested from DCI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum DciRequestedMaximum {
@@ -225,7 +259,31 @@ pub(crate) struct DciExactSearchRequestInput<'a> {
     pub(crate) selector: &'a str,
     /// Requested source maximum, exactly one or two.
     pub(crate) requested_max: u8,
+    /// Reviewed one-based page number for the fixed exact request.
+    pub(crate) page_number: u16,
     /// Optional pack-owned detached request signature.
+    pub(crate) signature: Option<&'a str>,
+}
+
+/// One reviewed component of a structured exact-AND DCI predicate.
+pub(crate) struct DciExactAndComponentInput<'a> {
+    pub(crate) field: &'a str,
+    pub(crate) value: &'a str,
+}
+
+/// Raw construction values for a structured exact-AND DCI search.
+pub(crate) struct DciExactAndSearchRequestInput<'a> {
+    pub(crate) protocol_version: &'a str,
+    pub(crate) message_id: &'a str,
+    pub(crate) message_timestamp: OffsetDateTime,
+    pub(crate) sender_id: &'a str,
+    pub(crate) receiver_id: Option<&'a str>,
+    pub(crate) registry_type: Option<&'a str>,
+    pub(crate) registry_event_type: Option<&'a str>,
+    pub(crate) record_type: Option<&'a str>,
+    pub(crate) components: &'a [DciExactAndComponentInput<'a>],
+    pub(crate) requested_max: u8,
+    pub(crate) page_number: u16,
     pub(crate) signature: Option<&'a str>,
 }
 
@@ -243,10 +301,23 @@ pub(crate) struct DciExactSearchRequest {
     registry_type: Option<Box<str>>,
     registry_event_type: Option<Box<str>>,
     record_type: Option<Box<str>>,
-    identifier_type: Box<str>,
-    selector: Zeroizing<String>,
+    selector: DciRequestSelector,
     requested_max: DciRequestedMaximum,
+    page_number: u16,
     signature: Option<Zeroizing<String>>,
+}
+
+enum DciRequestSelector {
+    IdtypeValue {
+        identifier_type: Box<str>,
+        value: Zeroizing<String>,
+    },
+    ExactAnd(Box<[DciExactAndComponent]>),
+}
+
+struct DciExactAndComponent {
+    field: Box<str>,
+    value: Zeroizing<String>,
 }
 
 impl DciExactSearchRequest {
@@ -284,6 +355,9 @@ impl DciExactSearchRequest {
         }
 
         let requested_max = DciRequestedMaximum::try_from(input.requested_max)?;
+        if input.page_number == 0 {
+            return Err(DciCodecError::InvalidRequestedMaximum);
+        }
         let signature = input
             .signature
             .map(|signature| {
@@ -305,9 +379,87 @@ impl DciExactSearchRequest {
             registry_type,
             registry_event_type,
             record_type,
-            identifier_type,
-            selector: Zeroizing::new(input.selector.to_owned()),
+            selector: DciRequestSelector::IdtypeValue {
+                identifier_type,
+                value: Zeroizing::new(input.selector.to_owned()),
+            },
             requested_max,
+            page_number: input.page_number,
+            signature,
+        })
+    }
+
+    /// Validate a stable one-to-four-component exact-AND predicate.
+    pub(crate) fn try_new_exact_and(
+        input: DciExactAndSearchRequestInput<'_>,
+    ) -> Result<Self, DciCodecError> {
+        let protocol_version = DciProtocolVersion::try_from(input.protocol_version)?;
+        let message_id = parse_canonical_ulid(input.message_id)?;
+        let sender_id = validated_protocol_identifier(input.sender_id)?;
+        let receiver_id = input
+            .receiver_id
+            .map(validated_protocol_identifier)
+            .transpose()?;
+        let registry_type = input
+            .registry_type
+            .map(validated_protocol_identifier)
+            .transpose()?;
+        let registry_event_type = input
+            .registry_event_type
+            .map(validated_protocol_identifier)
+            .transpose()?;
+        let record_type = input
+            .record_type
+            .map(validated_protocol_identifier)
+            .transpose()?;
+        if !(1..=4).contains(&input.components.len()) {
+            return Err(DciCodecError::InvalidSelector);
+        }
+        let mut fields = std::collections::BTreeSet::new();
+        let components = input
+            .components
+            .iter()
+            .map(|component| {
+                let field = validated_protocol_identifier(component.field)?;
+                if !fields.insert(field.clone())
+                    || component.value.is_empty()
+                    || component.value.len() > MAX_SELECTOR_BYTES
+                    || component.value.chars().any(char::is_control)
+                {
+                    return Err(DciCodecError::InvalidSelector);
+                }
+                Ok(DciExactAndComponent {
+                    field,
+                    value: Zeroizing::new(component.value.to_owned()),
+                })
+            })
+            .collect::<Result<Box<[_]>, _>>()?;
+        let requested_max = DciRequestedMaximum::try_from(input.requested_max)?;
+        if input.page_number == 0 {
+            return Err(DciCodecError::InvalidRequestedMaximum);
+        }
+        let signature = input
+            .signature
+            .map(|signature| {
+                (!signature.is_empty()
+                    && signature.len() <= MAX_SIGNATURE_BYTES
+                    && signature.chars().all(|character| !character.is_control()))
+                .then(|| Zeroizing::new(signature.to_owned()))
+                .ok_or(DciCodecError::InvalidSignature)
+            })
+            .transpose()?;
+        Ok(Self {
+            protocol_version,
+            message_id,
+            message_timestamp: input.message_timestamp,
+            sender_id,
+            receiver_id,
+            registry_type,
+            registry_event_type,
+            record_type,
+            selector: DciRequestSelector::ExactAnd(components),
+            requested_max,
+            page_number: input.page_number,
             signature,
         })
     }
@@ -319,6 +471,36 @@ impl DciExactSearchRequest {
             .message_timestamp
             .format(&Rfc3339)
             .map_err(|_| DciCodecError::InvalidTimestamp)?;
+        let predicates = match &self.selector {
+            DciRequestSelector::ExactAnd(components) => components
+                .iter()
+                .map(|component| WireExactPredicate {
+                    field: component.field.as_ref(),
+                    operator: "eq",
+                    value: component.value.as_str(),
+                })
+                .collect::<Vec<_>>(),
+            DciRequestSelector::IdtypeValue { .. } => Vec::new(),
+        };
+        let (query_type, query) = match &self.selector {
+            DciRequestSelector::IdtypeValue {
+                identifier_type,
+                value,
+            } => (
+                "idtype-value",
+                WireExactQuery::IdtypeValue(WireIdTypeValueQuery {
+                    identifier_type,
+                    value: value.as_str(),
+                }),
+            ),
+            DciRequestSelector::ExactAnd(_) => (
+                "exact-and",
+                WireExactQuery::ExactAnd(WireExactAndQuery {
+                    operator: "and",
+                    predicates: &predicates,
+                }),
+            ),
+        };
         let wire = WireRequestEnvelope {
             header: WireRequestHeader {
                 version: self.protocol_version.as_str(),
@@ -340,14 +522,11 @@ impl DciExactSearchRequest {
                         registry_type: self.registry_type.as_deref(),
                         registry_event_type: self.registry_event_type.as_deref(),
                         record_type: self.record_type.as_deref(),
-                        query_type: "idtype-value",
-                        query: WireIdTypeValueQuery {
-                            identifier_type: self.identifier_type.as_ref(),
-                            value: self.selector.as_str(),
-                        },
+                        query_type,
+                        query,
                         pagination: WireRequestPagination {
                             page_size: self.requested_max.get(),
-                            page_number: 1,
+                            page_number: self.page_number,
                         },
                     },
                 }],
@@ -477,8 +656,15 @@ struct WireSearchCriteria<'a> {
     #[serde(rename = "reg_record_type", skip_serializing_if = "Option::is_none")]
     record_type: Option<&'a str>,
     query_type: &'static str,
-    query: WireIdTypeValueQuery<'a>,
+    query: WireExactQuery<'a>,
     pagination: WireRequestPagination,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum WireExactQuery<'a> {
+    IdtypeValue(WireIdTypeValueQuery<'a>),
+    ExactAnd(WireExactAndQuery<'a>),
 }
 
 #[derive(Serialize)]
@@ -489,9 +675,22 @@ struct WireIdTypeValueQuery<'a> {
 }
 
 #[derive(Serialize)]
+struct WireExactAndQuery<'a> {
+    operator: &'static str,
+    predicates: &'a [WireExactPredicate<'a>],
+}
+
+#[derive(Serialize)]
+struct WireExactPredicate<'a> {
+    field: &'a str,
+    operator: &'static str,
+    value: &'a str,
+}
+
+#[derive(Serialize)]
 struct WireRequestPagination {
     page_size: u8,
-    page_number: u8,
+    page_number: u16,
 }
 
 /// Selector-free expectations used to decode one DCI response.
@@ -814,6 +1013,7 @@ mod tests {
             identifier_type: "EXTERNAL_ID",
             selector: "EXAMPLE-123",
             requested_max,
+            page_number: 1,
             signature: Some("detached-signature-fixture"),
         })
         .expect("valid exact request")
@@ -854,6 +1054,77 @@ mod tests {
     }
 
     #[test]
+    fn exact_and_request_keeps_typed_components_structural_and_stable() {
+        let components = [
+            DciExactAndComponentInput {
+                field: "birth_date",
+                value: "2001-02-03",
+            },
+            DciExactAndComponentInput {
+                field: "family_name",
+                value: "N'Dour",
+            },
+        ];
+        let request = DciExactSearchRequest::try_new_exact_and(DciExactAndSearchRequestInput {
+            protocol_version: "1.0.0",
+            message_id: MESSAGE_ID,
+            message_timestamp: OffsetDateTime::parse("2026-07-10T12:00:00Z", &Rfc3339)
+                .expect("fixture timestamp"),
+            sender_id: "registry-relay",
+            receiver_id: Some("registry-source"),
+            registry_type: Some("ns:org:RegistryType:Example"),
+            registry_event_type: Some("status"),
+            record_type: Some("example:Record"),
+            components: &components,
+            requested_max: 2,
+            page_number: 1,
+            signature: None,
+        })
+        .expect("structured exact request");
+        let body = request.to_json_body().expect("request body");
+        let value: Value = serde_json::from_slice(body.as_bytes()).expect("JSON request");
+        let criteria = &value["message"]["search_request"][0]["search_criteria"];
+        assert_eq!(criteria["query_type"], "exact-and");
+        assert_eq!(criteria["query"]["operator"], "and");
+        assert_eq!(
+            criteria["query"]["predicates"],
+            serde_json::json!([
+                {"field":"birth_date","operator":"eq","value":"2001-02-03"},
+                {"field":"family_name","operator":"eq","value":"N'Dour"}
+            ])
+        );
+        assert!(!String::from_utf8_lossy(body.as_bytes()).contains("2001-02-03|N'Dour"));
+
+        let duplicate = [
+            DciExactAndComponentInput {
+                field: "name",
+                value: "one",
+            },
+            DciExactAndComponentInput {
+                field: "name",
+                value: "two",
+            },
+        ];
+        assert!(matches!(
+            DciExactSearchRequest::try_new_exact_and(DciExactAndSearchRequestInput {
+                protocol_version: "1.0.0",
+                message_id: MESSAGE_ID,
+                message_timestamp: OffsetDateTime::UNIX_EPOCH,
+                sender_id: "relay",
+                receiver_id: None,
+                registry_type: None,
+                registry_event_type: None,
+                record_type: None,
+                components: &duplicate,
+                requested_max: 2,
+                page_number: 1,
+                signature: None,
+            }),
+            Err(DciCodecError::InvalidSelector)
+        ));
+    }
+
+    #[test]
     fn request_rejects_implicit_version_noncanonical_ulid_and_unbounded_maximum() {
         let invalid = |protocol_version: &str, message_id: &str, requested_max: u8| {
             DciExactSearchRequest::try_new(DciExactSearchRequestInput {
@@ -868,6 +1139,7 @@ mod tests {
                 identifier_type: "EXTERNAL_ID",
                 selector: "EXAMPLE-123",
                 requested_max,
+                page_number: 1,
                 signature: None,
             })
         };

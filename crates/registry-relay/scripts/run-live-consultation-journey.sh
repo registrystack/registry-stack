@@ -9,7 +9,7 @@ umask 077
 readonly POSTGRES_IMAGE="postgres:16"
 
 [[ "$#" -le 1 ]] || {
-  printf '%s\n' "usage: $0 [dhis2|opencrvs|synthetic]" >&2
+  printf '%s\n' "usage: $0 [dhis2|rhai|opencrvs|synthetic]" >&2
   exit 1
 }
 readonly product="${1:-dhis2}"
@@ -17,6 +17,10 @@ case "$product" in
   dhis2)
     readonly test_name="live_dhis2_consultation_lifecycle"
     readonly temporary_label="dhis2"
+    ;;
+  rhai)
+    readonly test_name="live_dhis2_sandboxed_rhai_consultation_lifecycle"
+    readonly temporary_label="dhis2-rhai"
     ;;
   opencrvs)
     readonly test_name="live_opencrvs_consultation_no_match_lifecycle"
@@ -27,7 +31,7 @@ case "$product" in
     readonly temporary_label="synthetic-snapshot"
     ;;
   *)
-    printf '%s\n' "usage: $0 [dhis2|opencrvs|synthetic]" >&2
+    printf '%s\n' "usage: $0 [dhis2|rhai|opencrvs|synthetic]" >&2
     exit 1
     ;;
 esac
@@ -62,7 +66,7 @@ owned_by_current_user() {
   [[ "$owner" == "$(id -u)" ]]
 }
 
-if [[ "$product" != "synthetic" ]]; then
+if [[ "$product" == "dhis2" || "$product" == "opencrvs" ]]; then
   readonly live_env_file="${REGISTRY_RELAY_LIVE_ENV_FILE:-}"
   [[ -n "$live_env_file" ]] || fail \
     "REGISTRY_RELAY_LIVE_ENV_FILE must name the authorized mode-0600 environment file"
@@ -129,11 +133,14 @@ temporary_root="$(mktemp -d "${TMPDIR:-/tmp}/registry-relay-live-${temporary_lab
 readonly temporary_root
 readonly certificate_input="$temporary_root/certificate-input"
 readonly docker_env_file="$temporary_root/postgres.env"
+readonly rhai_test_env_file="$temporary_root/rhai-test.env"
 readonly container_name="registry-relay-live-${temporary_label}-${$}-${RANDOM}"
 readonly certificate_volume="registry-relay-live-${temporary_label}-certs-${$}-${RANDOM}"
+readonly network_name="registry-relay-live-${temporary_label}-network-${$}-${RANDOM}"
 
 container_started=0
 volume_created=0
+network_created=0
 
 cleanup() {
   local status=$?
@@ -150,6 +157,9 @@ cleanup() {
   if [[ "$volume_created" == 1 ]]; then
     docker volume rm "$certificate_volume" >/dev/null 2>&1 || true
   fi
+  if [[ "$network_created" == 1 ]]; then
+    docker network rm "$network_name" >/dev/null 2>&1 || true
+  fi
   rm -rf "$temporary_root"
   exit "$status"
 }
@@ -162,14 +172,36 @@ openssl req \
   -sha256 \
   -nodes \
   -days 1 \
-  -subj '/CN=localhost' \
-  -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' \
+  -subj '/CN=registry-relay-live-root' \
   -addext 'basicConstraints=critical,CA:TRUE' \
-  -addext 'keyUsage=critical,digitalSignature,keyCertSign' \
-  -addext 'extendedKeyUsage=serverAuth' \
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -keyout "$certificate_input/ca.key" \
+  -out "$certificate_input/ca.crt" \
+  >/dev/null 2>&1 || fail "could not generate the disposable TLS root"
+openssl req \
+  -new \
+  -newkey rsa:3072 \
+  -sha256 \
+  -nodes \
+  -subj '/CN=localhost' \
+  -addext 'subjectAltName=DNS:localhost,DNS:host.docker.internal,DNS:rhai-runner,IP:127.0.0.1' \
   -keyout "$certificate_input/server.key" \
+  -out "$certificate_input/server.csr" \
+  >/dev/null 2>&1 || fail "could not generate the disposable TLS identity request"
+openssl x509 \
+  -req \
+  -in "$certificate_input/server.csr" \
+  -CA "$certificate_input/ca.crt" \
+  -CAkey "$certificate_input/ca.key" \
+  -CAcreateserial \
+  -days 1 \
+  -sha256 \
+  -copy_extensions copy \
+  -extfile <(printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n') \
   -out "$certificate_input/server.crt" \
-  >/dev/null 2>&1 || fail "could not generate the disposable PostgreSQL TLS identity"
+  >/dev/null 2>&1 || fail "could not sign the disposable TLS identity"
+chmod 0600 "$certificate_input/ca.key"
+chmod 0644 "$certificate_input/ca.crt"
 chmod 0600 "$certificate_input/server.key"
 chmod 0644 "$certificate_input/server.crt"
 
@@ -185,6 +217,8 @@ unset postgres_password
 
 docker volume create "$certificate_volume" >/dev/null
 volume_created=1
+docker network create "$network_name" >/dev/null
+network_created=1
 docker run --rm \
   --user 0:0 \
   --volume "$certificate_volume:/certificates" \
@@ -229,19 +263,52 @@ postgres_port="${port_mapping##*:}"
 
 # shellcheck disable=SC1090
 source "$docker_env_file"
-# shellcheck disable=SC2153
-export REGISTRY_RELAY_LIVE_POSTGRES_ADMIN_URL=\
-"postgresql://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${postgres_port}/relay_live?sslmode=require"
-export REGISTRY_RELAY_LIVE_POSTGRES_CA_PATH="$certificate_input/server.crt"
+if [[ "$product" == "rhai" ]]; then
+  {
+    printf 'CARGO_TARGET_DIR=/target\n'
+    printf 'REGISTRY_RELAY_LIVE_POSTGRES_ADMIN_URL=postgresql://postgres:%s@host.docker.internal:%s/relay_live?sslmode=require\n' \
+      "$POSTGRES_PASSWORD" "$postgres_port"
+    printf 'REGISTRY_RELAY_LIVE_POSTGRES_CA_PATH=/live-postgres-ca/ca.crt\n'
+    printf 'REGISTRY_RELAY_LIVE_RELAY_BINARY=/target/debug/registry-relay\n'
+    printf 'REGISTRY_RELAY_LIVE_REGISTRYCTL_BINARY=/target/debug/registryctl\n'
+    printf 'REGISTRY_RELAY_LIVE_SOURCE_CERT_PATH=/live-postgres-ca/server.crt\n'
+    printf 'REGISTRY_RELAY_LIVE_SOURCE_KEY_PATH=/live-postgres-ca/server.key\n'
+  } >"$rhai_test_env_file"
+  chmod 0600 "$rhai_test_env_file"
+else
+  # shellcheck disable=SC2153
+  export REGISTRY_RELAY_LIVE_POSTGRES_ADMIN_URL="postgresql://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${postgres_port}/relay_live?sslmode=require"
+  export REGISTRY_RELAY_LIVE_POSTGRES_CA_PATH="$certificate_input/ca.crt"
+fi
 unset POSTGRES_PASSWORD
 unset port_mapping
 unset postgres_port
 
 cd "$repository_root"
-cargo test \
-  --package registry-relay \
-  --locked \
-  --test live_consultation_journeys \
-  "$test_name" \
-  -- \
-  --ignored
+if [[ "$product" == "rhai" ]]; then
+  docker run --rm \
+    --add-host host.docker.internal:host-gateway \
+    --network "$network_name" \
+    --network-alias rhai-runner \
+    --env-file "$rhai_test_env_file" \
+    --volume "$repository_root:/workspace" \
+    --volume "$certificate_input:/live-postgres-ca:ro" \
+    --volume "$HOME/.cargo/registry:/usr/local/cargo/registry" \
+    --volume "$HOME/.cargo/git:/usr/local/cargo/git" \
+    --volume registry-relay-linux-target:/target \
+    --workdir /workspace \
+    rust:1.95-bookworm \
+    sh -eu -c \
+    'cp /live-postgres-ca/ca.crt /usr/local/share/ca-certificates/registry-live-source.crt
+     update-ca-certificates >/dev/null 2>&1
+     cargo build --locked --package registry-relay --bin registry-relay --bin registry-relay-rhai-worker --package registryctl --bin registryctl
+     cargo test --locked --package registry-relay --test live_consultation_journeys live_dhis2_sandboxed_rhai_consultation_lifecycle -- --ignored'
+else
+  cargo test \
+    --package registry-relay \
+    --locked \
+    --test live_consultation_journeys \
+    "$test_name" \
+    -- \
+    --ignored
+fi

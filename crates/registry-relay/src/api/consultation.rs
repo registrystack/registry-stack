@@ -19,8 +19,8 @@ use zeroize::Zeroizing;
 use crate::auth::AuthenticationResult;
 use crate::consultation::{
     AuthenticatedNotaryWorkload, ConsultationExecutionError, ConsultationKey,
-    ConsultationServiceError, NotaryEvaluationId, ParsedPurpose, ParsedSingleStringInput,
-    ResolvedConsultationProfile,
+    ConsultationServiceError, NotaryBatchChildIdentity, NotaryEvaluationId, ParsedPurpose,
+    ParsedSingleStringInput, ResolvedConsultationProfile,
 };
 use crate::error::{ConsultationError, Error};
 use crate::runtime_config::RuntimeSnapshot;
@@ -30,6 +30,7 @@ pub(crate) const MAX_CONSULTATION_REQUEST_BYTES: usize = 8 * 1024;
 
 const DATA_PURPOSE_HEADER: &str = "data-purpose";
 const NOTARY_EVALUATION_ID_HEADER: &str = "registry-notary-evaluation-id";
+const NOTARY_BATCH_CHILD_ID_HEADER: &str = "registry-notary-batch-child-id";
 const JSON_MEDIA_TYPE: &str = "application/json";
 const MIN_RETRY_AFTER_SECONDS: u64 = 1;
 const MAX_RETRY_AFTER_SECONDS: u64 = 60;
@@ -198,6 +199,7 @@ fn service_error_response(error: ConsultationServiceError) -> Response {
         ConsultationServiceError::Denied => (ConsultationError::Denied, None),
         ConsultationServiceError::ProfileNotFound => (ConsultationError::ProfileNotFound, None),
         ConsultationServiceError::InvalidRequest => (ConsultationError::InvalidRequest, None),
+        ConsultationServiceError::Conflict => (ConsultationError::Conflict, None),
         ConsultationServiceError::RateLimited(retry_after) => (
             ConsultationError::RateLimited,
             Some(u64::from(retry_after.seconds())),
@@ -301,6 +303,10 @@ pub(crate) enum ConsultationWireError {
     DuplicateNotaryEvaluationId,
     #[error("Notary evaluation id header is malformed")]
     InvalidNotaryEvaluationId,
+    #[error("Notary batch child id header is repeated")]
+    DuplicateNotaryBatchChildId,
+    #[error("Notary batch child id header is malformed")]
+    InvalidNotaryBatchChildId,
 }
 
 impl ConsultationWireError {
@@ -318,7 +324,9 @@ impl ConsultationWireError {
             | Self::BodyTooLarge
             | Self::InvalidBody
             | Self::DuplicateNotaryEvaluationId
-            | Self::InvalidNotaryEvaluationId => ConsultationError::InvalidRequest,
+            | Self::InvalidNotaryEvaluationId
+            | Self::DuplicateNotaryBatchChildId
+            | Self::InvalidNotaryBatchChildId => ConsultationError::InvalidRequest,
         }
     }
 }
@@ -332,11 +340,13 @@ pub(crate) struct ParsedConsultationEnvelope {
     purpose: ParsedPurpose,
     input: ParsedSingleStringInput,
     notary_evaluation_id: Option<NotaryEvaluationId>,
+    batch_child_identity: Option<NotaryBatchChildIdentity>,
 }
 
 struct ParsedConsultationHeaders {
     purpose: ParsedPurpose,
     notary_evaluation_id: Option<NotaryEvaluationId>,
+    batch_child_identity: Option<NotaryBatchChildIdentity>,
 }
 
 impl ParsedConsultationEnvelope {
@@ -364,8 +374,14 @@ impl ParsedConsultationEnvelope {
         ParsedPurpose,
         ParsedSingleStringInput,
         Option<NotaryEvaluationId>,
+        Option<NotaryBatchChildIdentity>,
     ) {
-        (self.purpose, self.input, self.notary_evaluation_id)
+        (
+            self.purpose,
+            self.input,
+            self.notary_evaluation_id,
+            self.batch_child_identity,
+        )
     }
 }
 
@@ -396,12 +412,24 @@ impl<'a> ClosedConsultationJson<'a> {
         self.whitespace();
         self.byte(b'{')?;
         self.whitespace();
-        let input_name = self.string(ParsedSingleStringInput::MAX_NAME_BYTES)?;
-        self.whitespace();
-        self.byte(b':')?;
-        self.whitespace();
-        let input_value = self.string(ParsedSingleStringInput::MAX_VALUE_BYTES)?;
-        self.whitespace();
+        let mut components = Vec::with_capacity(4);
+        loop {
+            let input_name = self.string(ParsedSingleStringInput::MAX_NAME_BYTES)?;
+            self.whitespace();
+            self.byte(b':')?;
+            self.whitespace();
+            let input_value = self.string(ParsedSingleStringInput::MAX_VALUE_BYTES)?;
+            components.push((input_name, input_value));
+            if components.len() > 4 {
+                return Err(ConsultationWireError::InvalidBody);
+            }
+            self.whitespace();
+            if self.bytes.get(self.position) != Some(&b',') {
+                break;
+            }
+            self.position += 1;
+            self.whitespace();
+        }
         self.byte(b'}')?;
         self.whitespace();
         self.byte(b'}')?;
@@ -410,7 +438,7 @@ impl<'a> ClosedConsultationJson<'a> {
             return Err(ConsultationWireError::InvalidBody);
         }
 
-        ParsedSingleStringInput::try_parse_zeroizing(input_name, input_value)
+        ParsedSingleStringInput::try_parse_components(components)
             .map_err(|_| ConsultationWireError::InvalidBody)
     }
 
@@ -621,10 +649,24 @@ fn parse_execute_headers(
             .map_err(|_| ConsultationWireError::InvalidNotaryEvaluationId)
     })
     .transpose()?;
+    let batch_child_identity = optional_header(
+        headers,
+        NOTARY_BATCH_CHILD_ID_HEADER,
+        ConsultationWireError::DuplicateNotaryBatchChildId,
+    )?
+    .map(|value| {
+        NotaryBatchChildIdentity::try_parse(value)
+            .map_err(|_| ConsultationWireError::InvalidNotaryBatchChildId)
+    })
+    .transpose()?;
+    if batch_child_identity.is_some() && notary_evaluation_id.is_none() {
+        return Err(ConsultationWireError::InvalidNotaryBatchChildId);
+    }
 
     Ok(ParsedConsultationHeaders {
         purpose,
         notary_evaluation_id,
+        batch_child_identity,
     })
 }
 
@@ -640,6 +682,7 @@ fn parse_execute_body(
     let ParsedConsultationHeaders {
         purpose,
         notary_evaluation_id,
+        batch_child_identity,
     } = headers;
 
     let input = parse_consultation_body_strict(body.as_slice())?;
@@ -648,6 +691,7 @@ fn parse_execute_body(
         purpose,
         input,
         notary_evaluation_id,
+        batch_child_identity,
     })
 }
 
@@ -665,6 +709,7 @@ fn exactly_one_header<'a>(
     first.to_str().map_err(|_| match name {
         DATA_PURPOSE_HEADER => ConsultationWireError::InvalidPurpose,
         NOTARY_EVALUATION_ID_HEADER => ConsultationWireError::InvalidNotaryEvaluationId,
+        NOTARY_BATCH_CHILD_ID_HEADER => ConsultationWireError::InvalidNotaryBatchChildId,
         _ => ConsultationWireError::UnsupportedContentType,
     })
 }
@@ -1011,7 +1056,7 @@ mod tests {
     }
 
     #[test]
-    fn envelope_accepts_only_the_closed_single_string_shape() {
+    fn envelope_accepts_only_one_to_four_closed_string_components() {
         let parsed = parse_envelope(&headers(), body()).unwrap();
         assert_eq!(parsed.purpose().as_str(), "benefit-verification");
         assert_eq!(parsed.input().name(), "subject_id");
@@ -1033,6 +1078,21 @@ mod tests {
         .unwrap();
         assert_eq!(surrogate_pair.input().value_for_internal_use(), "id-😀");
 
+        let composite = parse_envelope(
+            &headers(),
+            br#"{"inputs":{"birth_date":"2001-02-03","family_name":"N'Dour","given_name":"Awa","local_id":"42"}}"#,
+        )
+        .unwrap();
+        assert_eq!(composite.input().values().len(), 4);
+        assert_eq!(
+            composite
+                .input()
+                .values()
+                .find(|(name, _)| *name == "birth_date")
+                .map(|(_, value)| value),
+            Some("2001-02-03")
+        );
+
         for invalid in [
             br#"{}"#.as_slice(),
             br#"[]"#,
@@ -1049,7 +1109,7 @@ mod tests {
             br#"{"inputs":{"subject_id":"\uZZZZ"}}"#,
             br#"{"inputs":{"subject_id":"\x41"}}"#,
             br#"{"inputs":{"subject-id":"12345"}}"#,
-            br#"{"inputs":{"subject_id":"12345","other":"x"}}"#,
+            br#"{"inputs":{"a":"1","b":"2","c":"3","d":"4","e":"5"}}"#,
             br#"{"inputs":{"subject_id":"12345"},"other":true}"#,
         ] {
             assert_eq!(
@@ -1245,6 +1305,54 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_batch_child_identity_is_optional_exactly_once_and_opaque() {
+        let mut candidate = headers();
+        candidate.insert(
+            header::HeaderName::from_static(NOTARY_EVALUATION_ID_HEADER),
+            HeaderValue::from_static("01JYZZZZZZZZZZZZZZZZZZZZZZ"),
+        );
+        candidate.insert(
+            header::HeaderName::from_static(NOTARY_BATCH_CHILD_ID_HEADER),
+            HeaderValue::from_static("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+        );
+        let parsed = parse_envelope(&candidate, body()).unwrap();
+        let (_, _, _, child) = parsed.into_parts();
+        assert_eq!(
+            format!("{:?}", child.expect("typed child identity")),
+            "NotaryBatchChildIdentity([REDACTED])"
+        );
+
+        candidate.append(
+            header::HeaderName::from_static(NOTARY_BATCH_CHILD_ID_HEADER),
+            HeaderValue::from_static("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"),
+        );
+        assert_eq!(
+            parse_envelope(&candidate, body()).err(),
+            Some(ConsultationWireError::DuplicateNotaryBatchChildId)
+        );
+
+        let mut malformed = headers();
+        malformed.insert(
+            header::HeaderName::from_static(NOTARY_BATCH_CHILD_ID_HEADER),
+            HeaderValue::from_static("not-a-child"),
+        );
+        assert_eq!(
+            parse_envelope(&malformed, body()).err(),
+            Some(ConsultationWireError::InvalidNotaryBatchChildId)
+        );
+
+        let mut missing_evaluation = headers();
+        missing_evaluation.insert(
+            header::HeaderName::from_static(NOTARY_BATCH_CHILD_ID_HEADER),
+            HeaderValue::from_static("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+        );
+        assert_eq!(
+            parse_envelope(&missing_evaluation, body()).err(),
+            Some(ConsultationWireError::InvalidNotaryBatchChildId)
+        );
+    }
+
+    #[test]
     fn every_parser_failure_collapses_to_one_of_the_frozen_public_errors() {
         let cases = [
             ConsultationWireError::InvalidProfilePath,
@@ -1258,6 +1366,8 @@ mod tests {
             ConsultationWireError::InvalidBody,
             ConsultationWireError::DuplicateNotaryEvaluationId,
             ConsultationWireError::InvalidNotaryEvaluationId,
+            ConsultationWireError::DuplicateNotaryBatchChildId,
+            ConsultationWireError::InvalidNotaryBatchChildId,
         ];
         for error in cases {
             let expected = if error == ConsultationWireError::InvalidProfilePath {
@@ -1281,6 +1391,11 @@ mod tests {
                 ConsultationError::InvalidCredentials,
                 StatusCode::UNAUTHORIZED,
                 "auth.invalid_credentials",
+            ),
+            (
+                ConsultationError::Conflict,
+                StatusCode::CONFLICT,
+                "consultation.batch_child_conflict",
             ),
             (
                 ConsultationError::Denied,
@@ -1319,6 +1434,7 @@ mod tests {
         for variant in [
             ConsultationError::InvalidRequest,
             ConsultationError::InvalidCredentials,
+            ConsultationError::Conflict,
             ConsultationError::Denied,
             ConsultationError::ProfileNotFound,
             ConsultationError::RateLimited,

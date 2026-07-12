@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use hmac::{KeyInit, Mac, SimpleHmac};
 use registry_platform_audit::pseudonym_keyring::{
     AuditPseudonymCommitment, AuditPseudonymKeyId, TransientPseudonymInput,
 };
@@ -30,9 +31,34 @@ use crate::state_plane::QuotaGrant;
 use super::policy::CompiledPolicyProof;
 use super::pseudonym::PreparedConsultationPseudonyms;
 use super::{
-    AcquisitionClass, AuthenticatedConsultationWorkload, PreAuthorizationConsultationCore,
-    SelectorProvenance,
+    AcquisitionClass, AuthenticatedConsultationWorkload, NotaryBatchChildIdentity,
+    PreAuthorizationConsultationCore, SelectorProvenance,
 };
+
+const BATCH_CHILD_REPLAY_BINDING_DOMAIN_V1: &[u8] = b"registry-relay/batch-child-replay-binding/v1";
+
+/// Stable, opaque PostgreSQL keys for one authenticated Notary batch child.
+/// Neither value supports offline guessing of demographic selector inputs.
+pub(crate) struct BatchChildReplayBinding {
+    child_key: [u8; 32],
+    binding_digest: [u8; 32],
+}
+
+impl BatchChildReplayBinding {
+    pub(crate) const fn child_key(&self) -> &[u8; 32] {
+        &self.child_key
+    }
+
+    pub(crate) const fn binding_digest(&self) -> &[u8; 32] {
+        &self.binding_digest
+    }
+}
+
+impl fmt::Debug for BatchChildReplayBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BatchChildReplayBinding([REDACTED])")
+    }
+}
 
 const AUTHORIZATION_CONTEXT_DOMAIN_V1: &str = "registry.relay.consultation-authorization.v1";
 const EXECUTION_PLAN_DOMAIN_V1: &str = "registry.relay.consultation-execution-plan.v1";
@@ -137,23 +163,28 @@ impl<'profile> CanonicalConsultationInputs<'profile> {
             .purposes()
             .find(|purpose| *purpose == core.purpose().as_str())
             .ok_or(ConsultationCommitmentError::AuthorizationMismatch)?;
-        let mut slots = plan.inputs();
-        let slot = slots
-            .next()
-            .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)?;
-        if slots.next().is_some() || slot.name() != core.parsed_input().name() {
+        if plan.inputs().len() != core.parsed_input().values().len() {
             return Err(ConsultationCommitmentError::CanonicalInputMismatch);
         }
-        let value = slot
-            .canonicalize_and_validate(core.parsed_input().value_for_internal_use())
-            .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)?;
-        if !value.binding_matches(profile.profile().contract_hash(), slot.name(), 0) {
-            return Err(ConsultationCommitmentError::CanonicalInputMismatch);
+        let raw = core.parsed_input().values().collect::<BTreeMap<_, _>>();
+        let mut values = BTreeMap::new();
+        for (index, slot) in plan.inputs().enumerate() {
+            let value = slot
+                .canonicalize_and_validate(
+                    raw.get(slot.name())
+                        .copied()
+                        .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)?,
+                )
+                .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)?;
+            if !value.binding_matches(profile.profile().contract_hash(), slot.name(), index) {
+                return Err(ConsultationCommitmentError::CanonicalInputMismatch);
+            }
+            values.insert(slot.name().into(), value);
         }
         Ok(Self {
             plan,
             canonical_purpose: canonical_purpose.into(),
-            values: BTreeMap::from([(slot.name().into(), value)]),
+            values,
         })
     }
 
@@ -162,23 +193,85 @@ impl<'profile> CanonicalConsultationInputs<'profile> {
     }
 
     fn transient_value(&self) -> Value {
-        Value::Object(
-            self.values
-                .iter()
-                .map(|(name, value)| (name.to_string(), Value::String(value.as_str().to_owned())))
-                .collect(),
-        )
+        let components = self
+            .plan
+            .inputs()
+            .filter_map(|slot| {
+                self.values.get(slot.name()).map(|value| {
+                    (
+                        slot.name().to_owned(),
+                        json!({
+                            "type": match slot.input_type() {
+                                crate::source_plan::CompiledInputType::String => "string",
+                                crate::source_plan::CompiledInputType::FullDate => "full_date",
+                            },
+                            "value": value.as_str(),
+                        }),
+                    )
+                })
+            })
+            .collect();
+        json!({
+            "version": "registry.relay.subject_selector_map.v1",
+            "components": Value::Object(components),
+        })
     }
 
-    fn only_input(&self) -> Result<(&str, &str), ConsultationCommitmentError> {
-        let mut values = self.values.iter();
-        let (name, value) = values
-            .next()
-            .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)?;
-        if values.next().is_some() {
-            return Err(ConsultationCommitmentError::CanonicalInputMismatch);
+    /// Bind exact canonical inputs and authenticated execution identity to a
+    /// Notary-provided 256-bit child secret. PostgreSQL retains only the raw
+    /// child's SHA-256 row key and this HMAC, so low-entropy facts remain
+    /// resistant to offline guessing and retries survive pseudonym rotation.
+    pub(crate) fn batch_child_replay_binding(
+        &self,
+        child: &NotaryBatchChildIdentity,
+        workload: &AuthenticatedConsultationWorkload,
+    ) -> Result<BatchChildReplayBinding, ConsultationCommitmentError> {
+        let profile = self.profile();
+        if profile.workload_id() != workload.workload_id()
+            || profile.tenant() != workload.tenant()
+            || profile.registry_instance() != workload.registry_instance()
+            || !profile
+                .purposes()
+                .any(|purpose| purpose == self.canonical_purpose.as_ref())
+        {
+            return Err(ConsultationCommitmentError::AuthorizationMismatch);
         }
-        Ok((name, value.as_str()))
+        let value = json!({
+            "schema": "registry.relay.batch-child-replay-binding/v1",
+            "auth_mode": workload.auth_mode().as_str(),
+            "issuer": workload.issuer().as_str(),
+            "audience": workload.audience().as_str(),
+            "client_claim_selector": workload.client_claim_selector().as_str(),
+            "client_value": workload.client_value().as_str(),
+            "workload_id": workload.workload_id().as_str(),
+            "principal_id": workload.principal_id(),
+            "checked_scopes": workload.checked_scopes().collect::<Vec<_>>(),
+            "tenant": workload.tenant().as_str(),
+            "registry_instance": workload.registry_instance().as_str(),
+            "profile_id": profile.profile().id().as_str(),
+            "profile_version": profile.profile().version().to_string(),
+            "contract_hash": profile.profile().contract_hash().as_str(),
+            "integration_pack_hash": profile.integration_pack().hash().as_str(),
+            "policy_hash": profile.authorization().policy().hash().as_str(),
+            "private_binding_hash": profile.private_binding_hash(),
+            "canonical_purpose": self.canonical_purpose.as_ref(),
+            "canonical_inputs": self.transient_value(),
+        });
+        let canonical = Zeroizing::new(
+            canonicalize_json(&value).map_err(|_| ConsultationCommitmentError::Canonicalization)?,
+        );
+        let child_key = child.decoded_key();
+        let row_key: [u8; 32] = Sha256::digest(child_key.as_slice()).into();
+        let mut mac = <SimpleHmac<Sha256> as KeyInit>::new_from_slice(child_key.as_slice())
+            .expect("HMAC-SHA256 accepts 256-bit keys");
+        mac.update(BATCH_CHILD_REPLAY_BINDING_DOMAIN_V1);
+        mac.update(&[0]);
+        mac.update(canonical.as_slice());
+        let binding_digest: [u8; 32] = mac.finalize().into_bytes().into();
+        Ok(BatchChildReplayBinding {
+            child_key: row_key,
+            binding_digest,
+        })
     }
 }
 
@@ -197,7 +290,7 @@ pub(crate) struct SealedConsultationExecution<'profile> {
 /// execution inside the concrete source executor.
 pub(super) struct BoundConsultationExecution<'profile> {
     plan: &'profile CompiledSourcePlan,
-    input: CompiledInputValue,
+    inputs: Box<[CompiledInputValue]>,
 }
 
 impl BoundConsultationExecution<'_> {
@@ -205,15 +298,19 @@ impl BoundConsultationExecution<'_> {
         self.plan
     }
 
-    pub(super) const fn input(&self) -> &CompiledInputValue {
-        &self.input
+    pub(super) fn input(&self, index: usize) -> Option<&CompiledInputValue> {
+        self.inputs.get(index)
+    }
+
+    pub(super) fn inputs(&self) -> impl ExactSizeIterator<Item = &CompiledInputValue> {
+        self.inputs.iter()
     }
 }
 
 enum SealedConsultationExecutionInner<'profile> {
     Bound {
         plan: &'profile CompiledSourcePlan,
-        input: CompiledInputValue,
+        inputs: Box<[CompiledInputValue]>,
     },
     #[cfg(test)]
     StatePlaneOnly,
@@ -224,22 +321,26 @@ impl<'profile> SealedConsultationExecution<'profile> {
         plan: &'profile CompiledSourcePlan,
         mut values: BTreeMap<Box<str>, CompiledInputValue>,
     ) -> Result<Self, ConsultationCommitmentError> {
-        let mut slots = plan.inputs();
-        let slot = slots
-            .next()
-            .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)?;
-        if slots.next().is_some() || values.len() != 1 {
+        if plan.inputs().len() != values.len() || !(1..=4).contains(&values.len()) {
             return Err(ConsultationCommitmentError::CanonicalInputMismatch);
         }
-        let input = values
-            .remove(slot.name())
-            .filter(|value| value.binding_matches(plan.profile().contract_hash(), slot.name(), 0))
-            .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)?;
+        let inputs = plan
+            .inputs()
+            .enumerate()
+            .map(|(index, slot)| {
+                values
+                    .remove(slot.name())
+                    .filter(|value| {
+                        value.binding_matches(plan.profile().contract_hash(), slot.name(), index)
+                    })
+                    .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)
+            })
+            .collect::<Result<Box<[_]>, _>>()?;
         if !values.is_empty() {
             return Err(ConsultationCommitmentError::CanonicalInputMismatch);
         }
         Ok(Self {
-            inner: SealedConsultationExecutionInner::Bound { plan, input },
+            inner: SealedConsultationExecutionInner::Bound { plan, inputs },
         })
     }
 
@@ -249,7 +350,9 @@ impl<'profile> SealedConsultationExecution<'profile> {
     #[cfg(test)]
     pub(crate) fn bound_plan_and_input(&self) -> (&CompiledSourcePlan, &CompiledInputValue) {
         match &self.inner {
-            SealedConsultationExecutionInner::Bound { plan, input } => (plan, input),
+            SealedConsultationExecutionInner::Bound { plan, inputs } => {
+                (plan, inputs.first().expect("sealed selector is non-empty"))
+            }
             #[cfg(test)]
             SealedConsultationExecutionInner::StatePlaneOnly => {
                 panic!("state-plane-only test dispatch has no source execution")
@@ -273,8 +376,8 @@ impl<'profile> SealedConsultationExecution<'profile> {
         self,
     ) -> Result<BoundConsultationExecution<'profile>, ConsultationCommitmentError> {
         match self.inner {
-            SealedConsultationExecutionInner::Bound { plan, input } => {
-                Ok(BoundConsultationExecution { plan, input })
+            SealedConsultationExecutionInner::Bound { plan, inputs } => {
+                Ok(BoundConsultationExecution { plan, inputs })
             }
             #[cfg(test)]
             SealedConsultationExecutionInner::StatePlaneOnly => {
@@ -442,9 +545,8 @@ impl CanonicalConsultationInputs<'_> {
         &self,
         raw_consent_reference: Option<&str>,
     ) -> Result<RuntimePseudonymPreimagesForTest, ConsultationCommitmentError> {
-        let (identifier_type, canonical_subject) = self.only_input()?;
         Ok(RuntimePseudonymPreimagesForTest {
-            subject: subject_pseudonym_value(self.profile(), identifier_type, canonical_subject),
+            subject: subject_pseudonym_value(self.profile(), self),
             input: input_pseudonym_value(self.profile(), self),
             predicate: predicate_pseudonym_value(self.profile(), self),
             consent_evidence: consent_pseudonym_value(
@@ -465,12 +567,7 @@ pub(crate) fn build_pseudonym_inputs(
         evidence,
     } = authority;
     let profile = inputs.profile();
-    let (identifier_type, canonical_subject) = inputs.only_input()?;
-    let subject = transient_input(subject_pseudonym_value(
-        profile,
-        identifier_type,
-        canonical_subject,
-    ))?;
+    let subject = transient_input(subject_pseudonym_value(profile, &inputs))?;
     let input = transient_input(input_pseudonym_value(profile, &inputs))?;
     let predicate = transient_input(predicate_pseudonym_value(profile, &inputs))?;
     let consent_evidence = match (
@@ -513,14 +610,12 @@ pub(crate) fn build_pseudonym_inputs(
 
 fn subject_pseudonym_value(
     profile: &CompiledRuntimeProfile,
-    identifier_type: &str,
-    canonical_subject: &str,
+    inputs: &CanonicalConsultationInputs<'_>,
 ) -> Value {
     json!({
         "tenant": profile.tenant().as_str(),
         "registry_instance": profile.registry_instance().as_str(),
-        "identifier_type": identifier_type,
-        "canonical_subject": canonical_subject,
+        "canonical_selector": inputs.transient_value(),
     })
 }
 
@@ -1698,7 +1793,7 @@ mod tests {
         assert_eq!(
             committed_preimages
                 .input
-                .pointer("/canonical_inputs/subject_id")
+                .pointer("/canonical_inputs/components/subject_id/value")
                 .and_then(Value::as_str),
             Some(retained_input.as_str()),
             "the executor selector must be the exact value used by the input commitment",
@@ -1706,7 +1801,7 @@ mod tests {
         assert_eq!(
             committed_preimages
                 .predicate
-                .pointer("/exact_predicate/canonical_inputs/subject_id")
+                .pointer("/exact_predicate/canonical_inputs/components/subject_id/value")
                 .and_then(Value::as_str),
             Some(retained_input.as_str()),
             "the executor selector must be the exact value used by the predicate commitment",

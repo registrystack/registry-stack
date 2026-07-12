@@ -272,6 +272,7 @@ async fn handle_federated_evaluate(
         )),
         relationship: None,
         on_behalf_of: None,
+        variables: Default::default(),
         claims: vec![ClaimRef::from(profile.claim_id.clone())],
         disclosure: Some(
             profile

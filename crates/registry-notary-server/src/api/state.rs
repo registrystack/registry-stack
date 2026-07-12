@@ -12,7 +12,7 @@ pub(super) static AUDIT_ACK_CURSOR_READ_PERMIT: OnceLock<Arc<tokio::sync::Semaph
 #[derive(Debug, Default)]
 struct RelayReadinessCache {
     checked_at: Option<tokio::time::Instant>,
-    ready: bool,
+    readiness: crate::runtime::RelayProfileReadiness,
 }
 
 pub(super) fn audit_ack_cursor_read_permit() -> Arc<tokio::sync::Semaphore> {
@@ -533,12 +533,17 @@ impl RegistryNotaryApiState {
         self.activated_relay.get().is_some()
     }
 
+    #[cfg(test)]
     pub(crate) async fn relay_ready(&self) -> bool {
         if !self.relay_required() {
             return true;
         }
+        self.relay_readiness().await.is_ready()
+    }
+
+    pub(crate) async fn relay_readiness(&self) -> crate::runtime::RelayProfileReadiness {
         let Some(relay) = self.activated_relay.get() else {
-            return false;
+            return crate::runtime::RelayProfileReadiness::all_failed(1);
         };
         // Hold this mutex across the bounded remote check. This keeps the
         // public readiness endpoint from amplifying concurrent probes into
@@ -548,16 +553,17 @@ impl RegistryNotaryApiState {
             .checked_at
             .is_some_and(|checked_at| checked_at.elapsed() < RELAY_READINESS_TTL)
         {
-            return cache.ready;
+            return cache.readiness;
         }
-        cache.ready = matches!(
-            tokio::time::timeout(RELAY_READINESS_TIMEOUT, relay.check_ready()).await,
-            Ok(Ok(()))
-        );
+        cache.readiness =
+            match tokio::time::timeout(RELAY_READINESS_TIMEOUT, relay.readiness()).await {
+                Ok(readiness) => readiness,
+                Err(_) => crate::runtime::RelayProfileReadiness::all_failed(relay.profile_count()),
+            };
         // Cache timeout failures too, otherwise a slow or unavailable Relay
         // would trigger a new request for every readiness probe.
         cache.checked_at = Some(tokio::time::Instant::now());
-        cache.ready
+        cache.readiness
     }
 
     #[cfg(test)]

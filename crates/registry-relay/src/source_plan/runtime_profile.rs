@@ -19,12 +19,11 @@ use super::artifact::{
     SourceCardinality, SourceObservedAtDocument, SourcePlanKind, SourcePlanLimits,
     SourceRevisionDocument,
 };
-#[cfg(test)]
-use super::compiler::CompiledScalarShape;
 use super::compiler::{
     compile_runtime_response_schema, CompiledInputCanonicalization, CompiledOperation,
-    CompiledResponseSchema, CompiledSnapshotBinding, CompiledSourceAuth, CompiledStep,
-    RhaiWorkerLimits, SourcePlanCompileError,
+    CompiledResponse, CompiledResponseNormalization, CompiledResponseSchema, CompiledScalarShape,
+    CompiledSnapshotBinding, CompiledSourceAuth, CompiledStep, RhaiWorkerLimits,
+    SourcePlanCompileError,
 };
 use super::completion_seed::{compile_runtime_commitment_digests, CompiledCompletionSeedTemplate};
 use super::identifiers::{CanonicalPurpose, LegalBasisId, SourceDestinationId};
@@ -67,6 +66,57 @@ compiled_digest!(
     /// Digest of the exact typed compiled predicate-plan v1 preimage.
     PredicatePlanDigest
 );
+
+fn resolve_compiled_output_pointer<'a>(
+    response: &'a CompiledResponse,
+    tokens: impl Iterator<Item = &'a str>,
+) -> Option<&'a CompiledScalarShape> {
+    let mut schema = match response.normalization() {
+        CompiledResponseNormalization::Object => response.schema(),
+        CompiledResponseNormalization::ArrayProbeTwo => match response.schema() {
+            CompiledResponseSchema::Array { items, .. } => items,
+            CompiledResponseSchema::Object { .. } | CompiledResponseSchema::Scalar(_) => {
+                return None;
+            }
+        },
+        CompiledResponseNormalization::ObjectArrayProbeTwo {
+            records_field_index,
+        } => match response.schema() {
+            CompiledResponseSchema::Object { fields, .. } => {
+                match fields.get(records_field_index)?.schema() {
+                    CompiledResponseSchema::Array { items, .. } => items,
+                    CompiledResponseSchema::Object { .. } | CompiledResponseSchema::Scalar(_) => {
+                        return None
+                    }
+                }
+            }
+            CompiledResponseSchema::Array { .. } | CompiledResponseSchema::Scalar(_) => {
+                return None;
+            }
+        },
+    };
+    for token in tokens {
+        schema = match schema {
+            CompiledResponseSchema::Object { fields, .. } => {
+                fields.iter().find(|field| field.name() == token)?.schema()
+            }
+            CompiledResponseSchema::Array {
+                items, max_items, ..
+            } => {
+                let index = token.parse::<u16>().ok()?;
+                if index.to_string() != token || index >= *max_items {
+                    return None;
+                }
+                items
+            }
+            CompiledResponseSchema::Scalar(_) => return None,
+        };
+    }
+    match schema {
+        CompiledResponseSchema::Scalar(shape) => Some(shape),
+        CompiledResponseSchema::Object { .. } | CompiledResponseSchema::Array { .. } => None,
+    }
+}
 compiled_digest!(
     /// Digest of the fixed physical projection and cardinality mechanisms.
     PhysicalProjectionDigest
@@ -267,16 +317,26 @@ impl CompiledRuntimeProfile {
                     shape: match field.output_type {
                         OutputTypeDocument::String => CompiledOutputShape::String {
                             nullable: field.nullable,
+                            max_bytes: field
+                                .max_bytes
+                                .ok_or(SourcePlanCompileError::CompilerInvariant)?,
                         },
                         OutputTypeDocument::Boolean => CompiledOutputShape::Boolean {
                             nullable: field.nullable,
                         },
                         OutputTypeDocument::Integer => CompiledOutputShape::Integer {
                             nullable: field.nullable,
+                            minimum: field
+                                .minimum
+                                .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+                            maximum: field
+                                .maximum
+                                .ok_or(SourcePlanCompileError::CompilerInvariant)?,
                         },
-                        OutputTypeDocument::Number => CompiledOutputShape::Number {
+                        OutputTypeDocument::Date => CompiledOutputShape::Date {
                             nullable: field.nullable,
                         },
+                        OutputTypeDocument::Presence => CompiledOutputShape::Presence,
                     },
                 })
             })
@@ -336,8 +396,8 @@ impl CompiledRuntimeProfile {
                         let operation = operations
                             .get(step.operation_index())
                             .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-                        if let Some(jwks) = operation.embedded_open_crvs_jwks() {
-                            ordered.push(jwks.id().clone());
+                        if let Some(dci) = operation.dci_exact() {
+                            ordered.push(dci.verification().id().clone());
                         }
                         ordered.push(operation.id().clone());
                     }
@@ -511,6 +571,28 @@ impl CompiledRuntimeProfile {
         self.output.iter()
     }
 
+    pub(crate) fn output_field(&self, name: &str) -> Option<&CompiledOutputField> {
+        self.output
+            .binary_search_by(|field| field.name().as_bytes().cmp(name.as_bytes()))
+            .ok()
+            .map(|index| &self.output[index])
+    }
+
+    #[cfg(test)]
+    pub(crate) fn replace_output_shape_for_test(
+        &mut self,
+        name: &str,
+        shape: CompiledOutputShape,
+    ) -> Result<(), SourcePlanCompileError> {
+        let field = self
+            .output
+            .iter_mut()
+            .find(|field| field.name() == name)
+            .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+        field.shape = shape;
+        Ok(())
+    }
+
     pub(crate) fn outcomes(&self) -> impl ExactSizeIterator<Item = CompiledPublicOutcome> + '_ {
         self.outcomes.iter().copied()
     }
@@ -632,13 +714,19 @@ impl CompiledRuntimeProfile {
         output.push(CompiledOutputField {
             name: AcquiredField::try_from("recursive_leaf")
                 .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
-            shape: CompiledOutputShape::String { nullable: false },
+            shape: CompiledOutputShape::String {
+                nullable: false,
+                max_bytes: 65_536,
+            },
         });
         for index in 1..64 {
             output.push(CompiledOutputField {
                 name: AcquiredField::try_from(format!("scalar_{index:02}").as_str())
                     .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
-                shape: CompiledOutputShape::String { nullable: false },
+                shape: CompiledOutputShape::String {
+                    nullable: false,
+                    max_bytes: 65_536,
+                },
             });
         }
         self.output = output.into_boxed_slice();
@@ -849,10 +937,22 @@ impl CompiledOutputField {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompiledOutputShape {
-    String { nullable: bool },
-    Boolean { nullable: bool },
-    Integer { nullable: bool },
-    Number { nullable: bool },
+    String {
+        nullable: bool,
+        max_bytes: u32,
+    },
+    Boolean {
+        nullable: bool,
+    },
+    Integer {
+        nullable: bool,
+        minimum: i64,
+        maximum: i64,
+    },
+    Date {
+        nullable: bool,
+    },
+    Presence,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

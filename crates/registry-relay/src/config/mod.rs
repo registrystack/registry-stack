@@ -822,6 +822,24 @@ pub enum ConsultationSourceCredentialConfig {
         username_env: ConsultationCredentialEnvironmentName,
         password_env: ConsultationCredentialEnvironmentName,
     },
+    StaticBearer {
+        #[serde(rename = "ref")]
+        reference: ConsultationSourceCredentialReference,
+        generation: u64,
+        token_env: ConsultationCredentialEnvironmentName,
+    },
+    ApiKeyHeader {
+        #[serde(rename = "ref")]
+        reference: ConsultationSourceCredentialReference,
+        generation: u64,
+        value_env: ConsultationCredentialEnvironmentName,
+    },
+    ApiKeyQuery {
+        #[serde(rename = "ref")]
+        reference: ConsultationSourceCredentialReference,
+        generation: u64,
+        value_env: ConsultationCredentialEnvironmentName,
+    },
     #[serde(rename = "oauth_client_credentials")]
     OAuthClientCredentials {
         #[serde(rename = "ref")]
@@ -836,40 +854,53 @@ impl ConsultationSourceCredentialConfig {
     #[must_use]
     pub(crate) const fn reference(&self) -> &ConsultationSourceCredentialReference {
         match self {
-            Self::Basic { reference, .. } | Self::OAuthClientCredentials { reference, .. } => {
-                reference
-            }
+            Self::Basic { reference, .. }
+            | Self::StaticBearer { reference, .. }
+            | Self::ApiKeyHeader { reference, .. }
+            | Self::ApiKeyQuery { reference, .. }
+            | Self::OAuthClientCredentials { reference, .. } => reference,
         }
     }
 
     #[must_use]
     pub(crate) const fn generation(&self) -> u64 {
         match self {
-            Self::Basic { generation, .. } | Self::OAuthClientCredentials { generation, .. } => {
-                *generation
-            }
+            Self::Basic { generation, .. }
+            | Self::StaticBearer { generation, .. }
+            | Self::ApiKeyHeader { generation, .. }
+            | Self::ApiKeyQuery { generation, .. }
+            | Self::OAuthClientCredentials { generation, .. } => *generation,
         }
     }
 
     #[must_use]
-    pub(crate) const fn environment_names(&self) -> [&ConsultationCredentialEnvironmentName; 2] {
+    pub(crate) fn environment_names(&self) -> Vec<&ConsultationCredentialEnvironmentName> {
         match self {
             Self::Basic {
                 username_env,
                 password_env,
                 ..
-            } => [username_env, password_env],
+            } => vec![username_env, password_env],
+            Self::StaticBearer { token_env, .. } => vec![token_env],
+            Self::ApiKeyHeader { value_env, .. } | Self::ApiKeyQuery { value_env, .. } => {
+                vec![value_env]
+            }
             Self::OAuthClientCredentials {
                 client_id_env,
                 client_secret_env,
                 ..
-            } => [client_id_env, client_secret_env],
+            } => vec![client_id_env, client_secret_env],
         }
     }
 
     #[must_use]
     pub(crate) const fn is_basic(&self) -> bool {
         matches!(self, Self::Basic { .. })
+    }
+
+    #[must_use]
+    pub(crate) const fn is_static_bearer(&self) -> bool {
+        matches!(self, Self::StaticBearer { .. })
     }
 
     #[must_use]
@@ -882,6 +913,9 @@ impl fmt::Debug for ConsultationSourceCredentialConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug = formatter.debug_struct(match self {
             Self::Basic { .. } => "Basic",
+            Self::StaticBearer { .. } => "StaticBearer",
+            Self::ApiKeyHeader { .. } => "ApiKeyHeader",
+            Self::ApiKeyQuery { .. } => "ApiKeyQuery",
             Self::OAuthClientCredentials { .. } => "OAuthClientCredentials",
         });
         debug
@@ -892,6 +926,10 @@ impl fmt::Debug for ConsultationSourceCredentialConfig {
                 .field("username_env", &"<configured>")
                 .field("password_env", &"<configured>")
                 .finish(),
+            Self::StaticBearer { .. } => debug.field("token_env", &"<configured>").finish(),
+            Self::ApiKeyHeader { .. } | Self::ApiKeyQuery { .. } => {
+                debug.field("value_env", &"<configured>").finish()
+            }
             Self::OAuthClientCredentials { .. } => debug
                 .field("client_id_env", &"<configured>")
                 .field("client_secret_env", &"<configured>")
