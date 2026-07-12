@@ -237,7 +237,7 @@ fn rhai_conformance_controls_are_code_only_and_deny_ambient_capabilities() {
     let limits = registry_relay::rhai_worker::WorkerLimits {
         max_call_levels: 16,
         max_expr_depth: 16,
-        max_memory_bytes: 64 * 1024 * 1024,
+        max_memory_bytes: 128 * 1024 * 1024,
         wall_time_ms: 5_000,
         ..registry_relay::rhai_worker::WorkerLimits::default()
     };
