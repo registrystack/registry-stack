@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Sensitive runtime decoding and bounded scalar projection.
 use std::fmt;
-use std::mem;
 
 use registry_platform_canonical_json::parse_json_strict;
 use serde_json::Value;
 use thiserror::Error;
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
+#[cfg(test)]
+pub(super) use crate::destination::sensitive_json::zeroize_json_value;
+use crate::destination::sensitive_json::SensitiveJsonValue;
 use crate::destination::{BoundedDestinationBody, DataDestination, DataDestinationBody};
 
 use super::contract::{
@@ -35,7 +37,7 @@ pub(super) fn decode_body(
     let parsed =
         parse_json_strict(bytes.as_slice()).map_err(|_| ClosedJsonDecodeError::InvalidJson)?;
     drop(bytes);
-    let sensitive = SensitiveJsonValue(parsed);
+    let sensitive = SensitiveJsonValue::new(parsed);
     let normalized = normalized_records(sensitive.value(), &decoder.root)?;
     validate_response_value(sensitive.value(), &decoder.schema)?;
 
@@ -402,37 +404,6 @@ fn project_scalar(
             .map(ProjectedJsonScalar::Number)
             .ok_or(ClosedJsonDecodeError::ProjectionContractViolation),
         _ => Err(ClosedJsonDecodeError::ProjectionContractViolation),
-    }
-}
-
-/// Guard that scrubs successful parse-tree string values and member names
-/// before their allocations are released.
-struct SensitiveJsonValue(Value);
-
-impl SensitiveJsonValue {
-    fn value(&self) -> &Value {
-        &self.0
-    }
-}
-
-impl Drop for SensitiveJsonValue {
-    fn drop(&mut self) {
-        zeroize_json_value(&mut self.0);
-    }
-}
-
-pub(super) fn zeroize_json_value(value: &mut Value) {
-    match value {
-        Value::String(string) => string.zeroize(),
-        Value::Array(array) => array.iter_mut().for_each(zeroize_json_value),
-        Value::Object(object) => {
-            let retained = mem::take(object);
-            for (mut name, mut member) in retained {
-                name.zeroize();
-                zeroize_json_value(&mut member);
-            }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
 

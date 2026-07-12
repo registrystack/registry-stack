@@ -15,16 +15,20 @@ default = ["rustls"]
 rustls = ["reqwest/rustls-tls"]
 
 [dependencies]
+base64.workspace = true
 bytes.workspace = true
 hickory-resolver.workspace = true
 http.workspace = true
 ipnet.workspace = true
 registry-platform-canonical-json.workspace = true
+registry-platform-crypto.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tokio.workspace = true
 url.workspace = true
+uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]

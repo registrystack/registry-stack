@@ -5572,6 +5572,7 @@ name = "registry-platform-httputil"
 version = "0.9.0"
 dependencies = [
  "axum",
+ "base64",
  "bytes",
  "hickory-resolver",
  "http",
@@ -5579,12 +5580,15 @@ dependencies = [
  "proptest",
  "rcgen",
  "registry-platform-canonical-json",
+ "registry-platform-crypto",
  "reqwest",
  "serde_json",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "tokio-rustls",
  "url",
+ "uuid",
  "zeroize",
 ]
 

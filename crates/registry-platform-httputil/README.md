@@ -16,6 +16,15 @@ Outbound HTTP utilities for registry services.
 - `ValidatedFetchUrl` for immediate GET requests pinned to DNS evidence observed
   during validation, with a default request timeout.
 - Async validation with a wall-clock timeout around DNS resolution.
+- Marker-typed fixed-destination requests and opaque bounded response bodies for
+  registry-data and credential endpoints.
+- A closed no-expiry OAuth client-credentials response decoder that returns a
+  fresh, move-only bearer authorization capability.
+- A decoder pinned to the OpenCRVS DCI adapter v1.9.0-rc.1. It verifies the
+  exact compact RS256 response sibling against the fresh two-key OpenCRVS JWKS,
+  enforces the closed DCI envelope, and sends only a logical record wrapper
+  through the caller-supplied closed JSON schema. This remains product-specific
+  so configuration cannot weaken signature or correlation rules.
 
 ## Typical Use
 
