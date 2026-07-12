@@ -295,6 +295,7 @@ export default defineConfig({
         {
           label: 'Integrations',
           items: [
+            { label: 'Author a country integration', slug: 'tutorials/author-country-integration' },
             { label: 'OpenCRVS claims', slug: 'tutorials/verify-opencrvs-claims' },
           ],
         },

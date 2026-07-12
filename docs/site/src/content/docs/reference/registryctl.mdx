@@ -13,7 +13,130 @@ standards_referenced: []
 
 `registryctl` is the local adopter command-line tool for Registry Stack. It creates a local project, starts and stops the generated services, and runs validation and smoke checks against them.
 
-This page lists the commands, subcommands, and flags released in registryctl `v0.9.0`. Run `registryctl <command> --help` for the built-in usage text. Most human-facing commands also perform a once-per-day update check; see [Update check](#update-check).
+This page lists commands released in registryctl `v0.9.0` and the pre-1.0 country-authoring
+commands in the current source build.
+Run `registryctl <command> --help` for the built-in usage text.
+Most human-facing commands also perform a once-per-day update check; see
+[Update check](#update-check).
+
+## Country configuration authoring
+
+Country-authoring commands work on a project containing `registry-stack.yaml`, integration
+definitions and fixtures, and explicit environment bindings.
+The [country integration authoring guide](../../tutorials/author-country-integration/) covers the
+complete workflow and generated trust boundary.
+
+| Subcommand or flag | Purpose |
+| --- | --- |
+| `init --from <starter>` | Copy `bounded-http`, `dhis2-tracker`, `opencrvs`, or `openspp` into a local workspace. |
+| `init --country-dir <dir>` | Destination for `init --from`. Defaults to the current directory. |
+| `test --project <dir>` | Compile and run every integration fixture through the product Relay decoder and Notary evaluator offline. Defaults to the current directory. |
+| `test --environment <name>` | Include one explicit environment binding in offline validation. |
+| `test --environment <name> --live` | After offline fixtures pass, send one governed evaluation through a deployed Notary. The environment must be explicitly non-production. |
+| `check --project <dir> --environment <name>` | Validate fixtures and generated Relay and Notary configuration without writing build output. |
+| `check --explain` | Include the redacted acquisition, authorization, fact, claim, and disclosure plan. |
+| `check --against <bundle> --anchor <anchor>` | Verify a signed baseline and compare against its `approval/review.json`. Both flags are required together. |
+| `build --project <dir> --environment <name>` | Emit deterministic unsigned Relay and Notary Config Bundle input directories. |
+| `build --against <bundle> --anchor <anchor>` | Build against an explicitly verified signed baseline. Both flags are required together. |
+
+The commands print JSON reports.
+Without `--against`, `check` and `build` label the baseline
+`initial_without_baseline`.
+Their `semantic_changes` entries identify changed claim, integration, country-policy, and
+operator-security dimensions with previous and current digests; `required_reviews` remains the
+separate external approval set.
+Generated files are written under `.registry-stack/build/<environment>/` only by `build`.
+
+### Country authoring schemas
+
+The pre-1.0 schemas are versioned JSON Schema Draft 2020-12 documents in the matching
+Registry Stack source checkout. The binary installer does not install a separate schema bundle.
+Use the files from the exact source revision that produced your `registryctl` binary:
+
+| Authored file | Schema file | Versioned schema id |
+| --- | --- | --- |
+| `registry-stack.yaml` | `crates/registryctl/schemas/country-authoring/project.schema.json` | `https://registrystack.example/schemas/country-authoring/project.v1.json` |
+| `integrations/*/integration.yaml` | `crates/registryctl/schemas/country-authoring/integration.schema.json` | `https://registrystack.example/schemas/country-authoring/integration.v1.json` |
+| `integrations/*/fixtures/*.yaml` | `crates/registryctl/schemas/country-authoring/fixture.schema.json` | `https://registrystack.example/schemas/country-authoring/fixture.v1.json` |
+| `environments/*.yaml` | `crates/registryctl/schemas/country-authoring/environment.schema.json` | `https://registrystack.example/schemas/country-authoring/environment.v1.json` |
+| `records/*.yaml` | `crates/registryctl/schemas/country-authoring/records.schema.json` | `https://registrystack.example/schemas/country-authoring/records.v1.json` |
+
+For example, a VS Code workspace inside the Registry Stack checkout can associate the project
+schema in `.vscode/settings.json`:
+
+```json
+{
+  "yaml.schemas": {
+    "./crates/registryctl/schemas/country-authoring/project.schema.json": [
+      "**/registry-stack.yaml"
+    ]
+  }
+}
+```
+
+Add the other four schema paths with their authored-file patterns from the table.
+
+Offline fixture execution uses an implementation-owned, fixture-only binding. It runs the
+same Relay source-plan compiler, closed response decoder, typed normalization, Notary static
+authentication and policy gates, and claim evaluator used by the products. Fixture YAML supplies
+only synthetic logical inputs and bounded source observations. It cannot select destinations,
+credentials, worker commands, authority context, or decoder bypasses. OpenCRVS signed fixtures
+exercise the exact RSA JWKS, RS256 JWS, and DCI binding decoder, but remain deterministic codec
+evidence rather than proof of interoperability with a deployed OpenCRVS instance.
+
+`snapshot_exact` is supported through authored integration, records definition, and private
+environment files even though it is not an `init --from` starter.
+A `records_api` service and one or more SnapshotExact profiles can reference the same logical
+entity.
+`build` then emits one ingest plan and materialization identity, while the governed records routes
+and exact consultations retain their separate authorization contracts.
+See the guide's exact-snapshot section for the logical fact contract and private physical mapping.
+
+{/* Evidence: crates/registryctl/tests/country_authoring.rs,
+    records_and_snapshot_exact_share_one_generated_materialization. */}
+
+The governed live test reads `REGISTRY_STACK_LIVE_NOTARY_ORIGIN`,
+`REGISTRY_STACK_LIVE_NOTARY_API_KEY`, `REGISTRY_STACK_LIVE_REQUEST_FILE`, and
+`REGISTRY_STACK_LIVE_EXPECTED_FILE` from the invoking process environment. The origin must be
+HTTPS, except that HTTP loopback is accepted for local testing. The gate first requires every
+Relay-backed consultation profile to report ready, then sends the request only to
+`POST /v1/evaluations`. Returned claim fields must match the expected file and include
+source-backed provenance. Do not put registry or source credentials in the request or country
+project.
+
+Registry-backed batch is a Notary API contract, not a separate registryctl command.
+`POST /v1/batch-evaluations` requires an `Idempotency-Key` when any requested claim is
+registry-backed.
+Notary validates the complete batch before the first Relay call, executes bounded independent
+single-subject consultations, preserves item order, and replays an identical caller-scoped outer
+request without repeating its completed children.
+The `test --live` command currently exercises one `POST /v1/evaluations` request, so a successful
+live authoring check is not batch evidence.
+
+{/* Evidence: crates/registry-notary-server/src/runtime/tests/evaluation.rs and
+    crates/registry-notary-server/src/openapi.rs. */}
+
+## Config bundle commands
+
+Country `build` output is unsigned. Package and sign each product directory with `bundle sign`,
+then verify the resulting bundle against its product trust anchor with `bundle verify`.
+
+| Subcommand or flag | Purpose |
+| --- | --- |
+| `bundle sign --input <dir>` | Package the generated product input directory. |
+| `bundle sign --key <jwk-or-op-reference>` | Sign with a private JWK file or `op://` reference. |
+| `bundle sign --product <id> --environment <name> --stream-id <id>` | Bind the bundle to one product, environment, and configuration stream. |
+| `bundle sign --instance-id <id>` | Optionally bind the bundle to one product instance. |
+| `bundle sign --sequence <n> --bundle-id <id> --out <dir>` | Set the monotonic sequence and bundle identity, then create the output directory. |
+| `bundle verify --bundle-dir <dir> --anchor-path <file>` | Verify the signed closure, signature, trust anchor, and configured identity bindings. |
+| `check --against <bundle> --anchor <file>` | Verify a signed baseline before calculating semantic changes. Both flags are required. |
+| `build --against <bundle> --anchor <file>` | Verify a signed baseline before producing updated unsigned inputs. Both flags are required. |
+
+`bundle inspect --bundle-dir <dir>` reports manifest and signature metadata without replacing
+verification. Trust-anchor creation and key changes use the existing `anchor` subcommands shown by
+`registryctl anchor --help`.
+
+{/* Evidence: crates/registryctl/src/main.rs, BundleCommand and AnchorCommand. */}
 
 ## Project setup
 
@@ -159,4 +282,8 @@ Related environment variables are listed in the [environment variable reference]
 
 ## Source
 
-The command tree, subcommands, and flags above come from the registryctl source. For the canonical definitions, read the [registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registryctl/src/main.rs).
+The released command tree comes from the registryctl source at `v0.9.0`.
+For its canonical definitions, read the
+[registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registryctl/src/main.rs).
+The pre-1.0 country-authoring table tracks the current source command enum and will receive a
+release-tag link when that interface is released.

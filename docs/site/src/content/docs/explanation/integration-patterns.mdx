@@ -26,6 +26,7 @@ standards_referenced:
   - ogc-api-records
   - ogc-api-features
   - govstack-digital-registries
+  - fhir-r4
 ---
 
 Registry Stack is the registry-facing surface that sits behind systems already in a delivery
@@ -37,19 +38,20 @@ For how the registry family relates to the wider ecosystem, see the
 ## Country evidence mesh
 
 At country scale, the same pattern can sit next to several domain platforms.
-Clinical health systems can expose bounded facts through a FHIR API, public-health program systems
-such as DHIS2 are reached through the built-in source-adapter engines (`http_json` or `http_flow`),
-and social protection, agriculture, education, and civil
+Clinical health systems can expose bounded facts through a reviewed FHIR integration, public-health
+program systems such as DHIS2 are reached through Relay's authored bounded HTTP capability, and
+social protection, agriculture, education, and civil
 registration systems can keep their own authoritative stores.
-Registry Notary instances return configured claims to consuming systems such as a social
-protection management information system without turning those consumers into raw-record readers.
+Relay keeps source credentials and returns only reviewed typed facts. Registry Notary instances
+turn those facts into configured claims for consuming systems such as a social-protection
+management information system without turning those consumers into raw-record readers.
 
 {/* SVG diagram. Essential labels are restated in the paragraph before the figure. */}
 <figure>
   <img src="../../images/registry-country-evidence-mesh.svg"
        alt="Country evidence mesh: civil registration, clinical health over FHIR API,
-            public health through DHIS2 via built-in http_json or http_flow source adapter, social protection, agriculture, and
-            education registries each keep their source systems. Registry Notary add-ons
+            public health through DHIS2 via a bounded Relay integration, social protection, agriculture, and
+            education registries each keep their source systems. Registry Relay and Notary add-ons
             return signed minimized attestations to a social protection MIS, which owns the
             eligibility decision and reads the social registry it owns directly.
             The consuming system receives claims, not full source rows." />
@@ -65,6 +67,22 @@ These platforms own storage, business rules, correction workflows, user interfac
 API for their domain.
 Registry Stack adds standardized metadata description, scoped read-only routes over source data,
 configured evidence responses, and hash-chained audit records.
+The [country integration authoring guide](../../tutorials/author-country-integration/) shows how
+to define a bounded source recipe and the authorized Notary claims without adding product-specific
+runtime dispatch.
+
+One country integration can serve two different governed needs without creating two source
+definitions.
+A local materialization can back Relay's records API, including configured filters, projection,
+cursor pagination, relationships, aggregates, and enabled standards adapters.
+SnapshotExact consultations can use that same immutable published materialization for exact
+evidence lookup.
+The logical records definition stays in the country project; provider paths, worksheets, tables,
+and physical columns stay in the private environment binding.
+
+{/* Evidence: crates/registryctl/src/country_authoring.rs and
+    crates/registryctl/tests/country_authoring.rs,
+    records_and_snapshot_exact_share_one_generated_materialization. */}
 
 Wire Registry Stack in alongside a domain platform when:
 
@@ -72,6 +90,71 @@ Wire Registry Stack in alongside a domain platform when:
 - Callers need evidence-shaped responses (predicate, redacted, selected value) rather than full
   records.
 - A read path is needed for callers that must not be granted direct database access.
+
+## Exact subjects and batch envelopes
+
+A Relay consultation selects one subject with one to four required typed components.
+The components form one fixed exact conjunction, not a general search or a subject batch.
+Each component is bounded and canonicalized under the profile contract.
+Relay reports no match, one match, or ambiguity instead of choosing between duplicate records.
+
+Registry Notary keeps batch evaluation as a separate outer API.
+For registry-backed claims, a batch requires an `Idempotency-Key`, validates the complete batch
+before the first Relay call, and fans items out as independently authorized single-subject
+consultations under bounded concurrency.
+Claims within one item may reuse an identical consultation result, but duplicate subjects in
+different item positions remain separate children with separate identities.
+Replay of the same caller-scoped outer request returns the stored result without repeating a
+completed child consultation.
+
+This split preserves ordered batch results without granting Relay a multi-subject request or an
+upstream bulk operation.
+
+{/* Evidence: crates/registry-relay/src/api/consultation.rs,
+    envelope_accepts_only_one_to_four_closed_string_components; and
+    crates/registry-notary-server/src/runtime/tests/evaluation.rs,
+    registry_batch_requires_outer_key_before_relay_or_source_work,
+    registry_batch_preflights_every_item_before_first_relay_call, and
+    registry_batch_coalesces_within_items_never_across_duplicates_and_replays_outer_key. */}
+
+## Closed source adaptation
+
+Registry Relay compiles source access from a closed plan.
+One plan has at most five fixed read operations with fixed methods, paths, parameter names,
+response schemas, projections, and bounds.
+Validated consultation inputs and bounded earlier outputs may fill declared value slots, but they
+cannot choose a destination, operation, credential, or projection.
+OpenCRVS, DHIS2, OpenSPP, and country-specific systems remain authored integrations rather than
+runtime executor types.
+
+The Digital Convergence Initiative (DCI) exact-search primitive follows the same rule.
+Its closed `exact_and` map is keyed by every typed consultation input and fixes both the reviewed
+predicate field and the signed-record response pointer for each component.
+If a reviewed profile requires `identifier_type`, the closed codec may permit it only as a fixed
+protocol constant that never carries selector identity.
+No product-specific executor or separate authored identifier-value carrier selects the subject.
+
+FHIR R4 uses the same boundary.
+The retained shape is one fixed anchor search plus predeclared relation searches within the
+five-operation limit, bounded search-set Bundle validation, fixed resource types and parameters,
+closed projection, and no followed pagination links.
+Registry Relay does not expose arbitrary FHIR requests, caller-selected includes, a generic FHIR
+server facade, or FHIR-native bulk evaluation.
+
+Fixed source credentials are compiled providers.
+Basic, bearer, OAuth 2.0 client credentials, API-key header, and API-key query placement do not
+give request callers a credential name or value.
+API-key values enter through environment-only secret references.
+Registry Stack-owned diagnostics, URLs, metrics, audit, and retained evidence must remain
+value-free.
+Query placement requires verified HTTPS outside loopback tests and an operator-security review
+because an upstream server, proxy, web application firewall, or network appliance may retain the
+URL outside Registry Stack's control.
+
+{/* Evidence: crates/registry-relay/src/source_plan/compiler/operation.rs,
+    crates/registry-relay/src/source_plan/artifact/validation.rs,
+    crates/registry-relay/src/consultation/executor.rs, and
+    crates/registry-platform-httputil/src/destination/fhir.rs. */}
 
 ## Workflow engines
 
