@@ -13,6 +13,7 @@ use crate::destination::json::{
 const MESSAGE_ID: &str = "01JZ0000000000000000000000";
 const SENDER_ID: &str = "registry-relay";
 const RECEIVER_ID: &str = "opencrvs-farajaland";
+const EXPECTED_UIN: &str = "1234567890";
 const SIGNING_KID: &str = "opencrvs-signing-key";
 const CORRELATION_ID: &str = "123e4567-e89b-42d3-a456-426614174000";
 
@@ -70,14 +71,40 @@ fn jwks_body() -> DataDestinationBody {
 }
 
 fn record_schema() -> ClosedJsonDecoder {
+    let identifier = ClosedJsonSchema::object(
+        false,
+        vec![
+            ClosedJsonField::new(
+                "identifier_type",
+                true,
+                ClosedJsonSchema::string(false, 3).expect("identifier type schema"),
+            )
+            .expect("identifier type field"),
+            ClosedJsonField::new(
+                "identifier_value",
+                true,
+                ClosedJsonSchema::string(false, 12).expect("identifier value schema"),
+            )
+            .expect("identifier value field"),
+        ],
+    )
+    .expect("identifier schema");
     let raw_record = ClosedJsonSchema::object(
         false,
-        vec![ClosedJsonField::new(
-            "secret",
-            true,
-            ClosedJsonSchema::string(false, 64).expect("string schema"),
-        )
-        .expect("record field")],
+        vec![
+            ClosedJsonField::new(
+                "identifier",
+                true,
+                ClosedJsonSchema::array(false, 2, identifier).expect("identifier array schema"),
+            )
+            .expect("identifier field"),
+            ClosedJsonField::new(
+                "secret",
+                true,
+                ClosedJsonSchema::string(false, 64).expect("string schema"),
+            )
+            .expect("record field"),
+        ],
     )
     .expect("record schema");
     let logical = ClosedJsonSchema::object(
@@ -85,7 +112,9 @@ fn record_schema() -> ClosedJsonDecoder {
         vec![ClosedJsonField::new("record", true, raw_record).expect("logical field")],
     )
     .expect("logical schema");
-    ClosedJsonDecoder::new(logical, ClosedJsonRecordRoot::Object, vec![]).expect("closed decoder")
+    let records = ClosedJsonSchema::array(false, 2, logical).expect("records schema");
+    ClosedJsonDecoder::new(records, ClosedJsonRecordRoot::ArrayProbeTwo, vec![])
+        .expect("closed decoder")
 }
 
 fn decode_bodies_with_bounds(
@@ -98,6 +127,7 @@ fn decode_bodies_with_bounds(
         MESSAGE_ID,
         SENDER_ID,
         Some(RECEIVER_ID),
+        EXPECTED_UIN,
         max_jwks_bytes,
         max_response_bytes,
     )
@@ -114,6 +144,20 @@ fn decode_bodies(
 }
 
 fn unsigned_response(records: Vec<Value>, pagination_total_count: u64) -> Value {
+    let records = records
+        .into_iter()
+        .map(|mut record| {
+            if let Some(record) = record.as_object_mut() {
+                record.entry("identifier").or_insert_with(|| {
+                    json!([{
+                        "identifier_type": "UIN",
+                        "identifier_value": EXPECTED_UIN
+                    }])
+                });
+            }
+            record
+        })
+        .collect::<Vec<_>>();
     let record_count = records.len();
     json!({
         "header": {
@@ -215,6 +259,29 @@ fn verifies_before_releasing_zero_one_or_ambiguous_cardinality() {
         .expect("declared ambiguity is conservative"),
         ClosedJsonOutcome::Ambiguous
     ));
+}
+
+#[test]
+fn binds_every_returned_record_to_the_requested_uin() {
+    let mut wrong = unsigned_response(vec![json!({"secret": "record-secret"})], 1);
+    wrong["message"]["search_response"][0]["data"]["reg_records"][0]["identifier"][0]
+        ["identifier_value"] = json!("0987654321");
+    let error = decode(&wrong).expect_err("wrong UIN is rejected");
+    assert_eq!(
+        error,
+        OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation
+    );
+    let diagnostic = format!("{error:?} {error}");
+    assert!(!diagnostic.contains("record-secret"));
+    assert!(!diagnostic.contains(EXPECTED_UIN));
+
+    let mut wrong_type = unsigned_response(vec![json!({"secret": "record-secret"})], 1);
+    wrong_type["message"]["search_response"][0]["data"]["reg_records"][0]["identifier"][0]
+        ["identifier_type"] = json!("BRN");
+    assert_eq!(
+        decode(&wrong_type).err(),
+        Some(OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation)
+    );
 }
 
 #[test]
@@ -534,9 +601,43 @@ fn validates_every_record_against_the_complete_logical_schema() {
 
 #[test]
 fn byte_bounds_expectation_debug_and_errors_never_expose_values() {
-    assert!(OpenCrvsDciV190Rc1Expectation::new("", SENDER_ID, None, 1, 1).is_err());
-    assert!(OpenCrvsDciV190Rc1Expectation::new(MESSAGE_ID, SENDER_ID, None, 0, 1).is_err());
-    assert!(OpenCrvsDciV190Rc1Expectation::new(MESSAGE_ID, SENDER_ID, None, 1, 0).is_err());
+    assert!(OpenCrvsDciV190Rc1Expectation::new("", SENDER_ID, None, EXPECTED_UIN, 1, 1).is_err());
+    assert!(OpenCrvsDciV190Rc1Expectation::new(MESSAGE_ID, SENDER_ID, None, "", 1, 1).is_err());
+    assert!(OpenCrvsDciV190Rc1Expectation::new(
+        MESSAGE_ID,
+        SENDER_ID,
+        None,
+        "selector\nvalue",
+        1,
+        1,
+    )
+    .is_err());
+    assert!(OpenCrvsDciV190Rc1Expectation::new(
+        MESSAGE_ID,
+        SENDER_ID,
+        None,
+        &"s".repeat(257),
+        1,
+        1,
+    )
+    .is_err());
+    assert!(OpenCrvsDciV190Rc1Expectation::new(
+        MESSAGE_ID,
+        SENDER_ID,
+        None,
+        "country-UIN-01",
+        1,
+        1,
+    )
+    .is_ok());
+    assert!(
+        OpenCrvsDciV190Rc1Expectation::new(MESSAGE_ID, SENDER_ID, None, EXPECTED_UIN, 0, 1,)
+            .is_err()
+    );
+    assert!(
+        OpenCrvsDciV190Rc1Expectation::new(MESSAGE_ID, SENDER_ID, None, EXPECTED_UIN, 1, 0,)
+            .is_err()
+    );
 
     let unsigned = unsigned_response(vec![], 0);
     assert_eq!(
@@ -552,6 +653,7 @@ fn byte_bounds_expectation_debug_and_errors_never_expose_values() {
         "message-secret",
         "sender-secret",
         Some("receiver-secret"),
+        EXPECTED_UIN,
         1,
         1,
     )

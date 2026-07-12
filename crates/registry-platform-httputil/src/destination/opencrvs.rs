@@ -40,6 +40,7 @@ const MAX_RSA_SIGNATURE_BYTES: usize = 1_024;
 const MIN_RSA_MODULUS_BITS: usize = 2_048;
 const MAX_RSA_MODULUS_BITS: usize = 8_192;
 const MAX_EXPECTED_IDENTIFIER_BYTES: usize = 160;
+const MAX_EXPECTED_SELECTOR_BYTES: usize = 256;
 
 /// Invalid request-bound values supplied while compiling an OpenCRVS decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -71,6 +72,8 @@ pub enum OpenCrvsDciV190Rc1DecodeError {
     CorrelationViolation,
     #[error("OpenCRVS response identity does not match its request")]
     IdentityViolation,
+    #[error("OpenCRVS record identifier does not match its request selector")]
+    SelectorBindingViolation,
     #[error("OpenCRVS returned a non-success DCI status")]
     SourceRejected,
     #[error("OpenCRVS response pagination is inconsistent")]
@@ -86,6 +89,7 @@ pub struct OpenCrvsDciV190Rc1Expectation {
     message_id: Box<str>,
     sender_id: Box<str>,
     receiver_id: Option<Box<str>>,
+    expected_uin: Zeroizing<String>,
     max_jwks_bytes: usize,
     max_response_bytes: usize,
 }
@@ -96,12 +100,14 @@ impl OpenCrvsDciV190Rc1Expectation {
         message_id: &str,
         sender_id: &str,
         receiver_id: Option<&str>,
+        expected_uin: &str,
         max_jwks_bytes: usize,
         max_response_bytes: usize,
     ) -> Result<Self, OpenCrvsDciV190Rc1ExpectationError> {
         if !valid_expected_identifier(message_id)
             || !valid_expected_identifier(sender_id)
             || receiver_id.is_some_and(|value| !valid_expected_identifier(value))
+            || !valid_expected_selector(expected_uin)
             || !(1..=MAX_OPENCRVS_JWKS_BYTES).contains(&max_jwks_bytes)
             || !(1..=MAX_OPENCRVS_SIGNED_RESPONSE_BYTES).contains(&max_response_bytes)
         {
@@ -111,6 +117,7 @@ impl OpenCrvsDciV190Rc1Expectation {
             message_id: message_id.into(),
             sender_id: sender_id.into(),
             receiver_id: receiver_id.map(Into::into),
+            expected_uin: Zeroizing::new(expected_uin.to_owned()),
             max_jwks_bytes,
             max_response_bytes,
         })
@@ -127,6 +134,7 @@ impl fmt::Debug for OpenCrvsDciV190Rc1Expectation {
                 "receiver_id",
                 &self.receiver_id.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("expected_uin", &"[REDACTED]")
             .field("max_jwks_bytes", &self.max_jwks_bytes)
             .field("max_response_bytes", &self.max_response_bytes)
             .finish()
@@ -200,42 +208,37 @@ impl<'decoder> OpenCrvsDciV190Rc1Decoder<'decoder> {
         }
 
         let envelope = validate_envelope(payload.value(), &self.expected)?;
-        let records = take_records(payload.value_mut())?;
-        let logical_records = records
-            .into_iter()
-            .map(|record| {
-                let mut logical = Map::new();
-                logical.insert("record".to_owned(), record);
-                SensitiveJsonValue::new(Value::Object(logical))
-            })
-            .collect::<Vec<_>>();
-
-        let mut decoded = Vec::with_capacity(logical_records.len());
-        for record in &logical_records {
-            let mut bytes = Zeroizing::new(Vec::new());
-            serde_json::to_writer(&mut *bytes, record.value())
-                .map_err(|_| OpenCrvsDciV190Rc1DecodeError::RecordContractViolation)?;
-            let body = BoundedDestinationBody::<DataDestination> {
-                bytes,
-                slot: PhantomData,
-            };
-            let outcome = self
-                .record_decoder
-                .decode(body)
-                .map_err(|_| OpenCrvsDciV190Rc1DecodeError::RecordContractViolation)?;
-            if !matches!(outcome, ClosedJsonOutcome::One(_)) {
-                return Err(OpenCrvsDciV190Rc1DecodeError::RecordContractViolation);
+        let records = SensitiveJsonValue::new(Value::Array(take_records(payload.value_mut())?));
+        let records = records
+            .value()
+            .as_array()
+            .ok_or(OpenCrvsDciV190Rc1DecodeError::RecordContractViolation)?;
+        validate_record_selector(records, self.expected.expected_uin.as_str())?;
+        let mut bytes = Zeroizing::new(Vec::new());
+        bytes.push(b'[');
+        for (index, record) in records.iter().enumerate() {
+            if index > 0 {
+                bytes.push(b',');
             }
-            decoded.push(outcome);
+            bytes.extend_from_slice(b"{\"record\":");
+            serde_json::to_writer(&mut *bytes, record)
+                .map_err(|_| OpenCrvsDciV190Rc1DecodeError::RecordContractViolation)?;
+            bytes.push(b'}');
         }
+        bytes.push(b']');
+        let body = BoundedDestinationBody::<DataDestination> {
+            bytes,
+            slot: PhantomData,
+        };
+        let decoded = self
+            .record_decoder
+            .decode(body)
+            .map_err(|_| OpenCrvsDciV190Rc1DecodeError::RecordContractViolation)?;
 
-        if envelope.pagination_total_count > 1 || decoded.len() > 1 {
+        if envelope.pagination_total_count > 1 {
             return Ok(ClosedJsonOutcome::Ambiguous);
         }
-        match decoded.pop() {
-            Some(outcome) => Ok(outcome),
-            None => Ok(ClosedJsonOutcome::NoMatch),
-        }
+        Ok(decoded)
     }
 }
 
@@ -627,6 +630,33 @@ fn take_records(response: &mut Value) -> Result<Vec<Value>, OpenCrvsDciV190Rc1De
         .ok_or(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)
 }
 
+fn validate_record_selector(
+    records: &[Value],
+    expected_uin: &str,
+) -> Result<(), OpenCrvsDciV190Rc1DecodeError> {
+    for record in records {
+        let first_identifier = record
+            .as_object()
+            .and_then(|record| record.get("identifier"))
+            .and_then(Value::as_array)
+            .and_then(|identifiers| identifiers.first())
+            .and_then(Value::as_object)
+            .ok_or(OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation)?;
+        if first_identifier
+            .get("identifier_type")
+            .and_then(Value::as_str)
+            != Some("UIN")
+            || first_identifier
+                .get("identifier_value")
+                .and_then(Value::as_str)
+                != Some(expected_uin)
+        {
+            return Err(OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation);
+        }
+    }
+    Ok(())
+}
+
 fn exact_object<'a>(
     value: &'a Value,
     required: &[&str],
@@ -706,6 +736,12 @@ fn valid_expected_identifier(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_graphic() && byte != b'"' && byte != b'\\')
+}
+
+fn valid_expected_selector(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_EXPECTED_SELECTOR_BYTES
+        && value.chars().all(|character| !character.is_control())
 }
 
 fn valid_jwk_kid(value: &str) -> bool {

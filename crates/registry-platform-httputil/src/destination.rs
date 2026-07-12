@@ -1999,6 +1999,16 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
             .ok_or(DestinationResponseMediaTypeError::NotExactJson)
     }
 
+    /// Require the closed JSON media type forms produced by maintained source
+    /// products: bare `application/json` or the same type with UTF-8 charset.
+    /// Duplicate fields, alternate parameters, and comma-joined values remain
+    /// rejected.
+    pub fn require_json_content_type(&self) -> Result<(), DestinationResponseMediaTypeError> {
+        closed_json_content_type(self.response.headers())
+            .then_some(())
+            .ok_or(DestinationResponseMediaTypeError::NotExactJson)
+    }
+
     /// Consume the response body under both the operation deadline and byte cap.
     pub async fn read_bounded(
         self,
@@ -2052,6 +2062,18 @@ fn exact_json_content_type(headers: &HeaderMap) -> bool {
     matches!(
         (values.next(), values.next()),
         (Some(value), None) if value.as_bytes() == b"application/json"
+    )
+}
+
+fn closed_json_content_type(headers: &HeaderMap) -> bool {
+    let mut values = headers.get_all(CONTENT_TYPE).iter();
+    matches!(
+        (values.next(), values.next()),
+        (Some(value), None)
+            if matches!(
+                value.as_bytes(),
+                b"application/json" | b"application/json; charset=utf-8"
+            )
     )
 }
 
@@ -2818,6 +2840,38 @@ mod tests {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         assert!(!exact_json_content_type(&headers));
+    }
+
+    #[test]
+    fn closed_json_response_media_type_accepts_only_bare_or_utf8_json() {
+        let mut headers = HeaderMap::new();
+        assert!(!closed_json_content_type(&headers));
+
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        assert!(closed_json_content_type(&headers));
+
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/json; charset=utf-8"),
+        );
+        assert!(closed_json_content_type(&headers));
+
+        for rejected in [
+            "application/json;charset=utf-8",
+            "application/json; charset=UTF-8",
+            "application/json; profile=example",
+            "text/json",
+        ] {
+            headers.insert(
+                CONTENT_TYPE,
+                HeaderValue::from_str(rejected).expect("test media type"),
+            );
+            assert!(!closed_json_content_type(&headers));
+        }
+
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        assert!(!closed_json_content_type(&headers));
     }
 
     fn classify(
