@@ -153,3 +153,12 @@ test('redacts generated env values and credential headers before output is print
   assert.equal(redacted.includes('visible-key'), false);
   assert.match(redacted, /REDACTED:ROW_READER_RAW/);
 });
+
+test('source tutorial image staging includes the dedicated Relay Rhai worker', () => {
+  const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
+  const worker = 'registry-relay-rhai-worker';
+
+  assert.match(script, new RegExp(`\\$LINUX_TARGET/release/${worker}`));
+  assert.match(script, new RegExp(`dist/image-bin/${worker}`));
+  assert.match(script, new RegExp(`chmod 0755[\\s\\S]*dist/image-bin/${worker}`));
+});

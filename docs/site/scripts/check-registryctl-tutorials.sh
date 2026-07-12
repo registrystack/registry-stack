@@ -105,9 +105,13 @@ build_source_under_test() {
 				--features registry-relay/spdci-api-standards,registry-relay/standards-cel-mapping,registry-relay/ogcapi-edr,registry-notary/registry-notary-cel,registry-notary/pkcs11'
 
 	cp "$LINUX_TARGET/release/registry-relay" "$image_context/dist/image-bin/registry-relay"
+	cp "$LINUX_TARGET/release/registry-relay-rhai-worker" "$image_context/dist/image-bin/registry-relay-rhai-worker"
 	cp "$LINUX_TARGET/release/registry-notary" "$image_context/dist/image-bin/registry-notary"
 	cp "$REPO_ROOT/LICENSE" "$image_context/LICENSE"
-	chmod 0755 "$image_context/dist/image-bin/registry-relay" "$image_context/dist/image-bin/registry-notary"
+	chmod 0755 \
+		"$image_context/dist/image-bin/registry-relay" \
+		"$image_context/dist/image-bin/registry-relay-rhai-worker" \
+		"$image_context/dist/image-bin/registry-notary"
 
 	DOCKER_BUILDKIT=1 docker build \
 		--platform linux/amd64 \
