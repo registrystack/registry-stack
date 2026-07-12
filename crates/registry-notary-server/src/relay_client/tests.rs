@@ -1106,27 +1106,28 @@ async fn contract_digest_must_match_canonical_contract_returned_and_configured_h
 }
 
 #[tokio::test]
-async fn metadata_schema_accepts_ten_seconds_and_rejects_a_larger_source_timeout() {
+async fn metadata_schema_accepts_twenty_seconds_and_rejects_a_larger_source_timeout() {
     let token_file = TestTokenFile::new(&test_token());
-    let accepted_contract = contract_value();
-    assert_eq!(
-        accepted_contract["spec"]["bounds"]["timeout_ms"],
-        json!(10_000)
+    let mut accepted_contract = contract_value();
+    accepted_contract["spec"]["bounds"]["timeout_ms"] = json!(20_000);
+    let accepted_hash = typed_hash(
+        b"registry.relay.consultation-contract.v1\0",
+        &accepted_contract,
     );
-    let accepted = metadata_value_for_contract(&accepted_contract, CONTRACT_HASH);
+    let accepted = metadata_value_for_contract(&accepted_contract, &accepted_hash);
     let server = FakeRelay::start(
         WireResponse::ok(serde_json::to_vec(&accepted).unwrap()),
         result_response(),
     )
     .await;
-    client(&server, &token_file)
+    client_with_hash(&server, &token_file, &accepted_hash)
         .verify_profile()
         .await
-        .expect("the maintained 10-second source timeout fits the metadata schema");
+        .expect("the maintained 20-second source timeout fits the metadata schema");
     server.shutdown().await;
 
     let mut rejected_contract = contract_value();
-    rejected_contract["spec"]["bounds"]["timeout_ms"] = json!(10_001);
+    rejected_contract["spec"]["bounds"]["timeout_ms"] = json!(20_001);
     let recomputed = typed_hash(
         b"registry.relay.consultation-contract.v1\0",
         &rejected_contract,
@@ -1141,7 +1142,7 @@ async fn metadata_schema_accepts_ten_seconds_and_rejects_a_larger_source_timeout
         client_with_hash(&server, &token_file, &recomputed)
             .verify_profile()
             .await
-            .expect_err("the metadata schema caps source work at 10 seconds"),
+            .expect_err("the metadata schema caps source work at 20 seconds"),
         RelayClientError::InvalidProfileMetadata
     );
     server.shutdown().await;

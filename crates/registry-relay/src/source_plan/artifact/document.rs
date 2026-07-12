@@ -321,7 +321,7 @@ impl LimitsDocument {
             && self.max_disclosed_records == 1
             && transport_bounds_valid
             && (1..=1024 * 1024).contains(&self.max_source_bytes)
-            && (1..=10_000).contains(&self.timeout_ms)
+            && (1..=20_000).contains(&self.timeout_ms)
             && (1..=MAX_IN_FLIGHT).contains(&self.max_in_flight)
             && (1..=MAX_QUOTA_PER_MINUTE).contains(&self.quota_per_minute)
             && (1..=MAX_QUOTA_BURST).contains(&self.quota_burst)

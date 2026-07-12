@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #![cfg(unix)]
-//! Explicitly ignored end-to-end proof for the maintained DHIS2 2.41.9 journey.
+//! Explicitly ignored end-to-end proofs for maintained Relay consultation journeys.
 //!
 //! The companion runner supplies a disposable TLS PostgreSQL 16 database and
-//! sources the operator-authorized DHIS2 credentials. This module never prints
+//! sources the operator-authorized product credentials. This module never prints
 //! a credential, bearer token, source URL, selector, source response, or public
 //! response body. Failures retain only the closed test-stage taxonomy below.
 
@@ -26,7 +26,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ed25519_dalek::{pkcs8::EncodePrivateKey, SigningKey};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use postgres_native_tls::MakeTlsConnector;
-use rand_core::OsRng;
+use rand_core::{OsRng, RngCore as _};
 use registry_notary_server::{compile_notary_runtime, notary_router_from_runtime};
 use registry_platform_audit::AuditChainProfile;
 use reqwest::Url;
@@ -67,22 +67,20 @@ const PSEUDONYM_SECRET_ENV: &str = "REGISTRY_RELAY_AUDIT_PSEUDONYM_EPOCH_1";
 const DHIS2_BASE_URL_ENV: &str = "DHIS2_BASE_URL";
 const DHIS2_USERNAME_ENV: &str = "DHIS2_USERNAME";
 const DHIS2_PASSWORD_ENV: &str = "DHIS2_PASSWORD";
-const NOTARY_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_DHIS2_API_KEY_HASH";
+const OPENCRVS_BASE_URL_ENV: &str = "OPENCRVS_DCI_BASE_URL";
+const OPENCRVS_CLIENT_ID_ENV: &str = "OPENCRVS_DCI_CLIENT_ID";
+const OPENCRVS_CLIENT_SECRET_ENV: &str = "OPENCRVS_DCI_CLIENT_SECRET";
+const NOTARY_DHIS2_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_DHIS2_API_KEY_HASH";
+const NOTARY_OPENCRVS_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_OPENCRVS_API_KEY_HASH";
 const NOTARY_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_AUDIT_HASH_SECRET";
 
-const PROFILE_ID: &str = "dhis2.tracker.enrollment-status.exact";
 const PROFILE_VERSION: &str = "1";
-const PURPOSE: &str = "program-enrollment-verification";
-const REQUIRED_SCOPE: &str = "registry:consult:dhis2-enrollment-status";
 const ISSUER: &str = "https://relay-live-issuer.example.test";
 const AUDIENCE: &str = "relay-consultation";
 const NOTARY_PRINCIPAL: &str = "registry-notary";
-const JWT_KID: &str = "relay-live-dhis2-ed25519";
+const JWT_KID: &str = "relay-live-consultation-ed25519";
 const PSEUDONYM_KEY_ID: &str = "epoch-1";
 
-const PACK_HASH: &str = "sha256:ec0136be504e3f98539f9e0ec10e59532ff793dbadc2e66ea1c017a632da6ac4";
-
-const PROFILE_DIRECTORY: &str = "profiles/dhis2-2.41.9-enrollment-status";
 const CONFIG_EXAMPLE_FILE: &str = "relay-config.example.yaml";
 const NOTARY_CONFIG_EXAMPLE_FILE: &str = "notary-config.example.yaml";
 const PUBLIC_CONTRACT_FILE: &str = "public-contract.json";
@@ -91,12 +89,87 @@ const CONFORMANCE_FILE: &str = "evidence/conformance.json";
 const NEGATIVE_SECURITY_FILE: &str = "evidence/negative-security.json";
 const MINIMIZATION_FILE: &str = "evidence/minimization.json";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JourneyProfile {
+    Dhis2,
+    OpenCrvs,
+}
+
+impl JourneyProfile {
+    fn directory(self) -> &'static str {
+        match self {
+            Self::Dhis2 => "profiles/dhis2-2.41.9-enrollment-status",
+            Self::OpenCrvs => "profiles/opencrvs-1.9.0-rc.1-farajaland-birth-record-exists",
+        }
+    }
+
+    fn profile_id(self) -> &'static str {
+        match self {
+            Self::Dhis2 => "dhis2.tracker.enrollment-status.exact",
+            Self::OpenCrvs => "opencrvs.dci.farajaland.birth-record-exists.exact",
+        }
+    }
+
+    fn purpose(self) -> &'static str {
+        match self {
+            Self::Dhis2 => "program-enrollment-verification",
+            Self::OpenCrvs => "civil-registration-verification",
+        }
+    }
+
+    fn required_scope(self) -> &'static str {
+        match self {
+            Self::Dhis2 => "registry:consult:dhis2-enrollment-status",
+            Self::OpenCrvs => "registry:consult:opencrvs-birth-record",
+        }
+    }
+
+    fn notary_api_key_hash_env(self) -> &'static str {
+        match self {
+            Self::Dhis2 => NOTARY_DHIS2_API_KEY_HASH_ENV,
+            Self::OpenCrvs => NOTARY_OPENCRVS_API_KEY_HASH_ENV,
+        }
+    }
+
+    fn pack_id(self) -> &'static str {
+        match self {
+            Self::Dhis2 => "dhis2.tracker.enrollment-status",
+            Self::OpenCrvs => "opencrvs.dci.farajaland.birth-record-exists",
+        }
+    }
+
+    fn pack_hash(self) -> &'static str {
+        match self {
+            Self::Dhis2 => {
+                "sha256:ec0136be504e3f98539f9e0ec10e59532ff793dbadc2e66ea1c017a632da6ac4"
+            }
+            Self::OpenCrvs => {
+                "sha256:04297b0429cf311c79dedd332f45d1fd7ee9d9e4b56d2c77d793fdeeeeb986aa"
+            }
+        }
+    }
+
+    fn source_environment(self) -> [&'static str; 2] {
+        match self {
+            Self::Dhis2 => [DHIS2_USERNAME_ENV, DHIS2_PASSWORD_ENV],
+            Self::OpenCrvs => [OPENCRVS_CLIENT_ID_ENV, OPENCRVS_CLIENT_SECRET_ENV],
+        }
+    }
+
+    fn selector(self) -> Zeroizing<String> {
+        match self {
+            Self::Dhis2 => Zeroizing::new("PQfMcpmXeFE".to_string()),
+            Self::OpenCrvs => Zeroizing::new(format!("{:010}", OsRng.next_u64() % 10_000_000_000)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 enum LiveJourneyError {
     #[error("required live-test environment is unavailable: {0}")]
     MissingEnvironment(&'static str),
-    #[error("the authorized DHIS2 base URL is invalid")]
-    InvalidDhis2BaseUrl,
+    #[error("the authorized source base URL is invalid")]
+    InvalidSourceBaseUrl,
     #[error("the disposable PostgreSQL trust configuration is invalid")]
     InvalidPostgresTls,
     #[error("the disposable PostgreSQL database is unavailable")]
@@ -105,9 +178,9 @@ enum LiveJourneyError {
     StatePlaneInstall,
     #[error("the disposable PostgreSQL pseudonym epoch initialization failed")]
     PseudonymInitialization,
-    #[error("the maintained DHIS2 artifacts could not be staged")]
+    #[error("the maintained consultation artifacts could not be staged")]
     ArtifactStaging,
-    #[error("the maintained DHIS2 runtime configuration did not load")]
+    #[error("the maintained consultation runtime configuration did not load")]
     ConfigLoad,
     #[error("the live OIDC JWKS server could not start")]
     JwksServer,
@@ -143,11 +216,11 @@ enum LiveJourneyError {
     ExecuteUnavailable,
     #[error("Relay recorded unavailable source credentials for the live consultation")]
     ExecuteSourceCredentialsUnavailable,
-    #[error("Relay recorded the live DHIS2 source as unavailable")]
+    #[error("Relay recorded the live source as unavailable")]
     ExecuteSourceUnavailable,
-    #[error("Relay recorded a live DHIS2 response-contract violation")]
+    #[error("Relay recorded a live source response-contract violation")]
     ExecuteResponseContractViolation,
-    #[error("Relay recorded a live DHIS2 cardinality violation")]
+    #[error("Relay recorded a live source cardinality violation")]
     ExecuteCardinalityViolation,
     #[error("Relay closed the live consultation before source dispatch")]
     ExecuteClosedBeforeSourceDispatch,
@@ -163,43 +236,64 @@ enum LiveJourneyError {
     PostgresCleanup,
 }
 
-/// Run via `scripts/run-live-dhis2-consultation.sh`. The test stays ignored so
+/// Run via `scripts/run-live-consultation-journey.sh dhis2`. The test stays ignored so
 /// ordinary CI and developer test runs never contact a live registry.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires the explicit live DHIS2 runner and a disposable TLS PostgreSQL 16 instance"]
 async fn live_dhis2_consultation_lifecycle() {
-    if let Err(error) = run_live_dhis2_consultation_lifecycle().await {
+    if let Err(error) = run_live_consultation_lifecycle(JourneyProfile::Dhis2).await {
         panic!("live DHIS2 consultation lifecycle failed: {error}");
+    }
+}
+
+/// Run via `scripts/run-live-consultation-journey.sh opencrvs`. A fresh random valid
+/// UIN is used only in memory and is expected to produce a closed `no_match`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the explicit live OpenCRVS runner and a disposable TLS PostgreSQL 16 instance"]
+async fn live_opencrvs_consultation_no_match_lifecycle() {
+    if let Err(error) = run_live_consultation_lifecycle(JourneyProfile::OpenCrvs).await {
+        panic!("live OpenCRVS consultation lifecycle failed: {error}");
     }
 }
 
 #[test]
 fn maintained_operator_example_stages_through_real_loader() {
-    let staged = StagedProfile::new(
-        "https://dhis2.example.test/stable-2-41-9",
-        Path::new("/tmp/registry-relay-live-test-ca.pem"),
-        "http://127.0.0.1:1/keys",
-    )
-    .unwrap_or_else(|_| panic!("the maintained DHIS2 operator example did not stage"));
-    let loaded = config::load_with_metadata(&staged.config_path)
-        .unwrap_or_else(|_| panic!("the staged maintained DHIS2 operator example did not load"));
-    assert!(loaded.runtime.consultation.is_some());
-    assert!(loaded.consultation_artifacts.is_some());
+    for (profile, source_url) in [
+        (
+            JourneyProfile::Dhis2,
+            "https://dhis2.example.test/stable-2-41-9",
+        ),
+        (JourneyProfile::OpenCrvs, "https://opencrvs.example.test"),
+    ] {
+        let staged = StagedProfile::new(
+            profile,
+            source_url,
+            Path::new("/tmp/registry-relay-live-test-ca.pem"),
+            "http://127.0.0.1:1/keys",
+        )
+        .unwrap_or_else(|_| panic!("the maintained operator example did not stage"));
+        let loaded = config::load_with_metadata(&staged.config_path)
+            .unwrap_or_else(|_| panic!("the staged maintained operator example did not load"));
+        assert!(loaded.runtime.consultation.is_some());
+        assert!(loaded.consultation_artifacts.is_some());
+    }
 }
 
 #[test]
 fn maintained_notary_example_loads_and_validates() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(PROFILE_DIRECTORY)
-        .join(NOTARY_CONFIG_EXAMPLE_FILE);
-    let yaml = fs::read_to_string(path)
-        .unwrap_or_else(|_| panic!("the maintained Notary operator example was not readable"));
-    let config: registry_notary_core::StandaloneRegistryNotaryConfig =
-        serde_norway::from_str(&yaml)
-            .unwrap_or_else(|_| panic!("the maintained Notary operator example did not parse"));
-    config
-        .validate()
-        .unwrap_or_else(|_| panic!("the maintained Notary operator example did not validate"));
+    for profile in [JourneyProfile::Dhis2, JourneyProfile::OpenCrvs] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(profile.directory())
+            .join(NOTARY_CONFIG_EXAMPLE_FILE);
+        let yaml = fs::read_to_string(path)
+            .unwrap_or_else(|_| panic!("the maintained Notary operator example was not readable"));
+        let config: registry_notary_core::StandaloneRegistryNotaryConfig =
+            serde_norway::from_str(&yaml)
+                .unwrap_or_else(|_| panic!("the maintained Notary operator example did not parse"));
+        config
+            .validate()
+            .unwrap_or_else(|_| panic!("the maintained Notary operator example did not validate"));
+    }
 }
 
 #[test]
@@ -255,10 +349,17 @@ fn durable_failure_diagnostics_remain_closed_and_exact() {
     }
 }
 
-async fn run_live_dhis2_consultation_lifecycle() -> Result<(), LiveJourneyError> {
-    require_nonempty_environment(DHIS2_USERNAME_ENV)?;
-    require_nonempty_environment(DHIS2_PASSWORD_ENV)?;
-    let dhis2_base_url = required_secret_environment(DHIS2_BASE_URL_ENV)?;
+async fn run_live_consultation_lifecycle(profile: JourneyProfile) -> Result<(), LiveJourneyError> {
+    let [source_principal_env, source_secret_env] = profile.source_environment();
+    for name in [source_principal_env, source_secret_env] {
+        require_nonempty_environment(name)?;
+    }
+    let source_principal = required_secret_environment(source_principal_env)?;
+    let source_secret = required_secret_environment(source_secret_env)?;
+    let source_base_url = required_secret_environment(match profile {
+        JourneyProfile::Dhis2 => DHIS2_BASE_URL_ENV,
+        JourneyProfile::OpenCrvs => OPENCRVS_BASE_URL_ENV,
+    })?;
     let admin_database_url = required_secret_environment(ADMIN_DATABASE_URL_ENV)?;
     let postgres_ca_path = required_path_environment(POSTGRES_CA_PATH_ENV)?;
 
@@ -272,7 +373,7 @@ async fn run_live_dhis2_consultation_lifecycle() -> Result<(), LiveJourneyError>
     environment.set(AUDIT_SECRET_ENV, audit_secret.as_str());
     environment.set(PSEUDONYM_SECRET_ENV, pseudonym_secret.as_str());
     environment.set(NOTARY_AUDIT_SECRET_ENV, notary_audit_secret.as_str());
-    environment.set(NOTARY_API_KEY_HASH_ENV, &notary_api_key_hash);
+    environment.set(profile.notary_api_key_hash_env(), &notary_api_key_hash);
 
     let (mut database, database_urls) =
         LiveDatabase::provision(admin_database_url.as_str(), postgres_ca_path.as_path()).await?;
@@ -285,7 +386,8 @@ async fn run_live_dhis2_consultation_lifecycle() -> Result<(), LiveJourneyError>
 
     let execution = async {
         let staged = StagedProfile::new(
-            dhis2_base_url.as_str(),
+            profile,
+            source_base_url.as_str(),
             postgres_ca_path.as_path(),
             jwks.jwks_url(),
         )?;
@@ -342,11 +444,12 @@ async fn run_live_dhis2_consultation_lifecycle() -> Result<(), LiveJourneyError>
             let app = server::build_app(Arc::clone(&config), auth, audit)
                 .map_err(|_| LiveJourneyError::RouterAssembly)?
                 .layer(Extension(Arc::clone(&service)));
-            let bearer = jwks.mint_bearer()?;
+            let bearer = jwks.mint_bearer(profile)?;
             let relay_token_file = staged.stage_relay_token(bearer.as_str())?;
             let notary_audit_path = staged.notary_audit_path();
             let relay = LiveRelayServer::start(app).await?;
             let notary_config = staged.load_notary_config(
+                profile,
                 relay.base_url(),
                 &relay_token_file,
                 &notary_audit_path,
@@ -361,9 +464,15 @@ async fn run_live_dhis2_consultation_lifecycle() -> Result<(), LiveJourneyError>
             assert_notary_relay_ready(notary_app.clone()).await?;
 
             let journey = execute_notary_journey(
+                profile,
                 notary_app,
-                notary_api_key.as_str(),
-                bearer.as_str(),
+                &JourneySensitiveValues {
+                    source_base_url: source_base_url.as_str(),
+                    notary_api_key: notary_api_key.as_str(),
+                    relay_bearer: bearer.as_str(),
+                    source_principal: source_principal.as_str(),
+                    source_secret: source_secret.as_str(),
+                },
                 &notary_audit_path,
             )
             .await;
@@ -387,7 +496,11 @@ async fn run_live_dhis2_consultation_lifecycle() -> Result<(), LiveJourneyError>
         drop(service);
         let (journey, closed_diagnostic) = service_execution?;
         let durable_evidence = match (&journey, &shutdown) {
-            (Ok(correlation), Ok(())) => database.assert_safe_durable_evidence(correlation).await,
+            (Ok(correlation), Ok(())) => {
+                database
+                    .assert_safe_durable_evidence(profile, correlation)
+                    .await
+            }
             _ => Ok(()),
         };
         let journey = closed_diagnostic.map_or(journey, Err);
@@ -456,31 +569,51 @@ async fn bootstrap_live_state(
 struct JourneyCorrelation {
     evaluation_id: String,
     consultation_id: String,
+    selector: Zeroizing<String>,
+    source_base_url: Zeroizing<String>,
+    notary_api_key: Zeroizing<String>,
+    relay_bearer: Zeroizing<String>,
+    source_principal: Zeroizing<String>,
+    source_secret: Zeroizing<String>,
+}
+
+struct JourneySensitiveValues<'a> {
+    source_base_url: &'a str,
+    notary_api_key: &'a str,
+    relay_bearer: &'a str,
+    source_principal: &'a str,
+    source_secret: &'a str,
 }
 
 async fn execute_notary_journey(
+    profile: JourneyProfile,
     app: Router,
-    api_key: &str,
-    relay_bearer: &str,
+    sensitive: &JourneySensitiveValues<'_>,
     audit_path: &Path,
 ) -> Result<JourneyCorrelation, LiveJourneyError> {
-    let api_key_header =
-        HeaderValue::from_str(api_key).map_err(|_| LiveJourneyError::NotaryRequest)?;
+    let selector = profile.selector();
+    let api_key_header = HeaderValue::from_str(sensitive.notary_api_key)
+        .map_err(|_| LiveJourneyError::NotaryRequest)?;
     let request = Request::builder()
         .method(Method::POST)
         .uri("/v1/evaluations")
         .header("x-api-key", api_key_header)
         .header(header::CONTENT_TYPE, "application/json")
-        .header("data-purpose", PURPOSE)
+        .header("data-purpose", profile.purpose())
         .body(Body::from(
             serde_json::to_vec(&json!({
-                "target": {"type": "person", "id": "PQfMcpmXeFE"},
-                "claims": [
-                    {"id": "dhis2-enrollment-known", "version": "1"},
-                    {"id": "dhis2-enrollment-status", "version": "1"}
-                ],
+                "target": {"type": "person", "id": selector.as_str()},
+                "claims": match profile {
+                    JourneyProfile::Dhis2 => json!([
+                        {"id": "dhis2-enrollment-known", "version": "1"},
+                        {"id": "dhis2-enrollment-status", "version": "1"}
+                    ]),
+                    JourneyProfile::OpenCrvs => json!([
+                        {"id": "opencrvs-birth-record-exists", "version": "1"}
+                    ]),
+                },
                 "disclosure": "value",
-                "purpose": PURPOSE
+                "purpose": profile.purpose()
             }))
             .map_err(|_| LiveJourneyError::NotaryRequest)?,
         ))
@@ -497,19 +630,25 @@ async fn execute_notary_journey(
         .map_err(|_| LiveJourneyError::NotaryResponse)?;
     let response: Value =
         serde_json::from_slice(&body).map_err(|_| LiveJourneyError::NotaryResponse)?;
-    let evaluation_id = validate_minimized_notary_response(&response, api_key, relay_bearer)?;
-    validate_notary_audit(audit_path, &evaluation_id, api_key, relay_bearer)
+    let evaluation_id =
+        validate_minimized_notary_response(profile, &response, selector.as_str(), sensitive)?;
+    validate_notary_audit(audit_path, &evaluation_id, selector.as_str(), sensitive)
 }
 
 fn validate_minimized_notary_response(
+    profile: JourneyProfile,
     response: &Value,
-    api_key: &str,
-    relay_bearer: &str,
+    selector: &str,
+    sensitive: &JourneySensitiveValues<'_>,
 ) -> Result<String, LiveJourneyError> {
+    let expected_result_count = match profile {
+        JourneyProfile::Dhis2 => 2,
+        JourneyProfile::OpenCrvs => 1,
+    };
     let results = response
         .get("results")
         .and_then(Value::as_array)
-        .filter(|results| results.len() == 2)
+        .filter(|results| results.len() == expected_result_count)
         .ok_or(LiveJourneyError::NotaryResponse)?;
     let evaluation_id = results[0]
         .get("evaluation_id")
@@ -525,34 +664,53 @@ fn validate_minimized_notary_response(
     }) {
         return Err(LiveJourneyError::NotaryResponse);
     }
-    let known = results
-        .iter()
-        .find(|result| {
-            result.get("claim_id").and_then(Value::as_str) == Some("dhis2-enrollment-known")
-        })
-        .ok_or(LiveJourneyError::NotaryResponse)?;
-    if known.get("value") != Some(&Value::Bool(true)) {
-        return Err(LiveJourneyError::NotaryResponse);
-    }
-    let status = results
-        .iter()
-        .find(|result| {
-            result.get("claim_id").and_then(Value::as_str) == Some("dhis2-enrollment-status")
-        })
-        .and_then(|result| result.get("value"))
-        .and_then(Value::as_str)
-        .ok_or(LiveJourneyError::NotaryResponse)?;
-    if status.is_empty() || status.len() > 32 || status.chars().any(char::is_control) {
-        return Err(LiveJourneyError::NotaryResponse);
+    match profile {
+        JourneyProfile::Dhis2 => {
+            let known = results
+                .iter()
+                .find(|result| {
+                    result.get("claim_id").and_then(Value::as_str) == Some("dhis2-enrollment-known")
+                })
+                .ok_or(LiveJourneyError::NotaryResponse)?;
+            if known.get("value") != Some(&Value::Bool(true)) {
+                return Err(LiveJourneyError::NotaryResponse);
+            }
+            let status = results
+                .iter()
+                .find(|result| {
+                    result.get("claim_id").and_then(Value::as_str)
+                        == Some("dhis2-enrollment-status")
+                })
+                .and_then(|result| result.get("value"))
+                .and_then(Value::as_str)
+                .ok_or(LiveJourneyError::NotaryResponse)?;
+            if status.is_empty() || status.len() > 32 || status.chars().any(char::is_control) {
+                return Err(LiveJourneyError::NotaryResponse);
+            }
+        }
+        JourneyProfile::OpenCrvs => {
+            let [result] = results.as_slice() else {
+                return Err(LiveJourneyError::NotaryResponse);
+            };
+            if result.get("claim_id").and_then(Value::as_str)
+                != Some("opencrvs-birth-record-exists")
+                || result.get("value") != Some(&Value::Bool(false))
+            {
+                return Err(LiveJourneyError::NotaryResponse);
+            }
+        }
     }
     let public_wire =
         serde_json::to_string(response).map_err(|_| LiveJourneyError::NotaryResponse)?;
     if [
         "consultation_id",
         "relay_consultation",
-        "PQfMcpmXeFE",
-        api_key,
-        relay_bearer,
+        selector,
+        sensitive.source_base_url,
+        sensitive.notary_api_key,
+        sensitive.relay_bearer,
+        sensitive.source_principal,
+        sensitive.source_secret,
     ]
     .into_iter()
     .any(|sensitive| public_wire.contains(sensitive))
@@ -565,13 +723,20 @@ fn validate_minimized_notary_response(
 fn validate_notary_audit(
     path: &Path,
     expected_evaluation_id: &str,
-    api_key: &str,
-    relay_bearer: &str,
+    selector: &str,
+    sensitive: &JourneySensitiveValues<'_>,
 ) -> Result<JourneyCorrelation, LiveJourneyError> {
     let file = fs::read_to_string(path).map_err(|_| LiveJourneyError::NotaryAudit)?;
-    if ["PQfMcpmXeFE", api_key, relay_bearer]
-        .into_iter()
-        .any(|sensitive| file.contains(sensitive))
+    if [
+        selector,
+        sensitive.source_base_url,
+        sensitive.notary_api_key,
+        sensitive.relay_bearer,
+        sensitive.source_principal,
+        sensitive.source_secret,
+    ]
+    .into_iter()
+    .any(|sensitive| file.contains(sensitive))
     {
         return Err(LiveJourneyError::NotaryAudit);
     }
@@ -610,6 +775,12 @@ fn validate_notary_audit(
     Ok(JourneyCorrelation {
         evaluation_id: expected_evaluation_id.to_string(),
         consultation_id: consultation_id.to_string(),
+        selector: Zeroizing::new(selector.to_string()),
+        source_base_url: Zeroizing::new(sensitive.source_base_url.to_string()),
+        notary_api_key: Zeroizing::new(sensitive.notary_api_key.to_string()),
+        relay_bearer: Zeroizing::new(sensitive.relay_bearer.to_string()),
+        source_principal: Zeroizing::new(sensitive.source_principal.to_string()),
+        source_secret: Zeroizing::new(sensitive.source_secret.to_string()),
     })
 }
 
@@ -705,7 +876,7 @@ impl LiveJwksServer {
         &self.jwks_url
     }
 
-    fn mint_bearer(&self) -> Result<Zeroizing<String>, LiveJourneyError> {
+    fn mint_bearer(&self, profile: JourneyProfile) -> Result<Zeroizing<String>, LiveJourneyError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| LiveJourneyError::TokenMint)?
@@ -717,7 +888,7 @@ impl LiveJwksServer {
             "azp": NOTARY_PRINCIPAL,
             "iat": now,
             "exp": now + 300,
-            "scope": REQUIRED_SCOPE
+            "scope": profile.required_scope()
         });
         let mut header = Header::new(Algorithm::EdDSA);
         header.kid = Some(JWT_KID.to_string());
@@ -746,12 +917,13 @@ struct StagedProfile {
 
 impl StagedProfile {
     fn new(
-        dhis2_base_url: &str,
+        profile: JourneyProfile,
+        source_base_url: &str,
         postgres_ca_path: &Path,
         jwks_url: &str,
     ) -> Result<Self, LiveJourneyError> {
         let directory = tempfile::tempdir().map_err(|_| LiveJourneyError::ArtifactStaging)?;
-        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join(PROFILE_DIRECTORY);
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join(profile.directory());
         let evidence_directory = directory.path().join("evidence");
         fs::create_dir(&evidence_directory).map_err(|_| LiveJourneyError::ArtifactStaging)?;
 
@@ -776,7 +948,7 @@ impl StagedProfile {
             &evidence_directory.join("minimization.json"),
         )?;
 
-        let binding = live_private_binding(dhis2_base_url)?;
+        let binding = live_private_binding(profile, source_base_url)?;
         let binding_bytes =
             serde_json::to_vec_pretty(&binding).map_err(|_| LiveJourneyError::ArtifactStaging)?;
         let binding_path = directory.path().join("private-binding.json");
@@ -854,11 +1026,12 @@ impl StagedProfile {
 
     fn load_notary_config(
         &self,
+        profile: JourneyProfile,
         relay_base_url: &str,
         token_file: &Path,
         audit_path: &Path,
     ) -> Result<registry_notary_core::StandaloneRegistryNotaryConfig, LiveJourneyError> {
-        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join(PROFILE_DIRECTORY);
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join(profile.directory());
         let mut yaml = fs::read_to_string(source_root.join(NOTARY_CONFIG_EXAMPLE_FILE))
             .map_err(|_| LiveJourneyError::NotaryConfigLoad)?;
         replace_once(
@@ -899,8 +1072,11 @@ impl StagedProfile {
     }
 }
 
-fn live_private_binding(dhis2_base_url: &str) -> Result<Value, LiveJourneyError> {
-    let parsed = Url::parse(dhis2_base_url).map_err(|_| LiveJourneyError::InvalidDhis2BaseUrl)?;
+fn live_private_binding(
+    profile: JourneyProfile,
+    source_base_url: &str,
+) -> Result<Value, LiveJourneyError> {
+    let parsed = Url::parse(source_base_url).map_err(|_| LiveJourneyError::InvalidSourceBaseUrl)?;
     if parsed.scheme() != "https"
         || parsed.host_str().is_none()
         || !parsed.username().is_empty()
@@ -908,7 +1084,7 @@ fn live_private_binding(dhis2_base_url: &str) -> Result<Value, LiveJourneyError>
         || parsed.query().is_some()
         || parsed.fragment().is_some()
     {
-        return Err(LiveJourneyError::InvalidDhis2BaseUrl);
+        return Err(LiveJourneyError::InvalidSourceBaseUrl);
     }
     let base_path = parsed.path().trim_end_matches('/');
     let application_base_path = (!base_path.is_empty()).then(|| base_path.to_string());
@@ -920,8 +1096,12 @@ fn live_private_binding(dhis2_base_url: &str) -> Result<Value, LiveJourneyError>
     // The authorized public test endpoint has a usable A path but no reliable
     // AAAA response. Make that deployment fact explicit and hash-covered;
     // production bindings otherwise retain the strict dual-stack default.
+    let data_destination_id = match profile {
+        JourneyProfile::Dhis2 => "dhis2-live-data",
+        JourneyProfile::OpenCrvs => "opencrvs-live-data",
+    };
     let mut destination = Map::from_iter([
-        ("id".to_string(), json!("dhis2-live-data")),
+        ("id".to_string(), json!(data_destination_id)),
         ("origin".to_string(), json!(origin.as_str())),
         ("dns_family".to_string(), json!("ipv4_only")),
         ("allowed_private_cidrs".to_string(), json!([])),
@@ -929,19 +1109,44 @@ fn live_private_binding(dhis2_base_url: &str) -> Result<Value, LiveJourneyError>
     if let Some(path) = application_base_path {
         destination.insert("application_base_path".to_string(), json!(path));
     }
+    let credential_destination = match profile {
+        JourneyProfile::Dhis2 => Value::Null,
+        JourneyProfile::OpenCrvs => {
+            let mut credential = destination.clone();
+            credential.insert("id".to_string(), json!("opencrvs-live-oauth"));
+            Value::Object(credential)
+        }
+    };
+    let (registry_instance, source_instance, credential_ref, max_source_bytes, timeout_ms) =
+        match profile {
+            JourneyProfile::Dhis2 => (
+                "dhis2-live",
+                "tracker-api",
+                "dhis2-basic-reader",
+                8_192,
+                10_000,
+            ),
+            JourneyProfile::OpenCrvs => (
+                "opencrvs-live",
+                "dci-crvs-api",
+                "opencrvs-oauth-client",
+                147_456,
+                20_000,
+            ),
+        };
     Ok(json!({
-        "profile": {"id": PROFILE_ID, "version": PROFILE_VERSION},
-        "integration_pack": {"id": "dhis2.tracker.enrollment-status", "version": "1", "hash": PACK_HASH},
+        "profile": {"id": profile.profile_id(), "version": PROFILE_VERSION},
+        "integration_pack": {"id": profile.pack_id(), "version": "1", "hash": profile.pack_hash()},
         "tenant": "live-test",
-        "registry_instance": "dhis2-live",
-        "source_instance": "tracker-api",
+        "registry_instance": registry_instance,
+        "source_instance": source_instance,
         "data_destination": destination,
-        "credential_destination": null,
-        "credential": {"ref": "dhis2-basic-reader", "generation": 1},
+        "credential_destination": credential_destination,
+        "credential": {"ref": credential_ref, "generation": 1},
         "deployment_parameters": {},
         "limits": {
-            "max_source_bytes": 8192,
-            "timeout_ms": 10000,
+            "max_source_bytes": max_source_bytes,
+            "timeout_ms": timeout_ms,
             "max_in_flight": 1,
             "quota_per_minute": 10,
             "quota_burst": 2,
@@ -1093,6 +1298,7 @@ WHERE stream_kind = 'consultation' AND phase = 'completion'
 
     async fn assert_safe_durable_evidence(
         &mut self,
+        profile: JourneyProfile,
         expected: &JourneyCorrelation,
     ) -> Result<(), LiveJourneyError> {
         let row = self
@@ -1128,10 +1334,15 @@ SELECT
        FROM consultation_audit WHERE phase = 'completion') AS actual_credential_exchanges,
     (SELECT max((record #>> '{payload,completion_facts,actual_data_exchanges}')::bigint)
        FROM consultation_audit WHERE phase = 'completion') AS actual_data_exchanges,
-    (SELECT bool_and(
-         record #> '{payload,completion_facts,actual_path}' =
-         '[{"kind":"data","ordinal":0,"operation_id":"lookup-enrollment-status"}]'::jsonb
-       ) FROM consultation_audit WHERE phase = 'completion') AS actual_path_matches,
+    (SELECT (record #> '{payload,completion_facts,actual_path}')::text
+       FROM consultation_audit WHERE phase = 'completion' LIMIT 1) AS actual_path,
+    (SELECT count(*) = 0 FROM consultation_audit
+       WHERE strpos(record::text, $1) > 0
+          OR strpos(record::text, $2) > 0
+          OR strpos(record::text, $3) > 0
+          OR strpos(record::text, $4) > 0
+          OR strpos(record::text, $5) > 0
+          OR strpos(record::text, $6) > 0) AS sensitive_values_absent,
     (SELECT count(*) FROM permits) AS total_permit_count,
     (SELECT count(*) FROM permits WHERE kind = 'data') AS data_permit_count,
     (SELECT count(*) FROM permits
@@ -1139,7 +1350,14 @@ SELECT
     (SELECT count(*) FROM relay_state_private.consultation_completion_intent
        WHERE state = 'completed') AS completed_intent_count
 "#,
-                &[],
+                &[
+                    &expected.selector.as_str(),
+                    &expected.source_base_url.as_str(),
+                    &expected.relay_bearer.as_str(),
+                    &expected.notary_api_key.as_str(),
+                    &expected.source_principal.as_str(),
+                    &expected.source_secret.as_str(),
+                ],
             )
             .await
             .map_err(|_| LiveJourneyError::DurableEvidence)?;
@@ -1152,6 +1370,37 @@ SELECT
         if consultation_id.as_deref() != Some(expected.consultation_id.as_str())
             || notary_evaluation_id.as_deref() != Some(expected.evaluation_id.as_str())
         {
+            return Err(LiveJourneyError::DurableEvidence);
+        }
+        let actual_path = row
+            .try_get::<_, Option<String>>("actual_path")
+            .map_err(|_| LiveJourneyError::DurableEvidence)?
+            .ok_or(LiveJourneyError::DurableEvidence)?;
+        let actual_path: Value =
+            serde_json::from_str(&actual_path).map_err(|_| LiveJourneyError::DurableEvidence)?;
+        let (expected_outcome, credential_exchanges, data_exchanges, expected_path) = match profile
+        {
+            JourneyProfile::Dhis2 => (
+                "match",
+                0,
+                1,
+                json!([{"kind": "data", "ordinal": 0, "operation_id": "lookup-enrollment-status"}]),
+            ),
+            JourneyProfile::OpenCrvs => (
+                "no_match",
+                1,
+                2,
+                json!([
+                    {"kind": "credential", "ordinal": 0, "operation_id": "acquire-opencrvs-token"},
+                    {"kind": "data", "ordinal": 0, "operation_id": "lookup-birth-record.jwks"},
+                    {"kind": "data", "ordinal": 1, "operation_id": "lookup-birth-record"}
+                ]),
+            ),
+        };
+        let sensitive_values_absent = row
+            .try_get::<_, bool>("sensitive_values_absent")
+            .map_err(|_| LiveJourneyError::DurableEvidence)?;
+        if actual_path != expected_path || !sensitive_values_absent {
             return Err(LiveJourneyError::DurableEvidence);
         }
         let evidence = (
@@ -1169,8 +1418,6 @@ SELECT
                 .map_err(|_| LiveJourneyError::DurableEvidence)?,
             row.try_get::<_, Option<i64>>("actual_data_exchanges")
                 .map_err(|_| LiveJourneyError::DurableEvidence)?,
-            row.try_get::<_, Option<bool>>("actual_path_matches")
-                .map_err(|_| LiveJourneyError::DurableEvidence)?,
             row.try_get::<_, i64>("total_permit_count")
                 .map_err(|_| LiveJourneyError::DurableEvidence)?,
             row.try_get::<_, i64>("data_permit_count")
@@ -1185,14 +1432,13 @@ SELECT
                 1,
                 1,
                 Some("public_success".to_string()),
-                Some("match".to_string()),
+                Some(expected_outcome.to_string()),
                 Some("known_complete".to_string()),
-                Some(0),
-                Some(1),
-                Some(true),
-                1,
-                1,
-                1,
+                Some(credential_exchanges),
+                Some(data_exchanges),
+                credential_exchanges + data_exchanges,
+                data_exchanges,
+                data_exchanges,
                 1,
             )
         {

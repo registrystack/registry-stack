@@ -461,7 +461,7 @@
       "max_credential_exchanges": 1,
       "max_data_destinations": 1,
       "max_source_bytes": 147456,
-      "timeout_ms": 10000,
+      "timeout_ms": 20000,
       "max_in_flight": 16,
       "quota_per_minute": 60,
       "quota_burst": 10

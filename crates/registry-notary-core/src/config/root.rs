@@ -181,7 +181,7 @@ impl StandaloneRegistryNotaryConfig {
             }
             if self.server.request_timeout < MIN_RELAY_OUTER_REQUEST_TIMEOUT {
                 return Err(EvidenceConfigError::InvalidRelayConfig {
-                    reason: "server.request_timeout must be at least 20 seconds for registry_backed claims, reserving 5 seconds outside the fixed 15-second Relay service hop"
+                    reason: "server.request_timeout must be at least 30 seconds for registry_backed claims, reserving 5 seconds outside the fixed 25-second Relay service hop"
                         .to_string(),
                 });
             }

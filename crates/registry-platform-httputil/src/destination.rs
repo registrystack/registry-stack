@@ -77,7 +77,7 @@ pub const MAX_DESTINATION_RESPONSE_HEADER_BYTES: usize = 65_536;
 /// Frozen hard maximum for DNS, connect, send, and response body read together.
 pub const MAX_DESTINATION_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 /// Fixed hard maximum for a data request made across one internal service hop.
-pub const MAX_SERVICE_HOP_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
+pub const MAX_SERVICE_HOP_OPERATION_TIMEOUT: Duration = Duration::from_secs(25);
 /// Process-wide ceiling for concurrent destination DNS resolutions.
 pub const MAX_CONCURRENT_DESTINATION_RESOLUTIONS: usize = 32;
 
@@ -4535,7 +4535,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn service_hop_policy_rejects_a_sixteen_second_deadline() {
+    async fn service_hop_policy_rejects_a_twenty_six_second_deadline() {
         let policy = ServiceHopDataDestinationPolicy::new(
             "relay-service",
             "https://relay.example.test/",
@@ -4548,7 +4548,7 @@ mod tests {
                 .expect("data request validates");
 
         let result = policy
-            .send_with_deadline(request, Instant::now() + Duration::from_secs(16))
+            .send_with_deadline(request, Instant::now() + Duration::from_secs(26))
             .await;
 
         assert!(matches!(

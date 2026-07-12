@@ -1085,7 +1085,7 @@ fn execution_plan_value(
     predicate_commitment: &AuditPseudonymCommitment,
 ) -> Result<Value, ConsultationCommitmentError> {
     let bounds = profile.effective_limits().operation();
-    if bounds.timeout_ms == 0 || bounds.timeout_ms > 10_000 {
+    if bounds.timeout_ms == 0 || bounds.timeout_ms > 20_000 {
         return Err(ConsultationCommitmentError::AuthorizationMismatch);
     }
     Ok(json!({

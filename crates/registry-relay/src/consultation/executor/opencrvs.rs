@@ -24,7 +24,7 @@ use crate::state_plane::{
 };
 
 use super::{
-    map_response_error, map_unaccepted_status, prepare_public_result,
+    map_response_error, map_unaccepted_status, operation_deadline, prepare_public_result,
     ConcreteExecutorActivationError, ConcreteExecutorProof, ConcreteExecutorUnfinished,
     PublicResultPreparationError,
 };
@@ -245,6 +245,15 @@ pub(super) async fn execute_open_crvs_dci_exact(
             credential_permit,
             credential_operation.id(),
             |deadline| async move {
+                let deadline =
+                    match operation_deadline(deadline, credential_operation.request_timeout_ms()) {
+                        Ok(deadline) => deadline,
+                        Err(_) => {
+                            return CredentialDispatchResult::KnownFailure(
+                                KnownFailureClass::CredentialUnavailable,
+                            );
+                        }
+                    };
                 let response = match credential_destination
                     .send_with_deadline(credential_request, deadline)
                     .await
@@ -304,6 +313,14 @@ pub(super) async fn execute_open_crvs_dci_exact(
         .ok_or(ConcreteExecutorUnfinished)?;
     let jwks_result = fence
         .authorize_and_dispatch(jwks_permit, jwks_operation.id(), |deadline| async move {
+            let deadline = match operation_deadline(deadline, jwks_operation.request_timeout_ms()) {
+                Ok(deadline) => deadline,
+                Err(_) => {
+                    return DataBodyDispatchResult::KnownFailure(
+                        KnownFailureClass::SourceUnavailable,
+                    );
+                }
+            };
             let response = match data_destination
                 .send_with_deadline(jwks_request, deadline)
                 .await
@@ -366,6 +383,14 @@ pub(super) async fn execute_open_crvs_dci_exact(
         .ok_or(ConcreteExecutorUnfinished)?;
     let result = fence
         .authorize_and_dispatch(data_permit, operation.id(), |deadline| async move {
+            let deadline = match operation_deadline(deadline, operation.request_timeout_ms()) {
+                Ok(deadline) => deadline,
+                Err(_) => {
+                    return super::InnerDispatchResult::Known(
+                        ConcreteExecutorProof::known_failure(KnownFailureClass::SourceUnavailable),
+                    );
+                }
+            };
             let response = match data_destination
                 .send_with_deadline(data_request, deadline)
                 .await

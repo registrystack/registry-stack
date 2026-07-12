@@ -18,7 +18,7 @@
     "integration_pack": {
       "id": "opencrvs.dci.farajaland.birth-record-exists",
       "version": "1",
-      "hash": "sha256:2ee2dff4fb6859d6ff58c222fc08dac1a871580324c1d6b00e1af5cdee2ce466"
+      "hash": "sha256:04297b0429cf311c79dedd332f45d1fd7ee9d9e4b56d2c77d793fdeeeeb986aa"
     },
     "acquisition": {
       "class": "bounded_full_record",
@@ -125,7 +125,7 @@
       "legal_basis": "public_task",
       "policy": {
         "id": "relay.opencrvs.dci.farajaland.birth-record-exists.exact",
-        "hash": "sha256:2a03447ccf160d32e2fac3debee8d7c931f53a0fe28a368c79407ed476324754",
+        "hash": "sha256:46d029297071f13fb6887af1b6b5a32fbc3105192a6b93f8ae0c758a33be2697",
         "decision_cache": "disabled",
         "max_decision_age_ms": 1000,
         "unavailable": "deny"
@@ -140,7 +140,7 @@
       "max_credential_exchanges": 1,
       "max_data_destinations": 1,
       "max_source_bytes": 147456,
-      "timeout_ms": 10000,
+      "timeout_ms": 20000,
       "max_in_flight": 16,
       "quota_per_minute": 60,
       "quota_burst": 10

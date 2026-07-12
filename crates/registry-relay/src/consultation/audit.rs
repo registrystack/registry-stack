@@ -228,7 +228,7 @@ impl RuntimeConsultationCompletionSeed {
         };
         let bounds = profile.effective_limits();
         let operation_bounds = bounds.operation();
-        if operation_bounds.timeout_ms == 0 || operation_bounds.timeout_ms > 10_000 {
+        if operation_bounds.timeout_ms == 0 || operation_bounds.timeout_ms > 20_000 {
             return Err(ConsultationAuditBuildError::ProfileMismatch);
         }
         let value = json!({
@@ -430,7 +430,7 @@ impl PreparedAtomicConsultationAttempt<'static> {
             .and_then(|bounds| bounds.get("timeout_ms"))
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok())
-            .filter(|value| (1..=10_000).contains(value))
+            .filter(|value| (1..=20_000).contains(value))
             .ok_or(ConsultationAuditBuildError::StateBinding)?;
         let pseudonym_bundle = CanonicalPseudonymBundle {
             key_id: key_id.as_str().to_owned(),

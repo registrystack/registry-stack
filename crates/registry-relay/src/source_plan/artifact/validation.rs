@@ -497,6 +497,8 @@ pub(in super::super) const OPEN_CRVS_JWKS_MAX_RESPONSE_BYTES: u64 = 64 * 1024;
 pub(in super::super) const OPEN_CRVS_DCI_SEARCH_PATH: &str = "/registry/sync/search";
 pub(in super::super) const OPEN_CRVS_OAUTH_TOKEN_PATH: &str = "/oauth2/client/token";
 pub(in super::super) const OPEN_CRVS_DCI_REQUEST_BODY_MAX_BYTES: usize = 8 * 1024;
+const OPEN_CRVS_EXCHANGE_TIMEOUT_MS: u32 = 10_000;
+const OPEN_CRVS_JOURNEY_TIMEOUT_MS: u32 = 20_000;
 
 fn validate_open_crvs_exact_plan(
     spec: &IntegrationPackSpecDocument,
@@ -557,6 +559,7 @@ fn validate_open_crvs_exact_plan(
         && spec.bounds.max_data_exchanges == 2
         && spec.bounds.max_credential_exchanges == 1
         && spec.bounds.max_data_destinations == 1
+        && spec.bounds.timeout_ms == OPEN_CRVS_JOURNEY_TIMEOUT_MS
         && reviewed.class == AcquisitionClassDocument::BoundedFullRecord
         && reviewed.cardinality == ReviewedCardinalityDocument::ProbeTwo
         && record_schema_matches
@@ -569,7 +572,7 @@ fn validate_open_crvs_exact_plan(
         && operation.request_signer.is_none()
         && operation
             .step_limits
-            .is_some_and(|limits| limits.timeout_ms == spec.bounds.timeout_ms)
+            .is_some_and(|limits| limits.timeout_ms == OPEN_CRVS_EXCHANGE_TIMEOUT_MS)
         && operation.auth == SourceAuthDocument::OAuthClientCredentials
         && operation.acquisition_fields.is_empty()
         && operation.control_fields.is_empty()
@@ -590,7 +593,7 @@ fn validate_open_crvs_exact_plan(
         && credential.request.format
             == OAuth2ClientCredentialsRequestFormatDocument::JsonClientSecretBody
         && credential.path == OPEN_CRVS_OAUTH_TOKEN_PATH
-        && credential.request.timeout_ms == spec.bounds.timeout_ms
+        && credential.request.timeout_ms == OPEN_CRVS_EXCHANGE_TIMEOUT_MS
         && credential.request.audience.is_none()
         && credential.request.scopes.is_empty()
         && credential.request.resource.is_none()

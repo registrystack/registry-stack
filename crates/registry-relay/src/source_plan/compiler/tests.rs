@@ -76,13 +76,13 @@ const DHIS2_CONTRACT_HASH: &str =
 const DHIS2_BINDING_HASH: &str =
     "sha256:aa6172d3995b11dbc082ce744dcb46c40d5c28217d4e325a323fa595f42410ce";
 const OPENCRVS_PACK_HASH: &str =
-    "sha256:2ee2dff4fb6859d6ff58c222fc08dac1a871580324c1d6b00e1af5cdee2ce466";
+    "sha256:04297b0429cf311c79dedd332f45d1fd7ee9d9e4b56d2c77d793fdeeeeb986aa";
 const OPENCRVS_POLICY_HASH: &str =
-    "sha256:2a03447ccf160d32e2fac3debee8d7c931f53a0fe28a368c79407ed476324754";
+    "sha256:46d029297071f13fb6887af1b6b5a32fbc3105192a6b93f8ae0c758a33be2697";
 const OPENCRVS_CONTRACT_HASH: &str =
-    "sha256:4fdd83fdee1a86b7eea610c59e2ee44d7936bbcb44d837bd64c173a3c5b3f411";
+    "sha256:4bd7d0086dbfd6c5209d83178dc620474d746b3f2271147fcbe7d691376bb23c";
 const OPENCRVS_BINDING_HASH: &str =
-    "sha256:76d31f5c07639935953fa1744cefb37a640f1f301d94c5a3b5a6d212223d6de2";
+    "sha256:112e810e6edc2c1b9c63554dfb906bdf1984aa28851043734f4f4e333c1adfbe";
 
 fn vector_manifest() -> &'static Value {
     static MANIFEST: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
@@ -318,7 +318,7 @@ fn open_crvs_fixture() -> Fixture {
         "request_codec": "open_crvs_dci_exact_v1",
         "step_limits": {
             "max_request_bytes": 16384,
-            "timeout_ms": 5000,
+            "timeout_ms": 10000,
             "max_in_flight": 1
         },
         "auth": {"mode": "oauth_client_credentials"},
@@ -357,7 +357,7 @@ fn open_crvs_fixture() -> Fixture {
         .expect("credential request");
     credential_request.remove("audience");
     credential_request.remove("scopes");
-    credential_request["timeout_ms"] = json!(5_000);
+    credential_request["timeout_ms"] = json!(10_000);
     fixture.pack_value["spec"]["plan"]["credential_operation"]["path"] =
         json!("/oauth2/client/token");
     fixture.pack_value["spec"]["plan"]["credential_operation"]["response"] = json!({
@@ -370,12 +370,14 @@ fn open_crvs_fixture() -> Fixture {
     });
     fixture.pack_value["spec"]["bounds"]["max_data_exchanges"] = json!(2);
     fixture.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(180_224);
+    fixture.pack_value["spec"]["bounds"]["timeout_ms"] = json!(20_000);
     fixture.contract_value["spec"]["bounds"] = fixture.pack_value["spec"]["bounds"].clone();
     fixture.pack_value["spec"]["deployment_parameters"] = json!({});
     fixture.binding_value["deployment_parameters"] = json!({});
     fixture.binding_value["credential_destination"]["origin"] =
         fixture.binding_value["data_destination"]["origin"].clone();
     fixture.binding_value["limits"]["max_source_bytes"] = json!(180_224);
+    fixture.binding_value["limits"]["timeout_ms"] = json!(20_000);
     fixture.binding_value["limits"]
         .as_object_mut()
         .expect("binding limits")
@@ -898,7 +900,8 @@ fn open_crvs_exact_presence_plan_compiles_embedded_jwks_and_fresh_oauth() {
 
 #[test]
 fn open_crvs_exact_shape_rejects_optional_flexibility_and_unsafe_origin_changes() {
-    let cases: Vec<(&str, Box<dyn Fn(&mut Fixture)>)> = vec![
+    type FixtureMutation = Box<dyn Fn(&mut Fixture)>;
+    let cases: Vec<(&str, FixtureMutation)> = vec![
         (
             "projected output",
             Box::new(|fixture| {
@@ -1004,6 +1007,27 @@ fn open_crvs_generated_body_and_embedded_jwks_are_charged_to_bounds() {
             SourcePlanArtifactError::InvalidLimits
         )) | Err(SourcePlanCompileError::BindingWidening)
     ));
+}
+
+#[test]
+fn source_plan_timeout_accepts_twenty_seconds_and_rejects_one_millisecond_more() {
+    let mut fixture = fixture();
+    for timeout_ms in [20_000, 20_001] {
+        fixture.pack_value["spec"]["bounds"]["timeout_ms"] = json!(timeout_ms);
+        fixture.contract_value["spec"]["bounds"]["timeout_ms"] = json!(timeout_ms);
+        fixture.binding_value["limits"]["timeout_ms"] = json!(timeout_ms);
+        fixture.refresh_all();
+        if timeout_ms == 20_000 {
+            compile(&fixture).expect("the maintained source timeout ceiling compiles");
+        } else {
+            assert!(matches!(
+                compile(&fixture),
+                Err(SourcePlanCompileError::Artifact(
+                    SourcePlanArtifactError::InvalidLimits
+                ))
+            ));
+        }
+    }
 }
 
 pub(crate) fn dhis2_runtime_vector_plan_fixture() -> CompiledSourcePlan {
@@ -1749,7 +1773,7 @@ fn maintained_opencrvs_birth_record_exists_pack_compiles_to_exact_closed_exchang
 
     let operation = plan.operations().next().expect("OpenCRVS search operation");
     assert!(operation.is_open_crvs_dci_exact_v1());
-    assert_eq!(operation.total_deadline_ms(), 10_000);
+    assert_eq!(operation.total_deadline_ms(), 20_000);
     assert_eq!(operation.max_source_records(), 2);
     assert_eq!(operation.acquired_fields().collect::<Vec<_>>(), ["record"]);
     assert_eq!(operation.disclosed_fields().len(), 0);

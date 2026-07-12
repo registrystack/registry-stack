@@ -81,6 +81,7 @@ const POLICY_ACTION: &str = "consultation_execute";
 const POLICY_PERMIT: &str = "unqualified";
 const MAX_TOKEN_FILE_PATH_BYTES: usize = 4_096;
 const MAX_TOKEN_FILE_BYTES: usize = TOKEN_MAX_BYTES + 2;
+const MAX_RELAY_SOURCE_TIMEOUT_MS: i64 = 20_000;
 
 /// The hash-pinned public profile identity selected at Notary startup.
 #[derive(Clone, PartialEq, Eq)]
@@ -1311,7 +1312,7 @@ fn validate_contract_document(
         || !(0..=1).contains(&bounds.max_credential_exchanges)
         || bounds.max_data_destinations != 1
         || !(1..=256 * 1024).contains(&bounds.max_source_bytes)
-        || !(1..=10_000).contains(&bounds.timeout_ms)
+        || !(1..=MAX_RELAY_SOURCE_TIMEOUT_MS).contains(&bounds.timeout_ms)
         || !(1..=16).contains(&bounds.max_in_flight)
         || !(1..=60).contains(&bounds.quota_per_minute)
         || !(1..=10).contains(&bounds.quota_burst)

@@ -20,7 +20,7 @@ const MAX_CREDENTIAL_EXCHANGES: u8 = 1;
 const MAX_DATA_DESTINATIONS: u8 = 1;
 const MAX_SOURCE_MATCHES: u8 = 2;
 const MAX_DISCLOSED_RECORDS: u8 = 1;
-const MAX_TIMEOUT_MS: u32 = 10_000;
+const MAX_TIMEOUT_MS: u32 = 20_000;
 
 /// A safe, value-free reason that a consultation domain value was rejected.
 ///
@@ -76,7 +76,7 @@ pub enum ConsultationValidationError {
     /// An aggregate byte bound is zero or exceeds 1 MiB.
     #[error("consultation source-byte bound is outside the v1 ceiling")]
     InvalidSourceByteBound,
-    /// A deadline is zero or exceeds ten seconds.
+    /// A deadline is zero or exceeds twenty seconds.
     #[error("consultation timeout is outside the v1 ceiling")]
     InvalidTimeout,
     /// `ambiguous` was used for a source-enforced singleton.

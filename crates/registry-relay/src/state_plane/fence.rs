@@ -46,9 +46,9 @@ const FENCE_OPEN_AFTER_RECOVERY_SQL: &str =
     "SELECT * FROM relay_state_api.serving_fence_open_after_recovery_v1($1, $2, $3)";
 
 const DATABASE_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
-const HARD_SOURCE_DEADLINE: Duration = Duration::from_secs(10);
+const HARD_SOURCE_DEADLINE: Duration = Duration::from_secs(20);
 const CANCELLATION_GRACE: Duration = Duration::from_secs(1);
-const LOCAL_TAKEOVER_WAIT: Duration = Duration::from_secs(11);
+const LOCAL_TAKEOVER_WAIT: Duration = HARD_SOURCE_DEADLINE.saturating_add(CANCELLATION_GRACE);
 const MAX_POST_LOCAL_BARRIER_WAIT: Duration = Duration::from_secs(15);
 const MAX_BARRIER_POLL: Duration = Duration::from_millis(250);
 
@@ -651,8 +651,9 @@ impl PostgresServingFence {
         }
         let recovery_operation_ids = if takeover_required {
             // Start no earlier than the observed successful acquisition. This
-            // deliberately waits longer than eleven seconds from PostgreSQL's
-            // actual lock acquisition rather than risking a shortened barrier.
+            // deliberately waits for the complete source deadline plus grace
+            // from PostgreSQL's actual lock acquisition rather than risking a
+            // shortened barrier.
             tokio::time::sleep_until(Instant::now() + LOCAL_TAKEOVER_WAIT).await;
             finish_takeover(&client, lock_key, &holder_id, generation).await?
         } else {
@@ -1442,7 +1443,7 @@ mod tests {
             DispatchPermitBudget::new(HARD_SOURCE_DEADLINE)
                 .expect("hard deadline is allowed")
                 .as_milliseconds(),
-            10_000
+            20_000
         );
     }
 

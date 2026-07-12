@@ -6,7 +6,7 @@
   "integration_pack": {
     "id": "opencrvs.dci.farajaland.birth-record-exists",
     "version": "1",
-    "hash": "sha256:2ee2dff4fb6859d6ff58c222fc08dac1a871580324c1d6b00e1af5cdee2ce466"
+    "hash": "sha256:04297b0429cf311c79dedd332f45d1fd7ee9d9e4b56d2c77d793fdeeeeb986aa"
   },
   "tenant": "example-government",
   "registry_instance": "opencrvs-primary",
@@ -28,7 +28,7 @@
   "deployment_parameters": {},
   "limits": {
     "max_source_bytes": 147456,
-    "timeout_ms": 10000,
+    "timeout_ms": 20000,
     "max_in_flight": 8,
     "quota_per_minute": 30,
     "quota_burst": 5,

@@ -1436,7 +1436,7 @@ fn validate_server(config: &Config) -> Result<(), ConfigError> {
         tracing::error!(
             code = "config.validation_error",
             field = "server.request_timeout",
-            "consultation-enabled Relay requires server.request_timeout greater than the fixed 15-second Notary service-hop deadline"
+            "consultation-enabled Relay requires server.request_timeout greater than the fixed 25-second Notary service-hop deadline"
         );
         return Err(ConfigError::ValidationError);
     }
@@ -4764,7 +4764,7 @@ datasets: []
             Err(Error::Config(ConfigError::ValidationError))
         ));
         assert!(logs.contains("server.request_timeout"));
-        assert!(logs.contains("fixed 15-second"));
+        assert!(logs.contains("fixed 25-second"));
 
         config.server.request_timeout =
             MAX_SERVICE_HOP_OPERATION_TIMEOUT + Duration::from_millis(1);

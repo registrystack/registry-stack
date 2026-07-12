@@ -27,13 +27,13 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "persistent-quota=registry.relay.postgres-persistent-quota/v1\0",
     "audit-pseudonym-keyring=registry.relay.postgres-audit-pseudonym-keyring/v1\0",
     "consultation-completion=atomic-intent-sealed-seed-plan-slots-selected-operations-known-unfinished-recovery-v1\0",
-    "consultation-authorization=database-expiry-seed-timeout-exact-dispatch-prefix-v1\0",
+    "consultation-authorization=database-expiry-seed-timeout-exact-dispatch-prefix-v2\0",
     "consultation-credentials=direct-data-auth-reference-distinct-fresh-opencrvs-no-expiry-jwks-v2\0",
     "serving-fence-order=fence-row-keyring-intent-permit-audit-head-v1\0",
     "key-order=utf8-bytewise-key-order-v1\0",
 );
 pub(crate) const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "sha256:6a2ba3c9b0642d0ecbdb346fe2fc9b953bd419b5bde43c11a8ee81c7df8b7703";
+    "sha256:6602f5a07f80cb18d8b5cc78f0369d8b3bd765547f4765b39509997bbaca3090";
 
 pub(super) const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 7_221_091_440;
 const SUPPORTED_POSTGRES_MIN_MAJOR: i32 = 16;
@@ -42,16 +42,16 @@ const SUPPORTED_POSTGRES_MAX_MAJOR: i32 = 18;
 // Filled from the semantic catalog descriptor below on disposable supported
 // PostgreSQL majors. Constraint rendering is explicitly versioned because
 // pg_get_constraintdef is not a cross-major wire contract.
-const CONSTRAINT_FINGERPRINT_PG16: &str = "a3ef4049bbf7ce4cc844297271d72f81";
-const CONSTRAINT_FINGERPRINT_PG17: &str = "a3ef4049bbf7ce4cc844297271d72f81";
-const CONSTRAINT_FINGERPRINT_PG18: &str = "9364372c04c5b3dda870a4052d5aabc9";
+const CONSTRAINT_FINGERPRINT_PG16: &str = "4c5905e22d262645abcd05affe4da82f";
+const CONSTRAINT_FINGERPRINT_PG17: &str = "4c5905e22d262645abcd05affe4da82f";
+const CONSTRAINT_FINGERPRINT_PG18: &str = "6c11c5f44018f8cf06c439af932d7a15";
 const COLUMN_FINGERPRINT_PG16: &str = "1098f1125fa6f613d521504e985a351a";
 const COLUMN_FINGERPRINT_PG17: &str = "1098f1125fa6f613d521504e985a351a";
 const COLUMN_FINGERPRINT_PG18: &str = "1098f1125fa6f613d521504e985a351a";
-const FUNCTION_FINGERPRINT_PG16: &str = "5322967486cacf9fed70dc740405e3ce";
-const FUNCTION_FINGERPRINT_PG17: &str = "5322967486cacf9fed70dc740405e3ce";
-const FUNCTION_FINGERPRINT_PG18: &str = "5322967486cacf9fed70dc740405e3ce";
-const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "05c9f8a247befcfe994140abd912bfd6";
+const FUNCTION_FINGERPRINT_PG16: &str = "ff865db8ec5369d3b87ac2498e0f7bf6";
+const FUNCTION_FINGERPRINT_PG17: &str = "ff865db8ec5369d3b87ac2498e0f7bf6";
+const FUNCTION_FINGERPRINT_PG18: &str = "ff865db8ec5369d3b87ac2498e0f7bf6";
+const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "31af68e3b2ef65fead1674a7758ac418";
 
 /// Runtime-forceable session semantics. Server/SUSET state that the runtime
 /// cannot safely repair is rejected by the attested SQL capability instead.
@@ -107,7 +107,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_fingerprint_check CHECK (
         capability_fingerprint =
-        'sha256:6a2ba3c9b0642d0ecbdb346fe2fc9b953bd419b5bde43c11a8ee81c7df8b7703'
+        'sha256:6602f5a07f80cb18d8b5cc78f0369d8b3bd765547f4765b39509997bbaca3090'
     ),
     CONSTRAINT state_plane_metadata_roles_distinct_check CHECK (
         owner_role_oid <> runtime_role_oid
@@ -329,7 +329,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.consultation_completion_intent (
         AND holder_id ~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
     ),
     CONSTRAINT consultation_completion_intent_deadline_check CHECK (
-        budget_ms BETWEEN 1 AND 10000
+        budget_ms BETWEEN 1 AND 20000
         AND decision_expires_at_unix_ms BETWEEN 0 AND 9007199254740991
         AND total_deadline_at = created_at + budget_ms * interval '1 millisecond'
     ),
@@ -1051,7 +1051,7 @@ BEGIN
        OR (v_seed #>> '{bounds,credential_exchanges}')::integer NOT BETWEEN 0 AND 1
        OR (v_seed #>> '{bounds,data_destinations}')::integer NOT BETWEEN 0 AND 1
        OR (v_seed #>> '{bounds,source_bytes}')::bigint NOT BETWEEN 1 AND 1048576
-       OR (v_seed #>> '{bounds,timeout_ms}')::integer NOT BETWEEN 1 AND 10000
+       OR (v_seed #>> '{bounds,timeout_ms}')::integer NOT BETWEEN 1 AND 20000
        OR EXISTS (
            SELECT 1
            FROM pg_catalog.jsonb_each(v_seed -> 'bounds') AS bound(name, value)
@@ -1547,7 +1547,7 @@ WITH metadata AS (
       AND schema_version = 1
       AND capability_id = 'registry.relay.postgres-durable-audit/v1'
       AND capability_fingerprint =
-        'sha256:6a2ba3c9b0642d0ecbdb346fe2fc9b953bd419b5bde43c11a8ee81c7df8b7703'
+        'sha256:6602f5a07f80cb18d8b5cc78f0369d8b3bd765547f4765b39509997bbaca3090'
       AND serving_fence_capability_id = 'registry.relay.postgres-serving-fence/v1'
       AND serving_fence_lock_key <> 0
       AND serving_fence_lock_key <> 7221091440
@@ -2154,9 +2154,9 @@ SELECT
            )
     )
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN 'a3ef4049bbf7ce4cc844297271d72f81'
-            WHEN 17 THEN 'a3ef4049bbf7ce4cc844297271d72f81'
-            WHEN 18 THEN '9364372c04c5b3dda870a4052d5aabc9'
+            WHEN 16 THEN '4c5905e22d262645abcd05affe4da82f'
+            WHEN 17 THEN '4c5905e22d262645abcd05affe4da82f'
+            WHEN 18 THEN '6c11c5f44018f8cf06c439af932d7a15'
             ELSE '' END FROM constraint_fingerprint, server)
     AND (SELECT value = CASE server.major
             WHEN 16 THEN '1098f1125fa6f613d521504e985a351a'
@@ -2164,9 +2164,9 @@ SELECT
             WHEN 18 THEN '1098f1125fa6f613d521504e985a351a'
             ELSE '' END FROM column_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '5322967486cacf9fed70dc740405e3ce'
-            WHEN 17 THEN '5322967486cacf9fed70dc740405e3ce'
-            WHEN 18 THEN '5322967486cacf9fed70dc740405e3ce'
+            WHEN 16 THEN 'ff865db8ec5369d3b87ac2498e0f7bf6'
+            WHEN 17 THEN 'ff865db8ec5369d3b87ac2498e0f7bf6'
+            WHEN 18 THEN 'ff865db8ec5369d3b87ac2498e0f7bf6'
             ELSE '' END FROM function_fingerprint, server);
 $function$;
 
@@ -2921,7 +2921,7 @@ BEGIN
        OR jsonb_typeof(p_pseudonym_bundle_canonical::jsonb -> 'predicate_commitment') <> 'string'
        OR jsonb_typeof(p_pseudonym_bundle_canonical::jsonb -> 'consent_evidence_commitment')
             NOT IN ('string', 'null')
-       OR p_budget_ms NOT BETWEEN 1 AND 10000
+       OR p_budget_ms NOT BETWEEN 1 AND 20000
        OR p_decision_expires_at_unix_ms IS NULL
        OR p_decision_expires_at_unix_ms NOT BETWEEN 0 AND 9007199254740991
        OR (p_completion_seed_canonical::jsonb #>> '{bounds,timeout_ms}')::integer
@@ -7643,7 +7643,7 @@ mod tests {
             SERVING_FENCE_CAPABILITY_V1,
             PERSISTENT_QUOTA_CAPABILITY_V1,
             AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
-            "database-expiry-seed-timeout-exact-dispatch-prefix-v1",
+            "database-expiry-seed-timeout-exact-dispatch-prefix-v2",
             "direct-data-auth-reference-distinct-fresh-opencrvs-no-expiry-jwks-v2",
             "utf8-bytewise-key-order-v1",
         ] {

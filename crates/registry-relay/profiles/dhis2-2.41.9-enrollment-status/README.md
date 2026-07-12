@@ -56,12 +56,12 @@ Relay's hard source ceiling and still performs exactly one exchange with no
 retry.
 
 Notary wraps the complete internal service hop in one fixed, non-configurable
-15-second absolute deadline. Semaphore wait, workload-token reload, Relay
+25-second absolute deadline. Semaphore wait, workload-token reload, Relay
 request and response, strict decoding, and final result acceptance all consume
 that same budget. The Relay source operation's 10 seconds is nested inside it.
 There is no operator timeout knob and no retry, redirect, proxy, or result
 cache. Consultation-enabled Relay requires `server.request_timeout` greater
-than 15 seconds. Registry-backed Notary requires at least 20 seconds, retaining
+than 25 seconds. Registry-backed Notary requires at least 30 seconds, retaining
 a five-second listener reserve around its service hop. The unchanged 30-second
 default used by these examples satisfies both bounds.
 
@@ -94,7 +94,7 @@ identities or live source bindings.
    deadline and audit-retention interval.
 6. Start Relay with only its runtime database identity. Readiness must be green
    before activating Notary. Keep Relay's outer `server.request_timeout` above
-   15 seconds and Notary's at least 20 seconds; the examples retain the
+   25 seconds and Notary's at least 30 seconds; the examples retain the
    30-second default.
 7. Copy the Notary example. Replace the Relay HTTPS origin and add only the
    exact reviewed private CIDRs needed to reach an internal Relay. Notary has

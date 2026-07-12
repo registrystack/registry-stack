@@ -13,8 +13,11 @@ use std::time::Duration;
 use registry_platform_httputil::destination::json::{
     ClosedJsonDecodeError, ClosedJsonOutcome, MAX_CLOSED_JSON_ENCODED_BODY_BYTES,
 };
-use registry_platform_httputil::destination::DestinationResponseError;
+use registry_platform_httputil::destination::{
+    DestinationResponseError, MAX_DESTINATION_OPERATION_TIMEOUT,
+};
 use thiserror::Error;
+use tokio::time::Instant;
 
 use crate::source_plan::runtime_profile::CompiledConsentProfile;
 use crate::source_plan::{
@@ -42,6 +45,24 @@ use opencrvs::{execute_open_crvs_dci_exact, validate_open_crvs_dci_exact_activat
 pub(crate) enum ConcreteExecutorActivationError {
     #[error("consultation plan is outside the maintained concrete serving profiles")]
     UnsupportedPlan,
+}
+
+/// Cap one outbound exchange by both its reviewed operation timeout and the
+/// shared durable consultation deadline. Multi-exchange journeys may have a
+/// larger total budget, but no individual destination call inherits it.
+fn operation_deadline(
+    consultation_deadline: Instant,
+    operation_timeout_ms: u32,
+) -> Result<Instant, ConcreteExecutorUnfinished> {
+    let operation_deadline = Instant::now()
+        .checked_add(Duration::from_millis(u64::from(operation_timeout_ms)))
+        .ok_or(ConcreteExecutorUnfinished)?;
+    let platform_deadline = Instant::now()
+        .checked_add(MAX_DESTINATION_OPERATION_TIMEOUT)
+        .ok_or(ConcreteExecutorUnfinished)?;
+    Ok(consultation_deadline
+        .min(operation_deadline)
+        .min(platform_deadline))
 }
 
 /// Restart-only selection of one fully reviewed product journey.
@@ -266,6 +287,10 @@ pub(super) async fn execute_one_step_basic_get(
     let profile = bound.plan().runtime_profile();
     let inner = fence
         .authorize_and_dispatch(permit, operation.id(), |deadline| async move {
+            let deadline = match operation_deadline(deadline, operation.request_timeout_ms()) {
+                Ok(deadline) => deadline,
+                Err(_) => return InnerDispatchResult::Unfinished,
+            };
             let response = match destination.send_with_deadline(request, deadline).await {
                 Ok(response) => response,
                 Err(_) => {
@@ -324,6 +349,7 @@ pub(super) async fn execute_one_step_basic_get(
 /// Consume one sealed execution through the startup-selected product journey.
 /// The closed enum keeps runtime dispatch explicit without exposing a generic
 /// callback or provider surface.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn execute_concrete_consultation(
     kind: ConcreteExecutorKind,
     dispatch: &mut AuditedConsultationDispatch,
@@ -508,6 +534,22 @@ mod tests {
     fn activation_selects_the_exact_opencrvs_journey_and_permit_shape() {
         let opencrvs = maintained_open_crvs_runtime_plan_fixture();
         assert_eq!(validate_open_crvs_dci_exact_activation(&opencrvs), Ok(()));
+        let operation = opencrvs.operations().next().expect("OpenCRVS operation");
+        assert_eq!(operation.request_timeout_ms(), 10_000);
+        assert_eq!(
+            operation
+                .embedded_open_crvs_jwks()
+                .expect("OpenCRVS JWKS operation")
+                .request_timeout_ms(),
+            10_000
+        );
+        assert_eq!(
+            opencrvs
+                .credential_operation()
+                .expect("OpenCRVS credential operation")
+                .request_timeout_ms(),
+            10_000
+        );
         let executor = ConcreteExecutorKind::activate(&opencrvs).expect("OpenCRVS executor");
         assert_eq!(executor, ConcreteExecutorKind::OpenCrvsDciExact);
         assert_eq!(executor.permit_counts(), (1, 2));
@@ -516,8 +558,25 @@ mod tests {
                 .dispatch_budget(&opencrvs)
                 .expect("OpenCRVS shared budget")
                 .as_milliseconds(),
-            10_000
+            20_000
         );
+    }
+
+    #[test]
+    fn operation_deadline_caps_each_exchange_inside_the_shared_journey_fence() {
+        let short_consultation = Instant::now() + Duration::from_secs(1);
+        assert_eq!(
+            operation_deadline(short_consultation, 10_000)
+                .unwrap_or_else(|_| panic!("short shared deadline")),
+            short_consultation
+        );
+
+        let before = Instant::now();
+        let capped = operation_deadline(before + Duration::from_secs(20), 20_000)
+            .unwrap_or_else(|_| panic!("per-operation deadline"));
+        let after = Instant::now();
+        assert!(capped >= before + Duration::from_secs(10));
+        assert!(capped <= after + Duration::from_secs(10));
     }
 
     #[test]

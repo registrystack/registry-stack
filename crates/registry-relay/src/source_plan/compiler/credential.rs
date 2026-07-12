@@ -303,6 +303,10 @@ impl CompiledCredentialOperation {
         &self.id
     }
 
+    pub(crate) const fn request_timeout_ms(&self) -> u32 {
+        self.timeout_ms
+    }
+
     pub(crate) fn render_request(
         &self,
         client_id: Zeroizing<Vec<u8>>,

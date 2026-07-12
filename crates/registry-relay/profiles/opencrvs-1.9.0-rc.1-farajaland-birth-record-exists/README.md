@@ -14,7 +14,8 @@ loosening this pack.
 ## Closed product journey
 
 Every consultation performs exactly three same-origin exchanges under one
-10-second durable deadline and without retries:
+20-second durable deadline and without retries. Each individual exchange is
+also capped at 10 seconds:
 
 1. POST client credentials to `/oauth2/client/token` and accept the exact
    two-member, no-expiry bearer response. The token is never cached.

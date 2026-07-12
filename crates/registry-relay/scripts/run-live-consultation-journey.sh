@@ -8,6 +8,26 @@ umask 077
 
 readonly POSTGRES_IMAGE="postgres:16"
 
+[[ "$#" -le 1 ]] || {
+  printf '%s\n' "usage: $0 [dhis2|opencrvs]" >&2
+  exit 1
+}
+readonly product="${1:-dhis2}"
+case "$product" in
+  dhis2)
+    readonly test_name="live_dhis2_consultation_lifecycle"
+    readonly temporary_label="dhis2"
+    ;;
+  opencrvs)
+    readonly test_name="live_opencrvs_consultation_no_match_lifecycle"
+    readonly temporary_label="opencrvs"
+    ;;
+  *)
+    printf '%s\n' "usage: $0 [dhis2|opencrvs]" >&2
+    exit 1
+    ;;
+esac
+
 fail() {
   printf '%s\n' "$1" >&2
   exit 1
@@ -53,14 +73,42 @@ source "$live_env_file"
 set +x
 set +v
 
-[[ -n "${DHIS2_BASE_URL:-}" ]] || fail "DHIS2_BASE_URL is required"
-[[ -n "${DHIS2_USERNAME:-}" ]] || fail "DHIS2_USERNAME is required"
-[[ -n "${DHIS2_PASSWORD:-}" ]] || fail "DHIS2_PASSWORD is required"
-export DHIS2_BASE_URL DHIS2_USERNAME DHIS2_PASSWORD
-unset OPENCRVS_DCI_BASE_URL
-unset OPENCRVS_DCI_CLIENT_ID
-unset OPENCRVS_DCI_CLIENT_SECRET
-unset OPENCRVS_DCI_SHA_SECRET
+case "$product" in
+  dhis2)
+    [[ -n "${DHIS2_BASE_URL:-}" ]] || fail "DHIS2_BASE_URL is required"
+    [[ -n "${DHIS2_USERNAME:-}" ]] || fail "DHIS2_USERNAME is required"
+    [[ -n "${DHIS2_PASSWORD:-}" ]] || fail "DHIS2_PASSWORD is required"
+    selected_base_url="$DHIS2_BASE_URL"
+    selected_principal="$DHIS2_USERNAME"
+    selected_secret="$DHIS2_PASSWORD"
+    ;;
+  opencrvs)
+    [[ -n "${OPENCRVS_DCI_BASE_URL:-}" ]] || fail "OPENCRVS_DCI_BASE_URL is required"
+    [[ -n "${OPENCRVS_DCI_CLIENT_ID:-}" ]] || fail "OPENCRVS_DCI_CLIENT_ID is required"
+    [[ -n "${OPENCRVS_DCI_CLIENT_SECRET:-}" ]] || fail \
+      "OPENCRVS_DCI_CLIENT_SECRET is required"
+    selected_base_url="$OPENCRVS_DCI_BASE_URL"
+    selected_principal="$OPENCRVS_DCI_CLIENT_ID"
+    selected_secret="$OPENCRVS_DCI_CLIENT_SECRET"
+    ;;
+esac
+
+unset DHIS2_BASE_URL DHIS2_USERNAME DHIS2_PASSWORD
+unset OPENCRVS_DCI_BASE_URL OPENCRVS_DCI_CLIENT_ID
+unset OPENCRVS_DCI_CLIENT_SECRET OPENCRVS_DCI_SHA_SECRET
+case "$product" in
+  dhis2)
+    export DHIS2_BASE_URL="$selected_base_url"
+    export DHIS2_USERNAME="$selected_principal"
+    export DHIS2_PASSWORD="$selected_secret"
+    ;;
+  opencrvs)
+    export OPENCRVS_DCI_BASE_URL="$selected_base_url"
+    export OPENCRVS_DCI_CLIENT_ID="$selected_principal"
+    export OPENCRVS_DCI_CLIENT_SECRET="$selected_secret"
+    ;;
+esac
+unset selected_base_url selected_principal selected_secret
 
 command -v cargo >/dev/null 2>&1 || fail "cargo is required"
 command -v docker >/dev/null 2>&1 || fail "Docker is required"
@@ -71,12 +119,12 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly script_dir
 repository_root="$(cd "$script_dir/../../.." && pwd)"
 readonly repository_root
-temporary_root="$(mktemp -d "${TMPDIR:-/tmp}/registry-relay-live-dhis2.XXXXXX")"
+temporary_root="$(mktemp -d "${TMPDIR:-/tmp}/registry-relay-live-${temporary_label}.XXXXXX")"
 readonly temporary_root
 readonly certificate_input="$temporary_root/certificate-input"
 readonly docker_env_file="$temporary_root/postgres.env"
-readonly container_name="registry-relay-live-dhis2-${$}-${RANDOM}"
-readonly certificate_volume="registry-relay-live-dhis2-certs-${$}-${RANDOM}"
+readonly container_name="registry-relay-live-${temporary_label}-${$}-${RANDOM}"
+readonly certificate_volume="registry-relay-live-${temporary_label}-certs-${$}-${RANDOM}"
 
 container_started=0
 volume_created=0
@@ -87,6 +135,9 @@ cleanup() {
   unset REGISTRY_RELAY_LIVE_POSTGRES_ADMIN_URL
   unset REGISTRY_RELAY_LIVE_POSTGRES_CA_PATH
   unset POSTGRES_PASSWORD
+  unset DHIS2_BASE_URL DHIS2_USERNAME DHIS2_PASSWORD
+  unset OPENCRVS_DCI_BASE_URL OPENCRVS_DCI_CLIENT_ID
+  unset OPENCRVS_DCI_CLIENT_SECRET OPENCRVS_DCI_SHA_SECRET
   if [[ "$container_started" == 1 ]]; then
     docker rm --force "$container_name" >/dev/null 2>&1 || true
   fi
@@ -184,7 +235,7 @@ cd "$repository_root"
 cargo test \
   --package registry-relay \
   --locked \
-  --test live_dhis2_consultation \
-  live_dhis2_consultation_lifecycle \
+  --test live_consultation_journeys \
+  "$test_name" \
   -- \
   --ignored

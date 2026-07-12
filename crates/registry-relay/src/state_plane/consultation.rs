@@ -113,7 +113,7 @@ impl ConsultationCompletionSeed {
             .and_then(|bounds| bounds.get("timeout_ms"))
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok())
-            .filter(|value| (1..=10_000).contains(value))
+            .filter(|value| (1..=20_000).contains(value))
             .ok_or(ConsultationPersistenceError::InvalidInput)?;
         let (canonical, digest) = canonical_binding(value)?;
         if canonical.len() > MAX_COMPLETION_SEED_CANONICAL_BYTES_V1 {

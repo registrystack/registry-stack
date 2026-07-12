@@ -512,17 +512,17 @@ fn relay_connection_is_rejected_when_no_registry_backed_claim_uses_it() {
 #[test]
 fn registry_backed_notary_reserves_five_seconds_around_the_service_hop() {
     let mut config = valid_registry_backed_config();
-    config.server.request_timeout = Duration::from_secs(19) + Duration::from_millis(999);
+    config.server.request_timeout = Duration::from_secs(29) + Duration::from_millis(999);
     let error = config
         .validate()
         .expect_err("the request timeout must not expire before the Relay service hop");
     assert!(matches!(
         error,
         EvidenceConfigError::InvalidRelayConfig { ref reason }
-            if reason.contains("at least 20 seconds")
+            if reason.contains("at least 30 seconds")
     ));
 
-    config.server.request_timeout = Duration::from_secs(20);
+    config.server.request_timeout = Duration::from_secs(30);
     config
         .validate()
         .expect("the outer request minimum reserves five seconds around the service hop");
