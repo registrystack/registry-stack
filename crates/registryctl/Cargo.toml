@@ -15,19 +15,26 @@ clap = { version = "4.5", features = ["derive"] }
 crc32fast = "1.4"
 ed25519-dalek = "2"
 getrandom = "0.4"
+hex.workspace = true
+include_dir = "0.7"
 registry-config-report = { workspace = true }
+registry-notary-core.workspace = true
+registry-notary-server = { workspace = true, features = ["registry-notary-cel"] }
 registry-platform-authcommon = { workspace = true }
 registry-platform-config = { workspace = true }
 registry-platform-crypto = { workspace = true }
+registry-relay = { workspace = true, features = ["ogcapi-features", "spdci-api-standards"] }
+regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+sha2.workspace = true
 time = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "process"] }
 ureq = "2"
 url = "2"
 zeroize.workspace = true
 
 [dev-dependencies]
-registry-notary-core.workspace = true
 jsonschema = { workspace = true }
 tempfile = "3"

@@ -34,6 +34,14 @@ use serde_json::Value;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use zeroize::Zeroizing;
 
+mod country_authoring;
+
+pub use country_authoring::{
+    build_country_project, check_country_project, init_country_project, test_country_project,
+    CountryBuildOptions, CountryCheckOptions, CountryCommandReport, CountryInitOptions,
+    CountryStarter, CountryTestOptions, ReviewClass, SemanticChange,
+};
+
 pub use crate::sample::Sample;
 
 mod sample;

@@ -1,0 +1,7 @@
+name: wrong-purpose-denied-before-source
+input: { tracked_entity: A0000000001 }
+request_context:
+  caller: authorized-fixture-client
+  purpose: unrelated-purpose
+source: {}
+expect: { error: authorization.purpose_denied, source_access: false, disclosed_claims: [] }

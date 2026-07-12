@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.example/schemas/country-authoring/fixture.v1.json",
+  "title": "Registry Stack country integration fixture v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "input", "source", "expect"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "input": { "type": "object", "minProperties": 1, "maxProperties": 4, "additionalProperties": { "type": "string", "minLength": 1, "maxLength": 4096 } },
+    "variables": { "type": "object", "maxProperties": 16, "propertyNames": { "pattern": "^[a-z][a-z0-9._-]{0,95}$" }, "additionalProperties": { "type": "string", "format": "date" } },
+    "request_context": {
+      "type": "object", "additionalProperties": false, "required": ["caller", "purpose"],
+      "properties": { "caller": { "type": "string", "minLength": 1 }, "scopes": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }, "purpose": { "type": "string", "minLength": 1 } }
+    },
+    "request_overrides": true,
+    "source": { "type": "object", "additionalProperties": { "$ref": "#/$defs/sourceResult" } },
+    "expect": {
+      "type": "object", "additionalProperties": false, "minProperties": 1,
+      "properties": { "facts": { "type": "object" }, "claims": { "type": "object" }, "error": { "type": "string" }, "outcome": { "enum": ["match", "no_match", "ambiguous"] }, "source_access": { "type": "boolean" }, "disclosed_claims": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }, "calls": { "type": "array", "uniqueItems": true, "items": { "type": "string" } }, "fresh_worker": { "type": "boolean" } }
+    }
+  },
+  "$defs": {
+    "sourceResult": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "type": "integer", "minimum": 100, "maximum": 599 }, "body": true } },
+        { "type": "object", "additionalProperties": false, "required": ["timeout"], "properties": { "timeout": { "type": "string", "pattern": "^[1-9][0-9]*(?:ms|s)$" } } },
+        { "type": "object", "additionalProperties": false, "required": ["status", "raw_body"], "properties": { "status": { "type": "integer", "minimum": 100, "maximum": 599 }, "raw_body": { "type": "string" } } },
+        { "type": "object", "additionalProperties": false, "required": ["status", "body_bytes"], "properties": { "status": { "type": "integer", "minimum": 100, "maximum": 599 }, "body_bytes": { "type": "integer", "minimum": 0 } } },
+        { "type": "object", "additionalProperties": false, "required": ["outcome"], "properties": { "outcome": { "type": "string", "minLength": 1 } } }
+      ]
+    }
+  }
+}

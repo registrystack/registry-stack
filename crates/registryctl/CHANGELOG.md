@@ -6,6 +6,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `registryctl init --from`, `test`, `check`, and `build` provide a strict
+  country-owned authoring workflow for bounded HTTP, DHIS2 Tracker, OpenCRVS,
+  and fixture-backed OpenSPP integrations. The compiler produces deterministic,
+  closed Relay and Notary Config Bundle v1 inputs, verifies them with the exact
+  product startup compilers, and supports explicitly verified signed baselines
+  for independent claim, integration, country-policy, and operator-security
+  review classification.
+- Advanced `sandboxed_rhai` authoring is available only through explicit
+  operator-security enablement and the release-gated isolated worker. Ordinary
+  starters remain declarative and do not depend on Rhai.
+- Generated country inputs include exact signed-DCI, immutable snapshot, and
+  multi-profile/multi-purpose journeys, plus deterministic operational and
+  redacted secret-consumer descriptors for Relay and Notary. Snapshot physical
+  mappings remain private and shared compatible profiles reuse one immutable
+  materialization slot.
+- Tagged `records_api` services compile strict logical records definitions and
+  private environment entity bindings into Relay's existing governed records
+  model. A SnapshotExact integration references the same logical entity, so one
+  immutable local materialization serves records and evidence while retaining
+  principal-bound filters, projection, cursor pagination, relationships,
+  aggregates, metadata, and configured OGC or SP DCI adapters.
+- Exact consultation selectors now accept one to four required, typed,
+  canonical components across bounded HTTP, unified DCI exact predicates, and
+  SnapshotExact. The compiler emits canonical exact-AND artifacts and validates
+  full-date inputs, complete fixture and request mappings, and injective private
+  physical bindings before source access. Authored input names use Relay's exact
+  64-byte lower-snake wire grammar, values are bounded to 256 bytes, and regex
+  patterns are bounded to 1024 bytes before generated product compilation.
+- Bounded HTTP credential interfaces now include reviewed API-key header and
+  query modes. Names remain fixed public integration configuration, values
+  remain environment-only secret references, query credentials require an
+  operator-security review, and sensitive header names or query collisions are
+  rejected.
+- The fixture-backed `fhir-r4-coverage-active` golden journey replaces the
+  retained sidecar path with two fixed FHIR R4 searches, strict resource
+  projection, composite Patient selection, bounded ambiguity handling, and
+  malformed, wrong-resource, oversized, OperationOutcome, and pagination-link
+  negative vectors.
+- OpenCRVS and DHIS2 golden workspaces now expose the approved age-band claims
+  derived from explicit caller-supplied full dates while preserving the listed
+  direct facts, predicates, disclosure modes, and credential claim allow-lists.
+- Country reports separate semantic digest changes from required review
+  classes and identify safe actual fixture failure codes without disclosing
+  fixture values.
+- Offline country fixtures compile an internal authority-free product artifact
+  closure and reuse Relay's closed decoders and typed normalization plus
+  Notary's static authentication, pre-source policy gates, CEL worker, claim
+  evaluation, and disclosure behavior. Exact OpenCRVS fixtures use public RSA
+  JWKS material and precomputed RS256 DCI envelopes; they remain deterministic
+  codec evidence rather than live interoperability evidence.
+
+### Security
+
+- Country authoring rejects unknown fields, symlinks, path traversal, secret
+  values in authored environment bindings, caller-selected source requests,
+  implicit live environments, and direct live registry access. Governed live
+  tests contact only the configured Notary evaluation endpoint and refuse
+  production environments.
+- Governed live tests require complete Relay readiness, an exact expected
+  claim result, and source-backed provenance. Private binding references are
+  independently revalidated against their raw SHA-256 and typed artifact hash
+  before generated Relay startup validation.
+- Fixed request headers use a closed non-credential allow-list, named
+  environment-backed secrets are complete in deployment descriptors, and
+  implementation-only Rhai probes are unavailable from country fixture YAML.
+
 ## [0.9.0] - 2026-07-10
 
 ### Added

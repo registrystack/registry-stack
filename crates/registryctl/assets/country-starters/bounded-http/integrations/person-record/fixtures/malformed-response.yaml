@@ -1,0 +1,5 @@
+name: malformed-person-response
+input: { person_id: AB-123456 }
+source:
+  person: { status: 200, raw_body: '{"records":[' }
+expect: { error: source.response_malformed, source_access: true, disclosed_claims: [] }

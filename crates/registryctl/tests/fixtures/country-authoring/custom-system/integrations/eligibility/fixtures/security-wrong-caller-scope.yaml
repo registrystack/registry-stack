@@ -1,0 +1,8 @@
+name: wrong-caller-and-scope-denied-before-source
+input: { household_reference: HH-AB12CD34 }
+request_context:
+  caller: unauthorized-fixture-client
+  scopes: ["evidence:unrelated:read"]
+  purpose: household-support-screening
+source: {}
+expect: { error: authorization.denied, source_access: false, disclosed_claims: [] }

@@ -487,7 +487,7 @@ fn cell_reference(mut col_idx: usize, row_number: usize) -> String {
         }
         col_idx -= 1;
     }
-    letters.iter().rev().collect::<String>() + &row_number.to_string()
+    letters.iter().rev().collect::<String>() + row_number.to_string().as_str()
 }
 
 fn escape_xml(value: &str) -> String {

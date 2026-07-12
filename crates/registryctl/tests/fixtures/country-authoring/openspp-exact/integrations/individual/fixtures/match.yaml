@@ -1,0 +1,9 @@
+name: social-registry-match
+input: { individual_id: IND-AB12CD34 }
+source:
+  individual:
+    status: 200
+    body: { active: true, programme_code: SUPPORT, household_reference: HH-0001 }
+expect:
+  facts: { exists: true, active: true, programme_code: SUPPORT, household_reference: HH-0001 }
+  claims: { social-registry-record-exists: true, social-registry-active: true, programme-code: SUPPORT, household-reference: redacted }

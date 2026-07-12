@@ -1,0 +1,12 @@
+name: caller-selected-request-is-rejected
+input: { person_id: AB-123456 }
+request_overrides:
+  origin: https://attacker.invalid
+  method: POST
+  path: /admin/export
+  headers: { Authorization: attacker }
+  projection: "*"
+  credential: attacker
+  operation: caller-operation
+source: {}
+expect: { error: fixture.request_override_forbidden, source_access: false, disclosed_claims: [] }

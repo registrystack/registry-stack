@@ -1,0 +1,6 @@
+name: dhis2-timeout
+input: { tracked_entity: A0000000001 }
+variables: { as_of_date: 2026-01-01 }
+source:
+  identity: { timeout: 16s }
+expect: { error: source.deadline_exceeded, source_access: true, disclosed_claims: [] }

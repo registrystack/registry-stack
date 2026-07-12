@@ -1,0 +1,67 @@
+version: 1
+id: fhir-r4-coverage-active
+source:
+  product: country-fhir-server
+  versions: { tested: [r4-fixture-v1] }
+input:
+  birthdate:
+    type: full_date
+    bytes: 10
+    pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    canonicalization: identity
+  family: { type: string, bytes: 80, pattern: "^Example$", canonicalization: identity }
+  given: { type: string, bytes: 80, pattern: "^Ada$", canonicalization: identity }
+capability:
+  bounded_http:
+    credential: { type: static_bearer }
+    operations:
+      patient:
+        primitive: fhir_r4_search_get
+        request:
+          method: GET
+          destination: data
+          path: /fhir/Patient
+          codec: fhir_r4_search_get
+          headers: { Data-Purpose: { value: coverage-verification } }
+          query:
+            _count: { value: "2" }
+            birthdate: { input: birthdate }
+            family: { input: family }
+            given: { input: given }
+        response:
+          statuses: [200]
+          max_bytes: 32768
+          codec: fhir_r4_searchset
+          schema:
+            type: object
+            additional_fields: reject
+            fields:
+              id: { required: true, type: string, max_bytes: 64 }
+          cardinality: { mode: probe_two }
+      coverage:
+        depends_on: [patient]
+        primitive: fhir_r4_search_get
+        request:
+          method: GET
+          destination: data
+          path: /fhir/Coverage
+          codec: fhir_r4_search_get
+          headers: { Data-Purpose: { value: coverage-verification } }
+          query:
+            _count: { value: "2" }
+            beneficiary: { prior: patient.id }
+        response:
+          statuses: [200]
+          max_bytes: 32768
+          codec: fhir_r4_searchset
+          schema:
+            type: object
+            additional_fields: reject
+            fields:
+              status: { required: true, type: string, max_bytes: 16 }
+          cardinality: { mode: probe_two }
+facts:
+  patient_exists: { type: presence, from: patient.presence }
+  coverage_status: { type: string, nullable: true, max_bytes: 16, from: coverage.status }
+bounds: { calls: 2, source_bytes: 65536, request_bytes: 4096, deadline: 8s, concurrency: 4 }
+fixtures: fixtures/

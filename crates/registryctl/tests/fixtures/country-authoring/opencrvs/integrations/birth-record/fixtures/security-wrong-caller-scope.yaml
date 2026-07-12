@@ -1,0 +1,8 @@
+name: wrong-caller-and-scope-denied-before-source
+input: { uin: "0000000001" }
+request_context:
+  caller: unauthorized-fixture-client
+  scopes: ["evidence:unrelated:read"]
+  purpose: birth-record-verification
+source: {}
+expect: { error: authorization.denied, source_access: false, disclosed_claims: [] }

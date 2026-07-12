@@ -38,6 +38,34 @@ For the full walkthroughs, use the Registry Docs tutorials:
 - [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
 - [Connect Notary to a Registry Data API source](https://docs.registrystack.org/tutorials/run-notary-standalone-for-api/)
 
+## Country integration authoring
+
+Start from the declarative bounded-HTTP workspace, run its closed offline
+fixtures, inspect the redacted generated plan, and build deterministic Relay
+and Notary inputs:
+
+```sh
+registryctl init --from bounded-http --country-dir country
+registryctl test --project country
+registryctl check --project country --environment local --explain
+registryctl build --project country --environment local
+```
+
+The authoring contract accepts one to four exact subject inputs. Input names
+match `[a-z][a-z0-9_]{0,63}`, values are bounded to 256 bytes, and patterns are
+bounded to 1024 bytes. Credentials are fixed interfaces whose values remain
+environment-only secret references. `check` and `build` compile the generated
+closure with the product-owned Relay and Notary validators. `test` additionally
+executes deterministic source fixtures without granting fixture YAML network,
+credential, filesystem, or worker authority.
+
+Sandboxed Rhai is an advanced, release-gated integration mode. Its offline
+conformance fixtures use the isolated implementation-owned worker harness;
+ordinary startup remains unavailable unless the Relay build, reviewed country
+configuration, source version, and operator-security controls all support it.
+`test --live` requires an explicit non-production environment and uses only the
+governed deployed Notary path. It never contacts a source registry directly.
+
 To scaffold a standalone Notary project for an existing FHIR source-adapter
 sidecar:
 

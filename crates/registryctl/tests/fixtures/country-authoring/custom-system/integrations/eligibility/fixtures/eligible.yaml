@@ -1,0 +1,8 @@
+name: eligible-household
+input: { household_reference: HH-AB12CD34 }
+source:
+  resolve: { status: 200, body: { matches: [{ key: synthetic-key-1 }] } }
+  eligibility: { status: 200, body: { approved: true, category: PRIORITY } }
+expect:
+  facts: { exists: true, approved: true, category: PRIORITY }
+  claims: { household-record-exists: true, household-category: PRIORITY, household-eligible: true }

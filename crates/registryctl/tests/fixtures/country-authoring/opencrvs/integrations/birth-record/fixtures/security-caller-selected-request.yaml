@@ -1,0 +1,13 @@
+name: opencrvs-authority-is-closed
+input: { uin: "0000000001" }
+variables: { as_of_date: 2026-01-01 }
+request_overrides:
+  origin: https://attacker.invalid
+  method: GET
+  path: /records/export
+  headers: { Authorization: attacker }
+  projection: raw_record
+  credential: attacker
+  operation: export
+source: {}
+expect: { error: fixture.request_override_forbidden, source_access: false, disclosed_claims: [] }

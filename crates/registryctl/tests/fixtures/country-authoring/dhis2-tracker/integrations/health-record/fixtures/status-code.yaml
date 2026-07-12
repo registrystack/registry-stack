@@ -1,0 +1,6 @@
+name: dhis2-status-code
+input: { tracked_entity: A0000000001 }
+variables: { as_of_date: 2026-01-01 }
+source:
+  identity: { status: 503, body: {} }
+expect: { error: source.status_rejected, source_access: true, disclosed_claims: [] }

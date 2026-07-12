@@ -56,6 +56,7 @@ registry-config-report = { path = "crates/registry-config-report", version = "0.
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.9.0" }
 registry-notary-client = { path = "crates/registry-notary-client", version = "0.9.0" }
 registry-notary-core = { path = "crates/registry-notary-core", version = "0.9.0" }
+registry-relay = { path = "crates/registry-relay", version = "0.9.0" }
 registry-notary-server = { path = "crates/registry-notary-server", version = "0.9.0", default-features = false }
 registry-notary-source-adapter-rhai = { path = "crates/registry-notary-source-adapter-rhai", version = "0.9.0" }
 registry-notary-source-adapter-sidecar = { path = "crates/registry-notary-source-adapter-sidecar", version = "0.9.0" }

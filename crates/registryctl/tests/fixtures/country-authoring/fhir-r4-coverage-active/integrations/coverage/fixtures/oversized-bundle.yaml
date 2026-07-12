@@ -1,0 +1,5 @@
+name: oversized-bundle
+input: { birthdate: 2018-05-12, family: Example, given: Ada }
+source:
+  patient: { status: 200, body_bytes: 32769 }
+expect: { error: source.response_too_large, facts: {}, claims: {} }

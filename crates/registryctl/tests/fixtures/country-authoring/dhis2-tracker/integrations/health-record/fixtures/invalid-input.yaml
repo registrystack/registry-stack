@@ -1,0 +1,5 @@
+name: invalid-tracked-entity
+input: { tracked_entity: ../admin }
+variables: { as_of_date: 2026-01-01 }
+source: {}
+expect: { error: input.pattern_mismatch, source_access: false, disclosed_claims: [] }

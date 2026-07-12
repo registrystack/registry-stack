@@ -1,0 +1,5 @@
+name: rejected-person-status
+input: { person_id: AB-123456 }
+source:
+  person: { status: 503, body: {} }
+expect: { error: source.status_rejected, source_access: true, disclosed_claims: [] }

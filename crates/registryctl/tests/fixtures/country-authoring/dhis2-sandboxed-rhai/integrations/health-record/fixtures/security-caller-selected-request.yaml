@@ -1,0 +1,13 @@
+name: dhis2-authority-is-closed
+input: { tracked_entity: A0000000001 }
+variables: { as_of_date: 2026-01-01 }
+request_overrides:
+  origin: https://attacker.invalid
+  method: POST
+  path: /api/export
+  headers: { Authorization: attacker }
+  projection: raw
+  credential: attacker
+  operation: export-all
+source: {}
+expect: { error: fixture.request_override_forbidden, source_access: false, disclosed_claims: [] }

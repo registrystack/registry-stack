@@ -1,0 +1,5 @@
+name: social-registry-ambiguous
+input: { individual_id: IND-AB12CD34 }
+source:
+  individual: { status: 409, body: {} }
+expect: { outcome: ambiguous, disclosed_claims: [] }

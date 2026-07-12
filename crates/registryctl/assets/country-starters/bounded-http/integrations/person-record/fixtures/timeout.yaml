@@ -1,0 +1,5 @@
+name: person-timeout
+input: { person_id: AB-123456 }
+source:
+  person: { timeout: 6s }
+expect: { error: source.deadline_exceeded, source_access: true, disclosed_claims: [] }

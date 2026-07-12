@@ -1,0 +1,12 @@
+name: openspp-authority-is-closed
+input: { individual_id: IND-AB12CD34 }
+request_overrides:
+  origin: https://attacker.invalid
+  method: POST
+  path: /api/v2/spp/Individual
+  headers: { Authorization: attacker }
+  projection: all
+  credential: attacker
+  operation: list-all
+source: {}
+expect: { error: fixture.request_override_forbidden, source_access: false, disclosed_claims: [] }

@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registrystack.example/schemas/country-authoring/project.v1.json",
+  "title": "Registry Stack country project v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "registry", "integrations", "services"],
+  "properties": {
+    "version": { "const": 1 },
+    "registry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": { "id": { "$ref": "#/$defs/stableId" } }
+    },
+    "integrations": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 16,
+      "propertyNames": { "$ref": "#/$defs/stableId" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["file"],
+        "properties": { "file": { "$ref": "#/$defs/relativePath" } }
+      }
+    },
+    "services": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 32,
+      "propertyNames": { "$ref": "#/$defs/stableId" },
+      "additionalProperties": { "$ref": "#/$defs/service" }
+    }
+  },
+  "$defs": {
+    "stableId": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
+    "token": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^,\\s\\u0000-\\u001F\\u007F]+$" },
+    "relativePath": { "type": "string", "minLength": 1, "maxLength": 4096, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$" },
+    "disclosureMode": { "enum": ["value", "predicate", "redacted"] },
+    "disclosure": {
+      "oneOf": [
+        { "$ref": "#/$defs/disclosureMode" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["default", "allowed"],
+          "properties": {
+            "default": { "$ref": "#/$defs/disclosureMode" },
+            "allowed": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/disclosureMode" } }
+          }
+        }
+      ]
+    },
+    "service": {
+      "oneOf": [
+        { "$ref": "#/$defs/evidenceService" },
+        { "$ref": "#/$defs/recordsService" }
+      ]
+    },
+    "recordsService": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "definition", "entity"],
+      "properties": {
+        "kind": { "const": "records_api" },
+        "definition": { "$ref": "#/$defs/relativePath" },
+        "entity": { "$ref": "#/$defs/stableId" }
+      }
+    },
+    "evidenceService": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "version", "purpose", "legal_basis", "consent", "access", "consultations", "claims"],
+      "properties": {
+        "kind": { "const": "evidence" },
+        "version": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "purpose": { "$ref": "#/$defs/token" },
+        "legal_basis": { "$ref": "#/$defs/token" },
+        "consent": { "enum": ["not_required", "required"] },
+        "access": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scopes"],
+          "properties": { "scopes": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "$ref": "#/$defs/token" } } }
+        },
+        "variables": {
+          "type": "object",
+          "maxProperties": 16,
+          "propertyNames": { "$ref": "#/$defs/stableId" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "type"],
+            "properties": { "from": { "type": "string", "pattern": "^request\\.variables\\.[a-z][a-z0-9._-]{0,95}$" }, "type": { "const": "date" } }
+          }
+        },
+        "consultations": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 16,
+          "propertyNames": { "$ref": "#/$defs/stableId" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["integration", "input"],
+            "properties": {
+              "integration": { "$ref": "#/$defs/stableId" },
+              "input": {
+                "type": "object",
+                "minProperties": 1,
+                "maxProperties": 4,
+                "propertyNames": { "$ref": "#/$defs/stableId" },
+                "additionalProperties": { "type": "string", "pattern": "^request\\.target\\.(?:id|identifiers\\.[A-Za-z][A-Za-z0-9._-]{0,95})$" }
+              }
+            }
+          }
+        },
+        "claims": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 64,
+          "propertyNames": { "$ref": "#/$defs/stableId" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["disclosure"],
+            "properties": { "fact": { "type": "string" }, "cel": { "type": "string", "minLength": 1 }, "disclosure": { "$ref": "#/$defs/disclosure" } },
+            "oneOf": [{ "required": ["fact"] }, { "required": ["cel"] }]
+          }
+        },
+        "credentials": {
+          "type": "object",
+          "maxProperties": 32,
+          "propertyNames": { "$ref": "#/$defs/stableId" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["format", "type", "validity", "claims"],
+            "properties": {
+              "format": { "$ref": "#/$defs/token" },
+              "type": { "type": "string", "minLength": 1, "maxLength": 2048 },
+              "validity": { "type": "string", "pattern": "^[1-9][0-9]*(?:s|m|h)$" },
+              "claims": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/stableId" } }
+            }
+          }
+        }
+      }
+    }
+  }
+}

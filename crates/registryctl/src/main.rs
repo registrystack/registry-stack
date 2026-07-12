@@ -4,11 +4,25 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use registryctl::{
-    BundleSignOptions, DeploymentProfile, DoctorFormat, NotaryInitOptions, NotaryInitSourceKind,
-    NotarySource, OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions, Sample,
+    BundleSignOptions, CountryBuildOptions, CountryCheckOptions, CountryInitOptions,
+    CountryStarter, CountryTestOptions, DeploymentProfile, DoctorFormat, NotaryInitOptions,
+    NotaryInitSourceKind, NotarySource, OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions,
+    Sample,
 };
 
 fn main() -> Result<()> {
+    if registry_relay::rhai_worker::is_worker_invocation(std::env::args_os()) {
+        let status = registry_relay::rhai_worker::run_worker_stdio();
+        if status == std::process::ExitCode::SUCCESS {
+            return Ok(());
+        }
+        std::process::exit(1);
+    }
+    if is_exact_internal_mode("__registryctl-cel-worker-v1") {
+        registry_notary_server::cel_worker::run_stdio_worker();
+        return Ok(());
+    }
+
     let cli = Cli::parse();
     if cli.command.should_check_for_updates() {
         registryctl::maybe_warn_about_update(env!("CARGO_PKG_VERSION"));
@@ -16,62 +30,113 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::UpdateCheck => registryctl::update_check(env!("CARGO_PKG_VERSION"))?,
         Commands::UpdateCheckRefresh => registryctl::refresh_update_check_cache()?,
-        Commands::Init { command } => {
-            let image_lock = registryctl::load_registryctl_image_lock()?;
-            match *command {
-                InitCommand::Relay { dir, sample } => {
-                    registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?;
-                }
-                InitCommand::SpreadsheetApi { dir, sample } => {
-                    registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?;
-                }
-                InitCommand::Notary {
-                    dir,
-                    source_kind,
-                    source_url,
-                    source_token_from_env,
-                    source_token_env,
-                    source_dataset,
-                    source_entity,
-                    source_lookup_field,
-                    source_network,
-                    source_claim,
-                    source_claim_title,
-                    smoke_target_id,
-                } => {
-                    registryctl::init_notary_project(
-                        &dir,
-                        NotaryInitOptions {
-                            source_kind,
-                            source_url: source_url
-                                .unwrap_or_else(|| source_kind.default_source_url().to_string()),
-                            source_token_from_env,
-                            source_token_env: source_token_env.unwrap_or_else(|| {
-                                source_kind.default_source_token_env().to_string()
-                            }),
-                            source_dataset: source_dataset.unwrap_or_else(|| {
-                                source_kind.default_source_dataset().to_string()
-                            }),
-                            source_entity: source_entity
-                                .unwrap_or_else(|| source_kind.default_source_entity().to_string()),
-                            source_lookup_field: source_lookup_field.unwrap_or_else(|| {
-                                source_kind.default_source_lookup_field().to_string()
-                            }),
-                            source_network,
-                            source_claim: source_claim
-                                .unwrap_or_else(|| source_kind.default_source_claim().to_string()),
-                            source_claim_title: source_claim_title.unwrap_or_else(|| {
-                                source_kind.default_source_claim_title().to_string()
-                            }),
-                            smoke_target_id: smoke_target_id.unwrap_or_else(|| {
-                                source_kind.default_smoke_target_id().to_string()
-                            }),
-                        },
-                        &image_lock,
-                    )?;
+        Commands::Init {
+            from,
+            country_dir,
+            command,
+        } => match (from, command) {
+            (Some(starter), None) => {
+                print_json(&registryctl::init_country_project(&CountryInitOptions {
+                    starter,
+                    directory: country_dir,
+                })?)?
+            }
+            (None, Some(command)) => {
+                let image_lock = registryctl::load_registryctl_image_lock()?;
+                match *command {
+                    InitCommand::Relay { dir, sample } => {
+                        registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?;
+                    }
+                    InitCommand::SpreadsheetApi { dir, sample } => {
+                        registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?;
+                    }
+                    InitCommand::Notary {
+                        dir,
+                        source_kind,
+                        source_url,
+                        source_token_from_env,
+                        source_token_env,
+                        source_dataset,
+                        source_entity,
+                        source_lookup_field,
+                        source_network,
+                        source_claim,
+                        source_claim_title,
+                        smoke_target_id,
+                    } => {
+                        registryctl::init_notary_project(
+                            &dir,
+                            NotaryInitOptions {
+                                source_kind,
+                                source_url: source_url.unwrap_or_else(|| {
+                                    source_kind.default_source_url().to_string()
+                                }),
+                                source_token_from_env,
+                                source_token_env: source_token_env.unwrap_or_else(|| {
+                                    source_kind.default_source_token_env().to_string()
+                                }),
+                                source_dataset: source_dataset.unwrap_or_else(|| {
+                                    source_kind.default_source_dataset().to_string()
+                                }),
+                                source_entity: source_entity.unwrap_or_else(|| {
+                                    source_kind.default_source_entity().to_string()
+                                }),
+                                source_lookup_field: source_lookup_field.unwrap_or_else(|| {
+                                    source_kind.default_source_lookup_field().to_string()
+                                }),
+                                source_network,
+                                source_claim: source_claim.unwrap_or_else(|| {
+                                    source_kind.default_source_claim().to_string()
+                                }),
+                                source_claim_title: source_claim_title.unwrap_or_else(|| {
+                                    source_kind.default_source_claim_title().to_string()
+                                }),
+                                smoke_target_id: smoke_target_id.unwrap_or_else(|| {
+                                    source_kind.default_smoke_target_id().to_string()
+                                }),
+                            },
+                            &image_lock,
+                        )?;
+                    }
                 }
             }
-        }
+            _ => {
+                anyhow::bail!("init requires exactly one of --from or a legacy product subcommand")
+            }
+        },
+        Commands::Test {
+            project,
+            environment,
+            live,
+        } => print_json(&registryctl::test_country_project(&CountryTestOptions {
+            project_directory: project,
+            environment,
+            live,
+        })?)?,
+        Commands::Check {
+            project,
+            environment,
+            explain,
+            against,
+            anchor,
+        } => print_json(&registryctl::check_country_project(&CountryCheckOptions {
+            project_directory: project,
+            environment,
+            explain,
+            against,
+            anchor,
+        })?)?,
+        Commands::Build {
+            project,
+            environment,
+            against,
+            anchor,
+        } => print_json(&registryctl::build_country_project(&CountryBuildOptions {
+            project_directory: project,
+            environment,
+            against,
+            anchor,
+        })?)?,
         Commands::Add { command } => {
             let image_lock = registryctl::load_registryctl_image_lock()?;
             match command {
@@ -318,6 +383,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn is_exact_internal_mode(expected: &str) -> bool {
+    let mut args = std::env::args_os();
+    let _program = args.next();
+    args.next().as_deref() == Some(std::ffi::OsStr::new(expected)) && args.next().is_none()
+}
+
 fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
     println!(
         "{}",
@@ -344,8 +415,59 @@ enum Commands {
     UpdateCheckRefresh,
     /// Create a local Registry Commons project.
     Init {
+        /// Copy a tested country integration starter into a local workspace.
+        #[arg(long, value_enum)]
+        from: Option<CountryStarter>,
+        /// Destination for a country workspace initialized with --from.
+        #[arg(long, default_value = ".")]
+        country_dir: PathBuf,
         #[command(subcommand)]
-        command: Box<InitCommand>,
+        command: Option<Box<InitCommand>>,
+    },
+    /// Run every country integration fixture offline.
+    Test {
+        /// Country workspace root.
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+        /// Optional environment for environment-sensitive validation.
+        #[arg(long)]
+        environment: Option<String>,
+        /// Use the deployed governed path. Direct registry access is never performed.
+        #[arg(long)]
+        live: bool,
+    },
+    /// Validate and explain generated Relay and Notary configuration.
+    Check {
+        /// Country workspace root.
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+        /// Explicit environment binding.
+        #[arg(long)]
+        environment: String,
+        /// Print the complete redacted acquisition and disclosure plan.
+        #[arg(long)]
+        explain: bool,
+        /// Previously signed Config Bundle containing approval/review.json.
+        #[arg(long)]
+        against: Option<PathBuf>,
+        /// Trust anchor for --against.
+        #[arg(long)]
+        anchor: Option<PathBuf>,
+    },
+    /// Emit deterministic unsigned Relay and Notary Config Bundle inputs.
+    Build {
+        /// Country workspace root.
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+        /// Explicit environment binding.
+        #[arg(long)]
+        environment: String,
+        /// Previously signed Config Bundle containing approval/review.json.
+        #[arg(long)]
+        against: Option<PathBuf>,
+        /// Trust anchor for --against.
+        #[arg(long)]
+        anchor: Option<PathBuf>,
     },
     /// Add a Registry Commons product to the current project.
     Add {
@@ -422,6 +544,124 @@ mod tests {
     use super::*;
 
     #[test]
+    fn country_authoring_cli_accepts_the_documented_commands() {
+        let init = Cli::try_parse_from([
+            "registryctl",
+            "init",
+            "--from",
+            "bounded-http",
+            "--country-dir",
+            "country",
+        ])
+        .unwrap();
+        assert!(matches!(
+            init.command,
+            Commands::Init {
+                from: Some(CountryStarter::BoundedHttp),
+                country_dir,
+                command: None,
+            } if country_dir == std::path::Path::new("country")
+        ));
+
+        let test = Cli::try_parse_from([
+            "registryctl",
+            "test",
+            "--project",
+            "country",
+            "--environment",
+            "staging",
+            "--live",
+        ])
+        .unwrap();
+        assert!(matches!(
+            test.command,
+            Commands::Test {
+                project,
+                environment: Some(environment),
+                live: true,
+            } if project == std::path::Path::new("country") && environment == "staging"
+        ));
+
+        let check = Cli::try_parse_from([
+            "registryctl",
+            "check",
+            "--project",
+            "country",
+            "--environment",
+            "staging",
+            "--explain",
+            "--against",
+            "baseline",
+            "--anchor",
+            "anchor.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            check.command,
+            Commands::Check {
+                project,
+                environment,
+                explain: true,
+                against: Some(against),
+                anchor: Some(anchor),
+            } if project == std::path::Path::new("country")
+                && environment == "staging"
+                && against == std::path::Path::new("baseline")
+                && anchor == std::path::Path::new("anchor.json")
+        ));
+
+        let build = Cli::try_parse_from([
+            "registryctl",
+            "build",
+            "--project",
+            "country",
+            "--environment",
+            "staging",
+        ])
+        .unwrap();
+        assert!(matches!(
+            build.command,
+            Commands::Build {
+                project,
+                environment,
+                against: None,
+                anchor: None,
+            } if project == std::path::Path::new("country") && environment == "staging"
+        ));
+    }
+
+    #[test]
+    fn country_init_rejects_mixed_or_missing_modes_at_dispatch_boundary() {
+        let mixed = Cli::try_parse_from([
+            "registryctl",
+            "init",
+            "--from",
+            "opencrvs",
+            "notary",
+            "legacy",
+        ])
+        .unwrap();
+        assert!(matches!(
+            mixed.command,
+            Commands::Init {
+                from: Some(_),
+                command: Some(_),
+                ..
+            }
+        ));
+
+        let missing = Cli::try_parse_from(["registryctl", "init"]).unwrap();
+        assert!(matches!(
+            missing.command,
+            Commands::Init {
+                from: None,
+                command: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn doctor_cli_accepts_profile_and_json_format() {
         let cli = Cli::try_parse_from([
             "registryctl",
@@ -466,9 +706,10 @@ mod tests {
         ])
         .unwrap();
 
-        let Commands::Init { command } = cli.command else {
+        let Commands::Init { command, .. } = cli.command else {
             panic!("expected init command");
         };
+        let command = command.expect("legacy init subcommand");
         let InitCommand::Notary {
             source_kind,
             source_url,
@@ -497,9 +738,10 @@ mod tests {
         ])
         .unwrap();
 
-        let Commands::Init { command } = cli.command else {
+        let Commands::Init { command, .. } = cli.command else {
             panic!("expected init command");
         };
+        let command = command.expect("legacy init subcommand");
         let InitCommand::Notary { source_kind, .. } = *command else {
             panic!("expected init notary command");
         };

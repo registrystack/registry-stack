@@ -1,0 +1,81 @@
+version: 1
+id: fictional-household-eligibility
+
+source:
+  product: aurora-household-service
+  versions:
+    unverified: [fixture-contract-v2]
+
+input:
+  household_reference:
+    type: string
+    bytes: 18
+    pattern: "^HH-[A-Z0-9]{8}$"
+    canonicalization: identity
+
+capability:
+  bounded_http:
+    credential:
+      type: basic
+    operations:
+      resolve:
+        request:
+          method: POST
+          destination: data
+          path: /consultations/resolve-household
+          codec: strict_json_v1
+          body:
+            reference: { input: household_reference }
+            projection: { value: key }
+            limit: { value: 2 }
+        response:
+          statuses: [200]
+          max_bytes: 8192
+          schema:
+            type: object
+            additional_fields: reject
+            fields:
+              matches:
+                required: true
+                type: array
+                max_items: 2
+                items:
+                  type: object
+                  additional_fields: reject
+                  fields:
+                    key: { required: true, type: string, max_bytes: 36 }
+          cardinality: { records: matches, mode: probe_two }
+      eligibility:
+        depends_on: [resolve]
+        when: { prior: resolve.presence, equals: true }
+        request:
+          method: GET
+          destination: data
+          path: /consultations/eligibility
+          query:
+            key: { prior: resolve.record.key }
+            fields: { value: "approved,category" }
+        response:
+          statuses: [200]
+          max_bytes: 8192
+          schema:
+            type: object
+            additional_fields: reject
+            fields:
+              approved: { required: true, type: boolean }
+              category: { required: true, type: string, max_bytes: 20 }
+          cardinality: { mode: singleton }
+
+facts:
+  exists: { type: boolean, from: resolve.presence }
+  approved: { type: boolean, nullable: true, from: eligibility.approved }
+  category: { type: string, nullable: true, max_bytes: 20, from: eligibility.category }
+
+bounds:
+  calls: 2
+  source_bytes: 16384
+  request_bytes: 4096
+  deadline: 8s
+  concurrency: 4
+
+fixtures: fixtures/

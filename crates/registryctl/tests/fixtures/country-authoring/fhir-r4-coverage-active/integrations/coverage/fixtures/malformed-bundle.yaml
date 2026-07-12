@@ -1,0 +1,5 @@
+name: malformed-bundle
+input: { birthdate: 2018-05-12, family: Example, given: Ada }
+source:
+  patient: { status: 200, raw_body: '{"resourceType":"Bundle"' }
+expect: { error: source.response_malformed, facts: {}, claims: {} }

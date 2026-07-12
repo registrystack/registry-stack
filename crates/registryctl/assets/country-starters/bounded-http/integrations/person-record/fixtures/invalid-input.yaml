@@ -1,0 +1,4 @@
+name: invalid-person-input
+input: { person_id: caller-selected-path }
+source: {}
+expect: { error: input.pattern_mismatch, source_access: false, disclosed_claims: [] }

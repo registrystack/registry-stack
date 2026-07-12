@@ -1,0 +1,29 @@
+version: 1
+integrations:
+  coverage:
+    source_version: r4-fixture-v1
+    data_destination: { origin: https://fhir.fixture.invalid }
+    credential:
+      type: static_bearer
+      token: { secret: FHIR_ACCESS_TOKEN }
+      generation: 1
+issuance:
+  issuer: did:web:fhir-notary.invalid
+  signing_kid: country-issuer-key
+  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
+  generation: 1
+callers:
+  coverage-service:
+    api_key_fingerprint: { secret: COVERAGE_SERVICE_TOKEN_HASH }
+    scopes: ["evidence:coverage:read"]
+relay_trust:
+  origin: https://fhir-relay.internal.invalid
+  issuer: https://workload-issuer.internal.invalid
+  jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
+  audience: registry-relay
+  notary_client_id: fhir-notary
+  notary_token_file: /run/secrets/relay-workload-token
+deployment:
+  profile: local
+  relay: { service: fhir-relay }
+  notary: { service: fhir-notary }

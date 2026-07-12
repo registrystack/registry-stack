@@ -3520,6 +3520,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4085,6 +4104,18 @@ name = "ndk-context"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27b02d87554356db9e9a873add8782d4ea6e3e58ea071a9adb9a2e8ddb884a8b"
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
 
 [[package]]
 name = "no-std-compat"
@@ -5734,6 +5765,7 @@ dependencies = [
  "jsonschema 0.18.3",
  "jsonwebtoken",
  "native-tls",
+ "nix",
  "ogcapi-types",
  "postgres-native-tls",
  "proptest",
@@ -5753,6 +5785,7 @@ dependencies = [
  "registry-platform-pdp",
  "registry-platform-testing",
  "reqwest",
+ "rhai",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -5787,17 +5820,24 @@ dependencies = [
  "crc32fast",
  "ed25519-dalek",
  "getrandom 0.4.3",
+ "hex",
+ "include_dir",
  "jsonschema 0.18.3",
+ "regex",
  "registry-config-report",
  "registry-notary-core",
+ "registry-notary-server",
  "registry-platform-authcommon",
  "registry-platform-config",
  "registry-platform-crypto",
+ "registry-relay",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.11.0",
  "tempfile",
  "time",
+ "tokio",
  "ureq",
  "url",
  "zeroize",

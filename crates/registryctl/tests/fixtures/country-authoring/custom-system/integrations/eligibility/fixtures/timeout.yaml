@@ -1,0 +1,5 @@
+name: custom-timeout
+input: { household_reference: HH-AB12CD34 }
+source:
+  resolve: { timeout: 9s }
+expect: { error: source.deadline_exceeded, source_access: true, disclosed_claims: [] }

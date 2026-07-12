@@ -1,0 +1,42 @@
+version: 1
+
+registry:
+  id: fictional-citizen-registry
+
+integrations:
+  person-record:
+    file: integrations/person-record/integration.yaml
+
+services:
+  person-verification:
+    kind: evidence
+    version: 1
+    purpose: public-service-person-verification
+    legal_basis: public-service-delivery
+    consent: not_required
+    access:
+      scopes: ["evidence:person:read"]
+    consultations:
+      person_record:
+        integration: person-record
+        input:
+          person_id: request.target.identifiers.country_person_id
+    claims:
+      person-record-exists:
+        fact: person_record.exists
+        disclosure: predicate
+      person-status:
+        fact: person_record.status
+        disclosure: value
+      person-active:
+        cel: >-
+          person_record.status != null
+            ? person_record.exists && person_record.status == "ACTIVE"
+            : false
+        disclosure: predicate
+    credentials:
+      person-status:
+        format: dc+sd-jwt
+        type: https://credentials.invalid/person-status/v1
+        validity: 10m
+        claims: [person-record-exists, person-status, person-active]

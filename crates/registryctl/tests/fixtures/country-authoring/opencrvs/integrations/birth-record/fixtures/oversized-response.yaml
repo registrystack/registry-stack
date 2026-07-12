@@ -1,0 +1,10 @@
+name: opencrvs-oversized-response
+input: { uin: "0000000001" }
+variables: { as_of_date: 2026-01-01 }
+source:
+  oauth: { outcome: credential_success }
+  jwks:
+    status: 200
+    body: {"keys":[{"alg":"RS256","e":"AQAB","kid":"registry-country-opencrvs-signing-2026-07-12","kty":"RSA","n":"mVJZcmmylo1eBjZsjKBa7rJhjHH-ClLZNFeNhbog6PyAuRUGxGj3JrEDsy4z-icnVWXu4AkwCvgAAjx1lCmBBBnwfXvSjab40ejiWan7N4y1ivyESf7JI1mSpHQGkG5csadlYSxT2sZvg7yjkd1-JGG4KEYEyWunKuAD9ITo-ZTcDTqAxlFmfSAI871KT9bKMX55QS_LaMtlsJJMnF5K6MjOt2h0H92jhO1CJ6Kkj8Uj8D7tiSUvfVpjDS5oSZKcqRYghDciFDYagAqZrJeMsKLI_lyFmHX1JY1U0jOEprAEGhN-Wn1a6GNNXydjoI4ltxS-1kIUWm5te0D-BTz6vw","use":"sig"},{"alg":"RSA-OAEP-256","e":"AQAB","kid":"registry-country-opencrvs-encryption-2026-07-12","kty":"RSA","n":"mVJZcmmylo1eBjZsjKBa7rJhjHH-ClLZNFeNhbog6PyAuRUGxGj3JrEDsy4z-icnVWXu4AkwCvgAAjx1lCmBBBnwfXvSjab40ejiWan7N4y1ivyESf7JI1mSpHQGkG5csadlYSxT2sZvg7yjkd1-JGG4KEYEyWunKuAD9ITo-ZTcDTqAxlFmfSAI871KT9bKMX55QS_LaMtlsJJMnF5K6MjOt2h0H92jhO1CJ6Kkj8Uj8D7tiSUvfVpjDS5oSZKcqRYghDciFDYagAqZrJeMsKLI_lyFmHX1JY1U0jOEprAEGhN-Wn1a6GNNXydjoI4ltxS-1kIUWm5te0D-BTz6vw","use":"enc"}]}
+  birth: { status: 200, body_bytes: 65537 }
+expect: { error: source.response_too_large, source_access: true, disclosed_claims: [] }

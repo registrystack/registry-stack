@@ -1,0 +1,4 @@
+name: invalid-individual-id
+input: { individual_id: ../../admin }
+source: {}
+expect: { error: input.pattern_mismatch, source_access: false, disclosed_claims: [] }

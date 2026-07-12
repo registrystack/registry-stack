@@ -1,0 +1,7 @@
+name: total-exceeds-returned-records
+input: { birthdate: 2018-05-12, family: Example, given: Ada }
+source:
+  patient:
+    status: 200
+    body: { resourceType: Bundle, type: searchset, total: 2, entry: [{ resource: { resourceType: Patient, id: patient-1 } }] }
+expect: { outcome: ambiguous, facts: {}, claims: {} }

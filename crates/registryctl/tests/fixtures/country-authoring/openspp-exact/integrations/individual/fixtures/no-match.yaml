@@ -1,0 +1,7 @@
+name: social-registry-no-match
+input: { individual_id: IND-AB12CD34 }
+source:
+  individual: { status: 404, body: {} }
+expect:
+  facts: {}
+  claims: { social-registry-record-exists: false, social-registry-active: null, programme-code: null, household-reference: redacted }

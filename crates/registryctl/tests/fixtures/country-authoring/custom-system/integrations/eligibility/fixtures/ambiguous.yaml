@@ -1,0 +1,7 @@
+name: ambiguous-household
+input: { household_reference: HH-AB12CD34 }
+source:
+  resolve:
+    status: 200
+    body: { matches: [{ key: synthetic-key-1 }, { key: synthetic-key-2 }] }
+expect: { outcome: ambiguous, source_access: true, disclosed_claims: [], calls: [resolve] }
