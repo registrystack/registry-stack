@@ -8,8 +8,10 @@
 
 mod opencrvs;
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use datafusion::execution::context::SessionContext;
 use registry_platform_httputil::destination::json::{
     ClosedJsonDecodeError, ClosedJsonOutcome, MAX_CLOSED_JSON_ENCODED_BODY_BYTES,
 };
@@ -19,6 +21,10 @@ use registry_platform_httputil::destination::{
 use thiserror::Error;
 use tokio::time::Instant;
 
+use crate::source_backend::{
+    execute_snapshot_exact, PublishedSnapshotRegistry, SnapshotExactBackendError,
+    SnapshotExactBackendResult,
+};
 use crate::source_plan::runtime_profile::CompiledConsentProfile;
 use crate::source_plan::{
     CompiledBasicSourceCredentialProvider, CompiledOAuthSourceCredentialProvider,
@@ -68,6 +74,7 @@ fn operation_deadline(
 /// Restart-only selection of one fully reviewed product journey.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConcreteExecutorKind {
+    SnapshotExact,
     BasicGet,
     OpenCrvsDciExact,
 }
@@ -76,6 +83,9 @@ impl ConcreteExecutorKind {
     pub(crate) fn activate(
         plan: &CompiledSourcePlan,
     ) -> Result<Self, ConcreteExecutorActivationError> {
+        if validate_snapshot_exact_activation(plan).is_ok() {
+            return Ok(Self::SnapshotExact);
+        }
         if validate_basic_get_activation(plan).is_ok() {
             return Ok(Self::BasicGet);
         }
@@ -85,6 +95,7 @@ impl ConcreteExecutorKind {
 
     pub(crate) const fn permit_counts(self) -> (u8, u8) {
         match self {
+            Self::SnapshotExact => (0, 0),
             Self::BasicGet => (0, 1),
             Self::OpenCrvsDciExact => (1, 2),
         }
@@ -95,6 +106,7 @@ impl ConcreteExecutorKind {
         plan: &CompiledSourcePlan,
     ) -> Result<crate::state_plane::DispatchPermitBudget, ConcreteExecutorActivationError> {
         match self {
+            Self::SnapshotExact => validate_snapshot_exact_activation(plan)?,
             Self::BasicGet => validate_basic_get_activation(plan)?,
             Self::OpenCrvsDciExact => validate_open_crvs_dci_exact_activation(plan)?,
         }
@@ -103,6 +115,39 @@ impl ConcreteExecutorKind {
         )))
         .map_err(|_| ConcreteExecutorActivationError::UnsupportedPlan)
     }
+}
+
+/// Accept only the compiler-sealed local exact snapshot shape.
+pub(crate) fn validate_snapshot_exact_activation(
+    plan: &CompiledSourcePlan,
+) -> Result<(), ConcreteExecutorActivationError> {
+    let binding = plan
+        .snapshot_binding()
+        .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?;
+    let input = plan
+        .inputs()
+        .next()
+        .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?;
+    if plan.kind() != SourcePlanKind::SnapshotExact
+        || plan.inputs().len() != 1
+        || plan.operations().len() != 0
+        || plan.steps().len() != 0
+        || plan.compiled_steps().len() != 0
+        || plan.credential_operation().is_some()
+        || plan.data_destination().is_some()
+        || plan.credential_destination().is_some()
+        || plan.credential_reference().is_some()
+        || binding.key_input() != input.name()
+        || !binding.key_uses_utf8_binary_equality()
+        || binding.projection().len() == 0
+        || !matches!(
+            plan.runtime_profile().authorization().consent(),
+            CompiledConsentProfile::NotRequired
+        )
+    {
+        return Err(ConcreteExecutorActivationError::UnsupportedPlan);
+    }
+    Ok(())
 }
 
 /// Proof minted only after one fenced marker reaches a closed, known result.
@@ -359,8 +404,21 @@ pub(super) async fn execute_concrete_consultation(
     fence: &PostgresServingFence,
     basic_credentials: &CompiledBasicSourceCredentialProvider,
     oauth_credentials: &CompiledOAuthSourceCredentialProvider,
+    snapshots: &PublishedSnapshotRegistry,
+    datafusion: &SessionContext,
 ) -> Result<ConcreteExecutorProof<PublishableConsultationResponse>, ConcreteExecutorUnfinished> {
     match kind {
+        ConcreteExecutorKind::SnapshotExact => {
+            execute_local_snapshot_exact(
+                dispatch,
+                execution,
+                publication,
+                quota,
+                snapshots,
+                datafusion,
+            )
+            .await
+        }
         ConcreteExecutorKind::BasicGet => {
             execute_one_step_basic_get(
                 dispatch,
@@ -384,6 +442,122 @@ pub(super) async fn execute_concrete_consultation(
             .await
         }
     }
+}
+
+async fn execute_local_snapshot_exact(
+    dispatch: &mut AuditedConsultationDispatch,
+    execution: SealedConsultationExecution<'_>,
+    publication: PendingPublicationContext,
+    quota: QuotaGrant,
+    snapshots: &PublishedSnapshotRegistry,
+    datafusion: &SessionContext,
+) -> Result<ConcreteExecutorProof<PublishableConsultationResponse>, ConcreteExecutorUnfinished> {
+    let bound = execution
+        .into_bound()
+        .map_err(|_| ConcreteExecutorUnfinished)?;
+    validate_snapshot_exact_activation(bound.plan()).map_err(|_| ConcreteExecutorUnfinished)?;
+    let snapshot = snapshots
+        .capture(bound.plan())
+        .map_err(|_| ConcreteExecutorUnfinished)?;
+    let sampled = TrustedConsultationTime::sample().map_err(|_| ConcreteExecutorUnfinished)?;
+    let now_unix_ms = sampled.unix_ms();
+    let max_age_ms = i64::try_from(
+        bound
+            .plan()
+            .snapshot_binding()
+            .ok_or(ConcreteExecutorUnfinished)?
+            .max_snapshot_age_ms(),
+    )
+    .map_err(|_| ConcreteExecutorUnfinished)?;
+    if snapshot.published_at_unix_ms() > now_unix_ms
+        || now_unix_ms
+            .checked_sub(snapshot.published_at_unix_ms())
+            .is_none_or(|age| age > max_age_ms)
+    {
+        drop(quota);
+        return Ok(ConcreteExecutorProof::known_failure(
+            KnownFailureClass::SourceUnavailable,
+        ));
+    }
+    let deadline = dispatch.local_not_after();
+    if Instant::now() >= deadline {
+        return Err(ConcreteExecutorUnfinished);
+    }
+    let result = match execute_snapshot_exact(
+        datafusion,
+        bound.plan(),
+        Arc::clone(&snapshot),
+        bound.input().as_str(),
+        deadline,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(SnapshotExactBackendError::Unavailable) => {
+            drop(quota);
+            return Ok(ConcreteExecutorProof::known_failure(
+                KnownFailureClass::SourceUnavailable,
+            ));
+        }
+        Err(
+            SnapshotExactBackendError::InvalidPlan
+            | SnapshotExactBackendError::CardinalityViolation
+            | SnapshotExactBackendError::ResponseContractViolation,
+        ) => {
+            drop(quota);
+            return Ok(ConcreteExecutorProof::known_failure(
+                KnownFailureClass::ResponseContractViolation,
+            ));
+        }
+    };
+    if !snapshots.is_current(bound.plan(), &snapshot) {
+        drop(quota);
+        return Ok(ConcreteExecutorProof::known_failure(
+            KnownFailureClass::SourceUnavailable,
+        ));
+    }
+    drop(quota);
+    prepare_snapshot_public_result(publication, bound.plan().runtime_profile(), result)
+}
+
+fn prepare_snapshot_public_result(
+    publication: PendingPublicationContext,
+    profile: &crate::source_plan::runtime_profile::CompiledRuntimeProfile,
+    result: SnapshotExactBackendResult,
+) -> Result<ConcreteExecutorProof<PublishableConsultationResponse>, ConcreteExecutorUnfinished> {
+    let public_outcome = match result.outcome() {
+        ConsultationOutcome::Match => PublicConsultationOutcome::Match,
+        ConsultationOutcome::NoMatch => PublicConsultationOutcome::NoMatch,
+        ConsultationOutcome::Ambiguous => PublicConsultationOutcome::Ambiguous,
+    };
+    let acquired_at_unix_ms = TrustedConsultationTime::sample()
+        .map_err(|_| ConcreteExecutorUnfinished)?
+        .unix_ms();
+    let output = PublishableConsultationResponse::from_validated_snapshot_result(
+        publication.consultation_id(),
+        publication.notary_evaluation_id(),
+        profile,
+        result.outcome(),
+        result.record(),
+        acquired_at_unix_ms,
+        result.source_observed_at_unix_ms(),
+        result.source_revision(),
+        result.snapshot(),
+    )
+    .map_err(|_| ConcreteExecutorUnfinished)?;
+    let completion_facts = KnownConsultationCompletionFacts::public_for_snapshot(
+        public_outcome,
+        acquired_at_unix_ms,
+        result.source_observed_at_unix_ms(),
+        result.source_revision(),
+        result.snapshot().generation(),
+        result.snapshot().published_at_unix_ms(),
+    )
+    .map_err(|_| ConcreteExecutorUnfinished)?;
+    Ok(ConcreteExecutorProof {
+        output: Some(output),
+        completion_facts,
+    })
 }
 
 fn render_query_values<'a>(

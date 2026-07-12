@@ -35,6 +35,7 @@ pub mod runtime_config;
 pub mod serve;
 pub mod server;
 pub mod source;
+mod source_backend;
 pub mod source_plan;
 #[cfg(feature = "spdci-api-standards")]
 pub mod spdci;

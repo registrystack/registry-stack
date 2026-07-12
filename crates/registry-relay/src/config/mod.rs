@@ -1277,10 +1277,6 @@ pub enum SourceConfig {
         connect_timeout: Duration,
         #[serde(default = "default_postgres_query_timeout", with = "humantime_serde")]
         query_timeout: Duration,
-        #[serde(default = "default_postgres_live_max_connections")]
-        live_max_connections: usize,
-        #[serde(default = "default_postgres_live_max_rows")]
-        live_max_rows: usize,
     },
 }
 
@@ -1308,14 +1304,6 @@ fn default_postgres_connect_timeout() -> Duration {
 
 fn default_postgres_query_timeout() -> Duration {
     Duration::from_secs(30)
-}
-
-fn default_postgres_live_max_connections() -> usize {
-    8
-}
-
-fn default_postgres_live_max_rows() -> usize {
-    10_000
 }
 
 /// Refresh policy. Tagged on `mode:`.
@@ -1347,7 +1335,6 @@ fn default_mtime_interval() -> Duration {
 #[serde(rename_all = "snake_case")]
 pub enum MaterializationMode {
     Snapshot,
-    Live,
 }
 
 /// One private storage table under a dataset.

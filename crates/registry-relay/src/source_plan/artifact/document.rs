@@ -831,6 +831,38 @@ pub(in super::super) struct SnapshotTemplateDocument {
     pub(in super::super) max_snapshot_age_ms: u64,
     pub(in super::super) unavailable: MaterializationStaleBehaviorDocument,
     pub(in super::super) immutable_generation: bool,
+    pub(in super::super) mapping: SnapshotExactMappingDocument,
+}
+
+/// The only physical scalar type accepted by the SnapshotExact key lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum SnapshotPhysicalTypeDocument {
+    Utf8,
+}
+
+/// The only comparison semantics accepted by the SnapshotExact key lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum SnapshotComparisonDocument {
+    BinaryEquality,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct SnapshotExactKeyDocument {
+    pub(in super::super) input: String,
+    pub(in super::super) physical_field: String,
+    pub(in super::super) physical_type: SnapshotPhysicalTypeDocument,
+    pub(in super::super) comparison: SnapshotComparisonDocument,
+}
+
+/// Reviewed logical-to-physical mapping for one local exact snapshot read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct SnapshotExactMappingDocument {
+    pub(in super::super) key: SnapshotExactKeyDocument,
+    pub(in super::super) projection: BTreeMap<String, String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

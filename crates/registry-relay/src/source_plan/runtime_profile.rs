@@ -23,8 +23,8 @@ use super::artifact::{
 use super::compiler::CompiledScalarShape;
 use super::compiler::{
     compile_runtime_response_schema, CompiledInputCanonicalization, CompiledOperation,
-    CompiledResponseSchema, CompiledSourceAuth, CompiledStep, RhaiWorkerLimits,
-    SourcePlanCompileError,
+    CompiledResponseSchema, CompiledSnapshotBinding, CompiledSourceAuth, CompiledStep,
+    RhaiWorkerLimits, SourcePlanCompileError,
 };
 use super::completion_seed::{compile_runtime_commitment_digests, CompiledCompletionSeedTemplate};
 use super::identifiers::{CanonicalPurpose, LegalBasisId, SourceDestinationId};
@@ -185,6 +185,7 @@ impl CompiledRuntimeProfile {
         supported_version_evidence: &[String],
         logical_operation: OperationId,
         kind: SourcePlanKind,
+        snapshot: Option<&CompiledSnapshotBinding>,
     ) -> Result<Self, SourcePlanCompileError> {
         let authorization_document = &contract.document.spec.authorization;
         let consent = if authorization_document.consent.required {
@@ -360,20 +361,48 @@ impl CompiledRuntimeProfile {
                 steps,
                 &dispatch,
                 rhai_predicate_identity.as_ref(),
+                snapshot,
             )?;
         let acquisition_provenance = match (
             &contract.document.spec.source_provenance.source_observed_at,
             &contract.document.spec.source_provenance.source_revision,
         ) {
-            (SourceObservedAtDocument::Absent, SourceRevisionDocument::Absent) => {
-                CompiledAcquisitionProvenanceContract {
-                    source_observed_at: CompiledSourceObservedAtContract::Absent,
-                    source_revision: CompiledSourceRevisionContract::Absent,
-                    snapshot_generation_required: kind == SourcePlanKind::SnapshotExact,
-                    snapshot_published_at_required: kind == SourcePlanKind::SnapshotExact,
-                }
-            }
-            _ => return Err(SourcePlanCompileError::CompilerInvariant),
+            (observed, revision) => CompiledAcquisitionProvenanceContract {
+                source_observed_at: match observed {
+                    SourceObservedAtDocument::Absent => CompiledSourceObservedAtContract::Absent,
+                    SourceObservedAtDocument::AcquiredRfc3339 { field } => {
+                        let (_, physical_field) = snapshot
+                            .and_then(CompiledSnapshotBinding::source_observed_at_extraction)
+                            .filter(|(logical, _)| *logical == field)
+                            .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+                        CompiledSourceObservedAtContract::AcquiredRfc3339 {
+                            field: AcquiredField::try_from(field.as_str())
+                                .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
+                            physical_field: physical_field.into(),
+                        }
+                    }
+                },
+                source_revision: match revision {
+                    SourceRevisionDocument::Absent => CompiledSourceRevisionContract::Absent,
+                    SourceRevisionDocument::AcquiredString { field, max_bytes } => {
+                        let (_, physical_field, compiled_max) = snapshot
+                            .and_then(CompiledSnapshotBinding::source_revision_extraction)
+                            .filter(|(logical, _, _)| *logical == field)
+                            .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+                        if compiled_max != *max_bytes {
+                            return Err(SourcePlanCompileError::CompilerInvariant);
+                        }
+                        CompiledSourceRevisionContract::AcquiredString {
+                            field: AcquiredField::try_from(field.as_str())
+                                .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
+                            physical_field: physical_field.into(),
+                            max_bytes: *max_bytes,
+                        }
+                    }
+                },
+                snapshot_generation_required: kind == SourcePlanKind::SnapshotExact,
+                snapshot_published_at_required: kind == SourcePlanKind::SnapshotExact,
+            },
         };
         Ok(Self {
             profile: contract.identity().clone(),
@@ -777,24 +806,18 @@ impl CompiledAcquisitionProvenanceContract {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CompiledSourceObservedAtContract {
     Absent,
-    #[allow(
-        dead_code,
-        reason = "reserved for a future hash-covered extraction contract"
-    )]
     AcquiredRfc3339 {
         field: AcquiredField,
+        physical_field: Box<str>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CompiledSourceRevisionContract {
     Absent,
-    #[allow(
-        dead_code,
-        reason = "reserved for a future hash-covered extraction contract"
-    )]
     AcquiredString {
         field: AcquiredField,
+        physical_field: Box<str>,
         max_bytes: u16,
     },
 }

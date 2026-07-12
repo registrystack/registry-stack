@@ -704,6 +704,8 @@ impl<'profile> PreparedAuditedConsultationDispatch<'profile> {
         fence: &crate::state_plane::PostgresServingFence,
         basic_credentials: &crate::source_plan::CompiledBasicSourceCredentialProvider,
         oauth_credentials: &crate::source_plan::CompiledOAuthSourceCredentialProvider,
+        snapshots: &crate::source_backend::PublishedSnapshotRegistry,
+        datafusion: &datafusion::execution::context::SessionContext,
     ) -> Result<
         ExecutedAuditedConsultationDispatch<PublishableConsultationResponse>,
         UnfinishedAuditedConsultationDispatch,
@@ -729,6 +731,8 @@ impl<'profile> PreparedAuditedConsultationDispatch<'profile> {
             fence,
             basic_credentials,
             oauth_credentials,
+            snapshots,
+            datafusion,
         )
         .await
         {

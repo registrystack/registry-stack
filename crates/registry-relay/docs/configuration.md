@@ -738,7 +738,7 @@ source:
 
 For CSV files, set `format.csv.header_row: 1` when the first row contains column names. For XLSX files, `header_row` and `data_range` can be used when a worksheet has notes or title rows around the rectangular table. Source configuration is table-local: put file/database settings and format hints under each `tables[].source`.
 
-Postgres snapshot and live table sources are supported. Credentials are never stored in YAML:
+Postgres snapshot sources are supported. Credentials are never stored in YAML:
 
 ```yaml
 source:
@@ -750,45 +750,11 @@ source:
   change_token_sql: "select max(updated_at)::text from public.individuals"
 ```
 
-`connection_env` is the environment variable name containing the connection string. Validation and logs may mention the env var name but must not read or print its value. The connection string must set `sslmode=require`; missing `sslmode`, `sslmode=prefer`, and `sslmode=disable` are rejected when the connector reads the environment variable. The native TLS connector validates the server certificate and hostname against the system trust store. Use read-only database credentials. Registry Relay opens read-only Postgres sessions for live scans, but credentials must enforce the same boundary at the database. `table` and `query` are mutually exclusive; prefer structured `table` configs for production.
+`connection_env` is the environment variable name containing the connection string. Validation and logs may mention the env var name but must not read or print its value. The connection string must set `sslmode=require`; missing `sslmode`, `sslmode=prefer`, and `sslmode=disable` are rejected when the connector reads the environment variable. The native TLS connector validates the server certificate and hostname against the system trust store. Use read-only database credentials. Registry Relay opens read-only Postgres sessions during controlled ingest and refresh, and credentials must enforce the same boundary at the database. `table` and `query` are mutually exclusive; prefer structured `table` configs for production.
 
 Snapshot ingest reads Postgres through `COPY (SELECT ...) TO STDOUT WITH CSV HEADER`, then applies the same declared-schema coercion and validation as CSV files. The exported snapshot is bounded by `server.max_source_file_bytes`. For `table` sources, Registry Relay projects the declared schema fields from the table and casts them to CSV-friendly values. Extra database columns are ignored. For `query` sources, write a single `SELECT` or `WITH` statement without semicolons; public request input is never interpolated into SQL.
 
-Live materialization is supported for structured `table` sources only. Each DataFusion scan opens a read-only Postgres session and exports data from the configured table. Simple column projection is pushed into the generated `COPY` query only when the scan has no filters. Filter-free limited scans may use the requested limit as a physical fetch bound; filtered scans, joins, and semantic limit enforcement remain gateway-side and may read up to the configured live row cap before local filtering. This keeps the live path bounded and safe without accepting caller-controlled SQL. Live row responses do not advertise snapshot-style strong validators or cursor version tokens, because upstream rows can change between requests without a Registry Relay ingest event. Live exports are also bounded by `server.max_source_file_bytes`. Use `connect_timeout`, `query_timeout`, `live_max_connections`, and `live_max_rows` to bound upstream behavior.
-
-For production live sources, keep the contract deliberately narrow:
-
-```yaml
-tables:
-  - id: individuals_table
-    materialization: live
-    primary_key: individual_id
-    refresh:
-      mode: manual
-    schema:
-      strict: true
-      fields:
-        - name: individual_id
-          type: string
-          nullable: false
-        - name: household_id
-          type: string
-          nullable: false
-        - name: updated_at
-          type: timestamp
-          nullable: true
-    source:
-      type: postgres
-      connection_env: SOCIAL_REGISTRY_DATABASE_URL
-      table:
-        schema: public
-        name: individuals
-      connect_timeout: 5s
-      query_timeout: 30s
-      live_max_connections: 8
-```
-
-The connection string must include `sslmode=require` and point to a read-only database role that can `SELECT` only the configured table or view. Do not use `query` sources, `change_token_sql`, or `refresh.mode: mtime` with live materialization; those are snapshot-only controls. Declared schema fields are the exported contract, and extra database columns are ignored unless an entity query needs a full local scan to evaluate filters.
+The connection string must include `sslmode=require` and point to a read-only database role that can `SELECT` only the configured table or view. Declared schema fields are the exported contract. Public queries run against the ingested snapshot and never cause request-time access to the configured Postgres source.
 
 Minimal source-only form:
 
@@ -801,7 +767,6 @@ source:
     name: individuals
   connect_timeout: 5s
   query_timeout: 30s
-  live_max_connections: 8
 ```
 
 Supported Postgres field mappings are:
@@ -868,7 +833,7 @@ tables:
 
 Supported formats are `csv`, `xlsx`, and `parquet`. If `format` is omitted, the loader infers from the source file extension where possible.
 
-`materialization` may be `snapshot` or `live`. File sources support `snapshot`. Postgres sources support `snapshot`; Postgres structured table sources also support `live`.
+`materialization` may be `snapshot`. File and Postgres sources are ingested into snapshots.
 
 ### Datasource capability matrix
 
@@ -878,11 +843,10 @@ Registry Relay derives datasource capabilities from `source.type` and `materiali
 | --- | --- | --- | --- | --- | --- | --- |
 | `file` | `snapshot` | gateway-side | gateway-side | gateway-side | strong snapshot tokens | snapshot-backed |
 | `postgres` `table` or `query` | `snapshot` | gateway-side | gateway-side | gateway-side | strong snapshot tokens | snapshot-backed |
-| `postgres` `table` | `live` | gateway-side | Postgres column pushdown for filter-free scans, otherwise gateway-side | gateway-side | no strong snapshot tokens | not snapshot-backed |
 
-Unsupported combinations are rejected at config load: file `live`, Postgres `live` with a configured `query`, and `live` with `mtime` refresh. Postgres `query` sources stay snapshot-only so operator SQL is executed only during controlled ingest or refresh, never per public request. Future datasource connectors must follow the same convention: only generated SQL over structured table metadata may receive pushdown, and unsupported operations must fall back to gateway-side execution or be rejected explicitly.
+`materialization: live` is rejected at config parse time. Postgres `table` and `query` sources are snapshot-only, so operator SQL is executed only during controlled ingest or refresh and never per public request. Future request-time source access requires a request-aware backend with explicit policy enforcement and bounded execution.
 
-At startup, Registry Relay logs one `ingest.datasource_capabilities` event per configured table. For Postgres live scans, the admin listener's `/metrics` route also exports low-cardinality live scan metrics for scan duration, concurrency wait time, exported rows, and exported bytes. These metrics intentionally do not include dataset ids, table names, SQL, env vars, request ids, or row values.
+At startup, Registry Relay logs one `ingest.datasource_capabilities` event per configured table.
 
 Field types:
 
@@ -1098,4 +1062,4 @@ Use Registry Notary for credential issuance and verification. Relay metadata can
 - Row and evidence-verification routes that need purpose tracking set `require_purpose_header: true`.
 - Sensitive identifier fields are marked `sensitive: true` where audit redaction is required.
 - Audit sink and retention match the deployment's governance requirements.
-- For Postgres live tables, scrape `/metrics` from the admin listener and alert on live scan timeout/error growth, exported bytes, and concurrency wait time.
+- Postgres credentials use a read-only role limited to configured tables or views.

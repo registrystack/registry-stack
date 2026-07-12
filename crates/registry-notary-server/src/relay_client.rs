@@ -82,6 +82,7 @@ const POLICY_PERMIT: &str = "unqualified";
 const MAX_TOKEN_FILE_PATH_BYTES: usize = 4_096;
 const MAX_TOKEN_FILE_BYTES: usize = TOKEN_MAX_BYTES + 2;
 const MAX_RELAY_SOURCE_TIMEOUT_MS: i64 = 20_000;
+const MAX_SNAPSHOT_AGE_MS: u64 = 31 * 24 * 60 * 60 * 1_000;
 
 /// The hash-pinned public profile identity selected at Notary startup.
 #[derive(Clone, PartialEq, Eq)]
@@ -566,6 +567,7 @@ pub struct VerifiedRelayProfile {
     acquisition_class: RelayAcquisitionClass,
     integration_pack: RelayArtifactIdentity,
     policy: RelayPolicyIdentity,
+    source_provenance: VerifiedRelaySourceProvenance,
     result: VerifiedRelayResult,
 }
 
@@ -643,10 +645,16 @@ struct RelayPolicyIdentity {
     hash: Box<str>,
 }
 
+struct VerifiedRelaySourceProvenance {
+    source_observed_at: bool,
+    source_revision_max_bytes: Option<u16>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelayAcquisitionClass {
     SourceProjectedExact,
     BoundedFullRecord,
+    MaterializedSnapshot,
 }
 
 impl RelayAcquisitionClass {
@@ -654,6 +662,7 @@ impl RelayAcquisitionClass {
         match self {
             Self::SourceProjectedExact => "source_projected_exact",
             Self::BoundedFullRecord => "bounded_full_record",
+            Self::MaterializedSnapshot => "materialized_snapshot",
         }
     }
 }
@@ -888,45 +897,47 @@ fn result_decoder(profile: &VerifiedRelayProfile) -> Result<ClosedJsonDecoder, R
             )?],
         )?,
     };
-    let provenance = object(
-        false,
-        vec![
-            field("relay_acquired_at", true, string(false, 64)?)?,
-            field("source_observed_at", true, string(true, 64)?)?,
-            field(
-                "source_revision",
-                true,
-                string(true, MAX_PUBLIC_STRING_BYTES)?,
+    let mut provenance_fields = vec![
+        field("relay_acquired_at", true, string(false, 64)?)?,
+        field("source_observed_at", true, string(true, 64)?)?,
+        field(
+            "source_revision",
+            true,
+            string(true, MAX_PUBLIC_STRING_BYTES)?,
+        )?,
+        field("acquisition_class", true, string(false, 32)?)?,
+        field("integration_pack", true, artifact_identity_schema()?)?,
+        field(
+            "policy_id",
+            true,
+            string(false, PROFILE_ID_MAX_BYTES as u32)?,
+        )?,
+        field("policy_hash", true, string(false, HASH_BYTES as u32)?)?,
+        field(
+            "consent",
+            true,
+            object(
+                false,
+                vec![
+                    field("outcome", true, string(false, 32)?)?,
+                    field(
+                        "verifier_id",
+                        true,
+                        string(true, PROFILE_ID_MAX_BYTES as u32)?,
+                    )?,
+                    field("verifier_revision", true, string(true, HASH_BYTES as u32)?)?,
+                    field("checked_at", true, string(true, 64)?)?,
+                    field("expires_at", true, string(true, 64)?)?,
+                    field("revocation_status", true, string(false, 32)?)?,
+                ],
             )?,
-            field("acquisition_class", true, string(false, 32)?)?,
-            field("integration_pack", true, artifact_identity_schema()?)?,
-            field(
-                "policy_id",
-                true,
-                string(false, PROFILE_ID_MAX_BYTES as u32)?,
-            )?,
-            field("policy_hash", true, string(false, HASH_BYTES as u32)?)?,
-            field(
-                "consent",
-                true,
-                object(
-                    false,
-                    vec![
-                        field("outcome", true, string(false, 32)?)?,
-                        field(
-                            "verifier_id",
-                            true,
-                            string(true, PROFILE_ID_MAX_BYTES as u32)?,
-                        )?,
-                        field("verifier_revision", true, string(true, HASH_BYTES as u32)?)?,
-                        field("checked_at", true, string(true, 64)?)?,
-                        field("expires_at", true, string(true, 64)?)?,
-                        field("revocation_status", true, string(false, 32)?)?,
-                    ],
-                )?,
-            )?,
-        ],
-    )?;
+        )?,
+    ];
+    if profile.acquisition_class == RelayAcquisitionClass::MaterializedSnapshot {
+        provenance_fields.push(field("snapshot_generation_id", true, string(false, 26)?)?);
+        provenance_fields.push(field("snapshot_published_at", true, string(false, 64)?)?);
+    }
+    let provenance = object(false, provenance_fields)?;
     let schema = object(
         false,
         vec![
@@ -978,17 +989,39 @@ fn result_decoder(profile: &VerifiedRelayProfile) -> Result<ClosedJsonDecoder, R
         projection("r20", &["provenance", "consent", "expires_at"])?,
         projection("r21", &["provenance", "consent", "revocation_status"])?,
     ];
+    if profile.acquisition_class == RelayAcquisitionClass::MaterializedSnapshot {
+        projections.push(projection(
+            "r22",
+            &["provenance", "snapshot_generation_id"],
+        )?);
+        projections.push(projection("r23", &["provenance", "snapshot_published_at"])?);
+    }
+    let data_projection_offset =
+        if profile.acquisition_class == RelayAcquisitionClass::MaterializedSnapshot {
+            24
+        } else {
+            22
+        };
     let presence = match &profile.result {
         VerifiedRelayResult::ProjectedString(output) => {
-            projections.push(projection("r22", &["data", output.name.as_ref()])?);
-            vec![ClosedJsonPresenceProjection::new("r23", ["data"])
-                .map_err(|_| RelayClientError::InvalidConfiguration)?]
+            projections.push(projection(
+                &format!("r{data_projection_offset:02}"),
+                &["data", output.name.as_ref()],
+            )?);
+            vec![ClosedJsonPresenceProjection::new(
+                &format!("r{:02}", data_projection_offset + 1),
+                ["data"],
+            )
+            .map_err(|_| RelayClientError::InvalidConfiguration)?]
         }
         VerifiedRelayResult::PresenceOnly => vec![
-            ClosedJsonPresenceProjection::new("r22", ["data"])
+            ClosedJsonPresenceProjection::new(&format!("r{data_projection_offset:02}"), ["data"])
                 .map_err(|_| RelayClientError::InvalidConfiguration)?,
-            ClosedJsonPresenceProjection::new("r23", ["data", PRESENCE_RESULT_GUARD_FIELD])
-                .map_err(|_| RelayClientError::InvalidConfiguration)?,
+            ClosedJsonPresenceProjection::new(
+                &format!("r{:02}", data_projection_offset + 1),
+                ["data", PRESENCE_RESULT_GUARD_FIELD],
+            )
+            .map_err(|_| RelayClientError::InvalidConfiguration)?,
         ],
     };
     ClosedJsonDecoder::new_with_presence(
@@ -1054,6 +1087,8 @@ struct RelayContractSpec {
     authorization: RelayAuthorizationContract,
     bounds: RelayBoundsContract,
     public_behavior: RelayPublicBehaviorContract,
+    #[serde(default)]
+    materialization: Option<RelayMaterializationContract>,
 }
 
 #[derive(Deserialize)]
@@ -1145,15 +1180,22 @@ struct RelayResponseFieldContract {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RelaySourceProvenanceContract {
-    source_observed_at: RelayAbsentContract,
-    source_revision: RelayAbsentContract,
+    source_observed_at: RelaySourceObservedAtContract,
+    source_revision: RelaySourceRevisionContract,
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RelayAbsentContract {
-    #[serde(rename = "type")]
-    kind: String,
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum RelaySourceObservedAtContract {
+    Absent,
+    AcquiredRfc3339 { field: String },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum RelaySourceRevisionContract {
+    Absent,
+    AcquiredString { field: String, max_bytes: u16 },
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -1232,6 +1274,42 @@ struct RelayPublicBehaviorContract {
     denial_timing_profile: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayMaterializationContract {
+    max_snapshot_age_ms: u64,
+    stale_behavior: RelayMaterializationStaleBehavior,
+    footprint: RelayMaterializationFootprintContract,
+    refresh_class: RelayMaterializationRefreshClass,
+    snapshot_retention_generations: u16,
+    immutable_generation: bool,
+    digest_bound_active_pointer: bool,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RelayMaterializationStaleBehavior {
+    Unavailable,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RelayMaterializationRefreshClass {
+    OperatorTriggered,
+    Scheduled,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelayMaterializationFootprintContract {
+    fields: Vec<String>,
+    max_source_records: u64,
+    max_source_bytes: u64,
+    max_data_exchanges: u8,
+    max_credential_exchanges: u8,
+    max_data_destinations: u8,
+}
+
 fn validate_contract_document(
     contract: RelayContractDocument,
     pin: &RelayProfilePin,
@@ -1280,15 +1358,20 @@ fn validate_contract_document(
             RelayAcquisitionClass::BoundedFullRecord
         }
         RelayAcquisitionClassContract::MaterializedSnapshot => {
-            return Err(RelayClientError::InvalidProfileMetadata)
+            RelayAcquisitionClass::MaterializedSnapshot
         }
     };
     validate_acquisition_contract(&spec.acquisition.fields)?;
-    if spec.source_provenance.source_observed_at.kind != "absent"
-        || spec.source_provenance.source_revision.kind != "absent"
-    {
-        return Err(RelayClientError::InvalidProfileMetadata);
-    }
+    let source_provenance = validate_source_provenance_contract(
+        &spec.source_provenance,
+        acquisition_class,
+        &spec.acquisition.fields,
+    )?;
+    validate_materialization_contract(
+        acquisition_class,
+        &spec.acquisition.fields,
+        spec.materialization.as_ref(),
+    )?;
 
     let authorization = spec.authorization;
     if authorization.workload != RELAY_WORKLOAD
@@ -1306,11 +1389,19 @@ fn validate_contract_document(
         return Err(RelayClientError::InvalidProfileMetadata);
     }
     let bounds = spec.bounds;
+    let consultation_destination_bounds_valid =
+        if acquisition_class == RelayAcquisitionClass::MaterializedSnapshot {
+            bounds.max_data_exchanges == 0
+                && bounds.max_credential_exchanges == 0
+                && bounds.max_data_destinations == 0
+        } else {
+            (1..=5).contains(&bounds.max_data_exchanges)
+                && (0..=1).contains(&bounds.max_credential_exchanges)
+                && bounds.max_data_destinations == 1
+        };
     if !(1..=2).contains(&bounds.max_source_matches)
         || bounds.max_disclosed_records != 1
-        || !(1..=5).contains(&bounds.max_data_exchanges)
-        || !(0..=1).contains(&bounds.max_credential_exchanges)
-        || bounds.max_data_destinations != 1
+        || !consultation_destination_bounds_valid
         || !(1..=256 * 1024).contains(&bounds.max_source_bytes)
         || !(1..=MAX_RELAY_SOURCE_TIMEOUT_MS).contains(&bounds.timeout_ms)
         || !(1..=16).contains(&bounds.max_in_flight)
@@ -1422,8 +1513,113 @@ fn validate_contract_document(
             id: authorization.policy.id.into_boxed_str(),
             hash: authorization.policy.hash.into_boxed_str(),
         },
+        source_provenance,
         result,
     })
+}
+
+fn validate_source_provenance_contract(
+    provenance: &RelaySourceProvenanceContract,
+    acquisition_class: RelayAcquisitionClass,
+    fields: &std::collections::BTreeMap<String, RelayResponseSchemaContract>,
+) -> Result<VerifiedRelaySourceProvenance, RelayClientError> {
+    if acquisition_class != RelayAcquisitionClass::MaterializedSnapshot
+        && (!matches!(
+            provenance.source_observed_at,
+            RelaySourceObservedAtContract::Absent
+        ) || !matches!(
+            provenance.source_revision,
+            RelaySourceRevisionContract::Absent
+        ))
+    {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    }
+    let source_observed_at = match &provenance.source_observed_at {
+        RelaySourceObservedAtContract::Absent => false,
+        RelaySourceObservedAtContract::AcquiredRfc3339 { field } => {
+            if !stable_id(field, OUTPUT_NAME_MAX_BYTES)
+                || !matches!(
+                    fields.get(field),
+                    Some(RelayResponseSchemaContract::String {
+                        nullable: false,
+                        max_bytes: 1..=64,
+                    })
+                )
+            {
+                return Err(RelayClientError::InvalidProfileMetadata);
+            }
+            true
+        }
+    };
+    let source_revision_max_bytes = match &provenance.source_revision {
+        RelaySourceRevisionContract::Absent => None,
+        RelaySourceRevisionContract::AcquiredString { field, max_bytes } => {
+            if *max_bytes == 0
+                || !stable_id(field, OUTPUT_NAME_MAX_BYTES)
+                || !matches!(
+                    fields.get(field),
+                    Some(RelayResponseSchemaContract::String {
+                        nullable: false,
+                        max_bytes: schema_max,
+                    }) if *schema_max == u32::from(*max_bytes)
+                )
+            {
+                return Err(RelayClientError::InvalidProfileMetadata);
+            }
+            Some(*max_bytes)
+        }
+    };
+    Ok(VerifiedRelaySourceProvenance {
+        source_observed_at,
+        source_revision_max_bytes,
+    })
+}
+
+fn validate_materialization_contract(
+    acquisition_class: RelayAcquisitionClass,
+    fields: &std::collections::BTreeMap<String, RelayResponseSchemaContract>,
+    materialization: Option<&RelayMaterializationContract>,
+) -> Result<(), RelayClientError> {
+    let Some(materialization) = materialization else {
+        return (acquisition_class != RelayAcquisitionClass::MaterializedSnapshot)
+            .then_some(())
+            .ok_or(RelayClientError::InvalidProfileMetadata);
+    };
+    if acquisition_class != RelayAcquisitionClass::MaterializedSnapshot {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    }
+    let RelayMaterializationContract {
+        max_snapshot_age_ms,
+        stale_behavior: RelayMaterializationStaleBehavior::Unavailable,
+        footprint,
+        refresh_class:
+            RelayMaterializationRefreshClass::OperatorTriggered
+            | RelayMaterializationRefreshClass::Scheduled,
+        snapshot_retention_generations,
+        immutable_generation,
+        digest_bound_active_pointer,
+    } = materialization;
+    let fields_match = footprint
+        .fields
+        .iter()
+        .map(String::as_str)
+        .eq(fields.keys().map(String::as_str));
+    if !fields_match
+        || !(1..=MAX_SNAPSHOT_AGE_MS).contains(max_snapshot_age_ms)
+        || footprint.max_source_records == 0
+        || footprint.max_source_records > MAX_JSON_INTEROPERABLE_INTEGER
+        || footprint.max_source_bytes == 0
+        || footprint.max_source_bytes > MAX_JSON_INTEROPERABLE_INTEGER
+        || footprint.max_data_exchanges == 0
+        || footprint.max_credential_exchanges > 1
+        || footprint.max_data_destinations != 1
+        || !(1..=16).contains(snapshot_retention_generations)
+        || !immutable_generation
+        || !digest_bound_active_pointer
+    {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    }
+    Ok(())
 }
 
 fn validate_acquisition_contract(
@@ -1559,8 +1755,29 @@ fn parse_result(
     let acquired_at = fields.string()?;
     let relay_acquired_at = OffsetDateTime::parse(&acquired_at, &Rfc3339)
         .map_err(|_| RelayClientError::InvalidResult)?;
-    fields.require_null()?;
-    fields.require_null()?;
+    let source_observed_at = if profile.source_provenance.source_observed_at {
+        let value = fields.string()?;
+        let observed_at =
+            OffsetDateTime::parse(&value, &Rfc3339).map_err(|_| RelayClientError::InvalidResult)?;
+        if observed_at.unix_timestamp_nanos() <= 0 || observed_at > relay_acquired_at {
+            return Err(RelayClientError::InvalidResult);
+        }
+        Some(observed_at)
+    } else {
+        fields.require_null()?;
+        None
+    };
+    let _source_revision =
+        if let Some(max_bytes) = profile.source_provenance.source_revision_max_bytes {
+            let value = fields.string()?;
+            if value.is_empty() || value.len() > usize::from(max_bytes) {
+                return Err(RelayClientError::InvalidResult);
+            }
+            Some(value)
+        } else {
+            fields.require_null()?;
+            None
+        };
     fields.require_string(profile.acquisition_class.wire_name())?;
     fields.require_string(&profile.integration_pack.id)?;
     fields.require_string(&profile.integration_pack.version)?;
@@ -1573,6 +1790,22 @@ fn parse_result(
     fields.require_null()?;
     fields.require_null()?;
     fields.require_string("not_applicable")?;
+    if profile.acquisition_class == RelayAcquisitionClass::MaterializedSnapshot {
+        let generation_text = fields.string()?;
+        let _generation_id = Ulid::from_string(&generation_text)
+            .ok()
+            .filter(|id| id.to_string() == generation_text.as_str())
+            .ok_or(RelayClientError::InvalidResult)?;
+        let published_text = fields.string()?;
+        let published_at = OffsetDateTime::parse(&published_text, &Rfc3339)
+            .map_err(|_| RelayClientError::InvalidResult)?;
+        if published_at.unix_timestamp_nanos() <= 0
+            || published_at > relay_acquired_at
+            || source_observed_at.is_some_and(|observed_at| observed_at > published_at)
+        {
+            return Err(RelayClientError::InvalidResult);
+        }
+    }
     let match_data = match &profile.result {
         VerifiedRelayResult::ProjectedString(output) => {
             let scalar = fields.scalar()?;

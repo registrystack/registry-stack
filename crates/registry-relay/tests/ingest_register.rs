@@ -5,23 +5,11 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, Int64Array};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::catalog::TableProvider;
-use datafusion::datasource::MemTable;
 use datafusion::execution::context::SessionContext;
-use registry_relay::config::{
-    self, DatasetId, FieldConfig, FieldType, MaterializationMode, ResourceId, SchemaConfig,
-};
-use registry_relay::connector::{
-    ConnectorDescriptor, ConnectorError, ConnectorFuture, ConnectorMetadata, ObservedTable,
-    SnapshotTable, TableConnector,
-};
+use registry_relay::config::{self, DatasetId, ResourceId};
 use registry_relay::format::FormatRegistry;
-use registry_relay::ingest::{table_name, IngestPlan, IngestRegistry, ReadinessSnapshot};
+use registry_relay::ingest::{table_name, IngestRegistry, ReadinessSnapshot};
 use tempfile::TempDir;
-use time::OffsetDateTime;
 use tokio::sync::watch;
 
 fn id<T: serde::de::DeserializeOwned>(value: &str) -> T {
@@ -237,63 +225,6 @@ async fn ingest_fixture_with_source_limit(
     registry.snapshot()
 }
 
-struct FakeLiveConnector {
-    schema: SchemaRef,
-    provider: Arc<dyn TableProvider>,
-}
-
-impl TableConnector for FakeLiveConnector {
-    fn descriptor(&self) -> ConnectorDescriptor {
-        ConnectorDescriptor {
-            kind: "fake",
-            target: "in-memory".to_string(),
-        }
-    }
-
-    fn inspect<'a>(&'a self) -> ConnectorFuture<'a, ObservedTable> {
-        Box::pin(async move {
-            Ok(ObservedTable {
-                schema: Arc::clone(&self.schema),
-                change_token: Some("fake-token".to_string()),
-                observed_at: OffsetDateTime::now_utc(),
-            })
-        })
-    }
-
-    fn snapshot<'a>(&'a self) -> ConnectorFuture<'a, SnapshotTable> {
-        Box::pin(async { Err(ConnectorError::LiveUnsupported) })
-    }
-
-    fn live_provider<'a>(&'a self) -> ConnectorFuture<'a, Option<Arc<dyn TableProvider>>> {
-        Box::pin(async move { Ok(Some(Arc::clone(&self.provider))) })
-    }
-
-    fn metadata<'a>(&'a self) -> ConnectorFuture<'a, ConnectorMetadata> {
-        Box::pin(async {
-            Ok(ConnectorMetadata {
-                change_token: Some("fake-token".to_string()),
-                observed_at: Some(OffsetDateTime::now_utc()),
-            })
-        })
-    }
-}
-
-fn live_schema_config() -> SchemaConfig {
-    SchemaConfig {
-        strict: true,
-        fields: vec![FieldConfig {
-            name: "id".to_string(),
-            r#type: FieldType::Integer,
-            nullable: false,
-            sensitive: false,
-            concept_uri: None,
-            codelist: None,
-            unit: None,
-            language: None,
-        }],
-    }
-}
-
 #[tokio::test]
 async fn csv_fixture_ingests_and_registers() {
     let (_tmp, ctx, snapshot) =
@@ -304,44 +235,6 @@ async fn csv_fixture_ingests_and_registers() {
     let table = table_name(&dataset, &resource);
     assert!(ctx.table_exist(&table).expect("table_exist"));
     assert!(snapshot.ready.contains_key(&(dataset, resource)));
-}
-
-#[tokio::test]
-async fn live_connector_registers_in_memory_provider() {
-    let tmp = TempDir::new().expect("tempdir");
-    let ctx = Arc::new(SessionContext::new());
-    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
-    let batch = RecordBatch::try_new(
-        Arc::clone(&schema),
-        vec![Arc::new(Int64Array::from(vec![1_i64, 2, 3])) as ArrayRef],
-    )
-    .expect("record batch");
-    let provider = Arc::new(MemTable::try_new(Arc::clone(&schema), vec![vec![batch]]).unwrap());
-    let connector = Arc::new(FakeLiveConnector {
-        schema: Arc::clone(&schema),
-        provider,
-    });
-    let dataset: DatasetId = id("social_registry");
-    let resource: ResourceId = id("beneficiaries_live");
-    let plan = IngestPlan::new_with_connector(
-        dataset.clone(),
-        resource.clone(),
-        connector,
-        MaterializationMode::Live,
-        live_schema_config(),
-        Some("id".to_string()),
-        Arc::from(tmp.path()),
-        Arc::clone(&ctx),
-    );
-
-    plan.initial_ingest().await.expect("live ingest succeeds");
-
-    let table = table_name(&dataset, &resource);
-    assert!(ctx.table_exist(&table).expect("table_exist"));
-    assert!(matches!(
-        plan.readiness(),
-        registry_relay::ingest::ResourceReadiness::Ready { .. }
-    ));
 }
 
 #[tokio::test]

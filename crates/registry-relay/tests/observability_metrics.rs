@@ -13,7 +13,6 @@ use registry_relay::auth::ScopeSet;
 use registry_relay::config::{self, Config};
 use registry_relay::format::FormatRegistry;
 use registry_relay::ingest::{IngestRegistry, ReadinessSnapshot, ReadyResource};
-use registry_relay::observability::{observe_live_datasource_scan, LiveScanObservation};
 use registry_relay::server::{build_admin_app, build_app, build_app_with_readiness};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -248,21 +247,6 @@ fn assert_contains_readiness_gauge(body: &str) {
     assert!(
         body.contains("readiness") || body.contains("ready"),
         "metrics response should include readiness gauge metrics:\n{body}"
-    );
-}
-
-fn assert_contains_live_datasource_metrics(body: &str) {
-    assert!(
-        body.contains("registry_relay_datasource_live_scans_total"),
-        "metrics response should include live datasource scan counters:\n{body}"
-    );
-    assert!(
-        body.contains("registry_relay_datasource_live_scan_duration_seconds"),
-        "metrics response should include live datasource scan duration histograms:\n{body}"
-    );
-    assert!(
-        body.contains("datasource=\"postgres\"") && body.contains("projection_pushdown=\"yes\""),
-        "metrics response should include bounded live scan labels:\n{body}"
     );
 }
 
@@ -515,16 +499,6 @@ async fn denied_admin_and_metrics_requests_do_not_leak_privileged_surfaces() {
 #[tokio::test]
 async fn metrics_response_is_plain_prometheus_text_with_request_and_readiness_metrics() {
     let fixture = build_fixture();
-    observe_live_datasource_scan(LiveScanObservation {
-        datasource: "postgres",
-        status: "success",
-        projection_pushdown: true,
-        duration_seconds: 0.042,
-        wait_seconds: 0.001,
-        rows: 3,
-        bytes: 128,
-    });
-
     fixture
         .public
         .get("/healthz")
@@ -562,7 +536,6 @@ async fn metrics_response_is_plain_prometheus_text_with_request_and_readiness_me
     assert_prometheus_text(&body);
     assert_contains_request_metrics(&body);
     assert_contains_readiness_gauge(&body);
-    assert_contains_live_datasource_metrics(&body);
 }
 
 #[tokio::test]

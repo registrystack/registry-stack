@@ -1,0 +1,46 @@
+{
+  "schema": "registry.relay.snapshot-exact-compiler-vectors.v1",
+  "predicate_plan": {
+    "domain": "registry.relay.consultation-predicate-plan.v1",
+    "preimage": {
+      "schema": "registry.relay.consultation-predicate-plan.v1",
+      "kind": "snapshot_exact",
+      "operations": [],
+      "snapshot_selector": {
+        "source": {
+          "kind": "consultation_input",
+          "input": "subject_id"
+        },
+        "location": {
+          "kind": "materialized_snapshot_key",
+          "physical_field": "subject_key",
+          "physical_type": "utf8",
+          "comparison": "binary_equality"
+        }
+      }
+    },
+    "digest": "sha256:edbe19e94cdc13e064216777d664d21ffcc0ac78f2e25c686cc28ac1bd04226e"
+  },
+  "physical_projection": {
+    "domain": "registry.relay.consultation-physical-projection.v1",
+    "preimage": {
+      "schema": "registry.relay.consultation-physical-projection.v1",
+      "plan_kind": "snapshot_exact",
+      "operations": [],
+      "snapshot_projection": {
+        "key_physical_field": "subject_key",
+        "key_physical_type": "utf8",
+        "key_comparison": "binary_equality",
+        "fields": [
+          {
+            "logical_field": "registration_status",
+            "physical_field": "registration_status_text"
+          }
+        ],
+        "source_observed_at": null,
+        "source_revision": null
+      }
+    },
+    "digest": "sha256:2f1b42c442d4cbef4f8b169dbf5584b39e750dec9ac2ecfb61d3d88e9bf60be2"
+  }
+}

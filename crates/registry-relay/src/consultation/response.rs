@@ -16,6 +16,7 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
+use crate::source_backend::{PublishedSnapshotHandle, SnapshotExactRecord};
 use crate::source_plan::runtime_profile::CompiledRuntimeProfile;
 use crate::state_plane::ConsultationPublicationGrant;
 
@@ -63,6 +64,41 @@ impl PublishableConsultationResponse {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub(super) fn from_validated_snapshot_result(
+        consultation_id: ConsultationId,
+        notary_evaluation_id: Option<NotaryEvaluationId>,
+        profile: &CompiledRuntimeProfile,
+        outcome: ConsultationOutcome,
+        record: Option<&SnapshotExactRecord>,
+        relay_acquired_at_unix_ms: i64,
+        source_observed_at_unix_ms: Option<i64>,
+        source_revision: Option<&str>,
+        snapshot: &PublishedSnapshotHandle,
+    ) -> Result<Self, ConsultationResponseError> {
+        if profile.footprint().acquisition_class() != AcquisitionClass::MaterializedSnapshot {
+            return Err(ConsultationResponseError::Serialization);
+        }
+        let output_fields = profile.output().map(|field| field.name()).collect();
+        Self::serialize_validated_result(
+            consultation_id,
+            notary_evaluation_id,
+            profile,
+            outcome,
+            record.map(|record| ProjectedRecord::Snapshot {
+                fields: record.fields(),
+                output_fields,
+            }),
+            relay_acquired_at_unix_ms,
+            SnapshotResponseProvenance {
+                source_observed_at_unix_ms,
+                source_revision,
+                generation_id: snapshot.generation(),
+                published_at_unix_ms: snapshot.published_at_unix_ms(),
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn serialize_validated_live_result(
         consultation_id: ConsultationId,
         notary_evaluation_id: Option<NotaryEvaluationId>,
@@ -71,7 +107,31 @@ impl PublishableConsultationResponse {
         data: Option<ProjectedRecord<'_>>,
         relay_acquired_at_unix_ms: i64,
     ) -> Result<Self, ConsultationResponseError> {
+        Self::serialize_validated_result(
+            consultation_id,
+            notary_evaluation_id,
+            profile,
+            outcome,
+            data,
+            relay_acquired_at_unix_ms,
+            LiveResponseProvenance,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn serialize_validated_result<'a>(
+        consultation_id: ConsultationId,
+        notary_evaluation_id: Option<NotaryEvaluationId>,
+        profile: &'a CompiledRuntimeProfile,
+        outcome: ConsultationOutcome,
+        data: Option<ProjectedRecord<'a>>,
+        relay_acquired_at_unix_ms: i64,
+        provenance: impl SealedResponseProvenance<'a>,
+    ) -> Result<Self, ConsultationResponseError> {
         let relay_acquired_at = rfc3339_milliseconds(relay_acquired_at_unix_ms)?;
+        let source_observed_at = provenance.source_observed_at()?;
+        let snapshot_generation_id = provenance.snapshot_generation_id();
+        let snapshot_published_at = provenance.snapshot_published_at()?;
         let consultation_id = consultation_id.to_canonical_string();
         let notary_evaluation_id =
             notary_evaluation_id.map(NotaryEvaluationId::to_canonical_string);
@@ -96,8 +156,8 @@ impl PublishableConsultationResponse {
             data,
             provenance: ResponseProvenance {
                 relay_acquired_at: &relay_acquired_at,
-                source_observed_at: None,
-                source_revision: None,
+                source_observed_at: source_observed_at.as_deref(),
+                source_revision: provenance.source_revision(),
                 acquisition_class: acquisition_class_str(profile.footprint().acquisition_class()),
                 integration_pack: ResponseIntegrationPack {
                     id: integration_pack.id().as_str(),
@@ -114,6 +174,8 @@ impl PublishableConsultationResponse {
                     expires_at: None,
                     revocation_status: "not_applicable",
                 },
+                snapshot_generation_id: snapshot_generation_id.as_deref(),
+                snapshot_published_at: snapshot_published_at.as_deref(),
             },
         };
         let configured_limit =
@@ -185,6 +247,10 @@ struct ResponseProvenance<'a> {
     policy_id: &'a str,
     policy_hash: &'a str,
     consent: ResponseConsent<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot_generation_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot_published_at: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -206,6 +272,10 @@ struct ResponseConsent<'a> {
 
 enum ProjectedRecord<'a> {
     Platform(&'a ProjectedJsonRecord),
+    Snapshot {
+        fields: &'a serde_json::Map<String, serde_json::Value>,
+        output_fields: Vec<&'a str>,
+    },
     #[cfg(test)]
     Test(&'a [(&'a str, TestProjectedScalar<'a>)]),
 }
@@ -223,6 +293,19 @@ impl Serialize for ProjectedRecord<'_> {
                 }
                 map.end()
             }
+            Self::Snapshot {
+                fields,
+                output_fields,
+            } => {
+                let mut map = serializer.serialize_map(Some(output_fields.len()))?;
+                for name in output_fields {
+                    let value = fields.get(*name).ok_or_else(|| {
+                        serde::ser::Error::custom("snapshot output field is unavailable")
+                    })?;
+                    map.serialize_entry(*name, value)?;
+                }
+                map.end()
+            }
             #[cfg(test)]
             Self::Test(fields) => {
                 let mut map = serializer.serialize_map(Some(fields.len()))?;
@@ -232,6 +315,60 @@ impl Serialize for ProjectedRecord<'_> {
                 map.end()
             }
         }
+    }
+}
+
+trait SealedResponseProvenance<'a> {
+    fn source_observed_at(&self) -> Result<Option<String>, ConsultationResponseError>;
+    fn source_revision(&self) -> Option<&'a str>;
+    fn snapshot_generation_id(&self) -> Option<String>;
+    fn snapshot_published_at(&self) -> Result<Option<String>, ConsultationResponseError>;
+}
+
+struct LiveResponseProvenance;
+
+impl<'a> SealedResponseProvenance<'a> for LiveResponseProvenance {
+    fn source_observed_at(&self) -> Result<Option<String>, ConsultationResponseError> {
+        Ok(None)
+    }
+
+    fn source_revision(&self) -> Option<&'a str> {
+        None
+    }
+
+    fn snapshot_generation_id(&self) -> Option<String> {
+        None
+    }
+
+    fn snapshot_published_at(&self) -> Result<Option<String>, ConsultationResponseError> {
+        Ok(None)
+    }
+}
+
+struct SnapshotResponseProvenance<'a> {
+    source_observed_at_unix_ms: Option<i64>,
+    source_revision: Option<&'a str>,
+    generation_id: crate::consultation::SnapshotGenerationId,
+    published_at_unix_ms: i64,
+}
+
+impl<'a> SealedResponseProvenance<'a> for SnapshotResponseProvenance<'a> {
+    fn source_observed_at(&self) -> Result<Option<String>, ConsultationResponseError> {
+        self.source_observed_at_unix_ms
+            .map(rfc3339_milliseconds)
+            .transpose()
+    }
+
+    fn source_revision(&self) -> Option<&'a str> {
+        self.source_revision
+    }
+
+    fn snapshot_generation_id(&self) -> Option<String> {
+        Some(self.generation_id.to_canonical_string())
+    }
+
+    fn snapshot_published_at(&self) -> Result<Option<String>, ConsultationResponseError> {
+        rfc3339_milliseconds(self.published_at_unix_ms).map(Some)
     }
 }
 

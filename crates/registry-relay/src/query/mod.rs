@@ -6,9 +6,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::json::writer::{JsonArray, WriterBuilder};
 use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::catalog::TableProvider;
 use datafusion::execution::context::SessionContext;
 use datafusion::prelude::{col, lit};
 use serde_json::Value;
+use thiserror::Error as ThisError;
+use tokio::time::Instant;
 
 use crate::config::{
     FilterOp, RelationshipKind, RequiredFilterBindingConfig, RequiredFilterBindingSource,
@@ -22,6 +25,115 @@ pub use aggregates::{
     principal_bound_aggregate_filters, AggregateFilter, AggregateFilterOp, AggregateListItem,
     AggregateQueryEngine, AggregateQueryRequest, AggregateResult,
 };
+
+/// One closed logical field acquired from a fixed physical snapshot column.
+///
+/// Values are compiler-owned and never derived from a consultation request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SnapshotExactProjection {
+    physical_field: Box<str>,
+    logical_field: Box<str>,
+}
+
+impl SnapshotExactProjection {
+    pub(crate) fn new(physical_field: &str, logical_field: &str) -> Self {
+        Self {
+            physical_field: physical_field.into(),
+            logical_field: logical_field.into(),
+        }
+    }
+
+    pub(crate) fn physical_field(&self) -> &str {
+        &self.physical_field
+    }
+
+    pub(crate) fn logical_field(&self) -> &str {
+        &self.logical_field
+    }
+}
+
+/// Value-free failure from the dedicated local SnapshotExact read boundary.
+#[derive(Debug, Clone, Copy, ThisError, PartialEq, Eq)]
+pub(crate) enum SnapshotExactQueryError {
+    #[error("snapshot exact query contract is invalid")]
+    InvalidContract,
+    #[error("snapshot exact query is unavailable")]
+    Unavailable,
+    #[error("snapshot exact query exceeded its deadline")]
+    DeadlineExceeded,
+}
+
+/// Rows returned by the bounded exact probe. The caller still validates the
+/// compiled output and provenance schemas before any value can be published.
+pub(crate) struct SnapshotExactQueryRows {
+    rows: Vec<Value>,
+}
+
+impl SnapshotExactQueryRows {
+    pub(crate) fn into_rows(self) -> Vec<Value> {
+        self.rows
+    }
+}
+
+/// Execute one server-derived scalar equality against one captured immutable
+/// local provider, acquiring only the reviewed projection and at most the
+/// profile's singleton or two-row ambiguity probe.
+///
+/// This boundary has no cursor, sorting, relationship, aggregate, spatial,
+/// standards, collection, or caller-selected query behavior.
+pub(crate) async fn read_snapshot_exact(
+    ctx: &SessionContext,
+    provider: Arc<dyn TableProvider>,
+    key_field: &str,
+    projection: &[SnapshotExactProjection],
+    canonical_key: &str,
+    probe_limit: usize,
+    deadline: Instant,
+) -> Result<SnapshotExactQueryRows, SnapshotExactQueryError> {
+    if key_field.is_empty()
+        || canonical_key.is_empty()
+        || projection.is_empty()
+        || !matches!(probe_limit, 1 | 2)
+        || projection
+            .iter()
+            .any(|field| field.physical_field().is_empty() || field.logical_field().is_empty())
+    {
+        return Err(SnapshotExactQueryError::InvalidContract);
+    }
+
+    let query = async {
+        let mut frame = ctx
+            .read_table(provider)
+            .map_err(|_| SnapshotExactQueryError::Unavailable)?;
+        frame = frame
+            .filter(col(key_field).eq(lit(canonical_key)))
+            .map_err(|_| SnapshotExactQueryError::Unavailable)?;
+        frame = frame
+            .select(
+                projection
+                    .iter()
+                    .map(|field| col(field.physical_field()).alias(field.logical_field())),
+            )
+            .map_err(|_| SnapshotExactQueryError::Unavailable)?;
+        frame = frame
+            .limit(0, Some(probe_limit))
+            .map_err(|_| SnapshotExactQueryError::Unavailable)?;
+        let batches = frame
+            .collect()
+            .await
+            .map_err(|_| SnapshotExactQueryError::Unavailable)?;
+        let rows =
+            batches_to_json_rows(&batches).map_err(|_| SnapshotExactQueryError::Unavailable)?;
+        if rows.len() > probe_limit {
+            return Err(SnapshotExactQueryError::InvalidContract);
+        }
+        Ok(SnapshotExactQueryRows { rows })
+    };
+
+    tokio::time::timeout_at(deadline, query)
+        .await
+        .map_err(|_| SnapshotExactQueryError::DeadlineExceeded)?
+}
 
 /// Executes public entity reads against private DataFusion tables.
 #[derive(Clone)]
@@ -1446,6 +1558,126 @@ audit:
                 Arc::new(StringArray::from(vec!["Ada"])) as ArrayRef,
             ],
         )
+    }
+
+    fn snapshot_exact_table() -> Arc<dyn TableProvider> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("subject_key", DataType::Utf8, false),
+            Field::new("status_code", DataType::Utf8, false),
+            Field::new("private_control", DataType::Utf8, false),
+        ]));
+        mem_table(
+            schema,
+            vec![
+                Arc::new(StringArray::from(vec!["SYN-0001", "SYN-0002", "SYN-0002"])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["active", "active", "inactive"])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["never", "never", "never"])) as ArrayRef,
+            ],
+        )
+    }
+
+    #[tokio::test]
+    async fn snapshot_exact_reads_only_fixed_projection_with_bounded_cardinality_probe() {
+        let ctx = SessionContext::new();
+        let projection = [
+            SnapshotExactProjection::new("subject_key", "subject_id"),
+            SnapshotExactProjection::new("status_code", "registration_status"),
+        ];
+
+        let no_match = read_snapshot_exact(
+            &ctx,
+            snapshot_exact_table(),
+            "subject_key",
+            &projection,
+            "SYN-9999",
+            2,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .expect("no-match query succeeds");
+        assert!(no_match.into_rows().is_empty());
+
+        let match_rows = read_snapshot_exact(
+            &ctx,
+            snapshot_exact_table(),
+            "subject_key",
+            &projection,
+            "SYN-0001",
+            2,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .expect("single-match query succeeds")
+        .into_rows();
+        assert_eq!(
+            match_rows,
+            vec![json!({
+                "subject_id": "SYN-0001",
+                "registration_status": "active"
+            })]
+        );
+
+        let ambiguity_probe = read_snapshot_exact(
+            &ctx,
+            snapshot_exact_table(),
+            "subject_key",
+            &projection,
+            "SYN-0002",
+            2,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .expect("ambiguity probe succeeds")
+        .into_rows();
+        assert_eq!(ambiguity_probe.len(), 2);
+        assert!(ambiguity_probe
+            .iter()
+            .all(|row| row.get("private_control").is_none()));
+    }
+
+    #[tokio::test]
+    async fn snapshot_exact_uses_binary_case_sensitive_key_equality() {
+        let ctx = SessionContext::new();
+        let projection = [SnapshotExactProjection::new(
+            "status_code",
+            "registration_status",
+        )];
+        let rows = read_snapshot_exact(
+            &ctx,
+            snapshot_exact_table(),
+            "subject_key",
+            &projection,
+            "syn-0001",
+            1,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .expect("case-sensitive lookup succeeds")
+        .into_rows();
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn snapshot_exact_rejects_generic_query_shapes_before_execution() {
+        let ctx = SessionContext::new();
+        let projection = [SnapshotExactProjection::new(
+            "status_code",
+            "registration_status",
+        )];
+        let result = read_snapshot_exact(
+            &ctx,
+            snapshot_exact_table(),
+            "subject_key",
+            &projection,
+            "SYN-0001",
+            3,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(SnapshotExactQueryError::InvalidContract)
+        ));
     }
 
     #[tokio::test]

@@ -1333,8 +1333,13 @@ async fn compile_relay_runtime_with_options(
     let consultation = match (config.consultation.is_some(), consultation_artifacts) {
         (false, None) => None,
         (true, Some(artifacts)) => Some(
-            ConsultationService::activate(config.as_ref(), artifacts, audit_chain_profile.hasher())
-                .await?,
+            ConsultationService::activate(
+                config.as_ref(),
+                artifacts,
+                audit_chain_profile.hasher(),
+                Arc::clone(&df_ctx),
+            )
+            .await?,
         ),
         (configured, artifacts) => {
             error!(
@@ -1347,6 +1352,9 @@ async fn compile_relay_runtime_with_options(
             return Err(Error::from(ConfigError::ValidationError).into());
         }
     };
+    if let Some(service) = consultation.as_ref() {
+        service.bind_ingest_registry(ingest.as_ref())?;
+    }
 
     Ok(RelayRuntimeSnapshot::new(
         config,

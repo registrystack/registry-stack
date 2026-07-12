@@ -19,7 +19,11 @@ pub(in super::super) fn parse_public_contract(
     let selector_provenance = validate_subject(&document.spec.subject)?;
     validate_inputs(&document.spec.inputs)?;
     let acquired_fields = validate_acquisition(&document.spec.acquisition)?;
-    validate_source_provenance(&document.spec.source_provenance)?;
+    validate_source_provenance(
+        &document.spec.source_provenance,
+        document.spec.acquisition.class,
+        &document.spec.acquisition.fields,
+    )?;
     document.spec.bounds = document
         .spec
         .bounds
@@ -97,7 +101,11 @@ pub(in super::super) fn parse_integration_pack(
         .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
     validate_inputs(&document.spec.input_slots)?;
     let acquired_fields = validate_acquisition(&document.spec.acquisition)?;
-    validate_source_provenance(&document.spec.source_provenance)?;
+    validate_source_provenance(
+        &document.spec.source_provenance,
+        document.spec.acquisition.class,
+        &document.spec.acquisition.fields,
+    )?;
     validate_output(
         document.spec.output_mode,
         &document.spec.output,

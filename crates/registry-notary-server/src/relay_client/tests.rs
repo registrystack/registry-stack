@@ -46,6 +46,7 @@ const CONTRACT_DOMAIN: &[u8] = b"registry.relay.consultation-contract.v1\0";
 const MAX_RESULT_BYTES: usize = 64 * 1024;
 const EVALUATION_ID: &str = "01JYZZZZZZZZZZZZZZZZZZZZZZ";
 const CONSULTATION_ID: &str = "01K05H0JKP4VSQNYCZ0TN4D87R";
+const SNAPSHOT_GENERATION_ID: &str = "01K05H0JKP4VSQNYCZ0TN4D87S";
 const PROFILE_ROUTE: &str = "/v1/consultations/dhis2.tracker.enrollment-status.exact/versions/1";
 const EXECUTE_ROUTE: &str =
     "/v1/consultations/dhis2.tracker.enrollment-status.exact/versions/1/execute";
@@ -367,6 +368,53 @@ fn presence_contract_value() -> Value {
     contract
 }
 
+fn snapshot_contract_value() -> Value {
+    let mut contract = contract_value();
+    contract["spec"]["acquisition"]["class"] = json!("materialized_snapshot");
+    contract["spec"]["bounds"]["max_data_exchanges"] = json!(0);
+    contract["spec"]["bounds"]["max_credential_exchanges"] = json!(0);
+    contract["spec"]["bounds"]["max_data_destinations"] = json!(0);
+    contract["spec"]["materialization"] = json!({
+        "max_snapshot_age_ms": 86_400_000,
+        "stale_behavior": "unavailable",
+        "footprint": {
+            "fields": ["status"],
+            "max_source_records": 1000,
+            "max_source_bytes": 1_048_576,
+            "max_data_exchanges": 2,
+            "max_credential_exchanges": 1,
+            "max_data_destinations": 1
+        },
+        "refresh_class": "operator_triggered",
+        "snapshot_retention_generations": 3,
+        "immutable_generation": true,
+        "digest_bound_active_pointer": true
+    });
+    contract
+}
+
+fn snapshot_contract_with_source_provenance() -> Value {
+    let mut contract = snapshot_contract_value();
+    contract["spec"]["acquisition"]["fields"]["source_observed_at"] =
+        json!({"type": "string", "nullable": false, "max_bytes": 64});
+    contract["spec"]["acquisition"]["fields"]["source_revision"] =
+        json!({"type": "string", "nullable": false, "max_bytes": 32});
+    contract["spec"]["source_provenance"] = json!({
+        "source_observed_at": {
+            "type": "acquired_rfc3339",
+            "field": "source_observed_at"
+        },
+        "source_revision": {
+            "type": "acquired_string",
+            "field": "source_revision",
+            "max_bytes": 32
+        }
+    });
+    contract["spec"]["materialization"]["footprint"]["fields"] =
+        json!(["source_observed_at", "source_revision", "status"]);
+    contract
+}
+
 fn metadata_value_for_contract(contract: &Value, contract_hash: &str) -> Value {
     let contract_json = String::from_utf8(canonicalize_json(contract).unwrap()).unwrap();
     json!({
@@ -438,6 +486,15 @@ fn presence_result_value(contract_hash: &str, outcome: &str, data: Value) -> Val
     result["outcome"] = json!(outcome);
     result["data"] = data;
     result["provenance"]["acquisition_class"] = json!("bounded_full_record");
+    result
+}
+
+fn snapshot_result_value(contract_hash: &str) -> Value {
+    let mut result = result_value();
+    result["profile"]["contract_hash"] = json!(contract_hash);
+    result["provenance"]["acquisition_class"] = json!("materialized_snapshot");
+    result["provenance"]["snapshot_generation_id"] = json!(SNAPSHOT_GENERATION_ID);
+    result["provenance"]["snapshot_published_at"] = json!("2026-07-11T23:59:00Z");
     result
 }
 
@@ -1148,6 +1205,199 @@ async fn metadata_schema_accepts_twenty_seconds_and_rejects_a_larger_source_time
     server.shutdown().await;
 }
 
+#[tokio::test]
+async fn materialized_snapshot_contract_and_result_are_strictly_verified() {
+    let token_file = TestTokenFile::new(&test_token());
+    let contract = snapshot_contract_value();
+    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+    let metadata = metadata_value_for_contract(&contract, &contract_hash);
+    let result = snapshot_result_value(&contract_hash);
+    let server = FakeRelay::start(
+        WireResponse::ok(serde_json::to_vec(&metadata).unwrap()),
+        WireResponse::ok(serde_json::to_vec(&result).unwrap()),
+    )
+    .await;
+    let client = client_with_hash(&server, &token_file, &contract_hash)
+        .verify_profile()
+        .await
+        .expect("closed materialized snapshot metadata verifies");
+    let result = client
+        .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+        .await
+        .expect("closed materialized snapshot result verifies");
+    assert_eq!(
+        result.provenance().relay_acquired_at(),
+        OffsetDateTime::parse("2026-07-12T00:00:00Z", &Rfc3339).unwrap()
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn materialized_snapshot_contract_rejects_widened_or_private_shapes() {
+    let token_file = TestTokenFile::new(&test_token());
+    let baseline = snapshot_contract_value();
+    let mut cases = Vec::new();
+
+    let mut missing = baseline.clone();
+    missing["spec"]["materialization"] = Value::Null;
+    cases.push(missing);
+    for (pointer, value) in [
+        ("max_snapshot_age_ms", json!(0)),
+        ("max_snapshot_age_ms", json!(MAX_SNAPSHOT_AGE_MS + 1)),
+        ("snapshot_retention_generations", json!(0)),
+        ("snapshot_retention_generations", json!(17)),
+        ("immutable_generation", json!(false)),
+        ("digest_bound_active_pointer", json!(false)),
+    ] {
+        let mut contract = baseline.clone();
+        contract["spec"]["materialization"][pointer] = value;
+        cases.push(contract);
+    }
+    for (pointer, value) in [
+        ("fields", json!([])),
+        ("max_source_records", json!(0)),
+        ("max_source_bytes", json!(0)),
+        ("max_data_exchanges", json!(0)),
+        ("max_credential_exchanges", json!(2)),
+        ("max_data_destinations", json!(0)),
+    ] {
+        let mut contract = baseline.clone();
+        contract["spec"]["materialization"]["footprint"][pointer] = value;
+        cases.push(contract);
+    }
+    let mut stale = baseline.clone();
+    stale["spec"]["materialization"]["stale_behavior"] = json!("serve_stale");
+    cases.push(stale);
+    let mut private = baseline.clone();
+    private["spec"]["materialization"]["table_provider"] = json!("private-provider");
+    cases.push(private);
+    for field in [
+        "max_data_exchanges",
+        "max_credential_exchanges",
+        "max_data_destinations",
+    ] {
+        let mut live_bound = baseline.clone();
+        live_bound["spec"]["bounds"][field] = json!(1);
+        cases.push(live_bound);
+    }
+    let mut materialization_on_live = contract_value();
+    materialization_on_live["spec"]["materialization"] =
+        baseline["spec"]["materialization"].clone();
+    cases.push(materialization_on_live);
+
+    for contract in cases {
+        let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+        let metadata = metadata_value_for_contract(&contract, &contract_hash);
+        let server = FakeRelay::start(
+            WireResponse::ok(serde_json::to_vec(&metadata).unwrap()),
+            result_response(),
+        )
+        .await;
+        assert_eq!(
+            client_with_hash(&server, &token_file, &contract_hash)
+                .verify_profile()
+                .await
+                .expect_err("widened or private snapshot metadata must fail closed"),
+            RelayClientError::InvalidProfileMetadata
+        );
+        server.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn source_provenance_declarations_and_values_are_closed() {
+    let token_file = TestTokenFile::new(&test_token());
+    let contract = snapshot_contract_with_source_provenance();
+    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+    let metadata = metadata_value_for_contract(&contract, &contract_hash);
+    let mut result = snapshot_result_value(&contract_hash);
+    result["provenance"]["source_observed_at"] = json!("2026-07-11T23:58:00Z");
+    result["provenance"]["source_revision"] = json!("revision-42");
+    let server = FakeRelay::start(
+        WireResponse::ok(serde_json::to_vec(&metadata).unwrap()),
+        WireResponse::ok(serde_json::to_vec(&result).unwrap()),
+    )
+    .await;
+    let client = client_with_hash(&server, &token_file, &contract_hash)
+        .verify_profile()
+        .await
+        .expect("reviewed source provenance declaration verifies");
+    let verified = client
+        .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+        .await
+        .expect("reviewed source provenance values verify");
+    assert_eq!(
+        verified.provenance().relay_acquired_at(),
+        OffsetDateTime::parse("2026-07-12T00:00:00Z", &Rfc3339).unwrap()
+    );
+
+    for (observed_at, revision) in [
+        (Value::Null, json!("revision-42")),
+        (json!("not-a-time"), json!("revision-42")),
+        (json!("2026-07-11T23:59:30Z"), json!("revision-42")),
+        (json!("2026-07-11T23:58:00Z"), json!("")),
+        (json!("2026-07-11T23:58:00Z"), json!("x".repeat(33))),
+    ] {
+        let mut invalid = result.clone();
+        invalid["provenance"]["source_observed_at"] = observed_at;
+        invalid["provenance"]["source_revision"] = revision;
+        server
+            .set_execute(WireResponse::ok(serde_json::to_vec(&invalid).unwrap()))
+            .await;
+        assert_eq!(
+            client
+                .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+                .await
+                .expect_err("invalid source provenance must fail closed"),
+            RelayClientError::InvalidResult
+        );
+    }
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn source_provenance_declaration_must_match_materialized_acquisition_fields() {
+    let token_file = TestTokenFile::new(&test_token());
+    let baseline = snapshot_contract_with_source_provenance();
+    let mut cases = Vec::new();
+    let mut missing_field = baseline.clone();
+    missing_field["spec"]["source_provenance"]["source_observed_at"]["field"] = json!("missing");
+    cases.push(missing_field);
+    let mut nullable = baseline.clone();
+    nullable["spec"]["acquisition"]["fields"]["source_observed_at"]["nullable"] = json!(true);
+    cases.push(nullable);
+    let mut wrong_max = baseline;
+    wrong_max["spec"]["source_provenance"]["source_revision"]["max_bytes"] = json!(31);
+    cases.push(wrong_max);
+    let mut live = contract_value();
+    live["spec"]["acquisition"]["fields"]["source_revision"] =
+        json!({"type": "string", "nullable": false, "max_bytes": 32});
+    live["spec"]["source_provenance"]["source_revision"] = json!({
+        "type": "acquired_string",
+        "field": "source_revision",
+        "max_bytes": 32
+    });
+    cases.push(live);
+
+    for contract in cases {
+        let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+        let metadata = metadata_value_for_contract(&contract, &contract_hash);
+        let server = FakeRelay::start(
+            WireResponse::ok(serde_json::to_vec(&metadata).unwrap()),
+            result_response(),
+        )
+        .await;
+        assert_eq!(
+            client_with_hash(&server, &token_file, &contract_hash)
+                .verify_profile()
+                .await
+                .expect_err("unreviewed provenance declaration must fail closed"),
+            RelayClientError::InvalidProfileMetadata
+        );
+        server.shutdown().await;
+    }
+}
+
 #[test]
 fn client_operation_deadline_is_fixed_at_the_service_hop_bound() {
     let before = Instant::now();
@@ -1518,6 +1768,88 @@ async fn result_identity_provenance_shape_and_outcome_data_are_exact() {
         assert!(result.data().is_none());
     }
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn snapshot_generation_and_publication_are_required_ordered_and_profile_scoped() {
+    let token_file = TestTokenFile::new(&test_token());
+    let contract = snapshot_contract_value();
+    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+    let metadata = metadata_value_for_contract(&contract, &contract_hash);
+    let valid = snapshot_result_value(&contract_hash);
+    let server = FakeRelay::start(
+        WireResponse::ok(serde_json::to_vec(&metadata).unwrap()),
+        WireResponse::ok(serde_json::to_vec(&valid).unwrap()),
+    )
+    .await;
+    let client = client_with_hash(&server, &token_file, &contract_hash)
+        .verify_profile()
+        .await
+        .unwrap();
+    let mut cases = Vec::new();
+    let mut missing_generation = valid.clone();
+    missing_generation["provenance"]
+        .as_object_mut()
+        .unwrap()
+        .remove("snapshot_generation_id");
+    cases.push(missing_generation);
+    let mut missing_published = valid.clone();
+    missing_published["provenance"]
+        .as_object_mut()
+        .unwrap()
+        .remove("snapshot_published_at");
+    cases.push(missing_published);
+    let mut lowercase_generation = valid.clone();
+    lowercase_generation["provenance"]["snapshot_generation_id"] =
+        json!(SNAPSHOT_GENERATION_ID.to_ascii_lowercase());
+    cases.push(lowercase_generation);
+    let mut invalid_time = valid.clone();
+    invalid_time["provenance"]["snapshot_published_at"] = json!("not-a-time");
+    cases.push(invalid_time);
+    let mut private_digest = valid.clone();
+    private_digest["provenance"]["snapshot_content_digest"] =
+        json!("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    cases.push(private_digest);
+    let mut private_provider = valid.clone();
+    private_provider["provenance"]["table_provider"] = json!("private-provider");
+    cases.push(private_provider);
+    let mut published_after_acquisition = valid;
+    published_after_acquisition["provenance"]["snapshot_published_at"] =
+        json!("2026-07-12T00:00:01Z");
+    cases.push(published_after_acquisition);
+
+    for value in cases {
+        server
+            .set_execute(WireResponse::ok(serde_json::to_vec(&value).unwrap()))
+            .await;
+        assert_eq!(
+            client
+                .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+                .await
+                .expect_err("invalid snapshot provenance must fail closed"),
+            RelayClientError::InvalidResult
+        );
+    }
+    server.shutdown().await;
+
+    let live_server = FakeRelay::start(metadata_response(), result_response()).await;
+    let live_client = verified(&live_server, &token_file).await;
+    let mut snapshot_fields_on_live = result_value();
+    snapshot_fields_on_live["provenance"]["snapshot_generation_id"] = json!(SNAPSHOT_GENERATION_ID);
+    snapshot_fields_on_live["provenance"]["snapshot_published_at"] = json!("2026-07-11T23:59:00Z");
+    live_server
+        .set_execute(WireResponse::ok(
+            serde_json::to_vec(&snapshot_fields_on_live).unwrap(),
+        ))
+        .await;
+    assert_eq!(
+        live_client
+            .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+            .await
+            .expect_err("live profile must reject snapshot-only provenance"),
+        RelayClientError::InvalidResult
+    );
+    live_server.shutdown().await;
 }
 
 #[tokio::test]

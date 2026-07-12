@@ -23,7 +23,6 @@ use registry_platform_httpsec::CorsPolicy;
 use registry_platform_httputil::destination::MAX_SERVICE_HOP_OPERATION_TIMEOUT;
 use registry_platform_ops::ConfigSource;
 
-use super::capabilities::source_capabilities;
 use super::{
     AggregateConfig, AggregateSpatialConfig, AllowedFilter, AttributeReleaseProfile,
     AuditSinkConfig, AuthMode, Config, DatasetConfig, EntityConfig, EntityRelationshipConfig,
@@ -2394,8 +2393,6 @@ fn validate_source_config(
             change_token_sql,
             connect_timeout,
             query_timeout,
-            live_max_connections,
-            live_max_rows,
         } => {
             if !is_valid_env_var_name(connection_env) {
                 tracing::error!(
@@ -2464,17 +2461,13 @@ fn validate_source_config(
                 validate_configured_postgres_query(dataset, resource, connection_env, sql)?;
             }
 
-            if connect_timeout.is_zero()
-                || query_timeout.is_zero()
-                || *live_max_connections == 0
-                || *live_max_rows == 0
-            {
+            if connect_timeout.is_zero() || query_timeout.is_zero() {
                 tracing::error!(
                     code = "config.validation_error",
                     dataset_id = %dataset.id,
                     resource_id = resource.map(|r| r.id.as_str()).unwrap_or("<dataset>"),
                     connection_env = %connection_env,
-                    "postgres timeouts must be non-zero and live limits must be greater than zero"
+                    "postgres timeouts must be non-zero"
                 );
                 return Err(ConfigError::ValidationError);
             }
@@ -2673,43 +2666,6 @@ fn validate_materialization_refresh(
     source: &SourceConfig,
     refresh: &RefreshConfig,
 ) -> Result<(), ConfigError> {
-    let materialization = resource.effective_materialization(dataset);
-    let capabilities = source_capabilities(source, materialization);
-
-    if !capabilities.materialization_supported {
-        match source {
-            SourceConfig::File { .. } => tracing::error!(
-                code = "config.validation_error",
-                dataset_id = %dataset.id,
-                resource_id = %resource.id,
-                "file sources support only snapshot materialization"
-            ),
-            SourceConfig::Postgres { query: Some(_), .. } => tracing::error!(
-                code = "config.validation_error",
-                dataset_id = %dataset.id,
-                resource_id = %resource.id,
-                "postgres live materialization supports table sources only"
-            ),
-            SourceConfig::Postgres { .. } => tracing::error!(
-                code = "config.validation_error",
-                dataset_id = %dataset.id,
-                resource_id = %resource.id,
-                "source does not support live materialization"
-            ),
-        }
-        return Err(ConfigError::ValidationError);
-    }
-
-    if matches!(refresh, RefreshConfig::Mtime { .. }) && !capabilities.mtime_refresh {
-        tracing::error!(
-            code = "config.validation_error",
-            dataset_id = %dataset.id,
-            resource_id = %resource.id,
-            "live materialization does not support mtime refresh"
-        );
-        return Err(ConfigError::ValidationError);
-    }
-
     if let (
         SourceConfig::Postgres {
             change_token_sql, ..

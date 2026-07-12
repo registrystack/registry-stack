@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arc_swap::ArcSwap;
 use datafusion::arrow::datatypes::SchemaRef;
@@ -20,7 +20,9 @@ use datafusion::datasource::listing::{
 use datafusion::execution::context::SessionContext;
 use futures::stream;
 use futures::StreamExt as _;
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
+use tokio::io::AsyncReadExt as _;
 use tokio::sync::{watch, Mutex, MutexGuard};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -41,6 +43,7 @@ use crate::ingest::declared_schema::DeclaredSchema;
 use crate::ingest::refresh::{run_refresh_loop, RefreshPolicy};
 use crate::ingest::validation::validate;
 use crate::source::Source;
+use crate::source_backend::{SnapshotMaterializationCandidate, SnapshotMaterializationCoordinator};
 use crate::table_provider::{
     mark_versioned_table_unavailable, publication_write_guard, register_or_replace_versioned_table,
     restore_versioned_table, table_snapshot, TableSnapshot,
@@ -77,6 +80,7 @@ pub struct IngestPlan {
     cache_layout: Arc<CacheLayout>,
     df_ctx: Arc<SessionContext>,
     readiness: Arc<ArcSwap<ResourceReadiness>>,
+    materializations: OnceLock<Arc<SnapshotMaterializationCoordinator>>,
     /// Serialises concurrent refresh attempts so they don't pile up.
     refresh_lock: Mutex<()>,
 }
@@ -88,6 +92,25 @@ struct PreparedIngest {
     schema: SchemaRef,
     provider: Arc<dyn TableProvider>,
     cache_path: Option<PathBuf>,
+    row_count: u64,
+    byte_count: u64,
+    digest: [u8; 32],
+    source_revision: Option<String>,
+    source_observed_at_unix_ms: Option<i64>,
+}
+
+impl PreparedIngest {
+    fn materialization_candidate(&self) -> SnapshotMaterializationCandidate {
+        SnapshotMaterializationCandidate {
+            generation: self.readiness_ingest_ulid,
+            digest: self.digest,
+            source_revision: self.source_revision.clone(),
+            source_observed_at_unix_ms: self.source_observed_at_unix_ms,
+            row_count: self.row_count,
+            byte_count: self.byte_count,
+            provider: Arc::clone(&self.provider),
+        }
+    }
 }
 
 impl IngestPlan {
@@ -151,6 +174,7 @@ impl IngestPlan {
             cache_layout: Arc::new(CacheLayout::new(cache_root)),
             df_ctx,
             readiness: Arc::new(ArcSwap::from_pointee(ResourceReadiness::NotReady)),
+            materializations: OnceLock::new(),
             refresh_lock: Mutex::new(()),
         }
     }
@@ -171,6 +195,11 @@ impl IngestPlan {
 
     async fn refresh_unlocked(&self) -> Result<(), IngestError> {
         let prior = self.readiness.load_full();
+        if let Some(coordinator) = self.materializations.get() {
+            return self
+                .refresh_snapshot_exact(coordinator, prior.as_ref())
+                .await;
+        }
         let result = match self.prepare_pipeline().await {
             Ok(prepared) => {
                 let result = {
@@ -194,6 +223,140 @@ impl IngestPlan {
             // keep serving the last good data.
         }
         result
+    }
+
+    async fn refresh_snapshot_exact(
+        &self,
+        coordinator: &Arc<SnapshotMaterializationCoordinator>,
+        prior: &ResourceReadiness,
+    ) -> Result<(), IngestError> {
+        let provider_id = table_name(&self.dataset_id, &self.resource_id);
+
+        if matches!(prior, ResourceReadiness::NotReady) {
+            if let Some(active) = coordinator
+                .active_candidate(&provider_id)
+                .await
+                .map_err(|_| IngestError::MaterializationFailed)?
+            {
+                return self
+                    .reconcile_snapshot_exact(coordinator, active)
+                    .await
+                    .inspect_err(|error| {
+                        self.store_failed(ingest_error_code(error), prior);
+                    });
+            }
+        }
+
+        let attempt = coordinator
+            .begin(&provider_id, self.connector.descriptor().kind)
+            .await
+            .map_err(|_| IngestError::MaterializationFailed)?;
+        let prepared = match self.prepare_pipeline().await {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if coordinator
+                    .fail(attempt, ingest_error_code(&error))
+                    .await
+                    .is_err()
+                {
+                    tracing::error!(
+                        event = "ingest.materialization_failure_audit_failed",
+                        dataset_id = %self.dataset_id,
+                        resource_id = %self.resource_id,
+                    );
+                }
+                if !matches!(prior, ResourceReadiness::Ready { .. }) {
+                    self.store_failed(ingest_error_code(&error), prior);
+                }
+                return Err(error);
+            }
+        };
+        let pending = match coordinator
+            .publish(attempt, prepared.materialization_candidate())
+            .await
+        {
+            Ok(pending) => pending,
+            Err(_) => {
+                self.discard_prepared(&prepared).await;
+                if !matches!(prior, ResourceReadiness::Ready { .. }) {
+                    self.store_failed("ingest.materialization_failed", prior);
+                }
+                return Err(IngestError::MaterializationFailed);
+            }
+        };
+        let result = {
+            let _publication_guard = publication_write_guard().await;
+            self.commit_prepared(&prepared).await
+        };
+        match result {
+            Ok(()) => {
+                pending.finish();
+                self.finalize_prepared(&prepared).await;
+                Ok(())
+            }
+            Err(error) => {
+                self.discard_prepared(&prepared).await;
+                if !matches!(prior, ResourceReadiness::Ready { .. }) {
+                    self.store_failed(ingest_error_code(&error), prior);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    async fn reconcile_snapshot_exact(
+        &self,
+        coordinator: &Arc<SnapshotMaterializationCoordinator>,
+        active: crate::source_backend::ActiveSnapshotCandidate,
+    ) -> Result<(), IngestError> {
+        let provider_id = table_name(&self.dataset_id, &self.resource_id);
+        let path =
+            self.cache_layout
+                .final_path(&self.dataset_id, &self.resource_id, active.generation);
+        let digest = sha256_file(&path).await?;
+        if digest != active.digest {
+            return Err(IngestError::MaterializationFailed);
+        }
+        let schema = self.declared.to_arrow_schema();
+        let provider = self
+            .snapshot_table_provider(&path, Arc::clone(&schema))
+            .await?;
+        let byte_count = tokio::fs::metadata(&path)
+            .await
+            .map_err(|_| IngestError::MaterializationFailed)?
+            .len();
+        let pending = coordinator
+            .reconcile(
+                &provider_id,
+                SnapshotMaterializationCandidate {
+                    generation: active.generation,
+                    digest,
+                    source_revision: active.source_revision,
+                    source_observed_at_unix_ms: active.source_observed_at_unix_ms,
+                    row_count: 0,
+                    byte_count,
+                    provider: Arc::clone(&provider),
+                },
+            )
+            .await
+            .map_err(|_| IngestError::MaterializationFailed)?;
+        let prepared = PreparedIngest {
+            table_name: provider_id,
+            provider_ingest_ulid: Some(active.generation),
+            readiness_ingest_ulid: active.generation,
+            schema,
+            provider,
+            cache_path: Some(path),
+            row_count: 0,
+            byte_count,
+            digest,
+            source_revision: None,
+            source_observed_at_unix_ms: None,
+        };
+        self.commit_prepared(&prepared).await?;
+        pending.finish();
+        self.finalize_prepared(&prepared).await;
+        Ok(())
     }
 
     /// Current readiness state. Cheap arc-swap load.
@@ -233,10 +396,7 @@ impl IngestPlan {
     // ── Inner pipeline ────────────────────────────────────────────────────────
 
     async fn prepare_pipeline(&self) -> Result<PreparedIngest, IngestError> {
-        match self.materialization {
-            MaterializationMode::Snapshot => self.prepare_snapshot_pipeline().await,
-            MaterializationMode::Live => self.prepare_live_registration().await,
-        }
+        self.prepare_snapshot_pipeline().await
     }
 
     async fn prepare_snapshot_pipeline(&self) -> Result<PreparedIngest, IngestError> {
@@ -259,6 +419,8 @@ impl IngestPlan {
         // Current implementation: full materialisation in memory.
         // Streaming ingest can replace this path later.
         let observed_schema = snapshot.observed_schema;
+        let source_revision = restricted_source_revision(&snapshot.metadata);
+        let source_observed_at_unix_ms = snapshot.metadata.mtime.and_then(offset_datetime_unix_ms);
         let mut all_batches: Vec<RecordBatch> = Vec::new();
         let mut batch_stream = snapshot.batches;
         while let Some(result) = batch_stream.next().await {
@@ -296,6 +458,12 @@ impl IngestPlan {
             .map(|b| projection_plan.apply(b))
             .collect();
         let projected = projected?;
+        let row_count = projected
+            .iter()
+            .try_fold(0_u64, |total, batch| {
+                total.checked_add(batch.num_rows() as u64)
+            })
+            .ok_or(IngestError::MaterializationFailed)?;
 
         // Step 5: mint ULID for this ingest.
         let ingest_ulid = Ulid::new();
@@ -318,6 +486,11 @@ impl IngestPlan {
         let provider = self
             .snapshot_table_provider(&final_path, Arc::clone(&output_schema))
             .await?;
+        let byte_count = tokio::fs::metadata(&final_path)
+            .await
+            .map_err(|_| IngestError::CacheWriteFailed)?
+            .len();
+        let digest = sha256_file(&final_path).await?;
 
         Ok(PreparedIngest {
             table_name,
@@ -326,68 +499,11 @@ impl IngestPlan {
             schema: output_schema,
             provider,
             cache_path: Some(final_path),
-        })
-    }
-
-    async fn prepare_live_registration(&self) -> Result<PreparedIngest, IngestError> {
-        let dataset_id = &self.dataset_id;
-        let resource_id = &self.resource_id;
-
-        let provider = self
-            .connector
-            .live_provider()
-            .await
-            .map_err(|e| {
-                let code = connector_error_code(&e);
-                tracing::error!(
-                    event = code,
-                    dataset_id = %dataset_id,
-                    resource_id = %resource_id,
-                    error = %e,
-                );
-                ingest_error_from_connector(e)
-            })?
-            .ok_or_else(|| {
-                tracing::error!(
-                    event = "ingest.source_unreadable",
-                    dataset_id = %dataset_id,
-                    resource_id = %resource_id,
-                    "connector does not support live materialization",
-                );
-                IngestError::SourceUnreadable
-            })?;
-
-        let observed_schema = provider.schema();
-        let projection_plan = validate(
-            dataset_id,
-            resource_id,
-            &self.declared,
-            &observed_schema,
-            self.primary_key.as_deref(),
-            None,
-        )?;
-        let output_schema = projection_plan.output_schema();
-
-        if output_schema.as_ref() != observed_schema.as_ref() {
-            tracing::error!(
-                event = "ingest.schema_mismatch",
-                dataset_id = %dataset_id,
-                resource_id = %resource_id,
-                "live connector output must already match declared schema",
-            );
-            return Err(IngestError::SchemaMismatch);
-        }
-
-        let ingest_ulid = Ulid::new();
-        let table_name = table_name(dataset_id, resource_id);
-
-        Ok(PreparedIngest {
-            table_name,
-            provider_ingest_ulid: None,
-            readiness_ingest_ulid: ingest_ulid,
-            schema: output_schema,
-            provider,
-            cache_path: None,
+            row_count,
+            byte_count,
+            digest,
+            source_revision,
+            source_observed_at_unix_ms,
         })
     }
 
@@ -470,11 +586,15 @@ impl IngestPlan {
 
     async fn finalize_prepared(&self, prepared: &PreparedIngest) {
         if prepared.cache_path.is_some() {
-            cache::gc_resource(
+            cache::gc_resource_with_retention(
                 &self.cache_layout,
                 &self.dataset_id,
                 &self.resource_id,
                 prepared.readiness_ingest_ulid,
+                self.materializations
+                    .get()
+                    .and_then(|coordinator| coordinator.retention_generations(&prepared.table_name))
+                    .unwrap_or(2),
             )
             .await;
         }
@@ -644,7 +764,6 @@ impl IngestRegistry {
                     limit_pushdown = capabilities.limit_pushdown.as_str(),
                     strong_validators = capabilities.strong_validators,
                     snapshot_provenance = capabilities.snapshot_provenance,
-                    live_query_source = capabilities.live_query_source,
                     mtime_refresh = capabilities.mtime_refresh,
                 );
                 let declared = Arc::new(DeclaredSchema::from(&resource.schema));
@@ -693,8 +812,6 @@ impl IngestRegistry {
                         change_token_sql,
                         connect_timeout,
                         query_timeout,
-                        live_max_connections,
-                        live_max_rows,
                     } => Arc::new(PostgresConnector::new(
                         connection_env.clone(),
                         table.clone(),
@@ -704,8 +821,6 @@ impl IngestRegistry {
                         config.server.max_source_file_bytes,
                         *connect_timeout,
                         *query_timeout,
-                        *live_max_connections,
-                        *live_max_rows,
                     )),
                 };
 
@@ -725,6 +840,26 @@ impl IngestRegistry {
         }
 
         Ok(Self { plans })
+    }
+
+    pub(crate) fn bind_snapshot_materialization(
+        &self,
+        coordinator: Arc<SnapshotMaterializationCoordinator>,
+    ) -> Result<(), IngestError> {
+        for provider in coordinator.providers() {
+            let plan = self
+                .plans
+                .values()
+                .find(|plan| table_name(&plan.dataset_id, &plan.resource_id) == provider)
+                .ok_or(IngestError::MaterializationFailed)?;
+            if !coordinator.validates_declared_schema(provider, &plan.declared) {
+                return Err(IngestError::MaterializationFailed);
+            }
+            plan.materializations
+                .set(Arc::clone(&coordinator))
+                .map_err(|_| IngestError::MaterializationFailed)?;
+        }
+        Ok(())
     }
 
     /// Walk every plan, calling `initial_ingest`. Updates the readiness
@@ -848,6 +983,27 @@ impl IngestRegistry {
 
     /// Trigger a reload of every configured resource through the admin endpoint.
     pub async fn reload_all(&self) -> RegistryReloadReport {
+        if self
+            .plans
+            .values()
+            .any(|plan| plan.materializations.get().is_some())
+        {
+            return RegistryReloadReport {
+                total: self.plans.len(),
+                succeeded: 0,
+                failed: self.plans.len(),
+                resources: self
+                    .plans
+                    .keys()
+                    .map(|(dataset_id, resource_id)| ResourceReloadResult {
+                        dataset_id: dataset_id.clone(),
+                        resource_id: resource_id.clone(),
+                        status: "failed",
+                        error_code: Some("ingest.materialization_failed"),
+                    })
+                    .collect(),
+            };
+        }
         let _guards = self.lock_all_plans().await;
         let total = self.plans.len();
         let mut prepared = Vec::with_capacity(total);
@@ -1122,7 +1278,6 @@ fn source_kind_label(source: &SourceConfig) -> &'static str {
 fn materialization_label(materialization: MaterializationMode) -> &'static str {
     match materialization {
         MaterializationMode::Snapshot => "snapshot",
-        MaterializationMode::Live => "live",
     }
 }
 
@@ -1136,6 +1291,55 @@ fn atomic_reload_failed_report(
         failed: total,
         resources,
     }
+}
+
+fn restricted_source_revision(metadata: &crate::source::SourceMetadata) -> Option<String> {
+    if let Some(etag) = metadata.etag.as_deref() {
+        return Some(format!(
+            "sha256:{}",
+            encode_sha256(Sha256::digest(etag.as_bytes()).into())
+        ));
+    }
+    metadata.mtime.map(|mtime| {
+        let value = mtime.to_string();
+        format!(
+            "sha256:{}",
+            encode_sha256(Sha256::digest(value.as_bytes()).into())
+        )
+    })
+}
+
+fn offset_datetime_unix_ms(value: OffsetDateTime) -> Option<i64> {
+    i64::try_from(value.unix_timestamp_nanos().checked_div(1_000_000)?).ok()
+}
+
+async fn sha256_file(path: &Path) -> Result<[u8; 32], IngestError> {
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .map_err(|_| IngestError::MaterializationFailed)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .await
+            .map_err(|_| IngestError::MaterializationFailed)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(digest.finalize().into())
+}
+
+fn encode_sha256(bytes: [u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(64);
+    for byte in bytes {
+        output.push(char::from(HEX[usize::from(byte >> 4)]));
+        output.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    output
 }
 
 /// Build a sample `RecordBatch` from the first `n` rows across batches.
@@ -1236,24 +1440,21 @@ fn ingest_error_code(e: &IngestError) -> &'static str {
         IngestError::StrictExtraColumn => "ingest.strict_extra_column",
         IngestError::CacheWriteFailed => "ingest.cache_write_failed",
         IngestError::RegistrationFailed => "ingest.registration_failed",
+        IngestError::MaterializationFailed => "ingest.materialization_failed",
     }
 }
 
 fn connector_error_code(e: &ConnectorError) -> &'static str {
     match e {
         ConnectorError::SourceNotFound => "ingest.source_not_found",
-        ConnectorError::SourceUnreadable(_) | ConnectorError::LiveUnsupported => {
-            "ingest.source_unreadable"
-        }
+        ConnectorError::SourceUnreadable(_) => "ingest.source_unreadable",
     }
 }
 
 fn ingest_error_from_connector(e: ConnectorError) -> IngestError {
     match e {
         ConnectorError::SourceNotFound => IngestError::SourceNotFound,
-        ConnectorError::SourceUnreadable(_) | ConnectorError::LiveUnsupported => {
-            IngestError::SourceUnreadable
-        }
+        ConnectorError::SourceUnreadable(_) => IngestError::SourceUnreadable,
     }
 }
 

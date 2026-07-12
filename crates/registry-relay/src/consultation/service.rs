@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use datafusion::execution::context::SessionContext;
 use registry_platform_audit::{
     AuditChainHasher, DurableAuditOperationId, DurableAuditPhase, DurableAuditSink,
     DurableAuditStreamKind, DurableAuditWrite, DurableAuditWriteError, DurableAuditWriteOutcome,
@@ -25,6 +26,8 @@ use crate::auth::AuthenticationResult;
 use crate::config::{
     AuthMode as ConfigAuthMode, Config, ConsultationConfig, VerifiedConsultationArtifactClosure,
 };
+use crate::ingest::IngestRegistry;
+use crate::source_backend::{PublishedSnapshotRegistry, SnapshotMaterializationCoordinator};
 use crate::source_plan::{
     CompiledBasicSourceCredentialProvider, CompiledConsultationRegistry,
     CompiledOAuthSourceCredentialProvider, CompiledSourcePlan, InitializedConsentVerifierRegistry,
@@ -295,6 +298,7 @@ struct CompiledServiceActivation {
     basic_credentials: CompiledBasicSourceCredentialProvider,
     oauth_credentials: CompiledOAuthSourceCredentialProvider,
     pseudonym_materials: AuditPseudonymMaterialProvider,
+    snapshots: Arc<PublishedSnapshotRegistry>,
 }
 
 /// Restart-only concrete consultation service.
@@ -305,7 +309,10 @@ pub struct ConsultationService {
     basic_credentials: CompiledBasicSourceCredentialProvider,
     oauth_credentials: CompiledOAuthSourceCredentialProvider,
     pseudonym_materials: AuditPseudonymMaterialProvider,
-    state_plane: ConsultationStatePlaneRuntime,
+    snapshots: Arc<PublishedSnapshotRegistry>,
+    datafusion: Arc<SessionContext>,
+    materializations: Arc<SnapshotMaterializationCoordinator>,
+    state_plane: Arc<ConsultationStatePlaneRuntime>,
     admission_open: AtomicBool,
     audit_healthy: AtomicBool,
     accepted_tasks: Mutex<Option<JoinSet<()>>>,
@@ -318,13 +325,14 @@ impl ConsultationService {
         config: &Config,
         artifacts: VerifiedConsultationArtifactClosure,
         chain_hasher: AuditChainHasher,
+        datafusion: Arc<SessionContext>,
     ) -> Result<Arc<Self>, ConsultationServiceActivationError> {
         let compiled = compile_service_activation(config, artifacts)?;
         let consultation = config
             .consultation
             .as_ref()
             .ok_or(ConsultationServiceActivationError::MissingConfiguration)?;
-        let state_plane =
+        let state_plane = Arc::new(
             ConsultationStatePlaneRuntime::connect(&consultation.state_plane, chain_hasher)
                 .await
                 .map_err(|error| {
@@ -337,7 +345,8 @@ impl ConsultationService {
                         "consultation state-plane activation failed"
                     );
                     ConsultationServiceActivationError::StatePlane
-                })?;
+                })?,
+        );
         let current_authority = match state_plane
             .pseudonym_keyring()
             .current_write_authority()
@@ -362,6 +371,12 @@ impl ConsultationService {
             let _ = state_plane.shutdown().await;
             return Err(ConsultationServiceActivationError::PseudonymMaterial);
         }
+        let materializations = SnapshotMaterializationCoordinator::compile(
+            &compiled.registry,
+            Arc::clone(&compiled.snapshots),
+            Arc::clone(&state_plane),
+        )
+        .map_err(|_| ConsultationServiceActivationError::UnsupportedPlan)?;
         Ok(Arc::new(Self {
             registry: compiled.registry,
             fixed_notary_identity: compiled.fixed_notary_identity,
@@ -369,11 +384,23 @@ impl ConsultationService {
             basic_credentials: compiled.basic_credentials,
             oauth_credentials: compiled.oauth_credentials,
             pseudonym_materials: compiled.pseudonym_materials,
+            snapshots: compiled.snapshots,
+            datafusion,
+            materializations,
             state_plane,
             admission_open: AtomicBool::new(true),
             audit_healthy: AtomicBool::new(true),
             accepted_tasks: Mutex::new(Some(JoinSet::new())),
         }))
+    }
+
+    pub fn bind_ingest_registry(
+        &self,
+        ingest: &IngestRegistry,
+    ) -> Result<(), ConsultationServiceActivationError> {
+        ingest
+            .bind_snapshot_materialization(Arc::clone(&self.materializations))
+            .map_err(|_| ConsultationServiceActivationError::UnsupportedPlan)
     }
 
     pub async fn readiness(&self) -> ConsultationServiceReadiness {
@@ -399,6 +426,7 @@ impl ConsultationService {
             Err(_) => false,
         };
         if !material_ready
+            || (!self.snapshots.is_empty() && !self.snapshots.all_ready())
             || !self.admission_open.load(Ordering::Acquire)
             || !self.audit_healthy.load(Ordering::Acquire)
         {
@@ -620,6 +648,8 @@ impl ConsultationService {
                 self.state_plane.serving_fence(),
                 &self.basic_credentials,
                 &self.oauth_credentials,
+                &self.snapshots,
+                &self.datafusion,
             )
             .await
         {
@@ -841,6 +871,10 @@ fn compile_service_activation(
     .map_err(|_| ConsultationServiceActivationError::SourceCredentials)?;
     let pseudonym_materials = AuditPseudonymMaterialProvider::compile(consultation)
         .map_err(|_| ConsultationServiceActivationError::PseudonymMaterial)?;
+    let snapshots = Arc::new(
+        PublishedSnapshotRegistry::compile(&registry)
+            .map_err(|_| ConsultationServiceActivationError::UnsupportedPlan)?,
+    );
     Ok(CompiledServiceActivation {
         registry,
         fixed_notary_identity,
@@ -848,6 +882,7 @@ fn compile_service_activation(
         basic_credentials,
         oauth_credentials,
         pseudonym_materials,
+        snapshots,
     })
 }
 

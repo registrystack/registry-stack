@@ -36,6 +36,8 @@ const VECTOR_CONTRACT_UTF8_ORDERING: &[u8] =
     include_bytes!("../../../tests/fixtures/source-plan-v1/public-contract-utf8-ordering.json");
 const VECTOR_BINDING: &[u8] =
     include_bytes!("../../../tests/fixtures/source-plan-v1/private-binding.json");
+const SNAPSHOT_EXACT_COMPILER_VECTORS: &[u8] =
+    include_bytes!("../../../tests/fixtures/source-plan-v1/snapshot-exact-compiler-vectors.json");
 const DHIS2_PACK: &[u8] =
     include_bytes!("../../../profiles/dhis2-2.41.9-enrollment-status/integration-pack.json");
 const DHIS2_CONTRACT: &[u8] =
@@ -1605,7 +1607,18 @@ fn snapshot_fixture() -> Fixture {
     fixture.pack_value["spec"]["plan"]["snapshot"] = json!({
         "max_snapshot_age_ms": 86_400_000,
         "unavailable": "unavailable",
-        "immutable_generation": true
+        "immutable_generation": true,
+        "mapping": {
+            "key": {
+                "input": "subject_id",
+                "physical_field": "subject_key",
+                "physical_type": "utf8",
+                "comparison": "binary_equality"
+            },
+            "projection": {
+                "registration_status": "registration_status_text"
+            }
+        }
     });
     fixture.pack_value["spec"]["bounds"]["max_credential_exchanges"] = json!(0);
     fixture.pack_value["spec"]["bounds"]["max_data_exchanges"] = json!(0);
@@ -5161,6 +5174,20 @@ fn snapshot_plan_compiles_without_a_live_transport_capability() {
     assert_eq!(snapshot.consultation_live_destinations(), 0);
     assert!(snapshot.immutable_generation());
     assert!(snapshot.digest_bound_active_pointer());
+    assert_eq!(snapshot.key_input(), "subject_id");
+    assert_eq!(snapshot.key_physical_field(), "subject_key");
+    assert!(snapshot.key_uses_utf8_binary_equality());
+    assert_eq!(
+        snapshot.projection().collect::<Vec<_>>(),
+        [("registration_status", "registration_status_text")]
+    );
+    assert_eq!(
+        snapshot.physical_field_for("registration_status"),
+        Some("registration_status_text")
+    );
+    assert_eq!(snapshot.physical_field_for("caller_selected"), None);
+    assert_eq!(snapshot.source_observed_at_extraction(), None);
+    assert_eq!(snapshot.source_revision_extraction(), None);
     assert!(plan
         .runtime_profile()
         .acquisition_provenance()
@@ -5170,6 +5197,221 @@ fn snapshot_plan_compiles_without_a_live_transport_capability() {
         .acquisition_provenance()
         .snapshot_published_at_required());
     assert!(!format!("{snapshot:?}").contains("people-snapshot"));
+    let vectors = parse_json_strict(SNAPSHOT_EXACT_COMPILER_VECTORS)
+        .expect("strict portable SnapshotExact compiler vectors");
+    assert_eq!(
+        vectors["schema"],
+        "registry.relay.snapshot-exact-compiler-vectors.v1"
+    );
+    for member in ["predicate_plan", "physical_projection"] {
+        let domain = vectors[member]["domain"].as_str().expect("vector domain");
+        let canonical =
+            canonicalize_json(&vectors[member]["preimage"]).expect("canonical compiler preimage");
+        let mut hasher = Sha256::new();
+        hasher.update(domain.as_bytes());
+        hasher.update([0]);
+        hasher.update(canonical);
+        let digest = hasher.finalize();
+        let digest = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        assert_eq!(
+            vectors[member]["digest"],
+            format!("sha256:{digest}"),
+            "portable {member} digest"
+        );
+    }
+    assert_eq!(
+        runtime_digests(&fixture),
+        (
+            vectors["predicate_plan"]["digest"]
+                .as_str()
+                .expect("predicate digest")
+                .to_owned(),
+            vectors["physical_projection"]["digest"]
+                .as_str()
+                .expect("projection digest")
+                .to_owned(),
+        )
+    );
+}
+
+#[test]
+fn snapshot_exact_mapping_is_closed_injective_and_hash_committed() {
+    let baseline = snapshot_fixture();
+    let baseline_digests = runtime_digests(&baseline);
+    for (pointer, mutation) in [
+        ("key_field", json!("another_subject_key")),
+        ("projection", json!("another_status_text")),
+    ] {
+        let mut fixture = snapshot_fixture();
+        match pointer {
+            "key_field" => {
+                fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["key"]
+                    ["physical_field"] = mutation;
+            }
+            "projection" => {
+                fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]
+                    ["registration_status"] = mutation;
+            }
+            _ => unreachable!("closed test mutation"),
+        }
+        fixture.refresh_all();
+        assert_ne!(runtime_digests(&fixture), baseline_digests, "{pointer}");
+    }
+
+    for mutate in [
+        |fixture: &mut Fixture| {
+            fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]
+                .as_object_mut()
+                .expect("projection")
+                .remove("registration_status");
+        },
+        |fixture: &mut Fixture| {
+            fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]["unreviewed"] =
+                json!("unreviewed_physical");
+        },
+        |fixture: &mut Fixture| {
+            fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]
+                ["registration_status"] = json!("subject_key");
+        },
+    ] {
+        let mut fixture = snapshot_fixture();
+        mutate(&mut fixture);
+        fixture.refresh_all();
+        assert!(matches!(
+            compile(&fixture),
+            Err(SourcePlanCompileError::Artifact(
+                SourcePlanArtifactError::InvalidAcquisition
+            ))
+        ));
+    }
+
+    for (member, value, expected) in [
+        (
+            "input",
+            json!("different_input"),
+            SourcePlanArtifactError::InvalidAcquisition,
+        ),
+        (
+            "physical_type",
+            json!("unicode_casefold"),
+            SourcePlanArtifactError::ClosedSchema,
+        ),
+        (
+            "comparison",
+            json!("text_equality"),
+            SourcePlanArtifactError::ClosedSchema,
+        ),
+    ] {
+        let mut fixture = snapshot_fixture();
+        fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["key"][member] = value;
+        fixture.refresh_all();
+        assert!(matches!(
+            compile(&fixture),
+            Err(SourcePlanCompileError::Artifact(error)) if error == expected
+        ));
+    }
+
+    let mut unknown = snapshot_fixture();
+    unknown.pack_value["spec"]["plan"]["snapshot"]["mapping"]["key"]["collation"] = json!("binary");
+    unknown.refresh_all();
+    assert!(matches!(
+        compile(&unknown),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::ClosedSchema
+        ))
+    ));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(24))]
+
+    #[test]
+    fn snapshot_exact_physical_mapping_mutations_change_both_runtime_digests(
+        key_field in "[a-z][a-z0-9_]{0,20}",
+        projected_field in "[a-z][a-z0-9_]{0,20}",
+    ) {
+        prop_assume!(key_field != projected_field);
+        prop_assume!(key_field != "subject_key");
+        prop_assume!(projected_field != "registration_status_text");
+        let baseline = runtime_digests(&snapshot_fixture());
+        let mut fixture = snapshot_fixture();
+        fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["key"]["physical_field"] =
+            json!(key_field);
+        fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]
+            ["registration_status"] = json!(projected_field);
+        fixture.refresh_all();
+        let mutated = runtime_digests(&fixture);
+        prop_assert_ne!(mutated.0, baseline.0);
+        prop_assert_ne!(mutated.1, baseline.1);
+    }
+}
+
+#[test]
+fn snapshot_exact_compiles_reviewed_provenance_extraction() {
+    let mut fixture = snapshot_fixture();
+    let observed_schema = json!({"type": "string", "nullable": false, "max_bytes": 64});
+    let revision_schema = json!({"type": "string", "nullable": false, "max_bytes": 32});
+    for (field, schema) in [
+        ("source_observed_at", observed_schema),
+        ("source_revision", revision_schema),
+    ] {
+        fixture.contract_value["spec"]["acquisition"]["fields"][field] = schema.clone();
+        fixture.pack_value["spec"]["acquisition"]["fields"][field] = schema.clone();
+        fixture.pack_value["spec"]["reviewed_acquisition"]["control_fields"][field] = schema;
+    }
+    let provenance = json!({
+        "source_observed_at": {
+            "type": "acquired_rfc3339",
+            "field": "source_observed_at"
+        },
+        "source_revision": {
+            "type": "acquired_string",
+            "field": "source_revision",
+            "max_bytes": 32
+        }
+    });
+    fixture.contract_value["spec"]["source_provenance"] = provenance.clone();
+    fixture.pack_value["spec"]["source_provenance"] = provenance;
+    fixture.contract_value["spec"]["materialization"]["footprint"]["fields"] = json!([
+        "registration_status",
+        "source_observed_at",
+        "source_revision"
+    ]);
+    fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]["source_observed_at"] =
+        json!("observed_at_text");
+    fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]["source_revision"] =
+        json!("revision_text");
+    fixture.refresh_all();
+
+    let registry = compile(&fixture).expect("reviewed provenance mapping compiles");
+    let plan = registry.iter().next().expect("snapshot plan");
+    let snapshot = plan.snapshot_binding().expect("snapshot binding");
+    assert_eq!(
+        snapshot.source_observed_at_extraction(),
+        Some(("source_observed_at", "observed_at_text"))
+    );
+    assert_eq!(
+        snapshot.source_revision_extraction(),
+        Some(("source_revision", "revision_text", 32))
+    );
+    let seed = completion_seed_value(&fixture);
+    assert_eq!(
+        seed["acquisition"]["provenance_contract"]["source_revision"]["max_bytes"],
+        json!(32)
+    );
+
+    fixture.pack_value["spec"]["plan"]["snapshot"]["mapping"]["projection"]["source_revision"] =
+        json!("observed_at_text");
+    fixture.refresh_all();
+    assert!(matches!(
+        compile(&fixture),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidAcquisition
+        ))
+    ));
 }
 
 #[test]

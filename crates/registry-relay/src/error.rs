@@ -265,6 +265,8 @@ pub enum IngestError {
     CacheWriteFailed,
     #[error("table registration failed")]
     RegistrationFailed,
+    #[error("snapshot materialization failed")]
+    MaterializationFailed,
 }
 
 /// `aggregate.*` codes.
@@ -1026,6 +1028,7 @@ impl IngestError {
             IngestError::StrictExtraColumn => "ingest.strict_extra_column",
             IngestError::CacheWriteFailed => "ingest.cache_write_failed",
             IngestError::RegistrationFailed => "ingest.registration_failed",
+            IngestError::MaterializationFailed => "ingest.materialization_failed",
         }
     }
 
@@ -1042,6 +1045,7 @@ impl IngestError {
             IngestError::StrictExtraColumn => "Strict schema rejected extra column",
             IngestError::CacheWriteFailed => "Cache write failed",
             IngestError::RegistrationFailed => "Table registration failed",
+            IngestError::MaterializationFailed => "Snapshot materialization failed",
         }
     }
 
@@ -1057,6 +1061,9 @@ impl IngestError {
             IngestError::StrictExtraColumn => "source contains columns absent from a strict schema",
             IngestError::CacheWriteFailed => "parquet cache could not be written",
             IngestError::RegistrationFailed => "DataFusion table registration failed",
+            IngestError::MaterializationFailed => {
+                "snapshot publication could not be completed safely"
+            }
         }
     }
 }

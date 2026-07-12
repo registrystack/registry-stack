@@ -14,6 +14,8 @@ pub(crate) const PERSISTENT_QUOTA_CAPABILITY_V1: &str =
     "registry.relay.postgres-persistent-quota/v1";
 pub(crate) const AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1: &str =
     "registry.relay.postgres-audit-pseudonym-keyring/v1";
+pub(crate) const MATERIALIZATION_PUBLICATION_CAPABILITY_V1: &str =
+    "registry.relay.postgres-materialization-publication/v1";
 pub(crate) const STATE_PLANE_SCHEMA_VERSION_V1: i32 = 1;
 // This semantic identity deliberately changes when a capability revision or
 // cross-runtime protocol invariant changes. Exact PostgreSQL structure and
@@ -26,6 +28,8 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "serving-fence=registry.relay.postgres-serving-fence/v1\0",
     "persistent-quota=registry.relay.postgres-persistent-quota/v1\0",
     "audit-pseudonym-keyring=registry.relay.postgres-audit-pseudonym-keyring/v1\0",
+    "materialization-publication=registry.relay.postgres-materialization-publication/v1\0",
+    "materialization-publication-order=attempt-before-access-atomic-completion-pointer-monotonic-generation-v1\0",
     "consultation-completion=atomic-intent-sealed-seed-plan-slots-selected-operations-known-unfinished-recovery-v1\0",
     "consultation-authorization=database-expiry-seed-timeout-exact-dispatch-prefix-v2\0",
     "consultation-credentials=direct-data-auth-reference-distinct-fresh-opencrvs-no-expiry-jwks-v2\0",
@@ -33,7 +37,7 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "key-order=utf8-bytewise-key-order-v1\0",
 );
 pub(crate) const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "sha256:6602f5a07f80cb18d8b5cc78f0369d8b3bd765547f4765b39509997bbaca3090";
+    "sha256:85beacf26e279b0fd2e0f242b207afd05b83c5cb4e4c630ff9401ee5ffbe7f8d";
 
 pub(super) const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 7_221_091_440;
 const SUPPORTED_POSTGRES_MIN_MAJOR: i32 = 16;
@@ -42,16 +46,16 @@ const SUPPORTED_POSTGRES_MAX_MAJOR: i32 = 18;
 // Filled from the semantic catalog descriptor below on disposable supported
 // PostgreSQL majors. Constraint rendering is explicitly versioned because
 // pg_get_constraintdef is not a cross-major wire contract.
-const CONSTRAINT_FINGERPRINT_PG16: &str = "4c5905e22d262645abcd05affe4da82f";
-const CONSTRAINT_FINGERPRINT_PG17: &str = "4c5905e22d262645abcd05affe4da82f";
-const CONSTRAINT_FINGERPRINT_PG18: &str = "6c11c5f44018f8cf06c439af932d7a15";
-const COLUMN_FINGERPRINT_PG16: &str = "1098f1125fa6f613d521504e985a351a";
-const COLUMN_FINGERPRINT_PG17: &str = "1098f1125fa6f613d521504e985a351a";
-const COLUMN_FINGERPRINT_PG18: &str = "1098f1125fa6f613d521504e985a351a";
-const FUNCTION_FINGERPRINT_PG16: &str = "ff865db8ec5369d3b87ac2498e0f7bf6";
-const FUNCTION_FINGERPRINT_PG17: &str = "ff865db8ec5369d3b87ac2498e0f7bf6";
-const FUNCTION_FINGERPRINT_PG18: &str = "ff865db8ec5369d3b87ac2498e0f7bf6";
-const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "31af68e3b2ef65fead1674a7758ac418";
+const CONSTRAINT_FINGERPRINT_PG16: &str = "b7bcbdb92177fd40eedca0f9956212ac";
+const CONSTRAINT_FINGERPRINT_PG17: &str = "b7bcbdb92177fd40eedca0f9956212ac";
+const CONSTRAINT_FINGERPRINT_PG18: &str = "fa389bad5ee266649054a94da9900742";
+const COLUMN_FINGERPRINT_PG16: &str = "69f219a12a610e40f4f9c9dd4b8ab4bd";
+const COLUMN_FINGERPRINT_PG17: &str = "69f219a12a610e40f4f9c9dd4b8ab4bd";
+const COLUMN_FINGERPRINT_PG18: &str = "69f219a12a610e40f4f9c9dd4b8ab4bd";
+const FUNCTION_FINGERPRINT_PG16: &str = "59959efcee6cb80348614f4d577643db";
+const FUNCTION_FINGERPRINT_PG17: &str = "59959efcee6cb80348614f4d577643db";
+const FUNCTION_FINGERPRINT_PG18: &str = "59959efcee6cb80348614f4d577643db";
+const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "38baceab08c18103848c34e59e247b3f";
 
 /// Runtime-forceable session semantics. Server/SUSET state that the runtime
 /// cannot safely repair is rejected by the attested SQL capability instead.
@@ -107,7 +111,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_fingerprint_check CHECK (
         capability_fingerprint =
-        'sha256:6602f5a07f80cb18d8b5cc78f0369d8b3bd765547f4765b39509997bbaca3090'
+        'sha256:85beacf26e279b0fd2e0f242b207afd05b83c5cb4e4c630ff9401ee5ffbe7f8d'
     ),
     CONSTRAINT state_plane_metadata_roles_distinct_check CHECK (
         owner_role_oid <> runtime_role_oid
@@ -236,6 +240,82 @@ CREATE TABLE IF NOT EXISTS relay_state_private.audit_phase (
         attempt_envelope_id, attempt_record_hash
     ) REFERENCES relay_state_private.audit_phase (
         stream_kind, operation_id, phase, envelope_id, record_hash
+    )
+);
+
+CREATE TABLE IF NOT EXISTS relay_state_private.materialization_publication_history (
+    binding_id text NOT NULL,
+    publication_sequence bigint NOT NULL,
+    generation_id text NOT NULL,
+    content_digest bytea NOT NULL,
+    source_revision text NULL,
+    source_observed_at_unix_ms bigint NULL,
+    published_at_unix_ms bigint NOT NULL,
+    completion_operation_id text NOT NULL,
+    completion_envelope_id text NOT NULL,
+    completion_record_hash bytea NOT NULL,
+    inserted_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    CONSTRAINT materialization_publication_history_pk PRIMARY KEY (
+        binding_id, publication_sequence
+    ),
+    CONSTRAINT materialization_publication_history_generation_unique UNIQUE (generation_id),
+    CONSTRAINT materialization_publication_history_completion_unique UNIQUE (
+        completion_operation_id
+    ),
+    CONSTRAINT materialization_publication_history_binding_check CHECK (
+        binding_id ~ '^sha256:[0-9a-f]{64}$'
+    ),
+    CONSTRAINT materialization_publication_history_sequence_check CHECK (
+        publication_sequence BETWEEN 1 AND 9007199254740991
+    ),
+    CONSTRAINT materialization_publication_history_generation_check CHECK (
+        generation_id ~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+    ),
+    CONSTRAINT materialization_publication_history_digest_check CHECK (
+        octet_length(content_digest) = 32
+    ),
+    CONSTRAINT materialization_publication_history_revision_check CHECK (
+        source_revision IS NULL
+        OR (
+            octet_length(source_revision) BETWEEN 1 AND 256
+            AND source_revision ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'
+        )
+    ),
+    CONSTRAINT materialization_publication_history_time_check CHECK (
+        published_at_unix_ms BETWEEN 0 AND 9007199254740991
+        AND (
+            source_observed_at_unix_ms IS NULL
+            OR source_observed_at_unix_ms BETWEEN 0 AND published_at_unix_ms
+        )
+    ),
+    CONSTRAINT materialization_publication_history_operation_check CHECK (
+        completion_operation_id ~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+    ),
+    CONSTRAINT materialization_publication_history_envelope_check CHECK (
+        completion_envelope_id ~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+    ),
+    CONSTRAINT materialization_publication_history_record_hash_check CHECK (
+        octet_length(completion_record_hash) = 32
+    ),
+    CONSTRAINT materialization_publication_history_completion_fk FOREIGN KEY (
+        completion_envelope_id
+    ) REFERENCES relay_state_private.audit_phase (envelope_id)
+);
+
+CREATE TABLE IF NOT EXISTS relay_state_private.materialization_active_publication (
+    binding_id text NOT NULL,
+    publication_sequence bigint NOT NULL,
+    CONSTRAINT materialization_active_publication_pk PRIMARY KEY (binding_id),
+    CONSTRAINT materialization_active_publication_binding_check CHECK (
+        binding_id ~ '^sha256:[0-9a-f]{64}$'
+    ),
+    CONSTRAINT materialization_active_publication_sequence_check CHECK (
+        publication_sequence BETWEEN 1 AND 9007199254740991
+    ),
+    CONSTRAINT materialization_active_publication_history_fk FOREIGN KEY (
+        binding_id, publication_sequence
+    ) REFERENCES relay_state_private.materialization_publication_history (
+        binding_id, publication_sequence
     )
 );
 
@@ -643,6 +723,8 @@ CREATE TABLE IF NOT EXISTS relay_state_private.audit_pseudonym_transition_contex
 ALTER TABLE relay_state_private.state_plane_metadata OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.audit_chain_head OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.audit_phase OWNER TO CURRENT_USER;
+ALTER TABLE relay_state_private.materialization_publication_history OWNER TO CURRENT_USER;
+ALTER TABLE relay_state_private.materialization_active_publication OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.serving_fence_state OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.consultation_completion_intent OWNER TO CURRENT_USER;
 ALTER TABLE relay_state_private.consultation_audit_context OWNER TO CURRENT_USER;
@@ -1547,7 +1629,7 @@ WITH metadata AS (
       AND schema_version = 1
       AND capability_id = 'registry.relay.postgres-durable-audit/v1'
       AND capability_fingerprint =
-        'sha256:6602f5a07f80cb18d8b5cc78f0369d8b3bd765547f4765b39509997bbaca3090'
+        'sha256:85beacf26e279b0fd2e0f242b207afd05b83c5cb4e4c630ff9401ee5ffbe7f8d'
       AND serving_fence_capability_id = 'registry.relay.postgres-serving-fence/v1'
       AND serving_fence_lock_key <> 0
       AND serving_fence_lock_key <> 7221091440
@@ -1605,6 +1687,7 @@ target_indexes AS (
     WHERE namespace.nspname = 'relay_state_private'
       AND table_relation.relname IN (
           'state_plane_metadata', 'audit_chain_head', 'audit_phase',
+          'materialization_publication_history', 'materialization_active_publication',
           'serving_fence_state', 'consultation_completion_intent',
           'consultation_audit_context', 'dispatch_permit', 'consultation_quota_bucket',
           'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
@@ -1622,6 +1705,7 @@ target_triggers AS (
     WHERE namespace.nspname = 'relay_state_private'
       AND relation.relname IN (
           'state_plane_metadata', 'audit_chain_head', 'audit_phase',
+          'materialization_publication_history', 'materialization_active_publication',
           'serving_fence_state', 'consultation_completion_intent',
           'consultation_audit_context', 'dispatch_permit', 'consultation_quota_bucket',
           'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
@@ -1636,6 +1720,7 @@ target_rules AS (
     WHERE namespace.nspname = 'relay_state_private'
       AND relation.relname IN (
           'state_plane_metadata', 'audit_chain_head', 'audit_phase',
+          'materialization_publication_history', 'materialization_active_publication',
           'serving_fence_state', 'consultation_completion_intent',
           'consultation_audit_context', 'dispatch_permit', 'consultation_quota_bucket',
           'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
@@ -1650,6 +1735,7 @@ target_policies AS (
     WHERE namespace.nspname = 'relay_state_private'
       AND relation.relname IN (
           'state_plane_metadata', 'audit_chain_head', 'audit_phase',
+          'materialization_publication_history', 'materialization_active_publication',
           'serving_fence_state', 'consultation_completion_intent',
           'consultation_audit_context', 'dispatch_permit', 'consultation_quota_bucket',
           'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
@@ -1865,7 +1951,7 @@ SELECT
         SELECT 1 FROM target_schemas, metadata
         WHERE target_schemas.nspowner <> metadata.owner_role_oid
     )
-    AND (SELECT count(*) = 11 FROM target_relations)
+    AND (SELECT count(*) = 13 FROM target_relations)
     AND NOT EXISTS (
         SELECT 1 FROM target_relations, metadata
         WHERE target_relations.nspname <> 'relay_state_private'
@@ -1878,13 +1964,14 @@ SELECT
            OR target_relations.amname IS DISTINCT FROM 'heap'
            OR target_relations.relname NOT IN (
                'state_plane_metadata', 'audit_chain_head', 'audit_phase',
+               'materialization_publication_history', 'materialization_active_publication',
                'serving_fence_state', 'consultation_completion_intent',
                'consultation_audit_context', 'dispatch_permit', 'consultation_quota_bucket',
                'audit_pseudonym_keyring', 'audit_pseudonym_used_key_id',
                'audit_pseudonym_transition_context'
            )
     )
-    AND (SELECT count(*) = 16 FROM target_indexes)
+    AND (SELECT count(*) = 20 FROM target_indexes)
     AND NOT EXISTS (
         SELECT 1 FROM target_indexes, metadata
         WHERE target_indexes.relowner <> metadata.owner_role_oid
@@ -1906,6 +1993,10 @@ SELECT
                'state_plane_metadata_pk', 'audit_chain_head_pk', 'audit_phase_pk',
                'audit_phase_envelope_id_unique',
                'audit_phase_stored_identity_unique',
+               'materialization_publication_history_pk',
+               'materialization_publication_history_generation_unique',
+               'materialization_publication_history_completion_unique',
+               'materialization_active_publication_pk',
                'serving_fence_state_pk',
                'consultation_completion_intent_pk',
                'consultation_completion_intent_deadline_unique',
@@ -1925,6 +2016,14 @@ SELECT
                        'audit_phase_pk', 'audit_phase_envelope_id_unique',
                        'audit_phase_stored_identity_unique'
                    ))
+               OR (target_indexes.table_name = 'materialization_publication_history'
+                   AND target_indexes.index_name IN (
+                       'materialization_publication_history_pk',
+                       'materialization_publication_history_generation_unique',
+                       'materialization_publication_history_completion_unique'
+                   ))
+               OR (target_indexes.table_name = 'materialization_active_publication'
+                   AND target_indexes.index_name = 'materialization_active_publication_pk')
                OR (target_indexes.table_name = 'serving_fence_state'
                    AND target_indexes.index_name = 'serving_fence_state_pk')
                OR (target_indexes.table_name = 'consultation_completion_intent'
@@ -1951,6 +2050,8 @@ SELECT
            OR (
                target_indexes.index_name IN (
                    'state_plane_metadata_pk', 'audit_chain_head_pk', 'audit_phase_pk',
+                   'materialization_publication_history_pk',
+                   'materialization_active_publication_pk',
                    'serving_fence_state_pk', 'consultation_completion_intent_pk',
                    'consultation_audit_context_pk', 'dispatch_permit_pk',
                    'consultation_quota_bucket_pk', 'audit_pseudonym_keyring_pk',
@@ -1962,6 +2063,8 @@ SELECT
                target_indexes.index_name IN (
                    'audit_phase_envelope_id_unique',
                    'audit_phase_stored_identity_unique',
+                   'materialization_publication_history_generation_unique',
+                   'materialization_publication_history_completion_unique',
                    'consultation_completion_intent_deadline_unique'
                ) AND target_indexes.indisprimary
            )
@@ -1993,13 +2096,15 @@ SELECT
                AND (NOT target_indexes.indisunique OR NOT target_indexes.constraint_backed)
            )
     )
-    AND (SELECT count(*) = 20 FROM target_triggers)
+    AND (SELECT count(*) = 28 FROM target_triggers)
     AND NOT EXISTS (
         SELECT 1 FROM target_triggers
         WHERE NOT target_triggers.tgisinternal
            OR target_triggers.tgenabled <> 'O'
            OR target_triggers.conname NOT IN (
                'audit_phase_attempt_fk',
+               'materialization_publication_history_completion_fk',
+               'materialization_active_publication_history_fk',
                'consultation_completion_intent_attempt_fk',
                'consultation_completion_intent_completion_fk',
                'dispatch_permit_intent_deadline_fk',
@@ -2008,7 +2113,7 @@ SELECT
     )
     AND NOT EXISTS (SELECT 1 FROM target_rules)
     AND NOT EXISTS (SELECT 1 FROM target_policies)
-    AND (SELECT count(*) = 31 FROM target_functions)
+    AND (SELECT count(*) = 34 FROM target_functions)
     AND NOT EXISTS (
         SELECT 1 FROM target_functions, metadata
         WHERE target_functions.proowner <> metadata.owner_role_oid
@@ -2044,6 +2149,9 @@ SELECT
                        AND NOT (target_functions.proname IN (
                             'audit_phase_snapshot_v1', 'audit_phase_duplicate_v1',
                             'audit_phase_cas_v1', 'audit_readiness_v1',
+                            'materialization_publication_snapshot_v1',
+                            'materialization_publication_cas_v1',
+                            'materialization_active_publication_v1',
                             'consultation_attempt_intent_snapshot_v1',
                             'consultation_attempt_intent_cas_v1',
                             'consultation_completion_snapshot_normal_v1',
@@ -2088,7 +2196,7 @@ SELECT
            )
     )
     AND (SELECT count(*) FROM table_acl) = (
-        SELECT 11 * count(*) FROM metadata
+        SELECT 13 * count(*) FROM metadata
         CROSS JOIN LATERAL pg_catalog.aclexplode(
             pg_catalog.acldefault('r', metadata.owner_role_oid)
         ) AS expected_acl
@@ -2103,7 +2211,7 @@ SELECT
                'REFERENCES', 'TRIGGER', 'MAINTAIN'
            )
     )
-    AND (SELECT count(*) = 58 FROM function_acl)
+    AND (SELECT count(*) = 64 FROM function_acl)
     AND NOT EXISTS (
         SELECT 1 FROM function_acl, metadata
         WHERE function_acl.grantor <> metadata.owner_role_oid
@@ -2118,6 +2226,9 @@ SELECT
                    AND function_acl.proname IN (
                        'audit_phase_snapshot_v1', 'audit_phase_duplicate_v1',
                        'audit_phase_cas_v1',
+                       'materialization_publication_snapshot_v1',
+                       'materialization_publication_cas_v1',
+                       'materialization_active_publication_v1',
                        'consultation_attempt_intent_snapshot_v1',
                        'consultation_attempt_intent_cas_v1',
                        'consultation_completion_snapshot_normal_v1',
@@ -2154,19 +2265,19 @@ SELECT
            )
     )
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '4c5905e22d262645abcd05affe4da82f'
-            WHEN 17 THEN '4c5905e22d262645abcd05affe4da82f'
-            WHEN 18 THEN '6c11c5f44018f8cf06c439af932d7a15'
+            WHEN 16 THEN 'b7bcbdb92177fd40eedca0f9956212ac'
+            WHEN 17 THEN 'b7bcbdb92177fd40eedca0f9956212ac'
+            WHEN 18 THEN 'fa389bad5ee266649054a94da9900742'
             ELSE '' END FROM constraint_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '1098f1125fa6f613d521504e985a351a'
-            WHEN 17 THEN '1098f1125fa6f613d521504e985a351a'
-            WHEN 18 THEN '1098f1125fa6f613d521504e985a351a'
+            WHEN 16 THEN '69f219a12a610e40f4f9c9dd4b8ab4bd'
+            WHEN 17 THEN '69f219a12a610e40f4f9c9dd4b8ab4bd'
+            WHEN 18 THEN '69f219a12a610e40f4f9c9dd4b8ab4bd'
             ELSE '' END FROM column_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN 'ff865db8ec5369d3b87ac2498e0f7bf6'
-            WHEN 17 THEN 'ff865db8ec5369d3b87ac2498e0f7bf6'
-            WHEN 18 THEN 'ff865db8ec5369d3b87ac2498e0f7bf6'
+            WHEN 16 THEN '59959efcee6cb80348614f4d577643db'
+            WHEN 17 THEN '59959efcee6cb80348614f4d577643db'
+            WHEN 18 THEN '59959efcee6cb80348614f4d577643db'
             ELSE '' END FROM function_fingerprint, server);
 $function$;
 
@@ -2846,6 +2957,581 @@ BEGIN
             USING ERRCODE = '57014';
     END IF;
     RETURN QUERY SELECT 'inserted'::text, p_envelope_id, p_record_hash;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.materialization_publication_snapshot_v1(
+    p_operation_id text,
+    p_payload_digest bytea,
+    p_binding_id text,
+    p_generation_id text,
+    p_content_digest bytea,
+    p_source_revision text,
+    p_source_observed_at_unix_ms bigint,
+    p_expected_chain_key_epoch_id text
+)
+RETURNS TABLE (
+    outcome text,
+    stored_envelope_id text,
+    stored_chain_hash bytea,
+    candidate_predecessor_hash bytea,
+    candidate_generation bigint,
+    stored_publication_sequence bigint,
+    stored_generation_id text,
+    stored_content_digest bytea,
+    stored_source_revision text,
+    stored_source_observed_at_unix_ms bigint,
+    stored_published_at_unix_ms bigint
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_started_at timestamptz := clock_timestamp();
+    v_runtime_oid oid;
+    v_session_oid oid;
+    v_existing relay_state_private.audit_phase%ROWTYPE;
+    v_publication relay_state_private.materialization_publication_history%ROWTYPE;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.runtime_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'materialization publication caller is not bound'
+            USING ERRCODE = '42501';
+    END IF;
+    IF current_setting('search_path') <> 'pg_catalog, relay_state_private'
+       OR current_setting('lock_timeout') <> '2s'
+       OR current_setting('statement_timeout') <> '5s'
+       OR current_setting('idle_in_transaction_session_timeout') <> '5s'
+       OR current_setting('synchronous_commit') <> 'on'
+       OR current_setting('client_encoding') <> 'UTF8'
+       OR current_setting('standard_conforming_strings') <> 'on'
+       OR current_setting('session_replication_role') <> 'origin'
+       OR current_setting('default_transaction_isolation') <> 'read committed'
+       OR current_setting('transaction_isolation') <> 'read committed'
+       OR current_setting('default_transaction_read_only') <> 'off'
+       OR current_setting('transaction_read_only') <> 'off'
+       OR pg_catalog.pg_is_in_recovery()
+    THEN
+        RAISE EXCEPTION 'materialization publication runtime session is unsafe'
+            USING ERRCODE = '55000';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RAISE EXCEPTION 'materialization publication capability unavailable'
+            USING ERRCODE = '55000';
+    END IF;
+    IF p_operation_id IS NULL
+       OR p_operation_id !~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+       OR p_payload_digest IS NULL OR octet_length(p_payload_digest) <> 32
+       OR p_binding_id IS NULL OR p_binding_id !~ '^sha256:[0-9a-f]{64}$'
+       OR p_generation_id IS NULL
+       OR p_generation_id !~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+       OR p_content_digest IS NULL OR octet_length(p_content_digest) <> 32
+       OR (p_source_revision IS NOT NULL AND (
+            octet_length(p_source_revision) NOT BETWEEN 1 AND 256
+            OR p_source_revision !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'
+       ))
+       OR (p_source_observed_at_unix_ms IS NOT NULL
+           AND p_source_observed_at_unix_ms NOT BETWEEN 0 AND 9007199254740991)
+       OR NOT EXISTS (
+            SELECT 1 FROM relay_state_private.state_plane_metadata AS metadata
+            WHERE metadata.singleton = true
+              AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+       )
+    THEN
+        RAISE EXCEPTION 'invalid materialization publication request'
+            USING ERRCODE = '22023';
+    END IF;
+
+    SELECT phase_row.* INTO v_existing
+    FROM relay_state_private.audit_phase AS phase_row
+    WHERE phase_row.stream_kind = 'materialization'
+      AND phase_row.operation_id = p_operation_id
+      AND phase_row.phase = 'completion';
+    IF FOUND THEN
+        SELECT history.* INTO v_publication
+        FROM relay_state_private.materialization_publication_history AS history
+        WHERE history.completion_operation_id = p_operation_id;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'materialization publication state is inconsistent'
+                USING ERRCODE = '55000';
+        END IF;
+        IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
+            RAISE EXCEPTION 'materialization publication snapshot exceeded its deadline'
+                USING ERRCODE = '57014';
+        END IF;
+        IF v_existing.payload_digest = p_payload_digest
+           AND v_publication.binding_id = p_binding_id
+           AND v_publication.generation_id = p_generation_id
+           AND v_publication.content_digest = p_content_digest
+           AND v_publication.source_revision IS NOT DISTINCT FROM p_source_revision
+           AND v_publication.source_observed_at_unix_ms
+                IS NOT DISTINCT FROM p_source_observed_at_unix_ms
+        THEN
+            RETURN QUERY SELECT
+                'identical_duplicate'::text,
+                v_existing.envelope_id,
+                v_existing.record_hash,
+                NULL::bytea,
+                NULL::bigint,
+                v_publication.publication_sequence,
+                v_publication.generation_id,
+                v_publication.content_digest,
+                v_publication.source_revision,
+                v_publication.source_observed_at_unix_ms,
+                v_publication.published_at_unix_ms;
+        ELSE
+            RETURN QUERY SELECT
+                'conflicting_duplicate'::text,
+                v_existing.envelope_id,
+                v_existing.record_hash,
+                NULL::bytea,
+                NULL::bigint,
+                NULL::bigint,
+                NULL::text,
+                NULL::bytea,
+                NULL::text,
+                NULL::bigint,
+                NULL::bigint;
+        END IF;
+        RETURN;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM relay_state_private.materialization_publication_history AS history
+        WHERE history.generation_id = p_generation_id
+    ) THEN
+        RETURN QUERY SELECT
+            'generation_reused'::text,
+            NULL::text, NULL::bytea, NULL::bytea, NULL::bigint,
+            NULL::bigint, NULL::text, NULL::bytea, NULL::text, NULL::bigint, NULL::bigint;
+        RETURN;
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM relay_state_private.materialization_active_publication AS active
+        JOIN relay_state_private.materialization_publication_history AS history
+          ON history.binding_id = active.binding_id
+         AND history.publication_sequence = active.publication_sequence
+        WHERE active.binding_id = p_binding_id
+          AND p_generation_id <= history.generation_id COLLATE "C"
+    ) THEN
+        RETURN QUERY SELECT
+            'rollback_rejected'::text,
+            NULL::text, NULL::bytea, NULL::bytea, NULL::bigint,
+            NULL::bigint, NULL::text, NULL::bytea, NULL::text, NULL::bigint, NULL::bigint;
+        RETURN;
+    END IF;
+    RETURN QUERY
+    SELECT 'candidate'::text, NULL::text, NULL::bytea,
+           head.record_hash, head.generation,
+           NULL::bigint, NULL::text, NULL::bytea, NULL::text, NULL::bigint, NULL::bigint
+    FROM relay_state_private.audit_chain_head AS head
+    WHERE head.singleton = true;
+    IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
+        RAISE EXCEPTION 'materialization publication snapshot exceeded its deadline'
+            USING ERRCODE = '57014';
+    END IF;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.materialization_publication_cas_v1(
+    p_operation_id text,
+    p_payload_digest bytea,
+    p_binding_id text,
+    p_generation_id text,
+    p_content_digest bytea,
+    p_source_revision text,
+    p_source_observed_at_unix_ms bigint,
+    p_candidate_generation bigint,
+    p_candidate_predecessor_hash bytea,
+    p_envelope_id text,
+    p_timestamp_unix_ms bigint,
+    p_record_json text,
+    p_envelope_json text,
+    p_record_hash bytea,
+    p_attempt_envelope_id text,
+    p_attempt_record_hash bytea,
+    p_expected_chain_key_epoch_id text
+)
+RETURNS TABLE (
+    outcome text,
+    stored_envelope_id text,
+    stored_chain_hash bytea,
+    stored_publication_sequence bigint,
+    stored_generation_id text,
+    stored_content_digest bytea,
+    stored_source_revision text,
+    stored_source_observed_at_unix_ms bigint,
+    stored_published_at_unix_ms bigint
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_started_at timestamptz := clock_timestamp();
+    v_runtime_oid oid;
+    v_session_oid oid;
+    v_existing relay_state_private.audit_phase%ROWTYPE;
+    v_publication relay_state_private.materialization_publication_history%ROWTYPE;
+    v_record jsonb;
+    v_envelope jsonb;
+    v_expected_digest text;
+    v_active_sequence bigint;
+    v_active_generation text;
+    v_next_sequence bigint;
+    v_published_at_unix_ms bigint;
+    v_inserted_rows bigint;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.runtime_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'materialization publication caller is not bound'
+            USING ERRCODE = '42501';
+    END IF;
+    IF current_setting('search_path') <> 'pg_catalog, relay_state_private'
+       OR current_setting('lock_timeout') <> '2s'
+       OR current_setting('statement_timeout') <> '5s'
+       OR current_setting('idle_in_transaction_session_timeout') <> '5s'
+       OR current_setting('synchronous_commit') <> 'on'
+       OR current_setting('client_encoding') <> 'UTF8'
+       OR current_setting('standard_conforming_strings') <> 'on'
+       OR current_setting('session_replication_role') <> 'origin'
+       OR current_setting('default_transaction_isolation') <> 'read committed'
+       OR current_setting('transaction_isolation') <> 'read committed'
+       OR current_setting('default_transaction_read_only') <> 'off'
+       OR current_setting('transaction_read_only') <> 'off'
+       OR pg_catalog.pg_is_in_recovery()
+    THEN
+        RAISE EXCEPTION 'materialization publication runtime session is unsafe'
+            USING ERRCODE = '55000';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1() THEN
+        RAISE EXCEPTION 'materialization publication capability unavailable'
+            USING ERRCODE = '55000';
+    END IF;
+    IF p_operation_id IS NULL
+       OR p_operation_id !~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+       OR p_payload_digest IS NULL OR octet_length(p_payload_digest) <> 32
+       OR p_binding_id IS NULL OR p_binding_id !~ '^sha256:[0-9a-f]{64}$'
+       OR p_generation_id IS NULL
+       OR p_generation_id !~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+       OR p_content_digest IS NULL OR octet_length(p_content_digest) <> 32
+       OR (p_source_revision IS NOT NULL AND (
+            octet_length(p_source_revision) NOT BETWEEN 1 AND 256
+            OR p_source_revision !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$'
+       ))
+       OR (p_source_observed_at_unix_ms IS NOT NULL
+           AND p_source_observed_at_unix_ms NOT BETWEEN 0 AND 9007199254740991)
+       OR p_candidate_generation IS NULL OR p_candidate_generation < 0
+       OR (p_candidate_predecessor_hash IS NOT NULL
+           AND octet_length(p_candidate_predecessor_hash) <> 32)
+       OR p_envelope_id IS NULL
+       OR p_envelope_id !~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+       OR p_timestamp_unix_ms IS NULL
+       OR p_timestamp_unix_ms NOT BETWEEN 0 AND 9007199254740991
+       OR p_record_json IS NULL OR octet_length(p_record_json) > 1048576
+       OR p_envelope_json IS NULL OR octet_length(p_envelope_json) > 1310720
+       OR p_record_hash IS NULL OR octet_length(p_record_hash) <> 32
+       OR p_attempt_envelope_id IS NULL
+       OR p_attempt_envelope_id !~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
+       OR p_attempt_record_hash IS NULL OR octet_length(p_attempt_record_hash) <> 32
+       OR NOT EXISTS (
+            SELECT 1 FROM relay_state_private.state_plane_metadata AS metadata
+            WHERE metadata.singleton = true
+              AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+       )
+    THEN
+        RAISE EXCEPTION 'invalid materialization publication request'
+            USING ERRCODE = '22023';
+    END IF;
+
+    SELECT phase_row.* INTO v_existing
+    FROM relay_state_private.audit_phase AS phase_row
+    WHERE phase_row.stream_kind = 'materialization'
+      AND phase_row.operation_id = p_operation_id
+      AND phase_row.phase = 'completion';
+    IF FOUND THEN
+        SELECT history.* INTO v_publication
+        FROM relay_state_private.materialization_publication_history AS history
+        WHERE history.completion_operation_id = p_operation_id;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'materialization publication state is inconsistent'
+                USING ERRCODE = '55000';
+        END IF;
+        IF v_existing.payload_digest = p_payload_digest
+           AND v_publication.binding_id = p_binding_id
+           AND v_publication.generation_id = p_generation_id
+           AND v_publication.content_digest = p_content_digest
+           AND v_publication.source_revision IS NOT DISTINCT FROM p_source_revision
+           AND v_publication.source_observed_at_unix_ms
+                IS NOT DISTINCT FROM p_source_observed_at_unix_ms
+        THEN
+            RETURN QUERY SELECT
+                'identical_duplicate'::text,
+                v_existing.envelope_id,
+                v_existing.record_hash,
+                v_publication.publication_sequence,
+                v_publication.generation_id,
+                v_publication.content_digest,
+                v_publication.source_revision,
+                v_publication.source_observed_at_unix_ms,
+                v_publication.published_at_unix_ms;
+        ELSE
+            RETURN QUERY SELECT
+                'conflicting_duplicate'::text,
+                v_existing.envelope_id,
+                v_existing.record_hash,
+                NULL::bigint, NULL::text, NULL::bytea, NULL::text, NULL::bigint, NULL::bigint;
+        END IF;
+        RETURN;
+    END IF;
+
+    v_record := p_record_json::jsonb;
+    v_envelope := p_envelope_json::jsonb;
+    v_expected_digest := 'sha256:' || encode(p_payload_digest, 'hex');
+    IF jsonb_typeof(v_record) IS DISTINCT FROM 'object'
+       OR v_record - ARRAY[
+           'schema', 'stream_kind', 'operation_id', 'phase',
+           'payload_digest', 'payload'
+       ]::text[] <> '{}'::jsonb
+       OR v_record ->> 'schema' IS DISTINCT FROM 'registry.durable-audit/v1'
+       OR v_record ->> 'stream_kind' IS DISTINCT FROM 'materialization'
+       OR v_record ->> 'operation_id' IS DISTINCT FROM p_operation_id
+       OR v_record ->> 'phase' IS DISTINCT FROM 'completion'
+       OR v_record ->> 'payload_digest' IS DISTINCT FROM v_expected_digest
+       OR jsonb_typeof(v_record -> 'payload') IS DISTINCT FROM 'object'
+       OR v_record #>> '{payload,attempt_event,envelope_id}'
+            IS DISTINCT FROM p_attempt_envelope_id
+       OR v_record #>> '{payload,attempt_event,chain_hash}'
+            IS DISTINCT FROM 'registry-audit-chain-v1:'
+                || encode(p_attempt_record_hash, 'hex')
+       OR jsonb_typeof(v_envelope) IS DISTINCT FROM 'object'
+       OR v_envelope - ARRAY[
+           'envelope_id', 'timestamp_unix_ms', 'prev_hash', 'record', 'record_hash'
+       ]::text[] <> '{}'::jsonb
+       OR v_envelope ->> 'envelope_id' IS DISTINCT FROM p_envelope_id
+       OR (v_envelope ->> 'timestamp_unix_ms')::bigint IS DISTINCT FROM p_timestamp_unix_ms
+       OR v_envelope -> 'record' IS DISTINCT FROM v_record
+       OR v_envelope ->> 'record_hash' IS DISTINCT FROM encode(p_record_hash, 'hex')
+       OR (p_candidate_predecessor_hash IS NULL
+           AND v_envelope -> 'prev_hash' IS DISTINCT FROM 'null'::jsonb)
+       OR (p_candidate_predecessor_hash IS NOT NULL
+           AND v_envelope ->> 'prev_hash'
+               IS DISTINCT FROM encode(p_candidate_predecessor_hash, 'hex'))
+    THEN
+        RAISE EXCEPTION 'materialization publication envelope is inconsistent'
+            USING ERRCODE = '22023';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM relay_state_private.audit_phase AS attempt
+        WHERE attempt.stream_kind = 'materialization'
+          AND attempt.operation_id = p_operation_id
+          AND attempt.phase = 'attempt'
+          AND attempt.envelope_id = p_attempt_envelope_id
+          AND attempt.record_hash = p_attempt_record_hash
+    ) THEN
+        RAISE EXCEPTION 'materialization publication attempt is unavailable'
+            USING ERRCODE = '55000';
+    END IF;
+
+    SELECT active.publication_sequence, history.generation_id
+    INTO v_active_sequence, v_active_generation
+    FROM relay_state_private.materialization_active_publication AS active
+    JOIN relay_state_private.materialization_publication_history AS history
+      ON history.binding_id = active.binding_id
+     AND history.publication_sequence = active.publication_sequence
+    WHERE active.binding_id = p_binding_id
+    FOR UPDATE OF active;
+    IF FOUND THEN
+        IF v_active_sequence >= 9007199254740991 THEN
+            RAISE EXCEPTION 'materialization publication sequence exhausted'
+                USING ERRCODE = '54000';
+        END IF;
+        v_next_sequence := v_active_sequence + 1;
+        IF p_generation_id <= v_active_generation COLLATE "C" THEN
+            RETURN QUERY SELECT
+                'rollback_rejected'::text,
+                NULL::text, NULL::bytea, NULL::bigint, NULL::text,
+                NULL::bytea, NULL::text, NULL::bigint, NULL::bigint;
+            RETURN;
+        END IF;
+    ELSE
+        v_next_sequence := 1;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM relay_state_private.materialization_publication_history AS history
+        WHERE history.generation_id = p_generation_id
+    ) THEN
+        RETURN QUERY SELECT
+            'generation_reused'::text,
+            NULL::text, NULL::bytea, NULL::bigint, NULL::text,
+            NULL::bytea, NULL::text, NULL::bigint, NULL::bigint;
+        RETURN;
+    END IF;
+
+    UPDATE relay_state_private.audit_chain_head AS head
+    SET generation = head.generation + 1,
+        record_hash = p_record_hash,
+        advanced_at = clock_timestamp()
+    WHERE head.singleton = true
+      AND head.generation = p_candidate_generation
+      AND head.record_hash IS NOT DISTINCT FROM p_candidate_predecessor_hash;
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT
+            'head_changed'::text,
+            NULL::text, NULL::bytea, NULL::bigint, NULL::text,
+            NULL::bytea, NULL::text, NULL::bigint, NULL::bigint;
+        RETURN;
+    END IF;
+
+    INSERT INTO relay_state_private.audit_phase (
+        stream_kind, operation_id, phase, payload_digest, envelope_id,
+        timestamp_unix_ms, predecessor_hash, record_json, envelope_json,
+        record_hash, attempt_stream_kind, attempt_operation_id, attempt_phase,
+        attempt_envelope_id, attempt_record_hash
+    ) VALUES (
+        'materialization', p_operation_id, 'completion', p_payload_digest, p_envelope_id,
+        p_timestamp_unix_ms, p_candidate_predecessor_hash, p_record_json,
+        p_envelope_json, p_record_hash, 'materialization', p_operation_id, 'attempt',
+        p_attempt_envelope_id, p_attempt_record_hash
+    );
+    GET DIAGNOSTICS v_inserted_rows = ROW_COUNT;
+    IF v_inserted_rows <> 1 THEN
+        RAISE EXCEPTION 'materialization completion audit insert failed'
+            USING ERRCODE = '55000';
+    END IF;
+    v_published_at_unix_ms := pg_catalog.floor(
+        extract(epoch FROM clock_timestamp()) * 1000
+    )::bigint;
+    IF v_published_at_unix_ms NOT BETWEEN 0 AND 9007199254740991
+       OR (p_source_observed_at_unix_ms IS NOT NULL
+           AND p_source_observed_at_unix_ms > v_published_at_unix_ms)
+    THEN
+        RAISE EXCEPTION 'materialization publication time is invalid'
+            USING ERRCODE = '55000';
+    END IF;
+    INSERT INTO relay_state_private.materialization_publication_history (
+        binding_id, publication_sequence, generation_id, content_digest,
+        source_revision, source_observed_at_unix_ms, published_at_unix_ms,
+        completion_operation_id, completion_envelope_id, completion_record_hash
+    ) VALUES (
+        p_binding_id, v_next_sequence, p_generation_id, p_content_digest,
+        p_source_revision, p_source_observed_at_unix_ms, v_published_at_unix_ms,
+        p_operation_id, p_envelope_id, p_record_hash
+    );
+    INSERT INTO relay_state_private.materialization_active_publication (
+        binding_id, publication_sequence
+    ) VALUES (p_binding_id, v_next_sequence)
+    ON CONFLICT (binding_id) DO UPDATE
+    SET publication_sequence = EXCLUDED.publication_sequence;
+    IF clock_timestamp() - v_started_at > interval '5 seconds' THEN
+        RAISE EXCEPTION 'materialization publication CAS exceeded its deadline'
+            USING ERRCODE = '57014';
+    END IF;
+    RETURN QUERY SELECT
+        'inserted'::text,
+        p_envelope_id,
+        p_record_hash,
+        v_next_sequence,
+        p_generation_id,
+        p_content_digest,
+        p_source_revision,
+        p_source_observed_at_unix_ms,
+        v_published_at_unix_ms;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION relay_state_api.materialization_active_publication_v1(
+    p_binding_id text,
+    p_expected_chain_key_epoch_id text
+)
+RETURNS TABLE (
+    publication_sequence bigint,
+    generation_id text,
+    content_digest bytea,
+    source_revision text,
+    source_observed_at_unix_ms bigint,
+    published_at_unix_ms bigint,
+    completion_operation_id text,
+    completion_envelope_id text,
+    completion_record_hash bytea
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, relay_state_private
+SET lock_timeout = '2s'
+SET statement_timeout = '5s'
+SET idle_in_transaction_session_timeout = '5s'
+SET synchronous_commit = 'on'
+AS $function$
+DECLARE
+    v_runtime_oid oid;
+    v_session_oid oid;
+BEGIN
+    PERFORM set_config('lock_timeout', '2s', false);
+    PERFORM set_config('statement_timeout', '5s', false);
+    PERFORM set_config('idle_in_transaction_session_timeout', '5s', false);
+    PERFORM set_config('synchronous_commit', 'on', false);
+    SELECT metadata.runtime_role_oid INTO v_runtime_oid
+    FROM relay_state_private.state_plane_metadata AS metadata
+    WHERE metadata.singleton = true;
+    SELECT oid INTO v_session_oid FROM pg_catalog.pg_roles WHERE rolname = session_user;
+    IF v_session_oid IS DISTINCT FROM v_runtime_oid THEN
+        RAISE EXCEPTION 'materialization publication caller is not bound'
+            USING ERRCODE = '42501';
+    END IF;
+    IF NOT relay_state_private.capability_valid_v1()
+       OR NOT EXISTS (
+            SELECT 1 FROM relay_state_private.state_plane_metadata AS metadata
+            WHERE metadata.singleton = true
+              AND metadata.chain_key_epoch_id = p_expected_chain_key_epoch_id
+       )
+    THEN
+        RAISE EXCEPTION 'materialization publication capability unavailable'
+            USING ERRCODE = '55000';
+    END IF;
+    IF p_binding_id IS NULL OR p_binding_id !~ '^sha256:[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION 'invalid materialization publication binding'
+            USING ERRCODE = '22023';
+    END IF;
+    RETURN QUERY
+    SELECT history.publication_sequence,
+           history.generation_id,
+           history.content_digest,
+           history.source_revision,
+           history.source_observed_at_unix_ms,
+           history.published_at_unix_ms,
+           history.completion_operation_id,
+           history.completion_envelope_id,
+           history.completion_record_hash
+    FROM relay_state_private.materialization_active_publication AS active
+    JOIN relay_state_private.materialization_publication_history AS history
+      ON history.binding_id = active.binding_id
+     AND history.publication_sequence = active.publication_sequence
+    WHERE active.binding_id = p_binding_id;
 END;
 $function$;
 
@@ -6438,6 +7124,15 @@ ALTER FUNCTION relay_state_api.audit_phase_cas_v1(
     text, text, text, bytea, bigint, bytea, text, bigint,
     text, text, bytea, text, bytea, text, bigint, bytea, text, bigint
 ) OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.materialization_publication_snapshot_v1(
+    text, bytea, text, text, bytea, text, bigint, text
+) OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.materialization_publication_cas_v1(
+    text, bytea, text, text, bytea, text, bigint, bigint, bytea, text,
+    bigint, text, text, bytea, text, bytea, text
+) OWNER TO CURRENT_USER;
+ALTER FUNCTION relay_state_api.materialization_active_publication_v1(text, text)
+    OWNER TO CURRENT_USER;
 ALTER FUNCTION relay_state_api.consultation_attempt_intent_snapshot_v1(
     text, bytea, text, bytea, text, bytea, text, bigint, bytea, bigint,
     text, bigint, integer, bigint, text[], smallint[], text, bigint
@@ -7059,6 +7754,15 @@ GRANT EXECUTE ON FUNCTION relay_state_api.audit_phase_cas_v1(
     text, text, text, bytea, bigint, bytea, text, bigint,
     text, text, bytea, text, bytea, text, bigint, bytea, text, bigint
 ) TO {runtime};
+GRANT EXECUTE ON FUNCTION relay_state_api.materialization_publication_snapshot_v1(
+    text, bytea, text, text, bytea, text, bigint, text
+) TO {runtime};
+GRANT EXECUTE ON FUNCTION relay_state_api.materialization_publication_cas_v1(
+    text, bytea, text, text, bytea, text, bigint, bigint, bytea, text,
+    bigint, text, text, bytea, text, bytea, text
+) TO {runtime};
+GRANT EXECUTE ON FUNCTION relay_state_api.materialization_active_publication_v1(text, text)
+    TO {runtime};
 GRANT EXECUTE ON FUNCTION relay_state_api.consultation_attempt_intent_snapshot_v1(
     text, bytea, text, bytea, text, bytea, text, bigint, bytea, bigint,
     text, bigint, integer, bigint, text[], smallint[], text, bigint
@@ -7421,7 +8125,7 @@ mod tests {
         let audit_sql = POSTGRES_STATE_PLANE_MIGRATION_V1
             .split(
                 "CREATE OR REPLACE FUNCTION \
-                 relay_state_api.consultation_attempt_intent_snapshot_v1",
+                 relay_state_api.materialization_publication_snapshot_v1",
             )
             .next()
             .expect("generic audit migration prefix");
@@ -7445,6 +8149,50 @@ mod tests {
                 "consultation state protocol omitted {required}"
             );
         }
+    }
+
+    #[test]
+    fn materialization_publication_is_atomic_monotonic_and_runtime_only() {
+        for required in [
+            "materialization_publication_history",
+            "materialization_active_publication",
+            "materialization_publication_snapshot_v1",
+            "materialization_publication_cas_v1",
+            "materialization_active_publication_v1",
+            "'rollback_rejected'::text",
+            "'generation_reused'::text",
+            "v_next_sequence := v_active_sequence + 1",
+            "p_generation_id <= v_active_generation COLLATE \"C\"",
+            "completion_operation_id",
+            "completion_envelope_id",
+            "completion_record_hash",
+            "source_observed_at_unix_ms > v_published_at_unix_ms",
+            "materialization publication caller is not bound",
+        ] {
+            assert!(
+                POSTGRES_STATE_PLANE_MIGRATION_V1.contains(required),
+                "materialization publication protocol omitted {required}"
+            );
+        }
+        let publication_sql = POSTGRES_STATE_PLANE_MIGRATION_V1
+            .split("CREATE OR REPLACE FUNCTION relay_state_api.materialization_publication_cas_v1")
+            .nth(1)
+            .expect("publication CAS body")
+            .split(
+                "CREATE OR REPLACE FUNCTION relay_state_api.materialization_active_publication_v1",
+            )
+            .next()
+            .expect("bounded publication CAS body");
+        let audit_insert = publication_sql
+            .find("INSERT INTO relay_state_private.audit_phase")
+            .expect("completion audit insert");
+        let history_insert = publication_sql
+            .find("INSERT INTO relay_state_private.materialization_publication_history")
+            .expect("publication history insert");
+        let pointer_insert = publication_sql
+            .find("INSERT INTO relay_state_private.materialization_active_publication")
+            .expect("active pointer insert");
+        assert!(audit_insert < history_insert && history_insert < pointer_insert);
     }
 
     #[test]
@@ -7502,25 +8250,25 @@ mod tests {
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("SET lock_timeout = '2s'")
                 .count(),
-            31
+            34
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("set_config('idle_in_transaction_session_timeout', '5s', false)")
                 .count(),
-            19
+            22
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("SET synchronous_commit = 'on'")
                 .count(),
-            31
+            34
         );
         assert_eq!(
             POSTGRES_STATE_PLANE_MIGRATION_V1
                 .matches("set_config('synchronous_commit', 'on', false)")
                 .count(),
-            19
+            22
         );
         assert!(POSTGRES_STATE_PLANE_MIGRATION_V1.contains("exceeded its deadline"));
         for required_setting in [
@@ -7643,6 +8391,7 @@ mod tests {
             SERVING_FENCE_CAPABILITY_V1,
             PERSISTENT_QUOTA_CAPABILITY_V1,
             AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
+            MATERIALIZATION_PUBLICATION_CAPABILITY_V1,
             "database-expiry-seed-timeout-exact-dispatch-prefix-v2",
             "direct-data-auth-reference-distinct-fresh-opencrvs-no-expiry-jwks-v2",
             "utf8-bytewise-key-order-v1",

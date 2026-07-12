@@ -428,10 +428,14 @@ async fn run_live_consultation_lifecycle(profile: JourneyProfile) -> Result<(), 
             .map_err(|_| LiveJourneyError::AuthActivation)?;
         let chain_profile = AuditChainProfile::registry_relay_from_env(AUDIT_SECRET_ENV)
             .map_err(|_| LiveJourneyError::AuditActivation)?;
-        let service =
-            ConsultationService::activate(config.as_ref(), artifacts, chain_profile.hasher())
-                .await
-                .map_err(|_| LiveJourneyError::ConsultationActivation)?;
+        let service = ConsultationService::activate(
+            config.as_ref(),
+            artifacts,
+            chain_profile.hasher(),
+            Arc::new(datafusion::execution::context::SessionContext::new()),
+        )
+        .await
+        .map_err(|_| LiveJourneyError::ConsultationActivation)?;
         let service_execution = async {
             if service.readiness().await != ConsultationServiceReadiness::Ready {
                 return Err(LiveJourneyError::ConsultationNotReady);

@@ -260,6 +260,7 @@ pub(crate) struct AuditedConsultationDispatch {
     pub(super) fence_generation: i64,
     pub(super) holder_id: String,
     pub(super) deadline_unix_ms: i64,
+    pub(super) local_not_after: Instant,
     pub(super) permits: Vec<ConsultationDispatchPermit>,
     pub(super) lifecycle_seal: ConsultationLifecycleSeal,
 }
@@ -319,6 +320,13 @@ impl AuditedConsultationDispatch {
 
     pub(crate) fn deadline_unix_ms(&self) -> i64 {
         self.deadline_unix_ms
+    }
+
+    /// Return the non-shortenable process-monotonic deadline paired with the
+    /// PostgreSQL deadline by the atomic attempt CAS. Local SnapshotExact work
+    /// consumes this same bound even though it has no outbound child permit.
+    pub(crate) fn local_not_after(&self) -> Instant {
+        self.local_not_after
     }
 
     pub(super) fn postgres_permit_arrays(&self) -> (Vec<String>, Vec<i16>) {
@@ -1342,6 +1350,7 @@ mod tests {
                 fence_generation: 1,
                 holder_id: Ulid::new().to_string(),
                 deadline_unix_ms,
+                local_not_after,
                 permits,
                 lifecycle_seal: ConsultationLifecycleSeal::unarmed(
                     &admission,

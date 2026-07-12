@@ -32,10 +32,11 @@ use super::artifact::{
     PriorOutputBindingDocument, PrivateBindingArtifact, ProjectionMechanismDocument,
     PublicContractArtifact, ReadMethod, RequestCodecDocument, RequestSelectorLocationDocument,
     RequestSignerDocument, ResponseNormalizationDocument, ResponseSchemaDocument,
-    SourceAuthDocument, SourceCardinality, SourcePlanArtifactError, SourcePlanKind,
-    SourcePlanLimits, StepConditionDocument, ValueExpressionDocument, MAX_ARTIFACTS_PER_BUNDLE,
-    MAX_EVIDENCE_CLASS_BYTES, MAX_EVIDENCE_FILES_PER_CLASS, MAX_EVIDENCE_FILE_BYTES,
-    OPEN_CRVS_DCI_REQUEST_BODY_MAX_BYTES, OPEN_CRVS_JWKS_MAX_RESPONSE_BYTES, OPEN_CRVS_JWKS_PATH,
+    SourceAuthDocument, SourceCardinality, SourceObservedAtDocument, SourcePlanArtifactError,
+    SourcePlanKind, SourcePlanLimits, SourceRevisionDocument, StepConditionDocument,
+    ValueExpressionDocument, MAX_ARTIFACTS_PER_BUNDLE, MAX_EVIDENCE_CLASS_BYTES,
+    MAX_EVIDENCE_FILES_PER_CLASS, MAX_EVIDENCE_FILE_BYTES, OPEN_CRVS_DCI_REQUEST_BODY_MAX_BYTES,
+    OPEN_CRVS_JWKS_MAX_RESPONSE_BYTES, OPEN_CRVS_JWKS_PATH,
 };
 use super::completion_seed::{measure_completion_seed, MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1};
 use super::identifiers::{CredentialReferenceId, SourceDestinationId};
@@ -1117,6 +1118,11 @@ pub struct CompiledSnapshotBinding {
     refresh_class: CompiledSnapshotRefreshClass,
     immutable_generation: bool,
     digest_bound_active_pointer: bool,
+    key_input: Box<str>,
+    key_physical_field: Box<str>,
+    projection: Box<[(Box<str>, Box<str>)]>,
+    source_observed_at: Option<(Box<str>, Box<str>)>,
+    source_revision: Option<(Box<str>, Box<str>, u16)>,
 }
 
 impl fmt::Debug for CompiledSnapshotBinding {
@@ -1201,6 +1207,56 @@ impl CompiledSnapshotBinding {
     #[must_use]
     pub const fn digest_bound_active_pointer(&self) -> bool {
         self.digest_bound_active_pointer
+    }
+
+    /// Return the one canonical consultation input consumed by the exact key.
+    #[must_use]
+    pub fn key_input(&self) -> &str {
+        &self.key_input
+    }
+
+    /// Return the reviewed physical snapshot field compared with the input.
+    #[must_use]
+    pub fn key_physical_field(&self) -> &str {
+        &self.key_physical_field
+    }
+
+    /// SnapshotExact always compares a physical UTF-8 scalar by byte equality.
+    #[must_use]
+    pub const fn key_uses_utf8_binary_equality(&self) -> bool {
+        true
+    }
+
+    /// Iterate the complete fixed logical-to-physical acquisition projection.
+    pub fn projection(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+        self.projection
+            .iter()
+            .map(|(logical, physical)| (logical.as_ref(), physical.as_ref()))
+    }
+
+    /// Resolve one reviewed logical field without accepting caller-selected fields.
+    #[must_use]
+    pub fn physical_field_for(&self, logical_field: &str) -> Option<&str> {
+        self.projection
+            .binary_search_by(|(logical, _)| logical.as_bytes().cmp(logical_field.as_bytes()))
+            .ok()
+            .map(|index| self.projection[index].1.as_ref())
+    }
+
+    /// Return the reviewed RFC 3339 provenance extraction, when declared.
+    #[must_use]
+    pub fn source_observed_at_extraction(&self) -> Option<(&str, &str)> {
+        self.source_observed_at
+            .as_ref()
+            .map(|(logical, physical)| (logical.as_ref(), physical.as_ref()))
+    }
+
+    /// Return the reviewed bounded source-revision extraction, when declared.
+    #[must_use]
+    pub fn source_revision_extraction(&self) -> Option<(&str, &str, u16)> {
+        self.source_revision
+            .as_ref()
+            .map(|(logical, physical, max_bytes)| (logical.as_ref(), physical.as_ref(), *max_bytes))
     }
 
     /// Snapshot consultations never receive a live destination capability.
@@ -1937,6 +1993,7 @@ fn compile_one(
         &pack.document.spec.supported_version_evidence,
         pack.logical_operation.clone(),
         pack.document.spec.plan.kind,
+        snapshot.as_ref(),
     )?;
     let runtime_binding = RuntimePrivateBinding {
         data_destination,

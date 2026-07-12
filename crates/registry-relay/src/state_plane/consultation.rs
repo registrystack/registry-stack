@@ -310,6 +310,44 @@ impl KnownConsultationCompletionFacts {
         }
     }
 
+    /// Mint public-success provenance for one exact immutable materialized
+    /// snapshot. The restricted content digest remains private to publication
+    /// state and is deliberately absent from consultation completion facts.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn public_for_snapshot(
+        outcome: PublicConsultationOutcome,
+        relay_acquired_at_unix_ms: i64,
+        source_observed_at_unix_ms: Option<i64>,
+        source_revision: Option<&str>,
+        snapshot_generation: crate::consultation::SnapshotGenerationId,
+        snapshot_published_at_unix_ms: i64,
+    ) -> Result<Self, ConsultationPersistenceError> {
+        if !valid_public_unix_ms(relay_acquired_at_unix_ms)
+            || !valid_public_unix_ms(snapshot_published_at_unix_ms)
+            || snapshot_published_at_unix_ms > relay_acquired_at_unix_ms
+            || source_observed_at_unix_ms.is_some_and(|value| {
+                !valid_public_unix_ms(value) || value > snapshot_published_at_unix_ms
+            })
+            || source_revision.is_some_and(|value| value.is_empty() || value.len() > 512)
+        {
+            return Err(ConsultationPersistenceError::InvalidInput);
+        }
+        Ok(Self {
+            result: KnownExecutionResult::Public {
+                outcome,
+                provenance: ValidatedPublicProvenance {
+                    relay_acquired_at_unix_ms,
+                    source_observed_at_unix_ms,
+                    source_revision: source_revision.map(ToOwned::to_owned),
+                    acquisition: ValidatedAcquisitionProvenance::MaterializedSnapshot {
+                        generation: snapshot_generation.to_canonical_string(),
+                        published_at_unix_ms: snapshot_published_at_unix_ms,
+                    },
+                },
+            },
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn public_for_live_test(
         outcome: PublicConsultationOutcome,
@@ -339,23 +377,14 @@ impl KnownConsultationCompletionFacts {
         snapshot_generation: &str,
         snapshot_published_at_unix_ms: i64,
     ) -> Result<Self, ConsultationPersistenceError> {
-        let generation = ulid::Ulid::from_string(snapshot_generation)
-            .map_err(|_| ConsultationPersistenceError::InvalidInput)?;
-        if generation.to_string() != snapshot_generation
-            || !valid_public_unix_ms(snapshot_published_at_unix_ms)
-            || snapshot_published_at_unix_ms > relay_acquired_at_unix_ms
-        {
-            return Err(ConsultationPersistenceError::InvalidInput);
-        }
-        Self::public_for_test(
+        Self::public_for_snapshot(
             outcome,
             relay_acquired_at_unix_ms,
             source_observed_at_unix_ms,
             source_revision,
-            ValidatedAcquisitionProvenance::MaterializedSnapshot {
-                generation: snapshot_generation.to_owned(),
-                published_at_unix_ms: snapshot_published_at_unix_ms,
-            },
+            crate::consultation::SnapshotGenerationId::try_from(snapshot_generation)
+                .map_err(|_| ConsultationPersistenceError::InvalidInput)?,
+            snapshot_published_at_unix_ms,
         )
     }
 
@@ -1170,6 +1199,7 @@ fn dispatch_from_attempt_row(
         fence_generation: fence.fence_generation,
         holder_id: fence.holder_id,
         deadline_unix_ms,
+        local_not_after,
         permits,
         lifecycle_seal: fence.lifecycle_seal,
     })

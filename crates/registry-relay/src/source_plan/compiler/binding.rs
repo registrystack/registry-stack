@@ -87,11 +87,44 @@ pub(super) fn compile_snapshot_binding(
         .materialization
         .as_ref()
         .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+    let reviewed = pack
+        .document
+        .spec
+        .plan
+        .snapshot
+        .as_ref()
+        .ok_or(SourcePlanCompileError::CompilerInvariant)?;
     let refresh_class = match public.refresh_class {
         MaterializationRefreshClassDocument::OperatorTriggered => {
             CompiledSnapshotRefreshClass::OperatorTriggered
         }
         MaterializationRefreshClassDocument::Scheduled => CompiledSnapshotRefreshClass::Scheduled,
+    };
+    let projection = reviewed
+        .mapping
+        .projection
+        .iter()
+        .map(|(logical, physical)| (logical.as_str().into(), physical.as_str().into()))
+        .collect::<Box<[_]>>();
+    let physical_for = |logical: &str| {
+        reviewed
+            .mapping
+            .projection
+            .get(logical)
+            .map(|physical| physical.as_str().into())
+            .ok_or(SourcePlanCompileError::CompilerInvariant)
+    };
+    let source_observed_at = match &pack.document.spec.source_provenance.source_observed_at {
+        SourceObservedAtDocument::Absent => None,
+        SourceObservedAtDocument::AcquiredRfc3339 { field } => {
+            Some((field.as_str().into(), physical_for(field)?))
+        }
+    };
+    let source_revision = match &pack.document.spec.source_provenance.source_revision {
+        SourceRevisionDocument::Absent => None,
+        SourceRevisionDocument::AcquiredString { field, max_bytes } => {
+            Some((field.as_str().into(), physical_for(field)?, *max_bytes))
+        }
     };
     Ok(Some(CompiledSnapshotBinding {
         table_provider: private.table_provider.as_str().into(),
@@ -119,6 +152,11 @@ pub(super) fn compile_snapshot_binding(
         refresh_class,
         immutable_generation: public.immutable_generation,
         digest_bound_active_pointer: public.digest_bound_active_pointer,
+        key_input: reviewed.mapping.key.input.as_str().into(),
+        key_physical_field: reviewed.mapping.key.physical_field.as_str().into(),
+        projection,
+        source_observed_at,
+        source_revision,
     }))
 }
 

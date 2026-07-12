@@ -172,6 +172,18 @@ pub async fn gc_resource(
     resource: &ResourceId,
     keep_ulid: Ulid,
 ) {
+    gc_resource_with_retention(layout, dataset, resource, keep_ulid, 2).await;
+}
+
+/// Garbage-collect stale cache files while retaining the active generation and
+/// a bounded number of immediately preceding generations.
+pub async fn gc_resource_with_retention(
+    layout: &CacheLayout,
+    dataset: &DatasetId,
+    resource: &ResourceId,
+    keep_ulid: Ulid,
+    retention_generations: u16,
+) {
     let dir = layout
         .final_path(dataset, resource, keep_ulid)
         .parent()
@@ -179,7 +191,7 @@ pub async fn gc_resource(
         .to_path_buf();
 
     let keep_name = format!("{keep_ulid}.parquet");
-    let mut previous: Option<Ulid> = None;
+    let retention_generations = usize::from(retention_generations.max(1));
     let mut parquet_entries = Vec::new();
 
     let mut entries = match fs::read_dir(&dir).await {
@@ -230,22 +242,34 @@ pub async fn gc_resource(
         if name.ends_with(".parquet") {
             if let Some(stem) = name.strip_suffix(".parquet") {
                 if let Ok(ulid) = stem.parse::<Ulid>() {
-                    if ulid < keep_ulid {
-                        previous = Some(previous.map_or(ulid, |prev| prev.max(ulid)));
-                    }
+                    let _ = ulid;
                 }
             }
             parquet_entries.push(entry.path());
         }
     }
 
-    let previous_name = previous.map(|ulid| format!("{ulid}.parquet"));
+    let mut generations = parquet_entries
+        .iter()
+        .filter_map(|path| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(|stem| stem.parse::<Ulid>().ok())
+        })
+        .collect::<Vec<_>>();
+    generations.sort_unstable_by(|left, right| right.cmp(left));
+    let retained = generations
+        .into_iter()
+        .filter(|generation| *generation <= keep_ulid)
+        .take(retention_generations)
+        .map(|generation| format!("{generation}.parquet"))
+        .collect::<std::collections::BTreeSet<_>>();
 
     for path in parquet_entries {
         let Some(name) = path.file_name().map(|name| name.to_string_lossy()) else {
             continue;
         };
-        let should_delete = name != keep_name && previous_name.as_deref() != Some(name.as_ref());
+        let should_delete = name != keep_name && !retained.contains(name.as_ref());
 
         if should_delete {
             if let Err(e) = fs::remove_file(&path).await {

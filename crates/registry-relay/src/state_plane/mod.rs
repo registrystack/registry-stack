@@ -13,6 +13,7 @@
 mod audit;
 mod consultation;
 mod fence;
+mod materialization;
 mod migration;
 mod pseudonym_keyring;
 mod quota;
@@ -39,12 +40,19 @@ pub(crate) use fence::{
     FencedConsultationAttemptAuthority, PostgresServingFence, ServingFenceError,
     ServingFenceLockKey, ServingFenceReadiness, TakeoverCompletionRecoveryAuthority,
 };
+pub(crate) use materialization::{
+    ActiveMaterializationPublication, MaterializationGenerationId,
+    MaterializationPublicationBindingId, MaterializationPublicationError,
+    MaterializationPublicationOutcome, MaterializationPublicationRequest,
+    MaterializationSourceRevision, RestrictedMaterializationContentDigest,
+};
 pub(crate) use migration::install_postgres_state_plane_v1;
 pub(crate) use migration::{
     AuditChainKeyEpochId, AuditPseudonymKeyringLockKey, AuditPseudonymMaintenanceDatabaseRole,
     AuditPseudonymReaderDatabaseRole, RuntimeDatabaseRole, StatePlaneInstallError,
     AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1, DURABLE_AUDIT_CAPABILITY_V1,
-    PERSISTENT_QUOTA_CAPABILITY_V1, POSTGRES_STATE_PLANE_MIGRATION_V1, SERVING_FENCE_CAPABILITY_V1,
+    MATERIALIZATION_PUBLICATION_CAPABILITY_V1, PERSISTENT_QUOTA_CAPABILITY_V1,
+    POSTGRES_STATE_PLANE_MIGRATION_V1, SERVING_FENCE_CAPABILITY_V1,
     STATE_PLANE_SCHEMA_FINGERPRINT_V1,
 };
 pub(crate) use pseudonym_keyring::{

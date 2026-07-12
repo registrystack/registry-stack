@@ -2,30 +2,22 @@
 //! Table-level datasource connectors.
 //!
 //! Connectors are the boundary between configured private tables and
-//! DataFusion. File sources produce snapshot batches through the
-//! existing source/format stack. Future database connectors can either
-//! produce snapshot batches or a live `TableProvider`.
+//! DataFusion. File and database sources produce snapshot batches through the
+//! existing source/format stack. Request-time source access belongs behind a
+//! request-aware backend, not this operator-controlled ingestion boundary.
 
 use std::env;
-use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{DataFusionError, Result as DataFusionResult, Statistics};
-use datafusion::datasource::MemTable;
-use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableType};
-use datafusion::physical_plan::ExecutionPlan;
 use futures::stream::BoxStream;
 use futures::StreamExt as _;
 use postgres_native_tls::MakeTlsConnector;
 use time::OffsetDateTime;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_postgres::config::SslMode;
 use tokio_postgres::{Client, Config as PostgresClientConfig};
 
@@ -33,7 +25,6 @@ use crate::config::{FieldType, PostgresTableConfig};
 use crate::format::csv::CsvFormat;
 use crate::format::{Format, FormatError, FormatHints};
 use crate::ingest::declared_schema::DeclaredSchema;
-use crate::observability::{observe_live_datasource_scan, LiveScanObservation};
 use crate::source::{Source, SourceError, SourceMetadata};
 
 /// A table-level datasource connector.
@@ -41,7 +32,6 @@ pub trait TableConnector: Send + Sync + 'static {
     fn descriptor(&self) -> ConnectorDescriptor;
     fn inspect<'a>(&'a self) -> ConnectorFuture<'a, ObservedTable>;
     fn snapshot<'a>(&'a self) -> ConnectorFuture<'a, SnapshotTable>;
-    fn live_provider<'a>(&'a self) -> ConnectorFuture<'a, Option<Arc<dyn TableProvider>>>;
     fn metadata<'a>(&'a self) -> ConnectorFuture<'a, ConnectorMetadata>;
 }
 
@@ -84,8 +74,6 @@ pub enum ConnectorError {
     SourceNotFound,
     #[error("source unreadable: {0}")]
     SourceUnreadable(String),
-    #[error("live provider unsupported")]
-    LiveUnsupported,
 }
 
 impl ConnectorError {
@@ -213,10 +201,6 @@ impl TableConnector for FileConnector {
         })
     }
 
-    fn live_provider<'a>(&'a self) -> ConnectorFuture<'a, Option<Arc<dyn TableProvider>>> {
-        Box::pin(async { Ok(None) })
-    }
-
     fn metadata<'a>(&'a self) -> ConnectorFuture<'a, ConnectorMetadata> {
         Box::pin(async move {
             let metadata = self.source.metadata().await.map_err(ConnectorError::from)?;
@@ -244,12 +228,9 @@ pub struct PostgresConnector {
     max_source_bytes: u64,
     connect_timeout: Duration,
     query_timeout: Duration,
-    live_semaphore: Arc<Semaphore>,
-    live_max_rows: usize,
 }
 
 impl PostgresConnector {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         connection_env: String,
         table: Option<PostgresTableConfig>,
@@ -259,8 +240,6 @@ impl PostgresConnector {
         max_source_bytes: u64,
         connect_timeout: Duration,
         query_timeout: Duration,
-        live_max_connections: usize,
-        live_max_rows: usize,
     ) -> Self {
         Self {
             connection_env,
@@ -271,8 +250,6 @@ impl PostgresConnector {
             max_source_bytes,
             connect_timeout,
             query_timeout,
-            live_semaphore: Arc::new(Semaphore::new(live_max_connections)),
-            live_max_rows,
         }
     }
 
@@ -373,11 +350,7 @@ impl PostgresConnector {
         query.trim_end_matches(';').trim().to_string()
     }
 
-    fn projected_select_sql_for(
-        &self,
-        declared: &DeclaredSchema,
-        row_limit: Option<usize>,
-    ) -> String {
+    fn projected_select_sql(&self, declared: &DeclaredSchema) -> String {
         let base = self.base_select_sql();
         let projections = declared
             .fields
@@ -391,45 +364,23 @@ impl PostgresConnector {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        let limit = row_limit
-            .map(|limit| format!(" LIMIT {limit}"))
-            .unwrap_or_default();
-        format!("SELECT {projections} FROM ({base}) AS data_gate_source{limit}")
+        format!("SELECT {projections} FROM ({base}) AS data_gate_source")
     }
 
-    fn copy_sql_for_with_limit(
-        &self,
-        declared: &DeclaredSchema,
-        row_limit: Option<usize>,
-    ) -> String {
+    fn copy_sql_for(&self, declared: &DeclaredSchema) -> String {
         format!(
             "COPY ({}) TO STDOUT WITH (FORMAT CSV, HEADER TRUE)",
-            self.projected_select_sql_for(declared, row_limit)
+            self.projected_select_sql(declared)
         )
-    }
-
-    fn declared_for_projection(
-        &self,
-        projection: Option<&[usize]>,
-    ) -> Result<Arc<DeclaredSchema>, ConnectorError> {
-        match projection {
-            Some(indices) => self.declared.project(indices).ok_or_else(|| {
-                ConnectorError::SourceUnreadable(
-                    "postgres projection references an unknown declared column".into(),
-                )
-            }),
-            None => Ok(Arc::clone(&self.declared)),
-        }
     }
 
     async fn copy_decoded_for(
         &self,
         client: &Client,
         declared: Arc<DeclaredSchema>,
-        row_limit: Option<usize>,
     ) -> Result<SnapshotTable, ConnectorError> {
         let copy_stream = client
-            .copy_out(&self.copy_sql_for_with_limit(&declared, row_limit))
+            .copy_out(&self.copy_sql_for(&declared))
             .await
             .map_err(|e| ConnectorError::SourceUnreadable(e.to_string()))?;
         futures::pin_mut!(copy_stream);
@@ -475,50 +426,10 @@ impl PostgresConnector {
     }
 
     async fn timed_copy_decoded(&self, client: &Client) -> Result<SnapshotTable, ConnectorError> {
-        self.timed_copy_decoded_projected(client, None).await
-    }
-
-    async fn timed_copy_decoded_projected(
-        &self,
-        client: &Client,
-        projection: Option<&[usize]>,
-    ) -> Result<SnapshotTable, ConnectorError> {
-        let declared = self.declared_for_projection(projection)?;
         self.with_query_timeout(
             "postgres export",
-            self.copy_decoded_for(client, declared, None),
+            self.copy_decoded_for(client, Arc::clone(&self.declared)),
         )
-        .await
-    }
-
-    async fn timed_copy_decoded_live_projected(
-        &self,
-        client: &Client,
-        projection: Option<&[usize]>,
-        requested_limit: Option<usize>,
-    ) -> Result<SnapshotTable, ConnectorError> {
-        let declared = self.declared_for_projection(projection)?;
-        let fetch_limit = match requested_limit {
-            Some(limit) if limit <= self.live_max_rows => limit,
-            _ => self.live_max_rows.saturating_add(1),
-        };
-        self.with_query_timeout(
-            "postgres live export",
-            self.copy_decoded_for(client, declared, Some(fetch_limit)),
-        )
-        .await
-    }
-
-    async fn acquire_live_permit(&self) -> Result<OwnedSemaphorePermit, ConnectorError> {
-        self.with_query_timeout("postgres live concurrency wait", async {
-            self.live_semaphore
-                .clone()
-                .acquire_owned()
-                .await
-                .map_err(|_| {
-                    ConnectorError::SourceUnreadable("postgres live concurrency gate closed".into())
-                })
-        })
         .await
     }
 }
@@ -595,19 +506,6 @@ impl TableConnector for PostgresConnector {
         })
     }
 
-    fn live_provider<'a>(&'a self) -> ConnectorFuture<'a, Option<Arc<dyn TableProvider>>> {
-        Box::pin(async move {
-            if self.table.is_none() {
-                return Err(ConnectorError::LiveUnsupported);
-            }
-            let provider: Arc<dyn TableProvider> = Arc::new(PostgresLiveTableProvider {
-                connector: self.clone(),
-                schema: self.declared.to_arrow_schema(),
-            });
-            Ok(Some(provider))
-        })
-    }
-
     fn metadata<'a>(&'a self) -> ConnectorFuture<'a, ConnectorMetadata> {
         Box::pin(async move {
             let client = self.connect().await?;
@@ -618,212 +516,6 @@ impl TableConnector for PostgresConnector {
             })
         })
     }
-}
-
-struct PostgresLiveTableProvider {
-    connector: PostgresConnector,
-    schema: SchemaRef,
-}
-
-impl fmt::Debug for PostgresLiveTableProvider {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PostgresLiveTableProvider")
-            .field("descriptor", &self.connector.descriptor())
-            .finish_non_exhaustive()
-    }
-}
-
-#[async_trait]
-impl TableProvider for PostgresLiveTableProvider {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.schema)
-    }
-
-    fn table_type(&self) -> TableType {
-        TableType::Base
-    }
-
-    async fn scan(
-        &self,
-        state: &dyn Session,
-        projection: Option<&Vec<usize>>,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let started = Instant::now();
-        let (remote_projection, remote_limit) = postgres_live_remote_scan_options(
-            filters.is_empty(),
-            projection.map(Vec::as_slice),
-            limit,
-        );
-        let projection_pushdown = remote_projection.is_some();
-        let wait_started = Instant::now();
-        let _permit = match self.connector.acquire_live_permit().await {
-            Ok(permit) => permit,
-            Err(error) => {
-                observe_postgres_live_scan_error(
-                    started,
-                    wait_started.elapsed().as_secs_f64(),
-                    projection_pushdown,
-                );
-                return Err(postgres_to_datafusion_error(error));
-            }
-        };
-        let wait_seconds = wait_started.elapsed().as_secs_f64();
-        let client = match self.connector.connect().await {
-            Ok(client) => client,
-            Err(error) => {
-                observe_postgres_live_scan_error(started, wait_seconds, projection_pushdown);
-                return Err(postgres_to_datafusion_error(error));
-            }
-        };
-        let snapshot = match self
-            .connector
-            .timed_copy_decoded_live_projected(&client, remote_projection, remote_limit)
-            .await
-        {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                observe_postgres_live_scan_error(started, wait_seconds, projection_pushdown);
-                return Err(postgres_to_datafusion_error(error));
-            }
-        };
-        let exported_bytes = snapshot.metadata.size_bytes.unwrap_or(0);
-        let mut stream = snapshot.batches;
-        let mut batches = Vec::new();
-        let mut rows: u64 = 0;
-        while let Some(result) = stream.next().await {
-            let batch = match result {
-                Ok(batch) => batch,
-                Err(error) => {
-                    observe_postgres_live_scan_error(started, wait_seconds, projection_pushdown);
-                    return Err(postgres_to_datafusion_error(error));
-                }
-            };
-            rows = rows.saturating_add(batch.num_rows() as u64);
-            batches.push(batch);
-        }
-        if remote_limit.is_none_or(|limit| limit > self.connector.live_max_rows)
-            && rows > self.connector.live_max_rows as u64
-        {
-            observe_postgres_live_scan_error(started, wait_seconds, projection_pushdown);
-            return Err(postgres_to_datafusion_error(
-                ConnectorError::SourceUnreadable(format!(
-                    "postgres live export exceeds configured row maximum: > {}",
-                    self.connector.live_max_rows
-                )),
-            ));
-        }
-
-        let table = match MemTable::try_new(snapshot.observed_schema, vec![batches]) {
-            Ok(table) => table,
-            Err(error) => {
-                observe_postgres_live_scan_error(started, wait_seconds, projection_pushdown);
-                return Err(error);
-            }
-        };
-        let local_projection = if remote_projection.is_some() {
-            None
-        } else {
-            projection
-        };
-        match table.scan(state, local_projection, filters, limit).await {
-            Ok(plan) => {
-                observe_live_datasource_scan(LiveScanObservation {
-                    datasource: "postgres",
-                    status: "success",
-                    projection_pushdown,
-                    duration_seconds: started.elapsed().as_secs_f64(),
-                    wait_seconds,
-                    rows,
-                    bytes: exported_bytes,
-                });
-                tracing::info!(
-                    event = "connector.postgres_live_scan",
-                    datasource = "postgres",
-                    status = "success",
-                    projection_pushdown,
-                    rows,
-                    bytes = exported_bytes,
-                    duration_ms = started.elapsed().as_millis(),
-                    wait_ms = (wait_seconds * 1000.0) as u64,
-                );
-                Ok(plan)
-            }
-            Err(error) => {
-                observe_postgres_live_scan_error(started, wait_seconds, projection_pushdown);
-                Err(error)
-            }
-        }
-    }
-
-    fn supports_filters_pushdown(
-        &self,
-        filters: &[&Expr],
-    ) -> DataFusionResult<Vec<TableProviderFilterPushDown>> {
-        Ok(vec![
-            TableProviderFilterPushDown::Unsupported;
-            filters.len()
-        ])
-    }
-
-    fn statistics(&self) -> Option<Statistics> {
-        None
-    }
-}
-
-fn postgres_to_datafusion_error(error: ConnectorError) -> DataFusionError {
-    DataFusionError::Execution(error.to_string())
-}
-
-fn observe_postgres_live_scan_error(
-    started: Instant,
-    wait_seconds: f64,
-    projection_pushdown: bool,
-) {
-    observe_live_datasource_scan(LiveScanObservation {
-        datasource: "postgres",
-        status: "error",
-        projection_pushdown,
-        duration_seconds: started.elapsed().as_secs_f64(),
-        wait_seconds,
-        rows: 0,
-        bytes: 0,
-    });
-    tracing::warn!(
-        event = "connector.postgres_live_scan",
-        datasource = "postgres",
-        status = "error",
-        projection_pushdown,
-        duration_ms = started.elapsed().as_millis(),
-        wait_ms = (wait_seconds * 1000.0) as u64,
-    );
-}
-
-fn is_pushdown_safe_projection(projection: &[usize]) -> bool {
-    !projection.is_empty()
-        && projection
-            .iter()
-            .enumerate()
-            .all(|(offset, index)| !projection[..offset].contains(index))
-}
-
-fn postgres_live_remote_scan_options(
-    filters_empty: bool,
-    projection: Option<&[usize]>,
-    requested_limit: Option<usize>,
-) -> (Option<&[usize]>, Option<usize>) {
-    if !filters_empty {
-        return (None, None);
-    }
-    (
-        projection.filter(|indices| is_pushdown_safe_projection(indices)),
-        requested_limit,
-    )
 }
 
 fn quote_ident(identifier: &str) -> String {
@@ -888,126 +580,15 @@ mod tests {
             256 * 1024 * 1024,
             Duration::from_secs(5),
             Duration::from_secs(30),
-            8,
-            10_000,
         );
 
-        let sql = connector.copy_sql_for_with_limit(&connector.declared, None);
+        let sql = connector.copy_sql_for(&connector.declared);
         assert!(sql.contains(r#"FROM (SELECT * FROM "public"."people") AS data_gate_source"#));
         assert!(sql.contains(r#"data_gate_source."id"::bigint AS "id""#));
         assert!(sql.contains(r#"data_gate_source."active"::boolean AS "active""#));
         assert!(sql.contains(r#"to_char(data_gate_source."updated_at"::timestamptz"#));
         assert!(sql.starts_with("COPY (SELECT "));
         assert!(sql.ends_with(") TO STDOUT WITH (FORMAT CSV, HEADER TRUE)"));
-    }
-
-    #[test]
-    fn postgres_copy_sql_can_project_declared_column_subset() {
-        let connector = PostgresConnector::new(
-            "DATABASE_URL".to_string(),
-            Some(PostgresTableConfig {
-                schema: "public".to_string(),
-                name: "people".to_string(),
-            }),
-            None,
-            None,
-            declared(vec![
-                ("id", FieldType::Integer),
-                ("name", FieldType::String),
-                ("active", FieldType::Boolean),
-            ]),
-            256 * 1024 * 1024,
-            Duration::from_secs(5),
-            Duration::from_secs(30),
-            8,
-            10_000,
-        );
-        let projected = connector
-            .declared_for_projection(Some(&[2, 0]))
-            .expect("projection is valid");
-
-        let sql = connector.copy_sql_for_with_limit(&projected, None);
-
-        assert!(sql.contains(r#"data_gate_source."active"::boolean AS "active""#));
-        assert!(sql.contains(r#"data_gate_source."id"::bigint AS "id""#));
-        assert!(!sql.contains(r#"data_gate_source."name"::text AS "name""#));
-        assert!(
-            sql.find(r#""active""#).expect("active appears")
-                < sql.find(r#""id""#).expect("id appears")
-        );
-    }
-
-    #[test]
-    fn postgres_live_copy_sql_applies_remote_row_limit() {
-        let connector = PostgresConnector::new(
-            "DATABASE_URL".to_string(),
-            Some(PostgresTableConfig {
-                schema: "public".to_string(),
-                name: "people".to_string(),
-            }),
-            None,
-            None,
-            declared(vec![("id", FieldType::Integer)]),
-            256 * 1024 * 1024,
-            Duration::from_secs(5),
-            Duration::from_secs(30),
-            8,
-            10_000,
-        );
-
-        let sql = connector.copy_sql_for_with_limit(&connector.declared, Some(10_001));
-
-        assert!(sql
-            .contains(r#"FROM (SELECT * FROM "public"."people") AS data_gate_source LIMIT 10001"#));
-        assert!(sql.ends_with(") TO STDOUT WITH (FORMAT CSV, HEADER TRUE)"));
-    }
-
-    #[test]
-    fn postgres_declared_projection_rejects_unknown_index() {
-        let connector = PostgresConnector::new(
-            "DATABASE_URL".to_string(),
-            Some(PostgresTableConfig {
-                schema: "public".to_string(),
-                name: "people".to_string(),
-            }),
-            None,
-            None,
-            declared(vec![("id", FieldType::Integer)]),
-            256 * 1024 * 1024,
-            Duration::from_secs(5),
-            Duration::from_secs(30),
-            8,
-            10_000,
-        );
-
-        assert!(connector.declared_for_projection(Some(&[1])).is_err());
-    }
-
-    #[test]
-    fn postgres_live_projection_pushdown_requires_non_empty_unique_indices() {
-        assert!(!is_pushdown_safe_projection(&[]));
-        assert!(!is_pushdown_safe_projection(&[0, 0]));
-        assert!(is_pushdown_safe_projection(&[2, 0]));
-    }
-
-    #[test]
-    fn postgres_live_remote_scan_options_are_only_safe_without_filters() {
-        let projection = [2, 0];
-        let (remote_projection, remote_limit) =
-            postgres_live_remote_scan_options(true, Some(&projection), Some(1));
-        assert_eq!(remote_projection, Some(projection.as_slice()));
-        assert_eq!(remote_limit, Some(1));
-
-        let duplicate_projection = [0, 0];
-        let (remote_projection, remote_limit) =
-            postgres_live_remote_scan_options(true, Some(&duplicate_projection), Some(1));
-        assert_eq!(remote_projection, None);
-        assert_eq!(remote_limit, Some(1));
-
-        let (remote_projection, remote_limit) =
-            postgres_live_remote_scan_options(false, Some(&projection), Some(1));
-        assert_eq!(remote_projection, None);
-        assert_eq!(remote_limit, None);
     }
 
     #[test]

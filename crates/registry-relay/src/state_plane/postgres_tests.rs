@@ -58,16 +58,19 @@ use super::{
     ConsultationCompletionOutcome, ConsultationPermitSet, ConsultationPersistenceError,
     DispatchOperationId, DispatchPermitBudget, DispatchPermitKind, EffectiveQuotaLimits,
     KeyringInitializationOutcome, KnownCompletionDisposition, KnownConsultationCompletionFacts,
-    KnownFailureClass, PostgresAuditPseudonymKeyringMaintenance,
-    PostgresAuditPseudonymKeyringReader, PostgresAuditPseudonymKeyringRuntime,
-    PostgresDurableAuditStatePlane, PostgresKeyringError, PostgresQuotaStatePlane,
-    PostgresServingFence, PseudonymBoundDuplicateRecoveryOutcome, PublicConsultationOutcome,
-    PublicQuotaLimits, QuotaError, QuotaGrant, QuotaKey, QuotaReadiness, QuotaReservation,
-    RuntimeDatabaseRole, ServingFenceError, ServingFenceLockKey, ServingFenceReadiness,
-    StatePlaneInitializationError, StatePlaneInstallError, StatePlaneReadiness,
-    TakeoverCompletionRecoveryAuthority, AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
-    DURABLE_AUDIT_CAPABILITY_V1, PERSISTENT_QUOTA_CAPABILITY_V1, POSTGRES_STATE_PLANE_MIGRATION_V1,
-    SERVING_FENCE_CAPABILITY_V1, STATE_PLANE_SCHEMA_FINGERPRINT_V1,
+    KnownFailureClass, MaterializationGenerationId, MaterializationPublicationBindingId,
+    MaterializationPublicationError, MaterializationPublicationOutcome,
+    MaterializationPublicationRequest, MaterializationSourceRevision,
+    PostgresAuditPseudonymKeyringMaintenance, PostgresAuditPseudonymKeyringReader,
+    PostgresAuditPseudonymKeyringRuntime, PostgresDurableAuditStatePlane, PostgresKeyringError,
+    PostgresQuotaStatePlane, PostgresServingFence, PseudonymBoundDuplicateRecoveryOutcome,
+    PublicConsultationOutcome, PublicQuotaLimits, QuotaError, QuotaGrant, QuotaKey, QuotaReadiness,
+    QuotaReservation, RestrictedMaterializationContentDigest, RuntimeDatabaseRole,
+    ServingFenceError, ServingFenceLockKey, ServingFenceReadiness, StatePlaneInitializationError,
+    StatePlaneInstallError, StatePlaneReadiness, TakeoverCompletionRecoveryAuthority,
+    AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1, DURABLE_AUDIT_CAPABILITY_V1,
+    PERSISTENT_QUOTA_CAPABILITY_V1, POSTGRES_STATE_PLANE_MIGRATION_V1, SERVING_FENCE_CAPABILITY_V1,
+    STATE_PLANE_SCHEMA_FINGERPRINT_V1,
 };
 
 const DATABASE_URL_ENV: &str = "REGISTRY_RELAY_STATE_PLANE_POSTGRES_TEST_URL";
@@ -2645,6 +2648,19 @@ WHERE metadata.singleton = true
         direct_read_error.as_db_error().map(|error| error.code()),
         Some(&SqlState::INSUFFICIENT_PRIVILEGE)
     );
+    let direct_materialization_read_error = client_one
+        .query_one(
+            "SELECT count(*) FROM relay_state_private.materialization_publication_history",
+            &[],
+        )
+        .await
+        .expect_err("runtime must have no materialization-history table privilege");
+    assert_eq!(
+        direct_materialization_read_error
+            .as_db_error()
+            .map(|error| error.code()),
+        Some(&SqlState::INSUFFICIENT_PRIVILEGE)
+    );
     let plane_one = Arc::new(
         PostgresDurableAuditStatePlane::connect(
             client_one,
@@ -2666,6 +2682,238 @@ WHERE metadata.singleton = true
         .await?,
     );
     assert_eq!(plane_one.readiness().await, StatePlaneReadiness::Ready);
+
+    let binding =
+        MaterializationPublicationBindingId::parse(&format!("sha256:{}", "a".repeat(64)))?;
+    let generation_one = MaterializationGenerationId::parse("01J2D9W2G00000000000000000")?;
+    let generation_two = MaterializationGenerationId::parse("01J2D9W2G00000000000000001")?;
+    let publication_operation_one = DurableAuditOperationId::from_ulid(Ulid::new());
+    let publication_attempt_one = attempt_write(&publication_operation_one, "publication-one");
+    let publication_attempt_one_identity =
+        match plane_one.write_phase(&publication_attempt_one).await? {
+            DurableAuditWriteOutcome::Inserted(identity) => identity,
+            _ => panic!("fresh materialization attempt must insert"),
+        };
+    let publication_completion_one = DurableAuditWrite::new(
+        DurableAuditStreamKind::Materialization,
+        publication_operation_one,
+        DurableAuditPhase::Completion,
+        json!({
+            "attempt_event": CompletionAttemptReference::from_stored_attempt(
+                &publication_attempt_one_identity
+            ).to_safe_payload_value(),
+            "outcome": "known_complete",
+            "binding_id": binding.as_str(),
+            "generation_id": generation_one.as_str(),
+            "content_digest": "restricted-sha256",
+        }),
+    )?;
+    let publication_one_observed_at = current_unix_ms() - 1_000;
+    let publication_request_one = MaterializationPublicationRequest::new(
+        binding.clone(),
+        generation_one.clone(),
+        RestrictedMaterializationContentDigest::from_sha256([0x11; 32]),
+        Some(MaterializationSourceRevision::parse("source-rev:1")?),
+        Some(publication_one_observed_at),
+    )?;
+    let inserted_one = match plane_one
+        .publish_materialization(&publication_completion_one, &publication_request_one)
+        .await?
+    {
+        MaterializationPublicationOutcome::Inserted(publication) => publication,
+        MaterializationPublicationOutcome::IdenticalDuplicate(_) => {
+            panic!("fresh materialization publication must insert")
+        }
+    };
+    assert_eq!(inserted_one.publication_sequence(), 1);
+    assert_eq!(inserted_one.generation_id(), &generation_one);
+    assert!(inserted_one.published_at_unix_ms() >= current_unix_ms() - 5_000);
+    let publication_counts = admin
+        .query_one(
+            "SELECT \
+                 (SELECT count(*) FROM relay_state_private.materialization_publication_history), \
+                 (SELECT count(*) FROM relay_state_private.materialization_active_publication), \
+                 (SELECT count(*) FROM relay_state_private.audit_phase \
+                    WHERE stream_kind = 'materialization' AND phase = 'completion')",
+            &[],
+        )
+        .await?;
+    assert_eq!(publication_counts.get::<_, i64>(0), 1);
+    assert_eq!(publication_counts.get::<_, i64>(1), 1);
+    assert_eq!(publication_counts.get::<_, i64>(2), 1);
+    assert!(matches!(
+        plane_two
+            .publish_materialization(&publication_completion_one, &publication_request_one)
+            .await?,
+        MaterializationPublicationOutcome::IdenticalDuplicate(_)
+    ));
+    let conflicting_request = MaterializationPublicationRequest::new(
+        binding.clone(),
+        generation_one.clone(),
+        RestrictedMaterializationContentDigest::from_sha256([0x22; 32]),
+        Some(MaterializationSourceRevision::parse("source-rev:1")?),
+        Some(publication_one_observed_at),
+    )?;
+    assert!(matches!(
+        plane_one
+            .publish_materialization(&publication_completion_one, &conflicting_request)
+            .await,
+        Err(MaterializationPublicationError::ConflictingReplay)
+    ));
+    let publication_count_after_conflict: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM relay_state_private.materialization_publication_history",
+            &[],
+        )
+        .await?
+        .get(0);
+    assert_eq!(publication_count_after_conflict, 1);
+
+    let publication_operation_two = DurableAuditOperationId::from_ulid(Ulid::new());
+    let publication_attempt_two = attempt_write(&publication_operation_two, "publication-two");
+    let publication_attempt_two_identity =
+        match plane_one.write_phase(&publication_attempt_two).await? {
+            DurableAuditWriteOutcome::Inserted(identity) => identity,
+            _ => panic!("fresh second materialization attempt must insert"),
+        };
+    let publication_completion_two = DurableAuditWrite::new(
+        DurableAuditStreamKind::Materialization,
+        publication_operation_two,
+        DurableAuditPhase::Completion,
+        json!({
+            "attempt_event": CompletionAttemptReference::from_stored_attempt(
+                &publication_attempt_two_identity
+            ).to_safe_payload_value(),
+            "outcome": "known_complete",
+            "binding_id": binding.as_str(),
+            "generation_id": generation_two.as_str(),
+            "content_digest": "restricted-sha256",
+        }),
+    )?;
+    let publication_request_two = MaterializationPublicationRequest::new(
+        binding.clone(),
+        generation_two.clone(),
+        RestrictedMaterializationContentDigest::from_sha256([0x22; 32]),
+        Some(MaterializationSourceRevision::parse("source-rev:2")?),
+        Some(current_unix_ms() - 500),
+    )?;
+    let inserted_two = match plane_two
+        .publish_materialization(&publication_completion_two, &publication_request_two)
+        .await?
+    {
+        MaterializationPublicationOutcome::Inserted(publication) => publication,
+        MaterializationPublicationOutcome::IdenticalDuplicate(_) => {
+            panic!("fresh second materialization publication must insert")
+        }
+    };
+    assert_eq!(inserted_two.publication_sequence(), 2);
+    let active_sequence: i64 = admin
+        .query_one(
+            "SELECT publication_sequence \
+             FROM relay_state_private.materialization_active_publication \
+             WHERE binding_id = $1",
+            &[&binding.as_str()],
+        )
+        .await?
+        .get(0);
+    assert_eq!(active_sequence, 2);
+    assert_eq!(
+        plane_one
+            .active_materialization(&binding)
+            .await?
+            .expect("active materialization")
+            .generation_id(),
+        &generation_two
+    );
+    assert_eq!(
+        plane_one
+            .reconcile_materialization(&publication_request_two)
+            .await?
+            .completion()
+            .envelope_id(),
+        inserted_two.completion().envelope_id()
+    );
+
+    let rollback_operation = DurableAuditOperationId::from_ulid(Ulid::new());
+    let rollback_attempt = attempt_write(&rollback_operation, "publication-rollback");
+    let rollback_attempt_identity = match plane_one.write_phase(&rollback_attempt).await? {
+        DurableAuditWriteOutcome::Inserted(identity) => identity,
+        _ => panic!("fresh rollback attempt must insert"),
+    };
+    let rollback_completion = DurableAuditWrite::new(
+        DurableAuditStreamKind::Materialization,
+        rollback_operation,
+        DurableAuditPhase::Completion,
+        json!({
+            "attempt_event": CompletionAttemptReference::from_stored_attempt(
+                &rollback_attempt_identity
+            ).to_safe_payload_value(),
+            "outcome": "known_complete",
+        }),
+    )?;
+    let rollback_request = MaterializationPublicationRequest::new(
+        binding.clone(),
+        MaterializationGenerationId::parse("01J2D9W2F00000000000000000")?,
+        RestrictedMaterializationContentDigest::from_sha256([0x33; 32]),
+        None,
+        None,
+    )?;
+    assert!(matches!(
+        plane_one
+            .publish_materialization(&rollback_completion, &rollback_request)
+            .await,
+        Err(MaterializationPublicationError::RollbackRejected)
+    ));
+    let publication_count_after_rollback: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM relay_state_private.materialization_publication_history",
+            &[],
+        )
+        .await?
+        .get(0);
+    assert_eq!(publication_count_after_rollback, 2);
+
+    let reused_generation_operation = DurableAuditOperationId::from_ulid(Ulid::new());
+    let reused_generation_attempt =
+        attempt_write(&reused_generation_operation, "publication-generation-reuse");
+    let reused_generation_attempt_identity =
+        match plane_one.write_phase(&reused_generation_attempt).await? {
+            DurableAuditWriteOutcome::Inserted(identity) => identity,
+            _ => panic!("fresh generation-reuse attempt must insert"),
+        };
+    let reused_generation_completion = DurableAuditWrite::new(
+        DurableAuditStreamKind::Materialization,
+        reused_generation_operation,
+        DurableAuditPhase::Completion,
+        json!({
+            "attempt_event": CompletionAttemptReference::from_stored_attempt(
+                &reused_generation_attempt_identity
+            ).to_safe_payload_value(),
+            "outcome": "known_complete",
+        }),
+    )?;
+    let reused_generation_request = MaterializationPublicationRequest::new(
+        MaterializationPublicationBindingId::parse(&format!("sha256:{}", "b".repeat(64)))?,
+        generation_one,
+        RestrictedMaterializationContentDigest::from_sha256([0x44; 32]),
+        None,
+        None,
+    )?;
+    assert!(matches!(
+        plane_one
+            .publish_materialization(&reused_generation_completion, &reused_generation_request)
+            .await,
+        Err(MaterializationPublicationError::GenerationReused)
+    ));
+    let materialization_completion_count: i64 = admin
+        .query_one(
+            "SELECT count(*) FROM relay_state_private.audit_phase \
+             WHERE stream_kind = 'materialization' AND phase = 'completion'",
+            &[],
+        )
+        .await?
+        .get(0);
+    assert_eq!(materialization_completion_count, 2);
 
     // statement_timeout must be armed by the caller before PostgreSQL starts
     // the outer SELECT. Relay does this when it admits the runtime connection;
@@ -3617,7 +3865,7 @@ WHERE metadata.singleton = true
         .collect::<Result<Vec<_>, _>>()?;
     let ordered_chain = order_chain(stored_envelopes);
     let verification = verify_chain(&ordered_chain, &test_chain_hasher)?;
-    assert_eq!(verification.records, 8);
+    assert_eq!(verification.records, 14);
     let head: Vec<u8> = admin
         .query_one(
             "SELECT record_hash FROM relay_state_private.audit_chain_head WHERE singleton = true",

@@ -71,14 +71,47 @@ pub(super) fn validate_acquisition(
 
 pub(super) fn validate_source_provenance(
     provenance: &SourceProvenanceDocument,
+    acquisition: AcquisitionClassDocument,
+    fields: &BTreeMap<String, ResponseSchemaDocument>,
 ) -> Result<(), SourcePlanArtifactError> {
-    match (&provenance.source_observed_at, &provenance.source_revision) {
-        (SourceObservedAtDocument::Absent, SourceRevisionDocument::Absent) => Ok(()),
-        // V1 has no reviewed extraction mapping for provenance fields. Keep the
-        // closed document variants explicit, but fail closed until a contract
-        // version binds them to exact pack response pointers.
-        _ => Err(SourcePlanArtifactError::InvalidPlan),
+    if acquisition != AcquisitionClassDocument::MaterializedSnapshot
+        && (!matches!(
+            provenance.source_observed_at,
+            SourceObservedAtDocument::Absent
+        ) || !matches!(provenance.source_revision, SourceRevisionDocument::Absent))
+    {
+        return Err(SourcePlanArtifactError::InvalidPlan);
     }
+    if let SourceObservedAtDocument::AcquiredRfc3339 { field } = &provenance.source_observed_at {
+        validate_stable_text(field)?;
+        if !matches!(
+            fields.get(field),
+            Some(ResponseSchemaDocument::String {
+                nullable: false,
+                max_bytes: 1..=64,
+            })
+        ) {
+            return Err(SourcePlanArtifactError::InvalidAcquisition);
+        }
+    }
+    if let SourceRevisionDocument::AcquiredString { field, max_bytes } = &provenance.source_revision
+    {
+        validate_stable_text(field)?;
+        if *max_bytes == 0
+            || fields.get(field).is_none_or(|schema| {
+                !matches!(
+                    schema,
+                    ResponseSchemaDocument::String {
+                        nullable: false,
+                        max_bytes: schema_max,
+                    } if u32::from(*max_bytes) == *schema_max
+                )
+            })
+        {
+            return Err(SourcePlanArtifactError::InvalidAcquisition);
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn cardinality_from_bounds(
@@ -294,7 +327,7 @@ pub(super) fn validate_plan(
         }
     }
     if plan.kind == SourcePlanKind::SnapshotExact {
-        return validate_snapshot_plan(plan, spec.acquisition.class, spec.bounds);
+        return validate_snapshot_plan(spec);
     }
     if plan.operations.is_empty() || plan.operations.len() > 5 || plan.steps.is_empty() {
         return Err(SourcePlanArtifactError::InvalidPlan);
@@ -853,10 +886,10 @@ pub(super) fn body_uses_input(template: &BodyTemplateDocument, input: &str) -> b
 }
 
 pub(super) fn validate_snapshot_plan(
-    plan: &PlanTemplateDocument,
-    acquisition: AcquisitionClassDocument,
-    bounds: LimitsDocument,
+    spec: &IntegrationPackSpecDocument,
 ) -> Result<(), SourcePlanArtifactError> {
+    let plan = &spec.plan;
+    let bounds = spec.bounds;
     if !plan.operations.is_empty()
         || !plan.steps.is_empty()
         || !plan.step_conditions.is_empty()
@@ -869,7 +902,77 @@ pub(super) fn validate_snapshot_plan(
     {
         return Err(SourcePlanArtifactError::InvalidPlan);
     }
-    validate_template_kind(plan, acquisition)
+    validate_template_kind(plan, spec.acquisition.class)?;
+    let snapshot = plan
+        .snapshot
+        .as_ref()
+        .ok_or(SourcePlanArtifactError::InvalidPlan)?;
+    let reviewed = spec
+        .reviewed_acquisition
+        .as_ref()
+        .ok_or(SourcePlanArtifactError::InvalidAcquisition)?;
+    let input = spec
+        .input_slots
+        .keys()
+        .next()
+        .ok_or(SourcePlanArtifactError::InvalidAcquisition)?;
+    validate_stable_text(&snapshot.mapping.key.physical_field)?;
+    if snapshot.mapping.key.input != *input {
+        return Err(SourcePlanArtifactError::InvalidAcquisition);
+    }
+
+    let reviewed_fields = reviewed
+        .fields
+        .keys()
+        .chain(reviewed.control_fields.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let acquisition_fields = spec
+        .acquisition
+        .fields
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if reviewed_fields != acquisition_fields
+        || snapshot
+            .mapping
+            .projection
+            .keys()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != acquisition_fields
+    {
+        return Err(SourcePlanArtifactError::InvalidAcquisition);
+    }
+    let mut physical_fields = BTreeSet::new();
+    for physical_field in snapshot.mapping.projection.values() {
+        validate_stable_text(physical_field)?;
+        if physical_field == &snapshot.mapping.key.physical_field
+            || !physical_fields.insert(physical_field.as_str())
+        {
+            return Err(SourcePlanArtifactError::InvalidAcquisition);
+        }
+    }
+    for provenance_field in [
+        match &spec.source_provenance.source_observed_at {
+            SourceObservedAtDocument::Absent => None,
+            SourceObservedAtDocument::AcquiredRfc3339 { field } => Some(field),
+        },
+        match &spec.source_provenance.source_revision {
+            SourceRevisionDocument::Absent => None,
+            SourceRevisionDocument::AcquiredString { field, .. } => Some(field),
+        },
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !reviewed.control_fields.contains_key(provenance_field)
+            || !snapshot.mapping.projection.contains_key(provenance_field)
+        {
+            return Err(SourcePlanArtifactError::InvalidAcquisition);
+        }
+    }
+    Ok(())
 }
 
 struct HttpOperationValidationContext<'a> {

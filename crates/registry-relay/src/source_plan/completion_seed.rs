@@ -17,13 +17,13 @@ use sha2::{Digest, Sha256};
 
 use super::artifact::{
     IntegrationPackArtifact, PrivateBindingArtifact, PublicContractArtifact, RequestCodecDocument,
-    SourcePlanKind, SourcePlanLimits,
+    SourceObservedAtDocument, SourcePlanKind, SourcePlanLimits, SourceRevisionDocument,
 };
 use super::compiler::{
     CompiledBodyTemplate, CompiledCardinalityMechanism, CompiledOperation,
     CompiledProjectionMechanism, CompiledScalarShape, CompiledSelectorLocation,
-    CompiledSelectorSource, CompiledStep, CompiledStepPredicate, CompiledValueExpression,
-    RhaiWorkerLimits, SourcePlanCompileError,
+    CompiledSelectorSource, CompiledSnapshotBinding, CompiledStep, CompiledStepPredicate,
+    CompiledValueExpression, RhaiWorkerLimits, SourcePlanCompileError,
 };
 use super::runtime_profile::{
     CompiledDispatchProfile, PhysicalProjectionDigest, PredicatePlanDigest, RhaiPredicateIdentity,
@@ -148,10 +148,18 @@ pub(super) fn compile_runtime_commitment_digests(
     steps: &[CompiledStep],
     dispatch: &CompiledDispatchProfile,
     rhai: Option<&RhaiPredicateIdentity>,
+    snapshot: Option<&CompiledSnapshotBinding>,
 ) -> Result<(PredicatePlanDigest, PhysicalProjectionDigest), SourcePlanCompileError> {
-    let predicate =
-        compile_predicate_plan_digest(kind, input_names, operations, steps, dispatch, rhai)?;
-    let projection = compile_physical_projection_digest(kind, operations)?;
+    let predicate = compile_predicate_plan_digest(
+        kind,
+        input_names,
+        operations,
+        steps,
+        dispatch,
+        rhai,
+        snapshot,
+    )?;
+    let projection = compile_physical_projection_digest(kind, operations, snapshot)?;
     Ok((predicate, projection))
 }
 
@@ -162,6 +170,7 @@ fn compile_predicate_plan_digest(
     steps: &[CompiledStep],
     dispatch: &CompiledDispatchProfile,
     rhai: Option<&RhaiPredicateIdentity>,
+    snapshot: Option<&CompiledSnapshotBinding>,
 ) -> Result<PredicatePlanDigest, SourcePlanCompileError> {
     let mut operation_preimages = operations
         .iter()
@@ -180,9 +189,11 @@ fn compile_predicate_plan_digest(
 
     let plan = match (kind, dispatch, rhai) {
         (SourcePlanKind::SnapshotExact, CompiledDispatchProfile::SnapshotExact, None) => {
+            let snapshot = snapshot.ok_or(SourcePlanCompileError::CompilerInvariant)?;
             let input = input_names
-                .first()
+                .iter()
                 .copied()
+                .find(|input| *input == snapshot.key_input())
                 .ok_or(SourcePlanCompileError::CompilerInvariant)?;
             json!({
                 "schema": "registry.relay.consultation-predicate-plan.v1",
@@ -190,7 +201,12 @@ fn compile_predicate_plan_digest(
                 "operations": operation_preimages,
                 "snapshot_selector": {
                     "source": {"kind": "consultation_input", "input": input},
-                    "location": {"kind": "materialized_snapshot_key"},
+                    "location": {
+                        "kind": "materialized_snapshot_key",
+                        "physical_field": snapshot.key_physical_field(),
+                        "physical_type": "utf8",
+                        "comparison": "binary_equality",
+                    },
                 },
             })
         }
@@ -238,6 +254,7 @@ fn compile_predicate_plan_digest(
 fn compile_physical_projection_digest(
     kind: SourcePlanKind,
     operations: &[CompiledOperation],
+    snapshot: Option<&CompiledSnapshotBinding>,
 ) -> Result<PhysicalProjectionDigest, SourcePlanCompileError> {
     let mut operation_preimages = operations
         .iter()
@@ -271,16 +288,52 @@ fn compile_physical_projection_digest(
         })
         .collect::<Result<Vec<_>, SourcePlanCompileError>>()?;
     operation_preimages.sort_unstable_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    let snapshot_projection = snapshot.map(|snapshot| {
+        json!({
+            "key_physical_field": snapshot.key_physical_field(),
+            "key_physical_type": "utf8",
+            "key_comparison": "binary_equality",
+            "fields": snapshot
+                .projection()
+                .map(|(logical, physical)| json!({
+                    "logical_field": logical,
+                    "physical_field": physical,
+                }))
+                .collect::<Vec<_>>(),
+            "source_observed_at": snapshot
+                .source_observed_at_extraction()
+                .map(|(logical, physical)| json!({
+                    "logical_field": logical,
+                    "physical_field": physical,
+                    "type": "rfc3339",
+                })),
+            "source_revision": snapshot
+                .source_revision_extraction()
+                .map(|(logical, physical, max_bytes)| json!({
+                    "logical_field": logical,
+                    "physical_field": physical,
+                    "type": "string",
+                    "max_bytes": max_bytes,
+                })),
+        })
+    });
+    if (kind == SourcePlanKind::SnapshotExact) != snapshot_projection.is_some() {
+        return Err(SourcePlanCompileError::CompilerInvariant);
+    }
+    let mut preimage = json!({
+        "schema": "registry.relay.consultation-physical-projection.v1",
+        "plan_kind": source_plan_kind_str(kind),
+        "operations": operation_preimages
+            .into_iter()
+            .map(|(_, preimage)| preimage)
+            .collect::<Vec<_>>(),
+    });
+    if let Some(snapshot_projection) = snapshot_projection {
+        preimage["snapshot_projection"] = snapshot_projection;
+    }
     PhysicalProjectionDigest::from_compiled_label(domain_separated_digest(
         PHYSICAL_PROJECTION_DOMAIN_V1,
-        &json!({
-            "schema": "registry.relay.consultation-physical-projection.v1",
-            "plan_kind": source_plan_kind_str(kind),
-            "operations": operation_preimages
-                .into_iter()
-                .map(|(_, preimage)| preimage)
-                .collect::<Vec<_>>(),
-        }),
+        &preimage,
     )?)
 }
 
@@ -825,6 +878,22 @@ pub(super) fn measure_completion_seed(
     if data_permit_operations.len() != usize::from(operation_bounds.max_data_exchanges) {
         return Err(SourcePlanCompileError::CompilerInvariant);
     }
+    let source_observed_at_contract =
+        match &contract.document.spec.source_provenance.source_observed_at {
+            SourceObservedAtDocument::Absent => Value::Null,
+            SourceObservedAtDocument::AcquiredRfc3339 { field } => json!({
+                "type": "acquired_rfc3339",
+                "field": field,
+            }),
+        };
+    let source_revision_contract = match &contract.document.spec.source_provenance.source_revision {
+        SourceRevisionDocument::Absent => Value::Null,
+        SourceRevisionDocument::AcquiredString { field, max_bytes } => json!({
+            "type": "acquired_string",
+            "field": field,
+            "max_bytes": max_bytes,
+        }),
+    };
     let mut seed = json!({
         "schema": "registry.relay.consultation-completion-seed/v1",
         "correlation": {"notary_evaluation_id": "7ZZZZZZZZZZZZZZZZZZZZZZZZZ"},
@@ -866,8 +935,8 @@ pub(super) fn measure_completion_seed(
             "disclosure_fields": disclosure_fields,
             "public_outcomes": public_outcomes,
             "provenance_contract": {
-                "source_observed_at": null,
-                "source_revision": null,
+                "source_observed_at": source_observed_at_contract,
+                "source_revision": source_revision_contract,
                 "snapshot_generation": if pack.document.spec.plan.kind == SourcePlanKind::SnapshotExact {
                     "required"
                 } else {
@@ -1015,6 +1084,13 @@ fn measure_completion_audit_payload(
         .and_then(|outcomes| outcomes.last())
         .and_then(Value::as_str)
         .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+    let source_observed_at = seed["acquisition"]["provenance_contract"]["source_observed_at"]
+        .is_object()
+        .then_some(9_007_199_254_740_991_i64);
+    let source_revision = seed["acquisition"]["provenance_contract"]["source_revision"]
+        .get("max_bytes")
+        .and_then(Value::as_u64)
+        .map(|max_bytes| "x".repeat(usize::try_from(max_bytes).unwrap_or(usize::MAX)));
     let payload = json!({
         "attempt_event": {
             "envelope_id": "7ZZZZZZZZZZZZZZZZZZZZZZZZZ",
@@ -1036,8 +1112,8 @@ fn measure_completion_audit_payload(
             },
             "provenance": {
                 "relay_acquired_at_unix_ms": 9_007_199_254_740_991_i64,
-                "source_observed_at_unix_ms": null,
-                "source_revision": null,
+                "source_observed_at_unix_ms": source_observed_at,
+                "source_revision": source_revision,
                 "snapshot_generation": is_snapshot.then_some("7ZZZZZZZZZZZZZZZZZZZZZZZZZ"),
                 "snapshot_published_at_unix_ms": is_snapshot
                     .then_some(9_007_199_254_740_991_i64),
