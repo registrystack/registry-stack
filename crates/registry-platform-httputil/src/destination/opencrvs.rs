@@ -538,7 +538,14 @@ fn validate_envelope(
         responses
             .first()
             .ok_or(OpenCrvsDciV190Rc1DecodeError::CardinalityViolation)?,
-        &["reference_id", "timestamp", "status", "data"],
+        &[
+            "reference_id",
+            "timestamp",
+            "status",
+            "data",
+            "pagination",
+            "locale",
+        ],
         &[],
     )?;
     if required_string(response, "reference_id")? != expected.message_id.as_ref() {
@@ -555,20 +562,13 @@ fn validate_envelope(
         response
             .get("data")
             .ok_or(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)?,
-        &[
-            "version",
-            "reg_type",
-            "reg_record_type",
-            "reg_records",
-            "pagination",
-            "locale",
-        ],
+        &["version", "reg_type", "reg_record_type", "reg_records"],
         &[],
     )?;
     if required_string(data, "version")? != OPENCRVS_DCI_VERSION
         || required_string(data, "reg_type")? != OPENCRVS_REGISTRY_TYPE
         || required_string(data, "reg_record_type")? != OPENCRVS_RECORD_TYPE
-        || required_string(data, "locale")? != OPENCRVS_LOCALE
+        || required_string(response, "locale")? != OPENCRVS_LOCALE
     {
         return Err(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation);
     }
@@ -586,7 +586,8 @@ fn validate_envelope(
     }
 
     let pagination = exact_object(
-        data.get("pagination")
+        response
+            .get("pagination")
             .ok_or(OpenCrvsDciV190Rc1DecodeError::PaginationViolation)?,
         &["page_number", "page_size", "total_count"],
         &[],

@@ -138,14 +138,14 @@ fn unsigned_response(records: Vec<Value>, pagination_total_count: u64) -> Value 
                     "version": "1.0.0",
                     "reg_type": "ns:org:RegistryType:Civil",
                     "reg_record_type": "spdci-extensions-dci:Person",
-                    "reg_records": records,
-                    "pagination": {
-                        "page_number": 1,
-                        "page_size": 2,
-                        "total_count": pagination_total_count
-                    },
-                    "locale": "eng"
-                }
+                    "reg_records": records
+                },
+                "pagination": {
+                    "page_number": 1,
+                    "page_size": 2,
+                    "total_count": pagination_total_count
+                },
+                "locale": "eng"
             }]
         }
     })
@@ -418,7 +418,7 @@ fn rejects_correlation_identity_status_and_envelope_failures_after_verification(
             OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation,
         ),
         (
-            "/message/search_response/0/data/locale",
+            "/message/search_response/0/locale",
             json!("fra"),
             OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation,
         ),
@@ -435,21 +435,35 @@ fn rejects_correlation_identity_status_and_envelope_failures_after_verification(
         decode(&unknown).err(),
         Some(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)
     );
+
+    let mut misplaced = unsigned_response(vec![], 0);
+    let response = misplaced["message"]["search_response"][0]
+        .as_object_mut()
+        .expect("search response object");
+    let pagination = response.remove("pagination").expect("pagination sibling");
+    let locale = response.remove("locale").expect("locale sibling");
+    let data = response
+        .get_mut("data")
+        .and_then(Value::as_object_mut)
+        .expect("data object");
+    data.insert("pagination".to_owned(), pagination);
+    data.insert("locale".to_owned(), locale);
+    assert_eq!(
+        decode(&misplaced).err(),
+        Some(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)
+    );
 }
 
 #[test]
 fn rejects_pagination_and_cardinality_inconsistency() {
     for (pointer, value) in [
         (
-            "/message/search_response/0/data/pagination/page_number",
+            "/message/search_response/0/pagination/page_number",
             json!(2),
         ),
+        ("/message/search_response/0/pagination/page_size", json!(3)),
         (
-            "/message/search_response/0/data/pagination/page_size",
-            json!(3),
-        ),
-        (
-            "/message/search_response/0/data/pagination/total_count",
+            "/message/search_response/0/pagination/total_count",
             json!(0),
         ),
     ] {
