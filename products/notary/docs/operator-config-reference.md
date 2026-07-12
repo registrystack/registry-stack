@@ -346,17 +346,18 @@ Do not add token issuer, audience, subject, client, or Relay `max_in_flight`
 fields. Unknown fields are rejected. Relay verifies token semantics on every
 request, and the verified consultation profile supplies the concurrency bound.
 
-Relay profiles may spend up to 10 seconds on one source operation. Notary gives
-the complete internal service hop one fixed, non-configurable 15-second
-absolute deadline. Waiting for the profile-derived semaphore, reloading the
-workload-token file, sending and reading the Relay response, strict decoding,
-and final result acceptance all consume that same deadline. There is no
-operator timeout field, retry, redirect, proxy, or result cache. For a
-Registry-backed configuration, Notary rejects `server.request_timeout` below
-20 seconds, preserving a fixed five-second listener reserve around the service
-hop. A consultation-enabled Relay separately requires its outer request timeout
-to be greater than 15 seconds. The unchanged 30-second defaults satisfy both
-guards.
+Relay profiles may spend up to 20 seconds inside one total source fence, while
+each individual data or credential exchange remains capped at 10 seconds.
+Notary gives the complete internal service hop one fixed, non-configurable
+25-second absolute deadline. Waiting for the profile-derived semaphore,
+reloading the workload-token file, sending and reading the Relay response,
+strict decoding, and final result acceptance all consume that same deadline.
+There is no operator timeout field, retry, redirect, proxy, or result cache. For
+a Registry-backed configuration, Notary rejects `server.request_timeout` below
+30 seconds, creating a configured five-second listener margin around the
+service hop. A consultation-enabled Relay separately requires its outer request
+timeout to be greater than 25 seconds. The unchanged 30-second defaults satisfy
+both guards.
 
 ### Startup and credential rotation
 

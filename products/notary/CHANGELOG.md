@@ -17,9 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profile, and exposes bounded Relay readiness and `doctor --live` checks.
   Relay remains the sole workload-token verifier and source credential owner.
   Exact private Relay networks require explicit `allowed_private_cidrs`. The
-  full service hop uses one fixed, non-configurable 15-second absolute deadline,
+  full service hop uses one fixed, non-configurable 25-second absolute deadline,
   and Registry-backed configurations require `server.request_timeout` of at
-  least 20 seconds, preserving a fixed five-second listener reserve around
+  least 30 seconds, preserving a configured five-second listener margin around
   that bound. Every existing claim must now declare `evidence_mode`; use
   `transitional_direct` only to preserve an existing governed source-connection
   path while it is migrated, and use `self_attested` only for source-free

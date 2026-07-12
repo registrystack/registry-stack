@@ -48,13 +48,15 @@ the same profile, purpose, input, and required scope set, Notary makes one
 request-scoped Relay consultation and reuses its result for both claims. A later
 evaluation performs a new consultation; this is not a result cache.
 
-One Relay profile may bound its source operation at up to 10 seconds. Notary's
-internal service hop has one fixed 15-second absolute deadline with no operator
-knob; permit wait, credential reload, Relay I/O, decoding, and result acceptance
-share it. Keep Registry-backed Notary's outer `server.request_timeout` at least
-20 seconds so five seconds remain around the service hop. A consultation-enabled
-Relay separately requires more than 15 seconds. Readiness is a separate
-5-second metadata-only check and never calls the source.
+One Relay profile may bound its total source fence at up to 20 seconds, while
+each individual data or credential exchange remains capped at 10 seconds.
+Notary's internal service hop has one fixed 25-second absolute deadline with no
+operator knob; permit wait, credential reload, Relay I/O, decoding, and result
+acceptance share it. Keep Registry-backed Notary's outer
+`server.request_timeout` at least 30 seconds to create a configured five-second
+listener margin around the service hop. A consultation-enabled Relay separately
+requires more than 25 seconds. Readiness is a separate 5-second metadata-only
+check and never calls the source.
 
 `self_attested` is a statement about evidence provenance, not an escape hatch
 for a missing source configuration. It has no source I/O, supports only a CEL

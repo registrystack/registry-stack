@@ -10,7 +10,7 @@
 - Registry-backed Notary verifies its Relay profile before serving, reloads a
   mounted workload JWT for each operation, exposes Relay readiness and live
   doctor checks, and keeps Relay correlation in restricted audit only. Set
-  Notary `server.request_timeout` to at least 20 seconds and restrict the token
+  Notary `server.request_timeout` to at least 30 seconds and restrict the token
   file to the Notary service account.
 
 ## 0.9.0
