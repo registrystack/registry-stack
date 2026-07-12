@@ -1193,7 +1193,11 @@ pub fn init_notary_project(
     options: NotaryInitOptions,
     image_lock: &RegistryctlImageLock,
 ) -> Result<()> {
-    init_standalone_notary_project(dir, options, image_lock)
+    init_standalone_notary_project(dir, options, image_lock)?;
+    eprintln!(
+        "WARN generated Notary config uses temporary transitional_direct cutover scaffolding; it blocks the replacement beta and 1.0 release and must be replaced by a reviewed Relay profile"
+    );
+    Ok(())
 }
 
 pub fn add_notary(
@@ -1204,7 +1208,11 @@ pub fn add_notary(
 ) -> Result<()> {
     match from {
         NotarySource::LocalRelay => add_notary_from_local_relay(project_dir, force, image_lock),
-    }
+    }?;
+    eprintln!(
+        "WARN generated Notary config uses temporary transitional_direct cutover scaffolding; it blocks the replacement beta and 1.0 release and must be replaced by a reviewed Relay profile"
+    );
+    Ok(())
 }
 
 pub fn convert_openfn_project(options: OpenFnConvertOptions) -> Result<()> {

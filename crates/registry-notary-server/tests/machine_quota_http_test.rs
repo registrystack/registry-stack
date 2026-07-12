@@ -13,10 +13,12 @@ use axum::{Json, Router};
 use axum_test::TestServer;
 use registry_notary_core::StandaloneRegistryNotaryConfig;
 use registry_notary_server::standalone_router;
+#[cfg(feature = "registry-notary-cel")]
 use registry_platform_testing::MockIdp;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use tempfile::TempDir;
+#[cfg(feature = "registry-notary-cel")]
 use time::OffsetDateTime;
 
 const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
@@ -107,6 +109,8 @@ evidence:
       title: Farmed land size
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: number
         unit: hectare
@@ -463,8 +467,8 @@ async fn single_evaluate_calls_share_budget_with_batch_calls() {
     assert_eq!(quota_audit["forwarded"], json!(false));
 }
 
+#[cfg(feature = "registry-notary-cel")]
 fn self_attestation_and_machine_oidc_config(
-    base_url: &str,
     audit_path: &str,
     issuer: &str,
     jwks_uri: &str,
@@ -534,40 +538,19 @@ evidence:
       disclosure:
         allowed:
           - value
-  source_connections:
-    people:
-      base_url: "{base_url}"
-      allow_insecure_localhost: true
-      token_env: TEST_EVIDENCE_SOURCE_TOKEN
   claims:
     - id: person-is-alive
       title: Person is alive
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: self_attested
       purpose: citizen_self_attestation
       value:
         type: boolean
-      source_bindings:
-        person:
-          connector: registry_data_api
-          connection: people
-          required_scope: people:evidence_verification
-          dataset: people
-          entity: person
-          lookup:
-            input: target.identifiers.national_id
-            field: id
-            op: eq
-            cardinality: one
-          fields:
-            alive:
-              field: alive
-              type: boolean
-              required: true
       rule:
-        type: extract
-        source: person
-        field: alive
+        type: cel
+        expression: "true"
       disclosure:
         default: value
         allowed: [value, redacted]
@@ -624,20 +607,8 @@ self_attestation:
     serde_norway::from_str(&raw).expect("self-attestation + machine config deserializes")
 }
 
-async fn people_registry_data_api(Query(query): Query<BTreeMap<String, String>>) -> Response {
-    if query.get("id").map(String::as_str) != Some("person-1") {
-        return Json(json!({ "data": [] })).into_response();
-    }
-    Json(json!({
-        "data": [{
-            "id": "person-1",
-            "alive": true,
-        }]
-    }))
-    .into_response()
-}
-
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 async fn self_attestation_evaluate_succeeds_while_machine_quota_is_exhausted_for_same_principal_id()
 {
     set_audit_secret();
@@ -645,20 +616,9 @@ async fn self_attestation_evaluate_succeeds_while_machine_quota_is_exhausted_for
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", "{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"d\":\"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw\",\"x\":\"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc\",\"alg\":\"EdDSA\"}");
 
     let idp = MockIdp::start().await;
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(people_registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let app = standalone_router(self_attestation_and_machine_oidc_config(
-        base_url.trim_end_matches('/'),
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),

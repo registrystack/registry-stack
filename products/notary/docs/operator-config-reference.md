@@ -7,10 +7,10 @@ It is written for teams adopting the service, not for contributors changing the
 implementation.
 
 Registry Notary is config driven. The YAML file describes which claims can be
-evaluated, which upstream registries are contacted, how callers authenticate,
-how credentials are signed, and which operational stores are used. Secrets
-should stay in environment variables or a secret manager; config fields name the
-environment variable to read.
+evaluated, whether evidence comes through Registry Relay or is source-free, how
+callers authenticate, how credentials are signed, and which operational stores
+are used. Secrets should stay in environment variables, owner-readable secret
+files, or a secret manager; config fields contain only references to them.
 
 ## Adoption decisions
 
@@ -25,13 +25,13 @@ Before editing YAML, decide these items:
 | Multi-instance deployment | More than one Notary process serves traffic | `replay.storage: redis`, usually `credential_status.storage: redis` |
 | Credential suspension or revocation | Verifiers need a live status URL | `credential_status.enabled: true` |
 | Audit retention | Operators need traceability without raw personal data | `audit` |
-| Source adapter sidecar reads | A target system needs governed HTTP JSON mapping, a short dependent HTTP JSON flow, FHIR mapping, or normalization outside Notary | `connector: source_adapter_sidecar`, `retry_on_5xx: false` |
-| Source adapter sidecar assurance | Notary must fail closed unless it is talking to the approved sidecar runtime | `source_connections.<id>.expected_sidecar` |
-| Sidecar batch matching | Batch evaluation should share one sidecar read across compatible items | `bulk_mode: source_adapter_sidecar_batch`, binding `query_fields` |
+| Registry-backed evaluation | A claim must consult a source registry | `evidence.relay`, `evidence_mode.type: registry_backed` |
+| Source-free evaluation | A claim is derived without contacting Relay or a source | `evidence_mode.type: self_attested` |
+| Existing direct-source migration | A pre-convergence deployment still reads a source or source adapter directly | `evidence_mode.type: transitional_direct` |
 
-Start with one narrow claim, one source connection, one signing key, and one
-credential profile. Add federation, wallet issuance, and batch evaluation after
-the basic path passes `doctor`.
+For a new registry integration, start with one narrow claim and one pinned Relay
+consultation profile. Add credential issuance, federation, and wallet flows only
+after the evaluation path passes `doctor` and a controlled end-to-end test.
 
 ## Top-level shape
 
@@ -42,7 +42,7 @@ the basic path passes `doctor`.
 | `deployment` | Operator-declared deployment profile and gate waivers | Yes, `deployment.profile` is required |
 | `audit` | Redacted audit envelope sink and HMAC secret | Recommended for every deployable environment |
 | `config_trust` | Signed bundle boot trust, anti-rollback state, and optional local override path | No, only for signed bundle startup |
-| `evidence` | Claims, sources, rules, formats, signing keys, and credential profiles | Yes |
+| `evidence` | Claims, Relay or migration sources, rules, formats, signing keys, and credential profiles | Yes |
 | `cel` | Optional CEL (Common Expression Language) worker policy, limits, and regex posture | Defaults are present |
 | `replay` | One-time-use store for federation request JWTs, OID4VCI nonces, and holder proof JWTs | Defaults to in-process memory |
 | `credential_status` | Optional storage-backed lifecycle status URL for issued credentials | No |
@@ -178,10 +178,11 @@ Active waivers and gate findings appear in the admin posture document under the
 
 Config files should contain names, not secret values.
 
-| Need | Config field | Environment value |
+| Need | Config field | Secret source |
 | --- | --- | --- |
 | API key or bearer-token auth | `auth.api_keys[].fingerprint`, `auth.bearer_tokens[].fingerprint` | `sha256:<hex>` fingerprint |
-| Static upstream source token | `evidence.source_connections.<id>.token_env` | Raw upstream bearer token |
+| Registry Relay workload token | `evidence.relay.token_file` | Absolute path to a file containing the current workload JWT |
+| Transitional direct upstream token | `evidence.source_connections.<id>.token_env` | Raw upstream bearer token |
 | OAuth2 client credential source auth | `source_auth.client_id_env`, `source_auth.client_secret_env` | OAuth client id and secret |
 | Local JWK signing key | `evidence.signing_keys.<id>.private_jwk_env` | Private JWK JSON matching the configured `alg` |
 | Watched local JWK signing key | `evidence.signing_keys.<id>.path` with `provider: file_watch` | Private JWK JSON matching the configured `alg` in a host-local file |
@@ -255,11 +256,181 @@ Standalone Notary does not support resource, table, or runtime config reload;
 the mounted `POST /admin/v1/reload` route returns `501
 registry.admin.capability.not_supported`.
 
-## Minimal machine config
+## Registry-backed Relay journey
 
-This is the smallest useful shape for a backend caller that evaluates one claim
-from one DCI (Social Protection Digital Convergence Initiative) source and can
-later issue a credential from that claim.
+Every claim must declare one sealed `evidence_mode`:
+
+- `registry_backed` obtains evidence through Relay. Use it for new source-system
+  integrations.
+- `self_attested` is source-free. It permits a CEL rule but no consultation or
+  `source_bindings`, and its dependency closure must also be source-free.
+- `transitional_direct` keeps the old `source_connections` and source-binding
+  runtime available only while an existing deployment migrates to Relay.
+
+`transitional_direct` is intermediate-PR scaffolding, not a replacement-beta
+compatibility promise. Its presence blocks the replacement beta and 1.0
+release, and new integrations must not use it.
+
+The claim evidence mode describes provenance. It is separate from the
+`self_attestation` access block that configures OIDC-bound citizen and wallet
+flows. Do not mark a registry-derived fact `self_attested` to avoid configuring
+Relay.
+
+Use `evidence_mode.type: registry_backed` for new claims that consult a source
+system. Notary authenticates the caller, checks the claim purpose and scopes,
+and sends the request's `target.id` to one reviewed Relay consultation profile.
+Relay is the sole verifier of the Notary workload token and the sole component
+that authenticates to and interprets the source system. Do not copy target
+credentials or `source_connections` into Notary for this journey.
+
+The initial configuration is deliberately narrow:
+
+- `evidence.relay` describes one Relay origin and one reloadable token file.
+- Each Registry-backed claim names exactly one consultation and one hash-pinned
+  profile version.
+- The consultation maps exactly one profile-defined input name to `target.id`.
+- All Registry-backed claims in one Notary configuration share that profile,
+  purpose, input name, and string output. At least one `extract` claim pins the
+  shared output; an `exists` claim may reuse the same consultation.
+- Rules are limited to `extract` and `exists`. Registry-backed batch evaluation
+  is not supported.
+
+This example evaluates one string result through Relay:
+
+```yaml
+evidence:
+  enabled: true
+  allowed_purposes: [program-enrollment-verification]
+  relay:
+    base_url: https://relay.example.gov
+    token_file: /run/secrets/registry-notary/relay.jwt
+    # Add only when this exact reviewed private range is required.
+    allowed_private_cidrs: [10.42.7.12/32]
+  claims:
+    - id: enrollment-status
+      title: Enrollment status
+      version: "1"
+      subject_type: person
+      evidence_mode:
+        type: registry_backed
+        consultations:
+          enrollment:
+            profile:
+              id: dhis2.tracker.enrollment-status.exact
+              version: "1"
+              # Replace with the exact hash from the reviewed Relay contract.
+              contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            inputs:
+              tracked_entity: target.id
+      purpose: program-enrollment-verification
+      required_scopes: [registry:evidence:dhis2-enrollment-status]
+      value:
+        type: string
+      rule:
+        type: extract
+        source: enrollment
+        field: status
+      formats: [application/vnd.registry-notary.claim-result+json]
+```
+
+`evidence.relay` accepts only these fields:
+
+| Field | Operator action |
+| --- | --- |
+| `base_url` | Use the Relay HTTPS root origin. Plain HTTP is accepted only for an IP loopback origin when both `allow_insecure_localhost: true` and `deployment.profile: local` are set. |
+| `token_file` | Mount the current Relay-issued workload JWT at an absolute canonical path readable by the Notary process. |
+| `allowed_private_cidrs` | Omit for a public Relay. For an internal Relay, list only the exact reviewed private CIDRs needed by its resolved addresses. |
+| `allow_insecure_localhost` | Enable only for local loopback development. It is not a private-network or production escape hatch. |
+
+Do not add token issuer, audience, subject, client, or Relay `max_in_flight`
+fields. Unknown fields are rejected. Relay verifies token semantics on every
+request, and the verified consultation profile supplies the concurrency bound.
+
+Relay profiles may spend up to 10 seconds on one source operation. Notary gives
+the complete internal service hop one fixed, non-configurable 15-second
+absolute deadline. Waiting for the profile-derived semaphore, reloading the
+workload-token file, sending and reading the Relay response, strict decoding,
+and final result acceptance all consume that same deadline. There is no
+operator timeout field, retry, redirect, proxy, or result cache. For a
+Registry-backed configuration, Notary rejects `server.request_timeout` below
+20 seconds, preserving a fixed five-second listener reserve around the service
+hop. A consultation-enabled Relay separately requires its outer request timeout
+to be greater than 15 seconds. The unchanged 30-second defaults satisfy both
+guards.
+
+### Startup and credential rotation
+
+Before opening its listeners, Notary authenticates to Relay and verifies the
+profile id, version, contract hash, purpose, input, and output contract. A
+missing token, rejected credential, unreachable Relay, or mismatched profile
+fails startup. The Relay origin, token-file path, and profile pin are
+restart-only configuration.
+
+The token value is different: Notary reopens the file for every Relay metadata
+or execution operation. Rotate it without restarting Notary by atomically
+replacing the configured path, or by using the atomic symlink switch provided
+by a secret-volume implementation. Prepare the replacement on the same
+filesystem, make it a regular file owned by the Notary service account with
+owner-only permissions such as mode `0600`, then rename it over the old file.
+Never rewrite the active file in place. A missing, malformed, or rejected
+replacement fails closed; a later valid replacement recovers without restart.
+
+### Validation, readiness, and audit
+
+Use the existing operator commands in increasing order of network effect:
+
+```sh
+registry-notary explain-config --config registry-notary.yaml
+registry-notary doctor --config registry-notary.yaml
+registry-notary doctor --config registry-notary.yaml --live
+```
+
+`explain-config` reports the reload mode, offline file status, private-CIDR
+count, and consultation pins without printing the token or token-file path.
+`doctor` validates the configuration and checks that the token path resolves to
+a non-empty regular file. `doctor --live` authenticates to Relay and verifies
+the pinned profile metadata; run it only against an approved integration
+environment. A controlled evaluation is still required to test the source
+system end to end.
+
+For a running Registry-backed deployment, `/ready` rechecks the current token
+and pinned Relay profile and returns `503` when that dependency is not ready.
+This readiness operation has its own 5-second outer bound, fetches only the
+protected profile metadata, and makes zero source calls. It does not consume the
+10-second DHIS2 source budget or execute a consultation.
+The bounded `checks.relay` counts distinguish that dependency from signing or
+other readiness failures without exposing its origin, profile, credential, or
+error detail. Keep `/ready` on the normal orchestrator probe path and alert on
+sustained failure. The default in-memory replay store still makes the overall
+response degraded as documented under [Replay store](#replay-store); use the
+Relay subcheck to distinguish that expected local posture from a Relay failure.
+
+A single-subject evaluation may request several claims that use the same
+Registry-backed profile, purpose, target input, and required scope set. Notary
+coalesces those claims into one request-scoped Relay consultation. This is not a
+cross-request cache: the next evaluation performs a new consultation. Do not
+use the batch-evaluation endpoint for Registry-backed claims.
+
+Notary forwards its evaluation id to Relay and stores every consultation id
+returned before the evaluation closes only in the restricted audit event field
+`relay_consultation_ids`, including failures that occur after Relay responds.
+It also seals `forwarded: true` as a conservative dispatch-attempt marker before
+permit acquisition, credential loading, or network I/O. The value means the
+operation may have reached Relay, not that Relay received it. This placement
+prevents cancellation from creating a false negative. If an early sibling
+failure or client cancellation closes the Notary audit before detached Relay
+work finishes, the event intentionally has no later mutation; use its
+evaluation id to look for a late completion in Relay's audit. No matching Relay
+event can legitimately mean the local attempt failed before network dispatch.
+Relay consultation identifiers are deliberately absent from public claim
+results, provenance, and debug output. Restrict access to both audit sinks.
+
+## Transitional direct machine config
+
+This compatibility shape is for an existing deployment that still evaluates a
+claim by contacting a DCI (Social Protection Digital Convergence Initiative)
+source directly. Keep it only while migrating the source integration to Relay;
+do not use it for a new integration.
 
 ```yaml
 server:
@@ -336,6 +507,8 @@ evidence:
       title: Birth record exists
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       inputs:
@@ -439,9 +612,11 @@ global ceiling.
 
 ## Source connections
 
-Every source binding references one `source_connections` entry. A source
-connection defines the upstream base URL, the authentication method used to
-contact it, and connector-specific settings.
+`source_connections` is the pre-convergence direct-source model and is valid
+only for claims with `evidence_mode.type: transitional_direct`. Every source
+binding references one entry, which defines the upstream base URL,
+authentication method, and connector-specific settings. Keep these connections
+only while migrating an existing integration to Relay.
 
 Use exactly one source authentication mechanism:
 
@@ -545,6 +720,8 @@ evidence:
       title: Date of birth
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: date
       semantics:
@@ -604,6 +781,8 @@ evidence:
       title: Birth record exists
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       operations:
@@ -723,6 +902,10 @@ Important fields:
 - `id`: stable machine id used by clients and credential profiles.
 - `title`, `version`, `subject_type`, and `value`: operator and verifier
   metadata.
+- `evidence_mode`: required provenance boundary: `registry_backed`, source-free
+  `self_attested`, or migration-only `transitional_direct`.
+- `purpose` and `required_scopes`: explicit pre-consultation gates required for
+  Registry-backed claims.
 - `semantics`: optional external vocabulary binding for the claim output. Use it
   to label raw values with PublicSchema properties or derived booleans with a
   local predicate plus `derived_from` PublicSchema inputs.
@@ -730,8 +913,8 @@ Important fields:
   `target.identifiers.<scheme>`, `target.attributes.<name>`, `requester.id`,
   `requester.identifiers.<scheme>`, `requester.attributes.<name>`, and
   `relationship.attributes.<name>`.
-- `source_bindings`: upstream reads, lookup fields, required caller scope, and
-  extracted source fields.
+- `source_bindings`: direct upstream reads used only by `transitional_direct`
+  claims.
 - `rule`: `exists`, `extract`, or `cel`.
 - `depends_on`: prerequisite claims for CEL rules that reuse earlier results.
 - `operations`: enable or cap `evaluate` and `batch_evaluate`.
@@ -767,7 +950,8 @@ or a small dependency graph over one over-broad claim.
 
 ### Dependent source lookups
 
-When one source row contains the identifier needed to read another source, set
+This compatibility feature applies only to `transitional_direct` claims. When
+one source row contains the identifier needed to read another source, set
 the later binding's `lookup.input` or `query_fields[].input` to
 `sources.<binding>.<field_path>`. Notary loads the referenced binding first,
 extracts the scalar field value from its row, and uses that value as the later
@@ -1020,57 +1204,10 @@ The `self_attestation` block's keys are: `subject_binding.token_claim`,
 `credential_profiles`, `scope_policy`, `required_scopes`,
 `allowed_wallet_origins`, `delegation`, and `rate_limits`.
 
-Delegated self-attestation is configured under `self_attestation.delegation`.
-It lets a token-bound requester evaluate configured dependent claims only when a
-configured relationship proof claim passes. The scoped authorization details
-for delegated access must name the relationship and the dependent target by
-`target.id_type` and `target.id`:
-
-```yaml
-self_attestation:
-  delegation:
-    enabled: true
-    allowed_relationships:
-      - relationship_type: guardian
-        proof_claim: guardian-link-established
-        target_id_type: UIN
-        allowed_claims:
-          - dependent-person-is-alive
-        allowed_purposes:
-          - dependent_attestation
-        allowed_formats:
-          - application/vnd.registry-notary.claim-result+json
-        allowed_disclosures:
-          - predicate
-        credential_profiles:
-          - dependent_status_sd_jwt
-```
-
-| Field | Purpose |
-| --- | --- |
-| `delegation.enabled` | Enables delegated self-attestation. When false, `allowed_relationships` must be empty. |
-| `allowed_relationships[].relationship_type` | Relationship type accepted from scoped authorization details, for example `guardian`. |
-| `allowed_relationships[].proof_claim` | Existing claim that proves the requester-target relationship. |
-| `allowed_relationships[].target_id_type` | Optional dependent target id type. Defaults to `subject_binding.id_type`. |
-| `allowed_relationships[].allowed_claims` | Dependent claim ids this relationship may evaluate. |
-| `allowed_relationships[].allowed_purposes` | Purpose allow-list for dependent claims under this relationship. |
-| `allowed_relationships[].allowed_formats` | Response and credential formats allowed for this relationship. |
-| `allowed_relationships[].allowed_disclosures` | Disclosure modes allowed for this relationship. |
-| `allowed_relationships[].credential_profiles` | Credential profiles allowed for delegated issuance from this relationship. |
-
-Delegated validation fails closed:
-
-- `delegation.enabled: true` requires at least one relationship.
-- Relationship types must be unique.
-- `proof_claim` must exist, enable evaluation, and read a relationship source.
-- At least one `proof_claim` source binding must derive lookup input from both
-  `requester.*` and `target.*` paths.
-- Each delegated claim must exist, enable evaluation, and list the proof claim
-  in `depends_on`.
-- Each delegated claim must declare a purpose that appears in the relationship's
-  `allowed_purposes`.
-- Each configured format, disclosure, and credential profile must be supported by
-  the delegated claims or profiles it names.
+Delegated self-attestation is unavailable in v1. Keep
+`self_attestation.delegation.enabled: false` and `allowed_relationships: []`.
+Enabling it fails configuration validation until a separately reviewed
+Relay-bound subject and relationship assertion design exists.
 
 See the [self-attestation operator guide](self-attestation-operator-guide.md)
 for the full config blocks, identity-provider requirements, scope policy,
@@ -1082,8 +1219,8 @@ OID4VCI depends on self-attestation. Enable it when a wallet should retrieve
 Notary-issued credentials through OpenID4VCI-style metadata, offers, nonces,
 and credential requests. The facade is narrow: credential format is `dc+sd-jwt`,
 proof type is JWT with EdDSA, holder binding is `did:jwk`, and issuance is
-backed by direct self-attestation policy. Delegated transaction tokens are
-rejected by the OID4VCI credential endpoint in this version.
+backed by direct self-attestation policy. Delegated transaction tokens and
+delegation configuration are rejected in this version.
 
 ```yaml
 oid4vci:
@@ -1175,8 +1312,11 @@ registry-notary doctor --config registry-notary.yaml --env-file .env.local --liv
 ```
 
 Use `--live` only against a test target or a controlled integration
-environment. When live lookup values are supplied, the doctor output redacts
-target ids and tokens, but the upstream source still receives a real lookup.
+environment. For Registry-backed claims it verifies the Relay credential and
+pinned profile metadata but does not execute a consultation; follow it with a
+controlled evaluation to test the source end to end. For transitional direct
+claims, live lookup values cause a real upstream lookup. Doctor output redacts
+target ids and tokens, but the source still receives that lookup.
 
 For local VC smoke tests:
 
@@ -1190,7 +1330,12 @@ registry-notary doctor \
 ## Rollout checklist
 
 - Each caller has only the scopes required for its claims and operations.
-- Every source connection has exactly one auth method.
+- Registry-backed claims share the reviewed Relay profile pin, purpose, input,
+  and output expected by the deployed Relay contract.
+- The Relay token file is owner-readable only and has an atomic rotation path.
+- `allowed_private_cidrs` contains only reviewed Relay destination ranges.
+- Every remaining transitional source connection has exactly one auth method
+  and an explicit migration owner.
 - Insecure source or JWKS allowances are absent outside local demos.
 - Claims read only required upstream fields.
 - Credential profiles list explicit `allowed_claims`.
@@ -1204,4 +1349,6 @@ registry-notary doctor \
   retention.
 - `/metrics` is scraped with a `registry_notary:metrics_read` credential and
   normal network controls.
-- `doctor` passes without `--live`, then passes with a controlled live subject.
+- `doctor` passes without `--live`, then passes with `--live` in a controlled
+  environment. Registry-backed rollout also includes one controlled end-to-end
+  evaluation.

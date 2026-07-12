@@ -8,16 +8,18 @@
 //! output fields.
 //!
 //! Notary independently re-hashes the narrowed public contract and its sole v1
-//! policy preimage before accepting Relay's metadata identity. Relay remains
-//! the cryptographic verifier of the typed workload JWT on every request.
+//! policy preimage before accepting Relay's metadata identity. Relay is the
+//! sole cryptographic and semantic verifier of the workload JWT on every
+//! protected request.
 
 use std::fmt;
-use std::time::Duration;
+use std::fs::File;
+use std::io::Read as _;
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use axum::http::StatusCode;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine as _;
-use registry_platform_crypto::{canonicalize_json, parse_json_strict};
+use registry_platform_crypto::canonicalize_json;
 use registry_platform_httputil::destination::input_pattern::{
     BoundedInputPattern, MAX_BOUNDED_INPUT_BYTES, MAX_BOUNDED_INPUT_PATTERN_BYTES,
 };
@@ -27,9 +29,10 @@ use registry_platform_httputil::destination::json::{
     ProjectedJsonScalar,
 };
 use registry_platform_httputil::destination::{
-    DataDestinationPolicy, DataDestinationRequestTemplate, DestinationAuthorizationTemplate,
+    DataDestinationRequestTemplate, DestinationAuthorizationTemplate,
     DestinationAuthorizationValue, DestinationBodyTemplate, DestinationMethod,
-    MAX_DESTINATION_HEADER_VALUE_BYTES, MAX_DESTINATION_OPERATION_TIMEOUT,
+    DestinationResponseError, DestinationSendError, ServiceHopDataDestinationPolicy,
+    MAX_DESTINATION_HEADER_VALUE_BYTES, MAX_SERVICE_HOP_OPERATION_TIMEOUT,
 };
 use serde::ser::{SerializeMap, SerializeStruct};
 use serde::{Serialize, Serializer};
@@ -38,7 +41,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::{timeout_at, Instant};
 use ulid::Ulid;
 use zeroize::Zeroizing;
@@ -66,7 +69,8 @@ const POLICY_ENFORCEMENT_PROFILE: &str = "registry.relay.consultation-pdp/v1";
 const POLICY_RULE_SET: &str = "registry.relay.consultation-policy-rules.v1";
 const POLICY_ACTION: &str = "consultation_execute";
 const POLICY_PERMIT: &str = "unqualified";
-const JWT_CLAIM_MAX_BYTES: usize = 2_048;
+const MAX_TOKEN_FILE_PATH_BYTES: usize = 4_096;
+const MAX_TOKEN_FILE_BYTES: usize = TOKEN_MAX_BYTES + 2;
 
 /// The hash-pinned public profile identity selected at Notary startup.
 #[derive(Clone, PartialEq, Eq)]
@@ -158,61 +162,47 @@ impl fmt::Debug for RelayExpectedOutput {
     }
 }
 
-/// A startup-validated compact JWT retained only in zeroizing memory.
+/// A bounded reloadable workload-JWT file binding.
 ///
-/// Relay still verifies the JWS cryptographically. This local validation
-/// prevents an opaque bearer, a token for another service, or a stale token
-/// from becoming the Notary's activated workload credential.
-pub struct RelayWorkloadCredential {
-    token: Zeroizing<Vec<u8>>,
-    expected_scope: Box<str>,
+/// The path is restart-only. The current token is reopened, bounded,
+/// structurally checked, and zeroized for every metadata or execution
+/// operation, so atomic secret-file rotation requires no restart. Relay is the
+/// sole cryptographic and semantic verifier.
+pub struct RelayWorkloadCredentialFile {
+    path: PathBuf,
+    read_permit: Arc<Semaphore>,
 }
 
-impl RelayWorkloadCredential {
-    /// Validate the configured workload JWT against the exact deployment and
-    /// profile binding expected by this Notary process.
-    pub fn new(
-        token: Zeroizing<Vec<u8>>,
-        expected_issuer: &str,
-        expected_audience: &str,
-        expected_profile_scope: impl Into<Box<str>>,
-    ) -> Result<Self, RelayClientError> {
-        let expected_scope = expected_profile_scope.into();
-        if !valid_claim_text(expected_issuer)
-            || !valid_claim_text(expected_audience)
-            || !valid_scope(&expected_scope)
-            || token.is_empty()
-            || token.len() > TOKEN_MAX_BYTES
-        {
+impl RelayWorkloadCredentialFile {
+    /// Freeze the reloadable credential-file reference.
+    pub fn new(path: impl Into<PathBuf>) -> Result<Self, RelayClientError> {
+        let path = path.into();
+        if !valid_token_file_path(&path) {
             return Err(RelayClientError::InvalidConfiguration);
         }
-        validate_workload_jwt(
-            &token,
-            expected_issuer,
-            expected_audience,
-            &expected_scope,
-            OffsetDateTime::now_utc().unix_timestamp(),
-        )?;
-        DestinationAuthorizationValue::bearer_zeroizing(token.clone())
-            .map_err(|_| RelayClientError::InvalidConfiguration)?;
         Ok(Self {
-            token,
-            expected_scope,
+            path,
+            read_permit: Arc::new(Semaphore::new(1)),
         })
     }
 
-    fn authorization(&self) -> Result<DestinationAuthorizationValue, RelayClientError> {
-        DestinationAuthorizationValue::bearer_zeroizing(self.token.clone())
-            .map_err(|_| RelayClientError::InvalidConfiguration)
+    async fn authorization(&self) -> Result<DestinationAuthorizationValue, RelayClientError> {
+        let permit = Arc::clone(&self.read_permit)
+            .acquire_owned()
+            .await
+            .map_err(|_| RelayClientError::CredentialUnavailable)?;
+        let token = read_token_file(self.path.clone(), permit).await?;
+        validate_compact_jws(&token)?;
+        DestinationAuthorizationValue::bearer_zeroizing(token)
+            .map_err(|_| RelayClientError::InvalidCredentials)
     }
 }
 
-impl fmt::Debug for RelayWorkloadCredential {
+impl fmt::Debug for RelayWorkloadCredentialFile {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RelayWorkloadCredential")
-            .field("token", &"[REDACTED]")
-            .field("claims", &"[REDACTED]")
+            .debug_struct("RelayWorkloadCredentialFile")
+            .field("path", &"[REDACTED]")
             .finish()
     }
 }
@@ -220,13 +210,11 @@ impl fmt::Debug for RelayWorkloadCredential {
 /// Unverified, fixed-origin client. Consume it with [`Self::verify_profile`]
 /// before serving evaluations.
 pub struct RelayConsultationClient {
-    destination: DataDestinationPolicy,
+    destination: ServiceHopDataDestinationPolicy,
     metadata_request: DataDestinationRequestTemplate,
     execute_request: DataDestinationRequestTemplate,
     metadata_decoder: ClosedJsonDecoder,
-    credential: RelayWorkloadCredential,
-    timeout: Duration,
-    max_in_flight: usize,
+    credential: RelayWorkloadCredentialFile,
     pin: RelayProfilePin,
     purpose: Box<str>,
     input_name: Box<str>,
@@ -235,12 +223,9 @@ pub struct RelayConsultationClient {
 
 impl RelayConsultationClient {
     /// Freeze one Relay destination and one exact consultation route.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        destination: DataDestinationPolicy,
-        credential: RelayWorkloadCredential,
-        timeout: Duration,
-        max_in_flight: usize,
+        destination: ServiceHopDataDestinationPolicy,
+        credential: RelayWorkloadCredentialFile,
         pin: RelayProfilePin,
         purpose: impl Into<Box<str>>,
         input_name: impl Into<Box<str>>,
@@ -248,12 +233,7 @@ impl RelayConsultationClient {
     ) -> Result<Self, RelayClientError> {
         let purpose = purpose.into();
         let input_name = input_name.into();
-        if timeout.is_zero()
-            || timeout > MAX_DESTINATION_OPERATION_TIMEOUT
-            || !(1..=16).contains(&max_in_flight)
-            || !valid_purpose(&purpose)
-            || !stable_id(&input_name, INPUT_NAME_MAX_BYTES)
-        {
+        if !valid_purpose(&purpose) || !stable_id(&input_name, INPUT_NAME_MAX_BYTES) {
             return Err(RelayClientError::InvalidConfiguration);
         }
 
@@ -298,8 +278,6 @@ impl RelayConsultationClient {
             execute_request,
             metadata_decoder,
             credential,
-            timeout,
-            max_in_flight,
             pin,
             purpose,
             input_name,
@@ -310,52 +288,81 @@ impl RelayConsultationClient {
     /// Authenticate to Relay, verify the pinned public profile, and compile
     /// the exact result contract used by runtime evaluations.
     pub async fn verify_profile(self) -> Result<VerifiedRelayClient, RelayClientError> {
-        let deadline = operation_deadline(self.timeout)?;
-        let authorization = self.credential.authorization()?;
-        let request = self
-            .metadata_request
-            .render(&[], &[], Some(authorization), None)
-            .map_err(|_| RelayClientError::InvalidConfiguration)?;
-        let response = self
-            .destination
-            .send_with_deadline(request, deadline)
-            .await
-            .map_err(|_| RelayClientError::TransportUnavailable)?;
-        require_success(response.status())?;
-        response
-            .require_exact_json_content_type()
-            .map_err(|_| RelayClientError::InvalidProfileMetadata)?;
-        let body = response
-            .read_bounded(MAX_METADATA_BYTES)
-            .await
-            .map_err(|_| RelayClientError::InvalidProfileMetadata)?;
-        let decoded = self
-            .metadata_decoder
-            .decode(body)
-            .map_err(|_| RelayClientError::InvalidProfileMetadata)?;
-        let ClosedJsonOutcome::One(record) = decoded else {
-            return Err(RelayClientError::InvalidProfileMetadata);
-        };
-        let profile = parse_verified_profile(
-            record.into_fields(),
+        let profile = fetch_verified_profile(
+            &self.destination,
+            &self.metadata_request,
+            &self.metadata_decoder,
+            &self.credential,
             &self.pin,
             &self.purpose,
             &self.input_name,
-            &self.expected_output,
-            &self.credential.expected_scope,
-        )?;
+            self.expected_output.name(),
+        )
+        .await?;
         let result_decoder = result_decoder(&profile)?;
+        let max_in_flight = profile.max_in_flight;
 
         Ok(VerifiedRelayClient {
             destination: self.destination,
+            metadata_request: self.metadata_request,
             execute_request: self.execute_request,
+            metadata_decoder: self.metadata_decoder,
             result_decoder,
             credential: self.credential,
-            timeout: self.timeout,
-            permits: Semaphore::new(self.max_in_flight),
+            permits: Semaphore::new(max_in_flight),
             profile,
         })
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn fetch_verified_profile(
+    destination: &ServiceHopDataDestinationPolicy,
+    metadata_request: &DataDestinationRequestTemplate,
+    metadata_decoder: &ClosedJsonDecoder,
+    credential: &RelayWorkloadCredentialFile,
+    pin: &RelayProfilePin,
+    purpose: &str,
+    input_name: &str,
+    expected_output_name: &str,
+) -> Result<VerifiedRelayProfile, RelayClientError> {
+    let deadline = operation_deadline()?;
+    let authorization = authorization_before_deadline(credential, deadline).await?;
+    let request = metadata_request
+        .render(&[], &[], Some(authorization), None)
+        .map_err(|_| RelayClientError::InvalidConfiguration)?;
+    require_deadline(deadline)?;
+    let response = destination
+        .send_with_deadline(request, deadline)
+        .await
+        .map_err(map_send_error)?;
+    require_deadline(deadline)?;
+    require_success(response.status())?;
+    response
+        .require_exact_json_content_type()
+        .map_err(|_| RelayClientError::InvalidProfileMetadata)?;
+    require_deadline(deadline)?;
+    let body = response
+        .read_bounded(MAX_METADATA_BYTES)
+        .await
+        .map_err(|error| map_response_error(error, RelayClientError::InvalidProfileMetadata))?;
+    require_deadline(deadline)?;
+    let decoded = metadata_decoder
+        .decode(body)
+        .map_err(|_| RelayClientError::InvalidProfileMetadata)?;
+    require_deadline(deadline)?;
+    let ClosedJsonOutcome::One(record) = decoded else {
+        return Err(RelayClientError::InvalidProfileMetadata);
+    };
+    let profile = parse_verified_profile(
+        record.into_fields(),
+        pin,
+        purpose,
+        input_name,
+        expected_output_name,
+    )?;
+    require_deadline(deadline)?;
+    Ok(profile)
 }
 
 impl fmt::Debug for RelayConsultationClient {
@@ -366,19 +373,18 @@ impl fmt::Debug for RelayConsultationClient {
             .field("route", &"[REDACTED]")
             .field("authorization", &"[REDACTED]")
             .field("contract", &"[REDACTED]")
-            .field("timeout", &self.timeout)
-            .field("max_in_flight", &self.max_in_flight)
             .finish()
     }
 }
 
 /// Startup-verified Relay client ready to serve evaluations.
 pub struct VerifiedRelayClient {
-    destination: DataDestinationPolicy,
+    destination: ServiceHopDataDestinationPolicy,
+    metadata_request: DataDestinationRequestTemplate,
     execute_request: DataDestinationRequestTemplate,
+    metadata_decoder: ClosedJsonDecoder,
     result_decoder: ClosedJsonDecoder,
-    credential: RelayWorkloadCredential,
-    timeout: Duration,
+    credential: RelayWorkloadCredentialFile,
     permits: Semaphore,
     profile: VerifiedRelayProfile,
 }
@@ -390,6 +396,43 @@ impl VerifiedRelayClient {
         &self.profile
     }
 
+    /// Reload and validate the current credential, then re-fetch and verify
+    /// the exact pinned metadata profile. Readiness uses this operation so a
+    /// rotated or expired token cannot remain ready on stale startup state.
+    pub async fn verify_current_profile(&self) -> Result<(), RelayClientError> {
+        fetch_verified_profile(
+            &self.destination,
+            &self.metadata_request,
+            &self.metadata_decoder,
+            &self.credential,
+            &self.profile.pin,
+            &self.profile.purpose,
+            &self.profile.input_name,
+            &self.profile.output.name,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Validate the caller-owned request fields without acquiring capacity,
+    /// reading credentials, or touching the network.
+    pub(crate) fn validate_execute_input(
+        &self,
+        evaluation_id: &str,
+        input: &str,
+    ) -> Result<(), RelayClientError> {
+        if !canonical_ulid(evaluation_id)
+            || input.is_empty()
+            || input.len() > usize::from(self.profile.input_max_bytes)
+            || input.len() > INPUT_VALUE_MAX_BYTES
+            || input.chars().any(char::is_control)
+            || !self.profile.input_pattern.is_match(input)
+        {
+            return Err(RelayClientError::InvalidRequest);
+        }
+        Ok(())
+    }
+
     /// Execute one purpose-bound consultation. The evaluation id and input are
     /// validated before either value reaches the transport.
     pub async fn execute(
@@ -397,20 +440,13 @@ impl VerifiedRelayClient {
         evaluation_id: &str,
         input: Zeroizing<String>,
     ) -> Result<RelayConsultationResult, RelayClientError> {
-        if !canonical_ulid(evaluation_id)
-            || input.is_empty()
-            || input.len() > usize::from(self.profile.input_max_bytes)
-            || input.len() > INPUT_VALUE_MAX_BYTES
-            || input.chars().any(char::is_control)
-            || !self.profile.input_pattern.is_match(&input)
-        {
-            return Err(RelayClientError::InvalidRequest);
-        }
-        let deadline = operation_deadline(self.timeout)?;
+        self.validate_execute_input(evaluation_id, &input)?;
+        let deadline = operation_deadline()?;
         let _permit = timeout_at(deadline, self.permits.acquire())
             .await
-            .map_err(|_| RelayClientError::CapacityUnavailable)?
+            .map_err(|_| RelayClientError::Unavailable)?
             .map_err(|_| RelayClientError::CapacityUnavailable)?;
+        require_deadline(deadline)?;
 
         let mut body = Zeroizing::new(Vec::with_capacity(128));
         serde_json::to_writer(
@@ -425,7 +461,8 @@ impl VerifiedRelayClient {
             return Err(RelayClientError::InvalidRequest);
         }
 
-        let authorization = self.credential.authorization()?;
+        require_deadline(deadline)?;
+        let authorization = authorization_before_deadline(&self.credential, deadline).await?;
         let headers: [&[u8]; 4] = [
             b"application/json",
             b"application/json",
@@ -436,27 +473,34 @@ impl VerifiedRelayClient {
             .execute_request
             .render_zeroizing(&[], &headers, Some(authorization), Some(body))
             .map_err(|_| RelayClientError::InvalidRequest)?;
+        require_deadline(deadline)?;
         let response = self
             .destination
             .send_with_deadline(request, deadline)
             .await
-            .map_err(|_| RelayClientError::TransportUnavailable)?;
+            .map_err(map_send_error)?;
+        require_deadline(deadline)?;
         require_success(response.status())?;
         response
             .require_exact_json_content_type()
             .map_err(|_| RelayClientError::InvalidResult)?;
+        require_deadline(deadline)?;
         let body = response
             .read_bounded(MAX_RESULT_BYTES)
             .await
-            .map_err(|_| RelayClientError::InvalidResult)?;
+            .map_err(|error| map_response_error(error, RelayClientError::InvalidResult))?;
+        require_deadline(deadline)?;
         let decoded = self
             .result_decoder
             .decode(body)
             .map_err(|_| RelayClientError::InvalidResult)?;
+        require_deadline(deadline)?;
         let ClosedJsonOutcome::One(record) = decoded else {
             return Err(RelayClientError::InvalidResult);
         };
-        parse_result(record.into_fields(), evaluation_id, &self.profile)
+        let result = parse_result(record.into_fields(), evaluation_id, &self.profile)?;
+        require_deadline(deadline)?;
+        Ok(result)
     }
 }
 
@@ -468,7 +512,6 @@ impl fmt::Debug for VerifiedRelayClient {
             .field("route", &"[REDACTED]")
             .field("authorization", &"[REDACTED]")
             .field("profile", &"[REDACTED]")
-            .field("timeout", &self.timeout)
             .finish()
     }
 }
@@ -479,6 +522,7 @@ pub struct VerifiedRelayProfile {
     purpose: Box<str>,
     input_name: Box<str>,
     input_max_bytes: u16,
+    max_in_flight: usize,
     input_pattern: BoundedInputPattern,
     acquisition_class: RelayAcquisitionClass,
     integration_pack: RelayArtifactIdentity,
@@ -593,18 +637,12 @@ impl fmt::Debug for RelayOutputValue {
 /// Relay observation facts bound to one completed consultation.
 pub struct RelayConsultationProvenance {
     relay_acquired_at: OffsetDateTime,
-    acquisition_class: RelayAcquisitionClass,
 }
 
 impl RelayConsultationProvenance {
     #[must_use]
     pub const fn relay_acquired_at(&self) -> OffsetDateTime {
         self.relay_acquired_at
-    }
-
-    #[must_use]
-    pub const fn acquisition_class(&self) -> RelayAcquisitionClass {
-        self.acquisition_class
     }
 }
 
@@ -664,6 +702,8 @@ impl fmt::Debug for RelayConsultationResult {
 pub enum RelayClientError {
     #[error("Relay client configuration is invalid")]
     InvalidConfiguration,
+    #[error("Relay workload credential is unavailable")]
+    CredentialUnavailable,
     #[error("Relay operation capacity is unavailable")]
     CapacityUnavailable,
     #[error("Relay transport is unavailable")]
@@ -1161,8 +1201,7 @@ fn parse_verified_profile(
     pin: &RelayProfilePin,
     purpose: &str,
     input_name: &str,
-    expected_output: &RelayExpectedOutput,
-    expected_scope: &str,
+    expected_output_name: &str,
 ) -> Result<VerifiedRelayProfile, RelayClientError> {
     let mut fields = FieldCursor::new(fields, RelayClientError::InvalidProfileMetadata);
     let returned_contract_hash = fields.take_hash()?;
@@ -1202,7 +1241,7 @@ fn parse_verified_profile(
     fields.require_boolean(false)?;
     fields.require_string(RELAY_WORKLOAD)?;
     let required_scope = fields.string()?;
-    if required_scope.as_str() != expected_scope {
+    if !valid_scope(&required_scope) {
         return Err(RelayClientError::InvalidProfileMetadata);
     }
     fields.require_string(purpose)?;
@@ -1223,7 +1262,10 @@ fn parse_verified_profile(
     let max_data_destinations = fields.integer()?;
     let max_source_bytes = fields.integer()?;
     let timeout_ms = fields.integer()?;
-    let max_in_flight = fields.integer()?;
+    let max_in_flight = usize::try_from(fields.integer()?)
+        .ok()
+        .filter(|value| (1..=16).contains(value))
+        .ok_or(RelayClientError::InvalidProfileMetadata)?;
     let quota_per_minute = fields.integer()?;
     let quota_burst = fields.integer()?;
     fields.require_string("match")?;
@@ -1268,7 +1310,7 @@ fn parse_verified_profile(
             "integration_pack": integration_pack.clone(),
             "acquisition": {
                 "class": acquisition_class_text.as_str(),
-                "fields": single_json_member(expected_output.name(), json!({
+                "fields": single_json_member(expected_output_name, json!({
                     "type": "string",
                     "nullable": false,
                     "max_bytes": max_bytes,
@@ -1278,7 +1320,7 @@ fn parse_verified_profile(
                 "source_observed_at": {"type": "absent"},
                 "source_revision": {"type": "absent"},
             },
-            "output": single_json_member(expected_output.name(), json!({
+            "output": single_json_member(expected_output_name, json!({
                 "type": "string",
                 "nullable": false,
             })),
@@ -1351,12 +1393,12 @@ fn parse_verified_profile(
     if policy_hash.as_ref() != typed_json_hash(POLICY_HASH_DOMAIN, &policy_preimage)? {
         return Err(RelayClientError::InvalidProfileMetadata);
     }
-
     Ok(VerifiedRelayProfile {
         pin: pin.clone(),
         purpose: purpose.into(),
         input_name: input_name.into(),
         input_max_bytes,
+        max_in_flight,
         input_pattern,
         acquisition_class,
         integration_pack: RelayArtifactIdentity {
@@ -1369,7 +1411,7 @@ fn parse_verified_profile(
             hash: policy_hash,
         },
         output: VerifiedRelayOutput {
-            name: expected_output.name.clone(),
+            name: expected_output_name.into(),
             max_bytes,
         },
     })
@@ -1439,10 +1481,7 @@ fn parse_result(
         consultation_id,
         outcome,
         data,
-        provenance: RelayConsultationProvenance {
-            relay_acquired_at,
-            acquisition_class: profile.acquisition_class,
-        },
+        provenance: RelayConsultationProvenance { relay_acquired_at },
     })
 }
 
@@ -1631,217 +1670,144 @@ fn typed_json_hash(domain: &[u8], value: &Value) -> Result<String, RelayClientEr
     Ok(encoded)
 }
 
-fn validate_workload_jwt(
-    token: &[u8],
-    expected_issuer: &str,
-    expected_audience: &str,
-    expected_scope: &str,
-    now: i64,
-) -> Result<(), RelayClientError> {
-    let compact = std::str::from_utf8(token).map_err(|_| RelayClientError::InvalidConfiguration)?;
-    let mut segments = compact.split('.');
-    let header_segment = segments
-        .next()
-        .filter(|segment| !segment.is_empty())
-        .ok_or(RelayClientError::InvalidConfiguration)?;
-    let claims_segment = segments
-        .next()
-        .filter(|segment| !segment.is_empty())
-        .ok_or(RelayClientError::InvalidConfiguration)?;
-    let signature_segment = segments
-        .next()
-        .filter(|segment| !segment.is_empty())
-        .ok_or(RelayClientError::InvalidConfiguration)?;
-    if segments.next().is_some() {
-        return Err(RelayClientError::InvalidConfiguration);
-    }
+async fn read_token_file(
+    path: PathBuf,
+    permit: OwnedSemaphorePermit,
+) -> Result<Zeroizing<Vec<u8>>, RelayClientError> {
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        read_token_file_blocking(&path)
+    })
+    .await
+    .map_err(|_| RelayClientError::CredentialUnavailable)?
+}
 
-    let header_bytes = decode_jwt_segment(header_segment)?;
-    let claims_bytes = decode_jwt_segment(claims_segment)?;
-    let signature_bytes = decode_jwt_segment(signature_segment)?;
-    if signature_bytes.is_empty() {
-        return Err(RelayClientError::InvalidConfiguration);
+fn read_token_file_blocking(path: &Path) -> Result<Zeroizing<Vec<u8>>, RelayClientError> {
+    let file = open_token_file(path).map_err(|_| RelayClientError::CredentialUnavailable)?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| RelayClientError::CredentialUnavailable)?;
+    if !metadata.is_file() {
+        return Err(RelayClientError::CredentialUnavailable);
     }
-    let header =
-        parse_json_strict(&header_bytes).map_err(|_| RelayClientError::InvalidConfiguration)?;
-    let claims =
-        parse_json_strict(&claims_bytes).map_err(|_| RelayClientError::InvalidConfiguration)?;
-    drop(header_bytes);
-    drop(claims_bytes);
-    drop(signature_bytes);
-    validate_jwt_header(&header)?;
-    validate_jwt_claims(
-        &claims,
-        expected_issuer,
-        expected_audience,
-        expected_scope,
-        now,
+    if metadata.len() > MAX_TOKEN_FILE_BYTES as u64 {
+        return Err(RelayClientError::InvalidCredentials);
+    }
+    let mut token = Zeroizing::new(Vec::with_capacity(
+        usize::try_from(metadata.len()).unwrap_or(MAX_TOKEN_FILE_BYTES),
+    ));
+    file.take((MAX_TOKEN_FILE_BYTES + 1) as u64)
+        .read_to_end(&mut token)
+        .map_err(|_| RelayClientError::CredentialUnavailable)?;
+    if token.len() > MAX_TOKEN_FILE_BYTES {
+        return Err(RelayClientError::InvalidCredentials);
+    }
+    trim_one_line_ending(&mut token);
+    if token.is_empty() || token.len() > TOKEN_MAX_BYTES {
+        return Err(RelayClientError::InvalidCredentials);
+    }
+    Ok(token)
+}
+
+#[cfg(unix)]
+fn open_token_file(path: &Path) -> std::io::Result<File> {
+    use rustix::fs::{Mode, OFlags};
+
+    // O_NONBLOCK makes opening a FIFO or device return promptly. We follow
+    // symlinks so the conventional `..data`/atomic-symlink secret rotation
+    // pattern remains supported, then fstat the opened descriptor and reject
+    // every non-regular target before reading it.
+    let descriptor = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
     )
+    .map_err(std::io::Error::from)?;
+    Ok(File::from(descriptor))
 }
 
-fn decode_jwt_segment(segment: &str) -> Result<Zeroizing<Vec<u8>>, RelayClientError> {
-    if !segment
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
-        return Err(RelayClientError::InvalidConfiguration);
+#[cfg(not(unix))]
+fn open_token_file(path: &Path) -> std::io::Result<File> {
+    // Supported production targets use the nonblocking Unix path. Other
+    // targets still perform the same post-open regular-file and size checks.
+    File::open(path)
+}
+
+fn trim_one_line_ending(value: &mut Vec<u8>) {
+    if value.ends_with(b"\r\n") {
+        value.truncate(value.len() - 2);
+    } else if value.ends_with(b"\n") || value.ends_with(b"\r") {
+        value.truncate(value.len() - 1);
     }
-    let capacity = segment
-        .len()
-        .checked_mul(3)
-        .and_then(|length| length.checked_div(4))
-        .and_then(|length| length.checked_add(3))
-        .ok_or(RelayClientError::InvalidConfiguration)?;
-    let mut decoded = Zeroizing::new(vec![0_u8; capacity]);
-    let length = URL_SAFE_NO_PAD
-        .decode_slice(segment.as_bytes(), &mut decoded)
-        .map_err(|_| RelayClientError::InvalidConfiguration)?;
-    decoded.truncate(length);
-    Ok(decoded)
 }
 
-fn validate_jwt_header(value: &Value) -> Result<(), RelayClientError> {
-    let object = closed_json_object(value, &["alg", "kid", "typ"])?;
-    let alg = required_json_string(object, "alg")?;
-    if !matches!(alg, "RS256" | "ES256" | "EdDSA")
-        || required_json_string(object, "typ")? != "at+jwt"
-        || !valid_claim_text(required_json_string(object, "kid")?)
+fn validate_compact_jws(token: &[u8]) -> Result<(), RelayClientError> {
+    let mut segments = token.split(|byte| *byte == b'.');
+    let header = segments
+        .next()
+        .ok_or(RelayClientError::InvalidCredentials)?;
+    let claims = segments
+        .next()
+        .ok_or(RelayClientError::InvalidCredentials)?;
+    let signature = segments
+        .next()
+        .ok_or(RelayClientError::InvalidCredentials)?;
+    if segments.next().is_some()
+        || !valid_base64url_segment(header)
+        || !valid_base64url_segment(claims)
+        || !valid_base64url_segment(signature)
     {
-        return Err(RelayClientError::InvalidConfiguration);
+        return Err(RelayClientError::InvalidCredentials);
     }
     Ok(())
 }
 
-fn validate_jwt_claims(
-    value: &Value,
-    expected_issuer: &str,
-    expected_audience: &str,
-    expected_scope: &str,
-    now: i64,
-) -> Result<(), RelayClientError> {
-    let object = closed_json_object(
-        value,
-        &[
-            "aud",
-            "azp",
-            "client_id",
-            "exp",
-            "iat",
-            "iss",
-            "nbf",
-            "scope",
-            "sub",
-        ],
-    )?;
-    if required_json_string(object, "iss")? != expected_issuer
-        || required_json_string(object, "sub")? != RELAY_WORKLOAD
-        || required_json_string(object, "scope")? != expected_scope
-        || !exact_json_audience(
-            object
-                .get("aud")
-                .ok_or(RelayClientError::InvalidConfiguration)?,
-            expected_audience,
-        )
-    {
-        return Err(RelayClientError::InvalidConfiguration);
-    }
-
-    let azp = optional_json_string(object, "azp")?;
-    let client_id = optional_json_string(object, "client_id")?;
-    if (azp.is_none() && client_id.is_none())
-        || azp.is_some_and(|value| value != RELAY_WORKLOAD)
-        || client_id.is_some_and(|value| value != RELAY_WORKLOAD)
-    {
-        return Err(RelayClientError::InvalidConfiguration);
-    }
-
-    let issued_at = required_json_i64(object, "iat")?;
-    let expires_at = required_json_i64(object, "exp")?;
-    let not_before = optional_json_i64(object, "nbf")?;
-    if issued_at < 0
-        || issued_at > now
-        || expires_at <= now
-        || expires_at <= issued_at
-        || not_before.is_some_and(|value| value < 0 || value > now || value >= expires_at)
-    {
-        return Err(RelayClientError::InvalidConfiguration);
-    }
-    Ok(())
+fn valid_base64url_segment(segment: &[u8]) -> bool {
+    !segment.is_empty()
+        && segment.len() % 4 != 1
+        && segment
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
-fn closed_json_object<'a>(
-    value: &'a Value,
-    allowed_fields: &[&str],
-) -> Result<&'a Map<String, Value>, RelayClientError> {
-    let object = value
-        .as_object()
-        .ok_or(RelayClientError::InvalidConfiguration)?;
-    if object
-        .keys()
-        .any(|name| !allowed_fields.contains(&name.as_str()))
-    {
-        return Err(RelayClientError::InvalidConfiguration);
-    }
-    Ok(object)
+async fn authorization_before_deadline(
+    credential: &RelayWorkloadCredentialFile,
+    deadline: Instant,
+) -> Result<DestinationAuthorizationValue, RelayClientError> {
+    timeout_at(deadline, credential.authorization())
+        .await
+        .map_err(|_| RelayClientError::Unavailable)?
 }
 
-fn required_json_string<'a>(
-    object: &'a Map<String, Value>,
-    name: &str,
-) -> Result<&'a str, RelayClientError> {
-    object
-        .get(name)
-        .and_then(Value::as_str)
-        .filter(|value| valid_claim_text(value))
-        .ok_or(RelayClientError::InvalidConfiguration)
-}
-
-fn optional_json_string<'a>(
-    object: &'a Map<String, Value>,
-    name: &str,
-) -> Result<Option<&'a str>, RelayClientError> {
-    object
-        .get(name)
-        .map(|value| {
-            value
-                .as_str()
-                .filter(|value| valid_claim_text(value))
-                .ok_or(RelayClientError::InvalidConfiguration)
-        })
-        .transpose()
-}
-
-fn required_json_i64(object: &Map<String, Value>, name: &str) -> Result<i64, RelayClientError> {
-    object
-        .get(name)
-        .and_then(Value::as_i64)
-        .ok_or(RelayClientError::InvalidConfiguration)
-}
-
-fn optional_json_i64(
-    object: &Map<String, Value>,
-    name: &str,
-) -> Result<Option<i64>, RelayClientError> {
-    object
-        .get(name)
-        .map(|value| value.as_i64().ok_or(RelayClientError::InvalidConfiguration))
-        .transpose()
-}
-
-fn exact_json_audience(value: &Value, expected: &str) -> bool {
-    match value {
-        Value::String(value) => value == expected,
-        Value::Array(values) => {
-            matches!(values.as_slice(), [Value::String(value)] if value == expected)
-        }
-        _ => false,
-    }
-}
-
-fn operation_deadline(timeout: Duration) -> Result<Instant, RelayClientError> {
+fn operation_deadline() -> Result<Instant, RelayClientError> {
     Instant::now()
-        .checked_add(timeout)
+        .checked_add(MAX_SERVICE_HOP_OPERATION_TIMEOUT)
         .ok_or(RelayClientError::InvalidConfiguration)
+}
+
+fn require_deadline(deadline: Instant) -> Result<(), RelayClientError> {
+    if Instant::now() >= deadline {
+        Err(RelayClientError::Unavailable)
+    } else {
+        Ok(())
+    }
+}
+
+fn map_send_error(error: DestinationSendError) -> RelayClientError {
+    match error {
+        DestinationSendError::DeadlineExceeded => RelayClientError::Unavailable,
+        _ => RelayClientError::TransportUnavailable,
+    }
+}
+
+fn map_response_error(
+    error: DestinationResponseError,
+    otherwise: RelayClientError,
+) -> RelayClientError {
+    match error {
+        DestinationResponseError::DeadlineExceeded => RelayClientError::Unavailable,
+        _ => otherwise,
+    }
 }
 
 fn require_success(status: StatusCode) -> Result<(), RelayClientError> {
@@ -1889,16 +1855,29 @@ fn valid_purpose(value: &str) -> bool {
             .all(|character| !character.is_control() && !character.is_whitespace())
 }
 
-fn valid_claim_text(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= JWT_CLAIM_MAX_BYTES
-        && value
-            .chars()
-            .all(|character| !character.is_control() && !character.is_whitespace())
+fn valid_token_file_path(path: &Path) -> bool {
+    let Some(text) = path.to_str() else {
+        return false;
+    };
+    !text.is_empty()
+        && text.len() <= MAX_TOKEN_FILE_PATH_BYTES
+        && path.is_absolute()
+        && path.file_name().is_some()
+        && path.components().all(|component| {
+            matches!(
+                component,
+                Component::Prefix(_) | Component::RootDir | Component::Normal(_)
+            )
+        })
 }
 
 fn valid_scope(value: &str) -> bool {
-    value.len() <= PURPOSE_MAX_BYTES && valid_claim_text(value) && !value.contains(',')
+    !value.is_empty()
+        && value.len() <= PURPOSE_MAX_BYTES
+        && !value.contains(',')
+        && value
+            .chars()
+            .all(|character| !character.is_control() && !character.is_whitespace())
 }
 
 fn canonical_ulid(value: &str) -> bool {

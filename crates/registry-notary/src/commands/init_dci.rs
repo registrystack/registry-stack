@@ -54,6 +54,9 @@ pub(crate) fn init_dci(
         false,
     )?;
     println!("Generated DCI starter files in {}", output.display());
+    eprintln!(
+        "WARN generated config uses temporary transitional_direct cutover scaffolding; it blocks the replacement beta and 1.0 release and must be replaced by a reviewed Relay profile"
+    );
     if options.print_secrets {
         println!("REGISTRY_NOTARY_LOCAL_API_KEY={api_key}");
         println!("REGISTRY_NOTARY_API_KEY_HASH={api_hash}");
@@ -156,7 +159,10 @@ pub(crate) fn dci_config_yaml(options: &InitDciOptions) -> String {
         ""
     };
     format!(
-        r#"server:
+        r#"# TEMPORARY UNRELEASED CUTOVER SCAFFOLD: this file uses transitional_direct.
+# It blocks the replacement beta and 1.0 release. Do not use it to start a new
+# integration; replace it with a reviewed, hash-pinned Relay profile.
+server:
   bind: 127.0.0.1:4255
 auth:
   mode: api_key
@@ -192,6 +198,8 @@ evidence:
       title: {claim_title}
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
 {claim_profiles}      source_bindings:

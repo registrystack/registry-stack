@@ -128,6 +128,8 @@ evidence:
       title: Vital Status Attestation
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       purpose: https://demo.example.gov/purpose/civil-certificate-evidence
       value:
         type: boolean
@@ -165,6 +167,8 @@ evidence:
       title: CRVS Birth Certificate
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       purpose: https://demo.example.gov/purpose/civil-certificate-evidence
       value:
         type: object
@@ -445,8 +449,7 @@ self_attestation:
   credential_profiles:
     - citizen_civil_status_sd_jwt
     - citizen_birth_certificate_sd_jwt
-  wallet_cors:
-    allowed_origins: []
+  allowed_wallet_origins: []
   rate_limits:
     mode: in_process
     invalid_token_per_client_address_per_minute: 20

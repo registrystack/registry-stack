@@ -124,6 +124,101 @@ fn attested_local_file_audit_sink_suppresses_beta_tamper_evidence_warning() {
     );
 }
 
+fn doctor_relay_config(token_file: PathBuf) -> StandaloneRegistryNotaryConfig {
+    let mut config = doctor_live_test_config("http://127.0.0.1:1");
+    config.evidence.claims[0].evidence_mode =
+        registry_notary_core::ClaimEvidenceMode::RegistryBacked {
+            consultations: std::collections::BTreeMap::new(),
+        };
+    config.evidence.relay = Some(registry_notary_core::RelayConnectionConfig {
+        base_url: "http://127.0.0.1:1".to_string(),
+        token_file,
+        allowed_private_cidrs: Vec::new(),
+        allow_insecure_localhost: true,
+    });
+    config
+}
+
+#[test]
+fn relay_token_file_diagnostic_is_safe_and_requires_non_empty_regular_file() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let token_file = tmp.path().join("do-not-report-this-token-path.jwt");
+    let config = doctor_relay_config(token_file.clone());
+
+    let missing = relay_token_file_diagnostic(&config);
+    assert!(!missing.ok);
+    assert_eq!(
+        missing.report_code.as_deref(),
+        Some("notary.relay.credential_unavailable")
+    );
+    let missing_text = format!(
+        "{} {}",
+        missing.label,
+        missing.action.as_deref().unwrap_or_default()
+    );
+    assert!(!missing_text.contains("do-not-report-this-token-path"));
+
+    std::fs::write(&token_file, "").expect("empty token file writes");
+    assert!(!relay_token_file_diagnostic(&config).ok);
+
+    std::fs::write(&token_file, "header.payload.signature").expect("token file writes");
+    let permissive = relay_token_file_diagnostic(&config);
+    assert!(permissive.ok);
+    #[cfg(unix)]
+    {
+        assert!(permissive.warning);
+        assert_eq!(
+            permissive.report_code.as_deref(),
+            Some("notary.relay.credential_permissions")
+        );
+        std::fs::set_permissions(
+            &token_file,
+            <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o600),
+        )
+        .expect("token permissions are restricted");
+        let private = relay_token_file_diagnostic(&config);
+        assert!(private.ok);
+        assert!(!private.warning);
+    }
+}
+
+#[test]
+fn relay_live_failures_have_stable_safe_categories() {
+    let cases = [
+        (
+            StandaloneServerError::RelayCredentialUnavailable,
+            "notary.relay.credential_unavailable",
+        ),
+        (
+            StandaloneServerError::RelayCredentialsRejected,
+            "notary.relay.credentials_rejected",
+        ),
+        (
+            StandaloneServerError::RelayProfileNotFound,
+            "notary.relay.profile_not_found",
+        ),
+        (
+            StandaloneServerError::RelayProfileMismatch,
+            "notary.relay.profile_mismatch",
+        ),
+        (
+            StandaloneServerError::RelayUnavailable,
+            "notary.relay.unavailable",
+        ),
+        (
+            StandaloneServerError::InvalidRelayActivationPlan,
+            "notary.relay.configuration_invalid",
+        ),
+    ];
+
+    for (error, expected_code) in cases {
+        let diagnostic = relay_live_failure_diagnostic(&error);
+        assert!(!diagnostic.ok);
+        assert_eq!(diagnostic.report_code.as_deref(), Some(expected_code));
+        assert_eq!(diagnostic.report_severity, Some("error"));
+    }
+}
+
 #[test]
 fn notary_audit_shipping_reports_stdout_sink_as_shipped() {
     let mut config = doctor_live_test_config("http://127.0.0.1:1");
@@ -610,6 +705,8 @@ evidence:
       title: DCI record exists
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:

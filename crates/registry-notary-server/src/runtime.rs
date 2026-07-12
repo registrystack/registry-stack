@@ -15,16 +15,17 @@ use registry_notary_core::{
     detect_dependency_cycle, missing_context_error, parse_source_lookup_reference, AccessMode,
     BatchClaimResultView, BatchEvaluateRequest, BatchEvaluateResponse, BatchItemError,
     BatchItemResponse, BatchItemStatus, BatchStatus, BatchSummary, BoundedClaimId,
-    BoundedCorrelationId, BulkMode, CelBindingsConfig, ClaimDefinition, ClaimProvenance, ClaimRef,
-    ClaimResultView, CredentialProfileConfig, DisclosureDowngrade, DisclosureProfile,
-    EvaluateRequest, EvidenceAuthorizationDetails, EvidenceConfig, EvidenceEntity,
-    EvidenceEntityRef, EvidenceError, EvidenceFormat, EvidencePrincipal, EvidenceRequestContext,
-    MatchingMetadata, ProvenanceUsed, RegistryNotaryCelConfig, RenderRequest, RuleConfig,
-    SelfAttestationConfig, SelfAttestationDenialCode, SourceBindingConfig, SourceCapability,
-    SourceLookupReference, SourceRuntimeSummary, StoredSelfAttestationMetadata, SubjectRequest,
-    TargetRefView, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
-    SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP,
-    SD_JWT_VC_SIGNING_ALG,
+    BoundedCorrelationId, BulkMode, CelBindingsConfig, ClaimDefinition, ClaimEvidenceMode,
+    ClaimProvenance, ClaimRef, ClaimResultView, CredentialProfileConfig, DisclosureDowngrade,
+    DisclosureProfile, EvaluateRequest, EvidenceAuthorizationDetails, EvidenceConfig,
+    EvidenceEntity, EvidenceEntityRef, EvidenceError, EvidenceFormat, EvidencePrincipal,
+    EvidenceRequestContext, MatchingMetadata, ProvenanceUsed, RegistryNotaryCelConfig,
+    RelayConsultationInput, RenderRequest, RuleConfig, SelfAttestationConfig,
+    SelfAttestationDenialCode, SourceBindingConfig, SourceCapability, SourceLookupReference,
+    SourceRuntimeSummary, StoredSelfAttestationMetadata, SubjectRequest, TargetRefView,
+    FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC, MAX_CLAIM_DEPENDENCY_EDGES_V1,
+    MAX_CLAIM_DEPENDENCY_NODES_V1, SD_JWT_VC_HOLDER_BINDING_METHOD, SD_JWT_VC_ISSUER_KEY_TYPE,
+    SD_JWT_VC_JWT_TYP, SD_JWT_VC_SIGNING_ALG,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_pdp::{
@@ -44,6 +45,7 @@ const SD_JWT_VC_RSA_ISSUER_KEY_TYPE: &str = "RSA";
 const SD_JWT_VC_P256_ISSUER_KEY_TYPE: &str = "EC/P-256";
 use tokio::task::JoinSet;
 use ulid::Ulid;
+use zeroize::Zeroizing;
 
 #[cfg(feature = "registry-notary-cel")]
 use crate::cel_worker::{cel_expression_uses_regex, CelWorker, CelWorkerError};
@@ -61,6 +63,7 @@ const MAX_CEL_VAR_BINDINGS: usize = 64;
 mod access;
 mod catalog;
 mod cel;
+pub(crate) mod consultation;
 mod disclosure;
 mod evaluation;
 mod matching;
@@ -75,6 +78,16 @@ use access::*;
 pub use catalog::*;
 #[cfg(feature = "registry-notary-cel")]
 pub(crate) use cel::validate_cel_claims_for_startup;
+#[cfg(not(test))]
+use consultation::ConsultationGroupKeyV1;
+#[cfg(test)]
+pub(crate) use consultation::ConsultationGroupKeyV1;
+#[cfg(test)]
+use consultation::RuntimeRelayOutput;
+pub(crate) use consultation::{
+    ActivatedRelayConsultations, EvaluationAuditSnapshot, RuntimeRelayConsultationResult,
+};
+use consultation::{EvaluationAuditCollector, RequestScopedRelayPlan, RuntimeRelayOutcome};
 use disclosure::*;
 pub use evaluation::*;
 pub(crate) use matching::*;

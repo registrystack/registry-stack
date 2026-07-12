@@ -21,6 +21,7 @@ pub(in super::super) fn config_boot_audit_event(
         purposes: None,
         row_count: None,
         source_read_count: None,
+        relay_consultation_ids: Vec::new(),
         forwarded: None,
         error_code: None,
         access_mode: None,

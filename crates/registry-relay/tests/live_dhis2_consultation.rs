@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#![cfg(unix)]
 //! Explicitly ignored end-to-end proof for the maintained DHIS2 2.41.9 journey.
 //!
 //! The companion runner supplies a disposable TLS PostgreSQL 16 database and
@@ -8,6 +9,9 @@
 
 use std::{
     env, fs,
+    fs::OpenOptions,
+    io::Write as _,
+    os::unix::fs::OpenOptionsExt as _,
     path::{Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -23,6 +27,7 @@ use ed25519_dalek::{pkcs8::EncodePrivateKey, SigningKey};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use postgres_native_tls::MakeTlsConnector;
 use rand_core::OsRng;
+use registry_notary_server::{compile_notary_runtime, notary_router_from_runtime};
 use registry_platform_audit::AuditChainProfile;
 use reqwest::Url;
 use serde_json::{json, Map, Value};
@@ -62,27 +67,24 @@ const PSEUDONYM_SECRET_ENV: &str = "REGISTRY_RELAY_AUDIT_PSEUDONYM_EPOCH_1";
 const DHIS2_BASE_URL_ENV: &str = "DHIS2_BASE_URL";
 const DHIS2_USERNAME_ENV: &str = "DHIS2_USERNAME";
 const DHIS2_PASSWORD_ENV: &str = "DHIS2_PASSWORD";
+const NOTARY_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_DHIS2_API_KEY_HASH";
+const NOTARY_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_AUDIT_HASH_SECRET";
 
 const PROFILE_ID: &str = "dhis2.tracker.enrollment-status.exact";
 const PROFILE_VERSION: &str = "1";
-const PROFILE_ROUTE: &str = "/v1/consultations/dhis2.tracker.enrollment-status.exact/versions/1";
-const EXECUTE_ROUTE: &str =
-    "/v1/consultations/dhis2.tracker.enrollment-status.exact/versions/1/execute";
 const PURPOSE: &str = "program-enrollment-verification";
 const REQUIRED_SCOPE: &str = "registry:consult:dhis2-enrollment-status";
-const NOTARY_EVALUATION_ID: &str = "01JYZZZZZZZZZZZZZZZZZZZZZZ";
 const ISSUER: &str = "https://relay-live-issuer.example.test";
 const AUDIENCE: &str = "relay-consultation";
 const NOTARY_PRINCIPAL: &str = "registry-notary";
 const JWT_KID: &str = "relay-live-dhis2-ed25519";
 const PSEUDONYM_KEY_ID: &str = "epoch-1";
 
-const CONTRACT_HASH: &str =
-    "sha256:eb8f6cb4dd81d8a34c25e4da393ada734caa553e7e65a06fabd613afb1fecbc9";
-const PACK_HASH: &str = "sha256:017783fe880863e9dedc5138df4e1212d020ce7cfac5a13b58911fc4705f0e7a";
+const PACK_HASH: &str = "sha256:ec0136be504e3f98539f9e0ec10e59532ff793dbadc2e66ea1c017a632da6ac4";
 
 const PROFILE_DIRECTORY: &str = "profiles/dhis2-2.41.9-enrollment-status";
 const CONFIG_EXAMPLE_FILE: &str = "relay-config.example.yaml";
+const NOTARY_CONFIG_EXAMPLE_FILE: &str = "notary-config.example.yaml";
 const PUBLIC_CONTRACT_FILE: &str = "public-contract.json";
 const INTEGRATION_PACK_FILE: &str = "integration-pack.json";
 const CONFORMANCE_FILE: &str = "evidence/conformance.json";
@@ -121,22 +123,22 @@ enum LiveJourneyError {
     ConsultationNotReady,
     #[error("the production protected router could not be assembled")]
     RouterAssembly,
-    #[error("the protected profile metadata request failed")]
-    MetadataRequest,
-    #[error("the protected profile metadata response was invalid")]
-    MetadataResponse,
-    #[error("the protected DHIS2 consultation request failed")]
-    ExecuteRequest,
-    #[error("Relay rejected the live consultation as invalid")]
-    ExecuteInvalidRequest,
-    #[error("Relay rejected the live consultation credentials")]
-    ExecuteInvalidCredentials,
-    #[error("Relay denied the live consultation")]
-    ExecuteDenied,
-    #[error("Relay did not resolve the live consultation profile")]
-    ExecuteProfileNotFound,
-    #[error("Relay rate-limited the live consultation")]
-    ExecuteRateLimited,
+    #[error("the protected Relay listener could not be started")]
+    RelayListener,
+    #[error("the reloadable Relay workload credential could not be staged")]
+    RelayCredentialStaging,
+    #[error("the maintained Notary runtime configuration did not load")]
+    NotaryConfigLoad,
+    #[error("the Notary-to-Relay consultation path could not be activated")]
+    NotaryActivation,
+    #[error("the activated Notary-to-Relay path was not ready")]
+    NotaryReadiness,
+    #[error("the Notary evaluation request failed")]
+    NotaryRequest,
+    #[error("the minimized Notary evaluation response was invalid")]
+    NotaryResponse,
+    #[error("the restricted Notary audit correlation was invalid")]
+    NotaryAudit,
     #[error("Relay reported the live consultation unavailable")]
     ExecuteUnavailable,
     #[error("Relay recorded unavailable source credentials for the live consultation")]
@@ -153,8 +155,6 @@ enum LiveJourneyError {
     ExecuteClosedAfterSourceDispatch,
     #[error("Relay left the live consultation without a terminal durable completion")]
     ExecuteMissingDurableCompletion,
-    #[error("the protected DHIS2 consultation response was invalid")]
-    ExecuteResponse,
     #[error("the durable consultation evidence did not match the completed journey")]
     DurableEvidence,
     #[error("the concrete consultation service did not shut down cleanly")]
@@ -188,47 +188,22 @@ fn maintained_operator_example_stages_through_real_loader() {
 }
 
 #[test]
-fn live_failure_diagnostics_remain_closed_and_exact() {
-    for (status, code, expected) in [
-        (
-            StatusCode::BAD_REQUEST,
-            Some("consultation.invalid_request"),
-            LiveJourneyError::ExecuteInvalidRequest,
-        ),
-        (
-            StatusCode::UNAUTHORIZED,
-            Some("auth.invalid_credentials"),
-            LiveJourneyError::ExecuteInvalidCredentials,
-        ),
-        (
-            StatusCode::FORBIDDEN,
-            Some("consultation.denied"),
-            LiveJourneyError::ExecuteDenied,
-        ),
-        (
-            StatusCode::NOT_FOUND,
-            Some("consultation.profile_not_found"),
-            LiveJourneyError::ExecuteProfileNotFound,
-        ),
-        (
-            StatusCode::TOO_MANY_REQUESTS,
-            Some("consultation.rate_limited"),
-            LiveJourneyError::ExecuteRateLimited,
-        ),
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Some("consultation.unavailable"),
-            LiveJourneyError::ExecuteUnavailable,
-        ),
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Some("unexpected"),
-            LiveJourneyError::ExecuteRequest,
-        ),
-    ] {
-        assert_eq!(classify_closed_execute_failure(status, code), expected);
-    }
+fn maintained_notary_example_loads_and_validates() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join(PROFILE_DIRECTORY)
+        .join(NOTARY_CONFIG_EXAMPLE_FILE);
+    let yaml = fs::read_to_string(path)
+        .unwrap_or_else(|_| panic!("the maintained Notary operator example was not readable"));
+    let config: registry_notary_core::StandaloneRegistryNotaryConfig =
+        serde_norway::from_str(&yaml)
+            .unwrap_or_else(|_| panic!("the maintained Notary operator example did not parse"));
+    config
+        .validate()
+        .unwrap_or_else(|_| panic!("the maintained Notary operator example did not validate"));
+}
 
+#[test]
+fn durable_failure_diagnostics_remain_closed_and_exact() {
     for (outcome, class, failure, expected) in [
         (
             Some("known_complete"),
@@ -291,8 +266,13 @@ async fn run_live_dhis2_consultation_lifecycle() -> Result<(), LiveJourneyError>
     let mut environment = ScopedEnvironment::default();
     let audit_secret = random_secret();
     let pseudonym_secret = random_secret();
+    let notary_audit_secret = random_secret();
+    let notary_api_key = random_secret();
+    let notary_api_key_hash = sha256_uri(notary_api_key.as_bytes());
     environment.set(AUDIT_SECRET_ENV, audit_secret.as_str());
     environment.set(PSEUDONYM_SECRET_ENV, pseudonym_secret.as_str());
+    environment.set(NOTARY_AUDIT_SECRET_ENV, notary_audit_secret.as_str());
+    environment.set(NOTARY_API_KEY_HASH_ENV, &notary_api_key_hash);
 
     let (mut database, database_urls) =
         LiveDatabase::provision(admin_database_url.as_str(), postgres_ca_path.as_path()).await?;
@@ -303,89 +283,155 @@ async fn run_live_dhis2_consultation_lifecycle() -> Result<(), LiveJourneyError>
     );
     environment.set(READER_DATABASE_URL_ENV, database_urls.reader.as_str());
 
-    let staged = StagedProfile::new(
-        dhis2_base_url.as_str(),
-        postgres_ca_path.as_path(),
-        jwks.jwks_url(),
-    )?;
-    let mut loaded = config::load_with_metadata(&staged.config_path)
-        .map_err(|_| LiveJourneyError::ConfigLoad)?;
-    let now = current_unix_ms()?;
-    let active_write_deadline_unix_ms = now + 30 * 60 * 1_000;
-    let first_bootstrap = bootstrap_live_state(
-        &loaded.runtime,
-        database.owner_role(),
-        active_write_deadline_unix_ms,
-    )
-    .await?;
-    if first_bootstrap.state_plane != BootstrapStatePlaneStatus::InstalledOrAttested
-        || first_bootstrap.keyring != BootstrapKeyringStatus::Initialized
-    {
-        return Err(LiveJourneyError::PseudonymInitialization);
-    }
-    let identical_bootstrap = bootstrap_live_state(
-        &loaded.runtime,
-        database.owner_role(),
-        active_write_deadline_unix_ms,
-    )
-    .await?;
-    if identical_bootstrap.state_plane != BootstrapStatePlaneStatus::InstalledOrAttested
-        || identical_bootstrap.keyring != BootstrapKeyringStatus::Identical
-    {
-        return Err(LiveJourneyError::PseudonymInitialization);
-    }
-    let artifacts = loaded
-        .consultation_artifacts
-        .take()
-        .ok_or(LiveJourneyError::ConfigLoad)?;
-    let config = Arc::new(loaded.runtime);
+    let execution = async {
+        let staged = StagedProfile::new(
+            dhis2_base_url.as_str(),
+            postgres_ca_path.as_path(),
+            jwks.jwks_url(),
+        )?;
+        let mut loaded = config::load_with_metadata(&staged.config_path)
+            .map_err(|_| LiveJourneyError::ConfigLoad)?;
+        let now = current_unix_ms()?;
+        let active_write_deadline_unix_ms = now + 30 * 60 * 1_000;
+        let first_bootstrap = bootstrap_live_state(
+            &loaded.runtime,
+            database.owner_role(),
+            active_write_deadline_unix_ms,
+        )
+        .await?;
+        if first_bootstrap.state_plane != BootstrapStatePlaneStatus::InstalledOrAttested
+            || first_bootstrap.keyring != BootstrapKeyringStatus::Initialized
+        {
+            return Err(LiveJourneyError::PseudonymInitialization);
+        }
+        let identical_bootstrap = bootstrap_live_state(
+            &loaded.runtime,
+            database.owner_role(),
+            active_write_deadline_unix_ms,
+        )
+        .await?;
+        if identical_bootstrap.state_plane != BootstrapStatePlaneStatus::InstalledOrAttested
+            || identical_bootstrap.keyring != BootstrapKeyringStatus::Identical
+        {
+            return Err(LiveJourneyError::PseudonymInitialization);
+        }
+        let artifacts = loaded
+            .consultation_artifacts
+            .take()
+            .ok_or(LiveJourneyError::ConfigLoad)?;
+        let config = Arc::new(loaded.runtime);
 
-    let auth = registry_relay::auth::runtime::build_auth(config.as_ref())
-        .await
-        .map_err(|_| LiveJourneyError::AuthActivation)?;
-    let chain_profile = AuditChainProfile::registry_relay_from_env(AUDIT_SECRET_ENV)
-        .map_err(|_| LiveJourneyError::AuditActivation)?;
-    let service = ConsultationService::activate(config.as_ref(), artifacts, chain_profile.hasher())
-        .await
-        .map_err(|_| LiveJourneyError::ConsultationActivation)?;
-    if service.readiness().await != ConsultationServiceReadiness::Ready {
-        return Err(LiveJourneyError::ConsultationNotReady);
+        let auth = registry_relay::auth::runtime::build_auth(config.as_ref())
+            .await
+            .map_err(|_| LiveJourneyError::AuthActivation)?;
+        let chain_profile = AuditChainProfile::registry_relay_from_env(AUDIT_SECRET_ENV)
+            .map_err(|_| LiveJourneyError::AuditActivation)?;
+        let service =
+            ConsultationService::activate(config.as_ref(), artifacts, chain_profile.hasher())
+                .await
+                .map_err(|_| LiveJourneyError::ConsultationActivation)?;
+        let service_execution = async {
+            if service.readiness().await != ConsultationServiceReadiness::Ready {
+                return Err(LiveJourneyError::ConsultationNotReady);
+            }
+
+            let audit = Arc::new(AuditPipeline::new_with_chain_profile(
+                Arc::new(InMemorySink::new()),
+                chain_profile,
+            ));
+            let app = server::build_app(Arc::clone(&config), auth, audit)
+                .map_err(|_| LiveJourneyError::RouterAssembly)?
+                .layer(Extension(Arc::clone(&service)));
+            let bearer = jwks.mint_bearer()?;
+            let relay_token_file = staged.stage_relay_token(bearer.as_str())?;
+            let notary_audit_path = staged.notary_audit_path();
+            let relay = LiveRelayServer::start(app).await?;
+            let notary_config = staged.load_notary_config(
+                relay.base_url(),
+                &relay_token_file,
+                &notary_audit_path,
+            )?;
+            let notary_runtime = compile_notary_runtime(notary_config)
+                .map_err(|_| LiveJourneyError::NotaryActivation)?
+                .activate_relay()
+                .await
+                .map_err(|_| LiveJourneyError::NotaryActivation)?;
+            let notary_app = notary_router_from_runtime(notary_runtime)
+                .map_err(|_| LiveJourneyError::NotaryActivation)?;
+            assert_notary_relay_ready(notary_app.clone()).await?;
+
+            let journey = execute_notary_journey(
+                notary_app,
+                notary_api_key.as_str(),
+                bearer.as_str(),
+                &notary_audit_path,
+            )
+            .await;
+            let closed_diagnostic = if journey.is_err() {
+                match database.classify_safe_execute_failure().await {
+                    LiveJourneyError::ExecuteMissingDurableCompletion
+                    | LiveJourneyError::ExecuteUnavailable => None,
+                    diagnostic => Some(diagnostic),
+                }
+            } else {
+                None
+            };
+            drop(relay);
+            Ok((journey, closed_diagnostic))
+        };
+        let service_execution = service_execution.await;
+        let shutdown = service
+            .shutdown()
+            .await
+            .map_err(|_| LiveJourneyError::ConsultationShutdown);
+        drop(service);
+        let (journey, closed_diagnostic) = service_execution?;
+        let durable_evidence = match (&journey, &shutdown) {
+            (Ok(correlation), Ok(())) => database.assert_safe_durable_evidence(correlation).await,
+            _ => Ok(()),
+        };
+        let journey = closed_diagnostic.map_or(journey, Err);
+        journey?;
+        shutdown?;
+        durable_evidence
     }
-
-    let audit = Arc::new(AuditPipeline::new_with_chain_profile(
-        Arc::new(InMemorySink::new()),
-        chain_profile,
-    ));
-    let app = server::build_app(Arc::clone(&config), auth, audit)
-        .map_err(|_| LiveJourneyError::RouterAssembly)?
-        .layer(Extension(Arc::clone(&service)));
-    let bearer = jwks.mint_bearer()?;
-
-    let journey = execute_protected_journey(app.clone(), bearer.as_str()).await;
-    let closed_diagnostic = if matches!(journey, Err(LiveJourneyError::ExecuteUnavailable)) {
-        Some(database.classify_safe_execute_failure().await)
-    } else {
-        None
-    };
-    let shutdown = service
-        .shutdown()
-        .await
-        .map_err(|_| LiveJourneyError::ConsultationShutdown);
-    drop(app);
-    drop(service);
-    let durable_evidence = if journey.is_ok() && shutdown.is_ok() {
-        database.assert_safe_durable_evidence().await
-    } else {
-        Ok(())
-    };
-    let journey = closed_diagnostic.map_or(journey, Err);
+    .await;
     let cleanup = database.cleanup().await;
     drop(jwks);
 
-    journey?;
-    shutdown?;
-    durable_evidence?;
+    execution?;
     cleanup
+}
+
+async fn assert_notary_relay_ready(app: Router) -> Result<(), LiveJourneyError> {
+    let request = Request::builder()
+        .method(Method::GET)
+        .uri("/ready")
+        .body(Body::empty())
+        .map_err(|_| LiveJourneyError::NotaryReadiness)?;
+    let response = app
+        .oneshot(request)
+        .await
+        .map_err(|_| LiveJourneyError::NotaryReadiness)?;
+    if response.status() != StatusCode::OK && response.status() != StatusCode::SERVICE_UNAVAILABLE {
+        return Err(LiveJourneyError::NotaryReadiness);
+    }
+    let body = to_bytes(response.into_body(), 16 * 1024)
+        .await
+        .map_err(|_| LiveJourneyError::NotaryReadiness)?;
+    let body: Value =
+        serde_json::from_slice(&body).map_err(|_| LiveJourneyError::NotaryReadiness)?;
+    let overall_usable = body.get("status").and_then(Value::as_str) == Some("ready")
+        || body.get("readiness_status").and_then(Value::as_str) == Some("degraded");
+    if !overall_usable
+        || body.pointer("/checks/failed").and_then(Value::as_u64) != Some(0)
+        || body.pointer("/checks/relay/total").and_then(Value::as_u64) != Some(1)
+        || body.pointer("/checks/relay/ok").and_then(Value::as_u64) != Some(1)
+        || body.pointer("/checks/relay/failed").and_then(Value::as_u64) != Some(0)
+    {
+        return Err(LiveJourneyError::NotaryReadiness);
+    }
+    Ok(())
 }
 
 async fn bootstrap_live_state(
@@ -407,127 +453,197 @@ async fn bootstrap_live_state(
     .map_err(|_| LiveJourneyError::StatePlaneInstall)
 }
 
-async fn execute_protected_journey(app: Router, bearer: &str) -> Result<(), LiveJourneyError> {
-    let authorization_text = Zeroizing::new(format!("Bearer {bearer}"));
-    let authorization = HeaderValue::from_str(authorization_text.as_str())
-        .map_err(|_| LiveJourneyError::TokenMint)?;
-    drop(authorization_text);
-    let metadata_request = Request::builder()
-        .method(Method::GET)
-        .uri(PROFILE_ROUTE)
-        .header(header::AUTHORIZATION, authorization.clone())
-        .body(Body::empty())
-        .map_err(|_| LiveJourneyError::MetadataRequest)?;
-    let metadata_response = app
-        .clone()
-        .oneshot(metadata_request)
-        .await
-        .map_err(|_| LiveJourneyError::MetadataRequest)?;
-    if metadata_response.status() != StatusCode::OK {
-        return Err(LiveJourneyError::MetadataRequest);
-    }
-    let metadata = to_bytes(metadata_response.into_body(), 256 * 1024)
-        .await
-        .map_err(|_| LiveJourneyError::MetadataResponse)?;
-    let metadata: Value =
-        serde_json::from_slice(&metadata).map_err(|_| LiveJourneyError::MetadataResponse)?;
-    if metadata.get("contract_hash").and_then(Value::as_str) != Some(CONTRACT_HASH)
-        || metadata.pointer("/contract/id").and_then(Value::as_str) != Some(PROFILE_ID)
-    {
-        return Err(LiveJourneyError::MetadataResponse);
-    }
-    drop(metadata);
+struct JourneyCorrelation {
+    evaluation_id: String,
+    consultation_id: String,
+}
 
-    let execute_request = Request::builder()
+async fn execute_notary_journey(
+    app: Router,
+    api_key: &str,
+    relay_bearer: &str,
+    audit_path: &Path,
+) -> Result<JourneyCorrelation, LiveJourneyError> {
+    let api_key_header =
+        HeaderValue::from_str(api_key).map_err(|_| LiveJourneyError::NotaryRequest)?;
+    let request = Request::builder()
         .method(Method::POST)
-        .uri(EXECUTE_ROUTE)
-        .header(header::AUTHORIZATION, authorization)
+        .uri("/v1/evaluations")
+        .header("x-api-key", api_key_header)
         .header(header::CONTENT_TYPE, "application/json")
         .header("data-purpose", PURPOSE)
-        .header("registry-notary-evaluation-id", NOTARY_EVALUATION_ID)
         .body(Body::from(
-            br#"{"inputs":{"tracked_entity":"PQfMcpmXeFE"}}"# as &'static [u8],
+            serde_json::to_vec(&json!({
+                "target": {"type": "person", "id": "PQfMcpmXeFE"},
+                "claims": [
+                    {"id": "dhis2-enrollment-known", "version": "1"},
+                    {"id": "dhis2-enrollment-status", "version": "1"}
+                ],
+                "disclosure": "value",
+                "purpose": PURPOSE
+            }))
+            .map_err(|_| LiveJourneyError::NotaryRequest)?,
         ))
-        .map_err(|_| LiveJourneyError::ExecuteRequest)?;
-    let execute_response = app
-        .oneshot(execute_request)
+        .map_err(|_| LiveJourneyError::NotaryRequest)?;
+    let response = app
+        .oneshot(request)
         .await
-        .map_err(|_| LiveJourneyError::ExecuteRequest)?;
-    if execute_response.status() != StatusCode::OK {
-        return Err(closed_execute_failure(execute_response).await);
+        .map_err(|_| LiveJourneyError::NotaryRequest)?;
+    if response.status() != StatusCode::OK {
+        return Err(LiveJourneyError::NotaryRequest);
     }
-    let response = to_bytes(execute_response.into_body(), 64 * 1024)
+    let body = to_bytes(response.into_body(), 128 * 1024)
         .await
-        .map_err(|_| LiveJourneyError::ExecuteResponse)?;
+        .map_err(|_| LiveJourneyError::NotaryResponse)?;
     let response: Value =
-        serde_json::from_slice(&response).map_err(|_| LiveJourneyError::ExecuteResponse)?;
-    validate_public_response(&response)
+        serde_json::from_slice(&body).map_err(|_| LiveJourneyError::NotaryResponse)?;
+    let evaluation_id = validate_minimized_notary_response(&response, api_key, relay_bearer)?;
+    validate_notary_audit(audit_path, &evaluation_id, api_key, relay_bearer)
 }
 
-async fn closed_execute_failure(response: axum::response::Response) -> LiveJourneyError {
-    let status = response.status();
-    let Ok(body) = to_bytes(response.into_body(), 8 * 1024).await else {
-        return LiveJourneyError::ExecuteRequest;
-    };
-    let Ok(problem) = serde_json::from_slice::<Value>(&body) else {
-        return LiveJourneyError::ExecuteRequest;
-    };
-    let code = problem.get("code").and_then(Value::as_str);
-    classify_closed_execute_failure(status, code)
-}
-
-fn classify_closed_execute_failure(status: StatusCode, code: Option<&str>) -> LiveJourneyError {
-    match (status, code) {
-        (StatusCode::BAD_REQUEST, Some("consultation.invalid_request")) => {
-            LiveJourneyError::ExecuteInvalidRequest
-        }
-        (StatusCode::UNAUTHORIZED, Some("auth.invalid_credentials")) => {
-            LiveJourneyError::ExecuteInvalidCredentials
-        }
-        (StatusCode::FORBIDDEN, Some("consultation.denied")) => LiveJourneyError::ExecuteDenied,
-        (StatusCode::NOT_FOUND, Some("consultation.profile_not_found")) => {
-            LiveJourneyError::ExecuteProfileNotFound
-        }
-        (StatusCode::TOO_MANY_REQUESTS, Some("consultation.rate_limited")) => {
-            LiveJourneyError::ExecuteRateLimited
-        }
-        (StatusCode::SERVICE_UNAVAILABLE, Some("consultation.unavailable")) => {
-            LiveJourneyError::ExecuteUnavailable
-        }
-        _ => LiveJourneyError::ExecuteRequest,
+fn validate_minimized_notary_response(
+    response: &Value,
+    api_key: &str,
+    relay_bearer: &str,
+) -> Result<String, LiveJourneyError> {
+    let results = response
+        .get("results")
+        .and_then(Value::as_array)
+        .filter(|results| results.len() == 2)
+        .ok_or(LiveJourneyError::NotaryResponse)?;
+    let evaluation_id = results[0]
+        .get("evaluation_id")
+        .and_then(Value::as_str)
+        .filter(|value| value.parse::<Ulid>().is_ok())
+        .ok_or(LiveJourneyError::NotaryResponse)?;
+    if results.iter().any(|result| {
+        result.get("evaluation_id").and_then(Value::as_str) != Some(evaluation_id)
+            || result
+                .pointer("/provenance/used/source_count")
+                .and_then(Value::as_u64)
+                != Some(1)
+    }) {
+        return Err(LiveJourneyError::NotaryResponse);
     }
-}
-
-fn validate_public_response(response: &Value) -> Result<(), LiveJourneyError> {
-    if response.get("schema").and_then(Value::as_str)
-        != Some("registry.relay.consultation-result.v1")
-        || response.pointer("/profile/id").and_then(Value::as_str) != Some(PROFILE_ID)
-        || response.pointer("/profile/version").and_then(Value::as_str) != Some(PROFILE_VERSION)
-        || response.get("notary_evaluation_id").and_then(Value::as_str)
-            != Some(NOTARY_EVALUATION_ID)
+    let known = results
+        .iter()
+        .find(|result| {
+            result.get("claim_id").and_then(Value::as_str) == Some("dhis2-enrollment-known")
+        })
+        .ok_or(LiveJourneyError::NotaryResponse)?;
+    if known.get("value") != Some(&Value::Bool(true)) {
+        return Err(LiveJourneyError::NotaryResponse);
+    }
+    let status = results
+        .iter()
+        .find(|result| {
+            result.get("claim_id").and_then(Value::as_str) == Some("dhis2-enrollment-status")
+        })
+        .and_then(|result| result.get("value"))
+        .and_then(Value::as_str)
+        .ok_or(LiveJourneyError::NotaryResponse)?;
+    if status.is_empty() || status.len() > 32 || status.chars().any(char::is_control) {
+        return Err(LiveJourneyError::NotaryResponse);
+    }
+    let public_wire =
+        serde_json::to_string(response).map_err(|_| LiveJourneyError::NotaryResponse)?;
+    if [
+        "consultation_id",
+        "relay_consultation",
+        "PQfMcpmXeFE",
+        api_key,
+        relay_bearer,
+    ]
+    .into_iter()
+    .any(|sensitive| public_wire.contains(sensitive))
     {
-        return Err(LiveJourneyError::ExecuteResponse);
+        return Err(LiveJourneyError::NotaryResponse);
     }
-    match response.get("outcome").and_then(Value::as_str) {
-        Some("match") => {
-            let data = response
-                .get("data")
-                .and_then(Value::as_object)
-                .ok_or(LiveJourneyError::ExecuteResponse)?;
-            if data.len() != 1 || !data.contains_key("status") {
-                return Err(LiveJourneyError::ExecuteResponse);
-            }
-            let status = data
-                .get("status")
-                .and_then(Value::as_str)
-                .ok_or(LiveJourneyError::ExecuteResponse)?;
-            if status.is_empty() || status.len() > 32 || status.chars().any(char::is_control) {
-                return Err(LiveJourneyError::ExecuteResponse);
-            }
+    Ok(evaluation_id.to_string())
+}
+
+fn validate_notary_audit(
+    path: &Path,
+    expected_evaluation_id: &str,
+    api_key: &str,
+    relay_bearer: &str,
+) -> Result<JourneyCorrelation, LiveJourneyError> {
+    let file = fs::read_to_string(path).map_err(|_| LiveJourneyError::NotaryAudit)?;
+    if ["PQfMcpmXeFE", api_key, relay_bearer]
+        .into_iter()
+        .any(|sensitive| file.contains(sensitive))
+    {
+        return Err(LiveJourneyError::NotaryAudit);
+    }
+    let mut matching = Vec::new();
+    for line in file.lines() {
+        let envelope: Value =
+            serde_json::from_str(line).map_err(|_| LiveJourneyError::NotaryAudit)?;
+        let record = envelope
+            .get("record")
+            .and_then(Value::as_object)
+            .ok_or(LiveJourneyError::NotaryAudit)?;
+        if record.get("path").and_then(Value::as_str) == Some("/v1/evaluations")
+            && record.get("status").and_then(Value::as_u64) == Some(200)
+        {
+            matching.push(record.clone());
         }
-        _ => return Err(LiveJourneyError::ExecuteResponse),
     }
-    Ok(())
+    let [record] = matching.as_slice() else {
+        return Err(LiveJourneyError::NotaryAudit);
+    };
+    if record.get("verification_id").and_then(Value::as_str) != Some(expected_evaluation_id)
+        || record.get("source_read_count").and_then(Value::as_u64) != Some(1)
+        || record.get("forwarded").and_then(Value::as_bool) != Some(true)
+    {
+        return Err(LiveJourneyError::NotaryAudit);
+    };
+    let consultation_ids = record
+        .get("relay_consultation_ids")
+        .and_then(Value::as_array)
+        .filter(|values| values.len() == 1)
+        .ok_or(LiveJourneyError::NotaryAudit)?;
+    let consultation_id = consultation_ids[0]
+        .as_str()
+        .filter(|value| value.parse::<Ulid>().is_ok())
+        .ok_or(LiveJourneyError::NotaryAudit)?;
+    Ok(JourneyCorrelation {
+        evaluation_id: expected_evaluation_id.to_string(),
+        consultation_id: consultation_id.to_string(),
+    })
+}
+
+struct LiveRelayServer {
+    base_url: String,
+    task: JoinHandle<()>,
+}
+
+impl LiveRelayServer {
+    async fn start(app: Router) -> Result<Self, LiveJourneyError> {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .map_err(|_| LiveJourneyError::RelayListener)?;
+        let address = listener
+            .local_addr()
+            .map_err(|_| LiveJourneyError::RelayListener)?;
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Ok(Self {
+            base_url: format!("http://{address}"),
+            task,
+        })
+    }
+
+    fn base_url(&self) -> &str {
+        &self.base_url
+    }
+}
+
+impl Drop for LiveRelayServer {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 struct LiveJwksServer {
@@ -624,7 +740,7 @@ impl Drop for LiveJwksServer {
 }
 
 struct StagedProfile {
-    _directory: TempDir,
+    directory: TempDir,
     config_path: PathBuf,
 }
 
@@ -713,9 +829,73 @@ impl StagedProfile {
         let config_path = directory.path().join("relay.yaml");
         fs::write(&config_path, yaml).map_err(|_| LiveJourneyError::ArtifactStaging)?;
         Ok(Self {
-            _directory: directory,
+            directory,
             config_path,
         })
+    }
+
+    fn stage_relay_token(&self, token: &str) -> Result<PathBuf, LiveJourneyError> {
+        let path = self.directory.path().join("relay-workload.jwt");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(|_| LiveJourneyError::RelayCredentialStaging)?;
+        file.write_all(token.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|_| LiveJourneyError::RelayCredentialStaging)?;
+        Ok(path)
+    }
+
+    fn notary_audit_path(&self) -> PathBuf {
+        self.directory.path().join("notary-audit.jsonl")
+    }
+
+    fn load_notary_config(
+        &self,
+        relay_base_url: &str,
+        token_file: &Path,
+        audit_path: &Path,
+    ) -> Result<registry_notary_core::StandaloneRegistryNotaryConfig, LiveJourneyError> {
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join(PROFILE_DIRECTORY);
+        let mut yaml = fs::read_to_string(source_root.join(NOTARY_CONFIG_EXAMPLE_FILE))
+            .map_err(|_| LiveJourneyError::NotaryConfigLoad)?;
+        replace_once(
+            &mut yaml,
+            r#"    base_url: "https://relay.example.gov""#,
+            &format!(
+                "    base_url: {}\n    allow_insecure_localhost: true",
+                yaml_string(relay_base_url)?
+            ),
+        )?;
+        replace_once(
+            &mut yaml,
+            "    token_file: /var/run/secrets/registry-notary/relay-access-token",
+            &format!(
+                "    token_file: {}",
+                yaml_string(
+                    token_file
+                        .to_str()
+                        .ok_or(LiveJourneyError::NotaryConfigLoad)?
+                )?
+            ),
+        )?;
+        replace_once(
+            &mut yaml,
+            "  sink: stdout",
+            &format!(
+                "  sink: file\n  path: {}",
+                yaml_string(
+                    audit_path
+                        .to_str()
+                        .ok_or(LiveJourneyError::NotaryConfigLoad)?
+                )?
+            ),
+        )?;
+        let config =
+            serde_norway::from_str(&yaml).map_err(|_| LiveJourneyError::NotaryConfigLoad)?;
+        Ok(config)
     }
 }
 
@@ -761,7 +941,7 @@ fn live_private_binding(dhis2_base_url: &str) -> Result<Value, LiveJourneyError>
         "deployment_parameters": {},
         "limits": {
             "max_source_bytes": 8192,
-            "timeout_ms": 5000,
+            "timeout_ms": 10000,
             "max_in_flight": 1,
             "quota_per_minute": 10,
             "quota_burst": 2,
@@ -911,13 +1091,16 @@ WHERE stream_kind = 'consultation' AND phase = 'completion'
         )
     }
 
-    async fn assert_safe_durable_evidence(&mut self) -> Result<(), LiveJourneyError> {
+    async fn assert_safe_durable_evidence(
+        &mut self,
+        expected: &JourneyCorrelation,
+    ) -> Result<(), LiveJourneyError> {
         let row = self
             .admin
             .query_one(
                 r#"
 WITH consultation_audit AS (
-    SELECT phase, record_json::jsonb AS record
+    SELECT phase, operation_id::text AS operation_id, record_json::jsonb AS record
     FROM relay_state_private.audit_phase
     WHERE stream_kind = 'consultation'
 ), permits AS (
@@ -931,6 +1114,10 @@ WITH consultation_audit AS (
 SELECT
     (SELECT count(*) FROM consultation_audit WHERE phase = 'attempt') AS attempt_count,
     (SELECT count(*) FROM consultation_audit WHERE phase = 'completion') AS completion_count,
+    (SELECT min(operation_id)
+       FROM consultation_audit WHERE phase = 'attempt') AS consultation_id,
+    (SELECT min(record #>> '{payload,completion_seed,correlation,notary_evaluation_id}')
+       FROM consultation_audit WHERE phase = 'attempt') AS notary_evaluation_id,
     (SELECT min(record #>> '{payload,completion_facts,execution_result,class}')
        FROM consultation_audit WHERE phase = 'completion') AS completion_class,
     (SELECT min(record #>> '{payload,completion_facts,execution_result,outcome}')
@@ -956,6 +1143,17 @@ SELECT
             )
             .await
             .map_err(|_| LiveJourneyError::DurableEvidence)?;
+        let consultation_id = row
+            .try_get::<_, Option<String>>("consultation_id")
+            .map_err(|_| LiveJourneyError::DurableEvidence)?;
+        let notary_evaluation_id = row
+            .try_get::<_, Option<String>>("notary_evaluation_id")
+            .map_err(|_| LiveJourneyError::DurableEvidence)?;
+        if consultation_id.as_deref() != Some(expected.consultation_id.as_str())
+            || notary_evaluation_id.as_deref() != Some(expected.evaluation_id.as_str())
+        {
+            return Err(LiveJourneyError::DurableEvidence);
+        }
         let evidence = (
             row.try_get::<_, i64>("attempt_count")
                 .map_err(|_| LiveJourneyError::DurableEvidence)?,

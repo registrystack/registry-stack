@@ -1,5 +1,16 @@
 # Release Notes
 
+## Unreleased
+
+- Relay adds the authenticated, purpose-aware native consultation surface and
+  the maintained DHIS2 2.41.9 enrollment-status profile. The profile performs
+  one retry-free bounded source exchange, returns only a closed minimized
+  outcome, and keeps source credentials in Relay.
+- The DHIS2 source deadline is fixed at 10 seconds. Notary wraps the complete
+  service hop in 15 seconds; consultation-enabled Relay requires
+  `server.request_timeout` greater than 15 seconds, while Registry-backed
+  Notary requires at least 20 seconds.
+
 ## 0.9.0
 
 - BREAKING: Relay-local credential issuance and its `provenance` and entity

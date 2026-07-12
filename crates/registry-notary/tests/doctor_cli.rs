@@ -156,6 +156,8 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
       title: Person is alive
       version: "1.0"
       subject_type: person
+      evidence_mode:
+        type: self_attested
       rule:
         type: cel
         expression: "true"
@@ -172,6 +174,8 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
       title: Residency lookup
       version: "1.0"
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       source_bindings:
         registry:
           connector: registry_data_api
@@ -303,6 +307,8 @@ evidence:
       title: OpenCRVS birth record exists
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       inputs:

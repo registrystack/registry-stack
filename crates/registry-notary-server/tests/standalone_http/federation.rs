@@ -355,7 +355,7 @@ pub(super) fn audit_records(path: &std::path::Path) -> Vec<Value> {
 }
 
 pub(super) fn self_attestation_oidc_config(
-    base_url: &str,
+    _base_url: &str,
     audit_path: &str,
     issuer: &str,
     jwks_uri: &str,
@@ -421,40 +421,19 @@ evidence:
       disclosure:
         allowed:
           - value
-  source_connections:
-    people:
-      base_url: "{base_url}"
-      allow_insecure_localhost: true
-      token_env: TEST_EVIDENCE_SOURCE_TOKEN
   claims:
     - id: person-is-alive
       title: Person is alive
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: self_attested
       purpose: citizen_self_attestation
       value:
         type: boolean
-      source_bindings:
-        person:
-          connector: registry_data_api
-          connection: people
-          required_scope: people:evidence_verification
-          dataset: people
-          entity: person
-          lookup:
-            input: target.identifiers.national_id
-            field: id
-            op: eq
-            cardinality: one
-          fields:
-            alive:
-              field: alive
-              type: boolean
-              required: true
       rule:
-        type: extract
-        source: person
-        field: alive
+        type: cel
+        expression: "true"
       disclosure:
         default: value
         allowed: [value, redacted]
@@ -557,11 +536,12 @@ credential_configurations:
     config
 }
 
+#[cfg(feature = "registry-notary-cel")]
 pub(super) fn add_self_attestation_projection_claim(
     config: &mut StandaloneRegistryNotaryConfig,
     claim_id: &str,
     title: &str,
-    source_field: &str,
+    output_name: &str,
     value_type: &str,
 ) {
     let mut claim = config
@@ -574,29 +554,20 @@ pub(super) fn add_self_attestation_projection_claim(
     claim.id = claim_id.to_string();
     claim.title = title.to_string();
     claim.value.value_type = value_type.to_string();
-    claim.rule = RuleConfig::Extract {
-        source: "person".to_string(),
-        field: source_field.to_string(),
+    claim.rule = RuleConfig::Cel {
+        expression: match output_name {
+            "given_name" => "'Miguel'",
+            "birth_date" => "'2016-01-15'",
+            _ => panic!("unsupported self-attested projection output: {output_name}"),
+        }
+        .to_string(),
+        bindings: Default::default(),
     };
     claim.formats = vec![
         "application/vnd.registry-notary.claim-result+json".to_string(),
         "application/dc+sd-jwt".to_string(),
     ];
     claim.credential_profiles = vec!["civil_status_sd_jwt".to_string()];
-    let binding = claim
-        .source_bindings
-        .get_mut("person")
-        .expect("person source binding exists");
-    binding.fields.insert(
-        source_field.to_string(),
-        SourceFieldConfig {
-            field: source_field.to_string(),
-            field_type: Some(value_type.to_string()),
-            unit: None,
-            required: true,
-            semantic_term: None,
-        },
-    );
     config.evidence.claims.push(claim);
     config
         .self_attestation
@@ -611,6 +582,7 @@ pub(super) fn add_self_attestation_projection_claim(
         .push(claim_id.to_string());
 }
 
+#[cfg(feature = "registry-notary-cel")]
 pub(super) fn enable_oid4vci_field_projection(config: &mut StandaloneRegistryNotaryConfig) {
     add_self_attestation_projection_claim(
         config,
@@ -706,6 +678,8 @@ evidence:
       title: Civil person is alive by demographics
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -809,6 +783,8 @@ evidence:
       title: Farmed land size
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: number
         unit: hectare

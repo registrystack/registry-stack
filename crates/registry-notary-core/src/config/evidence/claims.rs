@@ -310,6 +310,17 @@ pub(in crate::config) fn validate_registry_backed_dependency_modes(
         .iter()
         .filter(|claim| claim.evidence_mode.is_registry_backed())
     {
+        if !claim.depends_on.is_empty() {
+            return invalid_claim_evidence_mode(
+                claim,
+                "the initial registry_backed journey cannot declare depends_on; one claim maps only its pinned Relay consultation",
+            );
+        }
+    }
+    for claim in claims
+        .iter()
+        .filter(|claim| claim.evidence_mode.is_transitional_direct())
+    {
         let mut pending: Vec<&str> = claim.depends_on.iter().map(String::as_str).collect();
         let mut visited = HashSet::new();
         while let Some(dependency_id) = pending.pop() {
@@ -322,14 +333,83 @@ pub(in crate::config) fn validate_registry_backed_dependency_modes(
             else {
                 continue;
             };
-            if dependency.evidence_mode.is_transitional_direct() {
+            if dependency.evidence_mode.is_registry_backed() {
                 return invalid_claim_evidence_mode(
                     claim,
-                    "registry_backed dependency closure cannot contain transitional_direct claims",
+                    "transitional_direct dependency closure cannot contain registry_backed claims",
                 );
             }
             pending.extend(dependency.depends_on.iter().map(String::as_str));
         }
+    }
+    Ok(())
+}
+
+pub(in crate::config) fn validate_relay_activation_shape(
+    claims: &[ClaimDefinition],
+) -> Result<(), EvidenceConfigError> {
+    let registry_claims: Vec<&ClaimDefinition> = claims
+        .iter()
+        .filter(|claim| claim.evidence_mode.is_registry_backed())
+        .collect();
+    let Some(first) = registry_claims.first().copied() else {
+        return Ok(());
+    };
+    let ClaimEvidenceMode::RegistryBacked {
+        consultations: first_consultations,
+    } = &first.evidence_mode
+    else {
+        unreachable!("registry-backed claims were filtered above");
+    };
+    let (_, first_consultation) = first_consultations
+        .first_key_value()
+        .expect("individual mode validation requires one consultation");
+    let first_input = first_consultation
+        .inputs
+        .first_key_value()
+        .expect("individual mode validation requires one input")
+        .0;
+    let mut output_name: Option<&str> = None;
+
+    for claim in registry_claims {
+        let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
+            unreachable!("registry-backed claims were filtered above");
+        };
+        let (_, consultation) = consultations
+            .first_key_value()
+            .expect("individual mode validation requires one consultation");
+        let input_name = consultation
+            .inputs
+            .first_key_value()
+            .expect("individual mode validation requires one input")
+            .0;
+        if consultation.profile != first_consultation.profile
+            || input_name != first_input
+            || claim.purpose != first.purpose
+        {
+            return invalid_claim_evidence_mode(
+                claim,
+                "the initial Relay journey requires one shared profile, purpose, and input name across registry_backed claims",
+            );
+        }
+        if let RuleConfig::Extract { field, .. } = &claim.rule {
+            match output_name {
+                Some(expected) if expected != field => {
+                    return invalid_claim_evidence_mode(
+                        claim,
+                        "the initial Relay journey requires one shared string output across registry_backed claims",
+                    );
+                }
+                None => output_name = Some(field),
+                Some(_) => {}
+            }
+        }
+    }
+    if output_name.is_none() {
+        return invalid_claim_evidence_mode(
+            first,
+            "the initial Relay journey requires one extract claim to pin the shared string output",
+        );
     }
     Ok(())
 }

@@ -6,7 +6,7 @@
   "integration_pack": {
     "id": "dhis2.tracker.enrollment-status",
     "version": "1",
-    "hash": "sha256:017783fe880863e9dedc5138df4e1212d020ce7cfac5a13b58911fc4705f0e7a"
+    "hash": "sha256:ec0136be504e3f98539f9e0ec10e59532ff793dbadc2e66ea1c017a632da6ac4"
   },
   "tenant": "example-government",
   "registry_instance": "dhis2-primary",
@@ -25,7 +25,7 @@
   "deployment_parameters": {},
   "limits": {
     "max_source_bytes": 8192,
-    "timeout_ms": 5000,
+    "timeout_ms": 10000,
     "max_in_flight": 8,
     "quota_per_minute": 30,
     "quota_burst": 5,

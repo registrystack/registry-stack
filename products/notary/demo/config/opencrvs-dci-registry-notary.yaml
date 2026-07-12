@@ -50,6 +50,8 @@ evidence:
       title: OpenCRVS birth record exists
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:

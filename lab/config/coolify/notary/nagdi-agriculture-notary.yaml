@@ -165,6 +165,8 @@ evidence:
       title: Farmer registered
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: &voucher_snapshot_binding
@@ -244,6 +246,8 @@ evidence:
       title: Data use authorized for purpose
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *voucher_snapshot_binding
@@ -258,6 +262,8 @@ evidence:
       title: Active smallholder farmer
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *voucher_snapshot_binding
@@ -272,6 +278,8 @@ evidence:
       title: Active farm parcel
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *voucher_snapshot_binding
@@ -286,6 +294,8 @@ evidence:
       title: Crop declared for season
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *voucher_snapshot_binding
@@ -300,6 +310,8 @@ evidence:
       title: District climate risk active
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *voucher_snapshot_binding
@@ -314,6 +326,8 @@ evidence:
       title: Voucher entitlement current
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *voucher_snapshot_binding
@@ -328,6 +342,8 @@ evidence:
       title: Voucher not redeemed
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *voucher_snapshot_binding
@@ -342,6 +358,8 @@ evidence:
       title: Supplier license active
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *voucher_snapshot_binding
@@ -356,6 +374,8 @@ evidence:
       title: Voucher eligibility reason code
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings: *voucher_snapshot_binding
@@ -374,6 +394,8 @@ evidence:
       title: Farmer holding total area hectares
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: number
       source_bindings:
@@ -410,6 +432,8 @@ evidence:
       title: No manual review required
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *voucher_snapshot_binding
@@ -424,6 +448,8 @@ evidence:
       title: Eligible for climate-smart input voucher
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       depends_on:
@@ -479,6 +505,8 @@ evidence:
       title: Voucher redemption authorized
       version: 2026-05
       subject_type: farmer
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       depends_on:
@@ -509,6 +537,8 @@ evidence:
       title: Market sizing aggregate controls
       version: 2026-05
       subject_type: policy
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -556,6 +586,8 @@ evidence:
       title: Registered livestock holder
       version: 2026-05
       subject_type: herd
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: &livestock_snapshot_binding
@@ -617,6 +649,8 @@ evidence:
       title: Registered herd
       version: 2026-05
       subject_type: herd
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *livestock_snapshot_binding
@@ -631,6 +665,8 @@ evidence:
       title: Herd vaccination current
       version: 2026-05
       subject_type: herd
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *livestock_snapshot_binding
@@ -645,6 +681,8 @@ evidence:
       title: Origin district not quarantined
       version: 2026-05
       subject_type: herd
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *livestock_snapshot_binding
@@ -659,6 +697,8 @@ evidence:
       title: Destination district open
       version: 2026-05
       subject_type: herd
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *livestock_snapshot_binding
@@ -673,6 +713,8 @@ evidence:
       title: No conflicting open movement permit
       version: 2026-05
       subject_type: herd
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings: *livestock_snapshot_binding
@@ -687,6 +729,8 @@ evidence:
       title: Livestock movement reason code
       version: 2026-05
       subject_type: herd
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings: *livestock_snapshot_binding
@@ -704,6 +748,8 @@ evidence:
       title: Eligible for livestock movement permit
       version: 2026-05
       subject_type: herd
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       depends_on:

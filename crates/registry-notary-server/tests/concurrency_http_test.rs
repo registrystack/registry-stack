@@ -264,6 +264,8 @@ evidence:
       title: Farmed land size
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: number
         unit: hectare
@@ -362,6 +364,8 @@ evidence:
       title: Farmed land size
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: number
         unit: hectare

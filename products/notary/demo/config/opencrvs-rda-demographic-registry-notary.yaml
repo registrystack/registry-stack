@@ -61,6 +61,8 @@ evidence:
       title: OpenCRVS birth record exists by demographics through Registry Data API
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       credential_profiles:

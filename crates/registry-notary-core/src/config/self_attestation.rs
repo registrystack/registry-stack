@@ -231,20 +231,20 @@ pub(super) fn validate_self_attestation_evidence_paths(
     evidence: &EvidenceConfig,
 ) -> Result<(), EvidenceConfigError> {
     for claim_id in &config.allowed_claims {
-        require_self_attested_dependency_path(
+        reject_registry_backed_dependency_path(
             "self_attestation.allowed_claims",
             claim_id,
             evidence,
         )?;
     }
     for relationship in &config.delegation.allowed_relationships {
-        require_self_attested_dependency_path(
+        reject_registry_backed_dependency_path(
             "self_attestation.delegation.proof_claim",
             &relationship.proof_claim,
             evidence,
         )?;
         for claim_id in &relationship.allowed_claims {
-            require_self_attested_dependency_path(
+            reject_registry_backed_dependency_path(
                 "self_attestation.delegation.allowed_claims",
                 claim_id,
                 evidence,
@@ -254,7 +254,7 @@ pub(super) fn validate_self_attestation_evidence_paths(
     Ok(())
 }
 
-fn require_self_attested_dependency_path(
+fn reject_registry_backed_dependency_path(
     context: &str,
     root_claim_id: &str,
     evidence: &EvidenceConfig,
@@ -272,11 +272,10 @@ fn require_self_attested_dependency_path(
         else {
             continue;
         };
-        if !claim.evidence_mode.is_self_attested() {
+        if claim.evidence_mode.is_registry_backed() {
             return invalid_self_attestation(format!(
-                "{context} path must contain only self_attested claims; claim '{}' uses {}",
-                claim.id,
-                claim.evidence_mode.name(),
+                "{context} path cannot include registry_backed claim '{}'",
+                claim.id
             ));
         }
         pending.extend(claim.depends_on.iter().map(String::as_str));

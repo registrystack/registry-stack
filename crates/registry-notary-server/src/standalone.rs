@@ -7,8 +7,8 @@ pub use runtime::{
     compile_notary_runtime, compile_notary_runtime_with_provenance, find_credential,
     notary_admin_router_from_runtime, notary_public_router_from_runtime,
     notary_router_from_runtime, notary_routers_from_runtime, notary_shared_router_from_runtime,
-    standalone_router, EvidenceIssuerRegistry, HttpEvidenceSources, NotaryRouters,
-    NotaryRuntimeSnapshot, ResolvedCredential, StandaloneServerError,
+    standalone_router, verify_relay_from_config, EvidenceIssuerRegistry, HttpEvidenceSources,
+    NotaryRouters, NotaryRuntimeSnapshot, ResolvedCredential, StandaloneServerError,
 };
 
 pub(crate) use runtime::{

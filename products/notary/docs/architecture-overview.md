@@ -8,6 +8,12 @@ reading the minimum data from a source registry. This page explains the shape of
 the system and how its layers relate, so you can place a more specific guide in
 context.
 
+> **Convergence status:** New source-backed integrations use a hash-pinned
+> Registry Relay consultation. The direct connector and source-adapter
+> architecture described below remains only for explicit `transitional_direct`
+> claims during the unreleased cutover; its presence blocks the replacement
+> beta and 1.0 release. Source-free `self_attested` claims use neither path.
+
 ## What it is, and what it is not
 
 Registry Notary is an evaluation and attestation service. It sits between a

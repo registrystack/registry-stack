@@ -1,5 +1,8 @@
 use crate::*;
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(crate) enum DoctorOutputFormat {
     Text,
@@ -71,6 +74,21 @@ impl Diagnostic {
             action: Some(action.into()),
             report_code: None,
             report_severity: None,
+        }
+    }
+
+    fn fail_with_code(
+        label: impl Into<String>,
+        action: impl Into<String>,
+        code: impl Into<String>,
+    ) -> Self {
+        Self {
+            ok: false,
+            warning: false,
+            label: label.into(),
+            action: Some(action.into()),
+            report_code: Some(code.into()),
+            report_severity: Some("error"),
         }
     }
 
@@ -604,6 +622,14 @@ pub(crate) fn local_env_diagnostics(
     env_report: &EnvFileReport,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
+    if config
+        .evidence
+        .claims
+        .iter()
+        .any(|claim| claim.evidence_mode.is_registry_backed())
+    {
+        diagnostics.push(relay_token_file_diagnostic(config));
+    }
     for credential in config
         .auth
         .api_keys
@@ -714,6 +740,39 @@ pub(crate) fn local_env_diagnostics(
         }
     }
     diagnostics
+}
+
+fn relay_token_file_diagnostic(config: &StandaloneRegistryNotaryConfig) -> Diagnostic {
+    let Some(relay) = config.evidence.relay.as_ref() else {
+        return Diagnostic::fail_with_code(
+            "Relay connection is not configured for Registry-backed claims",
+            "configure evidence.relay before serving Registry-backed claims",
+            "notary.relay.configuration_invalid",
+        );
+    };
+    match fs::metadata(&relay.token_file) {
+        Ok(metadata) if metadata.is_file() && metadata.len() > 0 => {
+            #[cfg(unix)]
+            if metadata.permissions().mode() & 0o077 != 0 {
+                return Diagnostic::warn_with_code(
+                    "Relay workload token file permits group or other access",
+                    "restrict the mounted workload token to the Notary service account, for example mode 0600",
+                    "notary.relay.credential_permissions",
+                );
+            }
+            Diagnostic::ok("Relay workload token file is present and non-empty")
+        }
+        Ok(_) => Diagnostic::fail_with_code(
+            "Relay workload token file is not a non-empty regular file",
+            "mount a non-empty workload JWT at the configured evidence.relay.token_file path",
+            "notary.relay.credential_unavailable",
+        ),
+        Err(_) => Diagnostic::fail_with_code(
+            "Relay workload token file is unavailable",
+            "mount a readable workload JWT at the configured evidence.relay.token_file path",
+            "notary.relay.credential_unavailable",
+        ),
+    }
 }
 
 pub(crate) fn check_fingerprint_env(env: &str, env_report: &EnvFileReport) -> Diagnostic {
@@ -921,6 +980,24 @@ pub(crate) async fn live_diagnostics(
     target_id_type: Option<&str>,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
+    if config
+        .evidence
+        .claims
+        .iter()
+        .any(|claim| claim.evidence_mode.is_registry_backed())
+    {
+        diagnostics.push(match verify_relay_from_config(config).await {
+            Ok(true) => {
+                Diagnostic::ok("Relay workload credential and pinned consultation profile verified")
+            }
+            Ok(false) => Diagnostic::fail_with_code(
+                "Relay activation plan did not include Registry-backed claims",
+                "check the Registry-backed claim and evidence.relay configuration",
+                "notary.relay.configuration_invalid",
+            ),
+            Err(error) => relay_live_failure_diagnostic(&error),
+        });
+    }
     for (connection_id, connection) in &config.evidence.source_connections {
         if let Some(SourceAuthConfig::Oauth2ClientCredentials(auth)) = &connection.source_auth {
             match fetch_oauth_token_for_doctor(connection_id, connection, auth).await {
@@ -956,6 +1033,50 @@ pub(crate) async fn live_diagnostics(
         ));
     }
     diagnostics
+}
+
+fn relay_live_failure_diagnostic(error: &StandaloneServerError) -> Diagnostic {
+    match error {
+        StandaloneServerError::RelayCredentialUnavailable => Diagnostic::fail_with_code(
+            "Relay workload credential is unavailable",
+            "mount a current readable workload JWT at evidence.relay.token_file",
+            "notary.relay.credential_unavailable",
+        ),
+        StandaloneServerError::RelayCredentialsRejected => Diagnostic::fail_with_code(
+            "Relay rejected the configured workload credential",
+            "rotate the workload JWT and verify that Relay recognizes its workload binding, required scope, and validity window",
+            "notary.relay.credentials_rejected",
+        ),
+        StandaloneServerError::RelayProfileNotFound => Diagnostic::fail_with_code(
+            "Relay consultation profile was not found",
+            "deploy the configured Relay profile id and version, then retry the live check",
+            "notary.relay.profile_not_found",
+        ),
+        StandaloneServerError::RelayProfileMismatch => Diagnostic::fail_with_code(
+            "Relay consultation profile does not match the configured contract pin",
+            "reconcile the Notary profile pin with the reviewed Relay consultation contract",
+            "notary.relay.profile_mismatch",
+        ),
+        StandaloneServerError::RelayUnavailable => Diagnostic::fail_with_code(
+            "Relay consultation service is unavailable",
+            "check Relay reachability, TLS, destination policy, and service health",
+            "notary.relay.unavailable",
+        ),
+        StandaloneServerError::InvalidRelayDestination
+        | StandaloneServerError::InvalidRelayActivationPlan
+        | StandaloneServerError::RelayActivation
+        | StandaloneServerError::RelayAlreadyActivated
+        | StandaloneServerError::RelayNotActivated => Diagnostic::fail_with_code(
+            "Relay consultation configuration is invalid",
+            "check the evidence.relay connection and Registry-backed consultation configuration",
+            "notary.relay.configuration_invalid",
+        ),
+        _ => Diagnostic::fail_with_code(
+            "Relay consultation activation failed",
+            "check the Notary configuration and startup environment",
+            "notary.relay.activation_failed",
+        ),
+    }
 }
 
 pub(crate) async fn fetch_oauth_token_for_doctor(

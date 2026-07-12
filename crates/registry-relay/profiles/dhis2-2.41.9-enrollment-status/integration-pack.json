@@ -99,7 +99,7 @@
           "request_codec": "none",
           "step_limits": {
             "max_request_bytes": 4096,
-            "timeout_ms": 5000,
+            "timeout_ms": 10000,
             "max_in_flight": 1
           },
           "auth": {
@@ -223,7 +223,7 @@
       "max_credential_exchanges": 0,
       "max_data_destinations": 1,
       "max_source_bytes": 8192,
-      "timeout_ms": 5000,
+      "timeout_ms": 10000,
       "max_in_flight": 16,
       "quota_per_minute": 60,
       "quota_burst": 10

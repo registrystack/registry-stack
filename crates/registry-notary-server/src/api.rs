@@ -115,7 +115,7 @@ use crate::{
     runtime::{
         batch_idempotency_key, batch_request_hash, claim_ids, claim_semantics_metadata, find_claim,
         find_claim_version, matching_policy_audit_identity, validate_batch_subject_limit,
-        MatchingPolicyAuditIdentity,
+        EvaluationAuditSnapshot, MatchingPolicyAuditIdentity,
     },
     standalone::{
         constant_time_eq, generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge,

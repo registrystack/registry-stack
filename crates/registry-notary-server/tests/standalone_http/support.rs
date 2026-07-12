@@ -19,11 +19,13 @@ pub(super) use registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP;
 pub(super) use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 pub(super) use registry_notary_core::{
     BulkMode, ConfigTrustConfig, CredentialProfileConfig, EvidenceAuthMode,
-    EvidenceCredentialConfig, EvidenceOidcAuthConfig, Oid4vciConfig, Oid4vciCredentialClaimConfig,
-    RegistryNotaryAdminListenerMode, RuleConfig, SelfAttestationClaimSource, SigningKeyConfig,
-    SigningKeyProviderConfig, SigningKeyStatus, SourceFieldConfig, StandaloneRegistryNotaryConfig,
+    EvidenceCredentialConfig, EvidenceOidcAuthConfig, Oid4vciConfig,
+    RegistryNotaryAdminListenerMode, SelfAttestationClaimSource, SigningKeyConfig,
+    SigningKeyProviderConfig, SigningKeyStatus, StandaloneRegistryNotaryConfig,
     SD_JWT_VC_SIGNING_ALG,
 };
+#[cfg(feature = "registry-notary-cel")]
+pub(super) use registry_notary_core::{Oid4vciCredentialClaimConfig, RuleConfig};
 #[cfg(feature = "registry-notary-cel")]
 pub(super) use registry_notary_server::cel_worker::{CelWorker, CelWorkerConfig};
 pub(super) use registry_notary_server::{
@@ -37,8 +39,8 @@ pub(super) use registry_platform_authcommon::{
     CredentialFingerprintProvider, CredentialFingerprintRef,
 };
 #[cfg(feature = "registry-notary-cel")]
-pub(super) use registry_platform_crypto::verify;
-pub(super) use registry_platform_crypto::{did_jwk_from_public_jwk, sign, PrivateJwk};
+pub(super) use registry_platform_crypto::{did_jwk_from_public_jwk, verify};
+pub(super) use registry_platform_crypto::{sign, PrivateJwk};
 pub(super) use registry_platform_ops::internal_config_hash;
 pub(super) use registry_platform_testing::{
     fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, sign_openid4vci_proof_jwt,
@@ -46,6 +48,7 @@ pub(super) use registry_platform_testing::{
 };
 pub(super) use serde::Deserialize;
 pub(super) use serde_json::{json, Value};
+#[cfg(feature = "registry-notary-cel")]
 pub(super) use sha2::{Digest, Sha256};
 pub(super) use std::collections::BTreeMap;
 pub(super) use std::collections::BTreeSet;
@@ -127,6 +130,7 @@ pub(super) fn sign_oid4vci_proof(audience: &str, nonce: &str) -> String {
     sign_openid4vci_proof_jwt(TEST_HOLDER_JWK, audience, Some(nonce), now)
 }
 
+#[cfg(feature = "registry-notary-cel")]
 pub(super) fn sign_oid4vci_proof_without_iss(audience: &str, nonce: &str) -> String {
     let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
     let now = OffsetDateTime::now_utc().unix_timestamp();
@@ -152,6 +156,7 @@ pub(super) fn sign_oid4vci_proof_without_iss(audience: &str, nonce: &str) -> Str
     format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
 }
 
+#[cfg(feature = "registry-notary-cel")]
 pub(super) fn sign_direct_holder_proof(holder_id: &str, evaluation_id: &str, jti: &str) -> String {
     let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
     let now = OffsetDateTime::now_utc().unix_timestamp();
@@ -181,6 +186,7 @@ pub(super) fn sign_direct_holder_proof(holder_id: &str, evaluation_id: &str, jti
     format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
 }
 
+#[cfg(feature = "registry-notary-cel")]
 pub(super) fn holder_did_jwk() -> String {
     let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
     did_jwk_from_public_jwk(&holder.public()).expect("holder did:jwk encodes")
@@ -529,6 +535,8 @@ evidence:
       title: Farmed land size
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: number
         unit: hectare
@@ -566,6 +574,8 @@ evidence:
       title: Farmer under four hectares
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       depends_on:

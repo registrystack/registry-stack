@@ -11,8 +11,8 @@ Pick the path that matches what you are doing. New to Registry Notary? Start wit
 
 - [See it live](https://docs.registrystack.org/start/see-it-live/): watch Notary issue a privacy-preserving credential against a hosted lab, with zero install.
 - [Verify a claim with Registry Notary](https://docs.registrystack.org/tutorials/verify-claim-registry-api/): add Notary to a local registry API project with `registryctl`.
-- [Connect Notary to a Registry Data API source](https://docs.registrystack.org/tutorials/run-notary-standalone-for-api/): run Notary in a separate project against a Registry Data API-shaped source.
-- [Integration patterns](https://docs.registrystack.org/explanation/integration-patterns/): choose the source-adapter boundary for systems such as DHIS2.
+- [Connect Notary to a Registry Data API source](https://docs.registrystack.org/tutorials/run-notary-standalone-for-api/): transitional migration tutorial for an existing direct Registry Data API-shaped source.
+- [Relay-backed DHIS2 journey](../../../crates/registry-relay/profiles/dhis2-2.41.9-enrollment-status/README.md): start a new registry integration from the maintained, hash-pinned consultation profile.
 
 - [Architecture overview](architecture-overview.md): what Registry Notary is, the request lifecycle, and how the layers relate.
 - [Capability matrix](notary-capability-matrix.md): which flows Notary supports today, by persona and system.
@@ -37,10 +37,11 @@ For application and wallet developers calling the API or the SDKs.
 For operators deploying, configuring, and running a Registry Notary.
 
 - [Configuration reference](operator-config-reference.md): the config blocks for auth, evidence, sources, replay, status, self-attestation, OID4VCI, and federation.
-- [Model sources and claims](source-claim-modeling-guide.md): design source connectors, source adapter sidecars, claim boundaries, disclosure, and batch reads.
-- [Integration patterns](https://docs.registrystack.org/explanation/integration-patterns/): model a governed source-adapter sidecar for systems such as DHIS2.
-- [FHIR source adapter](fhir-source-adapter-guide.md): project bounded FHIR R4 graphs into Notary-ready source facts without exposing raw FHIR Bundles.
-- [Script (Rhai) source adapter](script-rhai-source-adapter-guide.md): run a sandboxed, orchestration-only Rhai script for sources that need a little branching across a few governed reads.
+- [Model sources and claims](source-claim-modeling-guide.md): design pinned Relay consultations, source-free claims, and temporary direct migration claims.
+- [Relay-backed DHIS2 journey](../../../crates/registry-relay/profiles/dhis2-2.41.9-enrollment-status/README.md): configure and prove the maintained consultation profile end to end.
+- [Integration patterns](https://docs.registrystack.org/explanation/integration-patterns/): historical direct/sidecar patterns retained only as migration references.
+- [FHIR source adapter](fhir-source-adapter-guide.md): transitional migration reference for existing bounded FHIR projections.
+- [Script (Rhai) source adapter](script-rhai-source-adapter-guide.md): transitional migration reference for existing sandboxed sidecar flows.
 - [Signing key providers](signing-key-provider.md): SD-JWT VC signing-key configuration, rotation, and PKCS#11 setup.
 - [Self-attestation](self-attestation-operator-guide.md): citizen OIDC subject binding, token policy, allow-lists, and rollout.
 - [Federated evaluation](federated-evaluation-operator-guide.md): static-peer setup, environment variables, and the replay limitation.

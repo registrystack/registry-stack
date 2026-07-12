@@ -112,6 +112,13 @@ federation:
 The local `peers` block is authoritative. Manifest metadata helps partners
 configure each other, but it does not grant access.
 
+The current federation endpoint cannot select a claim with
+`evidence_mode.type: registry_backed`. Startup rejects that composition because
+federation audit does not yet carry the Notary evaluation id and Relay
+consultation ids needed for end-to-end reconciliation. Use a governed
+direct-source claim for the existing federation MVP. Relay-backed federation is
+deferred until the audit boundary is implemented as one complete feature.
+
 `allow_insecure_private_network` is a development and lab escape hatch for
 private Compose networks. It allows HTTP peer JWKS fetches through the shared
 bounded-fetch policy while still blocking cloud metadata targets. Do not enable

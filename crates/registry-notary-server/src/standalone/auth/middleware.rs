@@ -279,6 +279,9 @@ pub(in super::super) fn build_audit_event(
     let purposes = audit.and_then(|context| context.purposes.clone());
     let row_count = audit.and_then(|context| context.row_count);
     let source_read_count = audit.and_then(|context| context.source_read_count);
+    let relay_consultation_ids = audit
+        .map(|context| context.relay_consultation_ids.clone())
+        .unwrap_or_default();
     let forwarded = audit.and_then(|context| context.forwarded);
     let access_mode = audit
         .and_then(|context| context.access_mode)
@@ -342,6 +345,7 @@ pub(in super::super) fn build_audit_event(
         purposes,
         row_count,
         source_read_count,
+        relay_consultation_ids,
         forwarded,
         error_code,
         access_mode,

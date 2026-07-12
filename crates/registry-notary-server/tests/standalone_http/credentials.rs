@@ -251,6 +251,7 @@ pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_red
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credentials_issue_creates_retrievable_status_record() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -378,6 +379,7 @@ pub(super) async fn direct_credentials_issue_creates_retrievable_status_record()
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_denial_code() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -453,7 +455,7 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
         .as_str()
         .expect("evaluation id returned")
         .to_string();
-    assert_eq!(source_hits.load(Ordering::SeqCst), 1);
+    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
     let holder_id = holder_did_jwk();
     let proof = sign_direct_holder_proof(&holder_id, &evaluation_id, "operation-denied-jti-1");
 
@@ -493,7 +495,7 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
     }
     assert_eq!(
         source_hits.load(Ordering::SeqCst),
-        1,
+        0,
         "credential denial does not read the source again"
     );
 
@@ -546,6 +548,7 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -637,7 +640,7 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
         .as_str()
         .expect("evaluation id returned")
         .to_string();
-    assert_eq!(source_hits.load(Ordering::SeqCst), 1);
+    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
     let holder_id = holder_did_jwk();
     let first_proof = sign_direct_holder_proof(&holder_id, &evaluation_id, "rate-limit-first-jti");
     let second_proof =
@@ -691,7 +694,7 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
     );
     assert_eq!(assurance_denied["source_read_count"], json!(0));
     assert_eq!(assurance_denied["forwarded"], json!(false));
-    assert_eq!(source_hits.load(Ordering::SeqCst), 1);
+    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
     assert!(!records.iter().any(|record| {
         record["path"] == json!("/v1/credentials")
             && record["decision"] == json!("credential_issued")
@@ -763,7 +766,7 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
     }
     assert_eq!(
         source_hits.load(Ordering::SeqCst),
-        1,
+        0,
         "credential requests do not read the source again"
     );
 
@@ -836,6 +839,7 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacted() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -1004,6 +1008,7 @@ pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacte
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -1153,6 +1158,7 @@ pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_bound
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_redacted() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -1290,6 +1296,7 @@ pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_red
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");

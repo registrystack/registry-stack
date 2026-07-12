@@ -320,6 +320,8 @@ impl ConfigBuilder {
       title: Farmed land size
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: number
         unit: hectare
@@ -411,7 +413,7 @@ async fn fetch_posture(config: StandaloneRegistryNotaryConfig) -> Value {
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
     add_ops_read_api_key(&mut config);
     let runtime = compile_notary_runtime(config).expect("runtime compiles for posture");
-    let app = notary_router_from_runtime(runtime);
+    let app = notary_router_from_runtime(runtime).expect("source-free runtime is serve-ready");
     let server = TestServer::builder().http_transport().build(app);
     let response = server
         .get("/admin/v1/posture?tier=restricted")
@@ -428,6 +430,51 @@ fn audit_path(tmp: &tempfile::TempDir) -> String {
         .into_owned()
 }
 
+fn registry_backed_config(tmp: &tempfile::TempDir) -> StandaloneRegistryNotaryConfig {
+    let mut config = ConfigBuilder::new(&audit_path(tmp))
+        .deployment("deployment:\n  profile: local\n")
+        .build();
+    config.evidence.relay = Some(registry_notary_core::RelayConnectionConfig {
+        base_url: "http://127.0.0.1:1".to_string(),
+        token_file: tmp.path().join("relay-workload.jwt"),
+        allowed_private_cidrs: Vec::new(),
+        allow_insecure_localhost: true,
+    });
+    config.evidence.claims[0] = serde_norway::from_str(
+        r#"
+id: farmed-land-size
+title: Farmed land size
+version: "1"
+subject_type: person
+evidence_mode:
+  type: registry_backed
+  consultations:
+    farmer:
+      profile:
+        id: example.farmed-land-size.exact
+        version: "1"
+        contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      inputs:
+        subject_id: target.id
+value:
+  type: string
+purpose: benefit-verification
+required_scopes: [farmer_registry:evidence_verification]
+rule:
+  type: extract
+  source: farmer
+  field: total_farmed_area
+disclosure:
+  default: value
+  allowed: [value, redacted]
+formats:
+  - application/vnd.registry-notary.claim-result+json
+"#,
+    )
+    .expect("Registry-backed claim parses");
+    config
+}
+
 /// Compile a config expecting it to be rejected, returning the error.
 ///
 /// `NotaryRuntimeSnapshot` does not implement `Debug`, so `expect_err` cannot be
@@ -440,6 +487,41 @@ fn expect_compile_rejected(
         Ok(_) => panic!("expected compile to be rejected: {context}"),
         Err(error) => error,
     }
+}
+
+#[test]
+fn source_free_standalone_router_builds_without_relay_activation() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment("deployment:\n  profile: local\n")
+        .build();
+
+    let _router = standalone_router(config).expect("source-free router builds synchronously");
+}
+
+#[test]
+fn registry_backed_standalone_router_refuses_to_serve_before_activation() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = registry_backed_config(&tmp);
+
+    let error = match standalone_router(config) {
+        Ok(_) => panic!("Registry-backed standalone router must require Relay activation"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, StandaloneServerError::RelayNotActivated));
+}
+
+#[test]
+fn registry_backed_compiled_runtime_cannot_be_routed_before_activation() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let runtime = compile_notary_runtime(registry_backed_config(&tmp))
+        .expect("Registry-backed runtime compiles before activation");
+
+    let error = match notary_router_from_runtime(runtime) {
+        Ok(_) => panic!("compiled Registry-backed runtime must not be served before activation"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, StandaloneServerError::RelayNotActivated));
 }
 
 #[test]
@@ -916,7 +998,7 @@ async fn evidence_grade_readiness_rechecks_cursor_binding_and_recovers() {
     let runtime =
         compile_notary_runtime_with_provenance(config, ConfigSource::SignedBundleFile, None)
             .expect("signed evidence-grade runtime compiles");
-    let routers = notary_routers_from_runtime(runtime);
+    let routers = notary_routers_from_runtime(runtime).expect("source-free runtime is serve-ready");
     let server = TestServer::builder().http_transport().build(routers.public);
     let admin_server = TestServer::builder().http_transport().build(routers.admin);
 

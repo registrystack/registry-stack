@@ -1424,6 +1424,7 @@ pub(super) async fn preauth_notary_access_token_with_empty_authorization_details
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
     set_preauth_env();
     let idp = MockIdp::start().await;
@@ -1504,6 +1505,7 @@ pub(super) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
 }
 
 /// Decode the SD-JWT VC issuer JWS payload (the segment before the first `~`).
+#[cfg(feature = "registry-notary-cel")]
 pub(super) fn decode_sd_jwt_payload(sd_jwt: &str) -> Value {
     let issuer_jws = sd_jwt
         .split('~')
@@ -1524,6 +1526,7 @@ pub(super) fn decode_sd_jwt_payload(sd_jwt: &str) -> Value {
 /// Decode the SD-JWT VC disclosure for `claim_name` and return its value object.
 /// A disclosure is `base64url([salt, name, value])`; the value is the evaluated
 /// claim result.
+#[cfg(feature = "registry-notary-cel")]
 pub(super) fn decode_disclosed_claim(sd_jwt: &str, claim_name: &str) -> Value {
     sd_jwt
         .split('~')
@@ -1542,6 +1545,7 @@ pub(super) fn decode_disclosed_claim(sd_jwt: &str, claim_name: &str) -> Value {
 /// The evaluated-claim fields that must be stable across issuance paths. The
 /// `issued_at` timestamp legitimately differs between two evaluations, so it is
 /// excluded from the parity comparison.
+#[cfg(feature = "registry-notary-cel")]
 pub(super) fn semantic_claim_fields(disclosure_value: &Value) -> Value {
     json!({
         "claim_id": disclosure_value["claim_id"],
@@ -1556,6 +1560,7 @@ pub(super) fn semantic_claim_fields(disclosure_value: &Value) -> Value {
 /// endpoint. Its `target_ref_hash`/`requester_ref_hash` are HMACs over the
 /// bound subject reference, deterministic for a fixed audit secret, so two paths
 /// that bind the same eSignet subject produce identical hashes.
+#[cfg(feature = "registry-notary-cel")]
 pub(super) fn credential_issued_audit(audit_path: &std::path::Path) -> Value {
     audit_envelopes(audit_path)
         .into_iter()
@@ -1585,6 +1590,7 @@ pub(super) fn credential_issued_audit(audit_path: &std::path::Path) -> Value {
 ///    subject_type), proving the pre-auth path yields an equivalent credential,
 ///    not merely a well-shaped one.
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn preauth_credential_subject_and_evaluation_match_esignet_token_path() {
     set_preauth_env();
 

@@ -287,6 +287,55 @@ pub(super) fn federation_config_rejects_missing_protocol_and_bad_profile_referen
 }
 
 #[test]
+pub(super) fn federation_profile_rejects_registry_backed_claim() {
+    let mut config = valid_federation_config();
+    config.evidence.relay = Some(
+        serde_norway::from_str(
+            r#"
+base_url: https://relay.internal.example
+token_file: /run/secrets/registry-notary-relay.jwt
+"#,
+        )
+        .expect("Relay connection parses"),
+    );
+    config.evidence.claims[0] = serde_norway::from_str(
+        r#"
+id: disability-status
+title: Disability status
+version: "1"
+subject_type: person
+evidence_mode:
+  type: registry_backed
+  consultations:
+    disability_status:
+      profile:
+        id: example.disability-status.exact
+        version: "1"
+        contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      inputs:
+        subject_id: target.id
+value:
+  type: string
+purpose: benefit-verification
+required_scopes:
+  - registry:consult:disability-status
+rule:
+  type: extract
+  source: disability_status
+  field: status
+"#,
+    )
+    .expect("registry-backed claim parses");
+
+    let reason = expect_federation_error(&config);
+    assert!(
+        reason.contains("cannot reference a registry_backed claim")
+            && reason.contains("audit correlation"),
+        "unexpected: {reason}"
+    );
+}
+
+#[test]
 pub(super) fn federation_profile_disclosure_must_be_known_profile() {
     let mut config = valid_federation_config();
     config.federation.evaluation_profiles[0].disclosure = Some("raw".to_string());

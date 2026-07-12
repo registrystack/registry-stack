@@ -80,6 +80,8 @@ evidence:
       title: Civil record present
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       inputs:
@@ -125,6 +127,8 @@ evidence:
       title: Social program active
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       inputs:
@@ -166,6 +170,8 @@ evidence:
       title: Health service available
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       inputs:
@@ -215,6 +221,8 @@ evidence:
       title: Eligible for combined support
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       inputs:

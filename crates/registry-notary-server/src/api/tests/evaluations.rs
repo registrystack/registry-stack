@@ -3,6 +3,149 @@
 
 use super::*;
 
+#[derive(Debug)]
+struct AmbiguousApiRelay {
+    calls: std::sync::atomic::AtomicU64,
+}
+
+#[async_trait::async_trait]
+impl crate::runtime::ActivatedRelayConsultations for AmbiguousApiRelay {
+    async fn check_ready(&self) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    fn validate(
+        &self,
+        _key: &crate::runtime::consultation::ConsultationGroupKeyV1,
+    ) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    async fn execute(
+        &self,
+        _key: &crate::runtime::consultation::ConsultationGroupKeyV1,
+    ) -> Result<
+        crate::runtime::consultation::RuntimeRelayConsultationResult,
+        crate::relay_client::RelayClientError,
+    > {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        crate::runtime::consultation::RuntimeRelayConsultationResult::new(
+            ulid::Ulid::from_parts(2, 1),
+            crate::runtime::consultation::RuntimeRelayOutcome::Ambiguous,
+            None,
+            OffsetDateTime::UNIX_EPOCH,
+        )
+    }
+}
+
+#[tokio::test]
+async fn ambiguous_relay_response_keeps_ids_only_in_restricted_audit_context() {
+    let mut evidence = evidence_config();
+    evidence.allowed_purposes = vec!["test".to_string()];
+    let claim = evidence.claims.first_mut().expect("claim exists");
+    claim.evidence_mode = registry_notary_core::ClaimEvidenceMode::RegistryBacked {
+        consultations: BTreeMap::from([(
+            "enrollment".to_string(),
+            registry_notary_core::RelayConsultationConfig {
+                profile: registry_notary_core::RelayConsultationProfileRef {
+                    id: "dhis2.tracker.enrollment-status.exact".to_string(),
+                    version: "1".to_string(),
+                    contract_hash:
+                        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_string(),
+                },
+                inputs: BTreeMap::from([(
+                    "tracked_entity".to_string(),
+                    registry_notary_core::RelayConsultationInput::TargetId,
+                )]),
+            },
+        )]),
+    };
+    claim.purpose = Some("test".to_string());
+    claim.required_scopes = vec!["registry:evidence".to_string()];
+    claim.value.value_type = "string".to_string();
+    claim.rule = registry_notary_core::RuleConfig::Extract {
+        source: "enrollment".to_string(),
+        field: "registration_status".to_string(),
+    };
+    let state = Arc::new(RegistryNotaryApiState::new(
+        Arc::new(evidence),
+        AuditKeyHasher::unkeyed_dev_only(),
+        Arc::new(VersionScopedSource),
+        Arc::new(EvidenceStore::default()),
+        Arc::new(NoopIssuerResolver),
+    ));
+    let relay = Arc::new(AmbiguousApiRelay {
+        calls: std::sync::atomic::AtomicU64::new(0),
+    });
+    state
+        .install_activated_relay(relay.clone())
+        .expect("test Relay activates once");
+    let principal = EvidencePrincipal {
+        auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
+        principal_id: "machine".to_string(),
+        scopes: vec![
+            "registry:evidence".to_string(),
+            "person-is-alive:1".to_string(),
+        ],
+        access_mode: AccessMode::MachineClient,
+        verified_claims: None,
+        authorization_details: None,
+    };
+    let mut request = evaluate_request("subject-1");
+    request.target = Some(EvidenceEntity::from_subject_request(
+        "Person",
+        SubjectRequest {
+            id: "subject-1".to_string(),
+            id_type: None,
+        },
+    ));
+    request.purpose = Some("test".to_string());
+
+    let response = evaluate(
+        HeaderMap::new(),
+        Some(Extension(state)),
+        Some(Extension(principal)),
+        None,
+        Ok(Json(request)),
+    )
+    .await;
+
+    assert!(!response.status().is_success());
+    assert_eq!(
+        response
+            .extensions()
+            .get::<EvidenceErrorCodeContext>()
+            .expect("problem code context is attached")
+            .0,
+        "target.match_ambiguous"
+    );
+    assert_eq!(relay.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let audit = response
+        .extensions()
+        .get::<EvidenceAuditContext>()
+        .expect("denial audit context is attached");
+    let evaluation_id = audit
+        .verification_id
+        .clone()
+        .expect("post-preflight evaluation id is restricted-audited");
+    assert!(ulid::Ulid::from_string(&evaluation_id).is_ok());
+    let consultation_id = ulid::Ulid::from_parts(2, 1).to_string();
+    assert_eq!(audit.relay_consultation_ids, vec![consultation_id.clone()]);
+    assert_eq!(audit.source_read_count, Some(1));
+    assert_eq!(audit.forwarded, Some(true));
+    let audit_debug = format!("{audit:?}");
+    assert!(!audit_debug.contains(&evaluation_id));
+    assert!(!audit_debug.contains(&consultation_id));
+
+    let public_body = to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("public problem body reads");
+    let public_body = String::from_utf8(public_body.to_vec()).expect("problem body is UTF-8");
+    assert!(!public_body.contains(&evaluation_id));
+    assert!(!public_body.contains(&consultation_id));
+}
+
 #[test]
 fn pdp_policy_denials_keep_public_stable_problem_codes() {
     let error = EvidenceError::PolicyDenied {

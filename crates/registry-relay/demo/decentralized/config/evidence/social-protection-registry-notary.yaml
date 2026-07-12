@@ -70,6 +70,8 @@ evidence:
       title: Program enrollment status
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       inputs:
@@ -113,6 +115,8 @@ evidence:
       title: Household eligibility band
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       inputs:
@@ -156,6 +160,8 @@ evidence:
       title: Beneficiary active
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       inputs:

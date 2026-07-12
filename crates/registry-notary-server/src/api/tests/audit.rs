@@ -217,6 +217,7 @@ fn batch_audit_preserves_policy_identity_for_matching_policy_rejections() {
                 "title": "Person is alive",
                 "version": "2026-06",
                 "subject_type": "person",
+                "evidence_mode": { "type": "transitional_direct" },
                 "source_bindings": {
                     "aa_wrong": {
                         "connector": "registry_data_api",
@@ -676,6 +677,7 @@ fn denied_matching_policy_audit_identity_uses_requested_claim_binding() {
                 "title": "Person is alive",
                 "version": "2026-06",
                 "subject_type": "person",
+                "evidence_mode": { "type": "transitional_direct" },
                 "source_bindings": {
                     "aa_wrong": {
                         "connector": "registry_data_api",

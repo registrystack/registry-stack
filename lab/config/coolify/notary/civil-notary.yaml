@@ -76,6 +76,8 @@ evidence:
       title: Vital Status Attestation
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -112,6 +114,8 @@ evidence:
       title: Birth Evidence
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: object
       source_bindings:
@@ -448,6 +452,8 @@ evidence:
       title: Birth Evidence by demographics
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: object
       source_bindings:
@@ -784,6 +790,8 @@ evidence:
       title: Birth event exists
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -840,6 +848,8 @@ evidence:
       title: Marriage Evidence
       version: 2026-06
       subject_type: marriage
+      evidence_mode:
+        type: transitional_direct
       value:
         type: object
       source_bindings:
@@ -1110,6 +1120,8 @@ evidence:
       title: Marriage event exists
       version: 2026-06
       subject_type: marriage
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -1166,6 +1178,8 @@ evidence:
       title: Vital Status Attestation by demographics
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:

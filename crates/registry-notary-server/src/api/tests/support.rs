@@ -129,6 +129,7 @@
                 "title": "Person is alive",
                 "version": "1",
                 "subject_type": "person",
+                "evidence_mode": { "type": "self_attested" },
                 "purpose": "citizen_self_attestation",
                 "rule": { "type": "cel", "expression": "true" },
                 "operations": {
@@ -174,6 +175,7 @@
                     "title": "Guardian link is established",
                     "version": "1",
                     "subject_type": "relationship",
+                        "evidence_mode": { "type": "transitional_direct" },
                     "purpose": "dependent_attestation",
                     "source_bindings": {
                         "link": {
@@ -217,6 +219,7 @@
                     "title": "Dependent person is alive",
                     "version": "1",
                     "subject_type": "person",
+                        "evidence_mode": { "type": "transitional_direct" },
                     "purpose": "dependent_attestation",
                     "depends_on": ["guardian-link-established"],
                     "rule": { "type": "cel", "expression": "claims.guardian.satisfied", "bindings": { "claims": { "guardian": { "claim": "guardian-link-established" } } } },
@@ -274,10 +277,8 @@
 
     fn delegated_authorization_details(evidence: &EvidenceConfig) -> EvidenceAuthorizationDetails {
         EvidenceAuthorizationDetails {
-            detail_type: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE
-                .to_string(),
-            schema_version:
-                registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
+            detail_type: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE.to_string(),
+            schema_version: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
                     .to_string(),
             actions: vec!["evaluate".to_string()],
             locations: vec![evidence.service_id.clone()],
@@ -521,14 +522,10 @@
         }
     }
 
-    fn transaction_authorization_details(
-        evidence: &EvidenceConfig,
-    ) -> EvidenceAuthorizationDetails {
+    fn transaction_authorization_details(evidence: &EvidenceConfig) -> EvidenceAuthorizationDetails {
         EvidenceAuthorizationDetails {
-            detail_type: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE
-                .to_string(),
-            schema_version:
-                registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
+            detail_type: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE.to_string(),
+            schema_version: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
                     .to_string(),
             actions: vec!["evaluate".to_string()],
             locations: vec![evidence.service_id.clone()],
@@ -933,10 +930,7 @@ evaluation_profiles:
         }
     }
 
-    fn claim_result_view(
-        evaluation_id: &str,
-        claim_id: &str,
-    ) -> registry_notary_core::ClaimResultView {
+    fn claim_result_view(evaluation_id: &str, claim_id: &str) -> registry_notary_core::ClaimResultView {
         registry_notary_core::ClaimResultView {
             evaluation_id: evaluation_id.to_string(),
             claim_id: claim_id.to_string(),

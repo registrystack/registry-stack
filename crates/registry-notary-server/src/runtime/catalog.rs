@@ -109,11 +109,21 @@ pub(super) fn build_claim_levels(
     // Closure: starting from `requested`, accumulate every transitive dep.
     let mut closure: BTreeSet<String> = BTreeSet::new();
     let mut frontier: Vec<String> = claim_ids(requested);
+    let mut edge_count = 0usize;
     while let Some(claim_id) = frontier.pop() {
         if !closure.insert(claim_id.clone()) {
             continue;
         }
+        if closure.len() > MAX_CLAIM_DEPENDENCY_NODES_V1 {
+            return Err(EvidenceError::RuleEvaluationFailed);
+        }
         let claim = find_claim_for_selection(evidence, &claim_id, claim_versions)?;
+        edge_count = edge_count
+            .checked_add(claim.depends_on.len())
+            .ok_or(EvidenceError::RuleEvaluationFailed)?;
+        if edge_count > MAX_CLAIM_DEPENDENCY_EDGES_V1 {
+            return Err(EvidenceError::RuleEvaluationFailed);
+        }
         for dep in &claim.depends_on {
             if !closure.contains(dep) {
                 frontier.push(dep.clone());

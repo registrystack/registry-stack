@@ -6,6 +6,12 @@ This guide describes the implemented OpenID4VCI wallet facade for Registry
 Notary adopters. It focuses on what wallet and platform teams need to configure
 and test.
 
+> **Convergence status:** Source-backed wallet issuance currently uses only the
+> explicit `transitional_direct` lane while a reviewed Relay-bound citizen
+> assertion contract is developed. That lane blocks the replacement beta and
+> 1.0 release. Source-free `self_attested` wallet claims remain supported;
+> delegated and Registry-backed citizen claims are unavailable in v1.
+
 ## Use case
 
 Use the OID4VCI facade when a citizen wallet should request a Registry Notary
@@ -20,8 +26,8 @@ The facade is intentionally narrow:
 - Proof type is JWT.
 - Supported proof algorithm is `EdDSA`.
 - Supported holder binding method is `did:jwk`.
-- Issuance is backed by direct self-attestation policy and configured evidence
-  claims.
+- Issuance is backed by self-attestation policy and either source-free
+  `self_attested` claims or temporary `transitional_direct` claims.
 - Delegated attestation transaction tokens are rejected. Delegated wallet
   issuance is not part of this OID4VCI facade version.
 
@@ -108,7 +114,8 @@ The current wallet-facing flow is:
 4. Wallet requests a nonce when nonce support is enabled.
 5. Wallet sends a credential request with `format: "dc+sd-jwt"` and a JWT proof.
 6. Notary validates the access token, subject binding, self-attestation policy,
-   nonce and proof, then reads the source and issues the SD-JWT VC.
+   nonce and proof, evaluates the source-free or temporary direct claim, and
+   issues the SD-JWT VC.
 
 The credential request should not carry a raw subject id as a free-form wallet
 choice. The subject comes from the OIDC token claim configured in
@@ -378,7 +385,8 @@ configuration overrides in your deployment notes.
 
 ## Security and privacy notes
 
-- Notary validates token and policy before source reads.
+- For temporary `transitional_direct` claims, Notary validates token and policy
+  before source reads. `self_attested` claims perform no source read.
 - Subject binding is exact; do not use normalization that could join different
   civil identifiers.
 - A holder DID can become a correlation handle if reused widely. Wallets should

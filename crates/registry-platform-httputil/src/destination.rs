@@ -72,6 +72,8 @@ pub const MAX_DESTINATION_RESPONSE_HEADERS: usize = 64;
 pub const MAX_DESTINATION_RESPONSE_HEADER_BYTES: usize = 65_536;
 /// Frozen hard maximum for DNS, connect, send, and response body read together.
 pub const MAX_DESTINATION_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
+/// Fixed hard maximum for a data request made across one internal service hop.
+pub const MAX_SERVICE_HOP_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 /// Process-wide ceiling for concurrent destination DNS resolutions.
 pub const MAX_CONCURRENT_DESTINATION_RESOLUTIONS: usize = 32;
 
@@ -221,6 +223,98 @@ pub struct FixedDestinationPolicy<S: DestinationSlot> {
 pub type DataDestinationPolicy = FixedDestinationPolicy<DataDestination>;
 /// Credential-exchange fixed destination policy.
 pub type CredentialDestinationPolicy = FixedDestinationPolicy<CredentialDestination>;
+
+/// Fixed data destination for one bounded internal service hop.
+///
+/// This deliberately narrow wrapper reuses the data destination's validation,
+/// DNS, SSRF, TLS, redirect, proxy, retry, and body semantics while permitting
+/// an absolute operation deadline up to [`MAX_SERVICE_HOP_OPERATION_TIMEOUT`].
+/// It does not expose the ordinary relative-duration send API or the underlying
+/// data policy.
+///
+/// Credential requests cannot be sent through the service-hop policy:
+///
+/// ```compile_fail
+/// use registry_platform_httputil::destination::{
+///     CredentialDestinationRequest, ServiceHopDataDestinationPolicy,
+/// };
+/// use tokio::time::Instant;
+///
+/// async fn cannot_send_credentials(
+///     service_hop: &ServiceHopDataDestinationPolicy,
+///     request: CredentialDestinationRequest,
+/// ) {
+///     service_hop
+///         .send_with_deadline(request, Instant::now())
+///         .await
+///         .unwrap();
+/// }
+/// ```
+///
+/// A credential policy cannot be substituted for this policy:
+///
+/// ```compile_fail
+/// use registry_platform_httputil::destination::{
+///     CredentialDestinationPolicy, ServiceHopDataDestinationPolicy,
+/// };
+///
+/// fn requires_service_hop(_: ServiceHopDataDestinationPolicy) {}
+///
+/// fn cannot_use_credential_policy(policy: CredentialDestinationPolicy) {
+///     requires_service_hop(policy);
+/// }
+/// ```
+///
+/// The wrapper is also distinct from an ordinary data policy:
+///
+/// ```compile_fail
+/// use registry_platform_httputil::destination::{
+///     DataDestinationPolicy, ServiceHopDataDestinationPolicy,
+/// };
+///
+/// fn requires_data_policy(_: DataDestinationPolicy) {}
+///
+/// fn cannot_erase_service_hop(policy: ServiceHopDataDestinationPolicy) {
+///     requires_data_policy(policy);
+/// }
+/// ```
+pub struct ServiceHopDataDestinationPolicy {
+    policy: DataDestinationPolicy,
+}
+
+impl ServiceHopDataDestinationPolicy {
+    /// Validate and freeze a service-hop data destination binding.
+    pub fn new(
+        origin_id: &str,
+        origin: &str,
+        profile: DestinationProfile,
+        allowed_private_cidrs: &[IpNet],
+    ) -> Result<Self, DestinationPolicyError> {
+        DataDestinationPolicy::new(origin_id, origin, profile, allowed_private_cidrs)
+            .map(|policy| Self { policy })
+    }
+
+    /// Resolve, validate, pin, and send under one existing absolute deadline.
+    ///
+    /// DNS, connect, send, and the bounded response-body read share the same
+    /// instant, which must be no later than
+    /// [`MAX_SERVICE_HOP_OPERATION_TIMEOUT`] from the time of this call.
+    pub async fn send_with_deadline(
+        &self,
+        request: DataDestinationRequest,
+        deadline: Instant,
+    ) -> Result<DataDestinationResponse, DestinationSendError> {
+        self.policy
+            .send_with_deadline_bounded(
+                request,
+                deadline,
+                MAX_SERVICE_HOP_OPERATION_TIMEOUT,
+                &SystemResolver,
+                TransportTrust::System,
+            )
+            .await
+    }
+}
 
 impl<S: DestinationSlot> fmt::Debug for FixedDestinationPolicy<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -380,7 +474,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         request: BoundedDestinationRequest<S>,
         remaining: Duration,
     ) -> Result<BoundedDestinationResponse<S>, DestinationSendError> {
-        let deadline = deadline_from_remaining(remaining)?;
+        let deadline = deadline_from_remaining(remaining, MAX_DESTINATION_OPERATION_TIMEOUT)?;
         self.send_with_deadline(request, deadline).await
     }
 
@@ -395,9 +489,10 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         request: BoundedDestinationRequest<S>,
         deadline: Instant,
     ) -> Result<BoundedDestinationResponse<S>, DestinationSendError> {
-        self.send_with_deadline_and_resolver(
+        self.send_with_deadline_bounded(
             request,
             deadline,
+            MAX_DESTINATION_OPERATION_TIMEOUT,
             &SystemResolver,
             TransportTrust::System,
         )
@@ -412,19 +507,26 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         resolver: &R,
         trust: TransportTrust,
     ) -> Result<BoundedDestinationResponse<S>, DestinationSendError> {
-        let deadline = deadline_from_remaining(remaining)?;
-        self.send_with_deadline_and_resolver(request, deadline, resolver, trust)
-            .await
+        let deadline = deadline_from_remaining(remaining, MAX_DESTINATION_OPERATION_TIMEOUT)?;
+        self.send_with_deadline_bounded(
+            request,
+            deadline,
+            MAX_DESTINATION_OPERATION_TIMEOUT,
+            resolver,
+            trust,
+        )
+        .await
     }
 
-    async fn send_with_deadline_and_resolver<R: Resolver>(
+    async fn send_with_deadline_bounded<R: Resolver>(
         &self,
         request: BoundedDestinationRequest<S>,
         deadline: Instant,
+        maximum_timeout: Duration,
         resolver: &R,
         trust: TransportTrust,
     ) -> Result<BoundedDestinationResponse<S>, DestinationSendError> {
-        validate_absolute_deadline(deadline)?;
+        validate_absolute_deadline(deadline, maximum_timeout)?;
         let host = self
             .origin
             .host_str()
@@ -622,8 +724,11 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
     }
 }
 
-fn deadline_from_remaining(remaining: Duration) -> Result<Instant, DestinationSendError> {
-    if remaining.is_zero() || remaining > MAX_DESTINATION_OPERATION_TIMEOUT {
+fn deadline_from_remaining(
+    remaining: Duration,
+    maximum_timeout: Duration,
+) -> Result<Instant, DestinationSendError> {
+    if remaining.is_zero() || remaining > maximum_timeout {
         return Err(DestinationSendError::InvalidRemainingTimeout);
     }
     Instant::now()
@@ -631,12 +736,15 @@ fn deadline_from_remaining(remaining: Duration) -> Result<Instant, DestinationSe
         .ok_or(DestinationSendError::InvalidRemainingTimeout)
 }
 
-fn validate_absolute_deadline(deadline: Instant) -> Result<(), DestinationSendError> {
+fn validate_absolute_deadline(
+    deadline: Instant,
+    maximum_timeout: Duration,
+) -> Result<(), DestinationSendError> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
         return Err(DestinationSendError::DeadlineExceeded);
     }
-    if remaining > MAX_DESTINATION_OPERATION_TIMEOUT {
+    if remaining > maximum_timeout {
         return Err(DestinationSendError::InvalidRemainingTimeout);
     }
     Ok(())
@@ -4092,9 +4200,10 @@ mod tests {
 
         let exact_deadline = Instant::now() + Duration::from_secs(2);
         let response = policy
-            .send_with_deadline_and_resolver(
+            .send_with_deadline_bounded(
                 request,
                 exact_deadline,
+                MAX_DESTINATION_OPERATION_TIMEOUT,
                 &resolver,
                 TransportTrust::System,
             )
@@ -4305,6 +4414,130 @@ mod tests {
             Err(DestinationSendError::InvalidRemainingTimeout)
         ));
         assert_eq!(resolver.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn ordinary_data_and_credential_policies_reject_eleven_seconds_before_resolution() {
+        let data_policy = production(&[]);
+        let data_request =
+            DataDestinationRequest::new(DestinationMethod::Get, "/record", vec![], None, None)
+                .expect("data request validates");
+        let data_resolver = FakeResolver {
+            answers: vec![answer("93.184.216.34", 443)],
+            calls: AtomicUsize::new(0),
+        };
+        let data_result = data_policy
+            .send_with_resolver(
+                data_request,
+                Duration::from_secs(11),
+                &data_resolver,
+                TransportTrust::System,
+            )
+            .await;
+        assert!(matches!(
+            data_result,
+            Err(DestinationSendError::InvalidRemainingTimeout)
+        ));
+        assert_eq!(data_resolver.calls.load(Ordering::SeqCst), 0);
+
+        let credential_policy = CredentialDestinationPolicy::new(
+            "registry-credentials",
+            "https://credentials.example.test/",
+            DestinationProfile::ProductionHttps,
+            &[],
+        )
+        .expect("credential policy validates");
+        let credential_template = CredentialDestinationRequestTemplate::oauth2_client_credentials(
+            "/oauth/token",
+            OAuth2ClientCredentialsBodyFormat::JsonClientSecretBody,
+            64,
+            256,
+        )
+        .expect("credential request template validates");
+        let credential_request = credential_template
+            .render(&[], &[], None, Some(b"{}".to_vec()))
+            .expect("credential request renders");
+        let credential_resolver = FakeResolver {
+            answers: vec![answer("93.184.216.34", 443)],
+            calls: AtomicUsize::new(0),
+        };
+        let credential_result = credential_policy
+            .send_with_resolver(
+                credential_request,
+                Duration::from_secs(11),
+                &credential_resolver,
+                TransportTrust::System,
+            )
+            .await;
+        assert!(matches!(
+            credential_result,
+            Err(DestinationSendError::InvalidRemainingTimeout)
+        ));
+        assert_eq!(credential_resolver.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn service_hop_policy_rejects_a_sixteen_second_deadline() {
+        let policy = ServiceHopDataDestinationPolicy::new(
+            "relay-service",
+            "https://relay.example.test/",
+            DestinationProfile::ProductionHttps,
+            &[],
+        )
+        .expect("service-hop policy validates");
+        let request =
+            DataDestinationRequest::new(DestinationMethod::Get, "/record", vec![], None, None)
+                .expect("data request validates");
+
+        let result = policy
+            .send_with_deadline(request, Instant::now() + Duration::from_secs(16))
+            .await;
+
+        assert!(matches!(
+            result,
+            Err(DestinationSendError::InvalidRemainingTimeout)
+        ));
+    }
+
+    #[tokio::test]
+    async fn service_hop_accepts_an_eleven_second_deadline_for_bounded_loopback_data() {
+        let app = Router::new().route(
+            "/record",
+            get(|| async { (StatusCode::OK, "service-hop-response") }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind service-hop test server");
+        let address = listener.local_addr().expect("service-hop test address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve service-hop test app");
+        });
+
+        let policy = ServiceHopDataDestinationPolicy::new(
+            "relay-service",
+            &format!("http://127.0.0.1:{}/", address.port()),
+            DestinationProfile::LoopbackDevelopmentHttp,
+            &[],
+        )
+        .expect("service-hop policy validates");
+        let request =
+            DataDestinationRequest::new(DestinationMethod::Get, "/record", vec![], None, None)
+                .expect("data request validates");
+        let deadline = Instant::now() + Duration::from_secs(11);
+
+        let response = policy
+            .send_with_deadline(request, deadline)
+            .await
+            .expect("service-hop send accepts a deadline beyond ten seconds");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.deadline, deadline);
+        let body = response
+            .read_bounded(64)
+            .await
+            .expect("service-hop response body remains bounded");
+        assert_eq!(body.as_bytes(), b"service-hop-response");
     }
 
     proptest! {

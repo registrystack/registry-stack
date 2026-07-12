@@ -153,6 +153,8 @@ evidence:
       title: Program Enrollment Attestation
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings:
@@ -204,6 +206,8 @@ evidence:
       title: Welfare Classification Attestation
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings:
@@ -254,6 +258,8 @@ evidence:
       title: Program Enrollment Active Attestation
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       depends_on:
@@ -289,6 +295,8 @@ evidence:
       title: Household Composition Attestation
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: integer
       source_bindings:
@@ -343,6 +351,8 @@ evidence:
       title: Household Summary With Policy Redaction
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: object
       source_bindings:
@@ -417,6 +427,8 @@ evidence:
       title: Parent Or Guardian Link Attestation
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -507,6 +519,8 @@ evidence:
       title: Disability Determination Attestation
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings:
@@ -561,6 +575,8 @@ evidence:
       title: Functioning Assessment Attestation
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:

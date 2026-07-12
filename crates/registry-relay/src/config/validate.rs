@@ -20,6 +20,7 @@ use crate::table_provider::table_name;
 use registry_manifest_core::CompiledMetadata;
 use registry_platform_authcommon::CredentialFingerprintRefError;
 use registry_platform_httpsec::CorsPolicy;
+use registry_platform_httputil::destination::MAX_SERVICE_HOP_OPERATION_TIMEOUT;
 use registry_platform_ops::ConfigSource;
 
 use super::capabilities::source_capabilities;
@@ -1424,6 +1425,16 @@ fn validate_server(config: &Config) -> Result<(), ConfigError> {
         tracing::error!(
             code = "config.validation_error",
             "server timeouts must be non-zero and max_connections must be greater than zero"
+        );
+        return Err(ConfigError::ValidationError);
+    }
+    if config.consultation.is_some()
+        && config.server.request_timeout <= MAX_SERVICE_HOP_OPERATION_TIMEOUT
+    {
+        tracing::error!(
+            code = "config.validation_error",
+            field = "server.request_timeout",
+            "consultation-enabled Relay requires server.request_timeout greater than the fixed 15-second Notary service-hop deadline"
         );
         return Err(ConfigError::ValidationError);
     }
@@ -4738,6 +4749,24 @@ datasets: []
     fn null_consultation_keeps_the_runtime_disabled() {
         let config = parse_deployment_config("consultation: null\ndeployment:\n  profile: local");
         run(&config).expect("an explicit null consultation remains disabled");
+    }
+
+    #[test]
+    fn consultation_relay_requires_an_outer_request_timeout_above_service_hop_deadline() {
+        let mut config =
+            parse_consultation_config(&consultation_section(&[("epoch-a", "PSEUDONYM_SOURCE")]));
+        config.server.request_timeout = MAX_SERVICE_HOP_OPERATION_TIMEOUT;
+        let (result, logs) = run_with_captured_logs(&config);
+        assert!(matches!(
+            result,
+            Err(Error::Config(ConfigError::ValidationError))
+        ));
+        assert!(logs.contains("server.request_timeout"));
+        assert!(logs.contains("fixed 15-second"));
+
+        config.server.request_timeout =
+            MAX_SERVICE_HOP_OPERATION_TIMEOUT + Duration::from_millis(1);
+        run(&config).expect("a strictly larger Relay request timeout preserves the service hop");
     }
 
     #[test]

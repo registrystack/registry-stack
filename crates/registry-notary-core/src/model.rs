@@ -1616,7 +1616,7 @@ impl EvidencePrincipal {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct EvidenceAuditEvent {
     pub event_id: String,
     pub occurred_at: String,
@@ -1638,6 +1638,10 @@ pub struct EvidenceAuditEvent {
     pub row_count: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_read_count: Option<u64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relay_consultation_ids: Vec<String>,
+    /// Conservative dispatch-attempt marker. `true` means Notary committed to
+    /// Relay work that may have reached Relay, not that Relay received it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub forwarded: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1712,6 +1716,23 @@ pub struct EvidenceAuditEvent {
     pub source_sidecar_config_hashes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<ConfigAuditEvent>,
+}
+
+impl std::fmt::Debug for EvidenceAuditEvent {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EvidenceAuditEvent")
+            .field("event_id", &"[REDACTED]")
+            .field("decision", &self.decision)
+            .field("method", &self.method)
+            .field("path", &self.path)
+            .field("status", &self.status)
+            .field("verification_id", &"[REDACTED]")
+            .field("relay_consultation_ids", &"[REDACTED]")
+            .field("forwarded", &self.forwarded)
+            .field("error_code", &self.error_code)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -2338,6 +2359,7 @@ mod tests {
             purposes: None,
             row_count: None,
             source_read_count: None,
+            relay_consultation_ids: vec!["01JRELAYCORRELATIONSENSITIVE".to_string()],
             forwarded: None,
             error_code: Some("self_attestation.denied".to_string()),
             access_mode: Some(AccessMode::SelfAttestation),
@@ -2397,6 +2419,13 @@ mod tests {
         };
 
         let value = serde_json::to_value(&event).expect("audit event serializes");
+        assert_eq!(
+            value["relay_consultation_ids"],
+            json!(["01JRELAYCORRELATIONSENSITIVE"])
+        );
+        let debug = format!("{event:?}");
+        assert!(!debug.contains("01JRELAYCORRELATIONSENSITIVE"));
+        assert!(debug.contains("relay_consultation_ids: \"[REDACTED]\""));
         assert_eq!(value["access_mode"], json!("self_attestation"));
         assert_eq!(
             value["denial_code"],

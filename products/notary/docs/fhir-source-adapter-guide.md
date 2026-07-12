@@ -41,6 +41,7 @@ The current governed prototype keeps a compact, use-case-led claim set with
 synthetic fixtures:
 
 Eligibility and intake:
+
 - `patient-record-exists`
 - `not-recorded-deceased`, including explicit `true`, explicit `false`, and
   missing `deceased[x]`
@@ -50,6 +51,7 @@ Eligibility and intake:
 - `enrolled-in-program`
 
 Care navigation and service routing:
+
 - `provider-affiliated-with-facility`
 - `facility-offers-service`
 - `requester-guardian-confirmed`
@@ -57,11 +59,13 @@ Care navigation and service routing:
 - `appointment-booked`
 
 Service completion and follow-up:
+
 - `encounter-completed`
 - `lab-result-available`
 - `vaccination-recorded`
 
 Payer and assurance workflows:
+
 - `prior-authorization-approved`
 - `source-trace-available`, using FHIR `Provenance`
 
@@ -189,6 +193,8 @@ source_connections:
       require_smoke_verified: true
 claims:
   - id: coverage-active
+    evidence_mode:
+      type: transitional_direct
     source_bindings:
       coverage:
         connector: source_adapter_sidecar

@@ -1127,6 +1127,7 @@ pub(super) fn jwt_payload(jwt: &str) -> Value {
 }
 
 /// Decode (without verifying) the JOSE header of a compact JWT.
+#[cfg(feature = "registry-notary-cel")]
 pub(super) fn jwt_header(jwt: &str) -> Value {
     let header_b64 = jwt.split('.').next().expect("jwt has a header segment");
     let bytes = URL_SAFE_NO_PAD

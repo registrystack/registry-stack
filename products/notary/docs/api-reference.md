@@ -289,7 +289,10 @@ Direct self-attestation reasons include `self_attestation.disabled`,
 `self_attestation.invalid_token`, `self_attestation.assurance_denied`, and
 `self_attestation.batch_denied`.
 
-Delegated self-attestation reasons include
+The temporary pre-v1 internal taxonomy retains these delegated denial reasons
+for closed legacy paths. It creates no supported/configurable surface or
+compatibility guarantee: enabling delegated self-attestation fails validation.
+The retained reasons include
 `delegated.relationship_unproven`, `delegated.relationship_not_allowed`,
 `delegated.claim_denied`, `delegated.subject_not_permitted`, and
 `delegated.proof_denied`.

@@ -184,6 +184,8 @@ evidence:
       title: Farmed land size
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: number
         unit: hectare
@@ -272,6 +274,8 @@ evidence:
       title: Farmed land size
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: number
         unit: hectare
@@ -310,6 +314,8 @@ evidence:
       title: Is active farmer
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       operations:
         batch_evaluate:
           enabled: true
@@ -393,6 +399,8 @@ evidence:
       title: Farmed land size
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: number
         unit: hectare
@@ -431,6 +439,8 @@ evidence:
       title: Is active farmer
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       operations:
         batch_evaluate:
           enabled: true
@@ -465,6 +475,8 @@ evidence:
       title: Large farm
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       operations:
         batch_evaluate:
           enabled: true
@@ -552,6 +564,8 @@ evidence:
       title: Farmed land size
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       operations:
         batch_evaluate:
           enabled: true
@@ -586,6 +600,8 @@ evidence:
       title: Farmer id only
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       operations:
         batch_evaluate:
           enabled: true
@@ -676,6 +692,8 @@ evidence:
       title: DCI claim A
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       operations:
         batch_evaluate:
           enabled: true
@@ -709,6 +727,8 @@ evidence:
       title: DCI claim B
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       operations:
         batch_evaluate:
           enabled: true
@@ -1411,6 +1431,7 @@ fn shared_binding_claim(id: &str) -> ClaimDefinition {
         title: id.to_string(),
         version: "1.0".to_string(),
         subject_type: "person".to_string(),
+        evidence_mode: registry_notary_core::ClaimEvidenceMode::TransitionalDirect,
         value: ClaimValueConfig {
             value_type: "number".to_string(),
             unit: None,
@@ -1419,6 +1440,7 @@ fn shared_binding_claim(id: &str) -> ClaimDefinition {
         inputs: Vec::new(),
         depends_on: Vec::new(),
         purpose: None,
+        required_scopes: Vec::new(),
         source_bindings: bindings,
         rule: RuleConfig::Extract {
             source: "src".to_string(),

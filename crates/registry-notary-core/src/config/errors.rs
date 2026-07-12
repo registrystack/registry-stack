@@ -58,9 +58,7 @@ pub enum EvidenceConfigError {
     InvalidClaimSemantics { claim: String, reason: String },
     #[error("claim '{claim}' has invalid evidence_mode: {reason}")]
     InvalidClaimEvidenceMode { claim: String, reason: String },
-    #[error(
-        "claim '{claim}' dependency closure exceeds v1 bounds ({nodes} nodes, {edges} edges)"
-    )]
+    #[error("claim '{claim}' dependency closure exceeds v1 bounds ({nodes} nodes, {edges} edges)")]
     ClaimDependencyGraphTooLarge {
         claim: String,
         nodes: usize,

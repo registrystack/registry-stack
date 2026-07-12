@@ -88,6 +88,8 @@ evidence:
       title: Date of birth
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: date
       inputs:
@@ -126,6 +128,8 @@ evidence:
       title: Farmed land size
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: number
         unit: hectare
@@ -165,6 +169,8 @@ evidence:
       title: Farmer under four hectares
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       inputs:

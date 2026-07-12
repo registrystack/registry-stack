@@ -14,7 +14,7 @@ pub(super) type ClaimVersionSelections = BTreeMap<String, Option<String>>;
 
 pub(super) const SOURCE_LOOKUP_CONTEXT_ATTRIBUTE_PREFIX: &str = "__registry_notary_source_lookup_";
 pub(super) type PurposeConstraints = Vec<Vec<String>>;
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub(super) struct ClaimResultInternal {
     pub(super) evaluation_id: String,
     pub(super) claim_id: String,
@@ -28,6 +28,28 @@ pub(super) struct ClaimResultInternal {
     pub(super) issued_at: OffsetDateTime,
     pub(super) expires_at: Option<OffsetDateTime>,
     pub(super) provenance: ClaimProvenance,
+    pub(super) relay_consultation_ids: BTreeSet<String>,
+}
+
+impl std::fmt::Debug for ClaimResultInternal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClaimResultInternal")
+            .field("evaluation_id", &"[REDACTED]")
+            .field("claim_id", &self.claim_id)
+            .field("claim_version", &self.claim_version)
+            .field("subject_type", &self.subject_type)
+            .field("target", &"[REDACTED]")
+            .field("requester", &"[REDACTED]")
+            .field("matching", &"[REDACTED]")
+            .field("value", &"[REDACTED]")
+            .field("redaction_fields", &self.redaction_fields)
+            .field("issued_at", &self.issued_at)
+            .field("expires_at", &self.expires_at)
+            .field("provenance", &self.provenance)
+            .field("relay_consultation_ids", &"[REDACTED]")
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +141,7 @@ pub(super) struct ClaimEvaluationContext {
     pub(super) source: Arc<dyn SourceReader>,
     pub(super) self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
     pub(super) source_capability: SourceCapability,
+    pub(super) relay_plan: Option<Arc<RequestScopedRelayPlan>>,
     pub(super) context: EvidenceRequestContext,
     pub(super) trusted_policy: TrustedPolicyContext,
     pub(super) purpose: String,

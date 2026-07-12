@@ -54,7 +54,7 @@ pub(crate) fn explain_config(
                 println!("- {env}: {status}");
             }
             println!();
-            println!("Claim source bindings:");
+            println!("Direct claim source bindings:");
             for claim in &config.evidence.claims {
                 for (binding_id, binding) in &claim.source_bindings {
                     println!(
@@ -65,6 +65,17 @@ pub(crate) fn explain_config(
                         binding.connector
                     );
                 }
+            }
+            println!();
+            println!("Relay connection:");
+            println!(
+                "- {}",
+                serde_json::to_string(&notary_relay_connection_report(&config))?
+            );
+            println!();
+            println!("Relay consultations:");
+            for consultation in notary_relay_consultations_report(&config) {
+                println!("- {}", serde_json::to_string(&consultation)?);
             }
         }
     }
@@ -90,12 +101,45 @@ pub(crate) fn config_explanation_json(
         "optional_sections_absent": optional_config_sections_absent(config),
         "live_apply": notary_live_apply_classes(),
         "context_constraints": notary_context_constraints_report(config),
+        "relay_connection": notary_relay_connection_report(config),
+        "relay_consultations": notary_relay_consultations_report(config),
         "resolved_config": redacted_config(config),
         "hashes": {
             "internal_config_hash": sha256_hash(raw_config),
         },
         "generated_at": now_rfc3339(),
     })
+}
+
+pub(crate) fn notary_relay_connection_report(config: &StandaloneRegistryNotaryConfig) -> Value {
+    let Some(relay) = &config.evidence.relay else {
+        return Value::Null;
+    };
+    json!({
+        "credential": {
+            "mode": "reloadable_token_file",
+            "reload": "per_operation",
+            "offline_file_status": relay_credential_file_status(&relay.token_file),
+        },
+        "network": {
+            "transport": if relay.base_url.starts_with("https://") {
+                "https"
+            } else {
+                "loopback_http"
+            },
+            "allowed_private_cidr_count": relay.allowed_private_cidrs.len(),
+            "allow_insecure_localhost": relay.allow_insecure_localhost,
+        },
+    })
+}
+
+fn relay_credential_file_status(path: &Path) -> &'static str {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => "present",
+        Ok(_) => "not_regular",
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing",
+        Err(_) => "unreadable",
+    }
 }
 
 pub(crate) fn optional_config_sections_absent(
@@ -105,7 +149,13 @@ pub(crate) fn optional_config_sections_absent(
     if config.evidence.source_connections.is_empty() {
         sections.push(json!({
             "path": "/evidence/source_connections",
-            "reason": "no external source connections configured",
+            "reason": "no direct source connections configured",
+        }));
+    }
+    if config.evidence.relay.is_none() {
+        sections.push(json!({
+            "path": "/evidence/relay",
+            "reason": "no Registry Relay connection configured",
         }));
     }
     if !config.credential_status.enabled {
@@ -115,6 +165,38 @@ pub(crate) fn optional_config_sections_absent(
         }));
     }
     sections
+}
+
+pub(crate) fn notary_relay_consultations_report(
+    config: &StandaloneRegistryNotaryConfig,
+) -> Vec<Value> {
+    let mut entries = Vec::new();
+    for (claim_index, claim) in config.evidence.claims.iter().enumerate() {
+        let registry_notary_core::ClaimEvidenceMode::RegistryBacked { consultations } =
+            &claim.evidence_mode
+        else {
+            continue;
+        };
+        for (name, consultation) in consultations {
+            entries.push(json!({
+                "container_path": format!(
+                    "/evidence/claims/{claim_index}/evidence_mode/consultations/{}",
+                    json_pointer_segment(name),
+                ),
+                "claim_id": claim.id,
+                "consultation": name,
+                "profile": {
+                    "id": consultation.profile.id,
+                    "version": consultation.profile.version,
+                    "contract_hash": consultation.profile.contract_hash,
+                },
+                "purpose": claim.purpose,
+                "required_scopes": claim.required_scopes,
+                "inputs": consultation.inputs,
+            }));
+        }
+    }
+    entries
 }
 
 pub(crate) fn notary_context_constraints_report(
@@ -307,6 +389,10 @@ pub(crate) fn non_empty(value: &str) -> bool {
 
 pub(crate) fn notary_live_apply_classes() -> Vec<Value> {
     vec![
+        json!({
+            "path": "/evidence/relay",
+            "class": LiveApplyClass::RestartRequired.as_str(),
+        }),
         json!({
             "path": "/evidence/source_connections",
             "class": LiveApplyClass::RestartRequired.as_str(),

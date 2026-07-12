@@ -1062,6 +1062,7 @@ pub(super) async fn disabled_oid4vci_credential_route_stays_hidden_for_malformed
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -1338,6 +1339,7 @@ pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn oid4vci_field_projection_issues_separate_disclosures() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
@@ -1454,6 +1456,7 @@ pub(super) async fn oid4vci_field_projection_issues_separate_disclosures() {
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn oid4vci_credential_route_rejects_replayed_nonce() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");

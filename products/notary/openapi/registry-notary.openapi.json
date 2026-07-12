@@ -1347,6 +1347,29 @@
             "minimum": 0,
             "type": "integer"
           },
+          "relay": {
+            "additionalProperties": false,
+            "properties": {
+              "failed": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "ok": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "total",
+              "ok",
+              "failed"
+            ],
+            "type": "object"
+          },
           "signing_providers": {
             "$ref": "#/components/schemas/SigningProviderReadinessChecks"
           },
@@ -1360,7 +1383,8 @@
           "ok",
           "degraded",
           "failed",
-          "signing_providers"
+          "signing_providers",
+          "relay"
         ],
         "type": "object"
       },
@@ -3382,6 +3406,11 @@
                     "degraded": 0,
                     "failed": 0,
                     "ok": 3,
+                    "relay": {
+                      "failed": 0,
+                      "ok": 1,
+                      "total": 1
+                    },
                     "signing_providers": {
                       "custody": {
                         "active_provider_counts": {
@@ -3452,6 +3481,11 @@
                     "degraded": 1,
                     "failed": 1,
                     "ok": 1,
+                    "relay": {
+                      "failed": 1,
+                      "ok": 0,
+                      "total": 1
+                    },
                     "signing_providers": {
                       "custody": {
                         "active_provider_counts": {

@@ -125,6 +125,8 @@ evidence:
       title: DHIS2 tracked entity first name
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings:
@@ -164,6 +166,8 @@ evidence:
       title: DHIS2 tracked entity last name
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings:
@@ -203,6 +207,8 @@ evidence:
       title: Health Programme Participation Attestation
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -243,6 +249,8 @@ evidence:
       title: DHIS2 child age band
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings:
@@ -281,6 +289,8 @@ evidence:
       title: DHIS2 programme code
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings:
@@ -319,6 +329,8 @@ evidence:
       title: DHIS2 reconciliation reference
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings:
@@ -357,6 +369,8 @@ evidence:
       title: DHIS2 maternal and postnatal care active
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -393,6 +407,8 @@ evidence:
       title: DHIS2 child health visit recorded
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -429,6 +445,8 @@ evidence:
       title: DHIS2 TB programme active
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:

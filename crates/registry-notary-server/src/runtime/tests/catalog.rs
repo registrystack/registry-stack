@@ -1,6 +1,43 @@
 // SPDX-License-Identifier: Apache-2.0
 
     #[test]
+    fn runtime_claim_closure_defends_v1_node_and_edge_bounds() {
+        let mut node_claims = Vec::new();
+        for index in 0..=MAX_CLAIM_DEPENDENCY_NODES_V1 {
+            let dependency = (index > 0).then(|| format!("claim-{}", index - 1));
+            let mut claim = test_claim(&format!("claim-{index}"), Vec::new(), false);
+            claim.depends_on = dependency.into_iter().collect();
+            node_claims.push(claim);
+        }
+        let node_evidence = test_evidence(node_claims);
+        let requested = vec![ClaimRef::from(format!(
+            "claim-{}",
+            MAX_CLAIM_DEPENDENCY_NODES_V1
+        ))];
+        let versions = requested_claim_versions(&requested).expect("selection is valid");
+        assert!(matches!(
+            build_claim_levels(&node_evidence, &requested, &versions),
+            Err(EvidenceError::RuleEvaluationFailed)
+        ));
+
+        let mut edge_claims = Vec::new();
+        for index in 0..24 {
+            let mut claim = test_claim(&format!("edge-{index}"), Vec::new(), false);
+            claim.depends_on = (0..index)
+                .map(|dependency| format!("edge-{dependency}"))
+                .collect();
+            edge_claims.push(claim);
+        }
+        let edge_evidence = test_evidence(edge_claims);
+        let requested = vec![ClaimRef::from("edge-23")];
+        let versions = requested_claim_versions(&requested).expect("selection is valid");
+        assert!(matches!(
+            build_claim_levels(&edge_evidence, &requested, &versions),
+            Err(EvidenceError::RuleEvaluationFailed)
+        ));
+    }
+
+    #[test]
     fn claim_summary_advertises_cccev_evidence_type_metadata() {
         let mut claim = test_claim("civil-child-status", Vec::new(), false);
         claim.cccev = Some(registry_notary_core::CccevConfig {

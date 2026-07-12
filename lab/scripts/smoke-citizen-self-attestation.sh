@@ -1030,7 +1030,6 @@ evidence:
       token_env: CIVIL_EVIDENCE_SOURCE_RAW
       dci:
         search_path: /dci/crvs/registry/sync/search
-        version: "1.0.0"
         query_type: idtype-value
         records_path: /message/search_response/0/data/reg_records
         field_paths:
@@ -1065,6 +1064,8 @@ evidence:
       title: Person is alive
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       purpose: {json.dumps(self_attestation_purpose)}
       value:
         type: boolean
@@ -1136,9 +1137,8 @@ self_attestation:
 {required_scopes_block.rstrip()}
   credential_profiles:
     - citizen_civil_status_sd_jwt
-  wallet_cors:
-    allowed_origins:
-      - https://wallet.example.gov
+  allowed_wallet_origins:
+    - https://wallet.example.gov
   rate_limits:
     mode: in_process
     invalid_token_per_client_address_per_minute: 20

@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- BREAKING: Registry-backed claims can now use one hash-pinned Registry Relay
+  consultation instead of a Notary-owned source connection. Notary verifies
+  the protected Relay profile before serving, coalesces compatible claims for
+  one evaluation into one source consultation, reloads its bounded workload
+  JWT file for every Relay operation, derives concurrency from the verified
+  profile, and exposes bounded Relay readiness and `doctor --live` checks.
+  Relay remains the sole workload-token verifier and source credential owner.
+  Exact private Relay networks require explicit `allowed_private_cidrs`. The
+  full service hop uses one fixed, non-configurable 15-second absolute deadline,
+  and Registry-backed configurations require `server.request_timeout` of at
+  least 20 seconds, preserving a fixed five-second listener reserve around
+  that bound. Every existing claim must now declare `evidence_mode`; use
+  `transitional_direct` only to preserve an existing governed source-connection
+  path while it is migrated, and use `self_attested` only for source-free
+  evidence. `transitional_direct` is an intermediate-PR lane and remains a
+  release blocker; it must not ship in the replacement beta or 1.0 release.
+- Notary audit records now retain the evaluation ID, a conservative marker that
+  Relay dispatch was attempted, and every consultation ID returned before the
+  evaluation closes, for restricted cross-service correlation. The marker
+  means the operation may have reached Relay, not that Relay received it. If
+  detached Relay work completes after an early sibling failure or client
+  cancellation, reconcile it from Relay's audit using the forwarded Notary
+  evaluation ID. Relay IDs never enter public claim results, provenance, debug
+  output, or error bodies.
+
 ## [0.9.0] - 2026-07-10
 
 ### Added

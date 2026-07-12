@@ -50,13 +50,13 @@ const DHIS2_NEGATIVE_SECURITY: &[u8] = include_bytes!(
 const DHIS2_MINIMIZATION: &[u8] =
     include_bytes!("../../../profiles/dhis2-2.41.9-enrollment-status/evidence/minimization.json");
 const DHIS2_PACK_HASH: &str =
-    "sha256:017783fe880863e9dedc5138df4e1212d020ce7cfac5a13b58911fc4705f0e7a";
+    "sha256:ec0136be504e3f98539f9e0ec10e59532ff793dbadc2e66ea1c017a632da6ac4";
 const DHIS2_POLICY_HASH: &str =
-    "sha256:0eaec9b82087299193efb25a9189a41b7373e64abf152ba7204fdf5b05722959";
+    "sha256:0456a93b515b9d60aff9f06633c792f4e63ede2f7657ef37bb2f58a840380b1f";
 const DHIS2_CONTRACT_HASH: &str =
-    "sha256:eb8f6cb4dd81d8a34c25e4da393ada734caa553e7e65a06fabd613afb1fecbc9";
+    "sha256:a2d0e7588bc1bbeb0caf3247703a15d81830875f5e84dd257f7dc163d3a4ecb6";
 const DHIS2_BINDING_HASH: &str =
-    "sha256:bab9588ad75f56aa563b34b35c7741e4dc6c3c25726454a4a2ae885b33394e3a";
+    "sha256:aa6172d3995b11dbc082ce744dcb46c40d5c28217d4e325a323fa595f42410ce";
 
 fn vector_manifest() -> &'static Value {
     static MANIFEST: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
@@ -1242,6 +1242,7 @@ fn maintained_dhis2_enrollment_status_pack_compiles_to_one_bounded_exchange() {
         "/stable-2-41-9/api/tracker/enrollments"
     );
     assert_eq!(operation.auth(), CompiledSourceAuth::Basic);
+    assert_eq!(operation.total_deadline_ms(), 10_000);
     assert_eq!(operation.max_source_records(), 2);
     assert_eq!(operation.acquired_fields().collect::<Vec<_>>(), ["status"]);
     assert_eq!(operation.disclosed_fields().collect::<Vec<_>>(), ["status"]);

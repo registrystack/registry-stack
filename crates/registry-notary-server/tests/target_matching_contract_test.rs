@@ -785,6 +785,7 @@ fn claim(
         title: id.to_string(),
         version: "1.0.0".to_string(),
         subject_type: target_type.to_string(),
+        evidence_mode: registry_notary_core::ClaimEvidenceMode::TransitionalDirect,
         value: ClaimValueConfig {
             value_type: "boolean".to_string(),
             unit: None,
@@ -793,6 +794,7 @@ fn claim(
         inputs: Vec::new(),
         depends_on: Vec::new(),
         purpose: None,
+        required_scopes: Vec::new(),
         source_bindings: BTreeMap::from([(
             "src".to_string(),
             SourceBindingConfig {

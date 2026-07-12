@@ -400,6 +400,12 @@ Audit events must not include raw source rows, bearer tokens, private keys,
 private JWK fields, compact JWT strings, or raw source credentials. Parsed JWT
 claims may be logged only after redacting subject identifiers and token ids.
 
+Federation v0.1 does not compose with `registry_backed` claims. Configuration
+must reject an evaluation profile that references one until federation audit
+preserves the Notary evaluation id and Relay consultation ids across success,
+denial, and post-forward failure paths. This keeps Relay-backed federation out
+of the MVP rather than allowing an unreconcilable audit gap.
+
 ## Out Of Scope
 
 - Federated credential issuance.
@@ -522,6 +528,8 @@ until every applicable item below is satisfied and reviewed.
   configuration.
 - Registry Notary rejects startup config when `node_id` and `issuer` do not
   satisfy the MVP binding rule.
+- Registry Notary rejects startup config when a federation evaluation profile
+  references a `registry_backed` claim.
 - `POST /federation/v1/evaluations` is not mounted unless federation is enabled.
 - Request bodies over `inbound_body_limit_bytes` are rejected before full body
   buffering and before JWT parsing.

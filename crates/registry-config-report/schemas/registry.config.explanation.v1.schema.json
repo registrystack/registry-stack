@@ -61,6 +61,16 @@
       },
       "default": []
     },
+    "relay_connection": {
+      "$ref": "#/$defs/relay_connection"
+    },
+    "relay_consultations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relay_consultation"
+      },
+      "default": []
+    },
     "resolved_config": {
       "type": ["object", "array", "string", "number", "boolean", "null"]
     },
@@ -183,6 +193,129 @@
         "not_configured",
         "unknown"
       ]
+    },
+    "relay_connection": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": ["credential", "network"],
+          "additionalProperties": false,
+          "properties": {
+            "credential": {
+              "type": "object",
+              "required": ["mode", "reload", "offline_file_status"],
+              "additionalProperties": false,
+              "properties": {
+                "mode": {
+                  "const": "reloadable_token_file"
+                },
+                "reload": {
+                  "const": "per_operation"
+                },
+                "offline_file_status": {
+                  "enum": ["present", "missing", "not_regular", "unreadable"]
+                }
+              }
+            },
+            "network": {
+              "type": "object",
+              "required": [
+                "transport",
+                "allowed_private_cidr_count",
+                "allow_insecure_localhost"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "transport": {
+                  "enum": ["https", "loopback_http"]
+                },
+                "allowed_private_cidr_count": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 16
+                },
+                "allow_insecure_localhost": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "relay_consultation": {
+      "type": "object",
+      "required": [
+        "container_path",
+        "claim_id",
+        "consultation",
+        "profile",
+        "purpose",
+        "required_scopes",
+        "inputs"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "container_path": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "claim_id": {
+          "$ref": "#/$defs/non_empty_string"
+        },
+        "consultation": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9._-]{0,95}$"
+        },
+        "profile": {
+          "type": "object",
+          "required": ["id", "version", "contract_hash"],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9._-]{0,95}$"
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,9}$"
+            },
+            "contract_hash": {
+              "$ref": "#/$defs/sha256_hash"
+            }
+          }
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\s,]+$"
+        },
+        "required_scopes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "inputs": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 1,
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]{0,95}$"
+          },
+          "additionalProperties": {
+            "const": "target.id"
+          }
+        }
+      }
     },
     "context_constraint": {
       "type": "object",

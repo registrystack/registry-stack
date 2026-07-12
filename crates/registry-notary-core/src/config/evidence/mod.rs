@@ -49,8 +49,8 @@ pub struct EvidenceConfig {
     #[serde(default)]
     pub ecosystem_bindings: BTreeMap<String, EvidenceEcosystemBindingConfig>,
     /// The one Registry Relay connection available to registry-backed claims.
-    /// Authentication remains an environment reference; core never loads the
-    /// bearer token value.
+    /// Authentication remains a reloadable local file reference; core never
+    /// loads the bearer token value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay: Option<RelayConnectionConfig>,
     #[serde(default)]

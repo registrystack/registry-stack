@@ -1,5 +1,489 @@
 // SPDX-License-Identifier: Apache-2.0
 
+    #[derive(Debug)]
+    struct FixedRelayConsultation {
+        calls: AtomicU64,
+        outcome: RuntimeRelayOutcome,
+    }
+
+    #[async_trait::async_trait]
+    impl ActivatedRelayConsultations for FixedRelayConsultation {
+        async fn check_ready(&self) -> Result<(), crate::relay_client::RelayClientError> {
+            Ok(())
+        }
+
+        fn validate(
+            &self,
+            _key: &ConsultationGroupKeyV1,
+        ) -> Result<(), crate::relay_client::RelayClientError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _key: &ConsultationGroupKeyV1,
+        ) -> Result<RuntimeRelayConsultationResult, crate::relay_client::RelayClientError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let output = matches!(self.outcome, RuntimeRelayOutcome::Match)
+                .then(|| {
+                    RuntimeRelayOutput::new("registration_status", Zeroizing::new("ACTIVE".to_string()))
+                })
+                .transpose()?;
+            RuntimeRelayConsultationResult::new(
+                Ulid::from_parts(2, 1),
+                self.outcome,
+                output,
+                OffsetDateTime::UNIX_EPOCH,
+            )
+        }
+    }
+
+    fn registry_claim(id: &str, rule: RuleConfig, value_type: &str) -> ClaimDefinition {
+        let mut claim = test_claim(id, Vec::new(), false);
+        claim.evidence_mode = ClaimEvidenceMode::RegistryBacked {
+            consultations: BTreeMap::from([(
+                "enrollment".to_string(),
+                registry_notary_core::RelayConsultationConfig {
+                    profile: registry_notary_core::RelayConsultationProfileRef {
+                        id: "dhis2.tracker.enrollment-status.exact".to_string(),
+                        version: "1".to_string(),
+                        contract_hash:
+                            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                .to_string(),
+                    },
+                    inputs: BTreeMap::from([(
+                        "tracked_entity".to_string(),
+                        RelayConsultationInput::TargetId,
+                    )]),
+                },
+            )]),
+        };
+        claim.purpose = Some("test".to_string());
+        claim.required_scopes = vec!["registry:evidence".to_string()];
+        claim.rule = rule;
+        claim.value.value_type = value_type.to_string();
+        claim
+    }
+
+    async fn audited_registry_evaluation(
+        claim: ClaimDefinition,
+        outcome: RuntimeRelayOutcome,
+    ) -> (
+        Result<Vec<ClaimResultView>, EvidenceError>,
+        EvaluationAuditSnapshot,
+        Arc<FixedRelayConsultation>,
+        Arc<CountingSource>,
+    ) {
+        let mut evidence = (*test_evidence(vec![claim])).clone();
+        evidence.allowed_purposes = vec!["test".to_string()];
+        let source = Arc::new(CountingSource::default());
+        let activated = Arc::new(FixedRelayConsultation {
+            calls: AtomicU64::new(0),
+            outcome,
+        });
+        let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+        let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+        let mut principal = machine_principal();
+        principal.scopes = vec!["registry:evidence".to_string()];
+        let result = runtime
+            .evaluate_for_api(
+                Arc::new(evidence),
+                source.clone() as Arc<dyn SourceReader>,
+                &EvidenceStore::default(),
+                &principal,
+                test_request("enrollment-status"),
+                None,
+            )
+            .await;
+        (result.0, result.1, activated, source)
+    }
+
+    fn assert_relay_audit(snapshot: EvaluationAuditSnapshot) -> String {
+        let (evaluation_id, consultation_ids) = snapshot.into_parts();
+        let evaluation_id = evaluation_id.expect("post-preflight evaluation id is retained");
+        assert!(Ulid::from_string(&evaluation_id).is_ok());
+        assert_eq!(consultation_ids, vec![Ulid::from_parts(2, 1).to_string()]);
+        evaluation_id
+    }
+
+    #[tokio::test]
+    async fn relay_match_correlation_survives_success_without_public_relay_ids() {
+        let claim = registry_claim(
+            "enrollment-status",
+            RuleConfig::Extract {
+                source: "enrollment".to_string(),
+                field: "registration_status".to_string(),
+            },
+            "string",
+        );
+        let (result, audit, activated, source) =
+            audited_registry_evaluation(claim, RuntimeRelayOutcome::Match).await;
+        let results = result.expect("match evaluates");
+        let evaluation_id = assert_relay_audit(audit);
+
+        assert_eq!(results[0].evaluation_id, evaluation_id);
+        assert_eq!(results[0].value, Some(Value::String("ACTIVE".to_string())));
+        assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+        let public = serde_json::to_string(&results).expect("public results serialize");
+        assert!(!public.contains(&Ulid::from_parts(2, 1).to_string()));
+    }
+
+    #[test]
+    fn relay_exists_match_does_not_copy_the_semantic_output_value() {
+        let claim = registry_claim(
+            "enrollment-known",
+            RuleConfig::Exists {
+                source: "enrollment".to_string(),
+            },
+            "boolean",
+        );
+        let result = RuntimeRelayConsultationResult::new(
+            Ulid::from_parts(2, 1),
+            RuntimeRelayOutcome::Match,
+            Some(
+                RuntimeRelayOutput::new(
+                    "registration_status",
+                    Zeroizing::new("ACTIVE-SENSITIVE".to_string()),
+                )
+                .expect("bounded output"),
+            ),
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .expect("valid Relay match");
+
+        let sources = materialize_relay_match(&claim, &result)
+            .expect("exists match materializes only a presence sentinel");
+        let wire = serde_json::to_string(&sources).expect("presence sentinel serializes");
+
+        assert_eq!(sources.get("enrollment"), Some(&json!({})));
+        assert!(!wire.contains("ACTIVE-SENSITIVE"));
+        assert!(!wire.contains("registration_status"));
+    }
+
+    #[tokio::test]
+    async fn relay_no_match_extract_is_source_not_found_with_restricted_correlation() {
+        let claim = registry_claim(
+            "enrollment-status",
+            RuleConfig::Extract {
+                source: "enrollment".to_string(),
+                field: "registration_status".to_string(),
+            },
+            "string",
+        );
+        let (result, audit, activated, source) =
+            audited_registry_evaluation(claim, RuntimeRelayOutcome::NoMatch).await;
+
+        assert!(matches!(result, Err(EvidenceError::SourceNotFound)));
+        assert_relay_audit(audit);
+        assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn relay_no_match_exists_remains_false_with_restricted_correlation() {
+        let claim = registry_claim(
+            "enrollment-status",
+            RuleConfig::Exists {
+                source: "enrollment".to_string(),
+            },
+            "boolean",
+        );
+        let (result, audit, activated, source) =
+            audited_registry_evaluation(claim, RuntimeRelayOutcome::NoMatch).await;
+        let results = result.expect("no-match existence evaluates to false");
+
+        assert_eq!(results[0].value, Some(Value::Bool(false)));
+        assert_relay_audit(audit);
+        assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn relay_ambiguous_failure_retains_restricted_correlation() {
+        let claim = registry_claim(
+            "enrollment-status",
+            RuleConfig::Extract {
+                source: "enrollment".to_string(),
+                field: "registration_status".to_string(),
+            },
+            "string",
+        );
+        let (result, audit, activated, source) =
+            audited_registry_evaluation(claim, RuntimeRelayOutcome::Ambiguous).await;
+
+        assert!(matches!(result, Err(EvidenceError::SourceAmbiguous)));
+        assert_relay_audit(audit);
+        assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn post_relay_type_failure_retains_restricted_correlation() {
+        let claim = registry_claim(
+            "enrollment-status",
+            RuleConfig::Extract {
+                source: "enrollment".to_string(),
+                field: "registration_status".to_string(),
+            },
+            "boolean",
+        );
+        let (result, audit, activated, source) =
+            audited_registry_evaluation(claim, RuntimeRelayOutcome::Match).await;
+
+        assert!(matches!(result, Err(EvidenceError::RuleEvaluationFailed)));
+        assert_relay_audit(audit);
+        assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn registry_backed_claims_share_one_relay_consultation_without_source_reader_fallback() {
+        let exists = registry_claim(
+            "enrollment-known",
+            RuleConfig::Exists {
+                source: "enrollment".to_string(),
+            },
+            "boolean",
+        );
+        let extract = registry_claim(
+            "enrollment-status",
+            RuleConfig::Extract {
+                source: "enrollment".to_string(),
+                field: "registration_status".to_string(),
+            },
+            "string",
+        );
+        let mut evidence = (*test_evidence(vec![exists, extract])).clone();
+        evidence.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence);
+        let source = Arc::new(CountingSource::default());
+        let activated = Arc::new(FixedRelayConsultation {
+            calls: AtomicU64::new(0),
+            outcome: RuntimeRelayOutcome::Match,
+        });
+        let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+        let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+        let store = EvidenceStore::default();
+        let mut request = test_request("enrollment-known");
+        request.claims.push(ClaimRef::from("enrollment-status"));
+        let mut principal = machine_principal();
+        principal.scopes = vec!["registry:evidence".to_string()];
+
+        let results = runtime
+            .evaluate(
+                Arc::clone(&evidence),
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &principal,
+                request.clone(),
+                None,
+            )
+            .await
+            .expect("the coalesced Registry-backed evaluation succeeds");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].value, Some(Value::Bool(true)));
+        assert_eq!(results[1].value, Some(Value::String("ACTIVE".to_string())));
+        assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+        assert!(results
+            .iter()
+            .all(|result| result.provenance.used.source_count == 1));
+        let stored = store
+            .get(&results[0].evaluation_id)
+            .expect("restricted evaluation record is stored");
+        let stored_wire = serde_json::to_string(&stored).expect("stored evaluation serializes");
+        assert!(!stored_wire.contains("relay_consultation_ids"));
+        let public_wire = serde_json::to_string(&results).expect("public results serialize");
+        assert!(!public_wire.contains("relay_consultation_ids"));
+
+        runtime
+            .evaluate(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &principal,
+                request,
+                None,
+            )
+            .await
+            .expect("a new evaluation performs a new consultation");
+        assert_eq!(activated.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn relay_group_key_ignores_unrelated_principal_scopes() {
+        let claim = registry_claim(
+            "enrollment-status",
+            RuleConfig::Extract {
+                source: "enrollment".to_string(),
+                field: "registration_status".to_string(),
+            },
+            "string",
+        );
+        let mut evidence = (*test_evidence(vec![claim])).clone();
+        evidence.allowed_purposes = vec!["test".to_string()];
+        let source = Arc::new(CountingSource::default());
+        let activated = Arc::new(FixedRelayConsultation {
+            calls: AtomicU64::new(0),
+            outcome: RuntimeRelayOutcome::Match,
+        });
+        let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+        let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+        let mut principal = machine_principal();
+        principal.scopes = std::iter::once("registry:evidence".to_string())
+            .chain((0..32).map(|index| format!("unrelated:{index}")))
+            .collect();
+
+        let results = runtime
+            .evaluate(
+                Arc::new(evidence),
+                source.clone() as Arc<dyn SourceReader>,
+                &EvidenceStore::default(),
+                &principal,
+                test_request("enrollment-status"),
+                None,
+            )
+            .await
+            .expect("unrelated principal scopes do not widen the consultation key");
+
+        assert_eq!(results[0].value, Some(Value::String("ACTIVE".to_string())));
+        assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn relay_plan_uses_the_explicitly_selected_claim_version() {
+        let mut transitional = test_claim("enrollment-status", Vec::new(), false);
+        transitional.version = "1".to_string();
+        let mut registry = registry_claim(
+            "enrollment-status",
+            RuleConfig::Extract {
+                source: "enrollment".to_string(),
+                field: "registration_status".to_string(),
+            },
+            "string",
+        );
+        registry.version = "2".to_string();
+        let mut evidence = (*test_evidence(vec![transitional, registry])).clone();
+        evidence.allowed_purposes = vec!["test".to_string()];
+        let source = Arc::new(CountingSource::default());
+        let activated = Arc::new(FixedRelayConsultation {
+            calls: AtomicU64::new(0),
+            outcome: RuntimeRelayOutcome::Match,
+        });
+        let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+        let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+        let mut request = test_request("enrollment-status");
+        request.claims = vec![ClaimRef::with_version("enrollment-status", "2")];
+        let mut principal = machine_principal();
+        principal.scopes = vec!["registry:evidence".to_string()];
+
+        let results = runtime
+            .evaluate(
+                Arc::new(evidence),
+                source.clone() as Arc<dyn SourceReader>,
+                &EvidenceStore::default(),
+                &principal,
+                request,
+                None,
+            )
+            .await
+            .expect("the selected Registry-backed version is planned and evaluated");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].claim_version, "2");
+        assert_eq!(results[0].value, Some(Value::String("ACTIVE".to_string())));
+        assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn registry_backed_preflight_denial_makes_zero_relay_and_source_calls() {
+        let claim = registry_claim(
+            "enrollment-status",
+            RuleConfig::Extract {
+                source: "enrollment".to_string(),
+                field: "registration_status".to_string(),
+            },
+            "string",
+        );
+        let mut evidence = (*test_evidence(vec![claim])).clone();
+        evidence.allowed_purposes = vec!["test".to_string()];
+        let source = Arc::new(CountingSource::default());
+        let activated = Arc::new(FixedRelayConsultation {
+            calls: AtomicU64::new(0),
+            outcome: RuntimeRelayOutcome::Match,
+        });
+        let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+        let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+
+        let (result, audit) = runtime
+            .evaluate_for_api(
+                Arc::new(evidence),
+                source.clone() as Arc<dyn SourceReader>,
+                &EvidenceStore::default(),
+                &machine_principal(),
+                test_request("enrollment-status"),
+                None,
+            )
+            .await;
+        let error = result.expect_err("missing required scope is denied before Relay");
+
+        assert!(matches!(error, EvidenceError::ScopeDenied { .. }));
+        let (evaluation_id, consultation_ids) = audit.into_parts();
+        assert!(evaluation_id.is_none());
+        assert!(consultation_ids.is_empty());
+        assert_eq!(activated.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn transitional_dependency_cannot_compose_a_registry_backed_result() {
+        let registry = registry_claim(
+            "enrollment-status",
+            RuleConfig::Extract {
+                source: "enrollment".to_string(),
+                field: "registration_status".to_string(),
+            },
+            "string",
+        );
+        let mut transitional = test_claim("legacy-derived", vec!["enrollment-status"], false);
+        transitional.rule = RuleConfig::Cel {
+            expression: "claims.enrollment_status == 'ACTIVE'".to_string(),
+            bindings: CelBindingsConfig::default(),
+        };
+        let mut evidence = (*test_evidence(vec![registry, transitional])).clone();
+        evidence.allowed_purposes = vec!["test".to_string()];
+        let source = Arc::new(CountingSource::default());
+        let activated = Arc::new(FixedRelayConsultation {
+            calls: AtomicU64::new(0),
+            outcome: RuntimeRelayOutcome::Match,
+        });
+        let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+        let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+        let mut principal = machine_principal();
+        principal.scopes = vec!["registry:evidence".to_string()];
+
+        let error = runtime
+            .evaluate(
+                Arc::new(evidence),
+                source.clone() as Arc<dyn SourceReader>,
+                &EvidenceStore::default(),
+                &principal,
+                test_request("legacy-derived"),
+                None,
+            )
+            .await
+            .expect_err("cross-mode claim composition must fail before either source path");
+
+        assert!(matches!(error, EvidenceError::InvalidRequest));
+        assert_eq!(activated.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+
     #[tokio::test]
     async fn evaluate_refuses_extract_result_that_violates_declared_value_type() {
         let source = Arc::new(WrongTypeSource);
@@ -187,7 +671,7 @@
         let store = EvidenceStore::default();
         let request = test_request("selected");
         let principal = EvidencePrincipal {
-            auth_profile_id: EvidenceAuthProfileId::StaticApiKey,
+            auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
             principal_id: "machine".to_string(),
             scopes: Vec::new(),
             access_mode: AccessMode::MachineClient,
@@ -227,7 +711,7 @@
         let mut request = test_request("selected");
         request.claims = vec![ClaimRef::with_version("selected", "2.0")];
         let principal = EvidencePrincipal {
-            auth_profile_id: EvidenceAuthProfileId::StaticApiKey,
+            auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
             principal_id: "machine".to_string(),
             scopes: vec!["selected:1.0".to_string()],
             access_mode: AccessMode::MachineClient,
@@ -396,7 +880,7 @@
         );
 
         let principal = EvidencePrincipal {
-            auth_profile_id: EvidenceAuthProfileId::StaticApiKey,
+            auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
             principal_id: "caseworker".to_string(),
             scopes: vec!["birth.certificate_summary:1.0".to_string()],
             access_mode: AccessMode::MachineClient,
@@ -438,3 +922,20 @@
         assert_eq!(generated_by.pack_version.as_deref(), Some("v1"));
         assert_eq!(results[0].disclosure, "value");
     }
+#[test]
+fn internal_claim_result_debug_redacts_relay_correlation_and_value() {
+    let mut result = test_claim_result(
+        "registry-backed-claim",
+        serde_json::json!("registry-value-SENSITIVE"),
+        BTreeSet::new(),
+    );
+    result
+        .relay_consultation_ids
+        .insert("01JRELAYCORRELATIONSENSITIVE".to_string());
+
+    let rendered = format!("{result:?}");
+
+    assert!(!rendered.contains("01JRELAYCORRELATIONSENSITIVE"));
+    assert!(!rendered.contains("registry-value-SENSITIVE"));
+    assert!(rendered.contains("relay_consultation_ids: \"[REDACTED]\""));
+}

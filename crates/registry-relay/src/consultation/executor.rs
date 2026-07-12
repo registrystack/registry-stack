@@ -408,7 +408,7 @@ mod tests {
             dispatch_budget(&dhis2)
                 .expect("DHIS2 budget")
                 .as_milliseconds(),
-            5_000
+            10_000
         );
 
         let oauth = bounded_runtime_vector_plan_fixture();

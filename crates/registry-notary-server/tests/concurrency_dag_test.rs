@@ -181,6 +181,7 @@ fn claim_with_two_bindings(id: &str) -> ClaimDefinition {
         title: id.to_string(),
         version: "1.0".to_string(),
         subject_type: "person".to_string(),
+        evidence_mode: registry_notary_core::ClaimEvidenceMode::TransitionalDirect,
         value: ClaimValueConfig {
             value_type: "number".to_string(),
             unit: None,
@@ -189,6 +190,7 @@ fn claim_with_two_bindings(id: &str) -> ClaimDefinition {
         inputs: Vec::new(),
         depends_on: Vec::new(),
         purpose: None,
+        required_scopes: Vec::new(),
         source_bindings: bindings,
         rule: RuleConfig::Extract {
             source: "src-a".to_string(),
@@ -242,6 +244,7 @@ fn evaluate_claim(id: &str, entity: &str, depends_on: Vec<&str>) -> ClaimDefinit
         title: id.to_string(),
         version: "1.0".to_string(),
         subject_type: "person".to_string(),
+        evidence_mode: registry_notary_core::ClaimEvidenceMode::TransitionalDirect,
         value: ClaimValueConfig {
             value_type: "number".to_string(),
             unit: None,
@@ -250,6 +253,7 @@ fn evaluate_claim(id: &str, entity: &str, depends_on: Vec<&str>) -> ClaimDefinit
         inputs: Vec::new(),
         depends_on: depends_on.into_iter().map(String::from).collect(),
         purpose: None,
+        required_scopes: Vec::new(),
         source_bindings: bindings,
         rule: RuleConfig::Extract {
             source: "src".to_string(),

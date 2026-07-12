@@ -166,6 +166,8 @@ evidence:
       title: Civil record present
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -218,6 +220,8 @@ evidence:
       title: Program Enrollment Attestation
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -266,6 +270,8 @@ evidence:
       title: Service Availability Attestation
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -326,6 +332,8 @@ evidence:
       title: Combined Support Eligibility Attestation
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       depends_on:

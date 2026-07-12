@@ -53,6 +53,8 @@ evidence:
       title: Patient record exists
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings: &patient_binding
         patient:
@@ -82,6 +84,8 @@ evidence:
       title: Age over 18
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         patient:
@@ -108,6 +112,8 @@ evidence:
       title: Not recorded deceased
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         patient:
@@ -134,6 +140,8 @@ evidence:
       title: Coverage active
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         coverage:
@@ -159,6 +167,8 @@ evidence:
       title: Coverage eligibility confirmed
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         eligibility:
@@ -185,6 +195,8 @@ evidence:
       title: Enrolled in program
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         enrollment:
@@ -210,6 +222,8 @@ evidence:
       title: Encounter completed
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         encounter:
@@ -235,6 +249,8 @@ evidence:
       title: Referral active
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         referral:
@@ -260,6 +276,8 @@ evidence:
       title: Appointment booked
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         appointment:
@@ -285,6 +303,8 @@ evidence:
       title: Lab result available
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         lab_report:
@@ -310,6 +330,8 @@ evidence:
       title: Vaccination recorded
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         immunization:
@@ -335,6 +357,8 @@ evidence:
       title: Prior authorization approved
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         authorization:
@@ -361,6 +385,8 @@ evidence:
       title: Source trace available
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         source_trace:
@@ -386,6 +412,8 @@ evidence:
       title: Requester guardian confirmed
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         guardian:
@@ -422,6 +450,8 @@ evidence:
       title: Provider affiliated with facility
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         affiliation:
@@ -446,6 +476,8 @@ evidence:
       title: Facility offers service
       version: 2026-06
       subject_type: organization
+      evidence_mode:
+        type: transitional_direct
       value: { type: boolean }
       source_bindings:
         facility_service:

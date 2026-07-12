@@ -12,6 +12,34 @@
         assert_ne!(first, other);
         assert_ne!(first.as_str(), "request-jti-1");
     }
+
+    #[test]
+    fn relay_consultation_ids_are_preserved_in_restricted_audit() {
+        let consultation_id = "01HX0000000000000000000001".to_string();
+        let mut response = StatusCode::OK.into_response();
+        response.extensions_mut().insert(EvidenceAuditContext {
+            verification_decision: Some("evaluate".to_string()),
+            source_read_count: Some(1),
+            relay_consultation_ids: vec![consultation_id.clone()],
+            forwarded: Some(true),
+            ..EvidenceAuditContext::default()
+        });
+
+        let event = build_audit_event(
+            None,
+            &AuditKeyHasher::unkeyed_dev_only(),
+            "POST",
+            "/v1/evaluations",
+            BoundedCorrelationId::new("req-relay-1")
+                .expect("test correlation id is bounded"),
+            &response,
+        );
+
+        assert_eq!(event.relay_consultation_ids, vec![consultation_id]);
+        assert_eq!(event.source_read_count, Some(1));
+        assert_eq!(event.forwarded, Some(true));
+    }
+
     fn audit_event() -> EvidenceAuditEvent {
         EvidenceAuditEvent {
             event_id: "01HX0000000000000000000000".to_string(),
@@ -27,6 +55,7 @@
             purposes: None,
             row_count: None,
             source_read_count: None,
+            relay_consultation_ids: Vec::new(),
             forwarded: None,
             error_code: None,
             access_mode: Some(AccessMode::MachineClient),
@@ -97,6 +126,7 @@
             purposes: None,
             row_count: None,
             source_read_count: None,
+            relay_consultation_ids: Vec::new(),
             forwarded: None,
             access_mode: Some(AccessMode::SelfAttestation),
             denial_code: Some(SelfAttestationDenialCode::SubjectMismatch),

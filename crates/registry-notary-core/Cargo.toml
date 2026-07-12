@@ -14,9 +14,11 @@ workspace = true
 [dependencies]
 base64.workspace = true
 humantime-serde.workspace = true
+ipnet = { workspace = true, features = ["serde"] }
 registry-platform-authcommon.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
 registry-platform-oid4vci.workspace = true
 registry-platform-ops.workspace = true
 registry-platform-sdjwt.workspace = true

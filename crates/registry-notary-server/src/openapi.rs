@@ -1046,6 +1046,11 @@ fn add_response_examples(document: &mut Value) {
                             }
                         }
                     }
+                },
+                "relay": {
+                    "total": 1,
+                    "ok": 1,
+                    "failed": 0
                 }
             }
         }),
@@ -1115,6 +1120,11 @@ fn add_response_examples(document: &mut Value) {
                             }
                         }
                     }
+                },
+                "relay": {
+                    "total": 1,
+                    "ok": 0,
+                    "failed": 1
                 }
             }
         }),
@@ -2753,7 +2763,7 @@ fn readiness_response_schema() -> Value {
 fn readiness_checks_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["total", "ok", "degraded", "failed", "signing_providers"],
+        "required": ["total", "ok", "degraded", "failed", "signing_providers", "relay"],
         "properties": {
             "total": non_negative_count_schema(),
             "ok": non_negative_count_schema(),
@@ -2761,6 +2771,16 @@ fn readiness_checks_schema() -> Value {
             "failed": non_negative_count_schema(),
             "signing_providers": {
                 "$ref": "#/components/schemas/SigningProviderReadinessChecks"
+            },
+            "relay": {
+                "type": "object",
+                "required": ["total", "ok", "failed"],
+                "properties": {
+                    "total": non_negative_count_schema(),
+                    "ok": non_negative_count_schema(),
+                    "failed": non_negative_count_schema()
+                },
+                "additionalProperties": false
             }
         },
         "additionalProperties": false
@@ -4088,6 +4108,7 @@ mod tests {
             };
             let checks = &ready[status]["content"][content_type]["example"]["checks"];
             assert!(checks.get("deployment").is_none());
+            assert!(checks["relay"].get("total").is_some());
             assert!(checks["signing_providers"]["custody"]["surfaces"]
                 .get("access_token_issuance")
                 .is_some());

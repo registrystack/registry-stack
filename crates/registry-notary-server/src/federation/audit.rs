@@ -152,6 +152,7 @@ pub(super) fn federation_audit_event(
         purposes: None,
         row_count: response.status().is_success().then_some(1),
         source_read_count: None,
+        relay_consultation_ids: Vec::new(),
         forwarded: None,
         error_code: audit.error_code,
         access_mode: Some(AccessMode::MachineClient),

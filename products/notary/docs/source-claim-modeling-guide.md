@@ -2,25 +2,71 @@
 
 > **Page type:** How-to · **Product:** Registry Notary · **Layer:** evaluation · **Audience:** operator
 
-This guide helps adopter teams design the source connections and claims that
+This guide helps adopter teams choose a claim's evidence mode and model what
 Registry Notary will evaluate. It complements the config reference by focusing
-on modeling choices: what belongs in an upstream source, what belongs in a
-Notary claim, and how to avoid accidental over-collection.
+on what belongs in Relay, what belongs in a Notary claim, and how to avoid
+accidental over-collection.
 
 ## Mental model
 
 Registry Notary does four separate jobs:
 
 1. Authenticate the caller and check scopes.
-2. Read the minimum required data from configured source registries.
+2. Obtain the minimum required registry evidence through Registry Relay, or
+   evaluate a deliberately source-free claim.
 3. Evaluate a configured claim from that source data or dependent claims.
 4. Return a claim result, render a supported format, or issue a credential.
 
 The source registry remains the system of record. Notary should not become a
-copy of the registry, and a sidecar should not decide whether a claim is true.
-Keep source connectors narrow and keep claim semantics in Notary config.
+copy of the registry, and Relay should not decide whether a Notary claim is
+true. Relay owns source authentication, request shaping, and normalized
+consultation results. Keep claim semantics in Notary config.
 
-## Pick the source connector
+## Choose the evidence mode
+
+Every claim declares exactly one evidence provenance mode:
+
+| Mode | Use | Source behavior |
+| --- | --- | --- |
+| `registry_backed` | A new claim obtains evidence from a registry | Notary invokes one hash-pinned Relay consultation with a profile input mapped to `target.id` |
+| `self_attested` | A claim is derived without registry evidence | Source-free CEL only; no Relay consultation or `source_bindings` |
+| `transitional_direct` | An existing pre-convergence integration is being migrated | Notary temporarily retains the old direct `source_connections` and source-binding runtime |
+
+`transitional_direct` exists only to keep intermediate cutover commits and
+existing governed test deployments operable. It is a release blocker and must
+be removed before the replacement beta or 1.0 release. Do not start a new
+integration on it.
+
+For the initial Registry-backed journey, every claim has one consultation and
+all Registry-backed claims share one profile, purpose, input name, and string
+output. At least one `extract` claim pins that output. An `exists` claim can
+reuse the same consultation result. Registry-backed multi-subject batch
+evaluation is not supported.
+
+When one single-subject evaluation requests `exists` and `extract` claims with
+the same profile, purpose, input, and required scope set, Notary makes one
+request-scoped Relay consultation and reuses its result for both claims. A later
+evaluation performs a new consultation; this is not a result cache.
+
+One Relay profile may bound its source operation at up to 10 seconds. Notary's
+internal service hop has one fixed 15-second absolute deadline with no operator
+knob; permit wait, credential reload, Relay I/O, decoding, and result acceptance
+share it. Keep Registry-backed Notary's outer `server.request_timeout` at least
+20 seconds so five seconds remain around the service hop. A consultation-enabled
+Relay separately requires more than 15 seconds. Readiness is a separate
+5-second metadata-only check and never calls the source.
+
+`self_attested` is a statement about evidence provenance, not an escape hatch
+for a missing source configuration. It has no source I/O, supports only a CEL
+rule, and may depend only on other source-free claims. The separate
+`self_attestation` block controls OIDC-bound citizen and wallet access.
+
+## Pick a transitional direct connector
+
+The connector choices below apply only to migration claims with
+`evidence_mode.type: transitional_direct`. For a new source-system integration,
+define the adaptor and target credentials in Relay and pin its reviewed
+consultation profile from Notary.
 
 | Connector | Use when | Config value |
 | --- | --- | --- |
@@ -28,9 +74,9 @@ Keep source connectors narrow and keep claim semantics in Notary config.
 | Registry Data API | The upstream exposes `/v1/datasets/{dataset}/entities/{entity}/records` lookups | `connector: registry_data_api` |
 | Source adapter sidecar | A private sidecar must normalize a target system outside Notary, using built-in `http_json`, `http_flow`, `fhir`, or `script_rhai` source engines | `connector: source_adapter_sidecar` |
 
-Prefer the simplest direct source. Add a sidecar when the target system needs
-private credentials, governed request shaping, or output normalization outside
-Notary.
+While migrating a direct integration, keep its connector as narrow as possible.
+Do not add new behavior to the compatibility path when the same requirement can
+be implemented in Relay.
 
 ## Source connection design
 
@@ -137,6 +183,8 @@ evidence:
       title: Date of birth
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: date
       inputs:
@@ -236,6 +284,8 @@ evidence:
       title: Birth record exists
       version: 2026-06
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       operations:
@@ -355,7 +405,9 @@ same claim as `date_of_birth`.
 
 ## Source bindings
 
-A source binding connects a claim to one source read:
+A source binding connects a `transitional_direct` claim to one direct source
+read. Registry-backed claims use the consultation declared in `evidence_mode`
+and must not declare `source_bindings`.
 
 ```yaml
 source_bindings:
@@ -420,6 +472,11 @@ rule:
   field: birth_date
 ```
 
+For a Registry-backed rule, `source` is the consultation name rather than a
+source binding. An `extract` rule's `field` is the exact string output pinned by
+the verified Relay profile. For a `transitional_direct` rule, `source` remains
+the source-binding name and `field` remains a projected source field.
+
 Use `cel` when the claim is derived from source fields or dependent claim
 results:
 
@@ -481,6 +538,10 @@ issued by an unrelated profile.
 
 ## Batch and bulk reads
 
+This section applies to `transitional_direct` claims. Registry-backed claims
+reject `batch_evaluate`; request compatible claims for one target through the
+single-subject evaluation API when request-scoped consultation reuse is useful.
+
 Batch evaluation lets one request evaluate many target items for a claim. It
 should be enabled only when the source and caller are ready for that access
 pattern:
@@ -531,6 +592,13 @@ deployment's policy review, source-owner agreement, and audit review.
 
 ## Modeling checklist
 
+- Every claim has an explicit evidence mode that matches its provenance.
+- A Registry-backed claim pins one reviewed Relay profile and maps its one input
+  to `target.id`; its Notary config contains no source-system credentials.
+- A source-free `self_attested` claim has no source binding, and all of its
+  dependencies are also source-free.
+- `transitional_direct` is limited to an existing integration with a migration
+  path to Relay.
 - The claim id is stable and specific.
 - The claim reads the fewest possible source fields.
 - The source owner has confirmed lookup field, cardinality, and response shape.
@@ -543,7 +611,8 @@ deployment's policy review, source-owner agreement, and audit review.
 - Source adapter sidecars normalize data only and do not decide claims.
 - Source adapter sidecars run on localhost or a private pod network, never as a public
   endpoint.
-- `doctor --live` passes against a controlled test target.
+- `doctor --live` passes against a controlled environment, followed by a
+  controlled end-to-end evaluation for Registry-backed claims.
 
 ## Testing with doctor
 
@@ -561,6 +630,9 @@ registry-notary doctor \
   --live
 ```
 
-Live doctor probes can contact the upstream source. Use test data, document the
-purpose with the source owner, and keep probe output out of screenshots or
-support tickets unless it has been reviewed for disclosure.
+For Registry-backed claims, the live check authenticates to Relay and verifies
+the pinned profile metadata. It does not execute a consultation, so run one
+controlled single-subject evaluation before rollout. For `transitional_direct`
+claims, live doctor probes can contact the upstream source. Use test data,
+document the purpose with the source owner, and keep probe output out of
+screenshots or support tickets unless it has been reviewed for disclosure.

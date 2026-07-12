@@ -51,7 +51,8 @@ use registry_notary_core::{
 };
 use registry_notary_server::{
     compile_notary_runtime_with_provenance, notary_router_from_runtime,
-    notary_routers_from_runtime, openapi_document, EvidenceIssuerRegistry,
+    notary_routers_from_runtime, openapi_document, verify_relay_from_config,
+    EvidenceIssuerRegistry, StandaloneServerError,
 };
 use registry_platform_config::{
     expand_config_env_vars, reject_deprecated_config_fields, verify_config_bundle,
@@ -110,7 +111,7 @@ enum Command {
     Openapi,
     /// Validate config, env-backed secrets, source auth, and VC wiring.
     Doctor {
-        /// Fetch OAuth source tokens and run live reachability checks.
+        /// Verify Relay activation and run OAuth source reachability checks.
         #[arg(long)]
         live: bool,
         /// Target id for record-level live probes. Output is redacted.

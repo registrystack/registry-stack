@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: Apache-2.0
+# Local Notary example for the maintained DHIS2 2.41.9 consultation journey.
+# Production deployments distribute this through a signed configuration bundle.
+
+deployment:
+  profile: local
+
+server:
+  bind: "127.0.0.1:8081"
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: dhis2-verifier
+      fingerprint:
+        provider: env
+        name: REGISTRY_NOTARY_DHIS2_API_KEY_HASH
+      scopes: [registry:evidence:dhis2-enrollment-status]
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+evidence:
+  enabled: true
+  service_id: registry-notary-dhis2-enrollment-status
+  allowed_purposes: [program-enrollment-verification]
+  relay:
+    base_url: "https://relay.example.gov"
+    # Mount a mode-0600 Relay-issued workload JWT and replace it atomically when rotating.
+    # Relay is the sole cryptographic and semantic verifier on every request.
+    token_file: /var/run/secrets/registry-notary/relay-access-token
+    # Add only exact reviewed private networks needed to reach an internal Relay.
+    allowed_private_cidrs: []
+  claims:
+    - id: dhis2-enrollment-known
+      title: DHIS2 enrollment exists
+      version: "1"
+      subject_type: person
+      evidence_mode:
+        type: registry_backed
+        consultations:
+          enrollment:
+            profile:
+              id: dhis2.tracker.enrollment-status.exact
+              version: "1"
+              contract_hash: sha256:a2d0e7588bc1bbeb0caf3247703a15d81830875f5e84dd257f7dc163d3a4ecb6
+            inputs:
+              tracked_entity: target.id
+      value:
+        type: boolean
+      purpose: program-enrollment-verification
+      required_scopes: [registry:evidence:dhis2-enrollment-status]
+      rule:
+        type: exists
+        source: enrollment
+      disclosure:
+        default: value
+        allowed: [value, redacted]
+      formats: [application/vnd.registry-notary.claim-result+json]
+
+    - id: dhis2-enrollment-status
+      title: DHIS2 enrollment status
+      version: "1"
+      subject_type: person
+      evidence_mode:
+        type: registry_backed
+        consultations:
+          enrollment:
+            profile:
+              id: dhis2.tracker.enrollment-status.exact
+              version: "1"
+              contract_hash: sha256:a2d0e7588bc1bbeb0caf3247703a15d81830875f5e84dd257f7dc163d3a4ecb6
+            inputs:
+              tracked_entity: target.id
+      value:
+        type: string
+      purpose: program-enrollment-verification
+      required_scopes: [registry:evidence:dhis2-enrollment-status]
+      rule:
+        type: extract
+        source: enrollment
+        field: status
+      disclosure:
+        default: value
+        allowed: [value, redacted]
+      formats: [application/vnd.registry-notary.claim-result+json]

@@ -49,5 +49,6 @@ pub use standalone::{
     compile_notary_runtime, compile_notary_runtime_with_provenance,
     notary_admin_router_from_runtime, notary_public_router_from_runtime,
     notary_router_from_runtime, notary_routers_from_runtime, standalone_router,
-    EvidenceIssuerRegistry, NotaryRouters, NotaryRuntimeSnapshot, StandaloneServerError,
+    verify_relay_from_config, EvidenceIssuerRegistry, NotaryRouters, NotaryRuntimeSnapshot,
+    StandaloneServerError,
 };

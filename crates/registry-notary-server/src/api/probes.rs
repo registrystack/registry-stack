@@ -41,11 +41,21 @@ pub(super) async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>)
         Some(Extension(state)) => Some(state.current_deployment_gates().await),
         None => None,
     };
+    let (relay_total, relay_ok, relay_failed) = match state.as_ref() {
+        Some(Extension(state)) if state.relay_required() => {
+            if state.relay_ready().await {
+                (1, 1, 0)
+            } else {
+                (1, 0, 1)
+            }
+        }
+        _ => (0, 0, 0),
+    };
     #[cfg(feature = "registry-notary-cel")]
     let (total, ok, failed) = {
-        let mut total = 1 + signer_total;
-        let mut ok = usize::from(base_ready) + signer_ok;
-        let mut failed = usize::from(!base_ready && !base_degraded) + signer_failed;
+        let mut total = 1 + signer_total + relay_total;
+        let mut ok = usize::from(base_ready) + signer_ok + relay_ok;
+        let mut failed = usize::from(!base_ready && !base_degraded) + signer_failed + relay_failed;
         if let Some(Extension(state)) = state.as_ref() {
             if state.source.has_readiness_check() {
                 total += 1;
@@ -79,9 +89,9 @@ pub(super) async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>)
     };
     #[cfg(not(feature = "registry-notary-cel"))]
     let (total, ok, failed) = {
-        let mut total = 1 + signer_total;
-        let mut ok = usize::from(base_ready) + signer_ok;
-        let mut failed = usize::from(!base_ready && !base_degraded) + signer_failed;
+        let mut total = 1 + signer_total + relay_total;
+        let mut ok = usize::from(base_ready) + signer_ok + relay_ok;
+        let mut failed = usize::from(!base_ready && !base_degraded) + signer_failed + relay_failed;
         if let Some(Extension(state)) = state.as_ref() {
             if state.source.has_readiness_check() {
                 total += 1;
@@ -132,6 +142,11 @@ pub(super) async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>)
             "ok": signer_ok,
             "failed": signer_failed,
             "custody": signer_custody,
+        },
+        "relay": {
+            "total": relay_total,
+            "ok": relay_ok,
+            "failed": relay_failed,
         },
     });
     if ready {

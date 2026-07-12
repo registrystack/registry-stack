@@ -102,6 +102,8 @@ mod cors;
 mod deployment;
 #[path = "preauth.rs"]
 mod preauth;
+#[path = "relay.rs"]
+mod relay;
 #[path = "sources/mod.rs"]
 mod sources;
 #[path = "transport/mod.rs"]
@@ -120,6 +122,7 @@ pub(crate) use preauth::{
     constant_time_eq, generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge,
     pre_auth_audit_event, PreAuthAuditFields, PreAuthRuntime,
 };
+use relay::*;
 use sidecar_assurance::*;
 pub use signing::providers::EvidenceIssuerRegistry;
 use signing::providers::*;

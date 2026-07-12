@@ -1,20 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Sealed Registry Relay connection configuration.
 
+use std::collections::BTreeSet;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::path::{Component, Path};
+
+use ipnet::IpNet;
+
 use super::*;
 
-pub const DEFAULT_RELAY_MAX_IN_FLIGHT: usize = 8;
-pub const MAX_RELAY_MAX_IN_FLIGHT: usize = 16;
 const MAX_RELAY_BASE_URL_BYTES: usize = 2_048;
-const MAX_RELAY_TOKEN_ENV_BYTES: usize = 128;
+const MAX_RELAY_TOKEN_FILE_BYTES: usize = 4_096;
+const MAX_RELAY_PRIVATE_CIDRS: usize = 16;
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RelayConnectionConfig {
     pub base_url: String,
-    pub token_env: String,
-    #[serde(default = "default_relay_max_in_flight")]
-    pub max_in_flight: usize,
+    pub token_file: PathBuf,
+    #[serde(default)]
+    pub allowed_private_cidrs: Vec<IpNet>,
     #[serde(default)]
     pub allow_insecure_localhost: bool,
 }
@@ -24,8 +29,11 @@ impl std::fmt::Debug for RelayConnectionConfig {
         formatter
             .debug_struct("RelayConnectionConfig")
             .field("base_url", &"<redacted>")
-            .field("token_env", &"<redacted>")
-            .field("max_in_flight", &self.max_in_flight)
+            .field("token_file", &"<redacted>")
+            .field(
+                "allowed_private_cidr_count",
+                &self.allowed_private_cidrs.len(),
+            )
             .field("allow_insecure_localhost", &self.allow_insecure_localhost)
             .finish()
     }
@@ -54,17 +62,10 @@ impl RelayConnectionConfig {
             }
             _ => return invalid_relay("base_url must use the http or https scheme"),
         }
-        if self.token_env.is_empty()
-            || self.token_env.len() > MAX_RELAY_TOKEN_ENV_BYTES
-            || !is_environment_reference(&self.token_env)
-        {
-            return invalid_relay(
-                "token_env must be a non-empty environment variable name of bounded length",
-            );
+        if !valid_token_file(&self.token_file) {
+            return invalid_relay("token_file must be a bounded absolute canonical file path");
         }
-        if !(1..=MAX_RELAY_MAX_IN_FLIGHT).contains(&self.max_in_flight) {
-            return invalid_relay("max_in_flight must be between 1 and 16");
-        }
+        validate_private_cidrs(&self.allowed_private_cidrs)?;
         Ok(())
     }
 
@@ -72,10 +73,6 @@ impl RelayConnectionConfig {
     pub fn uses_insecure_url(&self) -> bool {
         self.base_url.starts_with("http://")
     }
-}
-
-pub(in crate::config) const fn default_relay_max_in_flight() -> usize {
-    DEFAULT_RELAY_MAX_IN_FLIGHT
 }
 
 fn is_loopback_origin(origin: &url::Url) -> bool {
@@ -109,12 +106,83 @@ fn parse_relay_origin(value: &str) -> Option<url::Url> {
     .then_some(origin)
 }
 
-fn is_environment_reference(value: &str) -> bool {
-    let mut chars = value.chars();
-    chars
-        .next()
-        .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
-        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
+fn valid_token_file(path: &Path) -> bool {
+    let Some(text) = path.to_str() else {
+        return false;
+    };
+    !text.is_empty()
+        && text.len() <= MAX_RELAY_TOKEN_FILE_BYTES
+        && path.is_absolute()
+        && path.file_name().is_some()
+        && path.components().all(|component| {
+            matches!(
+                component,
+                Component::Prefix(_) | Component::RootDir | Component::Normal(_)
+            )
+        })
+}
+
+fn validate_private_cidrs(cidrs: &[IpNet]) -> Result<(), EvidenceConfigError> {
+    if cidrs.len() > MAX_RELAY_PRIVATE_CIDRS {
+        return invalid_relay("allowed_private_cidrs cannot contain more than 16 entries");
+    }
+    let mut seen = BTreeSet::new();
+    for cidr in cidrs {
+        if cidr.trunc() != *cidr
+            || !eligible_private_cidr(*cidr)
+            || metadata_singleton(*cidr)
+            || !seen.insert(*cidr)
+        {
+            return invalid_relay(
+                "allowed_private_cidrs must contain unique canonical RFC 1918, RFC 6598, or IPv6 ULA networks",
+            );
+        }
+    }
+    Ok(())
+}
+
+fn eligible_private_cidr(cidr: IpNet) -> bool {
+    match cidr {
+        IpNet::V4(cidr) => {
+            let address = cidr.network();
+            let prefix = cidr.prefix_len();
+            (prefix >= 8 && ipv4_in_prefix(address, Ipv4Addr::new(10, 0, 0, 0), 8))
+                || (prefix >= 12 && ipv4_in_prefix(address, Ipv4Addr::new(172, 16, 0, 0), 12))
+                || (prefix >= 16 && ipv4_in_prefix(address, Ipv4Addr::new(192, 168, 0, 0), 16))
+                || (prefix >= 10 && ipv4_in_prefix(address, Ipv4Addr::new(100, 64, 0, 0), 10))
+        }
+        IpNet::V6(cidr) => {
+            cidr.prefix_len() >= 7
+                && ipv6_in_prefix(
+                    cidr.network(),
+                    Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0),
+                    7,
+                )
+        }
+    }
+}
+
+fn ipv4_in_prefix(address: Ipv4Addr, network: Ipv4Addr, prefix: u8) -> bool {
+    let mask = u32::MAX << (32 - prefix);
+    u32::from(address) & mask == u32::from(network) & mask
+}
+
+fn ipv6_in_prefix(address: Ipv6Addr, network: Ipv6Addr, prefix: u8) -> bool {
+    let mask = u128::MAX << (128 - prefix);
+    u128::from(address) & mask == u128::from(network) & mask
+}
+
+fn metadata_singleton(cidr: IpNet) -> bool {
+    match cidr {
+        IpNet::V4(cidr) if cidr.prefix_len() == 32 => {
+            IpAddr::V4(cidr.network()) == IpAddr::V4(Ipv4Addr::new(100, 100, 100, 200))
+        }
+        IpNet::V6(cidr) if cidr.prefix_len() == 128 => {
+            IpAddr::V6(cidr.network())
+                == IpAddr::V6(Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254))
+        }
+        _ => false,
+    }
 }
 
 fn invalid_relay<T>(reason: &str) -> Result<T, EvidenceConfigError> {

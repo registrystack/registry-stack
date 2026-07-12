@@ -4,15 +4,19 @@
 
 Release label: pre-1.0 technical release for evaluation and integration pilots.
 
+> **Convergence status:** New source-backed claims use authenticated,
+> hash-pinned Registry Relay consultations. Direct HTTP connectors and the
+> source-adapter sidecar remain only as explicit `transitional_direct` cutover
+> scaffolding; their presence blocks the replacement beta and 1.0 release.
+
 Standalone Registry Notary workspace, claim evaluation, federated delegated
 evaluation, credential issuance, and attestation service.
 
 This repository owns claim configuration, claim evaluation, disclosure policy,
 Registry Notary API routes, credential issuance primitives, static-peer
-federation, HTTP source connectors, fail-closed API key and bearer-token auth,
-and redacted audit event emission. Registry Relay or Registry Manifest may
-publish metadata that points to a Registry Notary, but Registry Notary does
-not import or link Registry Relay code.
+federation, the strict Relay consultation client, fail-closed API key and
+bearer-token auth, and redacted audit event emission. Legacy HTTP source
+connectors remain compiled only for the unreleased migration window.
 
 Shared security and operations primitives come from sibling
 `registry-platform-*` crates, including audit envelopes, auth common code,
@@ -24,14 +28,19 @@ operator guides, conformance references, and design history.
 
 ## Try locally with registryctl
 
-For the first local tutorial, use
+The existing `registryctl` tutorials currently generate temporary direct
+migration scaffolding and must not be used to start a new integration or cut a
+release. For a maintained replacement journey, start with the
+[Relay-backed DHIS2 profile](../../crates/registry-relay/profiles/dhis2-2.41.9-enrollment-status/README.md).
+To exercise the transitional local tutorial, use
 [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/).
 It uses `registryctl` to add Registry Notary to a local registry API project, start both services,
 and run the Notary smoke checks without cloning this repository.
 
-If you already have a source API, use
+If you need to migrate an existing source API, use
 [Verify a claim from your own API](https://docs.registrystack.org/tutorials/verify-claim-own-api/).
-That path creates a standalone Notary project and points it at an API you operate.
+That path creates a temporary `transitional_direct` Notary project and points
+it at an API you operate.
 
 ## Layout
 
@@ -39,9 +48,9 @@ That path creates a standalone Notary project and points it at an API you operat
   portable Registry Notary domain, config, auth, audit, request, response, and
   SD-JWT VC contracts.
 - [`crates/registry-notary-server`](crates/registry-notary-server/README.md):
-  Axum routes, runtime evaluation, renderers, credential issuance wiring, HTTP
-  Registry Data API and DCI source connectors, auth middleware, audit emission,
-  and standalone app assembly.
+  Axum routes, runtime evaluation, strict Relay consultation, renderers,
+  credential issuance wiring, auth middleware, audit emission, standalone app
+  assembly, and transitional direct connectors pending deletion.
 - [`crates/registry-notary-client`](crates/registry-notary-client/README.md):
   typed Rust HTTP client, JSON facade, route-aware retry, bounded response
   reads, JWKS refresh, and redacted errors.
@@ -49,8 +58,8 @@ That path creates a standalone Notary project and points it at an API you operat
   process startup, config loading, bind address, tracing, graceful shutdown, and
   OpenAPI generation.
 - [`crates/registry-notary-source-adapter-sidecar`](crates/registry-notary-source-adapter-sidecar/README.md):
-  synchronous Registry Data API-shaped sidecar for governed HTTP JSON, HTTP
-  flow, and FHIR source lookups.
+  transitional Registry Data API-shaped sidecar retained only for existing
+  governed HTTP JSON, HTTP flow, and FHIR migration paths.
 - [`bindings/python`](bindings/python): `registry-notary` sync and async
   dictionary-friendly Python wrapper.
 - [`bindings/node`](bindings/node): `@registry-notary/client` Promise client
@@ -109,14 +118,18 @@ cargo run -p registry-notary -- \
   --env-file .env.local
 ```
 
-The demo config uses HTTP source connections, so claim evaluation requires a
-source service at the configured `base_url`. The binary still starts fail-closed:
-no Registry Notary route is served without a configured API key or bearer token.
+The demo config is temporary `transitional_direct` scaffolding and requires a
+source service at the configured `base_url`. It blocks the replacement beta and
+1.0 release. The binary still starts fail-closed: no Registry Notary route is
+served without a configured API key or bearer token.
 
 ## Operating Relay And Notary Together
 
-Relay publishes metadata evidence offerings that point callers to Notary; Notary
-calls Relay as an HTTP source when a claim profile needs registry data.
+Relay owns authenticated, purpose-aware source acquisition. For a
+Registry-backed claim, Notary verifies one exact Relay consultation profile at
+startup, invokes its closed execute route, and applies its own evaluation and
+disclosure policy to the minimized result. Notary does not configure Relay as
+an ordinary direct HTTP source and does not hold the registry credential.
 Credential wiring, port conventions, replay store, metrics, and audit sink
 configuration: [`docs/operator-config-reference.md`](docs/operator-config-reference.md).
 Credential status states and verifier caveats:

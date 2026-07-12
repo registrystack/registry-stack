@@ -8,9 +8,13 @@ pub(super) fn principal_can_see_claim<R: SourceReader + ?Sized>(
     principal: &EvidencePrincipal,
     claim: &ClaimDefinition,
 ) -> bool {
-    source
-        .required_scopes_for_claim(evidence, claim)
-        .is_ok_and(|scopes| scopes.iter().all(|scope| principal.has_scope(scope)))
+    claim
+        .required_scopes
+        .iter()
+        .all(|scope| principal.has_scope(scope))
+        && source
+            .required_scopes_for_claim(evidence, claim)
+            .is_ok_and(|scopes| scopes.iter().all(|scope| principal.has_scope(scope)))
 }
 
 pub(super) fn require_claim_access<R: SourceReader + ?Sized>(
@@ -19,6 +23,13 @@ pub(super) fn require_claim_access<R: SourceReader + ?Sized>(
     principal: &EvidencePrincipal,
     claim: &ClaimDefinition,
 ) -> Result<(), EvidenceError> {
+    for scope in &claim.required_scopes {
+        if !principal.has_scope(scope) {
+            return Err(EvidenceError::ScopeDenied {
+                required: scope.clone(),
+            });
+        }
+    }
     if principal.is_self_attestation() {
         return Ok(());
     }
@@ -315,11 +326,9 @@ pub(super) fn claim_purpose_constraints(
 }
 
 pub(super) fn require_claim_format(
-    evidence: &EvidenceConfig,
-    claim_id: &str,
+    claim: &ClaimDefinition,
     format: &str,
 ) -> Result<(), EvidenceError> {
-    let claim = find_claim(evidence, claim_id)?;
     if claim.formats.iter().any(|candidate| candidate == format) {
         Ok(())
     } else {

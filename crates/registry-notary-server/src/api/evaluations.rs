@@ -207,7 +207,7 @@ pub(super) async fn evaluate(
     let evaluation_future = async {
         if let Some(context) = self_attestation_context {
             runtime
-                .evaluate_with_source_capability(
+                .evaluate_with_source_capability_for_api(
                     Arc::clone(&state.evidence),
                     Arc::clone(&state.source),
                     &state.store,
@@ -221,7 +221,7 @@ pub(super) async fn evaluate(
                 .await
         } else {
             runtime
-                .evaluate(
+                .evaluate_for_api(
                     Arc::clone(&state.evidence),
                     Arc::clone(&state.source),
                     &state.store,
@@ -238,8 +238,8 @@ pub(super) async fn evaluate(
         evaluation_future.await
     };
     match evaluation {
-        Ok(results) => {
-            let evaluation_id = results.first().map(|result| result.evaluation_id.clone());
+        (Ok(results), runtime_audit) => {
+            let evaluation_id = runtime_audit.evaluation_id().map(str::to_string);
             let mut response = Json(json!({ "results": results })).into_response();
             if principal.is_self_attestation() {
                 attach_self_attestation_success_audit(
@@ -261,6 +261,7 @@ pub(super) async fn evaluate(
                     Some(1),
                 );
             }
+            attach_runtime_evaluation_audit(&mut response, runtime_audit);
             let sidecar_config_hashes = state
                 .source
                 .observed_sidecar_config_hashes(evidence, &requested_claims)
@@ -279,7 +280,7 @@ pub(super) async fn evaluate(
             }
             response
         }
-        Err(error) => {
+        (Err(error), runtime_audit) => {
             let audit_code = error.audit_code();
             let zero_source_no_forward = matches!(
                 &error,
@@ -295,10 +296,11 @@ pub(super) async fn evaluate(
             attach_evidence_audit(
                 &mut response,
                 "evaluate_denied",
-                None,
+                runtime_audit.evaluation_id().map(str::to_string),
                 &requested_claims,
                 None,
             );
+            attach_runtime_evaluation_audit(&mut response, runtime_audit);
             if principal.is_self_attestation() {
                 override_attestation_audit_access_mode(&mut response, principal.access_mode());
             }

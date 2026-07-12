@@ -74,6 +74,8 @@ evidence:
       title: Disability registry record exists
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -105,6 +107,8 @@ evidence:
       title: Has disability
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -142,6 +146,8 @@ evidence:
       title: Disability review category
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings:
@@ -179,6 +185,8 @@ evidence:
       title: Disability severity code
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings:
@@ -216,6 +224,8 @@ evidence:
       title: Disability next review
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: date
       source_bindings:

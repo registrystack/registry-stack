@@ -2,8 +2,13 @@
 //! Root Registry Notary configuration and cross-domain validation.
 
 use super::*;
+use registry_platform_httputil::destination::MAX_SERVICE_HOP_OPERATION_TIMEOUT;
 
 pub(super) const PKCE_METHOD_S256: &str = "S256";
+const RELAY_SERVICE_HOP_REQUEST_RESERVE: Duration = Duration::from_secs(5);
+const MIN_RELAY_OUTER_REQUEST_TIMEOUT: Duration = Duration::from_secs(
+    MAX_SERVICE_HOP_OPERATION_TIMEOUT.as_secs() + RELAY_SERVICE_HOP_REQUEST_RESERVE.as_secs(),
+);
 
 /// Non-EdDSA signing algorithms accepted for credential-profile signing.
 /// Access-token and federation signing stay EdDSA; `validate_signing_key_alg_usage`
@@ -161,6 +166,23 @@ impl StandaloneRegistryNotaryConfig {
             {
                 return Err(EvidenceConfigError::InvalidRelayConfig {
                     reason: "HTTP Relay origins require deployment.profile = local".to_string(),
+                });
+            }
+            if !self
+                .evidence
+                .claims
+                .iter()
+                .any(|claim| claim.evidence_mode.is_registry_backed())
+            {
+                return Err(EvidenceConfigError::InvalidRelayConfig {
+                    reason: "evidence.relay requires at least one registry_backed claim"
+                        .to_string(),
+                });
+            }
+            if self.server.request_timeout < MIN_RELAY_OUTER_REQUEST_TIMEOUT {
+                return Err(EvidenceConfigError::InvalidRelayConfig {
+                    reason: "server.request_timeout must be at least 20 seconds for registry_backed claims, reserving 5 seconds outside the fixed 15-second Relay service hop"
+                        .to_string(),
                 });
             }
         }
@@ -517,6 +539,7 @@ impl StandaloneRegistryNotaryConfig {
         }
         validate_self_attested_dependency_modes(&self.evidence.claims)?;
         validate_registry_backed_dependency_modes(&self.evidence.claims)?;
+        validate_relay_activation_shape(&self.evidence.claims)?;
         self.self_attestation.validate(&self.auth, &self.evidence)?;
         self.validate_oid4vci_cross_block()?;
         self.validate_access_token_signing_cross_block()?;

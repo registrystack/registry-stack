@@ -163,6 +163,8 @@ claims:
     title: A
     version: "1.0"
     subject_type: person
+    evidence_mode:
+      type: transitional_direct
     rule:
       type: exists
       source: src

@@ -168,6 +168,8 @@ evidence:
       title: Person is alive
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       purpose: citizen_self_attestation
       value:
         type: boolean
@@ -282,6 +284,8 @@ evidence:
       title: Person is alive
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       purpose: citizen_self_attestation
       value:
         type: boolean

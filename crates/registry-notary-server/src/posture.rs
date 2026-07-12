@@ -923,6 +923,8 @@ evidence:
       title: Person age
       version: "2026-06"
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       source_bindings:
         registry:
           connector: registry_data_api

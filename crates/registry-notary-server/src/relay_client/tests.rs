@@ -2,6 +2,7 @@
 
 use super::*;
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,9 +12,15 @@ use axum::extract::{Request, State};
 use axum::http::{header, Response, StatusCode};
 use axum::routing::{get, post};
 use axum::Router;
+use axum_test::TestServer;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
+use registry_notary_core::StandaloneRegistryNotaryConfig;
+use registry_platform_authcommon::fingerprint_api_key;
 use registry_platform_crypto::canonicalize_json;
-use registry_platform_httputil::destination::{DataDestinationPolicy, DestinationProfile};
+use registry_platform_httputil::destination::{
+    DestinationProfile, ServiceHopDataDestinationPolicy, MAX_SERVICE_HOP_OPERATION_TIMEOUT,
+};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
@@ -24,13 +31,15 @@ use zeroize::Zeroizing;
 const PROFILE_ID: &str = "dhis2.tracker.enrollment-status.exact";
 const PROFILE_VERSION: &str = "1";
 const CONTRACT_HASH: &str =
-    "sha256:eb8f6cb4dd81d8a34c25e4da393ada734caa553e7e65a06fabd613afb1fecbc9";
+    "sha256:a2d0e7588bc1bbeb0caf3247703a15d81830875f5e84dd257f7dc163d3a4ecb6";
 const PURPOSE: &str = "program-enrollment-verification";
 const INPUT_NAME: &str = "tracked_entity";
 const INPUT_VALUE: &str = "PQfMcpmXeFE";
 const OUTPUT_NAME: &str = "status";
 const EXPECTED_ISSUER: &str = "https://issuer.example.test";
 const EXPECTED_AUDIENCE: &str = "registry-relay";
+const EXPECTED_SUBJECT: &str = "registry-notary";
+const EXPECTED_CLIENT_ID: &str = "registry-notary";
 const EXPECTED_SCOPE: &str = "registry:consult:dhis2-enrollment-status";
 const RESULT_SCHEMA: &str = "registry.relay.consultation-result.v1";
 const MAX_RESULT_BYTES: usize = 64 * 1024;
@@ -39,6 +48,15 @@ const CONSULTATION_ID: &str = "01K05H0JKP4VSQNYCZ0TN4D87R";
 const PROFILE_ROUTE: &str = "/v1/consultations/dhis2.tracker.enrollment-status.exact/versions/1";
 const EXECUTE_ROUTE: &str =
     "/v1/consultations/dhis2.tracker.enrollment-status.exact/versions/1/execute";
+const NOTARY_API_KEY: &str = "notary-relay-vertical-api-key";
+const NOTARY_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_RELAY_VERTICAL_API_KEY_HASH";
+const NOTARY_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_RELAY_VERTICAL_AUDIT_SECRET";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EvaluationIdMode {
+    Fixed,
+    EchoCanonical,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ObservedOperation {
@@ -66,8 +84,11 @@ struct FakeState {
 struct FakeStateInner {
     metadata: Mutex<WireResponse>,
     execute: Mutex<WireResponse>,
+    expected_token: Mutex<String>,
     observations: Mutex<Vec<Observation>>,
+    metadata_calls: AtomicUsize,
     execute_calls: AtomicUsize,
+    evaluation_id_mode: EvaluationIdMode,
 }
 
 #[derive(Clone)]
@@ -103,12 +124,28 @@ struct FakeRelay {
 
 impl FakeRelay {
     async fn start(metadata: WireResponse, execute: WireResponse) -> Self {
+        Self::start_with_evaluation_id_mode(metadata, execute, EvaluationIdMode::Fixed).await
+    }
+
+    async fn start_echoing_evaluation_id(metadata: WireResponse, execute: WireResponse) -> Self {
+        Self::start_with_evaluation_id_mode(metadata, execute, EvaluationIdMode::EchoCanonical)
+            .await
+    }
+
+    async fn start_with_evaluation_id_mode(
+        metadata: WireResponse,
+        execute: WireResponse,
+        evaluation_id_mode: EvaluationIdMode,
+    ) -> Self {
         let state = FakeState {
             inner: Arc::new(FakeStateInner {
                 metadata: Mutex::new(metadata),
                 execute: Mutex::new(execute),
+                expected_token: Mutex::new(test_token()),
                 observations: Mutex::new(Vec::new()),
+                metadata_calls: AtomicUsize::new(0),
                 execute_calls: AtomicUsize::new(0),
+                evaluation_id_mode,
             }),
         };
         let app = Router::new()
@@ -138,12 +175,20 @@ impl FakeRelay {
         *self.state.inner.execute.lock().await = response;
     }
 
+    async fn set_expected_token(&self, token: &str) {
+        *self.state.inner.expected_token.lock().await = token.to_owned();
+    }
+
     async fn observations(&self) -> Vec<Observation> {
         self.state.inner.observations.lock().await.clone()
     }
 
     fn execute_calls(&self) -> usize {
         self.state.inner.execute_calls.load(Ordering::SeqCst)
+    }
+
+    fn metadata_calls(&self) -> usize {
+        self.state.inner.metadata_calls.load(Ordering::SeqCst)
     }
 
     async fn shutdown(mut self) {
@@ -155,23 +200,58 @@ impl FakeRelay {
 }
 
 async fn metadata_handler(State(state): State<FakeState>, request: Request) -> Response<Body> {
-    let observation = observe_request(ObservedOperation::Metadata, request).await;
+    state.inner.metadata_calls.fetch_add(1, Ordering::SeqCst);
+    let expected_token = state.inner.expected_token.lock().await.clone();
+    let observation =
+        observe_request(ObservedOperation::Metadata, request, &expected_token, None).await;
     state.inner.observations.lock().await.push(observation);
     wire_response(state.inner.metadata.lock().await.clone())
 }
 
 async fn execute_handler(State(state): State<FakeState>, request: Request) -> Response<Body> {
     state.inner.execute_calls.fetch_add(1, Ordering::SeqCst);
-    let observation = observe_request(ObservedOperation::Execute, request).await;
+    let expected_token = state.inner.expected_token.lock().await.clone();
+    let evaluation_id = request
+        .headers()
+        .get("registry-notary-evaluation-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let expected_evaluation_id = match state.inner.evaluation_id_mode {
+        EvaluationIdMode::Fixed => Some(EVALUATION_ID),
+        EvaluationIdMode::EchoCanonical => evaluation_id
+            .as_deref()
+            .filter(|value| ulid::Ulid::from_string(value).is_ok()),
+    };
+    let observation = observe_request(
+        ObservedOperation::Execute,
+        request,
+        &expected_token,
+        expected_evaluation_id,
+    )
+    .await;
     state.inner.observations.lock().await.push(observation);
-    wire_response(state.inner.execute.lock().await.clone())
+    let mut response = state.inner.execute.lock().await.clone();
+    if state.inner.evaluation_id_mode == EvaluationIdMode::EchoCanonical {
+        if let Some(evaluation_id) = expected_evaluation_id {
+            let mut body: Value = serde_json::from_slice(&response.body)
+                .expect("echoing fake Relay result must contain JSON");
+            body["notary_evaluation_id"] = json!(evaluation_id);
+            response.body = serde_json::to_vec(&body).expect("echoed Relay result serializes");
+        }
+    }
+    wire_response(response)
 }
 
-async fn observe_request(operation: ObservedOperation, request: Request) -> Observation {
+async fn observe_request(
+    operation: ObservedOperation,
+    request: Request,
+    expected_token: &str,
+    expected_evaluation_id: Option<&str>,
+) -> Observation {
     let headers = request.headers();
     let exact_authorization = headers
         .get(header::AUTHORIZATION)
-        .is_some_and(|value| value.as_bytes() == format!("Bearer {}", test_token()).as_bytes());
+        .is_some_and(|value| value.as_bytes() == format!("Bearer {expected_token}").as_bytes());
     let exact_accept = headers
         .get(header::ACCEPT)
         .is_some_and(|value| value == "application/json");
@@ -191,7 +271,7 @@ async fn observe_request(operation: ObservedOperation, request: Request) -> Obse
         ObservedOperation::Metadata => !headers.contains_key("registry-notary-evaluation-id"),
         ObservedOperation::Execute => headers
             .get("registry-notary-evaluation-id")
-            .is_some_and(|value| value == EVALUATION_ID),
+            .is_some_and(|value| expected_evaluation_id.is_some_and(|expected| value == expected)),
     };
     let forbidden_ambient_headers_absent = [
         header::COOKIE.as_str(),
@@ -279,10 +359,10 @@ fn result_value() -> Value {
             "integration_pack": {
                 "id": "dhis2.tracker.enrollment-status",
                 "version": "1",
-                "hash": "sha256:017783fe880863e9dedc5138df4e1212d020ce7cfac5a13b58911fc4705f0e7a"
+                "hash": "sha256:ec0136be504e3f98539f9e0ec10e59532ff793dbadc2e66ea1c017a632da6ac4"
             },
             "policy_id": "relay.dhis2.tracker.enrollment-status.exact",
-            "policy_hash": "sha256:0eaec9b82087299193efb25a9189a41b7373e64abf152ba7204fdf5b05722959",
+            "policy_hash": "sha256:0456a93b515b9d60aff9f06633c792f4e63ede2f7657ef37bb2f58a840380b1f",
             "consent": {
                 "outcome": "not_required",
                 "verifier_id": null,
@@ -302,24 +382,35 @@ fn result_response() -> WireResponse {
 fn test_claims() -> Value {
     json!({
         "iss": EXPECTED_ISSUER,
-        "aud": EXPECTED_AUDIENCE,
-        "sub": "registry-notary",
-        "azp": "registry-notary",
-        "client_id": "registry-notary",
-        "scope": EXPECTED_SCOPE,
+        "aud": [EXPECTED_AUDIENCE, "registry-operations"],
+        "sub": EXPECTED_SUBJECT,
+        "azp": EXPECTED_CLIENT_ID,
+        "client_id": EXPECTED_CLIENT_ID,
+        "scope": format!("registry:read {EXPECTED_SCOPE} registry:audit"),
         "iat": 1_700_000_000_i64,
         "nbf": 1_700_000_000_i64,
         "exp": 4_102_444_800_i64,
+        "jti": "relay-test-token-1",
+        "tenant": { "id": "test-country" },
     })
 }
 
 fn token_for_claims(claims: &Value) -> String {
-    let header = json!({"alg": "RS256", "kid": "relay-test-key", "typ": "at+jwt"});
+    token_for_claims_and_signature(claims, b"relay-test-signature-SENSITIVE")
+}
+
+fn token_for_claims_and_signature(claims: &Value, signature: &[u8]) -> String {
+    let header = json!({
+        "alg": "RS256",
+        "kid": "relay-test-key",
+        "typ": "at+jwt",
+        "x5t": "relay-test-thumbprint",
+    });
     format!(
         "{}.{}.{}",
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).unwrap()),
         URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).unwrap()),
-        URL_SAFE_NO_PAD.encode(b"relay-test-signature-SENSITIVE"),
+        URL_SAFE_NO_PAD.encode(signature),
     )
 }
 
@@ -327,18 +418,43 @@ fn test_token() -> String {
     token_for_claims(&test_claims())
 }
 
-fn workload_credential() -> RelayWorkloadCredential {
-    RelayWorkloadCredential::new(
-        Zeroizing::new(test_token().into_bytes()),
-        EXPECTED_ISSUER,
-        EXPECTED_AUDIENCE,
-        EXPECTED_SCOPE,
-    )
-    .unwrap()
+struct TestTokenFile {
+    _directory: tempfile::TempDir,
+    path: PathBuf,
 }
 
-fn client_with_hash(server: &FakeRelay, contract_hash: &str) -> RelayConsultationClient {
-    let destination = DataDestinationPolicy::new(
+impl TestTokenFile {
+    fn new(token: &str) -> Self {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("relay.jwt");
+        std::fs::write(&path, token.as_bytes()).unwrap();
+        Self {
+            _directory: directory,
+            path,
+        }
+    }
+
+    fn replace(&self, token: &str) {
+        let replacement = self.path.with_extension("jwt.next");
+        std::fs::write(&replacement, token.as_bytes()).unwrap();
+        std::fs::rename(replacement, &self.path).unwrap();
+    }
+
+    fn remove(&self) {
+        std::fs::remove_file(&self.path).unwrap();
+    }
+
+    fn credential(&self) -> RelayWorkloadCredentialFile {
+        RelayWorkloadCredentialFile::new(self.path.clone()).unwrap()
+    }
+}
+
+fn client_with_hash(
+    server: &FakeRelay,
+    token_file: &TestTokenFile,
+    contract_hash: &str,
+) -> RelayConsultationClient {
+    let destination = ServiceHopDataDestinationPolicy::new(
         "registry-notary-relay",
         &server.origin,
         DestinationProfile::LoopbackDevelopmentHttp,
@@ -347,9 +463,7 @@ fn client_with_hash(server: &FakeRelay, contract_hash: &str) -> RelayConsultatio
     .unwrap();
     RelayConsultationClient::new(
         destination,
-        workload_credential(),
-        Duration::from_secs(2),
-        2,
+        token_file.credential(),
         RelayProfilePin::new(PROFILE_ID, PROFILE_VERSION, contract_hash).unwrap(),
         PURPOSE,
         INPUT_NAME,
@@ -358,12 +472,16 @@ fn client_with_hash(server: &FakeRelay, contract_hash: &str) -> RelayConsultatio
     .unwrap()
 }
 
-fn client(server: &FakeRelay) -> RelayConsultationClient {
-    client_with_hash(server, CONTRACT_HASH)
+fn client(server: &FakeRelay, token_file: &TestTokenFile) -> RelayConsultationClient {
+    client_with_hash(server, token_file, CONTRACT_HASH)
 }
 
-async fn verified(server: &FakeRelay) -> VerifiedRelayClient {
-    client(server).verify_profile().await.unwrap()
+async fn verified(server: &FakeRelay, token_file: &TestTokenFile) -> VerifiedRelayClient {
+    client(server, token_file).verify_profile().await.unwrap()
+}
+
+fn credential_for_path(path: PathBuf) -> Result<RelayWorkloadCredentialFile, RelayClientError> {
+    RelayWorkloadCredentialFile::new(path)
 }
 
 fn all_shape_checks_pass(observation: &Observation) -> bool {
@@ -376,10 +494,237 @@ fn all_shape_checks_pass(observation: &Observation) -> bool {
         && observation.forbidden_ambient_headers_absent
 }
 
+struct ScopedEnvironment {
+    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
+}
+
+impl ScopedEnvironment {
+    fn set(values: &[(&'static str, &str)]) -> Self {
+        let previous = values
+            .iter()
+            .map(|(name, value)| {
+                let previous = std::env::var_os(name);
+                // SAFETY: these names are unique to this test module and the
+                // guard restores their previous values after the test.
+                unsafe { std::env::set_var(name, value) };
+                (*name, previous)
+            })
+            .collect();
+        Self { previous }
+    }
+}
+
+impl Drop for ScopedEnvironment {
+    fn drop(&mut self) {
+        for (name, value) in self.previous.drain(..).rev() {
+            // SAFETY: this guard exclusively owns the unique test variables.
+            unsafe {
+                if let Some(value) = value {
+                    std::env::set_var(name, value);
+                } else {
+                    std::env::remove_var(name);
+                }
+            }
+        }
+    }
+}
+
+fn assembled_notary_config(
+    relay: &FakeRelay,
+    token_file: &TestTokenFile,
+    audit_path: &std::path::Path,
+) -> StandaloneRegistryNotaryConfig {
+    let relay_origin = serde_json::to_string(&relay.origin).expect("Relay origin serializes");
+    let token_path =
+        serde_json::to_string(&token_file.path.to_string_lossy()).expect("token path serializes");
+    let audit_path =
+        serde_json::to_string(&audit_path.to_string_lossy()).expect("audit path serializes");
+    serde_norway::from_str(&format!(
+        r#"
+deployment:
+  profile: local
+server:
+  bind: 127.0.0.1:0
+auth:
+  mode: api_key
+  api_keys:
+    - id: relay-vertical-verifier
+      fingerprint:
+        provider: env
+        name: {NOTARY_API_KEY_HASH_ENV}
+      scopes: [registry:evidence:dhis2-enrollment-status]
+audit:
+  sink: file
+  path: {audit_path}
+  hash_secret_env: {NOTARY_AUDIT_SECRET_ENV}
+evidence:
+  enabled: true
+  service_id: notary-relay-vertical.test
+  allowed_purposes: [{PURPOSE}]
+  relay:
+    base_url: {relay_origin}
+    token_file: {token_path}
+    allow_insecure_localhost: true
+  claims:
+    - id: dhis2-enrollment-known
+      title: DHIS2 enrollment exists
+      version: "1"
+      subject_type: person
+      evidence_mode:
+        type: registry_backed
+        consultations:
+          enrollment:
+            profile:
+              id: {PROFILE_ID}
+              version: "{PROFILE_VERSION}"
+              contract_hash: {CONTRACT_HASH}
+            inputs:
+              {INPUT_NAME}: target.id
+      value:
+        type: boolean
+      purpose: {PURPOSE}
+      required_scopes: [registry:evidence:dhis2-enrollment-status]
+      rule:
+        type: exists
+        source: enrollment
+      disclosure:
+        default: value
+        allowed: [value, redacted]
+      formats: [application/vnd.registry-notary.claim-result+json]
+    - id: dhis2-enrollment-status
+      title: DHIS2 enrollment status
+      version: "1"
+      subject_type: person
+      evidence_mode:
+        type: registry_backed
+        consultations:
+          enrollment:
+            profile:
+              id: {PROFILE_ID}
+              version: "{PROFILE_VERSION}"
+              contract_hash: {CONTRACT_HASH}
+            inputs:
+              {INPUT_NAME}: target.id
+      value:
+        type: string
+      purpose: {PURPOSE}
+      required_scopes: [registry:evidence:dhis2-enrollment-status]
+      rule:
+        type: extract
+        source: enrollment
+        field: {OUTPUT_NAME}
+      disclosure:
+        default: value
+        allowed: [value, redacted]
+      formats: [application/vnd.registry-notary.claim-result+json]
+"#,
+    ))
+    .expect("assembled Notary configuration parses")
+}
+
+#[tokio::test]
+async fn assembled_notary_relay_journey_activates_and_coalesces_two_claims() {
+    let api_key_fingerprint = fingerprint_api_key(NOTARY_API_KEY);
+    let _environment = ScopedEnvironment::set(&[
+        (NOTARY_API_KEY_HASH_ENV, &api_key_fingerprint),
+        (NOTARY_AUDIT_SECRET_ENV, "0123456789abcdef0123456789abcdef"),
+    ]);
+    let token_file = TestTokenFile::new(&test_token());
+    let relay =
+        FakeRelay::start_echoing_evaluation_id(metadata_response(), result_response()).await;
+    let directory = tempfile::tempdir().expect("temporary Notary directory");
+    let audit_path = directory.path().join("notary-audit.jsonl");
+    let config = assembled_notary_config(&relay, &token_file, &audit_path);
+
+    let runtime = crate::compile_notary_runtime(config).expect("Notary runtime compiles");
+    assert_eq!(relay.metadata_calls(), 0);
+    assert_eq!(relay.execute_calls(), 0);
+    let runtime = runtime
+        .activate_relay()
+        .await
+        .expect("Notary activates the pinned Relay profile before serving");
+    assert_eq!(relay.metadata_calls(), 1);
+    assert_eq!(relay.execute_calls(), 0);
+    let app = crate::notary_router_from_runtime(runtime)
+        .expect("activated Registry-backed runtime is serve-ready");
+    let notary = TestServer::builder().http_transport().build(app);
+
+    let response = notary
+        .post("/v1/evaluations")
+        .add_header("x-api-key", NOTARY_API_KEY)
+        .json(&json!({
+            "target": { "type": "Person", "id": INPUT_VALUE },
+            "claims": ["dhis2-enrollment-known", "dhis2-enrollment-status"],
+            "disclosure": "value",
+            "purpose": PURPOSE,
+        }))
+        .await;
+    response.assert_status_ok();
+    let public: Value = response.json();
+    let results = public["results"]
+        .as_array()
+        .expect("public response contains claim results");
+    assert_eq!(results.len(), 2);
+    let known = results
+        .iter()
+        .find(|result| result["claim_id"] == "dhis2-enrollment-known")
+        .expect("existence claim is returned");
+    let status = results
+        .iter()
+        .find(|result| result["claim_id"] == "dhis2-enrollment-status")
+        .expect("status claim is returned");
+    assert_eq!(known["value"], json!(true));
+    assert_eq!(status["value"], json!("ACTIVE"));
+    assert!(results
+        .iter()
+        .all(|result| result["provenance"]["used"]["source_count"] == json!(1)));
+    let evaluation_id = results[0]["evaluation_id"]
+        .as_str()
+        .expect("public Notary evaluation id is present");
+    assert!(ulid::Ulid::from_string(evaluation_id).is_ok());
+    assert!(results
+        .iter()
+        .all(|result| result["evaluation_id"] == evaluation_id));
+
+    assert_eq!(relay.metadata_calls(), 1);
+    assert_eq!(relay.execute_calls(), 1);
+    let observations = relay.observations().await;
+    assert_eq!(observations.len(), 2);
+    assert_eq!(observations[0].operation, ObservedOperation::Metadata);
+    assert_eq!(observations[1].operation, ObservedOperation::Execute);
+    assert!(observations.iter().all(all_shape_checks_pass));
+
+    let public_wire = serde_json::to_string(&public).expect("public response serializes");
+    assert!(!public_wire.contains(CONSULTATION_ID));
+    assert!(!public_wire.contains("relay_consultation_ids"));
+    assert!(!public_wire.contains("consultation_id"));
+
+    let audit = std::fs::read_to_string(&audit_path).expect("restricted Notary audit is durable");
+    let audit_record = audit
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("audit envelope parses"))
+        .find_map(|envelope| {
+            (envelope["record"]["path"] == "/v1/evaluations").then(|| envelope["record"].clone())
+        })
+        .expect("evaluation audit record exists");
+    assert_eq!(audit_record["status"], json!(200));
+    assert_eq!(audit_record["verification_id"], evaluation_id);
+    assert_eq!(
+        audit_record["relay_consultation_ids"],
+        json!([CONSULTATION_ID])
+    );
+    assert_eq!(audit_record["source_read_count"], json!(1));
+    assert_eq!(audit_record["forwarded"], json!(true));
+
+    drop(notary);
+    relay.shutdown().await;
+}
+
 #[tokio::test]
 async fn exact_profile_and_execute_journey_is_strict_and_bounded() {
+    let token_file = TestTokenFile::new(&test_token());
     let server = FakeRelay::start(metadata_response(), result_response()).await;
-    let client = verified(&server).await;
+    let client = verified(&server, &token_file).await;
     assert_eq!(client.profile().pin().id(), PROFILE_ID);
     assert_eq!(client.profile().pin().version(), PROFILE_VERSION);
     assert_eq!(client.profile().pin().contract_hash(), CONTRACT_HASH);
@@ -394,11 +739,6 @@ async fn exact_profile_and_execute_journey_is_strict_and_bounded() {
     let data = result.data().unwrap();
     assert_eq!(data.name(), OUTPUT_NAME);
     assert_eq!(data.value(), "ACTIVE");
-    assert_eq!(
-        result.provenance().acquisition_class(),
-        RelayAcquisitionClass::SourceProjectedExact
-    );
-
     let observations = server.observations().await;
     assert_eq!(observations.len(), 2);
     assert_eq!(observations[0].operation, ObservedOperation::Metadata);
@@ -409,6 +749,7 @@ async fn exact_profile_and_execute_journey_is_strict_and_bounded() {
 
 #[tokio::test]
 async fn metadata_pin_and_strict_json_fail_closed() {
+    let token_file = TestTokenFile::new(&test_token());
     let mut cases = Vec::new();
     let mut wrong_hash = metadata_value();
     wrong_hash["contract_hash"] =
@@ -442,7 +783,10 @@ async fn metadata_pin_and_strict_json_fail_closed() {
 
     for body in cases {
         let server = FakeRelay::start(WireResponse::ok(body), result_response()).await;
-        let error = client(&server).verify_profile().await.unwrap_err();
+        let error = client(&server, &token_file)
+            .verify_profile()
+            .await
+            .unwrap_err();
         assert_eq!(error, RelayClientError::InvalidProfileMetadata);
         server.shutdown().await;
     }
@@ -450,6 +794,7 @@ async fn metadata_pin_and_strict_json_fail_closed() {
 
 #[tokio::test]
 async fn contract_digest_must_match_canonical_contract_returned_and_configured_hashes() {
+    let token_file = TestTokenFile::new(&test_token());
     let mut metadata = metadata_value();
     metadata["contract"]["spec"]["bounds"]["timeout_ms"] = json!(4_999);
     let recomputed = typed_hash(
@@ -468,7 +813,7 @@ async fn contract_digest_must_match_canonical_contract_returned_and_configured_h
         )
         .await;
         assert_eq!(
-            client_with_hash(&server, &configured_hash)
+            client_with_hash(&server, &token_file, &configured_hash)
                 .verify_profile()
                 .await
                 .unwrap_err(),
@@ -479,7 +824,76 @@ async fn contract_digest_must_match_canonical_contract_returned_and_configured_h
 }
 
 #[tokio::test]
+async fn metadata_schema_accepts_ten_seconds_and_rejects_a_larger_source_timeout() {
+    let token_file = TestTokenFile::new(&test_token());
+    let accepted = metadata_value();
+    assert_eq!(
+        accepted["contract"]["spec"]["bounds"]["timeout_ms"],
+        json!(10_000)
+    );
+    let server = FakeRelay::start(
+        WireResponse::ok(serde_json::to_vec(&accepted).unwrap()),
+        result_response(),
+    )
+    .await;
+    client(&server, &token_file)
+        .verify_profile()
+        .await
+        .expect("the maintained 10-second source timeout fits the metadata schema");
+    server.shutdown().await;
+
+    let mut rejected = metadata_value();
+    rejected["contract"]["spec"]["bounds"]["timeout_ms"] = json!(10_001);
+    let recomputed = typed_hash(
+        b"registry.relay.consultation-contract.v1\0",
+        &rejected["contract"],
+    );
+    rejected["contract_hash"] = json!(recomputed);
+    let server = FakeRelay::start(
+        WireResponse::ok(serde_json::to_vec(&rejected).unwrap()),
+        result_response(),
+    )
+    .await;
+    assert_eq!(
+        client_with_hash(&server, &token_file, &recomputed)
+            .verify_profile()
+            .await
+            .expect_err("the metadata schema caps source work at 10 seconds"),
+        RelayClientError::InvalidProfileMetadata
+    );
+    server.shutdown().await;
+}
+
+#[test]
+fn client_operation_deadline_is_fixed_at_the_service_hop_bound() {
+    let before = Instant::now();
+    let deadline = operation_deadline().expect("fixed service-hop deadline is representable");
+    let after = Instant::now();
+
+    assert!(deadline >= before + MAX_SERVICE_HOP_OPERATION_TIMEOUT);
+    assert!(deadline <= after + MAX_SERVICE_HOP_OPERATION_TIMEOUT);
+    assert!(deadline > after + MAX_SERVICE_HOP_OPERATION_TIMEOUT - Duration::from_secs(1));
+    assert_eq!(
+        require_deadline(Instant::now()),
+        Err(RelayClientError::Unavailable),
+        "expiry is intentionally reported as generic Relay unavailability"
+    );
+    assert_eq!(
+        map_send_error(DestinationSendError::DeadlineExceeded),
+        RelayClientError::Unavailable
+    );
+    assert_eq!(
+        map_response_error(
+            DestinationResponseError::DeadlineExceeded,
+            RelayClientError::InvalidResult,
+        ),
+        RelayClientError::Unavailable
+    );
+}
+
+#[tokio::test]
 async fn independently_reconstructed_policy_rejects_a_stale_policy_digest() {
+    let token_file = TestTokenFile::new(&test_token());
     const CONTRACT_DOMAIN: &[u8] = b"registry.relay.consultation-contract.v1\0";
     let mut metadata = metadata_value();
     metadata["contract"]["spec"]["authorization"]["policy"]["max_decision_age_ms"] = json!(999);
@@ -491,7 +905,7 @@ async fn independently_reconstructed_policy_rejects_a_stale_policy_digest() {
     )
     .await;
     assert_eq!(
-        client_with_hash(&server, &recomputed)
+        client_with_hash(&server, &token_file, &recomputed)
             .verify_profile()
             .await
             .unwrap_err(),
@@ -500,51 +914,179 @@ async fn independently_reconstructed_policy_rejects_a_stale_policy_digest() {
     server.shutdown().await;
 }
 
-#[test]
-fn workload_credential_rejects_opaque_and_nonmatching_jwts() {
-    let opaque = RelayWorkloadCredential::new(
-        Zeroizing::new(b"relay-test-token-SENSITIVE".to_vec()),
-        EXPECTED_ISSUER,
-        EXPECTED_AUDIENCE,
-        EXPECTED_SCOPE,
-    )
-    .unwrap_err();
-    assert_eq!(opaque, RelayClientError::InvalidConfiguration);
-    assert!(!format!("{opaque:?} {opaque}").contains("SENSITIVE"));
-
-    let mut cases = Vec::new();
-    for (field, value) in [
-        ("iss", json!("https://other-issuer.example.test")),
-        ("aud", json!("other-relay")),
-        ("sub", json!("other-principal")),
-        ("azp", json!("other-client")),
-        ("client_id", json!("other-client")),
-        ("scope", json!("registry:consult:other-profile")),
-        ("exp", json!(1_700_000_001_i64)),
-        ("nbf", json!(4_102_444_799_i64)),
+#[tokio::test]
+async fn malformed_compact_credentials_fail_before_network() {
+    let server = FakeRelay::start(metadata_response(), result_response()).await;
+    for token in [
+        "relay-test-token-SENSITIVE",
+        "e30.e30",
+        "e30.e30.c2lnbmF0dXJl.extra",
+        "e30..c2lnbmF0dXJl",
+        "e30.e30.c2ln=bmF0dXJl",
+        "e30.e30.c2ln\nbmF0dXJl",
+        "a.e30.c2lnbmF0dXJl",
     ] {
-        let mut claims = test_claims();
-        claims[field] = value;
-        cases.push(token_for_claims(&claims));
+        let token_file = TestTokenFile::new(token);
+        let error = client(&server, &token_file)
+            .verify_profile()
+            .await
+            .unwrap_err();
+        assert_eq!(error, RelayClientError::InvalidCredentials);
+        assert!(!format!("{error:?} {error}").contains("SENSITIVE"));
     }
-    for token in cases {
-        assert_eq!(
-            RelayWorkloadCredential::new(
-                Zeroizing::new(token.into_bytes()),
-                EXPECTED_ISSUER,
-                EXPECTED_AUDIENCE,
-                EXPECTED_SCOPE,
-            )
+    assert_eq!(server.metadata_calls(), 0);
+
+    assert_eq!(
+        credential_for_path(PathBuf::from("relative.jwt")).unwrap_err(),
+        RelayClientError::InvalidConfiguration
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn compact_credential_is_forwarded_and_relay_owns_semantic_rejection() {
+    let compact = "e30.e30.c2lnbmF0dXJl";
+    let token_file = TestTokenFile::new(compact);
+    let server = FakeRelay::start(
+        WireResponse {
+            status: StatusCode::UNAUTHORIZED,
+            body: b"credential-rejected-SENSITIVE".to_vec(),
+            location: None,
+            content_types: vec!["application/json"],
+        },
+        result_response(),
+    )
+    .await;
+    server.set_expected_token(compact).await;
+
+    let error = client(&server, &token_file)
+        .verify_profile()
+        .await
+        .unwrap_err();
+
+    assert_eq!(error, RelayClientError::InvalidCredentials);
+    assert_eq!(server.metadata_calls(), 1);
+    let observations = server.observations().await;
+    assert_eq!(observations.len(), 1);
+    assert!(observations[0].exact_authorization);
+    assert!(!format!("{error:?} {error}").contains("SENSITIVE"));
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn credential_file_rotation_and_unavailability_apply_without_restart() {
+    let token_file = TestTokenFile::new(&test_token());
+    let server = FakeRelay::start(metadata_response(), result_response()).await;
+    let client = verified(&server, &token_file).await;
+
+    let mut rotated_claims = test_claims();
+    rotated_claims["jti"] = json!("relay-test-token-2");
+    let rotated =
+        token_for_claims_and_signature(&rotated_claims, b"relay-rotated-test-signature-SENSITIVE");
+    token_file.replace(&format!("{rotated}\n"));
+    server.set_expected_token(&rotated).await;
+
+    client.verify_current_profile().await.unwrap();
+    client
+        .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+        .await
+        .unwrap();
+    assert_eq!(server.metadata_calls(), 2);
+    assert_eq!(server.execute_calls(), 1);
+    assert!(server
+        .observations()
+        .await
+        .iter()
+        .all(all_shape_checks_pass));
+
+    token_file.replace("invalid-rotated-token-SENSITIVE");
+    assert_eq!(
+        client
+            .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+            .await
             .unwrap_err(),
-            RelayClientError::InvalidConfiguration
+        RelayClientError::InvalidCredentials
+    );
+    assert_eq!(server.execute_calls(), 1);
+
+    token_file.remove();
+    assert_eq!(
+        client.verify_current_profile().await.unwrap_err(),
+        RelayClientError::CredentialUnavailable
+    );
+    assert_eq!(server.metadata_calls(), 2);
+    token_file.replace(&rotated);
+    client.verify_current_profile().await.unwrap();
+    assert_eq!(server.metadata_calls(), 3);
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn credential_file_is_bounded_and_must_remain_a_regular_file() {
+    let oversized = TestTokenFile::new(&"x".repeat(MAX_TOKEN_FILE_BYTES + 1));
+    assert_eq!(
+        oversized.credential().authorization().await.unwrap_err(),
+        RelayClientError::InvalidCredentials
+    );
+
+    let directory = tempfile::tempdir().unwrap();
+    let credential = credential_for_path(directory.path().to_path_buf()).unwrap();
+    assert_eq!(
+        credential.authorization().await.unwrap_err(),
+        RelayClientError::CredentialUnavailable
+    );
+}
+
+#[tokio::test]
+async fn cancelled_credential_reads_share_one_blocking_worker_gate() {
+    let token_file = TestTokenFile::new(&test_token());
+    let credential = token_file.credential();
+    let held = Arc::clone(&credential.read_permit)
+        .acquire_owned()
+        .await
+        .expect("test holds the one credential-read permit");
+
+    for _ in 0..2 {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), credential.authorization())
+                .await
+                .is_err(),
+            "a cancelled retry waits behind the original read instead of spawning another worker"
         );
     }
+    assert_eq!(credential.read_permit.available_permits(), 0);
+
+    drop(held);
+    credential
+        .authorization()
+        .await
+        .expect("credential reload resumes after the original worker gate releases");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn credential_fifo_is_rejected_promptly_without_a_blocked_reader() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("relay.jwt");
+    let status = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .expect("mkfifo command runs");
+    assert!(status.success());
+    let credential = credential_for_path(path).unwrap();
+
+    let result = tokio::time::timeout(Duration::from_secs(1), credential.authorization())
+        .await
+        .expect("nonblocking FIFO inspection returns promptly");
+
+    assert_eq!(result.unwrap_err(), RelayClientError::CredentialUnavailable);
 }
 
 #[tokio::test]
 async fn input_pattern_rejection_performs_no_execute_network_call() {
+    let token_file = TestTokenFile::new(&test_token());
     let server = FakeRelay::start(metadata_response(), result_response()).await;
-    let client = verified(&server).await;
+    let client = verified(&server, &token_file).await;
     assert_eq!(server.execute_calls(), 0);
     assert_eq!(
         client
@@ -559,6 +1101,7 @@ async fn input_pattern_rejection_performs_no_execute_network_call() {
 
 #[tokio::test]
 async fn unsupported_input_pattern_is_rejected_during_profile_activation() {
+    let token_file = TestTokenFile::new(&test_token());
     const CONTRACT_DOMAIN: &[u8] = b"registry.relay.consultation-contract.v1\0";
     let mut metadata = metadata_value();
     metadata["contract"]["spec"]["inputs"][INPUT_NAME]["pattern"] = json!("^.*$");
@@ -570,7 +1113,7 @@ async fn unsupported_input_pattern_is_rejected_during_profile_activation() {
     )
     .await;
     assert_eq!(
-        client_with_hash(&server, &recomputed)
+        client_with_hash(&server, &token_file, &recomputed)
             .verify_profile()
             .await
             .unwrap_err(),
@@ -582,6 +1125,7 @@ async fn unsupported_input_pattern_is_rejected_during_profile_activation() {
 
 #[tokio::test]
 async fn metadata_and_result_require_one_exact_json_media_type() {
+    let token_file = TestTokenFile::new(&test_token());
     for content_types in [
         Vec::new(),
         vec!["application/problem+json"],
@@ -593,14 +1137,17 @@ async fn metadata_and_result_require_one_exact_json_media_type() {
         )
         .await;
         assert_eq!(
-            client(&server).verify_profile().await.unwrap_err(),
+            client(&server, &token_file)
+                .verify_profile()
+                .await
+                .unwrap_err(),
             RelayClientError::InvalidProfileMetadata
         );
         server.shutdown().await;
     }
 
     let server = FakeRelay::start(metadata_response(), result_response()).await;
-    let client = verified(&server).await;
+    let client = verified(&server, &token_file).await;
     for content_types in [
         Vec::new(),
         vec!["application/json; charset=utf-8"],
@@ -622,8 +1169,9 @@ async fn metadata_and_result_require_one_exact_json_media_type() {
 
 #[tokio::test]
 async fn result_identity_provenance_shape_and_outcome_data_are_exact() {
+    let token_file = TestTokenFile::new(&test_token());
     let server = FakeRelay::start(metadata_response(), result_response()).await;
-    let client = verified(&server).await;
+    let client = verified(&server, &token_file).await;
     let mut cases = Vec::new();
 
     let mut wrong_hash = result_value();
@@ -690,8 +1238,9 @@ async fn result_identity_provenance_shape_and_outcome_data_are_exact() {
 
 #[tokio::test]
 async fn status_size_redirect_and_retry_behavior_is_closed() {
+    let token_file = TestTokenFile::new(&test_token());
     let server = FakeRelay::start(metadata_response(), result_response()).await;
-    let client = verified(&server).await;
+    let client = verified(&server, &token_file).await;
     for (status, expected) in [
         (StatusCode::BAD_REQUEST, RelayClientError::InvalidRequest),
         (
@@ -755,8 +1304,9 @@ async fn status_size_redirect_and_retry_behavior_is_closed() {
 
 #[tokio::test]
 async fn debug_and_errors_never_expose_transport_or_consultation_values() {
+    let token_file = TestTokenFile::new(&test_token());
     let server = FakeRelay::start(metadata_response(), result_response()).await;
-    let unverified = client(&server);
+    let unverified = client(&server, &token_file);
     let unverified_debug = format!("{unverified:?}");
     let client = unverified.verify_profile().await.unwrap();
     let verified_debug = format!("{client:?} {:?}", client.profile());

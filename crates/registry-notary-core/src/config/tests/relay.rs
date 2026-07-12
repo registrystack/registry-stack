@@ -11,7 +11,7 @@ fn relay_connection() -> RelayConnectionConfig {
     serde_norway::from_str(
         r#"
 base_url: https://relay.internal.example
-token_env: REGISTRY_NOTARY_RELAY_TOKEN
+token_file: /run/secrets/registry-notary-relay.jwt
 "#,
     )
     .expect("Relay connection parses")
@@ -41,9 +41,10 @@ fn make_registry_backed(claim: &mut ClaimDefinition, consultation_name: &str) {
     claim.source_bindings.clear();
     claim.purpose = Some("benefit-verification".to_string());
     claim.required_scopes = vec!["registry:consult:person-status".to_string()];
-    claim.value.value_type = "boolean".to_string();
-    claim.rule = RuleConfig::Exists {
+    claim.value.value_type = "string".to_string();
+    claim.rule = RuleConfig::Extract {
         source: consultation_name.to_string(),
+        field: "registration_status".to_string(),
     };
 }
 
@@ -79,10 +80,11 @@ fn expect_self_attestation_closure_error(config: &StandaloneRegistryNotaryConfig
             error,
             EvidenceConfigError::InvalidClaimEvidenceMode { ref reason, .. }
                 if reason.contains("self_attested dependency closure")
+                    || reason.contains("cannot declare depends_on")
         ) || matches!(
             error,
             EvidenceConfigError::InvalidSelfAttestationConfig { ref reason }
-                if reason.contains("must contain only self_attested claims")
+                if reason.contains("cannot include registry_backed claim")
         ),
         "unexpected error: {error:?}"
     );
@@ -221,6 +223,42 @@ fn registry_backed_claim_accepts_one_pinned_consultation() {
 }
 
 #[test]
+fn initial_relay_activation_shape_is_one_shared_product_journey() {
+    let mut config = valid_registry_backed_config();
+    let mut exists = config.evidence.claims[0].clone();
+    exists.id = "person-status-present".to_string();
+    exists.title = "Person status known".to_string();
+    exists.rule = RuleConfig::Exists {
+        source: "person_status".to_string(),
+    };
+    exists.value.value_type = "boolean".to_string();
+    config.evidence.claims.push(exists);
+    config
+        .validate()
+        .expect("exists and extract claims may share one pinned consultation");
+
+    let mut exists_only = config.clone();
+    exists_only.evidence.claims.remove(0);
+    expect_mode_error(&exists_only, "requires one extract claim");
+
+    let mut different_profile = config.clone();
+    let ClaimEvidenceMode::RegistryBacked { consultations } =
+        &mut different_profile.evidence.claims[1].evidence_mode
+    else {
+        panic!("registry-backed mode")
+    };
+    consultations
+        .get_mut("person_status")
+        .expect("consultation")
+        .profile
+        .version = "2".to_string();
+    expect_mode_error(
+        &different_profile,
+        "one shared profile, purpose, and input name",
+    );
+}
+
+#[test]
 fn registry_backed_claim_rejects_missing_or_mixed_sources() {
     let mut config = valid_registry_backed_config();
     config.evidence.relay = None;
@@ -329,7 +367,9 @@ fn registry_backed_claim_matches_relay_identifier_and_scalar_contract() {
     expect_mode_error(&config, "exactly one target.id mapping");
 
     let mut config = valid_registry_backed_config();
-    config.evidence.claims[0].value.value_type = "string".to_string();
+    config.evidence.claims[0].rule = RuleConfig::Exists {
+        source: "person_status".to_string(),
+    };
     expect_mode_error(&config, "exists claim value.type must be boolean");
 
     let mut config = valid_registry_backed_config();
@@ -356,43 +396,131 @@ fn relay_connection_is_single_closed_bounded_and_redacted() {
     let relay: RelayConnectionConfig = serde_norway::from_str(
         r#"
 base_url: https://relay.internal.example
-token_env: PRIVATE_RELAY_TOKEN
+token_file: /run/secrets/private-relay.jwt
+allowed_private_cidrs: [10.42.0.0/16, fd42::/64]
 "#,
     )
     .expect("Relay connection parses");
-    assert_eq!(relay.max_in_flight, DEFAULT_RELAY_MAX_IN_FLIGHT);
+    relay.validate().expect("Relay connection validates");
+    assert_eq!(relay.allowed_private_cidrs.len(), 2);
     let debug = format!("{relay:?}");
     assert!(!debug.contains("relay.internal.example"));
-    assert!(!debug.contains("PRIVATE_RELAY_TOKEN"));
+    assert!(!debug.contains("private-relay.jwt"));
+    assert!(!debug.contains("10.42.0.0/16"));
 
     serde_norway::from_str::<RelayConnectionConfig>(
         r#"
 base_url: https://relay.internal.example
-token_env: RELAY_TOKEN
+token_file: /run/secrets/relay.jwt
 retry_on_5xx: true
 "#,
     )
     .expect_err("retry controls are not part of the closed Relay connection");
+}
 
-    for max_in_flight in [0, MAX_RELAY_MAX_IN_FLIGHT + 1] {
-        let mut config = minimal_config();
+#[test]
+fn relay_token_file_and_private_cidrs_are_exact_and_bounded() {
+    for token_file in [
+        PathBuf::from("relative/relay.jwt"),
+        PathBuf::from("/run/secrets/../relay.jwt"),
+        PathBuf::from("/"),
+    ] {
         let mut relay = relay_connection();
-        relay.max_in_flight = max_in_flight;
-        config.evidence.relay = Some(relay);
-        let error = config
-            .validate()
-            .expect_err("Relay concurrency outside the v1 bound must fail");
+        relay.token_file = token_file;
         assert!(matches!(
-            error,
-            EvidenceConfigError::InvalidRelayConfig { ref reason }
-                if reason.contains("between 1 and 16")
+            relay.validate(),
+            Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
+                if reason.contains("token_file")
         ));
     }
+
+    for cidrs in [
+        vec!["10.42.0.1/16"],
+        vec!["93.184.216.0/24"],
+        vec!["100.100.100.200/32"],
+        vec!["fd00:ec2::254/128"],
+        vec!["10.42.0.0/16", "10.42.0.0/16"],
+    ] {
+        let mut relay = relay_connection();
+        relay.allowed_private_cidrs = cidrs
+            .into_iter()
+            .map(|cidr| cidr.parse().expect("test CIDR parses"))
+            .collect();
+        assert!(matches!(
+            relay.validate(),
+            Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
+                if reason.contains("allowed_private_cidrs")
+        ));
+    }
+
+    let mut relay = relay_connection();
+    relay.allowed_private_cidrs = (0..=16)
+        .map(|index| {
+            format!("10.{index}.0.0/16")
+                .parse()
+                .expect("test CIDR parses")
+        })
+        .collect();
+    assert!(matches!(
+        relay.validate(),
+        Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
+            if reason.contains("more than 16")
+    ));
+
+    serde_norway::from_str::<RelayConnectionConfig>(
+        r#"
+base_url: https://relay.internal.example
+token_env: REMOVED_RELAY_TOKEN
+"#,
+    )
+    .expect_err("the removed static environment-token mode is rejected");
+
+    serde_norway::from_str::<RelayConnectionConfig>(
+        r#"
+base_url: https://relay.internal.example
+token_file: /run/secrets/relay.jwt
+token_issuer: REMOVED_DUPLICATE_IDENTITY
+"#,
+    )
+    .expect_err("duplicated local workload-token semantics are rejected");
+}
+
+#[test]
+fn relay_connection_is_rejected_when_no_registry_backed_claim_uses_it() {
+    let mut config = minimal_config();
+    config.evidence.relay = Some(relay_connection());
+    let error = config
+        .validate()
+        .expect_err("an unused Relay connection must not be silently accepted");
+    assert!(matches!(
+        error,
+        EvidenceConfigError::InvalidRelayConfig { ref reason }
+            if reason.contains("at least one registry_backed claim")
+    ));
+}
+
+#[test]
+fn registry_backed_notary_reserves_five_seconds_around_the_service_hop() {
+    let mut config = valid_registry_backed_config();
+    config.server.request_timeout = Duration::from_secs(19) + Duration::from_millis(999);
+    let error = config
+        .validate()
+        .expect_err("the request timeout must not expire before the Relay service hop");
+    assert!(matches!(
+        error,
+        EvidenceConfigError::InvalidRelayConfig { ref reason }
+            if reason.contains("at least 20 seconds")
+    ));
+
+    config.server.request_timeout = Duration::from_secs(20);
+    config
+        .validate()
+        .expect("the outer request minimum reserves five seconds around the service hop");
 }
 
 #[test]
 fn relay_connection_requires_https_origin_or_explicit_loopback() {
-    let mut config = minimal_config();
+    let mut config = valid_registry_backed_config();
     let mut relay = relay_connection();
     relay.base_url = "http://relay.internal.example".to_string();
     relay.allow_insecure_localhost = true;
@@ -405,7 +533,7 @@ fn relay_connection_requires_https_origin_or_explicit_loopback() {
         EvidenceConfigError::InvalidRelayConfig { .. }
     ));
 
-    let mut config = minimal_config();
+    let mut config = valid_registry_backed_config();
     let mut relay = relay_connection();
     relay.base_url = "http://127.0.0.1:8080".to_string();
     relay.allow_insecure_localhost = true;
@@ -416,7 +544,7 @@ fn relay_connection_requires_https_origin_or_explicit_loopback() {
         .expect("explicit HTTP loopback is permitted for local development");
     assert!(config.gate_input().source_insecure_url);
 
-    let mut config = minimal_config();
+    let mut config = valid_registry_backed_config();
     let mut relay = relay_connection();
     relay.base_url = "http://localhost:8080".to_string();
     relay.allow_insecure_localhost = true;
@@ -426,7 +554,7 @@ fn relay_connection_requires_https_origin_or_explicit_loopback() {
         .validate()
         .expect_err("local development HTTP requires a literal loopback origin");
 
-    let mut config = minimal_config();
+    let mut config = valid_registry_backed_config();
     let mut relay = relay_connection();
     relay.base_url = "http://127.0.0.1:8080".to_string();
     relay.allow_insecure_localhost = true;
@@ -442,7 +570,7 @@ fn relay_connection_requires_https_origin_or_explicit_loopback() {
     ));
 
     let sensitive_path = "private-route";
-    let mut config = minimal_config();
+    let mut config = valid_registry_backed_config();
     let mut relay = relay_connection();
     relay.base_url = format!("https://relay.internal.example/{sensitive_path}");
     config.evidence.relay = Some(relay);
@@ -454,7 +582,7 @@ fn relay_connection_requires_https_origin_or_explicit_loopback() {
     assert!(!rendered.contains("relay.internal.example"));
     assert!(!rendered.contains(sensitive_path));
 
-    let mut config = minimal_config();
+    let mut config = valid_registry_backed_config();
     let mut relay = relay_connection();
     relay.base_url = "https://relay.internal.example/private/..".to_string();
     config.evidence.relay = Some(relay);
@@ -514,7 +642,7 @@ lookup:
 }
 
 #[test]
-fn self_attestation_allowed_claim_closures_require_self_attested_modes() {
+fn self_attestation_allowed_claim_closures_reject_registry_backed_modes() {
     let mut config = valid_self_attestation_config();
     config.evidence.relay = Some(relay_connection());
     make_registry_backed(&mut config.evidence.claims[0], "civil_status");
@@ -522,7 +650,9 @@ fn self_attestation_allowed_claim_closures_require_self_attested_modes() {
 
     let mut config = valid_self_attestation_config();
     config.evidence.claims[0].evidence_mode = ClaimEvidenceMode::TransitionalDirect;
-    expect_self_attestation_closure_error(&config);
+    config
+        .validate()
+        .expect("transitional direct preserves the governed legacy self-service path");
 
     let mut config = valid_self_attestation_config();
     config.evidence.relay = Some(relay_connection());
@@ -536,14 +666,33 @@ fn self_attestation_allowed_claim_closures_require_self_attested_modes() {
 }
 
 #[test]
-fn registry_backed_dependency_closure_rejects_transitional_direct() {
+fn registry_backed_v1_rejects_all_claim_dependencies() {
     let mut config = valid_registry_backed_config();
     let dependency = minimal_claim("legacy-dependency");
     config.evidence.claims[0]
         .depends_on
         .push(dependency.id.clone());
     config.evidence.claims.push(dependency);
-    expect_mode_error(&config, "dependency closure cannot contain transitional_direct");
+    expect_mode_error(&config, "cannot declare depends_on");
+
+    let mut config = valid_registry_backed_config();
+    let mut dependency = minimal_claim("source-free-dependency");
+    dependency.evidence_mode = ClaimEvidenceMode::SelfAttested;
+    config.evidence.claims[0]
+        .depends_on
+        .push(dependency.id.clone());
+    config.evidence.claims.push(dependency);
+    expect_mode_error(&config, "cannot declare depends_on");
+
+    let mut config = valid_registry_backed_config();
+    let registry_id = config.evidence.claims[0].id.clone();
+    let mut transitional = minimal_claim("legacy-derived-claim");
+    transitional.depends_on.push(registry_id);
+    config.evidence.claims.push(transitional);
+    expect_mode_error(
+        &config,
+        "transitional_direct dependency closure cannot contain registry_backed",
+    );
 }
 
 #[test]

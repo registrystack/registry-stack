@@ -20,7 +20,7 @@
     "integration_pack": {
       "id": "dhis2.tracker.enrollment-status",
       "version": "1",
-      "hash": "sha256:017783fe880863e9dedc5138df4e1212d020ce7cfac5a13b58911fc4705f0e7a"
+      "hash": "sha256:ec0136be504e3f98539f9e0ec10e59532ff793dbadc2e66ea1c017a632da6ac4"
     },
     "acquisition": {
       "class": "source_projected_exact",
@@ -55,7 +55,7 @@
       "legal_basis": "public_task",
       "policy": {
         "id": "relay.dhis2.tracker.enrollment-status.exact",
-        "hash": "sha256:0eaec9b82087299193efb25a9189a41b7373e64abf152ba7204fdf5b05722959",
+        "hash": "sha256:0456a93b515b9d60aff9f06633c792f4e63ede2f7657ef37bb2f58a840380b1f",
         "decision_cache": "disabled",
         "max_decision_age_ms": 1000,
         "unavailable": "deny"
@@ -72,7 +72,7 @@
       "max_credential_exchanges": 0,
       "max_data_destinations": 1,
       "max_source_bytes": 8192,
-      "timeout_ms": 5000,
+      "timeout_ms": 10000,
       "max_in_flight": 16,
       "quota_per_minute": 60,
       "quota_burst": 10

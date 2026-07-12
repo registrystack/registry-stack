@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- BREAKING: every claim now declares an explicit evidence mode. New
+  source-backed claims use a hash-pinned Relay consultation; source-free claims
+  use `self_attested`. Existing direct/source-adapter claims must be labeled
+  `transitional_direct` only during the unreleased migration window, and that
+  mode blocks the replacement beta and 1.0 release.
+- Registry-backed Notary verifies its Relay profile before serving, reloads a
+  mounted workload JWT for each operation, exposes Relay readiness and live
+  doctor checks, and keeps Relay correlation in restricted audit only. Set
+  Notary `server.request_timeout` to at least 20 seconds and restrict the token
+  file to the Notary service account.
+
 ## 0.9.0
 
 - Production and evidence-grade deployments now fail closed until signer custody

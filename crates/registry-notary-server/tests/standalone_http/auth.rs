@@ -208,6 +208,7 @@ pub(super) async fn jwks_is_public_and_contains_no_private_members() {
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 pub(super) async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     set_audit_secret();
     std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");

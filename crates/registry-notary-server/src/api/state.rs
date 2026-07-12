@@ -4,8 +4,16 @@
 use super::*;
 
 pub(super) const AUDIT_ACK_CURSOR_READ_TIMEOUT: Duration = Duration::from_millis(500);
+pub(super) const RELAY_READINESS_TIMEOUT: Duration = Duration::from_secs(5);
+const RELAY_READINESS_TTL: Duration = Duration::from_secs(5);
 pub(super) static AUDIT_ACK_CURSOR_READ_PERMIT: OnceLock<Arc<tokio::sync::Semaphore>> =
     OnceLock::new();
+
+#[derive(Debug, Default)]
+struct RelayReadinessCache {
+    checked_at: Option<tokio::time::Instant>,
+    ready: bool,
+}
 
 pub(super) fn audit_ack_cursor_read_permit() -> Arc<tokio::sync::Semaphore> {
     Arc::clone(
@@ -76,6 +84,8 @@ pub struct RegistryNotaryApiState {
     pub(super) status_list_jwt_cache: Arc<StatusListJwtCache>,
     pub(crate) metrics: Arc<AppMetrics>,
     pub(crate) source: Arc<dyn SourceReader>,
+    pub(crate) activated_relay: Arc<OnceLock<Arc<dyn crate::runtime::ActivatedRelayConsultations>>>,
+    relay_readiness: Arc<tokio::sync::Mutex<RelayReadinessCache>>,
     pub(crate) store: Arc<EvidenceStore>,
     pub(super) runtime: Arc<RwLock<Arc<ApiRuntimeSnapshot>>>,
     pub(super) auth_state: Option<Arc<AuthAuditState>>,
@@ -308,6 +318,8 @@ impl RegistryNotaryApiState {
             status_list_jwt_cache: Arc::new(StatusListJwtCache::default()),
             metrics,
             source,
+            activated_relay: Arc::new(OnceLock::new()),
+            relay_readiness: Arc::new(tokio::sync::Mutex::new(RelayReadinessCache::default())),
             store,
             runtime: Arc::new(RwLock::new(runtime)),
             auth_state: None,
@@ -489,7 +501,8 @@ impl RegistryNotaryApiState {
     pub(crate) fn runtime(&self) -> RegistryNotaryRuntime {
         let runtime = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(
             &self.self_attestation_rate_keys,
-        ));
+        ))
+        .with_activated_relay(self.activated_relay.get().map(Arc::clone));
         #[cfg(feature = "registry-notary-cel")]
         {
             runtime
@@ -500,6 +513,57 @@ impl RegistryNotaryApiState {
         {
             runtime
         }
+    }
+
+    pub(crate) fn install_activated_relay(
+        &self,
+        activated: Arc<dyn crate::runtime::ActivatedRelayConsultations>,
+    ) -> Result<(), ()> {
+        self.activated_relay.set(activated).map_err(|_| ())
+    }
+
+    pub(crate) fn relay_required(&self) -> bool {
+        self.evidence
+            .claims
+            .iter()
+            .any(|claim| claim.evidence_mode.is_registry_backed())
+    }
+
+    pub(crate) fn relay_activated(&self) -> bool {
+        self.activated_relay.get().is_some()
+    }
+
+    pub(crate) async fn relay_ready(&self) -> bool {
+        if !self.relay_required() {
+            return true;
+        }
+        let Some(relay) = self.activated_relay.get() else {
+            return false;
+        };
+        // Hold this mutex across the bounded remote check. This keeps the
+        // public readiness endpoint from amplifying concurrent probes into
+        // concurrent Relay metadata requests.
+        let mut cache = self.relay_readiness.lock().await;
+        if cache
+            .checked_at
+            .is_some_and(|checked_at| checked_at.elapsed() < RELAY_READINESS_TTL)
+        {
+            return cache.ready;
+        }
+        cache.ready = matches!(
+            tokio::time::timeout(RELAY_READINESS_TIMEOUT, relay.check_ready()).await,
+            Ok(Ok(()))
+        );
+        // Cache timeout failures too, otherwise a slow or unavailable Relay
+        // would trigger a new request for every readiness probe.
+        cache.checked_at = Some(tokio::time::Instant::now());
+        cache.ready
+    }
+
+    #[cfg(test)]
+    pub(super) async fn expire_relay_readiness_cache(&self) {
+        self.relay_readiness.lock().await.checked_at =
+            Some(tokio::time::Instant::now() - RELAY_READINESS_TTL);
     }
 
     pub(crate) fn enabled_evidence(&self) -> Result<&EvidenceConfig, EvidenceError> {

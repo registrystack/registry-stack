@@ -132,8 +132,11 @@ aws-lc-rs = { version = "1" }
 axum-test = { version = "20" }
 assert-json-diff = { version = "2" }
 chrono = { version = "0.4" }
+registry-notary-core.workspace = true
+registry-notary-server.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
 proptest = { version = "1" }
+serde_norway.workspace = true
 tempfile = { version = "3" }
 insta = { version = "1", features = ["json"] }
 # Used only by format_xlsx tests to construct a synthetic XLSX (a ZIP)

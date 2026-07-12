@@ -6,7 +6,7 @@ use registry_notary_core::{
     EvidenceEntityReference, Hashed, PolicyIdentifier, RateLimitBucket, SelfAttestationDenialCode,
 };
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct EvidenceAuditContext {
     pub verification_id: Option<String>,
     pub verification_decision: Option<String>,
@@ -14,6 +14,9 @@ pub struct EvidenceAuditContext {
     pub purposes: Option<Vec<String>>,
     pub row_count: Option<u64>,
     pub source_read_count: Option<u64>,
+    /// Restricted cross-service correlation. Response extensions feed the
+    /// audit sink only and are never serialized into the HTTP response body.
+    pub relay_consultation_ids: Vec<String>,
     pub forwarded: Option<bool>,
     pub access_mode: Option<AccessMode>,
     pub denial_code: Option<SelfAttestationDenialCode>,
@@ -42,6 +45,20 @@ pub struct EvidenceAuditContext {
     pub batch_items: Option<Vec<EvidenceBatchItemAuditEvent>>,
     pub source_sidecar_config_hashes: Option<Vec<String>>,
     pub config: Option<ConfigAuditEvent>,
+}
+
+impl std::fmt::Debug for EvidenceAuditContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("EvidenceAuditContext")
+            .field("verification_id", &"[REDACTED]")
+            .field("verification_decision", &self.verification_decision)
+            .field("source_read_count", &self.source_read_count)
+            .field("relay_consultation_ids", &"[REDACTED]")
+            .field("forwarded", &self.forwarded)
+            .field("access_mode", &self.access_mode)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -79,6 +79,8 @@ evidence:
       title: Date of birth
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: date
       inputs:
@@ -123,6 +125,8 @@ evidence:
       title: Civil status
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       inputs:
@@ -167,6 +171,8 @@ evidence:
       title: Person is alive
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       inputs:

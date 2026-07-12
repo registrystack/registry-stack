@@ -160,6 +160,8 @@ evidence:
       title: Birth Registration Attestation
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: boolean
       source_bindings:
@@ -210,6 +212,8 @@ evidence:
       title: OpenCRVS date of birth
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: date
       source_bindings:
@@ -266,6 +270,8 @@ evidence:
       title: OpenCRVS sex
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings:
@@ -322,6 +328,8 @@ evidence:
       title: Age Eligibility Attestation
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       source_bindings:
@@ -380,6 +388,8 @@ evidence:
       title: OpenCRVS child given name
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       credential_profiles:
@@ -436,6 +446,8 @@ evidence:
       title: OpenCRVS child family name
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       credential_profiles:
@@ -492,6 +504,8 @@ evidence:
       title: OpenCRVS child date of birth
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: date
       credential_profiles:
@@ -548,6 +562,8 @@ evidence:
       title: OpenCRVS child place of birth
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: string
       credential_profiles:

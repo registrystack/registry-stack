@@ -3,6 +3,127 @@
 
 use super::*;
 
+#[derive(Debug)]
+struct ReadinessRelay {
+    calls: AtomicUsize,
+    ready: AtomicBool,
+}
+
+impl ReadinessRelay {
+    fn new(ready: bool) -> Self {
+        Self {
+            calls: AtomicUsize::new(0),
+            ready: AtomicBool::new(ready),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::runtime::ActivatedRelayConsultations for ReadinessRelay {
+    async fn check_ready(&self) -> Result<(), crate::relay_client::RelayClientError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        tokio::task::yield_now().await;
+        if self.ready.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(crate::relay_client::RelayClientError::Unavailable)
+        }
+    }
+
+    fn validate(
+        &self,
+        _key: &crate::runtime::consultation::ConsultationGroupKeyV1,
+    ) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    async fn execute(
+        &self,
+        _key: &crate::runtime::ConsultationGroupKeyV1,
+    ) -> Result<crate::runtime::RuntimeRelayConsultationResult, crate::relay_client::RelayClientError>
+    {
+        Err(crate::relay_client::RelayClientError::InvalidRequest)
+    }
+}
+
+fn relay_readiness_state() -> RegistryNotaryApiState {
+    let mut evidence = evidence_config();
+    evidence.claims[0].evidence_mode = registry_notary_core::ClaimEvidenceMode::RegistryBacked {
+        consultations: BTreeMap::new(),
+    };
+    RegistryNotaryApiState::new(
+        Arc::new(evidence),
+        AuditKeyHasher::unkeyed_dev_only(),
+        Arc::new(CountingSource::default()),
+        Arc::new(EvidenceStore::default()),
+        Arc::new(NoopIssuerResolver),
+    )
+}
+
+#[tokio::test]
+async fn source_free_state_does_not_require_relay_readiness() {
+    let state = RegistryNotaryApiState::new(
+        Arc::new(evidence_config()),
+        AuditKeyHasher::unkeyed_dev_only(),
+        Arc::new(CountingSource::default()),
+        Arc::new(EvidenceStore::default()),
+        Arc::new(NoopIssuerResolver),
+    );
+
+    assert!(!state.relay_required());
+    assert!(!state.relay_activated());
+    assert!(state.relay_ready().await);
+}
+
+#[tokio::test]
+async fn registry_backed_state_is_not_ready_before_relay_activation() {
+    let state = Arc::new(relay_readiness_state());
+
+    assert!(state.relay_required());
+    assert!(!state.relay_activated());
+    assert!(!state.relay_ready().await);
+
+    let response = ready(Some(Extension(state))).await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("ready body reads");
+    let value: Value = serde_json::from_slice(&body).expect("ready body is JSON");
+    assert_eq!(value["checks"]["total"], json!(2));
+    assert_eq!(value["checks"]["ok"], json!(0));
+    assert_eq!(value["checks"]["degraded"], json!(1));
+    assert_eq!(value["checks"]["failed"], json!(1));
+    assert_eq!(value["checks"]["relay"]["total"], json!(1));
+    assert_eq!(value["checks"]["relay"]["ok"], json!(0));
+    assert_eq!(value["checks"]["relay"]["failed"], json!(1));
+}
+
+#[tokio::test]
+async fn relay_readiness_is_singleflight_cached_and_recovers() {
+    let state = Arc::new(relay_readiness_state());
+    let relay = Arc::new(ReadinessRelay::new(false));
+    let activated: Arc<dyn crate::runtime::ActivatedRelayConsultations> = relay.clone();
+    state
+        .install_activated_relay(activated)
+        .expect("Relay activation succeeds once");
+
+    let (first, second, third) = tokio::join!(
+        state.relay_ready(),
+        state.relay_ready(),
+        state.relay_ready()
+    );
+    assert!(!first && !second && !third);
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
+
+    relay.ready.store(true, Ordering::SeqCst);
+    assert!(!state.relay_ready().await, "failure is briefly cached");
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
+
+    state.expire_relay_readiness_cache().await;
+    assert!(state.relay_ready().await);
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 2);
+}
+
 #[test]
 fn runtime_snapshot_read_never_observes_torn_issuer_federation_generation() {
     let old_issuers: Arc<dyn EvidenceIssuerResolver> = Arc::new(NoopIssuerResolver);

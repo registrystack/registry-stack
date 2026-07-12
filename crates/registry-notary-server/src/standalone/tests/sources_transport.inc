@@ -124,6 +124,8 @@ claims:
     title: Date of birth
     version: 2026-05
     subject_type: person
+    evidence_mode:
+      type: transitional_direct
     value:
       type: date
     inputs:

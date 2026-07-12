@@ -37,15 +37,15 @@ consultation:
   artifacts:
     public_contracts:
       - path: public-contract.json
-        hash: sha256:eb8f6cb4dd81d8a34c25e4da393ada734caa553e7e65a06fabd613afb1fecbc9
-        sha256: sha256:b99894e8b94bda460a85c41e2c4061bb741286f53efa64aec26851d97f13ed13
+        hash: sha256:a2d0e7588bc1bbeb0caf3247703a15d81830875f5e84dd257f7dc163d3a4ecb6
+        sha256: sha256:c891cc5d097df9e1db54a2ff189d82f0ce49aa0b422c23d544f19678d08becec
     integration_packs:
       - path: integration-pack.json
-        hash: sha256:017783fe880863e9dedc5138df4e1212d020ce7cfac5a13b58911fc4705f0e7a
-        sha256: sha256:bdeb470261c53406a3cbdd165dbd1a7b7e7f6bdb5e54464a46ce668dad1d7072
+        hash: sha256:ec0136be504e3f98539f9e0ec10e59532ff793dbadc2e66ea1c017a632da6ac4
+        sha256: sha256:961b00f3f35dce8c63c5a8e70237e958f95968939ee90095875829a348a2127c
     private_bindings:
       - path: private-binding.example.json
-        sha256: sha256:d5c0a187fddd5caaffe19e18c7da62e1bdc2ec68f7b329fad7e1f7b59b653c45
+        sha256: sha256:661e0750d376b76db89eaa411e545a32d35b25451a1f309560c34ef07e71bc2d
     evidence:
       - class: conformance
         path: evidence/conformance.json

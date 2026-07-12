@@ -518,6 +518,7 @@
             title: id.to_string(),
             version: "1.0".to_string(),
             subject_type: "person".to_string(),
+            evidence_mode: registry_notary_core::ClaimEvidenceMode::TransitionalDirect,
             value: registry_notary_core::ClaimValueConfig {
                 value_type: "boolean".to_string(),
                 unit: None,
@@ -526,6 +527,7 @@
             inputs: Vec::new(),
             depends_on: depends_on.into_iter().map(str::to_string).collect(),
             purpose: None,
+            required_scopes: Vec::new(),
             source_bindings,
             rule: if has_source {
                 RuleConfig::Extract {
@@ -587,6 +589,7 @@
                     source_runtimes: Vec::new(),
                 },
             ),
+            relay_consultation_ids: BTreeSet::new(),
         }
     }
 
@@ -628,7 +631,7 @@
 
     fn machine_principal() -> EvidencePrincipal {
         EvidencePrincipal {
-            auth_profile_id: EvidenceAuthProfileId::StaticApiKey,
+            auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
             principal_id: "machine".to_string(),
             scopes: Vec::new(),
             access_mode: AccessMode::MachineClient,
@@ -639,7 +642,7 @@
 
     fn self_attestation_principal() -> EvidencePrincipal {
         EvidencePrincipal {
-            auth_profile_id: EvidenceAuthProfileId::ExternalOidc,
+            auth_profile_id: registry_notary_core::EvidenceAuthProfileId::ExternalOidc,
             principal_id: "citizen".to_string(),
             scopes: vec!["self_attestation".to_string()],
             access_mode: AccessMode::SelfAttestation,
@@ -696,7 +699,7 @@
 
     fn delegated_principal() -> EvidencePrincipal {
         EvidencePrincipal {
-            auth_profile_id: EvidenceAuthProfileId::ExternalOidc,
+            auth_profile_id: registry_notary_core::EvidenceAuthProfileId::ExternalOidc,
             principal_id: "guardian".to_string(),
             scopes: Vec::new(),
             access_mode: AccessMode::DelegatedAttestation,

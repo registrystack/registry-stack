@@ -65,6 +65,33 @@ pub(super) fn attach_zero_source_no_forward_audit(response: &mut Response) {
     }
 }
 
+pub(super) fn attach_relay_consultation_audit(response: &mut Response, ids: Vec<String>) {
+    if ids.is_empty() {
+        return;
+    }
+    if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
+        audit.source_read_count = u64::try_from(ids.len()).ok();
+        audit.relay_consultation_ids = ids;
+    }
+}
+
+pub(super) fn attach_runtime_evaluation_audit(
+    response: &mut Response,
+    runtime_audit: EvaluationAuditSnapshot,
+) {
+    let relay_forwarded_count = runtime_audit.relay_forwarded_count();
+    let (evaluation_id, relay_consultation_ids) = runtime_audit.into_parts();
+    if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
+        if evaluation_id.is_some() {
+            audit.verification_id = evaluation_id;
+        }
+        if relay_forwarded_count > 0 {
+            audit.forwarded = Some(true);
+        }
+    }
+    attach_relay_consultation_audit(response, relay_consultation_ids);
+}
+
 pub(super) fn attach_source_sidecar_config_hashes(
     response: &mut Response,
     config_hashes: Vec<String>,

@@ -298,7 +298,8 @@ pub(super) async fn dedicated_topology_splits_admin_routes_and_reports_capabilit
 
     let routers = notary_routers_from_runtime(
         compile_notary_runtime(config).expect("runtime compiles for dedicated topology"),
-    );
+    )
+    .expect("direct-source runtime is serve-ready");
     let public = TestServer::builder().http_transport().build(routers.public);
     let admin = TestServer::builder().http_transport().build(routers.admin);
 

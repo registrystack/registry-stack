@@ -366,6 +366,8 @@ evidence:
       title: Farmed land size
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       value:
         type: number
         unit: hectare
@@ -459,6 +461,8 @@ evidence:
       title: DCI claim
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       operations:
         batch_evaluate:
           enabled: true
@@ -541,6 +545,8 @@ evidence:
       title: Date of birth
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       operations:
         batch_evaluate:
           enabled: true
@@ -634,6 +640,8 @@ evidence:
       title: Date of birth
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       operations:
         batch_evaluate:
           enabled: true
@@ -717,6 +725,8 @@ evidence:
       title: Date of birth
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       operations:
         batch_evaluate:
           enabled: true
@@ -804,6 +814,8 @@ evidence:
       title: Date of birth
       version: 2026-05
       subject_type: person
+      evidence_mode:
+        type: transitional_direct
       operations:
         batch_evaluate:
           enabled: true

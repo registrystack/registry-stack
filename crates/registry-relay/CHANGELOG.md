@@ -15,6 +15,18 @@
   state-plane secrets remain environment-backed, and no generic proxy or
   caller-selected source operation is exposed.
 
+### Changed
+
+- The maintained DHIS2 2.41.9 enrollment-status profile now uses a reviewed
+  10-second absolute source deadline. The previous 5-second contract failed
+  closed against the authorized integration instance before a terminal result.
+  Notary now gives the complete internal service hop one fixed,
+  non-configurable 15-second deadline. Consultation-enabled Relay requires its
+  outer `server.request_timeout` to be greater than 15 seconds; Registry-backed
+  Notary requires at least 20 seconds to preserve a five-second listener
+  reserve. The profile remains one-shot, bounded, and retry-free, with all
+  contract, pack, binding, and operator pins regenerated.
+
 ## 0.9.0 - 2026-07-10
 
 ### Added

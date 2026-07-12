@@ -1,16 +1,22 @@
 use super::*;
 
+/// Build a source-free Notary router synchronously.
+///
+/// Registry-backed configurations intentionally return
+/// [`StandaloneServerError::RelayNotActivated`]. Processes serving those
+/// configurations must compile the runtime, await
+/// [`NotaryRuntimeSnapshot::activate_relay`], and only then build listeners.
 pub fn standalone_router(
     config: StandaloneRegistryNotaryConfig,
 ) -> Result<Router, StandaloneServerError> {
     let admin_listener_mode = config.server.admin_listener.mode;
     let runtime = compile_notary_runtime(config)?;
-    Ok(match admin_listener_mode {
+    match admin_listener_mode {
         RegistryNotaryAdminListenerMode::SharedWithPublic => notary_router_from_runtime(runtime),
         RegistryNotaryAdminListenerMode::Dedicated | RegistryNotaryAdminListenerMode::Disabled => {
-            notary_routers_from_runtime(runtime).public
+            Ok(notary_routers_from_runtime(runtime)?.public)
         }
-    })
+    }
 }
 
 pub struct NotaryRuntimeSnapshot {
@@ -24,6 +30,31 @@ pub struct NotaryRuntimeSnapshot {
 }
 
 impl NotaryRuntimeSnapshot {
+    /// Authenticate to Relay and verify the exact pinned consultation profile.
+    ///
+    /// Source-free runtimes complete without reading credentials or performing
+    /// network I/O.
+    pub async fn activate_relay(self) -> Result<Self, StandaloneServerError> {
+        let config = self
+            .api_state
+            .runtime_config()
+            .ok_or(StandaloneServerError::InvalidRelayActivationPlan)?;
+        if let Some(activated) = activate_relay_from_config(&config).await? {
+            self.api_state
+                .install_activated_relay(activated)
+                .map_err(|_| StandaloneServerError::RelayAlreadyActivated)?;
+        }
+        self.ensure_ready_to_serve()?;
+        Ok(self)
+    }
+
+    fn ensure_ready_to_serve(&self) -> Result<(), StandaloneServerError> {
+        if self.api_state.relay_required() && !self.api_state.relay_activated() {
+            return Err(StandaloneServerError::RelayNotActivated);
+        }
+        Ok(())
+    }
+
     pub async fn emit_config_boot_audit(
         &self,
         event: &'static str,
@@ -51,6 +82,16 @@ pub fn compile_notary_runtime(
     config: StandaloneRegistryNotaryConfig,
 ) -> Result<NotaryRuntimeSnapshot, StandaloneServerError> {
     compile_notary_runtime_with_provenance(config, ConfigSource::LocalFile, None)
+}
+
+/// Perform the same authenticated, hash-pinned Relay metadata verification
+/// used during startup without constructing the rest of the Notary runtime.
+/// Returns `false` only when the configuration has no Registry-backed claims.
+pub async fn verify_relay_from_config(
+    config: &StandaloneRegistryNotaryConfig,
+) -> Result<bool, StandaloneServerError> {
+    config.validate()?;
+    Ok(activate_relay_from_config(config).await?.is_some())
 }
 
 pub fn compile_notary_runtime_with_provenance(
@@ -179,11 +220,16 @@ pub fn compile_notary_runtime_with_provenance(
     })
 }
 
-pub fn notary_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Router {
+pub fn notary_router_from_runtime(
+    snapshot: NotaryRuntimeSnapshot,
+) -> Result<Router, StandaloneServerError> {
     notary_shared_router_from_runtime(snapshot)
 }
 
-pub fn notary_shared_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Router {
+pub fn notary_shared_router_from_runtime(
+    snapshot: NotaryRuntimeSnapshot,
+) -> Result<Router, StandaloneServerError> {
+    snapshot.ensure_ready_to_serve()?;
     let NotaryRuntimeSnapshot {
         metrics,
         auth_state,
@@ -202,7 +248,7 @@ pub fn notary_shared_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Rou
         get(admin_metrics_handler).with_state(Arc::clone(&metrics)),
     );
 
-    layer_notary_routes(
+    Ok(layer_notary_routes(
         routes,
         metrics,
         auth_state,
@@ -210,10 +256,13 @@ pub fn notary_shared_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Rou
         cors_policy,
         wallet_cors_policy,
         http_limits,
-    )
+    ))
 }
 
-pub fn notary_routers_from_runtime(snapshot: NotaryRuntimeSnapshot) -> NotaryRouters {
+pub fn notary_routers_from_runtime(
+    snapshot: NotaryRuntimeSnapshot,
+) -> Result<NotaryRouters, StandaloneServerError> {
+    snapshot.ensure_ready_to_serve()?;
     let NotaryRuntimeSnapshot {
         metrics,
         auth_state,
@@ -232,7 +281,7 @@ pub fn notary_routers_from_runtime(snapshot: NotaryRuntimeSnapshot) -> NotaryRou
         get(admin_metrics_handler).with_state(Arc::clone(&metrics)),
     );
 
-    NotaryRouters {
+    Ok(NotaryRouters {
         public: layer_notary_routes(
             public_routes,
             Arc::clone(&metrics),
@@ -251,19 +300,23 @@ pub fn notary_routers_from_runtime(snapshot: NotaryRuntimeSnapshot) -> NotaryRou
             wallet_cors_policy,
             http_limits,
         ),
-    }
+    })
 }
 
 /// Build the router mounted on the public listener.
 ///
 /// The returned router is still wrapped in auth/audit middleware; only explicit
 /// probe and public protocol routes are exempted from authentication.
-pub fn notary_public_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Router {
-    notary_routers_from_runtime(snapshot).public
+pub fn notary_public_router_from_runtime(
+    snapshot: NotaryRuntimeSnapshot,
+) -> Result<Router, StandaloneServerError> {
+    Ok(notary_routers_from_runtime(snapshot)?.public)
 }
 
-pub fn notary_admin_router_from_runtime(snapshot: NotaryRuntimeSnapshot) -> Router {
-    notary_routers_from_runtime(snapshot).admin
+pub fn notary_admin_router_from_runtime(
+    snapshot: NotaryRuntimeSnapshot,
+) -> Result<Router, StandaloneServerError> {
+    Ok(notary_routers_from_runtime(snapshot)?.admin)
 }
 
 fn layer_notary_routes(
@@ -333,6 +386,26 @@ pub enum StandaloneServerError {
     InvalidCredentialHash(String, #[source] FingerprintFormatError),
     #[error("configured source token environment variable is missing or empty: {0}")]
     MissingSourceTokenEnv(String),
+    #[error("configured Relay destination is invalid")]
+    InvalidRelayDestination,
+    #[error("configured Relay consultation activation plan is invalid")]
+    InvalidRelayActivationPlan,
+    #[error("Relay consultation activation failed")]
+    RelayActivation,
+    #[error("Relay consultation client was already activated")]
+    RelayAlreadyActivated,
+    #[error("Relay consultation client was not activated before serving")]
+    RelayNotActivated,
+    #[error("Relay workload credential is unavailable")]
+    RelayCredentialUnavailable,
+    #[error("Relay rejected the configured workload credential")]
+    RelayCredentialsRejected,
+    #[error("Relay consultation profile was not found")]
+    RelayProfileNotFound,
+    #[error("Relay consultation profile does not match its configured pin")]
+    RelayProfileMismatch,
+    #[error("Relay consultation service is unavailable")]
+    RelayUnavailable,
     #[error("invalid source auth configuration: {0}")]
     InvalidSourceAuth(String),
     #[error("signing key '{key}' is invalid: {reason}")]

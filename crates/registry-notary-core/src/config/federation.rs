@@ -156,11 +156,6 @@ impl FederationConfig {
                 "federation.evaluation_profiles must list at least one profile",
             );
         }
-        let claim_ids: HashSet<&str> = evidence
-            .claims
-            .iter()
-            .map(|claim| claim.id.as_str())
-            .collect();
         let mut profile_ids = HashSet::new();
         for profile in &self.evaluation_profiles {
             validate_federation_non_empty("federation.evaluation_profiles[].id", &profile.id)?;
@@ -175,9 +170,18 @@ impl FederationConfig {
                 "federation.evaluation_profiles[].claim_id",
                 &profile.claim_id,
             )?;
-            if !claim_ids.contains(profile.claim_id.as_str()) {
+            let claim = evidence
+                .claims
+                .iter()
+                .find(|claim| claim.id == profile.claim_id)
+                .ok_or_else(|| EvidenceConfigError::InvalidFederationConfig {
+                    reason:
+                        "federation.evaluation_profiles[].claim_id must reference an evidence claim"
+                            .to_string(),
+                })?;
+            if claim.evidence_mode.is_registry_backed() {
                 return invalid_federation(
-                    "federation.evaluation_profiles[].claim_id must reference an evidence claim",
+                    "federation.evaluation_profiles[].claim_id cannot reference a registry_backed claim until federation preserves Relay consultation audit correlation",
                 );
             }
             validate_federation_non_empty(

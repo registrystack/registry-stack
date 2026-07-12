@@ -1,5 +1,63 @@
 // SPDX-License-Identifier: Apache-2.0
 
+    #[test]
+    fn claim_scopes_are_enforced_without_delegating_to_the_source_reader() {
+        let source = CountingSource::default();
+        let mut claim = test_claim("selected", Vec::new(), false);
+        claim.required_scopes = vec!["registry:consult:dhis2".to_string()];
+        let evidence = test_evidence(vec![claim.clone()]);
+        let denied = machine_principal();
+
+        assert!(!principal_can_see_claim(
+            &evidence, &source, &denied, &claim
+        ));
+        assert!(matches!(
+            require_claim_access(&evidence, &source, &denied, &claim),
+            Err(EvidenceError::ScopeDenied { required })
+                if required == "registry:consult:dhis2"
+        ));
+
+        let mut allowed = denied;
+        allowed.scopes.push("registry:consult:dhis2".to_string());
+        assert!(principal_can_see_claim(
+            &evidence, &source, &allowed, &claim
+        ));
+        require_claim_access(&evidence, &source, &allowed, &claim)
+            .expect("claim scope grants access independently of source bindings");
+    }
+
+    #[tokio::test]
+    async fn authorized_self_attestation_preserves_transitional_direct_source_reads() {
+        let source = Arc::new(CountingSource::default());
+        let mut evidence_config = (*test_evidence(vec![test_claim(
+            "selected",
+            Vec::new(),
+            true,
+        )]))
+        .clone();
+        evidence_config.allowed_purposes = vec!["test".to_string()];
+        let evidence = Arc::new(evidence_config);
+        let store = EvidenceStore::default();
+
+        let results = RegistryNotaryRuntime::new()
+            .evaluate_with_source_capability(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &store,
+                &self_attestation_principal(),
+                self_attestation_capability("selected"),
+                test_request("selected"),
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("the explicit transitional lane preserves its governed self-service read");
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 1);
+    }
+
     #[tokio::test]
     async fn batch_subject_purpose_conflict_rejects_batch_default() {
         let source = Arc::new(CountingSource::default());
