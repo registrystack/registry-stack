@@ -146,6 +146,56 @@ list.
 `consent: required` is not accepted in this authoring version.
 Use `consent: not_required` until a verified consent input and denial contract are available.
 
+## Map a composite subject selector
+
+A consultation still selects one subject when that subject needs several exact attributes.
+Declare one to four required inputs in the integration, then map every input from the request in
+the service consultation.
+The following integration uses an exact given name, family name, and full birth date:
+
+```yaml
+input:
+  given_name:
+    type: string
+    bytes: 80
+    pattern: "^[A-Za-z '-]+$"
+    canonicalization: identity
+  family_name:
+    type: string
+    bytes: 80
+    pattern: "^[A-Za-z '-]+$"
+    canonicalization: identity
+  date_of_birth:
+    type: full_date
+    bytes: 10
+    pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    canonicalization: identity
+```
+
+Map all three components in `registry-stack.yaml`:
+
+```yaml
+consultations:
+  person:
+    integration: person-record
+    input:
+      given_name: request.target.identifiers.given_name
+      family_name: request.target.identifiers.family_name
+      date_of_birth: request.target.identifiers.date_of_birth
+```
+
+Registry Relay applies the complete selector as one exact `AND` predicate and probes at most two
+records.
+Missing components fail before source access, and two matching records return `ambiguous` rather
+than selecting one.
+Optional, fuzzy, weighted, and range matching are outside this contract.
+Changing YAML member order does not change the generated selector identity.
+
+{/* Evidence: crates/registryctl/tests/country_authoring.rs,
+    exact_selector_sizes_one_through_four_compile_for_http_and_snapshot,
+    exact_selector_authored_member_order_is_canonical, and
+    opencrvs_composite_dci_uses_unified_exact_predicates_canonically. */}
+
 ## Define bounded acquisition and facts
 
 Edit the referenced `integration.yaml`.
@@ -230,6 +280,118 @@ The response schema is closed and bounded.
 Map only the facts that claims require.
 Use a non-null Boolean presence fact for existence and nullable record facts for the no-match
 case.
+
+## Use fixed API-key credentials
+
+Use `api_key_header` only when the source expects a fixed header name.
+The public integration declares the name and maximum value size, never the key value:
+
+```yaml
+capability:
+  bounded_http:
+    credential:
+      type: api_key_header
+      name: x-country-api-key
+      max_value_bytes: 128
+```
+
+The private environment binds the value through a secret reference:
+
+```yaml
+integrations:
+  enrollment:
+    credential:
+      type: api_key_header
+      value: { secret: COUNTRY_SOURCE_API_KEY }
+      generation: 1
+```
+
+Registry Stack rejects authentication, cookie, host, forwarding, proxy, hop-by-hop, and other
+security-sensitive header names.
+The caller cannot select the header name or value.
+
+Use `api_key_query` only when the upstream has no safer authentication mechanism.
+Declare the fixed query parameter name in the integration, change the private credential type to
+`api_key_query`, and record the required review:
+
+```yaml
+capability:
+  bounded_http:
+    credential:
+      type: api_key_query
+      name: apiKey
+      max_value_bytes: 128
+```
+
+```yaml
+integrations:
+  enrollment:
+    credential:
+      type: api_key_query
+      value: { secret: COUNTRY_SOURCE_API_KEY }
+      generation: 1
+      review: operator_security
+```
+
+Query credential names cannot collide with authored request parameters.
+Outside loopback tests, the destination must use verified HTTPS.
+Registry Stack keeps the value out of authored and generated files, diagnostics, retained URLs,
+metrics, audit, and evidence that Registry Stack owns.
+The upstream server, reverse proxy, web application firewall, and network appliances can still
+retain complete URLs, so the operator-security review must record that residual risk.
+
+{/* Evidence: crates/registryctl/tests/country_authoring.rs,
+    api_key_interfaces_keep_values_environment_only_and_enforce_query_review;
+    crates/registry-relay/src/source_plan/credentials/tests.rs,
+    api_key_runtime_capabilities_keep_sentinel_material_out_of_diagnostics. */}
+
+## Use the closed FHIR R4 journey
+
+Fast Healthcare Interoperability Resources Release 4 (FHIR R4) integrations use the same bounded
+HTTP capability and credential boundary.
+The fixture-backed `fhir-r4-coverage-active` conformance workspace performs two fixed searches:
+an exact Patient anchor followed by one Coverage relation.
+Both operations declare their resource path, search parameters, response codec, closed schema,
+byte limit, and probe-two cardinality before deployment.
+
+```yaml
+operations:
+  patient:
+    primitive: fhir_r4_search_get
+    request:
+      method: GET
+      destination: data
+      path: /fhir/Patient
+      codec: fhir_r4_search_get
+      query:
+        _count: { value: "2" }
+        birthdate: { input: birthdate }
+        family: { input: family }
+        given: { input: given }
+  coverage:
+    depends_on: [patient]
+    primitive: fhir_r4_search_get
+    request:
+      method: GET
+      destination: data
+      path: /fhir/Coverage
+      codec: fhir_r4_search_get
+      query:
+        _count: { value: "2" }
+        beneficiary: { prior: patient.id }
+```
+
+This profile accepts only the authored resources, parameters, relation, and projection.
+It rejects malformed or oversized Bundles, wrong resource types, ambiguous anchors or relations,
+and `OperationOutcome` responses.
+Registry Relay does not follow Bundle pagination links or expose caller-selected FHIR requests,
+FHIRPath, `_include`, `_revinclude`, or a generic FHIR proxy.
+The FHIR workspace is a release conformance fixture, not an `init --from` starter or a claim of
+interoperability with an untested FHIR deployment.
+
+{/* Evidence: crates/registryctl/tests/fixtures/country-authoring/fhir-r4-coverage-active/ and
+    crates/registryctl/tests/country_authoring.rs,
+    fhir_r4_coverage_active_passes_the_closed_bundle_matrix. */}
 
 ## Author an exact snapshot integration
 
@@ -661,9 +823,24 @@ The pre-release differential conformance path exists only in Registry Stack's co
 harness. Authored YAML, CLI flags, environment variables, startup configuration, and runtime APIs
 cannot select that path.
 
+Release images include the dedicated `registry-relay-rhai-worker` executable beside
+`registry-relay`.
+If you install standalone release binaries instead of the image, install both executables in the
+same directory under the canonical names `registry-relay` and `registry-relay-rhai-worker`, and
+ensure both are executable.
+Registry Relay refuses SandboxedRhai activation when the companion is absent.
+Production activation is Linux-only and enforces a hard maximum of 128 MiB of worker address
+space, with a lower reviewed profile limit allowed.
+Each evaluation starts a fresh worker with a scrubbed environment and one-execution lifetime.
+
 The script can choose among declared named operations and map typed values.
 It cannot receive or decide caller identity, scopes, purpose, service, claim, credential format,
 disclosure, authorization, source credentials, raw responses, or provenance.
+
+{/* Evidence: crates/registry-relay/src/rhai_worker.rs,
+    WorkerProcess::dedicated_executable and MAX_MEMORY_BYTES;
+    crates/registry-relay/src/consultation/service.rs,
+    validate_production_rhai_worker_requirement; and release/docker/Dockerfile.registry-relay. */}
 
 ## Verify the authored boundary
 

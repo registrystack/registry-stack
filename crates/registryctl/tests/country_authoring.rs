@@ -9,6 +9,7 @@ use registryctl::{
     BundleSignOptions, CountryBuildOptions, CountryCheckOptions, CountryInitOptions,
     CountryStarter, CountryTestOptions, ReviewClass,
 };
+use sha2::{Digest as _, Sha256};
 
 const TEST_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registryctl-test-private-key"}"#;
 const TEST_PUBLIC_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registryctl-test-private-key"}"#;
@@ -1233,6 +1234,11 @@ fn check_and_build_produce_deterministic_product_inputs() {
     let first_closure = directory_closure(&output);
     build_country_project(&options).expect("second build");
     assert_eq!(first_closure, directory_closure(&output));
+    assert_eq!(
+        closure_digest(&first_closure),
+        "57d14aa988611e5fd985cc8d3a6997ca74cf1aa826316b9280716bb784e40549",
+        "country product inputs must match the cross-machine golden digest"
+    );
 }
 
 #[test]
@@ -2249,6 +2255,36 @@ fn directory_closure(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     walkdir(root, root, &mut files);
     files.sort_by(|left, right| left.0.cmp(&right.0));
     files
+}
+
+fn closure_digest(files: &[(PathBuf, Vec<u8>)]) -> String {
+    use std::fmt::Write as _;
+
+    let mut hasher = Sha256::new();
+    for (path, bytes) in files {
+        let path = path
+            .to_str()
+            .expect("generated relative paths are UTF-8")
+            .as_bytes();
+        hasher.update(
+            u64::try_from(path.len())
+                .expect("path length fits u64")
+                .to_be_bytes(),
+        );
+        hasher.update(path);
+        hasher.update(
+            u64::try_from(bytes.len())
+                .expect("file length fits u64")
+                .to_be_bytes(),
+        );
+        hasher.update(bytes);
+    }
+    let digest = hasher.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    encoded
 }
 
 fn walkdir(root: &Path, directory: &Path, output: &mut Vec<(PathBuf, Vec<u8>)>) {

@@ -179,6 +179,44 @@ jobs:
         working-directory: crates/registry-relay
         run: just exposure-check
 
+  country-authoring-determinism:
+    name: Country authoring determinism (${{ matrix.arch }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64-linux
+            expected_uname: x86_64
+          - runner: macos-14
+            arch: aarch64-macos
+            expected_uname: arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Assert native architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "${{ matrix.expected_uname }}"
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: country-authoring-${{ matrix.arch }}
+
+      - name: Verify cross-machine country product inputs
+        run: >-
+          cargo test --locked -p registryctl --test country_authoring
+          check_and_build_produce_deterministic_product_inputs -- --exact
+
   release-tool:
     name: Release tooling
     needs: changes
