@@ -37,6 +37,7 @@ use thiserror::Error;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
+    sync::watch,
     task::JoinHandle,
 };
 use tokio_postgres::{Client, Config as PostgresConfig};
@@ -54,6 +55,8 @@ use registry_relay::{
         },
         ConsultationService, ConsultationServiceReadiness,
     },
+    format::FormatRegistry,
+    ingest::IngestRegistry,
     server,
 };
 
@@ -72,6 +75,7 @@ const OPENCRVS_CLIENT_ID_ENV: &str = "OPENCRVS_DCI_CLIENT_ID";
 const OPENCRVS_CLIENT_SECRET_ENV: &str = "OPENCRVS_DCI_CLIENT_SECRET";
 const NOTARY_DHIS2_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_DHIS2_API_KEY_HASH";
 const NOTARY_OPENCRVS_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_OPENCRVS_API_KEY_HASH";
+const NOTARY_SYNTHETIC_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_SYNTHETIC_SNAPSHOT_API_KEY_HASH";
 const NOTARY_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_AUDIT_HASH_SECRET";
 
 const PROFILE_VERSION: &str = "1";
@@ -93,6 +97,7 @@ const MINIMIZATION_FILE: &str = "evidence/minimization.json";
 enum JourneyProfile {
     Dhis2,
     OpenCrvs,
+    SyntheticSnapshot,
 }
 
 impl JourneyProfile {
@@ -100,6 +105,7 @@ impl JourneyProfile {
         match self {
             Self::Dhis2 => "profiles/dhis2-2.41.9-enrollment-status",
             Self::OpenCrvs => "profiles/opencrvs-1.9.0-rc.1-farajaland-birth-record-exists",
+            Self::SyntheticSnapshot => "profiles/synthetic-snapshot-exact-person-status",
         }
     }
 
@@ -107,6 +113,7 @@ impl JourneyProfile {
         match self {
             Self::Dhis2 => "dhis2.tracker.enrollment-status.exact",
             Self::OpenCrvs => "opencrvs.dci.farajaland.birth-record-exists.exact",
+            Self::SyntheticSnapshot => "synthetic.snapshot.person-status.exact",
         }
     }
 
@@ -114,6 +121,7 @@ impl JourneyProfile {
         match self {
             Self::Dhis2 => "program-enrollment-verification",
             Self::OpenCrvs => "civil-registration-verification",
+            Self::SyntheticSnapshot => "benefit-status-verification",
         }
     }
 
@@ -121,6 +129,7 @@ impl JourneyProfile {
         match self {
             Self::Dhis2 => "registry:consult:dhis2-enrollment-status",
             Self::OpenCrvs => "registry:consult:opencrvs-birth-record",
+            Self::SyntheticSnapshot => "registry:consult:synthetic-snapshot-person-status",
         }
     }
 
@@ -128,6 +137,7 @@ impl JourneyProfile {
         match self {
             Self::Dhis2 => NOTARY_DHIS2_API_KEY_HASH_ENV,
             Self::OpenCrvs => NOTARY_OPENCRVS_API_KEY_HASH_ENV,
+            Self::SyntheticSnapshot => NOTARY_SYNTHETIC_API_KEY_HASH_ENV,
         }
     }
 
@@ -135,6 +145,7 @@ impl JourneyProfile {
         match self {
             Self::Dhis2 => "dhis2.tracker.enrollment-status",
             Self::OpenCrvs => "opencrvs.dci.farajaland.birth-record-exists",
+            Self::SyntheticSnapshot => "synthetic.snapshot.person-status",
         }
     }
 
@@ -146,13 +157,17 @@ impl JourneyProfile {
             Self::OpenCrvs => {
                 "sha256:04297b0429cf311c79dedd332f45d1fd7ee9d9e4b56d2c77d793fdeeeeb986aa"
             }
+            Self::SyntheticSnapshot => {
+                "sha256:cc490a9b51255611f3dc3b529952a185c22a32c260644b095d6b3bf6ac52fab6"
+            }
         }
     }
 
-    fn source_environment(self) -> [&'static str; 2] {
+    fn source_environment(self) -> Option<[&'static str; 2]> {
         match self {
-            Self::Dhis2 => [DHIS2_USERNAME_ENV, DHIS2_PASSWORD_ENV],
-            Self::OpenCrvs => [OPENCRVS_CLIENT_ID_ENV, OPENCRVS_CLIENT_SECRET_ENV],
+            Self::Dhis2 => Some([DHIS2_USERNAME_ENV, DHIS2_PASSWORD_ENV]),
+            Self::OpenCrvs => Some([OPENCRVS_CLIENT_ID_ENV, OPENCRVS_CLIENT_SECRET_ENV]),
+            Self::SyntheticSnapshot => None,
         }
     }
 
@@ -160,6 +175,7 @@ impl JourneyProfile {
         match self {
             Self::Dhis2 => Zeroizing::new("PQfMcpmXeFE".to_string()),
             Self::OpenCrvs => Zeroizing::new(format!("{:010}", OsRng.next_u64() % 10_000_000_000)),
+            Self::SyntheticSnapshot => Zeroizing::new("per-2001".to_string()),
         }
     }
 }
@@ -194,6 +210,8 @@ enum LiveJourneyError {
     ConsultationActivation,
     #[error("the concrete consultation service was not ready")]
     ConsultationNotReady,
+    #[error("the synthetic snapshot ingest and publication failed")]
+    SnapshotIngest,
     #[error("the production protected router could not be assembled")]
     RouterAssembly,
     #[error("the protected Relay listener could not be started")]
@@ -256,6 +274,16 @@ async fn live_opencrvs_consultation_no_match_lifecycle() {
     }
 }
 
+/// Run via `scripts/run-live-consultation-journey.sh synthetic`. The source fixture is
+/// repository-owned; only the disposable TLS PostgreSQL state plane is external.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires the explicit synthetic runner and a disposable TLS PostgreSQL 16 instance"]
+async fn synthetic_snapshot_exact_consultation_lifecycle() {
+    if let Err(error) = run_live_consultation_lifecycle(JourneyProfile::SyntheticSnapshot).await {
+        panic!("synthetic SnapshotExact consultation lifecycle failed: {error}");
+    }
+}
+
 #[test]
 fn maintained_operator_example_stages_through_real_loader() {
     for (profile, source_url) in [
@@ -264,6 +292,7 @@ fn maintained_operator_example_stages_through_real_loader() {
             "https://dhis2.example.test/stable-2-41-9",
         ),
         (JourneyProfile::OpenCrvs, "https://opencrvs.example.test"),
+        (JourneyProfile::SyntheticSnapshot, ""),
     ] {
         let staged = StagedProfile::new(
             profile,
@@ -281,7 +310,11 @@ fn maintained_operator_example_stages_through_real_loader() {
 
 #[test]
 fn maintained_notary_example_loads_and_validates() {
-    for profile in [JourneyProfile::Dhis2, JourneyProfile::OpenCrvs] {
+    for profile in [
+        JourneyProfile::Dhis2,
+        JourneyProfile::OpenCrvs,
+        JourneyProfile::SyntheticSnapshot,
+    ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(profile.directory())
             .join(NOTARY_CONFIG_EXAMPLE_FILE);
@@ -350,16 +383,28 @@ fn durable_failure_diagnostics_remain_closed_and_exact() {
 }
 
 async fn run_live_consultation_lifecycle(profile: JourneyProfile) -> Result<(), LiveJourneyError> {
-    let [source_principal_env, source_secret_env] = profile.source_environment();
-    for name in [source_principal_env, source_secret_env] {
-        require_nonempty_environment(name)?;
-    }
-    let source_principal = required_secret_environment(source_principal_env)?;
-    let source_secret = required_secret_environment(source_secret_env)?;
-    let source_base_url = required_secret_environment(match profile {
-        JourneyProfile::Dhis2 => DHIS2_BASE_URL_ENV,
-        JourneyProfile::OpenCrvs => OPENCRVS_BASE_URL_ENV,
-    })?;
+    let (source_principal, source_secret, source_base_url) = match profile.source_environment() {
+        Some([source_principal_env, source_secret_env]) => {
+            for name in [source_principal_env, source_secret_env] {
+                require_nonempty_environment(name)?;
+            }
+            let source_base_url = required_secret_environment(match profile {
+                JourneyProfile::Dhis2 => DHIS2_BASE_URL_ENV,
+                JourneyProfile::OpenCrvs => OPENCRVS_BASE_URL_ENV,
+                JourneyProfile::SyntheticSnapshot => unreachable!("synthetic source is local"),
+            })?;
+            (
+                required_secret_environment(source_principal_env)?,
+                required_secret_environment(source_secret_env)?,
+                source_base_url,
+            )
+        }
+        None => (
+            Zeroizing::new("repository-owned-fixture".to_string()),
+            Zeroizing::new("no-source-credential".to_string()),
+            Zeroizing::new("local-snapshot-materialization".to_string()),
+        ),
+    };
     let admin_database_url = required_secret_environment(ADMIN_DATABASE_URL_ENV)?;
     let postgres_ca_path = required_path_environment(POSTGRES_CA_PATH_ENV)?;
 
@@ -428,14 +473,32 @@ async fn run_live_consultation_lifecycle(profile: JourneyProfile) -> Result<(), 
             .map_err(|_| LiveJourneyError::AuthActivation)?;
         let chain_profile = AuditChainProfile::registry_relay_from_env(AUDIT_SECRET_ENV)
             .map_err(|_| LiveJourneyError::AuditActivation)?;
+        let datafusion = Arc::new(datafusion::execution::context::SessionContext::new());
         let service = ConsultationService::activate(
             config.as_ref(),
             artifacts,
             chain_profile.hasher(),
-            Arc::new(datafusion::execution::context::SessionContext::new()),
+            Arc::clone(&datafusion),
         )
         .await
         .map_err(|_| LiveJourneyError::ConsultationActivation)?;
+        let ingest = Arc::new(
+            IngestRegistry::from_config(
+                config.as_ref(),
+                Arc::new(FormatRegistry::with_v1_defaults()),
+                Arc::from(config.server.cache_dir.as_path()),
+                datafusion,
+            )
+            .map_err(|_| LiveJourneyError::SnapshotIngest)?,
+        );
+        service
+            .bind_ingest_registry(ingest.as_ref())
+            .map_err(|_| LiveJourneyError::SnapshotIngest)?;
+        let (ingest_tx, _ingest_rx) = watch::channel(ingest.snapshot());
+        ingest.run_initial_ingest(ingest_tx).await;
+        if profile == JourneyProfile::SyntheticSnapshot && !ingest.snapshot().fully_ready() {
+            return Err(LiveJourneyError::SnapshotIngest);
+        }
         let service_execution = async {
             if service.readiness().await != ConsultationServiceReadiness::Ready {
                 return Err(LiveJourneyError::ConsultationNotReady);
@@ -615,6 +678,10 @@ async fn execute_notary_journey(
                     JourneyProfile::OpenCrvs => json!([
                         {"id": "opencrvs-birth-record-exists", "version": "1"}
                     ]),
+                    JourneyProfile::SyntheticSnapshot => json!([
+                        {"id": "synthetic-person-known", "version": "1"},
+                        {"id": "synthetic-person-status", "version": "1"}
+                    ]),
                 },
                 "disclosure": "value",
                 "purpose": profile.purpose()
@@ -648,6 +715,7 @@ fn validate_minimized_notary_response(
     let expected_result_count = match profile {
         JourneyProfile::Dhis2 => 2,
         JourneyProfile::OpenCrvs => 1,
+        JourneyProfile::SyntheticSnapshot => 2,
     };
     let results = response
         .get("results")
@@ -700,6 +768,28 @@ fn validate_minimized_notary_response(
                 != Some("opencrvs-birth-record-exists")
                 || result.get("value") != Some(&Value::Bool(false))
             {
+                return Err(LiveJourneyError::NotaryResponse);
+            }
+        }
+        JourneyProfile::SyntheticSnapshot => {
+            let known = results
+                .iter()
+                .find(|result| {
+                    result.get("claim_id").and_then(Value::as_str) == Some("synthetic-person-known")
+                })
+                .ok_or(LiveJourneyError::NotaryResponse)?;
+            if known.get("value") != Some(&Value::Bool(true)) {
+                return Err(LiveJourneyError::NotaryResponse);
+            }
+            let status = results
+                .iter()
+                .find(|result| {
+                    result.get("claim_id").and_then(Value::as_str)
+                        == Some("synthetic-person-status")
+                })
+                .and_then(|result| result.get("value"))
+                .and_then(Value::as_str);
+            if status != Some("ACTIVE") {
                 return Err(LiveJourneyError::NotaryResponse);
             }
         }
@@ -952,7 +1042,22 @@ impl StagedProfile {
             &evidence_directory.join("minimization.json"),
         )?;
 
-        let binding = live_private_binding(profile, source_base_url)?;
+        if profile == JourneyProfile::SyntheticSnapshot {
+            let fixture_directory = directory.path().join("fixtures");
+            fs::create_dir(&fixture_directory).map_err(|_| LiveJourneyError::ArtifactStaging)?;
+            copy_artifact(
+                &source_root.join("fixtures/people.csv"),
+                &fixture_directory.join("people.csv"),
+            )?;
+        }
+
+        let binding = if profile == JourneyProfile::SyntheticSnapshot {
+            let bytes = fs::read(source_root.join("private-binding.example.json"))
+                .map_err(|_| LiveJourneyError::ArtifactStaging)?;
+            serde_json::from_slice(&bytes).map_err(|_| LiveJourneyError::ArtifactStaging)?
+        } else {
+            live_private_binding(profile, source_base_url)?
+        };
         let binding_bytes =
             serde_json::to_vec_pretty(&binding).map_err(|_| LiveJourneyError::ArtifactStaging)?;
         let binding_path = directory.path().join("private-binding.json");
@@ -1103,6 +1208,7 @@ fn live_private_binding(
     let data_destination_id = match profile {
         JourneyProfile::Dhis2 => "dhis2-live-data",
         JourneyProfile::OpenCrvs => "opencrvs-live-data",
+        JourneyProfile::SyntheticSnapshot => return Err(LiveJourneyError::InvalidSourceBaseUrl),
     };
     let mut destination = Map::from_iter([
         ("id".to_string(), json!(data_destination_id)),
@@ -1120,6 +1226,7 @@ fn live_private_binding(
             credential.insert("id".to_string(), json!("opencrvs-live-oauth"));
             Value::Object(credential)
         }
+        JourneyProfile::SyntheticSnapshot => return Err(LiveJourneyError::InvalidSourceBaseUrl),
     };
     let (registry_instance, source_instance, credential_ref, max_source_bytes, timeout_ms) =
         match profile {
@@ -1137,6 +1244,9 @@ fn live_private_binding(
                 147_456,
                 20_000,
             ),
+            JourneyProfile::SyntheticSnapshot => {
+                return Err(LiveJourneyError::InvalidSourceBaseUrl)
+            }
         };
     Ok(json!({
         "profile": {"id": profile.profile_id(), "version": PROFILE_VERSION},
@@ -1400,6 +1510,7 @@ SELECT
                     {"kind": "data", "ordinal": 1, "operation_id": "lookup-birth-record"}
                 ]),
             ),
+            JourneyProfile::SyntheticSnapshot => ("match", 0, 0, json!([])),
         };
         let sensitive_values_absent = row
             .try_get::<_, bool>("sensitive_values_absent")

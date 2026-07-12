@@ -1,0 +1,24 @@
+{
+  "schema": "registry.relay.profile-evidence.v1",
+  "class": "minimization",
+  "product_family": "registry-stack-synthetic-snapshot",
+  "product_version": "1",
+  "key_field": "subject_key",
+  "acquired_record_fields": [
+    "registration_status",
+    "source_observed_at",
+    "source_revision"
+  ],
+  "released_fields": [
+    "registration_status"
+  ],
+  "restricted_provenance_fields": [
+    "source_observed_at",
+    "source_revision"
+  ],
+  "excluded_as_private": [
+    "table_provider",
+    "private_binding_hash",
+    "restricted_content_digest"
+  ]
+}

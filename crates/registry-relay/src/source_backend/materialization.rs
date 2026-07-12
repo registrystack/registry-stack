@@ -132,6 +132,12 @@ impl SnapshotMaterializationCoordinator {
             .map(|facts| facts.snapshot_retention_generations)
     }
 
+    pub(crate) fn footprint_limits(&self, table_provider: &str) -> Option<(u64, u64)> {
+        self.facts
+            .get(table_provider)
+            .map(|facts| (facts.max_source_records, facts.max_source_bytes))
+    }
+
     pub(crate) fn validates_declared_schema(
         &self,
         table_provider: &str,
@@ -143,6 +149,7 @@ impl SnapshotMaterializationCoordinator {
         schema
             .field(&facts.key_physical_field)
             .is_some_and(|field| field.ty == FieldType::String)
+            && schema.fields.len() == facts.required_physical_fields.len()
             && facts
                 .required_physical_fields
                 .iter()

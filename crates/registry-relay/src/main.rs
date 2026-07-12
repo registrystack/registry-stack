@@ -579,7 +579,7 @@ fn build_doctor_report(
     }
 
     let loaded_config = match config::load_with_metadata(config_path) {
-        Ok(loaded) => {
+        Ok(mut loaded) => {
             checks.push(DoctorCheck::passed(
                 "config",
                 "relay.config.loaded",
@@ -622,6 +622,40 @@ fn build_doctor_report(
                     "split metadata source digest is present",
                     None,
                 ));
+            }
+            match (
+                loaded.runtime.consultation.is_some(),
+                loaded.consultation_artifacts.take(),
+            ) {
+                (true, Some(artifacts)) => match ConsultationService::validate_configuration(
+                    &loaded.runtime,
+                    artifacts,
+                ) {
+                    Ok(()) => checks.push(DoctorCheck::passed(
+                        "consultation_artifacts",
+                        "relay.consultation_artifacts.verified",
+                        "consultation artifact closure compiled with closed runtime capabilities",
+                        None,
+                    )),
+                    Err(_) => checks.push(DoctorCheck::failed(
+                        "consultation_artifacts",
+                        "relay.consultation_artifacts.failed",
+                        "consultation artifact compilation failed",
+                        Some("check the hash-pinned contracts, packs, bindings, and environment references"),
+                    )),
+                },
+                (false, None) => checks.push(DoctorCheck::passed(
+                    "consultation_artifacts",
+                    "relay.consultation_artifacts.not_configured",
+                    "consultation artifacts are not configured",
+                    None,
+                )),
+                _ => checks.push(DoctorCheck::failed(
+                    "consultation_artifacts",
+                    "relay.consultation_artifacts.failed",
+                    "consultation configuration and artifact closure disagree",
+                    Some("check the consultation artifact manifest and runtime configuration"),
+                )),
             }
             Some(loaded.runtime.clone())
         }

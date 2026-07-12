@@ -1,0 +1,5 @@
+subject_key,registration_status_text,observed_at_text,revision_text
+per-2001,ACTIVE,2026-07-11T12:00:00Z,synthetic-revision-1
+per-2002,INACTIVE,2026-07-11T12:00:00Z,synthetic-revision-1
+per-2003,PENDING,2026-07-11T12:00:00Z,synthetic-revision-1
+per-2003,APPROVED,2026-07-11T12:00:00Z,synthetic-revision-1

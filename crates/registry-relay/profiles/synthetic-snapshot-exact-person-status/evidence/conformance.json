@@ -1,0 +1,32 @@
+{
+  "schema": "registry.relay.profile-evidence.v1",
+  "class": "conformance",
+  "product_family": "registry-stack-synthetic-snapshot",
+  "product_version": "1",
+  "operation": "snapshot exact person status",
+  "response_cases": {
+    "no_match": {
+      "subject_key": "per-2999",
+      "records": []
+    },
+    "match": {
+      "subject_key": "per-2001",
+      "records": [
+        {
+          "registration_status": "ACTIVE"
+        }
+      ]
+    },
+    "ambiguous": {
+      "subject_key": "per-2003",
+      "records": [
+        {
+          "registration_status": "PENDING"
+        },
+        {
+          "registration_status": "APPROVED"
+        }
+      ]
+    }
+  }
+}

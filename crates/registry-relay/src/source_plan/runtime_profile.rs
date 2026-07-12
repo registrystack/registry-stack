@@ -363,46 +363,45 @@ impl CompiledRuntimeProfile {
                 rhai_predicate_identity.as_ref(),
                 snapshot,
             )?;
-        let acquisition_provenance = match (
+        let (observed, revision) = (
             &contract.document.spec.source_provenance.source_observed_at,
             &contract.document.spec.source_provenance.source_revision,
-        ) {
-            (observed, revision) => CompiledAcquisitionProvenanceContract {
-                source_observed_at: match observed {
-                    SourceObservedAtDocument::Absent => CompiledSourceObservedAtContract::Absent,
-                    SourceObservedAtDocument::AcquiredRfc3339 { field } => {
-                        let (_, physical_field) = snapshot
-                            .and_then(CompiledSnapshotBinding::source_observed_at_extraction)
-                            .filter(|(logical, _)| *logical == field)
-                            .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-                        CompiledSourceObservedAtContract::AcquiredRfc3339 {
-                            field: AcquiredField::try_from(field.as_str())
-                                .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
-                            physical_field: physical_field.into(),
-                        }
+        );
+        let acquisition_provenance = CompiledAcquisitionProvenanceContract {
+            source_observed_at: match observed {
+                SourceObservedAtDocument::Absent => CompiledSourceObservedAtContract::Absent,
+                SourceObservedAtDocument::AcquiredRfc3339 { field } => {
+                    let (_, physical_field) = snapshot
+                        .and_then(CompiledSnapshotBinding::source_observed_at_extraction)
+                        .filter(|(logical, _)| *logical == field)
+                        .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+                    CompiledSourceObservedAtContract::AcquiredRfc3339 {
+                        field: AcquiredField::try_from(field.as_str())
+                            .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
+                        physical_field: physical_field.into(),
                     }
-                },
-                source_revision: match revision {
-                    SourceRevisionDocument::Absent => CompiledSourceRevisionContract::Absent,
-                    SourceRevisionDocument::AcquiredString { field, max_bytes } => {
-                        let (_, physical_field, compiled_max) = snapshot
-                            .and_then(CompiledSnapshotBinding::source_revision_extraction)
-                            .filter(|(logical, _, _)| *logical == field)
-                            .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-                        if compiled_max != *max_bytes {
-                            return Err(SourcePlanCompileError::CompilerInvariant);
-                        }
-                        CompiledSourceRevisionContract::AcquiredString {
-                            field: AcquiredField::try_from(field.as_str())
-                                .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
-                            physical_field: physical_field.into(),
-                            max_bytes: *max_bytes,
-                        }
-                    }
-                },
-                snapshot_generation_required: kind == SourcePlanKind::SnapshotExact,
-                snapshot_published_at_required: kind == SourcePlanKind::SnapshotExact,
+                }
             },
+            source_revision: match revision {
+                SourceRevisionDocument::Absent => CompiledSourceRevisionContract::Absent,
+                SourceRevisionDocument::AcquiredString { field, max_bytes } => {
+                    let (_, physical_field, compiled_max) = snapshot
+                        .and_then(CompiledSnapshotBinding::source_revision_extraction)
+                        .filter(|(logical, _, _)| *logical == field)
+                        .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+                    if compiled_max != *max_bytes {
+                        return Err(SourcePlanCompileError::CompilerInvariant);
+                    }
+                    CompiledSourceRevisionContract::AcquiredString {
+                        field: AcquiredField::try_from(field.as_str())
+                            .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
+                        physical_field: physical_field.into(),
+                        max_bytes: *max_bytes,
+                    }
+                }
+            },
+            snapshot_generation_required: kind == SourcePlanKind::SnapshotExact,
+            snapshot_published_at_required: kind == SourcePlanKind::SnapshotExact,
         };
         Ok(Self {
             profile: contract.identity().clone(),

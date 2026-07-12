@@ -1,0 +1,136 @@
+{
+  "schema": "registry.relay.integration-pack.v1",
+  "id": "synthetic.snapshot.person-status",
+  "version": "1",
+  "spec": {
+    "product_family": "registry-stack-synthetic-snapshot",
+    "supported_version_evidence": [
+      "registry-stack-synthetic-snapshot-v1"
+    ],
+    "logical_operation": "snapshot.person-status",
+    "input_slots": {
+      "person_id": {
+        "type": "string",
+        "max_bytes": 8,
+        "pattern": "^per-[0-9][0-9][0-9][0-9]$",
+        "canonicalization": "identity"
+      }
+    },
+    "acquisition": {
+      "class": "materialized_snapshot",
+      "fields": {
+        "registration_status": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 32
+        },
+        "source_observed_at": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 64
+        },
+        "source_revision": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 32
+        }
+      }
+    },
+    "source_provenance": {
+      "source_observed_at": {
+        "type": "acquired_rfc3339",
+        "field": "source_observed_at"
+      },
+      "source_revision": {
+        "type": "acquired_string",
+        "field": "source_revision",
+        "max_bytes": 32
+      }
+    },
+    "reviewed_acquisition": {
+      "class": "materialized_snapshot",
+      "fields": {
+        "registration_status": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 32
+        }
+      },
+      "control_fields": {
+        "source_observed_at": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 64
+        },
+        "source_revision": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 32
+        }
+      },
+      "selector": {
+        "type": "snapshot_key",
+        "input": "person_id"
+      },
+      "cardinality": "probe_two",
+      "reject_unknown_fields": true
+    },
+    "output": {
+      "registration_status": {
+        "type": "string",
+        "nullable": false
+      }
+    },
+    "plan": {
+      "kind": "snapshot_exact",
+      "data_destination_slot": null,
+      "credential_destination_slot": null,
+      "operations": [],
+      "steps": [],
+      "credential_operation": null,
+      "snapshot": {
+        "max_snapshot_age_ms": 86400000,
+        "unavailable": "unavailable",
+        "immutable_generation": true,
+        "mapping": {
+          "key": {
+            "input": "person_id",
+            "physical_field": "subject_key",
+            "physical_type": "utf8",
+            "comparison": "binary_equality"
+          },
+          "projection": {
+            "registration_status": "registration_status_text",
+            "source_observed_at": "observed_at_text",
+            "source_revision": "revision_text"
+          }
+        }
+      },
+      "rhai": null
+    },
+    "bounds": {
+      "max_source_matches": 2,
+      "max_disclosed_records": 1,
+      "max_data_exchanges": 0,
+      "max_credential_exchanges": 0,
+      "max_data_destinations": 0,
+      "max_source_bytes": 4096,
+      "timeout_ms": 5000,
+      "max_in_flight": 4,
+      "quota_per_minute": 30,
+      "quota_burst": 5
+    },
+    "deployment_parameters": {},
+    "evidence": {
+      "conformance": [
+        "sha256:d0d5489d19bca6215f3c1c61ab608b615eeae88459050f7729d64be2972eef0e"
+      ],
+      "negative_security": [
+        "sha256:f51614b43181e0ac545e66fa7770be8b6154b54891a187958c51cf58a5bf0c43"
+      ],
+      "minimization": [
+        "sha256:ca0a8670021a40e4f07fe276f894c270d1a48f1997f034118490e29966e5129a"
+      ]
+    }
+  }
+}

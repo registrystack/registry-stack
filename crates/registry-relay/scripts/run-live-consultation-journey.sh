@@ -9,7 +9,7 @@ umask 077
 readonly POSTGRES_IMAGE="postgres:16"
 
 [[ "$#" -le 1 ]] || {
-  printf '%s\n' "usage: $0 [dhis2|opencrvs]" >&2
+  printf '%s\n' "usage: $0 [dhis2|opencrvs|synthetic]" >&2
   exit 1
 }
 readonly product="${1:-dhis2}"
@@ -22,8 +22,12 @@ case "$product" in
     readonly test_name="live_opencrvs_consultation_no_match_lifecycle"
     readonly temporary_label="opencrvs"
     ;;
+  synthetic)
+    readonly test_name="synthetic_snapshot_exact_consultation_lifecycle"
+    readonly temporary_label="synthetic-snapshot"
+    ;;
   *)
-    printf '%s\n' "usage: $0 [dhis2|opencrvs]" >&2
+    printf '%s\n' "usage: $0 [dhis2|opencrvs|synthetic]" >&2
     exit 1
     ;;
 esac
@@ -58,57 +62,59 @@ owned_by_current_user() {
   [[ "$owner" == "$(id -u)" ]]
 }
 
-readonly live_env_file="${REGISTRY_RELAY_LIVE_ENV_FILE:-}"
-[[ -n "$live_env_file" ]] || fail \
-  "REGISTRY_RELAY_LIVE_ENV_FILE must name the authorized mode-0600 environment file"
-[[ -f "$live_env_file" && ! -L "$live_env_file" ]] || fail \
-  "REGISTRY_RELAY_LIVE_ENV_FILE must be a regular non-symlink file"
-safe_file_mode "$live_env_file" || fail \
-  "REGISTRY_RELAY_LIVE_ENV_FILE must have mode 0600 or 0400"
-owned_by_current_user "$live_env_file" || fail \
-  "REGISTRY_RELAY_LIVE_ENV_FILE must be owned by the current user"
+if [[ "$product" != "synthetic" ]]; then
+  readonly live_env_file="${REGISTRY_RELAY_LIVE_ENV_FILE:-}"
+  [[ -n "$live_env_file" ]] || fail \
+    "REGISTRY_RELAY_LIVE_ENV_FILE must name the authorized mode-0600 environment file"
+  [[ -f "$live_env_file" && ! -L "$live_env_file" ]] || fail \
+    "REGISTRY_RELAY_LIVE_ENV_FILE must be a regular non-symlink file"
+  safe_file_mode "$live_env_file" || fail \
+    "REGISTRY_RELAY_LIVE_ENV_FILE must have mode 0600 or 0400"
+  owned_by_current_user "$live_env_file" || fail \
+    "REGISTRY_RELAY_LIVE_ENV_FILE must be owned by the current user"
 
-# shellcheck disable=SC1090
-source "$live_env_file"
-set +x
-set +v
+  # shellcheck disable=SC1090
+  source "$live_env_file"
+  set +x
+  set +v
 
-case "$product" in
-  dhis2)
-    [[ -n "${DHIS2_BASE_URL:-}" ]] || fail "DHIS2_BASE_URL is required"
-    [[ -n "${DHIS2_USERNAME:-}" ]] || fail "DHIS2_USERNAME is required"
-    [[ -n "${DHIS2_PASSWORD:-}" ]] || fail "DHIS2_PASSWORD is required"
-    selected_base_url="$DHIS2_BASE_URL"
-    selected_principal="$DHIS2_USERNAME"
-    selected_secret="$DHIS2_PASSWORD"
-    ;;
-  opencrvs)
-    [[ -n "${OPENCRVS_DCI_BASE_URL:-}" ]] || fail "OPENCRVS_DCI_BASE_URL is required"
-    [[ -n "${OPENCRVS_DCI_CLIENT_ID:-}" ]] || fail "OPENCRVS_DCI_CLIENT_ID is required"
-    [[ -n "${OPENCRVS_DCI_CLIENT_SECRET:-}" ]] || fail \
-      "OPENCRVS_DCI_CLIENT_SECRET is required"
-    selected_base_url="$OPENCRVS_DCI_BASE_URL"
-    selected_principal="$OPENCRVS_DCI_CLIENT_ID"
-    selected_secret="$OPENCRVS_DCI_CLIENT_SECRET"
-    ;;
-esac
+  case "$product" in
+    dhis2)
+      [[ -n "${DHIS2_BASE_URL:-}" ]] || fail "DHIS2_BASE_URL is required"
+      [[ -n "${DHIS2_USERNAME:-}" ]] || fail "DHIS2_USERNAME is required"
+      [[ -n "${DHIS2_PASSWORD:-}" ]] || fail "DHIS2_PASSWORD is required"
+      selected_base_url="$DHIS2_BASE_URL"
+      selected_principal="$DHIS2_USERNAME"
+      selected_secret="$DHIS2_PASSWORD"
+      ;;
+    opencrvs)
+      [[ -n "${OPENCRVS_DCI_BASE_URL:-}" ]] || fail "OPENCRVS_DCI_BASE_URL is required"
+      [[ -n "${OPENCRVS_DCI_CLIENT_ID:-}" ]] || fail "OPENCRVS_DCI_CLIENT_ID is required"
+      [[ -n "${OPENCRVS_DCI_CLIENT_SECRET:-}" ]] || fail \
+        "OPENCRVS_DCI_CLIENT_SECRET is required"
+      selected_base_url="$OPENCRVS_DCI_BASE_URL"
+      selected_principal="$OPENCRVS_DCI_CLIENT_ID"
+      selected_secret="$OPENCRVS_DCI_CLIENT_SECRET"
+      ;;
+  esac
 
-unset DHIS2_BASE_URL DHIS2_USERNAME DHIS2_PASSWORD
-unset OPENCRVS_DCI_BASE_URL OPENCRVS_DCI_CLIENT_ID
-unset OPENCRVS_DCI_CLIENT_SECRET OPENCRVS_DCI_SHA_SECRET
-case "$product" in
-  dhis2)
-    export DHIS2_BASE_URL="$selected_base_url"
-    export DHIS2_USERNAME="$selected_principal"
-    export DHIS2_PASSWORD="$selected_secret"
-    ;;
-  opencrvs)
-    export OPENCRVS_DCI_BASE_URL="$selected_base_url"
-    export OPENCRVS_DCI_CLIENT_ID="$selected_principal"
-    export OPENCRVS_DCI_CLIENT_SECRET="$selected_secret"
-    ;;
-esac
-unset selected_base_url selected_principal selected_secret
+  unset DHIS2_BASE_URL DHIS2_USERNAME DHIS2_PASSWORD
+  unset OPENCRVS_DCI_BASE_URL OPENCRVS_DCI_CLIENT_ID
+  unset OPENCRVS_DCI_CLIENT_SECRET OPENCRVS_DCI_SHA_SECRET
+  case "$product" in
+    dhis2)
+      export DHIS2_BASE_URL="$selected_base_url"
+      export DHIS2_USERNAME="$selected_principal"
+      export DHIS2_PASSWORD="$selected_secret"
+      ;;
+    opencrvs)
+      export OPENCRVS_DCI_BASE_URL="$selected_base_url"
+      export OPENCRVS_DCI_CLIENT_ID="$selected_principal"
+      export OPENCRVS_DCI_CLIENT_SECRET="$selected_secret"
+      ;;
+  esac
+  unset selected_base_url selected_principal selected_secret
+fi
 
 command -v cargo >/dev/null 2>&1 || fail "cargo is required"
 command -v docker >/dev/null 2>&1 || fail "Docker is required"

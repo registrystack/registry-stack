@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: Apache-2.0
+# Local operator example for the Registry Stack synthetic SnapshotExact journey.
+# Production and evidence-grade deployments must deliver this configuration and
+# its artifacts through the signed configuration-bundle path.
+
+server:
+  bind: "127.0.0.1:8080"
+  cache_dir: "./cache"
+  request_timeout: 30s
+
+catalog:
+  title: "Synthetic SnapshotExact Relay"
+  base_url: "https://relay.example.gov"
+  publisher: "Example Ministry"
+
+auth:
+  mode: oidc
+  oidc:
+    issuer: "https://identity.example.gov"
+    audiences: ["relay-consultation"]
+    jwks_url: "https://identity.example.gov/.well-known/jwks.json"
+    allowed_clients: ["registry-notary"]
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
+
+consultation:
+  notary_workload:
+    audience: relay-consultation
+    client_claim_selector: azp
+    client_value: registry-notary
+    principal_id: registry-notary
+  state_plane:
+    database_url_env: REGISTRY_RELAY_CONSULTATION_DATABASE_URL
+    chain_key_epoch_id: relay-consultation-chain-1
+    serving_fence_lock_key: 7221091451
+    audit_pseudonym_keyring_lock_key: 7221091452
+  artifacts:
+    public_contracts:
+      - path: public-contract.json
+        hash: sha256:6ec4b791fac13188c5d0cdec6ef48588655b22a9207086b7e495837bc52a66d2
+        sha256: sha256:a89c3296bd455b6d2d7cdcecf4311cd96e3cea66e6648fed5e5bfa9ef3286d29
+    integration_packs:
+      - path: integration-pack.json
+        hash: sha256:cc490a9b51255611f3dc3b529952a185c22a32c260644b095d6b3bf6ac52fab6
+        sha256: sha256:ffe059a7f9ec7da4dff34372b3f3a765fde0a306467d814172d06669bbfa007e
+    private_bindings:
+      - path: private-binding.example.json
+        sha256: sha256:310bf445e3b703fa6d9e9aa042d8040d7be6d76a9499264fda1d86491d201b91
+    evidence:
+      - class: conformance
+        path: evidence/conformance.json
+        sha256: sha256:d0d5489d19bca6215f3c1c61ab608b615eeae88459050f7729d64be2972eef0e
+      - class: negative_security
+        path: evidence/negative-security.json
+        sha256: sha256:f51614b43181e0ac545e66fa7770be8b6154b54891a187958c51cf58a5bf0c43
+      - class: minimization
+        path: evidence/minimization.json
+        sha256: sha256:ca0a8670021a40e4f07fe276f894c270d1a48f1997f034118490e29966e5129a
+  audit_pseudonym_materials:
+    - key_id: epoch-1
+      source:
+        provider: environment
+        name: REGISTRY_RELAY_AUDIT_PSEUDONYM_EPOCH_1
+  source_credentials: []
+
+datasets:
+  - id: synthetic_snapshot
+    title: Synthetic SnapshotExact registry
+    description: Synthetic person status records for the maintained SnapshotExact journey
+    owner: Example Ministry
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: as_needed
+    tables:
+      - id: people
+        materialization: snapshot
+        source:
+          type: file
+          path: ./fixtures/people.csv
+          format:
+            csv:
+              header_row: 1
+        refresh:
+          mode: manual
+        schema:
+          strict: true
+          fields:
+            - name: subject_key
+              type: string
+              nullable: false
+              sensitive: true
+            - name: registration_status_text
+              type: string
+              nullable: false
+            - name: observed_at_text
+              type: string
+              nullable: false
+            - name: revision_text
+              type: string
+              nullable: false
+    entities: []
+
+deployment:
+  profile: local

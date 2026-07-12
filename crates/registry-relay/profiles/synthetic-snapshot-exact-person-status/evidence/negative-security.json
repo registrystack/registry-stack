@@ -1,0 +1,20 @@
+{
+  "schema": "registry.relay.profile-evidence.v1",
+  "class": "negative_security",
+  "activation_rejections": [
+    "missing_materialization_contract",
+    "live_destination_present",
+    "unreviewed_projection",
+    "non_binary_key_comparison",
+    "widened_private_binding",
+    "unreviewed_source_provenance"
+  ],
+  "runtime_rejections_required": [
+    "missing_snapshot",
+    "stale_snapshot",
+    "snapshot_identity_mismatch",
+    "snapshot_revision_mismatch",
+    "malformed_record",
+    "more_than_one_matching_record"
+  ]
+}

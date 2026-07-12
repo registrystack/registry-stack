@@ -80,8 +80,9 @@ impl PublishedSnapshotHandle {
         if published_at_unix_ms <= 0
             || source_revision
                 .as_deref()
-                .is_some_and(|revision| revision.is_empty() || revision.len() > 512)
+                .is_some_and(|revision| revision.is_empty() || revision.len() > 256)
             || source_observed_at_unix_ms.is_some_and(|value| value <= 0)
+            || source_observed_at_unix_ms.is_some_and(|value| value > published_at_unix_ms)
         {
             return Err(SnapshotRegistryError::InvalidPublication);
         }
@@ -312,4 +313,102 @@ pub(crate) enum SnapshotRegistryError {
     InvalidPublication,
     #[error("snapshot exact provider is unavailable")]
     Unavailable,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    use ::datafusion::arrow::datatypes::{Schema, SchemaRef};
+    use ::datafusion::catalog::TableProvider;
+    use ::datafusion::datasource::MemTable;
+
+    use super::*;
+
+    fn empty_provider() -> Arc<dyn TableProvider> {
+        let schema: SchemaRef = Arc::new(Schema::empty());
+        Arc::new(MemTable::try_new(schema, vec![vec![]]).expect("empty table provider"))
+    }
+
+    fn registry() -> Arc<PublishedSnapshotRegistry> {
+        let slot = Arc::new(SnapshotSlot {
+            profile_id: "synthetic.profile".into(),
+            profile_version: 1,
+            binding_hash: format!("sha256:{}", "a".repeat(64)).into(),
+            state: AtomicU8::new(SLOT_UNAVAILABLE),
+            handle: ArcSwapOption::empty(),
+        });
+        Arc::new(PublishedSnapshotRegistry {
+            by_provider: BTreeMap::from([("synthetic__persons".into(), slot)]),
+        })
+    }
+
+    fn handle(generation: &str, published_at_unix_ms: i64) -> PublishedSnapshotHandle {
+        PublishedSnapshotHandle::new(
+            Ulid::from_string(generation).expect("test generation"),
+            SnapshotContentDigest::from_bytes([0xab; 32]),
+            published_at_unix_ms,
+            Some(format!("sha256:{}", "b".repeat(64))),
+            Some(published_at_unix_ms - 1),
+            empty_provider(),
+        )
+        .expect("valid snapshot handle")
+    }
+
+    #[test]
+    fn publication_slot_has_one_atomic_writer_and_no_stale_fallback() {
+        let registry = registry();
+        let start = Arc::new(Barrier::new(9));
+        let joins = (0..8)
+            .map(|_| {
+                let registry = Arc::clone(&registry);
+                let start = Arc::clone(&start);
+                thread::spawn(move || {
+                    start.wait();
+                    registry.begin_publication("synthetic__persons")
+                })
+            })
+            .collect::<Vec<_>>();
+        start.wait();
+        let mut guards = joins
+            .into_iter()
+            .filter_map(|join| join.join().expect("writer joins").ok())
+            .collect::<Vec<_>>();
+        assert_eq!(guards.len(), 1);
+        assert!(!registry.all_ready());
+
+        guards
+            .pop()
+            .expect("one writer")
+            .publish(handle("01J00000000000000000000001", 1_720_612_800_000));
+        assert!(registry.all_ready());
+
+        let replacement = registry
+            .begin_publication("synthetic__persons")
+            .expect("replacement writer claims slot");
+        assert!(!registry.all_ready());
+        drop(replacement);
+        assert!(
+            !registry.all_ready(),
+            "old handle cannot become a stale fallback"
+        );
+    }
+
+    #[test]
+    fn snapshot_handle_rejects_invalid_provenance_ordering() {
+        let result = PublishedSnapshotHandle::new(
+            Ulid::from_string("01J00000000000000000000001").expect("test generation"),
+            SnapshotContentDigest::from_bytes([0xab; 32]),
+            1_720_612_800_000,
+            None,
+            Some(1_720_612_800_001),
+            empty_provider(),
+        );
+        assert!(matches!(
+            result,
+            Err(SnapshotRegistryError::InvalidPublication)
+        ));
+    }
 }

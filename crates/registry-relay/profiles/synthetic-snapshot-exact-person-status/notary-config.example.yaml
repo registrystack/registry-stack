@@ -1,0 +1,86 @@
+# SPDX-License-Identifier: Apache-2.0
+# Local Notary example for the Registry Stack synthetic SnapshotExact journey.
+# Production deployments distribute this through a signed configuration bundle.
+
+deployment:
+  profile: local
+
+server:
+  bind: "127.0.0.1:8081"
+
+auth:
+  mode: api_key
+  api_keys:
+    - id: synthetic-snapshot-verifier
+      fingerprint:
+        provider: env
+        name: REGISTRY_NOTARY_SYNTHETIC_SNAPSHOT_API_KEY_HASH
+      scopes: [registry:evidence:synthetic-snapshot-person-status]
+
+audit:
+  sink: stdout
+  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
+
+evidence:
+  enabled: true
+  service_id: registry-notary-synthetic-snapshot-person-status
+  allowed_purposes: [benefit-status-verification]
+  relay:
+    base_url: "https://relay.example.gov"
+    # Mount a mode-0600 Relay-issued workload JWT and replace it atomically when rotating.
+    # Relay is the sole cryptographic and semantic verifier on every request.
+    token_file: /var/run/secrets/registry-notary/relay-access-token
+    allowed_private_cidrs: []
+  claims:
+    - id: synthetic-person-known
+      title: Synthetic person exists
+      version: "1"
+      subject_type: person
+      evidence_mode:
+        type: registry_backed
+        consultations:
+          person_status:
+            profile:
+              id: synthetic.snapshot.person-status.exact
+              version: "1"
+              contract_hash: sha256:6ec4b791fac13188c5d0cdec6ef48588655b22a9207086b7e495837bc52a66d2
+            inputs:
+              person_id: target.id
+      value:
+        type: boolean
+      purpose: benefit-status-verification
+      required_scopes: [registry:evidence:synthetic-snapshot-person-status]
+      rule:
+        type: exists
+        source: person_status
+      disclosure:
+        default: value
+        allowed: [value, redacted]
+      formats: [application/vnd.registry-notary.claim-result+json]
+
+    - id: synthetic-person-status
+      title: Synthetic person registration status
+      version: "1"
+      subject_type: person
+      evidence_mode:
+        type: registry_backed
+        consultations:
+          person_status:
+            profile:
+              id: synthetic.snapshot.person-status.exact
+              version: "1"
+              contract_hash: sha256:6ec4b791fac13188c5d0cdec6ef48588655b22a9207086b7e495837bc52a66d2
+            inputs:
+              person_id: target.id
+      value:
+        type: string
+      purpose: benefit-status-verification
+      required_scopes: [registry:evidence:synthetic-snapshot-person-status]
+      rule:
+        type: extract
+        source: person_status
+        field: registration_status
+      disclosure:
+        default: value
+        allowed: [value, redacted]
+      formats: [application/vnd.registry-notary.claim-result+json]

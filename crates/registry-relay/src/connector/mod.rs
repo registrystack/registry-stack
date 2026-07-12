@@ -32,6 +32,14 @@ pub trait TableConnector: Send + Sync + 'static {
     fn descriptor(&self) -> ConnectorDescriptor;
     fn inspect<'a>(&'a self) -> ConnectorFuture<'a, ObservedTable>;
     fn snapshot<'a>(&'a self) -> ConnectorFuture<'a, SnapshotTable>;
+    fn snapshot_bounded<'a>(
+        &'a self,
+        max_source_bytes: u64,
+        _max_source_records: u64,
+    ) -> ConnectorFuture<'a, SnapshotTable> {
+        let _ = max_source_bytes;
+        self.snapshot()
+    }
     fn metadata<'a>(&'a self) -> ConnectorFuture<'a, ConnectorMetadata>;
 }
 
@@ -127,7 +135,11 @@ impl FileConnector {
         }
     }
 
-    fn enforce_size_limits(&self, metadata: &SourceMetadata) -> Result<(), ConnectorError> {
+    fn enforce_size_limits(
+        &self,
+        metadata: &SourceMetadata,
+        max_source_bytes: u64,
+    ) -> Result<(), ConnectorError> {
         let Some(size_bytes) = metadata.size_bytes else {
             // Fail closed: refuse to read when size is unknown. Future streaming
             // or HTTP sources must always provide a size or implement their own caps.
@@ -136,10 +148,10 @@ impl FileConnector {
                     .to_string(),
             ));
         };
-        if size_bytes > self.max_source_file_bytes {
+        let max_source_file_bytes = self.max_source_file_bytes.min(max_source_bytes);
+        if size_bytes > max_source_file_bytes {
             return Err(ConnectorError::SourceUnreadable(format!(
-                "source exceeds configured maximum: {size_bytes} > {}",
-                self.max_source_file_bytes
+                "source exceeds configured maximum: {size_bytes} > {max_source_file_bytes}",
             )));
         }
         if self.format_name == "xlsx" && size_bytes > self.xlsx_max_file_bytes {
@@ -181,9 +193,17 @@ impl TableConnector for FileConnector {
     }
 
     fn snapshot<'a>(&'a self) -> ConnectorFuture<'a, SnapshotTable> {
+        self.snapshot_bounded(self.max_source_file_bytes, u64::MAX)
+    }
+
+    fn snapshot_bounded<'a>(
+        &'a self,
+        max_source_bytes: u64,
+        _max_source_records: u64,
+    ) -> ConnectorFuture<'a, SnapshotTable> {
         Box::pin(async move {
             let opened = self.source.open().await.map_err(ConnectorError::from)?;
-            self.enforce_size_limits(&opened.metadata)?;
+            self.enforce_size_limits(&opened.metadata, max_source_bytes)?;
             let decoded = self
                 .format
                 .decode(opened.reader, self.hints.clone())
@@ -231,6 +251,7 @@ pub struct PostgresConnector {
 }
 
 impl PostgresConnector {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         connection_env: String,
         table: Option<PostgresTableConfig>,
@@ -367,20 +388,28 @@ impl PostgresConnector {
         format!("SELECT {projections} FROM ({base}) AS data_gate_source")
     }
 
-    fn copy_sql_for(&self, declared: &DeclaredSchema) -> String {
-        format!(
-            "COPY ({}) TO STDOUT WITH (FORMAT CSV, HEADER TRUE)",
-            self.projected_select_sql(declared)
-        )
+    fn copy_sql_for(&self, declared: &DeclaredSchema, max_source_records: u64) -> String {
+        let projected = self.projected_select_sql(declared);
+        let bounded = if max_source_records == u64::MAX {
+            projected
+        } else {
+            format!(
+                "SELECT * FROM ({projected}) AS bounded_source LIMIT {}",
+                max_source_records.saturating_add(1)
+            )
+        };
+        format!("COPY ({bounded}) TO STDOUT WITH (FORMAT CSV, HEADER TRUE)")
     }
 
     async fn copy_decoded_for(
         &self,
         client: &Client,
         declared: Arc<DeclaredSchema>,
+        max_source_bytes: u64,
+        max_source_records: u64,
     ) -> Result<SnapshotTable, ConnectorError> {
         let copy_stream = client
-            .copy_out(&self.copy_sql_for(&declared))
+            .copy_out(&self.copy_sql_for(&declared, max_source_records))
             .await
             .map_err(|e| ConnectorError::SourceUnreadable(e.to_string()))?;
         futures::pin_mut!(copy_stream);
@@ -388,10 +417,10 @@ impl PostgresConnector {
         while let Some(chunk) = copy_stream.next().await {
             let chunk = chunk.map_err(|e| ConnectorError::SourceUnreadable(e.to_string()))?;
             let next_len = bytes.len().saturating_add(chunk.len());
-            if next_len > self.max_source_bytes as usize {
+            let effective_max_source_bytes = self.max_source_bytes.min(max_source_bytes);
+            if next_len > effective_max_source_bytes as usize {
                 return Err(ConnectorError::SourceUnreadable(format!(
-                    "postgres export exceeds configured maximum: {next_len} > {}",
-                    self.max_source_bytes
+                    "postgres export exceeds configured maximum: {next_len} > {effective_max_source_bytes}",
                 )));
             }
             bytes.extend_from_slice(&chunk);
@@ -425,10 +454,20 @@ impl PostgresConnector {
         })
     }
 
-    async fn timed_copy_decoded(&self, client: &Client) -> Result<SnapshotTable, ConnectorError> {
+    async fn timed_copy_decoded(
+        &self,
+        client: &Client,
+        max_source_bytes: u64,
+        max_source_records: u64,
+    ) -> Result<SnapshotTable, ConnectorError> {
         self.with_query_timeout(
             "postgres export",
-            self.copy_decoded_for(client, Arc::clone(&self.declared)),
+            self.copy_decoded_for(
+                client,
+                Arc::clone(&self.declared),
+                max_source_bytes,
+                max_source_records,
+            ),
         )
         .await
     }
@@ -492,16 +531,22 @@ impl TableConnector for PostgresConnector {
     }
 
     fn snapshot<'a>(&'a self) -> ConnectorFuture<'a, SnapshotTable> {
+        self.snapshot_bounded(self.max_source_bytes, u64::MAX)
+    }
+
+    fn snapshot_bounded<'a>(
+        &'a self,
+        max_source_bytes: u64,
+        max_source_records: u64,
+    ) -> ConnectorFuture<'a, SnapshotTable> {
         Box::pin(async move {
             let client = self.connect().await?;
             let (change_token, observed_at) = self.read_change_token(&client).await?;
-            let mut snapshot = self.timed_copy_decoded(&client).await?;
-            snapshot.metadata = SourceMetadata {
-                mtime: Some(observed_at),
-                size_bytes: None,
-                etag: change_token,
-                content_type: Some("text/csv".to_string()),
-            };
+            let mut snapshot = self
+                .timed_copy_decoded(&client, max_source_bytes, max_source_records)
+                .await?;
+            snapshot.metadata.mtime = Some(observed_at);
+            snapshot.metadata.etag = change_token;
             Ok(snapshot)
         })
     }
@@ -582,13 +627,16 @@ mod tests {
             Duration::from_secs(30),
         );
 
-        let sql = connector.copy_sql_for(&connector.declared);
+        let sql = connector.copy_sql_for(&connector.declared, u64::MAX);
         assert!(sql.contains(r#"FROM (SELECT * FROM "public"."people") AS data_gate_source"#));
         assert!(sql.contains(r#"data_gate_source."id"::bigint AS "id""#));
         assert!(sql.contains(r#"data_gate_source."active"::boolean AS "active""#));
         assert!(sql.contains(r#"to_char(data_gate_source."updated_at"::timestamptz"#));
         assert!(sql.starts_with("COPY (SELECT "));
         assert!(sql.ends_with(") TO STDOUT WITH (FORMAT CSV, HEADER TRUE)"));
+
+        let bounded = connector.copy_sql_for(&connector.declared, 25);
+        assert!(bounded.contains("AS bounded_source LIMIT 26"));
     }
 
     #[test]
@@ -735,7 +783,7 @@ mod tests {
             ..SourceMetadata::default()
         };
 
-        let result = connector.enforce_size_limits(&metadata);
+        let result = connector.enforce_size_limits(&metadata, connector.max_source_file_bytes);
 
         assert!(result.is_err());
         match result {
@@ -747,5 +795,12 @@ mod tests {
             }
             _ => panic!("expected SourceUnreadable error"),
         }
+        let oversized_for_reviewed_bound = SourceMetadata {
+            size_bytes: Some(101),
+            ..SourceMetadata::default()
+        };
+        assert!(connector
+            .enforce_size_limits(&oversized_for_reviewed_bound, 100)
+            .is_err());
     }
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Concrete consultation service for the maintained product journeys.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,13 +24,16 @@ use ulid::Ulid;
 use crate::api::consultation::ParsedConsultationEnvelope;
 use crate::auth::AuthenticationResult;
 use crate::config::{
-    AuthMode as ConfigAuthMode, Config, ConsultationConfig, VerifiedConsultationArtifactClosure,
+    AuthMode as ConfigAuthMode, Config, ConsultationConfig, FieldType,
+    VerifiedConsultationArtifactClosure,
 };
+use crate::ingest::declared_schema::DeclaredSchema;
 use crate::ingest::IngestRegistry;
 use crate::source_backend::{PublishedSnapshotRegistry, SnapshotMaterializationCoordinator};
 use crate::source_plan::{
     CompiledBasicSourceCredentialProvider, CompiledConsultationRegistry,
-    CompiledOAuthSourceCredentialProvider, CompiledSourcePlan, InitializedConsentVerifierRegistry,
+    CompiledOAuthSourceCredentialProvider, CompiledResponseSchema, CompiledScalarShape,
+    CompiledSourcePlan, InitializedConsentVerifierRegistry, SourcePlanKind,
 };
 use crate::state_plane::{
     ConsultationPermitSet, ConsultationStatePlaneReadiness, ConsultationStatePlaneRuntime,
@@ -319,6 +322,15 @@ pub struct ConsultationService {
 }
 
 impl ConsultationService {
+    /// Compile the complete hash-pinned artifact closure without connecting to
+    /// the state plane or any governed source. Used by offline diagnostics.
+    pub fn validate_configuration(
+        config: &Config,
+        artifacts: VerifiedConsultationArtifactClosure,
+    ) -> Result<(), ConsultationServiceActivationError> {
+        compile_service_activation(config, artifacts).map(drop)
+    }
+
     /// Compile every process-local capability, then connect the concrete state
     /// plane last so failed static activation never acquires serving authority.
     pub async fn activate(
@@ -852,6 +864,7 @@ fn compile_service_activation(
         &InitializedConsentVerifierRegistry::empty(),
     )
     .map_err(|_| ConsultationServiceActivationError::RegistryActivation)?;
+    validate_snapshot_config_bindings(config, &registry)?;
     let mut profiles = BTreeMap::new();
     for plan in registry.plans_for_concrete_activation() {
         let (key, activated) = compile_profile_activation(plan, &fixed_notary_identity)?;
@@ -884,6 +897,93 @@ fn compile_service_activation(
         pseudonym_materials,
         snapshots,
     })
+}
+
+fn validate_snapshot_config_bindings(
+    config: &Config,
+    registry: &CompiledConsultationRegistry,
+) -> Result<(), ConsultationServiceActivationError> {
+    for plan in registry
+        .plans_for_concrete_activation()
+        .filter(|plan| plan.kind() == SourcePlanKind::SnapshotExact)
+    {
+        let binding = plan
+            .snapshot_binding()
+            .ok_or(ConsultationServiceActivationError::UnsupportedPlan)?;
+        let resource = config
+            .datasets
+            .iter()
+            .flat_map(|dataset| {
+                dataset
+                    .table_configs()
+                    .map(move |resource| (dataset, resource))
+            })
+            .find(|(dataset, resource)| {
+                crate::ingest::table_name(&dataset.id, &resource.id) == binding.table_provider()
+            })
+            .map(|(_, resource)| resource)
+            .ok_or(ConsultationServiceActivationError::UnsupportedPlan)?;
+        let declared = DeclaredSchema::from(&resource.schema);
+        if !declared.strict {
+            return Err(ConsultationServiceActivationError::UnsupportedPlan);
+        }
+        let mut reviewed_physical_fields = binding
+            .projection()
+            .map(|(_, physical)| physical)
+            .collect::<BTreeSet<_>>();
+        if let Some((_, physical)) = binding.source_observed_at_extraction() {
+            reviewed_physical_fields.insert(physical);
+        }
+        if let Some((_, physical, _)) = binding.source_revision_extraction() {
+            reviewed_physical_fields.insert(physical);
+        }
+        if declared
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<BTreeSet<_>>()
+            != reviewed_physical_fields
+        {
+            return Err(ConsultationServiceActivationError::UnsupportedPlan);
+        }
+        for (logical, physical) in binding.projection() {
+            let acquired = plan
+                .runtime_profile()
+                .acquisition()
+                .fields()
+                .find(|field| field.name() == logical)
+                .ok_or(ConsultationServiceActivationError::UnsupportedPlan)?;
+            let configured = declared
+                .field(physical)
+                .ok_or(ConsultationServiceActivationError::UnsupportedPlan)?;
+            let compatible_type = matches!(
+                (acquired.schema(), configured.ty),
+                (
+                    CompiledResponseSchema::Scalar(CompiledScalarShape::String { .. }),
+                    FieldType::String
+                ) | (
+                    CompiledResponseSchema::Scalar(CompiledScalarShape::Boolean { .. }),
+                    FieldType::Boolean
+                ) | (
+                    CompiledResponseSchema::Scalar(CompiledScalarShape::Integer { .. }),
+                    FieldType::Integer
+                ) | (
+                    CompiledResponseSchema::Scalar(CompiledScalarShape::Number { .. }),
+                    FieldType::Number
+                )
+            );
+            if !compatible_type || acquired.schema().nullable() != configured.nullable {
+                return Err(ConsultationServiceActivationError::UnsupportedPlan);
+            }
+        }
+        if declared
+            .field(binding.key_physical_field())
+            .is_none_or(|field| field.ty != FieldType::String || field.nullable)
+        {
+            return Err(ConsultationServiceActivationError::UnsupportedPlan);
+        }
+    }
+    Ok(())
 }
 
 fn compile_fixed_notary_identity(

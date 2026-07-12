@@ -251,7 +251,10 @@ impl IngestPlan {
             .begin(&provider_id, self.connector.descriptor().kind)
             .await
             .map_err(|_| IngestError::MaterializationFailed)?;
-        let prepared = match self.prepare_pipeline().await {
+        let footprint_limits = coordinator
+            .footprint_limits(&provider_id)
+            .ok_or(IngestError::MaterializationFailed)?;
+        let prepared = match self.prepare_snapshot_pipeline(Some(footprint_limits)).await {
             Ok(prepared) => prepared,
             Err(error) => {
                 if coordinator
@@ -390,50 +393,100 @@ impl IngestPlan {
 
     /// Sample connector metadata for mtime-policy polling.
     pub(crate) async fn connector_metadata(&self) -> Result<ConnectorMetadata, ConnectorError> {
+        if self.materializations.get().is_some() {
+            return Err(ConnectorError::source_unreadable(
+                "snapshot-exact metadata polling requires an audited materialization attempt",
+            ));
+        }
         self.connector.metadata().await
     }
 
     // ── Inner pipeline ────────────────────────────────────────────────────────
 
     async fn prepare_pipeline(&self) -> Result<PreparedIngest, IngestError> {
-        self.prepare_snapshot_pipeline().await
+        self.prepare_snapshot_pipeline(None).await
     }
 
-    async fn prepare_snapshot_pipeline(&self) -> Result<PreparedIngest, IngestError> {
+    async fn prepare_snapshot_pipeline(
+        &self,
+        footprint_limits: Option<(u64, u64)>,
+    ) -> Result<PreparedIngest, IngestError> {
         let dataset_id = &self.dataset_id;
         let resource_id = &self.resource_id;
 
         // Step 1: get a connector snapshot.
-        let snapshot = self.connector.snapshot().await.map_err(|e| {
+        let snapshot_result = match footprint_limits {
+            Some((max_source_records, max_source_bytes)) => {
+                self.connector
+                    .snapshot_bounded(max_source_bytes, max_source_records)
+                    .await
+            }
+            None => self.connector.snapshot().await,
+        };
+        let snapshot = snapshot_result.map_err(|e| {
             let code = connector_error_code(&e);
-            tracing::error!(
-                event = code,
-                dataset_id = %dataset_id,
-                resource_id = %resource_id,
-                error = %e,
-            );
-            ingest_error_from_connector(e)
-        })?;
-
-        // Step 2: materialise all batches and build a sample.
-        // Current implementation: full materialisation in memory.
-        // Streaming ingest can replace this path later.
-        let observed_schema = snapshot.observed_schema;
-        let source_revision = restricted_source_revision(&snapshot.metadata);
-        let source_observed_at_unix_ms = snapshot.metadata.mtime.and_then(offset_datetime_unix_ms);
-        let mut all_batches: Vec<RecordBatch> = Vec::new();
-        let mut batch_stream = snapshot.batches;
-        while let Some(result) = batch_stream.next().await {
-            let batch = result.map_err(|e| {
-                let code = connector_error_code(&e);
+            if self.materializations.get().is_some() {
+                tracing::error!(
+                    event = code,
+                    dataset_id = %dataset_id,
+                    resource_id = %resource_id,
+                    "snapshot acquisition failed with redacted diagnostics",
+                );
+            } else {
                 tracing::error!(
                     event = code,
                     dataset_id = %dataset_id,
                     resource_id = %resource_id,
                     error = %e,
                 );
+            }
+            ingest_error_from_connector(e)
+        })?;
+
+        // Step 2: materialise all batches and build a sample.
+        // Current implementation: full materialisation in memory.
+        // Streaming ingest can replace this path later.
+        let source_byte_count = snapshot.metadata.size_bytes;
+        if footprint_limits.is_some()
+            && source_byte_count
+                .is_none_or(|bytes| bytes > footprint_limits.expect("checked as present").1)
+        {
+            return Err(IngestError::MaterializationFailed);
+        }
+        let observed_schema = snapshot.observed_schema;
+        let source_revision = restricted_source_revision(&snapshot.metadata);
+        let source_observed_at_unix_ms = snapshot.metadata.mtime.and_then(offset_datetime_unix_ms);
+        let mut all_batches: Vec<RecordBatch> = Vec::new();
+        let mut source_row_count = 0_u64;
+        let mut batch_stream = snapshot.batches;
+        while let Some(result) = batch_stream.next().await {
+            let batch = result.map_err(|e| {
+                let code = connector_error_code(&e);
+                if self.materializations.get().is_some() {
+                    tracing::error!(
+                        event = code,
+                        dataset_id = %dataset_id,
+                        resource_id = %resource_id,
+                        "snapshot decode failed with redacted diagnostics",
+                    );
+                } else {
+                    tracing::error!(
+                        event = code,
+                        dataset_id = %dataset_id,
+                        resource_id = %resource_id,
+                        error = %e,
+                    );
+                }
                 ingest_error_from_connector(e)
             })?;
+            source_row_count = source_row_count
+                .checked_add(batch.num_rows() as u64)
+                .ok_or(IngestError::MaterializationFailed)?;
+            if footprint_limits
+                .is_some_and(|(max_source_records, _)| source_row_count > max_source_records)
+            {
+                return Err(IngestError::MaterializationFailed);
+            }
             all_batches.push(batch);
         }
 
@@ -458,12 +511,7 @@ impl IngestPlan {
             .map(|b| projection_plan.apply(b))
             .collect();
         let projected = projected?;
-        let row_count = projected
-            .iter()
-            .try_fold(0_u64, |total, batch| {
-                total.checked_add(batch.num_rows() as u64)
-            })
-            .ok_or(IngestError::MaterializationFailed)?;
+        let row_count = source_row_count;
 
         // Step 5: mint ULID for this ingest.
         let ingest_ulid = Ulid::new();
@@ -486,10 +534,13 @@ impl IngestPlan {
         let provider = self
             .snapshot_table_provider(&final_path, Arc::clone(&output_schema))
             .await?;
-        let byte_count = tokio::fs::metadata(&final_path)
-            .await
-            .map_err(|_| IngestError::CacheWriteFailed)?
-            .len();
+        let byte_count = match source_byte_count {
+            Some(byte_count) => byte_count,
+            None => tokio::fs::metadata(&final_path)
+                .await
+                .map_err(|_| IngestError::CacheWriteFailed)?
+                .len(),
+        };
         let digest = sha256_file(&final_path).await?;
 
         Ok(PreparedIngest {
@@ -948,7 +999,16 @@ impl IngestRegistry {
             let tx = readiness_tx.clone();
             let registry = Arc::clone(&self);
             let shutdown_clone = shutdown.clone();
-            let policy = policy_for_resource(ds_id, rs_id);
+            let policy = match policy_for_resource(ds_id, rs_id) {
+                // SnapshotExact cannot poll even source metadata before its
+                // durable materialization attempt. Preserve the operator's
+                // interval while performing the bounded refresh acquisition
+                // under the audited path.
+                RefreshPolicy::Mtime { interval } if plan.materializations.get().is_some() => {
+                    RefreshPolicy::Interval { interval }
+                }
+                policy => policy,
+            };
             let audit_sink = audit_sink.clone();
 
             set.spawn(async move {

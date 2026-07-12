@@ -1,0 +1,123 @@
+{
+  "schema": "registry.relay.consultation-contract.v1",
+  "id": "synthetic.snapshot.person-status.exact",
+  "version": "1",
+  "spec": {
+    "subject": {
+      "mode": "single_subject",
+      "selector_provenance": {
+        "type": "workload_selected"
+      }
+    },
+    "inputs": {
+      "person_id": {
+        "type": "string",
+        "max_bytes": 8,
+        "pattern": "^per-[0-9][0-9][0-9][0-9]$",
+        "canonicalization": "identity"
+      }
+    },
+    "integration_pack": {
+      "id": "synthetic.snapshot.person-status",
+      "version": "1",
+      "hash": "sha256:cc490a9b51255611f3dc3b529952a185c22a32c260644b095d6b3bf6ac52fab6"
+    },
+    "acquisition": {
+      "class": "materialized_snapshot",
+      "fields": {
+        "registration_status": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 32
+        },
+        "source_observed_at": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 64
+        },
+        "source_revision": {
+          "type": "string",
+          "nullable": false,
+          "max_bytes": 32
+        }
+      }
+    },
+    "source_provenance": {
+      "source_observed_at": {
+        "type": "acquired_rfc3339",
+        "field": "source_observed_at"
+      },
+      "source_revision": {
+        "type": "acquired_string",
+        "field": "source_revision",
+        "max_bytes": 32
+      }
+    },
+    "output": {
+      "registration_status": {
+        "type": "string",
+        "nullable": false
+      }
+    },
+    "authorization": {
+      "workload": "registry-notary",
+      "required_scope": "registry:consult:synthetic-snapshot-person-status",
+      "purposes": [
+        "benefit-status-verification"
+      ],
+      "legal_basis": "public_task",
+      "policy": {
+        "id": "relay.synthetic.snapshot.person-status.exact",
+        "hash": "sha256:9267efe7eedb6a080df546c017a1c2ee641589827b2ab4eeabe2d16eab3e7054",
+        "decision_cache": "disabled",
+        "max_decision_age_ms": 1000,
+        "unavailable": "deny"
+      },
+      "consent": {
+        "required": false
+      },
+      "mandatory_obligations": []
+    },
+    "bounds": {
+      "max_source_matches": 2,
+      "max_disclosed_records": 1,
+      "max_data_exchanges": 0,
+      "max_credential_exchanges": 0,
+      "max_data_destinations": 0,
+      "max_source_bytes": 4096,
+      "timeout_ms": 5000,
+      "max_in_flight": 4,
+      "quota_per_minute": 30,
+      "quota_burst": 5
+    },
+    "public_behavior": {
+      "outcomes": [
+        "match",
+        "no_match",
+        "ambiguous"
+      ],
+      "denial_code": "consultation.denied",
+      "denial_timing_profile": "measured-uniform-v1"
+    },
+    "materialization": {
+      "max_snapshot_age_ms": 86400000,
+      "stale_behavior": "unavailable",
+      "footprint": {
+        "fields": [
+          "registration_status",
+          "source_observed_at",
+          "source_revision"
+        ],
+        "max_source_records": 4,
+        "max_source_bytes": 4096,
+        "max_data_exchanges": 1,
+        "max_credential_exchanges": 0,
+        "max_data_destinations": 1
+      },
+      "refresh_class": "operator_triggered",
+      "snapshot_retention_generations": 2,
+      "immutable_generation": true,
+      "digest_bound_active_pointer": true
+    }
+  }
+}
