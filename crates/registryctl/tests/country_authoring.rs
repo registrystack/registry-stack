@@ -55,7 +55,7 @@ fn fhir_r4_coverage_active_passes_the_closed_bundle_matrix() {
     })
     .expect("FHIR R4 Coverage-active golden passes");
     assert_eq!(report.status, "passed");
-    assert_eq!(report.fixtures.len(), 11);
+    assert_eq!(report.fixtures.len(), 13);
     assert!(report.fixtures.iter().all(|fixture| fixture.passed));
 }
 
@@ -137,57 +137,54 @@ fn authored_rhai_script_compiles_under_the_production_surface() {
     .expect("authored Rhai script compiles under the production language surface");
 }
 
+#[cfg(target_os = "linux")]
 #[test]
-fn public_rhai_commands_cannot_select_the_code_owned_conformance_path() {
+fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("dhis2-sandboxed-rhai", temporary.path());
     replace_in_file(
         &project.join("integrations/health-record/integration.yaml"),
-        "2.41.9",
-        "2.41.10",
+        "product: dhis2",
+        "product: fictional-health-registry",
+    );
+    replace_in_file(
+        &project.join("integrations/health-record/integration.yaml"),
+        "versions: { tested: [2.41.9] }",
+        "versions: { unverified: [7.3] }",
     );
     replace_in_file(
         &project.join("environments/local.yaml"),
-        "2.41.9",
-        "2.41.10",
+        "source_version: 2.41.9",
+        "source_version: 7.3",
     );
 
-    let test_error = test_country_project(&CountryTestOptions {
+    let test_report = test_country_project(&CountryTestOptions {
         project_directory: project.clone(),
         environment: None,
         live: false,
     })
-    .expect_err("public test must enforce the Rhai release gate");
-    assert!(
-        format!("{test_error:#}").contains("release allow-list"),
-        "{test_error:#}"
-    );
+    .expect("released Rhai contract accepts an unknown product");
+    assert_eq!(test_report.status, "passed");
 
-    let check_error = check_country_project(&CountryCheckOptions {
+    let check_report = check_country_project(&CountryCheckOptions {
         project_directory: project.clone(),
         environment: "local".to_string(),
         explain: false,
         against: None,
         anchor: None,
     })
-    .expect_err("public check must enforce the Rhai release gate");
-    assert!(
-        format!("{check_error:#}").contains("release allow-list"),
-        "{check_error:#}"
-    );
+    .expect("unknown-product Rhai project checks");
+    assert_eq!(check_report.status, "passed");
 
-    let build_error = build_country_project(&CountryBuildOptions {
+    let build_report = build_country_project(&CountryBuildOptions {
         project_directory: project.clone(),
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
-    .expect_err("public build must enforce the Rhai release gate");
-    assert!(
-        format!("{build_error:#}").contains("release allow-list"),
-        "{build_error:#}"
-    );
-    assert!(!project.join(".registry-stack/build/local").exists());
+    .expect("unknown-product Rhai project builds");
+    assert_eq!(build_report.status, "built");
+    assert!(project.join(".registry-stack/build/local").exists());
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -487,6 +484,88 @@ expect:
     assert!(report
         .required_reviews
         .contains(&ReviewClass::CountryPolicy));
+}
+
+#[test]
+fn source_product_is_metadata_not_runtime_dispatch() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    for (name, integration, product) in [
+        (
+            "fhir-r4-coverage-active",
+            "integrations/coverage/integration.yaml",
+            "country-fhir-server",
+        ),
+        (
+            "opencrvs",
+            "integrations/birth-record/integration.yaml",
+            "opencrvs",
+        ),
+        (
+            "snapshot-exact",
+            "integrations/person-snapshot/integration.yaml",
+            "population-snapshot",
+        ),
+    ] {
+        let case_root = temporary.path().join(format!("case-{name}"));
+        std::fs::create_dir(&case_root).expect("case root creates");
+        let case = copy_project(name, &case_root);
+        replace_in_file(
+            &case.join(integration),
+            &format!("product: {product}"),
+            "product: previously-unknown-country-system",
+        );
+        let report = test_country_project(&CountryTestOptions {
+            project_directory: case,
+            environment: None,
+            live: false,
+        })
+        .unwrap_or_else(|error| panic!("{name} selected behavior by product id: {error:#}"));
+        assert_eq!(report.status, "passed", "{name}");
+    }
+
+    let project = copy_project("custom-system", temporary.path());
+    replace_in_file(
+        &project.join("integrations/eligibility/integration.yaml"),
+        "product: aurora-household-service",
+        "product: previously-unknown-country-system",
+    );
+    replace_in_file(
+        &project.join("integrations/eligibility/integration.yaml"),
+        "unverified: [fixture-contract-v2]",
+        "unverified: [country-contract-99]",
+    );
+    replace_in_file(
+        &project.join("environments/local.yaml"),
+        "source_version: fixture-contract-v2",
+        "source_version: country-contract-99",
+    );
+
+    let offline = test_country_project(&CountryTestOptions {
+        project_directory: project.clone(),
+        environment: None,
+        live: false,
+    })
+    .expect("unknown product uses the generic bounded HTTP executor");
+    assert_eq!(offline.status, "passed");
+
+    let check = check_country_project(&CountryCheckOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        explain: true,
+        against: None,
+        anchor: None,
+    })
+    .expect("unknown product compiles through the generic authoring contract");
+    assert_eq!(check.status, "valid");
+
+    let build = build_country_project(&CountryBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("unknown product builds generic Relay and Notary inputs");
+    assert_eq!(build.status, "built");
 }
 
 #[test]
@@ -1198,7 +1277,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     })
     .expect("golden project checks");
     assert_eq!(check.status, "valid");
-    assert_eq!(check.semantic_changes.len(), 4);
+    assert_eq!(check.semantic_changes.len(), 5);
     assert!(check
         .semantic_changes
         .iter()
@@ -1236,7 +1315,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "57d14aa988611e5fd985cc8d3a6997ca74cf1aa826316b9280716bb784e40549",
+        "6a9b652ecbca8a0d286a1557499aac51a595d0cb90cd9c4d508604bfffde2a7a",
         "country product inputs must match the cross-machine golden digest"
     );
 }
@@ -1815,6 +1894,52 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     })
     .expect("baseline signs");
 
+    let initial_review: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(output.join("reviewable/review.json")).expect("initial review reads"),
+    )
+    .expect("initial review parses");
+    assert!(initial_review["baseline"].is_null());
+    assert!(initial_review["disclosure_profiles"].is_object());
+    for class in [
+        "claim",
+        "integration",
+        "country_policy",
+        "operator_security",
+    ] {
+        assert!(
+            initial_review["review_digests"][class].is_string(),
+            "{class}"
+        );
+    }
+
+    let reviewed_build = build_country_project(&CountryBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: Some(baseline.clone()),
+        anchor: Some(anchor.clone()),
+    })
+    .expect("verified-baseline build passes");
+    let reviewed_output = PathBuf::from(reviewed_build.output.expect("reviewed build output"));
+    let reviewed_record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(reviewed_output.join("reviewable/review.json"))
+            .expect("reviewed record reads"),
+    )
+    .expect("reviewed record parses");
+    assert_eq!(
+        reviewed_record["baseline"]["review_digests"],
+        initial_review["review_digests"]
+    );
+    assert!(reviewed_record["review_digests"]
+        .as_object()
+        .expect("current review digest slots")
+        .values()
+        .all(serde_json::Value::is_null));
+    assert_eq!(
+        reviewed_record["baseline"]["verified_manifest"]["schema"],
+        "registry.platform.config_bundle.v1"
+    );
+    assert!(reviewed_record["baseline"]["verified_manifest"]["files"].is_array());
+
     let unchanged = check_country_project(&CountryCheckOptions {
         project_directory: project.clone(),
         environment: "local".to_string(),
@@ -1852,7 +1977,7 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
         );
     std::fs::write(&project_file, authored).expect("claim-only edit writes");
     let changed = check_country_project(&CountryCheckOptions {
-        project_directory: claim_project,
+        project_directory: claim_project.clone(),
         environment: "local".to_string(),
         explain: false,
         against: Some(baseline.clone()),
@@ -1862,6 +1987,44 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     assert_eq!(
         changed.required_reviews,
         BTreeSet::from([ReviewClass::Claim])
+    );
+
+    let compiler_input = temporary.path().join("compiler-baseline-input");
+    copy_tree(&output.join("private/notary"), &compiler_input);
+    let compiler_review_path = compiler_input.join("approval/review.json");
+    let mut compiler_review: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&compiler_review_path).expect("compiler baseline review reads"),
+    )
+    .expect("compiler baseline review parses");
+    compiler_review["compiler_version"] = serde_json::Value::String("0.0.0".to_string());
+    std::fs::write(
+        &compiler_review_path,
+        serde_json::to_vec(&compiler_review).expect("compiler baseline review serializes"),
+    )
+    .expect("compiler baseline review writes");
+    let compiler_baseline = temporary.path().join("compiler-baseline-bundle");
+    sign_config_bundle(BundleSignOptions {
+        input: compiler_input,
+        key: private_key.display().to_string(),
+        product: "registry-notary".to_string(),
+        environment: "local".to_string(),
+        stream_id: "country-authoring".to_string(),
+        instance_id: Some("country-instance".to_string()),
+        sequence: 2,
+        bundle_id: "country-authoring-compiler-baseline".to_string(),
+        out: compiler_baseline.clone(),
+    })
+    .expect("compiler baseline signs");
+    assert_review_classes(
+        claim_project,
+        &compiler_baseline,
+        &anchor,
+        BTreeSet::from([
+            ReviewClass::Claim,
+            ReviewClass::Integration,
+            ReviewClass::CountryPolicy,
+            ReviewClass::OperatorSecurity,
+        ]),
     );
 
     replace_in_file(

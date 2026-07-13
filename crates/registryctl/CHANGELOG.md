@@ -74,6 +74,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   environment-backed secrets are complete in deployment descriptors, and
   implementation-only Rhai probes are unavailable from country fixture YAML.
 
+### Fixed
+
+- Signed country review records now bind the exact verified baseline manifest,
+  prior per-class review digests, and current per-class review digests or
+  explicit nulls. Compiler-version changes require all review classes even
+  when authored semantics also change.
+- Disclosure-only changes are classified directionally: narrowing requires
+  claim review, widening requires country-policy review, and incomparable
+  changes require both.
+- Sandboxed Rhai release enablement is keyed only by the implementation-owned
+  authoring and worker contract. Source product and version remain review and
+  provenance metadata and cannot select a capability or executor.
+- Governed live validation resolves globally unique claims across every
+  evidence service sharing the requested purpose instead of selecting the
+  first service by map order.
+
 ## [0.9.0] - 2026-07-10
 
 ### Added

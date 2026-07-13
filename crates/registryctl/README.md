@@ -61,8 +61,10 @@ credential, filesystem, or worker authority.
 
 Sandboxed Rhai is an advanced, release-gated integration mode. Its offline
 conformance fixtures use the isolated implementation-owned worker harness;
-ordinary startup remains unavailable unless the Relay build, reviewed country
-configuration, source version, and operator-security controls all support it.
+ordinary startup remains unavailable unless the release includes the reviewed
+Sandboxed Rhai authoring and worker contract and the country environment has
+explicit operator-security enablement. Source product and version remain review
+and provenance metadata; they do not select the Rhai runtime or executor.
 `test --live` requires an explicit non-production environment and uses only the
 governed deployed Notary path. It never contacts a source registry directly.
 
