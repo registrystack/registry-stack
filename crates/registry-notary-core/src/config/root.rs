@@ -555,7 +555,10 @@ impl StandaloneRegistryNotaryConfig {
                 )?;
             }
         }
-        validate_self_attested_dependency_modes(&self.evidence.claims)?;
+        validate_self_attested_dependency_modes(
+            &self.evidence.claims,
+            &self.self_attestation.delegation,
+        )?;
         validate_registry_backed_dependency_modes(&self.evidence.claims)?;
         validate_relay_activation_shape(&self.evidence.claims)?;
         self.self_attestation.validate(&self.auth, &self.evidence)?;

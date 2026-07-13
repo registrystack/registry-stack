@@ -191,6 +191,8 @@ pub enum RequestVariableType {
 pub enum RelayConsultationInput {
     TargetId,
     TargetIdentifier(String),
+    RequesterId,
+    RequesterIdentifier(String),
 }
 
 impl RelayConsultationInput {
@@ -199,6 +201,8 @@ impl RelayConsultationInput {
         match self {
             Self::TargetId => "target.id",
             Self::TargetIdentifier(path) => path,
+            Self::RequesterId => "request.requester.id",
+            Self::RequesterIdentifier(path) => path,
         }
     }
 
@@ -207,6 +211,16 @@ impl RelayConsultationInput {
         self.request_path()
             .strip_prefix("request.")
             .unwrap_or(self.request_path())
+    }
+
+    #[must_use]
+    pub const fn is_requester_derived(&self) -> bool {
+        matches!(self, Self::RequesterId | Self::RequesterIdentifier(_))
+    }
+
+    #[must_use]
+    pub const fn is_target_derived(&self) -> bool {
+        matches!(self, Self::TargetId | Self::TargetIdentifier(_))
     }
 }
 
@@ -230,14 +244,21 @@ impl<'de> Deserialize<'de> for RelayConsultationInput {
         let mapping = String::deserialize(deserializer)?;
         match mapping.as_str() {
             "target.id" => Ok(Self::TargetId),
+            "request.requester.id" => Ok(Self::RequesterId),
             _ if mapping
                 .strip_prefix("request.target.identifiers.")
                 .is_some_and(is_request_identifier_name) =>
             {
                 Ok(Self::TargetIdentifier(mapping))
             }
+            _ if mapping
+                .strip_prefix("request.requester.identifiers.")
+                .is_some_and(is_request_identifier_name) =>
+            {
+                Ok(Self::RequesterIdentifier(mapping))
+            }
             _ => Err(serde::de::Error::custom(
-                "unsupported consultation input mapping; v1 permits target.id or request.target.identifiers.<stable-id>",
+                "unsupported consultation input mapping; v1 permits target.id, request.requester.id, request.target.identifiers.<stable-id>, or request.requester.identifiers.<stable-id>",
             )),
         }
     }
@@ -401,6 +422,7 @@ pub(in crate::config) fn validate_claim_evidence_mode(
 
 pub(in crate::config) fn validate_self_attested_dependency_modes(
     claims: &[ClaimDefinition],
+    delegation: &SelfAttestationDelegationConfig,
 ) -> Result<(), EvidenceConfigError> {
     for claim in claims
         .iter()
@@ -419,9 +441,24 @@ pub(in crate::config) fn validate_self_attested_dependency_modes(
                 continue;
             };
             if !dependency.evidence_mode.is_self_attested() {
+                let delegated_proof_edge = dependency.evidence_mode.is_registry_backed()
+                    && delegation.allowed_relationships.iter().any(|relationship| {
+                        relationship.proof_claim == dependency.id
+                            && relationship
+                                .allowed_claims
+                                .iter()
+                                .any(|allowed| allowed == &claim.id)
+                            && claim
+                                .depends_on
+                                .iter()
+                                .any(|direct| direct == dependency_id)
+                    });
+                if delegated_proof_edge {
+                    continue;
+                }
                 return invalid_claim_evidence_mode(
                     claim,
-                    "self_attested dependency closure may contain only self_attested claims",
+                    "self_attested dependency closure may contain only self_attested claims except its configured direct delegated Relay proof",
                 );
             }
             pending.extend(dependency.depends_on.iter().map(String::as_str));

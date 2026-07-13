@@ -46,13 +46,11 @@ pub(super) fn valid_self_attestation_config_passes_validation() {
 }
 
 #[test]
-pub(super) fn delegated_attestation_is_disabled_until_trusted_assertions_replace_direct_proofs() {
+pub(super) fn delegated_attestation_accepts_compiler_pinned_relay_proofs() {
     let config = valid_delegated_self_attestation_config();
-    let reason = expect_self_attestation_error(&config);
-    assert!(
-        reason.contains("delegation is unavailable in v1"),
-        "unexpected: {reason}"
-    );
+    config
+        .validate()
+        .expect("Relay-backed delegated proof config validates");
 }
 
 #[test]
@@ -896,7 +894,21 @@ pub(super) fn self_attestation_disabled_scope_policy_rejects_required_scopes() {
 pub(super) fn self_attestation_rejects_citizen_scope_map_granting_source_scope() {
     let mut config = valid_self_attestation_config();
     let mut machine_claim = minimal_claim("machine-only");
-    machine_claim.required_scopes = vec!["civil_registry:evidence_verification".to_string()];
+    config.evidence.source_connections.insert(
+        "civil-registry".to_string(),
+        serde_norway::from_str(
+            r#"
+base_url: https://registry.example
+token_env: CIVIL_REGISTRY_TOKEN
+"#,
+        )
+        .expect("direct source connection parses"),
+    );
+    let mut binding = rda_binding("civil-registry", "one");
+    binding.required_scope = Some("civil_registry:evidence_verification".to_string());
+    machine_claim
+        .source_bindings
+        .insert("civil-record".to_string(), binding);
     config.evidence.claims.push(machine_claim);
     config.auth.oidc.as_mut().unwrap().scope_map.insert(
         "citizen_self_attestation".to_string(),

@@ -1323,17 +1323,72 @@ self_attestation:
 
 pub(super) fn valid_delegated_self_attestation_config() -> StandaloneRegistryNotaryConfig {
     let mut config = valid_self_attestation_config();
+    config.evidence.relay = Some(
+        serde_norway::from_str(
+            r#"
+base_url: https://relay.internal.example
+workload_client_id: registry-notary
+token_file: /run/secrets/registry-notary-relay.jwt
+"#,
+        )
+        .expect("Relay connection parses"),
+    );
     let mut proof = config.evidence.claims[0].clone();
     proof.id = "guardian-link".to_string();
     proof.title = "Guardian link".to_string();
     proof.subject_type = "relationship".to_string();
     proof.purpose = Some("dependent_attestation".to_string());
+    proof.required_scopes = vec!["self_attestation".to_string()];
+    proof.evidence_mode = ClaimEvidenceMode::RegistryBacked {
+        consultations: BTreeMap::from([(
+            "guardian_link".to_string(),
+            RelayConsultationConfig {
+                profile: RelayConsultationProfileRef {
+                    id: "example.guardian-link.exact".to_string(),
+                    contract_hash:
+                        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_string(),
+                },
+                inputs: BTreeMap::from([
+                    (
+                        "requester_id".to_string(),
+                        RelayConsultationInput::RequesterIdentifier(
+                            "request.requester.identifiers.national_id".to_string(),
+                        ),
+                    ),
+                    (
+                        "target_id".to_string(),
+                        RelayConsultationInput::TargetIdentifier(
+                            "request.target.identifiers.civil_registration_id".to_string(),
+                        ),
+                    ),
+                ]),
+                outputs: BTreeMap::from([(
+                    "established".to_string(),
+                    RelayOutputContract::Boolean { nullable: true },
+                )]),
+            },
+        )]),
+    };
+    proof.value.nullable = true;
+    proof.rule = RuleConfig::Extract {
+        source: "guardian_link".to_string(),
+        field: "established".to_string(),
+    };
 
     let mut dependent = config.evidence.claims[0].clone();
     dependent.id = "dependent-date-of-birth".to_string();
     dependent.title = "Dependent date of birth".to_string();
     dependent.purpose = Some("dependent_attestation".to_string());
     dependent.depends_on = vec!["guardian-link".to_string()];
+
+    config
+        .evidence
+        .credential_profiles
+        .get_mut("civil_status_sd_jwt")
+        .expect("credential profile exists")
+        .allowed_claims
+        .push("dependent-date-of-birth".to_string());
 
     config.evidence.claims.push(proof);
     config.evidence.claims.push(dependent);

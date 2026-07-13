@@ -151,6 +151,24 @@ pub(super) fn require_machine_source_capability(
     }
 }
 
+pub(super) fn require_relay_consultation_capability(
+    capability: &SourceCapability,
+    claim_id: &str,
+) -> Result<(), EvidenceError> {
+    match capability {
+        SourceCapability::Machine { .. } => Ok(()),
+        SourceCapability::DelegatedAttestation { .. }
+            if capability.is_delegated_proof_claim(claim_id) =>
+        {
+            Ok(())
+        }
+        SourceCapability::DelegatedAttestation { .. } => Err(delegated_attestation_denied()),
+        SourceCapability::SelfAttestation { .. } => Err(EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::OperationDenied,
+        }),
+    }
+}
+
 pub(super) fn delegated_attestation_denied() -> EvidenceError {
     EvidenceError::SelfAttestationDenied {
         reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted,

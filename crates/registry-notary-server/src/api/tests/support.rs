@@ -175,34 +175,28 @@
                     "title": "Guardian link is established",
                     "version": "1",
                     "subject_type": "relationship",
-                        "evidence_mode": { "type": "transitional_direct" },
-                    "purpose": "dependent_attestation",
-                    "source_bindings": {
-                        "link": {
-                            "connector": "registry_data_api",
-                            "dataset": "guardian_registry",
-                            "entity": "guardian_link",
-                            "lookup": {
-                                "input": "target.identifiers.civil_registration_id",
-                                "field": "dependent_id",
-                                "op": "eq",
-                                "cardinality": "one"
-                            },
-                            "query_fields": [{
-                                "input": "requester.identifiers.national_id",
-                                "field": "guardian_id",
-                                "op": "eq"
-                            }],
-                            "fields": {
-                                "value": {
-                                    "field": "value",
-                                    "type": "boolean",
-                                    "required": true
+                    "evidence_mode": {
+                        "type": "registry_backed",
+                        "consultations": {
+                            "guardian_link": {
+                                "profile": {
+                                    "id": "example.guardian-link.exact",
+                                    "contract_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                },
+                                "inputs": {
+                                    "requester_id": "request.requester.identifiers.national_id",
+                                    "target_id": "request.target.identifiers.civil_registration_id"
+                                },
+                                "outputs": {
+                                    "established": { "type": "boolean", "nullable": true }
                                 }
                             }
                         }
                     },
-                    "rule": { "type": "extract", "source": "link", "field": "value" },
+                    "purpose": "dependent_attestation",
+                    "required_scopes": ["self_attestation"],
+                    "value": { "type": "boolean", "nullable": true },
+                    "rule": { "type": "extract", "source": "guardian_link", "field": "established" },
                     "operations": {
                         "evaluate": { "enabled": true },
                         "batch_evaluate": { "enabled": false, "max_subjects": 1 }
@@ -219,7 +213,7 @@
                     "title": "Dependent person is alive",
                     "version": "1",
                     "subject_type": "person",
-                        "evidence_mode": { "type": "transitional_direct" },
+                    "evidence_mode": { "type": "self_attested" },
                     "purpose": "dependent_attestation",
                     "depends_on": ["guardian-link-established"],
                     "rule": { "type": "cel", "expression": "claims.guardian.satisfied", "bindings": { "claims": { "guardian": { "claim": "guardian-link-established" } } } },

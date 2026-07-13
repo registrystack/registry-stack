@@ -44,6 +44,54 @@ impl ActivatedRelayConsultations for FixedRelayConsultation {
     }
 }
 
+#[derive(Debug)]
+struct DelegatedRelayConsultation {
+    calls: AtomicU64,
+    outcome: RuntimeRelayOutcome,
+    proof_value: bool,
+    validation_error: Option<crate::relay_client::RelayClientError>,
+    execution_error: Option<crate::relay_client::RelayClientError>,
+}
+
+#[async_trait::async_trait]
+impl ActivatedRelayConsultations for DelegatedRelayConsultation {
+    async fn check_ready(&self) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    fn validate(
+        &self,
+        _key: &ConsultationGroupKeyV1,
+    ) -> Result<(), crate::relay_client::RelayClientError> {
+        self.validation_error.map_or(Ok(()), Err)
+    }
+
+    async fn execute(
+        &self,
+        _key: &ConsultationGroupKeyV1,
+    ) -> Result<RuntimeRelayConsultationResult, crate::relay_client::RelayClientError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(error) = self.execution_error {
+            return Err(error);
+        }
+        let match_data = matches!(self.outcome, RuntimeRelayOutcome::Match)
+            .then(|| {
+                RuntimeRelayOutputMap::from_json(BTreeMap::from([(
+                    "relationship_proven".to_string(),
+                    Value::Bool(self.proof_value),
+                )]))
+                .map(RuntimeRelayMatchData::OutputMap)
+            })
+            .transpose()?;
+        RuntimeRelayConsultationResult::new(
+            Ulid::from_parts(7, 1),
+            self.outcome,
+            match_data,
+            OffsetDateTime::UNIX_EPOCH,
+        )
+    }
+}
+
 #[derive(Debug, Default)]
 struct BatchIdentityRelay {
     child_identities: Mutex<Vec<String>>,
@@ -217,6 +265,396 @@ fn registry_claim(id: &str, rule: RuleConfig, value_type: &str) -> ClaimDefiniti
     claim.value.value_type = value_type.to_string();
     claim.value.nullable = nullable;
     claim
+}
+
+fn delegated_relay_proof_claim() -> ClaimDefinition {
+    let mut claim = registry_claim(
+        "guardian-link",
+        RuleConfig::Extract {
+            source: "relationship".to_string(),
+            field: "relationship_proven".to_string(),
+        },
+        "boolean",
+    );
+    claim.required_scopes = vec!["self_attestation".to_string()];
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+        panic!("delegated proof claim is Registry-backed")
+    };
+    let mut consultation = consultations
+        .remove("enrollment")
+        .expect("proof consultation exists");
+    consultation.profile.id = "example.guardian-link.exact".to_string();
+    consultation.inputs = BTreeMap::from([
+        (
+            "requester_id".to_string(),
+            RelayConsultationInput::RequesterIdentifier(
+                "request.requester.identifiers.national_id".to_string(),
+            ),
+        ),
+        (
+            "target_id".to_string(),
+            RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.civil_registration_id".to_string(),
+            ),
+        ),
+    ]);
+    consultation.outputs = BTreeMap::from([(
+        "relationship_proven".to_string(),
+        registry_notary_core::RelayOutputContract::Boolean { nullable: false },
+    )]);
+    consultations.insert("relationship".to_string(), consultation);
+    claim
+}
+
+fn delegated_selected_claim(dependencies: Vec<&str>) -> ClaimDefinition {
+    let mut claim = test_claim("selected", dependencies, false);
+    claim.evidence_mode = ClaimEvidenceMode::SelfAttested;
+    claim.purpose = Some("test".to_string());
+    claim
+}
+
+fn delegated_relay_principal() -> EvidencePrincipal {
+    let mut principal = delegated_principal();
+    principal.scopes = vec!["self_attestation".to_string()];
+    principal
+}
+
+fn delegated_evidence(claims: Vec<ClaimDefinition>) -> Arc<EvidenceConfig> {
+    let mut evidence = (*test_evidence(claims)).clone();
+    evidence.allowed_purposes = vec!["test".to_string()];
+    Arc::new(evidence)
+}
+
+fn delegated_runtime_with_relay(
+    keys: &Arc<SelfAttestationRateLimitKeys>,
+    outcome: RuntimeRelayOutcome,
+    proof_value: bool,
+    validation_error: Option<crate::relay_client::RelayClientError>,
+    execution_error: Option<crate::relay_client::RelayClientError>,
+) -> (RegistryNotaryRuntime, Arc<DelegatedRelayConsultation>) {
+    let activated = Arc::new(DelegatedRelayConsultation {
+        calls: AtomicU64::new(0),
+        outcome,
+        proof_value,
+        validation_error,
+        execution_error,
+    });
+    let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+    (
+        RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(keys))
+            .with_activated_relay(Some(bound)),
+        activated,
+    )
+}
+
+#[tokio::test]
+async fn delegated_exact_relay_proof_runs_once_before_the_dependent_claim() {
+    let evidence = delegated_evidence(vec![
+        delegated_relay_proof_claim(),
+        delegated_selected_claim(vec!["guardian-link"]),
+    ]);
+    let source = Arc::new(CountingSource::default());
+    let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+        AuditKeyHasher::unkeyed_dev_only(),
+    ));
+    let (runtime, relay) = delegated_runtime_with_relay(
+        &keys,
+        RuntimeRelayOutcome::Match,
+        true,
+        None,
+        None,
+    );
+
+    let results = runtime
+        .evaluate_with_source_capability(
+            evidence,
+            source.clone() as Arc<dyn SourceReader>,
+            &EvidenceStore::default(),
+            &delegated_relay_principal(),
+            delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
+            delegated_runtime_request(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("the exact Relay proof permits its configured delegated claim");
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].claim_id, "selected");
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn delegated_capability_denies_an_unrelated_registry_backed_dependency_before_relay() {
+    let mut unrelated = registry_claim(
+        "unrelated-registry-claim",
+        RuleConfig::Extract {
+            source: "enrollment".to_string(),
+            field: "registration_status".to_string(),
+        },
+        "string",
+    );
+    unrelated.required_scopes.clear();
+    let evidence = delegated_evidence(vec![
+        delegated_relay_proof_claim(),
+        unrelated,
+        delegated_selected_claim(vec!["guardian-link", "unrelated-registry-claim"]),
+    ]);
+    let source = Arc::new(CountingSource::default());
+    let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+        AuditKeyHasher::unkeyed_dev_only(),
+    ));
+    let (runtime, relay) = delegated_runtime_with_relay(
+        &keys,
+        RuntimeRelayOutcome::Match,
+        true,
+        None,
+        None,
+    );
+
+    let error = runtime
+        .evaluate_with_source_capability(
+            evidence,
+            source.clone() as Arc<dyn SourceReader>,
+            &EvidenceStore::default(),
+            &delegated_relay_principal(),
+            delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
+            delegated_runtime_request(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("delegation grants only the exact configured Relay proof claim");
+
+    assert!(matches!(
+        error,
+        EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted
+        }
+    ));
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn delegated_proof_claim_scope_denial_makes_zero_relay_calls() {
+    let evidence = delegated_evidence(vec![
+        delegated_relay_proof_claim(),
+        delegated_selected_claim(vec!["guardian-link"]),
+    ]);
+    let source = Arc::new(CountingSource::default());
+    let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+        AuditKeyHasher::unkeyed_dev_only(),
+    ));
+    let (runtime, relay) = delegated_runtime_with_relay(
+        &keys,
+        RuntimeRelayOutcome::Match,
+        true,
+        None,
+        None,
+    );
+
+    let error = runtime
+        .evaluate_with_source_capability(
+            evidence,
+            source.clone() as Arc<dyn SourceReader>,
+            &EvidenceStore::default(),
+            &delegated_principal(),
+            delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
+            delegated_runtime_request(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("the delegated caller must satisfy the proof claim scope gate");
+
+    assert!(matches!(
+        error,
+        EvidenceError::ScopeDenied { required } if required == "self_attestation"
+    ));
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn delegated_requester_or_target_binding_mismatch_makes_zero_relay_calls() {
+    for (requester, target) in [
+        ("OTHER-REQUESTER", "CHILD-123"),
+        ("NAT-123", "OTHER-TARGET"),
+    ] {
+        let evidence = delegated_evidence(vec![
+            delegated_relay_proof_claim(),
+            delegated_selected_claim(vec!["guardian-link"]),
+        ]);
+        let source = Arc::new(CountingSource::default());
+        let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+            AuditKeyHasher::unkeyed_dev_only(),
+        ));
+        let (runtime, relay) = delegated_runtime_with_relay(
+            &keys,
+            RuntimeRelayOutcome::Match,
+            true,
+            None,
+            None,
+        );
+
+        let error = runtime
+            .evaluate_with_source_capability(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &EvidenceStore::default(),
+                &delegated_relay_principal(),
+                delegated_attestation_capability(&keys, requester, target),
+                delegated_runtime_request(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect_err("delegated requester and target bindings fail closed before Relay");
+
+        assert!(matches!(
+            error,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted
+            }
+        ));
+        assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn delegated_false_or_no_match_relay_proof_is_relationship_unproven() {
+    for (outcome, proof_value) in [
+        (RuntimeRelayOutcome::Match, false),
+        (RuntimeRelayOutcome::NoMatch, false),
+    ] {
+        let evidence = delegated_evidence(vec![
+            delegated_relay_proof_claim(),
+            delegated_selected_claim(vec!["guardian-link"]),
+        ]);
+        let source = Arc::new(CountingSource::default());
+        let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+            AuditKeyHasher::unkeyed_dev_only(),
+        ));
+        let (runtime, relay) =
+            delegated_runtime_with_relay(&keys, outcome, proof_value, None, None);
+
+        let error = runtime
+            .evaluate_with_source_capability(
+                evidence,
+                source.clone() as Arc<dyn SourceReader>,
+                &EvidenceStore::default(),
+                &delegated_relay_principal(),
+                delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
+                delegated_runtime_request(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect_err("a false or absent relationship proof denies its dependent claim");
+
+        assert!(matches!(
+            error,
+            EvidenceError::SelfAttestationDenied {
+                reason: SelfAttestationDenialCode::DelegatedRelationshipUnproven
+            }
+        ));
+        assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn delegated_relay_execution_failure_is_proof_denied() {
+    let evidence = delegated_evidence(vec![
+        delegated_relay_proof_claim(),
+        delegated_selected_claim(vec!["guardian-link"]),
+    ]);
+    let source = Arc::new(CountingSource::default());
+    let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+        AuditKeyHasher::unkeyed_dev_only(),
+    ));
+    let (runtime, relay) = delegated_runtime_with_relay(
+        &keys,
+        RuntimeRelayOutcome::Match,
+        true,
+        None,
+        Some(crate::relay_client::RelayClientError::TransportUnavailable),
+    );
+
+    let error = runtime
+        .evaluate_with_source_capability(
+            evidence,
+            source.clone() as Arc<dyn SourceReader>,
+            &EvidenceStore::default(),
+            &delegated_relay_principal(),
+            delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
+            delegated_runtime_request(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("Relay execution failure fails closed as delegated proof denial");
+
+    assert!(matches!(
+        error,
+        EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::DelegatedProofDenied
+        }
+    ));
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn delegated_relay_contract_mismatch_is_proof_denied_before_execution() {
+    let evidence = delegated_evidence(vec![
+        delegated_relay_proof_claim(),
+        delegated_selected_claim(vec!["guardian-link"]),
+    ]);
+    let source = Arc::new(CountingSource::default());
+    let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+        AuditKeyHasher::unkeyed_dev_only(),
+    ));
+    let (runtime, relay) = delegated_runtime_with_relay(
+        &keys,
+        RuntimeRelayOutcome::Match,
+        true,
+        Some(crate::relay_client::RelayClientError::ContractMismatch),
+        None,
+    );
+
+    let error = runtime
+        .evaluate_with_source_capability(
+            evidence,
+            source.clone() as Arc<dyn SourceReader>,
+            &EvidenceStore::default(),
+            &delegated_relay_principal(),
+            delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
+            delegated_runtime_request(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("pinned Relay contract mismatch fails closed as proof denial");
+
+    assert!(matches!(
+        error,
+        EvidenceError::SelfAttestationDenied {
+            reason: SelfAttestationDenialCode::DelegatedProofDenied
+        }
+    ));
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[cfg(feature = "registry-notary-cel")]

@@ -543,6 +543,7 @@ impl RegistryNotaryRuntime {
             self.activated_relay.as_ref(),
             Arc::clone(&audit),
             None,
+            &source_capability,
         )?;
         let now = OffsetDateTime::now_utc();
         let binding_concurrency = Arc::new(Semaphore::new(evidence.concurrency.bindings));
@@ -1048,6 +1049,7 @@ impl RegistryNotaryRuntime {
                 self.activated_relay.as_ref(),
                 audit,
                 Some((outer_idempotency_key, input_index)),
+                &source_capability,
             )?
             .ok_or(EvidenceError::ConsultationInvalidRequest)?;
             total_groups = total_groups
@@ -1581,7 +1583,7 @@ fn preflight_claim_closure<R: SourceReader + ?Sized>(
         require_claim_access(evidence, source, principal, claim)?;
         match &claim.evidence_mode {
             ClaimEvidenceMode::RegistryBacked { .. } => {
-                require_machine_source_capability(source_capability)?;
+                require_relay_consultation_capability(source_capability, &claim.id)?;
                 if !relay_is_activated {
                     return Err(EvidenceError::SourceUnavailable);
                 }
@@ -1617,6 +1619,7 @@ fn plan_relay_consultations(
     activated_relay: Option<&Arc<dyn ActivatedRelayConsultations>>,
     audit: Arc<EvaluationAuditCollector>,
     batch: Option<(&str, usize)>,
+    source_capability: &SourceCapability,
 ) -> Result<Option<Arc<RequestScopedRelayPlan>>, EvidenceError> {
     let mut entries = Vec::new();
     for claim_id in levels.iter().flatten() {
@@ -1678,9 +1681,16 @@ fn plan_relay_consultations(
         }
         None => RequestScopedRelayPlan::new(entries, activated, audit),
     };
-    plan.map(Arc::new)
-        .map(Some)
-        .map_err(|_| EvidenceError::InvalidRequest)
+    plan.map(Arc::new).map(Some).map_err(|_| {
+        if matches!(
+            source_capability,
+            SourceCapability::DelegatedAttestation { .. }
+        ) {
+            delegated_proof_denied()
+        } else {
+            EvidenceError::InvalidRequest
+        }
+    })
 }
 
 fn relay_expected_result(
@@ -1813,34 +1823,49 @@ pub(super) async fn evaluate_claim_task(
             false,
         ),
         ClaimEvidenceMode::RegistryBacked { .. } => {
-            require_machine_source_capability(&ctx.source_capability)?;
+            require_relay_consultation_capability(&ctx.source_capability, &claim.id)?;
             let plan = ctx
                 .relay_plan
                 .as_ref()
                 .ok_or(EvidenceError::SourceUnavailable)?;
-            let result = plan
-                .consult(&claim.id)
-                .await
-                .map_err(|_| EvidenceError::SourceUnavailable)?;
-            let sources = match result.outcome() {
-                RuntimeRelayOutcome::Match => materialize_relay_match(&claim, &result)?,
+            let result = plan.consult(&claim.id).await.map_err(|_| {
+                if delegated_proof_claim {
+                    delegated_proof_denied()
+                } else {
+                    EvidenceError::SourceUnavailable
+                }
+            })?;
+            let relay_outcome = result.outcome();
+            let sources_result = match relay_outcome {
+                RuntimeRelayOutcome::Match => materialize_relay_match(&claim, &result),
                 RuntimeRelayOutcome::NoMatch
                     if matches!(&claim.rule, RuleConfig::Extract { .. })
                         && registry_claim_has_typed_outputs(&claim) =>
                 {
-                    materialize_relay_absence(&claim)?
+                    materialize_relay_absence(&claim)
                 }
                 RuntimeRelayOutcome::NoMatch
                     if matches!(&claim.rule, RuleConfig::Extract { .. }) =>
                 {
-                    return Err(EvidenceError::SourceNotFound);
+                    Err(EvidenceError::SourceNotFound)
                 }
                 RuntimeRelayOutcome::NoMatch if matches!(&claim.rule, RuleConfig::Cel { .. }) => {
-                    materialize_relay_absence(&claim)?
+                    materialize_relay_absence(&claim)
                 }
-                RuntimeRelayOutcome::NoMatch => BTreeMap::new(),
-                RuntimeRelayOutcome::Ambiguous => return Err(EvidenceError::SourceAmbiguous),
+                RuntimeRelayOutcome::NoMatch => Ok(BTreeMap::new()),
+                RuntimeRelayOutcome::Ambiguous => Err(EvidenceError::SourceAmbiguous),
             };
+            let sources = sources_result.map_err(|error| {
+                if delegated_proof_claim {
+                    if relay_outcome == RuntimeRelayOutcome::NoMatch {
+                        delegated_relationship_unproven()
+                    } else {
+                        delegated_proof_denied()
+                    }
+                } else {
+                    error
+                }
+            })?;
             (
                 sources,
                 Some(result.acquired_at()),

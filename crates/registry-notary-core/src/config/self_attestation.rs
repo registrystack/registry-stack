@@ -237,20 +237,6 @@ pub(super) fn validate_self_attestation_evidence_paths(
             evidence,
         )?;
     }
-    for relationship in &config.delegation.allowed_relationships {
-        reject_registry_backed_dependency_path(
-            "self_attestation.delegation.proof_claim",
-            &relationship.proof_claim,
-            evidence,
-        )?;
-        for claim_id in &relationship.allowed_claims {
-            reject_registry_backed_dependency_path(
-                "self_attestation.delegation.allowed_claims",
-                claim_id,
-                evidence,
-            )?;
-        }
-    }
     Ok(())
 }
 
@@ -304,11 +290,6 @@ impl SelfAttestationDelegationConfig {
             }
             return Ok(());
         }
-        if !delegated_attestation_v1_enabled() {
-            return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
-                reason: "self_attestation.delegation is unavailable in v1 until a trusted assertion design replaces direct source proof claims".to_string(),
-            });
-        }
         if self.allowed_relationships.is_empty() {
             return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
                 reason: "self_attestation.delegation.enabled requires allowed_relationships"
@@ -344,10 +325,6 @@ impl SelfAttestationDelegationConfig {
             .iter()
             .find(|relationship| relationship.relationship_type == relationship_type)
     }
-}
-
-fn delegated_attestation_v1_enabled() -> bool {
-    false
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -467,6 +444,12 @@ impl SelfAttestationDelegatedRelationshipConfig {
                         self.proof_claim
                     ),
                 });
+            }
+            if claim.purpose != proof_claim.purpose {
+                return invalid_self_attestation(format!(
+                    "delegated claim '{claim_id}' and proof_claim '{}' must declare the same purpose",
+                    self.proof_claim
+                ));
             }
             validate_delegated_attestation_claim(
                 self,
@@ -990,48 +973,48 @@ pub(super) fn validate_delegated_proof_claim_binding(
     relationship: &SelfAttestationDelegatedRelationshipConfig,
     proof_claim: &ClaimDefinition,
 ) -> Result<(), EvidenceConfigError> {
-    if proof_claim.source_bindings.is_empty() {
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &proof_claim.evidence_mode else {
         return invalid_self_attestation(format!(
-            "delegated proof_claim '{}' must read a relationship source binding",
+            "delegated proof_claim '{}' must be registry_backed",
+            relationship.proof_claim
+        ));
+    };
+    let Some((_, consultation)) = consultations
+        .first_key_value()
+        .filter(|_| consultations.len() == 1)
+    else {
+        return invalid_self_attestation(format!(
+            "delegated proof_claim '{}' must declare exactly one Relay consultation",
+            relationship.proof_claim
+        ));
+    };
+    let has_requester = consultation
+        .inputs
+        .values()
+        .any(RelayConsultationInput::is_requester_derived);
+    let has_target = consultation
+        .inputs
+        .values()
+        .any(RelayConsultationInput::is_target_derived);
+    if !has_requester || !has_target {
+        return invalid_self_attestation(format!(
+            "delegated proof_claim '{}' must map both requester-derived and target-derived Relay inputs",
             relationship.proof_claim
         ));
     }
-    if !proof_claim
-        .source_bindings
-        .values()
-        .any(source_binding_lookup_references_requester_and_target)
-    {
+    if proof_claim.value.value_type != "boolean" {
         return invalid_self_attestation(format!(
-            "delegated proof_claim '{}' must bind both requester and target source inputs",
+            "delegated proof_claim '{}' must produce a boolean result",
+            relationship.proof_claim
+        ));
+    }
+    if proof_claim.purpose.as_deref().is_none() {
+        return invalid_self_attestation(format!(
+            "delegated proof_claim '{}' must declare purpose",
             relationship.proof_claim
         ));
     }
     Ok(())
-}
-
-pub(super) fn source_binding_lookup_references_requester_and_target(
-    binding: &SourceBindingConfig,
-) -> bool {
-    let input_paths = std::iter::once(binding.lookup.input.as_str()).chain(
-        binding
-            .query_fields
-            .iter()
-            .map(|field| field.input.as_str()),
-    );
-    let mut has_requester = false;
-    let mut has_target = false;
-    for path in input_paths {
-        has_requester |= source_binding_input_is_under(path, "requester");
-        has_target |= source_binding_input_is_under(path, "target");
-    }
-    has_requester && has_target
-}
-
-pub(super) fn source_binding_input_is_under(path: &str, root: &str) -> bool {
-    path == root
-        || path
-            .strip_prefix(root)
-            .is_some_and(|rest| rest.starts_with('.'))
 }
 
 pub(super) fn validate_delegated_attestation_claim(
@@ -1045,6 +1028,12 @@ pub(super) fn validate_delegated_attestation_claim(
     if !claim.operations.evaluate.enabled {
         return invalid_self_attestation(format!(
             "delegated claim '{}' must enable evaluate",
+            claim.id
+        ));
+    }
+    if !claim.evidence_mode.is_self_attested() {
+        return invalid_self_attestation(format!(
+            "delegated claim '{}' must be self_attested",
             claim.id
         ));
     }
@@ -1208,9 +1197,6 @@ pub(super) fn validate_required_scopes_do_not_grant_source_access(
 pub(super) fn source_required_scopes(evidence: &EvidenceConfig) -> HashSet<String> {
     let mut scopes = HashSet::new();
     for claim in &evidence.claims {
-        if !claim.evidence_mode.is_self_attested() {
-            scopes.extend(claim.required_scopes.iter().cloned());
-        }
         for binding in claim.source_bindings.values() {
             if let Some(scope) = binding.required_scope.as_deref() {
                 scopes.insert(scope.to_string());
