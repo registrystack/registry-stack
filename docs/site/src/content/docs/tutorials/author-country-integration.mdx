@@ -1,59 +1,51 @@
 ---
-title: Author a country registry integration
-description: Create, test, review, and build country-owned Relay and Notary configuration without editing product source code.
+title: Author a bounded HTTP country integration
+description: Copy the bounded HTTP starter, run its offline fixtures, review the generated plan, and build unsigned Relay and Notary inputs.
 status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
 last_reviewed: "2026-07-12"
-doc_type: how-to
+doc_type: tutorial
 locale: en
 standards_referenced: []
 ---
 
-Use this guide when your institution operates a registry source and needs a reviewed,
-bounded path from that source to Registry Relay and Registry Notary.
-You will edit country-owned YAML and offline fixtures, then generate separate unsigned
-configuration inputs for Relay and Notary.
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-{/* Evidence: crates/registryctl/src/main.rs and crates/registryctl/src/country_authoring.rs. */}
+Create a country-owned bounded HTTP integration without editing Registry Stack source code.
+You will copy the built-in starter, prove its synthetic journey offline, inspect the bounded
+acquisition and disclosure plan, and build separate unsigned inputs for Registry Relay and
+Registry Notary.
 
-## When to use this
+<QuickstartMeta
+  outcome="A tested country workspace with reviewable bounded HTTP configuration and unsigned Relay and Notary bundle inputs."
+  time="About 10 minutes after registryctl is installed"
+  level="Local authoring with synthetic fixtures"
+  prerequisites={['A registryctl build with country authoring commands', 'A shell and a text editor']}
+/>
 
-The country-authoring workflow fits a source integration that Registry Stack can express as a
-fixed bounded HTTP plan or an exact local snapshot lookup.
-The integration describes how Registry Relay obtains and minimizes facts.
-The service describes which authenticated callers, purposes, claims, disclosure modes, and
-credential profiles Registry Notary accepts.
+This tutorial uses a fictional registry and synthetic records.
+Do not add source credentials, production endpoints, or real subject records.
 
-Use a separate platform review when the source needs a new transport, authentication provider,
-verification primitive, response codec, or operation semantic.
-Country configuration can arrange supported operations and map country fields, but it cannot add
-runtime authority.
+{/* Evidence: crates/registryctl/src/main.rs, crates/registryctl/src/country_authoring.rs,
+    and crates/registryctl/assets/country-starters/bounded-http/. */}
 
-## Before you start
+## Copy the bounded HTTP starter
 
-You need:
-
-- A `registryctl` build that includes the pre-1.0 country-authoring commands.
-- A reviewed source API contract or immutable snapshot shape.
-- Synthetic source responses for positive and denial fixtures.
-- Names for the country purpose, legal basis declaration, caller scopes, and minimized claims.
-- A non-production environment name such as `local`.
-
-Do not put source credentials, client API keys, issuer private keys, production endpoints, or real
-subject records in the project.
-Environment files name secret references and deployment bindings, not secret values.
-
-## Copy a starter
-
-Create a country workspace from a local embedded starter:
+Create a local country workspace:
 
 ```sh
 registryctl init --from bounded-http --country-dir country-registry
 ```
 
-The command prints a JSON report with `status: "initialized"` and creates this authored layout:
+The JSON report contains:
+
+```text
+"status": "initialized"
+```
+
+The command creates this authored layout:
 
 ```text
 country-registry/
@@ -66,542 +58,93 @@ country-registry/
     local.yaml
 ```
 
-The copy belongs to the country project.
-Registry Stack does not resolve a remote package or download executable integration code at
-runtime.
+The starter is copied into your workspace.
+Registry Stack does not resolve a remote package or download integration code at runtime.
 
-Choose the starter that matches the reviewed source contract:
+## Prove the starter offline
 
-| Starter | Fixture-backed authoring journey |
-| --- | --- |
-| `bounded-http` | A fictional product-neutral HTTP registry with one typed identifier, presence and bounded scalar facts, direct and CEL-derived claims, and acquisition and authorization denials. |
-| `dhis2-tracker` | A fixed four-operation health journey with names, birth date, programme and care facts, request-scoped claim reuse, and three credential profiles. |
-| `opencrvs` | A bounded OAuth, signing-key, and Digital Convergence Initiative (DCI) search journey with birth-record presence, child attributes, an `as_of_date` request variable, and two credential profiles. |
-| `openspp` | A fixture-backed exact individual lookup with presence, status, programme, and redacted household-reference claims. |
-
-The product-named starters are editable examples expressed through the same capability and fact
-contracts.
-Their fixture-backed checks establish authoring and runtime-contract coverage, not product
-certification or deployment approval.
-The OpenSPP starter is an offline proof; OpenSPP live testing remains deferred.
-No ordinary starter enables SandboxedRhai.
-
-## Describe the registry service
-
-Open `registry-stack.yaml`.
-The project file connects four reviewed decisions: the integration, purpose, authenticated
-callers, and claims returned from minimized facts.
-
-```yaml
-version: 1
-
-registry:
-  id: health-registry
-
-integrations:
-  enrollment:
-    file: integrations/enrollment-by-person/integration.yaml
-
-services:
-  programme-verification:
-    kind: evidence
-    version: 1
-    purpose: programme-enrollment-verification
-    legal_basis: public-service-delivery
-    consent: not_required
-    access:
-      scopes: ["evidence:programme:read"]
-    consultations:
-      enrollment:
-        integration: enrollment
-        input:
-          person_id: request.target.identifiers.dhis2_tracked_entity
-    claims:
-      enrollment-exists:
-        fact: enrollment.exists
-        disclosure: predicate
-      enrollment-active:
-        cel: >-
-          enrollment.exists && enrollment.status != null &&
-          enrollment.status == "ACTIVE"
-        disclosure: predicate
-    credentials:
-      health-status:
-        format: dc+sd-jwt
-        type: https://credentials.example.com/health-status/v1
-        validity: 10m
-        claims: [enrollment-active]
-```
-
-A consultation names one integration and one typed subject mapping.
-Several claims can reuse the same request-scoped consultation result.
-A direct claim selects a declared fact.
-A derived claim uses Common Expression Language (CEL) over declared facts and request variables;
-CEL does not select a source operation, caller, purpose, credential format, or wider disclosure.
-
-The credential profile contains one claim allow-list.
-The generated Notary configuration derives its matching claim-to-profile membership from that
-list.
-
-`consent: required` is not accepted in this authoring version.
-Use `consent: not_required` until a verified consent input and denial contract are available.
-
-## Map a composite subject selector
-
-A consultation still selects one subject when that subject needs several exact attributes.
-Declare one to four required inputs in the integration, then map every input from the request in
-the service consultation.
-The following integration uses an exact given name, family name, and full birth date:
-
-```yaml
-input:
-  given_name:
-    type: string
-    bytes: 80
-    pattern: "^[A-Za-z '-]+$"
-    canonicalization: identity
-  family_name:
-    type: string
-    bytes: 80
-    pattern: "^[A-Za-z '-]+$"
-    canonicalization: identity
-  date_of_birth:
-    type: full_date
-    bytes: 10
-    pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
-    canonicalization: identity
-```
-
-Map all three components in `registry-stack.yaml`:
-
-```yaml
-consultations:
-  person:
-    integration: person-record
-    input:
-      given_name: request.target.identifiers.given_name
-      family_name: request.target.identifiers.family_name
-      date_of_birth: request.target.identifiers.date_of_birth
-```
-
-Registry Relay applies the complete selector as one exact `AND` predicate and probes at most two
-records.
-Missing components fail before source access, and two matching records return `ambiguous` rather
-than selecting one.
-Optional, fuzzy, weighted, and range matching are outside this contract.
-Changing YAML member order does not change the generated selector identity.
-
-{/* Evidence: crates/registryctl/tests/country_authoring.rs,
-    exact_selector_sizes_one_through_four_compile_for_http_and_snapshot,
-    exact_selector_authored_member_order_is_canonical, and
-    opencrvs_composite_dci_uses_unified_exact_predicates_canonically. */}
-
-## Define bounded acquisition and facts
-
-Edit the referenced `integration.yaml`.
-Keep every destination, method, path, parameter name, projection, response field, and bound fixed
-before deployment.
-
-```yaml
-version: 1
-id: enrollment-by-person
-
-source:
-  product: country-health-system
-  versions:
-    unverified: [country-contract-v1]
-
-input:
-  person_id:
-    type: string
-    bytes: 11
-    pattern: "^[A-Za-z][A-Za-z0-9]{10}$"
-    canonicalization: identity
-
-capability:
-  bounded_http:
-    credential:
-      type: basic
-    operations:
-      enrollment:
-        request:
-          method: GET
-          destination: data
-          path: /api/enrollments
-          query:
-            trackedEntity: { input: person_id }
-            fields: { value: status }
-            pageSize: { value: 2 }
-        response:
-          statuses: [200]
-          max_bytes: 32768
-          schema:
-            type: object
-            additional_fields: reject
-            fields:
-              enrollments:
-                required: true
-                type: array
-                max_items: 2
-                items:
-                  type: object
-                  additional_fields: reject
-                  fields:
-                    status: { required: true, type: string, max_bytes: 32 }
-          cardinality:
-            records: enrollments
-            mode: probe_two
-
-facts:
-  exists: { type: boolean, from: enrollment.presence }
-  status:
-    type: string
-    nullable: true
-    max_bytes: 32
-    from: enrollment.record.status
-
-bounds:
-  calls: 1
-  source_bytes: 32768
-  request_bytes: 4096
-  deadline: 10s
-  concurrency: 8
-
-fixtures: fixtures/
-```
-
-`source.product` is review metadata.
-Registry Relay dispatches the compiled capability and operation primitives, not a product name.
-The operation graph contains at most five fixed operations.
-Earlier typed outputs can supply declared values to later operations, but they cannot select a new
-origin, method, path, credential, codec, projection, or operation name.
-
-The response schema is closed and bounded.
-Map only the facts that claims require.
-Use a non-null Boolean presence fact for existence and nullable record facts for the no-match
-case.
-
-## Use fixed API-key credentials
-
-Use `api_key_header` only when the source expects a fixed header name.
-The public integration declares the name and maximum value size, never the key value:
-
-```yaml
-capability:
-  bounded_http:
-    credential:
-      type: api_key_header
-      name: x-country-api-key
-      max_value_bytes: 128
-```
-
-The private environment binds the value through a secret reference:
-
-```yaml
-integrations:
-  enrollment:
-    credential:
-      type: api_key_header
-      value: { secret: COUNTRY_SOURCE_API_KEY }
-      generation: 1
-```
-
-Registry Stack rejects authentication, cookie, host, forwarding, proxy, hop-by-hop, and other
-security-sensitive header names.
-The caller cannot select the header name or value.
-
-Use `api_key_query` only when the upstream has no safer authentication mechanism.
-Declare the fixed query parameter name in the integration, change the private credential type to
-`api_key_query`, and record the required review:
-
-```yaml
-capability:
-  bounded_http:
-    credential:
-      type: api_key_query
-      name: apiKey
-      max_value_bytes: 128
-```
-
-```yaml
-integrations:
-  enrollment:
-    credential:
-      type: api_key_query
-      value: { secret: COUNTRY_SOURCE_API_KEY }
-      generation: 1
-      review: operator_security
-```
-
-Query credential names cannot collide with authored request parameters.
-Outside loopback tests, the destination must use verified HTTPS.
-Registry Stack keeps the value out of authored and generated files, diagnostics, retained URLs,
-metrics, audit, and evidence that Registry Stack owns.
-The upstream server, reverse proxy, web application firewall, and network appliances can still
-retain complete URLs, so the operator-security review must record that residual risk.
-
-{/* Evidence: crates/registryctl/tests/country_authoring.rs,
-    api_key_interfaces_keep_values_environment_only_and_enforce_query_review;
-    crates/registry-relay/src/source_plan/credentials/tests.rs,
-    api_key_runtime_capabilities_keep_sentinel_material_out_of_diagnostics. */}
-
-## Use the closed FHIR R4 journey
-
-Fast Healthcare Interoperability Resources Release 4 (FHIR R4) integrations use the same bounded
-HTTP capability and credential boundary.
-The fixture-backed `fhir-r4-coverage-active` conformance workspace performs two fixed searches:
-an exact Patient anchor followed by one Coverage relation.
-Both operations declare their resource path, search parameters, response codec, closed schema,
-byte limit, and probe-two cardinality before deployment.
-
-```yaml
-operations:
-  patient:
-    primitive: fhir_r4_search_get
-    request:
-      method: GET
-      destination: data
-      path: /fhir/Patient
-      codec: fhir_r4_search_get
-      query:
-        _count: { value: "2" }
-        birthdate: { input: birthdate }
-        family: { input: family }
-        given: { input: given }
-  coverage:
-    depends_on: [patient]
-    primitive: fhir_r4_search_get
-    request:
-      method: GET
-      destination: data
-      path: /fhir/Coverage
-      codec: fhir_r4_search_get
-      query:
-        _count: { value: "2" }
-        beneficiary: { prior: patient.id }
-```
-
-This profile accepts only the authored resources, parameters, relation, and projection.
-It rejects malformed or oversized Bundles, wrong resource types, ambiguous anchors or relations,
-and `OperationOutcome` responses.
-Registry Relay does not follow Bundle pagination links or expose caller-selected FHIR requests,
-FHIRPath, `_include`, `_revinclude`, or a generic FHIR proxy.
-The FHIR workspace is a release conformance fixture, not an `init --from` starter or a claim of
-interoperability with an untested FHIR deployment.
-
-{/* Evidence: crates/registryctl/tests/fixtures/country-authoring/fhir-r4-coverage-active/ and
-    crates/registryctl/tests/country_authoring.rs,
-    fhir_r4_coverage_active_passes_the_closed_bundle_matrix. */}
-
-## Author an exact snapshot integration
-
-Use `snapshot_exact` when Relay reads an immutable, locally published materialization instead of
-calling a source API.
-Define the governed records model once, then let a records service and the exact consultation
-share that model and its private physical binding.
-
-Add the records service to `registry-stack.yaml`:
-
-```yaml
-services:
-  people-records:
-    kind: records_api
-    definition: records/people.yaml
-    entity: people
-```
-
-Define only the logical record contract in `records/people.yaml`:
-
-```yaml
-version: 1
-id: people
-primary_key: person_id
-fields:
-  person_id: { type: string }
-  registration_status: { type: string, nullable: true }
-api:
-  scopes:
-    metadata: people:metadata
-    rows: people:rows
-  purposes: [case-management]
-  pagination: { default_limit: 50, max_limit: 100 }
-  filters:
-    person_id: [eq, in]
-    registration_status: [eq]
-  required_principal_filters: [person_id]
-  relationships: {}
-  aggregates: {}
-  standards: { ogc_features: false, sp_dci: false }
-```
-
-The public snapshot integration references the logical entity and declares only logical facts,
-cardinality, freshness, and materialization bounds:
-
-```yaml
-capability:
-  snapshot_exact:
-    entity: people
-    cardinality: probe_two
-    freshness: 86400s
-    materialization:
-      max_source_records: 1000000
-      max_source_bytes: 268435456
-
-facts:
-  exists: { type: presence, from: snapshot.presence }
-  registration_status:
-    type: string
-    nullable: true
-    max_bytes: 32
-    from: snapshot.record.registration_status
-
-bounds:
-  calls: 0
-  source_bytes: 4096
-  request_bytes: 1024
-  deadline: 5s
-  concurrency: 4
-```
-
-Keep the physical provider and column mapping in the private environment binding:
-
-```yaml
-entities:
-  people:
-    provider:
-      type: csv
-      path: /var/lib/registry/population.csv
-      header_row: 1
-    columns:
-      person_id: subject_key
-      registration_status: status_code
-    source_revision: population-export-v1
-    generation: 2026-07-12
-```
-
-Every logical field must have one private physical column, and physical columns must be unique.
-`registryctl build` emits one Relay ingest plan and one materialization identity for the entity.
-The governed records routes and every compatible SnapshotExact profile capture that same
-published materialization rather than creating separate copies or repeating physical mappings.
-If the materialization is absent or stale, only its dependent consultation profiles become
-unready; Relay never falls back to a live source.
-
-{/* Evidence: crates/registryctl/tests/country_authoring.rs,
-    records_and_snapshot_exact_share_one_generated_materialization and
-    records_environment_mapping_fails_closed. */}
-
-## Add offline fixtures
-
-Put direct `*.yaml` files in the declared fixture directory.
-Cover the expected match and no-match results, ambiguity, malformed and oversized responses,
-unexpected status, timeout, invalid input, wrong caller or scope, wrong purpose, and attempted
-request-authority changes.
-
-```yaml
-name: active-enrollment
-input:
-  person_id: A0000000001
-source:
-  enrollment:
-    status: 200
-    body:
-      enrollments:
-        - { status: ACTIVE }
-expect:
-  facts:
-    exists: true
-    status: ACTIVE
-  claims:
-    enrollment-exists: true
-    enrollment-active: true
-```
-
-Fixtures contain synthetic inputs and bounded source observations.
-They do not contain a destination, credential, worker command, authentication bypass, or decoder
-mode. `registryctl` first compiles an internal fixture-only artifact closure with the
-production Relay and Notary validators. It then feeds the observations through Relay's closed
-decoder and typed normalization path, followed by Notary's production authentication, purpose,
-scope, consultation, disclosure, and claim-evaluation path. Negative authorization fixtures are
-required to reach neither Relay nor a direct source.
-`registryctl` loads direct YAML members in filename order and rejects nested fixture entries,
-symlinks, and unsupported files.
-
-The OpenCRVS starter includes public RSA JWKS material and precomputed RS256-signed DCI envelopes.
-Those fixtures exercise exact signature, correlation, sender and receiver, registry, record type,
-selector, and cardinality checks. They prove the deterministic product decoder contract only.
-They do not prove that a live OpenCRVS deployment implements the pinned contract.
-
-Run the complete offline fixture set:
+Run every fixture before changing the source contract:
 
 ```sh
 registryctl test --project country-registry
 ```
 
-The report has `status: "passed"` and lists each integration, fixture, fact name, claim id, and
-pass result.
-Successful negative fixtures also list the expected denial code and whether source access occurred,
-without including authored input or source-response values.
-The command does not contact Relay, Notary, or the source registry. Snapshot fixtures reuse the
-product-owned exact projection and cardinality logic without opening a live table provider.
+The JSON report contains:
 
-## Bind a non-production environment
-
-Edit `environments/local.yaml` to bind the reviewed integration to deployment-specific values.
-Use secret references for every credential and signing key.
-
-```yaml
-version: 1
-
-integrations:
-  enrollment:
-    source_version: country-contract-v1
-    data_destination:
-      origin: https://health-registry.example.com
-    credential:
-      type: basic
-      username: { secret: HEALTH_REGISTRY_USERNAME }
-      password: { secret: HEALTH_REGISTRY_PASSWORD }
-      generation: 1
-
-issuance:
-  issuer: did:web:health-notary.example.com
-  signing_kid: country-issuer-key
-  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
-  generation: 1
-
-callers:
-  programme-service:
-    api_key_fingerprint: { secret: PROGRAMME_SERVICE_TOKEN_HASH }
-    scopes: ["evidence:programme:read"]
-
-relay_trust:
-  origin: https://health-registry-relay.internal.example.com
-  issuer: https://workload-issuer.internal.example.com
-  jwks_url: https://workload-issuer.internal.example.com/.well-known/jwks.json
-  audience: registry-relay
-  notary_client_id: health-registry-notary
-  notary_token_file: /run/secrets/relay-workload-token
-
-deployment:
-  profile: local
-  relay: { service: health-registry-relay }
-  notary: { service: health-registry-notary }
+```text
+"status": "passed"
 ```
 
-The string inside `secret` is an environment identifier consumed by the generated product
-configuration.
-`registryctl` validates the reference name without reading the referenced value.
-The source credential stays in Relay's private input, while the issuance key and caller bindings
-stay in Notary's private input.
-The `relay_trust` block binds Notary to one Relay origin and one workload identity issuer,
-audience, client id, signing-key URL, and token file.
-Set `deployment.profile` explicitly. Use `local` only for local development; production and
-evidence-grade builds retain their corresponding product security gates.
+The fixture set covers match, no match, malformed and oversized responses, invalid input,
+unexpected source status, timeout, wrong caller or scope, wrong purpose, and attempted request
+authority changes.
+The command does not contact Registry Relay, Registry Notary, or a source registry.
 
-## Check the generated plan
+## Adapt the authored contract
 
-Validate the authored project, offline fixtures, generated Relay artifacts, and generated Notary
-configuration without writing build output:
+For this synthetic journey, make these exact substitutions with your editor:
+
+| File | Field | Replace | With |
+| --- | --- | --- | --- |
+| `registry-stack.yaml` | `registry.id` | `fictional-citizen-registry` | `fictional-civic-support-registry` |
+| `integrations/person-record/integration.yaml` | `source.product` | `fictional-citizen-system` | `fictional-civic-support-api` |
+| `integrations/person-record/integration.yaml` | `source.versions.unverified` | `[country-fixture-v1]` | `[tutorial-contract-v2]` |
+| `integrations/person-record/integration.yaml` | the `person` request `path` | `/v1/person-records` | `/v2/citizens/status` |
+| `environments/local.yaml` | `source_version` | `country-fixture-v1` | `tutorial-contract-v2` |
+| `environments/local.yaml` | `data_destination.origin` | `https://citizen-registry.invalid` | `https://civic-support.invalid` |
+
+These values remain fictional and `.invalid` destinations cannot identify a live service. The
+fixture observations describe response bodies rather than executing HTTP requests, so they remain
+valid after the fixed request paths change.
+
+For an actual country integration, review all four authored surfaces and replace the fictional
+contract with approved country values:
+
+1. In `registry-stack.yaml`, name the registry, service, purpose, caller scopes, consultation
+   input mapping, facts, claims, disclosure modes, and credential claim allow-list.
+2. In `integrations/person-record/integration.yaml`, define the typed subject input, fixed
+   operation, closed response schema, fact mapping, cardinality, bytes, calls, deadline, and
+   concurrency.
+3. In `integrations/person-record/fixtures/`, replace the synthetic source observations and
+   expected facts and claims. Keep positive and denial fixtures.
+4. In `environments/local.yaml`, bind the source version, non-production destination, secret
+   references, caller fingerprints, Relay trust, and deployment services.
+
+The integration fixes the destination slot, method, path, parameter names, response fields, and
+bounds before deployment.
+Consultation inputs can populate only declared value slots.
+They cannot select an origin, operation, credential, codec, projection, or response mapper.
+
+Use `source.product` as review metadata for the country system.
+It does not select a product executor or runtime capability.
+Mark a country version `unverified` until the required integration evidence exists.
+
+{/* Evidence: crates/registryctl/tests/country_authoring.rs,
+    bounded_http_starter_adapts_to_a_structurally_different_country_api and
+    source_product_is_metadata_not_runtime_dispatch. */}
+
+## Rerun the fixture journey
+
+Test the edited project:
+
+```sh
+registryctl test --project country-registry
+```
+
+The report must again contain:
+
+```text
+"status": "passed"
+```
+
+Failures identify the authored file and fixture.
+A fixture can supply bounded source observations, but it cannot supply a destination, credential,
+worker command, authentication bypass, or decoder mode.
+
+## Review the generated plan
+
+Compile the authored project through the Relay and Notary validators without writing build
+output:
 
 ```sh
 registryctl check \
@@ -610,27 +153,22 @@ registryctl check \
   --explain
 ```
 
-The report has `status: "valid"`.
-`explanation` adds the redacted acquisition, authorization, fact, claim, and disclosure plan.
-Inspect the fixed destinations and operations, input mappings, caller scopes, purpose, facts,
-claims, disclosure modes, and credential membership before approval.
+The JSON report contains:
 
-Without an approved baseline, the report labels the comparison
-`initial_without_baseline` and requires all four review classes:
+```text
+"status": "valid"
+"baseline": "initial_without_baseline"
+```
 
-- `claim`: Derived expressions and minimized claim selection.
-- `integration`: Acquisition, normalization, fact semantics, and source-version evidence.
-- `country_policy`: Purpose, legal basis, callers, scopes, disclosure, and credential membership.
-- `operator_security`: Destinations, source credentials, issuer and signing-key binding, and
-  deployment authority.
-
-These labels record which external country reviews apply.
-A successful check is not legal approval, source interoperability evidence, or deployment
-authorization.
+Review the fixed operations, input mappings, caller scopes, purpose, facts, claims, disclosure
+modes, and credential membership in `explanation`.
+An initial project without an approved baseline requires the `claim`, `integration`,
+`country_policy`, and `operator_security` review classes.
+A valid report is not legal approval, source interoperability evidence, or deployment authority.
 
 ## Build unsigned product inputs
 
-Generate deterministic Relay and Notary input directories:
+Generate deterministic inputs for the existing Config Bundle v1 workflow:
 
 ```sh
 registryctl build \
@@ -638,7 +176,13 @@ registryctl build \
   --environment local
 ```
 
-The report has `status: "built"` and names this output root:
+The JSON report contains:
+
+```text
+"status": "built"
+```
+
+The output root contains:
 
 ```text
 country-registry/.registry-stack/build/local/
@@ -649,227 +193,47 @@ country-registry/.registry-stack/build/local/
   private/
     relay/
       config/relay.yaml
-      descriptors/operations.json
-      descriptors/secret-consumers.json
       approval/review.json
     notary/
       config/notary.yaml
-      descriptors/operations.json
-      descriptors/secret-consumers.json
       approval/review.json
 ```
 
-The `reviewable` directory contains the generated contracts and semantic review record.
-Treat those artifacts as institutionally sensitive even though they cross the Relay-to-Notary
-trust boundary.
-The `private/relay` and `private/notary` directories are separate, owner-readable bundle inputs.
-Each private directory vendors the reviewable artifacts its product needs, so runtime
-configuration does not follow paths back into `reviewable`.
-The operational descriptor records the fixed health/readiness and restart contract. The
-secret-consumer descriptor lists only environment-variable names or runtime file paths and their
-config pointers; it never contains a secret value.
+The product input directories remain separate and contain secret references, not secret values.
+`build` does not create a bundle manifest, sign a bundle, or read a secret value.
+Treat every generated directory as institutionally sensitive and keep it out of source control.
 
-`build` emits unsigned inputs.
-It does not create a Config Bundle v1 manifest, sign a bundle, or read secret values.
+## Clean up generated output
 
-## Sign and verify the product bundles
+Keep `country-registry/` as the authored country project.
+If you do not need the generated inputs, remove only
+`country-registry/.registry-stack/build/local/`.
+You can reproduce that directory with the same `build` command.
 
-Use the existing Config Bundle v1 workflow separately for Relay and Notary.
-The operator supplies the product identity, environment, sequence, bundle id, and signing key.
+## What you built
 
-```sh
-registryctl bundle sign \
-  --input country-registry/.registry-stack/build/local/private/relay \
-  --key <relay-bundle-signing-key.jwk> \
-  --product registry-relay \
-  --environment local \
-  --stream-id <registry-stream> \
-  --instance-id <relay-instance> \
-  --sequence <sequence> \
-  --bundle-id <bundle-id> \
-  --out <signed-relay-bundle>
+You copied a local bounded HTTP starter, proved its positive and denial fixtures without source
+access, adapted the reviewed country contract, inspected the complete redacted plan, and generated
+separate unsigned Relay and Notary inputs.
+The generated profile keeps source acquisition in Relay and claim disclosure in Notary.
 
-registryctl bundle verify \
-  --bundle-dir <signed-relay-bundle> \
-  --anchor-path <relay-trust-anchor.json>
-```
+## Next
 
-Repeat the commands with `private/notary`, the Notary product and instance identity, and its trust
-anchor.
-The signature authorizes deployment under the country's signer policy.
-The signature does not perform the underlying claim, integration, policy, or operator-security
-reviews.
-
-The [registryctl CLI reference](../../reference/registryctl/) lists the complete bundle and trust
-anchor flags.
-
-## Deploy the signed bundles
-
-Place the verified Relay and Notary bundles, their trust anchors, and the referenced secrets on
-the non-production service nodes through your institution's deployment process.
-Restart Relay and Notary with those mounted inputs, then confirm that both products report ready.
-Registry Stack does not provide a hot-apply route for this configuration; a runtime configuration
-change requires a signed local bundle and a service restart.
-
-{/* Evidence: docs/site/src/content/docs/explanation/known-limitations.mdx and
-    crates/registry-relay/tests/config_verify_bundle_cli.rs. */}
-
-## Exercise the governed live path
-
-After the signed bundles are deployed and both products report ready, use the bound
-non-production environment to exercise the Notary-to-Relay path:
-
-```sh
-registryctl test \
-  --project country-registry \
-  --environment local \
-  --live
-```
-
-Before running the command, populate these variables through the invoking process's secret loader:
-
-| Process variable | Required content |
-| --- | --- |
-| `REGISTRY_STACK_LIVE_NOTARY_ORIGIN` | An HTTPS Notary origin, or an HTTP IP-loopback origin for local testing. Do not include a path, query, fragment, or user information. |
-| `REGISTRY_STACK_LIVE_NOTARY_API_KEY` | The Notary caller API key. Keep the value out of project files, request files, command arguments, and logs. |
-| `REGISTRY_STACK_LIVE_REQUEST_FILE` | Path to a bounded regular JSON file containing one Notary evaluation request. The file cannot be a symlink. |
-| `REGISTRY_STACK_LIVE_EXPECTED_FILE` | Path to a bounded regular JSON file containing one `claims` object with the expected disclosed `value`, `satisfied`, or `disclosure` fields for every requested claim. The file cannot be a symlink. |
-
-The request must declare one project purpose and a non-empty, duplicate-free subset of that
-service's project claims. It must not contain credential-like fields, including tokens, API keys,
-passwords, or source credentials.
-
-`registryctl` first reruns every offline fixture and requires every Relay-backed consultation
-profile to be ready through Notary. It then sends the bounded strict-JSON request only to
-`POST /v1/evaluations`, using the Notary API key. It rejects production environment names,
-non-HTTPS remote origins, oversized input or output, a response that is not strict JSON, a claim
-field that differs from the expected file, or a result without source-backed provenance.
-The command never connects directly to Relay or the source registry and never accepts a registry
-credential.
-
-The OpenSPP starter remains fixture-only. This governed test is not an OpenSPP live certification
-or deployment approval.
-
-Registry-backed batch evaluation remains a separate Notary API journey.
-A call to `POST /v1/batch-evaluations` that includes a registry-backed claim must carry one
-caller-supplied `Idempotency-Key`.
-Notary validates the complete request before the first Relay call, then executes each item as an
-independently authorized single-subject consultation under bounded concurrency.
-The outer result keeps request order and per-item outcomes.
-An exact caller-scoped replay returns the stored result without repeating completed children, and
-duplicate subjects at different item positions retain separate child identities.
-This behavior does not create a multi-subject Relay request or an upstream bulk operation.
-
-`registryctl test --live` exercises one evaluation, not this batch path.
-Verify batch separately when the deployment exposes registry-backed batch to machine callers.
-
-{/* Evidence: crates/registry-notary-server/src/runtime/tests/evaluation.rs,
-    registry_batch_requires_outer_key_before_relay_or_source_work,
-    registry_batch_preflights_every_item_before_first_relay_call, and
-    registry_batch_coalesces_within_items_never_across_duplicates_and_replays_outer_key. */}
-
-## Compare with a signed baseline
-
-For an update, pass a previously signed bundle and its trust anchor together:
-
-```sh
-registryctl check \
-  --project country-registry \
-  --environment local \
-  --against <previous-signed-bundle> \
-  --anchor <trust-anchor.json> \
-  --explain
-```
-
-`registryctl` verifies the bundle before reading its signed `approval/review.json`.
-The report labels the baseline `verified_signed_bundle`.
-The `semantic_changes` list names each changed review dimension and its verified previous and
-current digest. The report separately lists the required review classes. A compiler or generated
-closure change can require all four reviews even when the authored semantic digests are unchanged.
-
-Supply `--against` and `--anchor` together.
-Registry Stack does not infer an approved baseline from Git history, a prior local build, or a
-mutable workspace directory.
-
-## Use SandboxedRhai only for advanced integration logic
-
-SandboxedRhai is an advanced integration capability for bounded orchestration and normalization
-that the declarative operation graph cannot express.
-It is not an alternative claim language and does not replace CEL.
-
-The integration still declares the same fixed credential interface, named operations, response
-schemas, facts, and bounds as bounded HTTP.
-The environment must opt in explicitly:
-
-```yaml
-integrations:
-  health-record:
-    advanced_capabilities:
-      sandboxed_rhai:
-        enabled: true
-        review: operator_security
-```
-
-`registryctl test`, `registryctl check`, and `registryctl build` reject a SandboxedRhai integration
-unless both the built-in release capability table allows the exact source product and version and
-the environment contains that operator-security declaration. The pre-1.0 table allows only the
-reviewed DHIS2 2.41.9 surface; the maintained differential fixture targets that same version.
-The generated Relay configuration must also pass the product's exact production activation gate
-on the current platform before fixture-only compilation begins.
-An ordinary starter does not depend on Rhai.
-Country configuration does not select a worker command, runtime path, script hash, or sandbox
-limit.
-The pre-release differential conformance path exists only in Registry Stack's code-owned test
-harness. Authored YAML, CLI flags, environment variables, startup configuration, and runtime APIs
-cannot select that path.
-
-Release images include the dedicated `registry-relay-rhai-worker` executable beside
-`registry-relay`.
-If you install standalone release binaries instead of the image, install both executables in the
-same directory under the canonical names `registry-relay` and `registry-relay-rhai-worker`, and
-ensure both are executable.
-Registry Relay refuses SandboxedRhai activation when the companion is absent.
-Production activation is Linux-only and enforces a hard maximum of 128 MiB of worker address
-space, with a lower reviewed profile limit allowed.
-Each evaluation starts a fresh worker with a scrubbed environment and one-execution lifetime.
-
-The script can choose among declared named operations and map typed values.
-It cannot receive or decide caller identity, scopes, purpose, service, claim, credential format,
-disclosure, authorization, source credentials, raw responses, or provenance.
-
-{/* Evidence: crates/registry-relay/src/rhai_worker.rs,
-    WorkerProcess::dedicated_executable and MAX_MEMORY_BYTES;
-    crates/registry-relay/src/consultation/service.rs,
-    validate_production_rhai_worker_requirement; and release/docker/Dockerfile.registry-relay. */}
-
-## Verify the authored boundary
-
-Before handing the project to operators, confirm:
-
-- `registryctl test` passes every offline fixture.
-- `registryctl check --explain` shows only reviewed acquisition and disclosure.
-- Every environment credential and signing key is a `secret` reference.
-- No authored or generated file contains a secret value or real fixture record.
-- The required review classes match the intended change.
-- Relay and Notary bundles are signed and verified separately.
-- Generated files remain under `.registry-stack/build/<environment>/` and are not committed.
+- [Configure API-key source authentication](../configure-country-api-key-authentication/) when
+  the upstream requires a fixed header or query credential.
+- [Configure a FHIR R4 integration](../configure-country-fhir-r4/) when the reviewed journey uses
+  a fixed Patient anchor and declared relation.
+- [Configure an exact snapshot materialization](../configure-country-snapshot-materialization/)
+  when consultation reads an immutable local snapshot.
+- [Configure Sandboxed Rhai orchestration](../configure-country-sandboxed-rhai/) only when the
+  reviewed source recipe cannot be expressed as declarative bounded HTTP operations.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `country project destination must be absent or an empty real directory` | `init` found authored content, a non-directory, or a symlink. | Choose an absent or empty real directory. Existing content is never overwritten. |
-| `input.pattern_mismatch` | A fixture input does not satisfy the declared typed input. | Correct the synthetic fixture or the reviewed input contract. |
-| `fixture.request_override_forbidden` | A fixture attempted to choose request authority. | Keep origin, method, path, headers, projection, credential, and operation names in the integration. |
-| `--against and --anchor must be supplied together` | Only one baseline argument was present. | Supply the verified bundle and matching trust anchor together. |
-| `sandboxed_rhai requires release allow-list and explicit operator-security enablement` | The source/version is not enabled in this release, or the environment lacks approval. | Use an allowed reviewed source/version and add the exact `advanced_capabilities.sandboxed_rhai` declaration after operator review. |
-| Generated configuration fails validation | Authored fields cannot produce a valid Relay or Notary startup contract. | Use the authored file and field path in the error, correct the source contract, then rerun `test` and `check`. |
-
-## Next
-
-- [Integration patterns](../../explanation/integration-patterns/) explains where Registry Stack
-  sits next to domain systems and exchange layers.
-- [Harden a production deployment](../../security/hardening-checklist/) covers operator controls
-  after configuration authoring.
-- [Upgrade and roll back](../../operate/upgrade-and-rollback/) covers signed configuration and
-  state during a product upgrade.
+| `country project destination must be absent or an empty real directory` | `init` found content, a non-directory, or a symlink. | Choose an absent or empty real directory. |
+| `input.pattern_mismatch` | A fixture input does not satisfy the declared type or pattern. | Correct the synthetic fixture or the reviewed input contract. |
+| `fixture.request_override_forbidden` | A fixture attempted to choose request authority. | Keep transport and credential authority in the integration and environment. |
+| `--against and --anchor must be supplied together` | Only one approved-baseline argument was present. | Supply the verified bundle and matching trust anchor together. |
+| Generated configuration fails validation | Authored fields cannot produce a valid Relay or Notary startup contract. | Correct the reported authored file and field, then rerun `test` and `check`. |

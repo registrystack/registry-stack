@@ -295,7 +295,11 @@ export default defineConfig({
         {
           label: 'Integrations',
           items: [
-            { label: 'Author a country integration', slug: 'tutorials/author-country-integration' },
+            { label: 'Bounded HTTP country integration', slug: 'tutorials/author-country-integration' },
+            { label: 'API-key source authentication', slug: 'tutorials/configure-country-api-key-authentication' },
+            { label: 'FHIR R4 country integration', slug: 'tutorials/configure-country-fhir-r4' },
+            { label: 'Snapshot materialization', slug: 'tutorials/configure-country-snapshot-materialization' },
+            { label: 'Sandboxed Rhai orchestration', slug: 'tutorials/configure-country-sandboxed-rhai' },
             { label: 'OpenCRVS claims', slug: 'tutorials/verify-opencrvs-claims' },
           ],
         },
