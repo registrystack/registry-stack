@@ -13,7 +13,7 @@ use crate::runtime::{
     ActivatedRelayClientSet, ActivatedRelayConsultations, RelayClientSelectionV1,
     RuntimeRelayConsultationResult, RuntimeRelayExpectedResult,
 };
-use registry_notary_core::{ClaimEvidenceMode, RuleConfig, StandaloneRegistryNotaryConfig};
+use registry_notary_core::{ClaimEvidenceMode, StandaloneRegistryNotaryConfig};
 use registry_platform_httputil::destination::{
     DestinationProfile, ServiceHopDataDestinationPolicy,
 };
@@ -45,7 +45,6 @@ pub(super) async fn activate_relay_from_config(
         let expected_result = plan.expected_result.relay()?;
         let selection = RelayClientSelectionV1::new(
             plan.profile.id.as_str(),
-            plan.profile.version.as_str(),
             plan.profile.contract_hash.as_str(),
             plan.purpose.as_str(),
             plan.input_names.clone(),
@@ -56,7 +55,6 @@ pub(super) async fn activate_relay_from_config(
             connection: plans.connection.clone(),
             pin: RelayProfilePin::new(
                 plan.profile.id.as_str(),
-                plan.profile.version.as_str(),
                 plan.profile.contract_hash.as_str(),
             )
             .map_err(|_| StandaloneServerError::RelayActivation)?,
@@ -67,9 +65,9 @@ pub(super) async fn activate_relay_from_config(
         let client = RelayConsultationClient::new(
             destination,
             credential,
+            plans.connection.workload_client_id.as_str(),
             RelayProfilePin::new(
                 plan.profile.id.as_str(),
-                plan.profile.version.as_str(),
                 plan.profile.contract_hash.as_str(),
             )
             .map_err(|_| StandaloneServerError::RelayActivation)?,
@@ -77,6 +75,7 @@ pub(super) async fn activate_relay_from_config(
             plan.input_names,
             expected_result,
         )
+        .and_then(|client| client.with_max_in_flight(plans.connection.max_in_flight))
         .map_err(map_relay_client_error)?;
         let activated_client =
             retain_profile_activation(client.verify_profile().await, retry_plan)?;
@@ -124,11 +123,13 @@ impl RelayRetryPlan {
         RelayConsultationClient::new(
             destination,
             RelayWorkloadCredentialFile::new(self.connection.token_file.clone())?,
+            self.connection.workload_client_id.as_str(),
             self.pin.clone(),
             self.purpose.clone(),
             self.input_names.clone(),
             self.expected_result.clone(),
         )
+        .and_then(|client| client.with_max_in_flight(self.connection.max_in_flight))
     }
 }
 
@@ -219,9 +220,9 @@ fn map_relay_client_error(error: RelayClientError) -> StandaloneServerError {
             StandaloneServerError::RelayCredentialsRejected
         }
         RelayClientError::ProfileNotFound => StandaloneServerError::RelayProfileNotFound,
-        RelayClientError::InvalidProfileMetadata | RelayClientError::InvalidResult => {
-            StandaloneServerError::RelayProfileMismatch
-        }
+        RelayClientError::ContractMismatch
+        | RelayClientError::InvalidProfileMetadata
+        | RelayClientError::InvalidResult => StandaloneServerError::RelayProfileMismatch,
         RelayClientError::TransportUnavailable
         | RelayClientError::CapacityUnavailable
         | RelayClientError::RateLimited
@@ -254,32 +255,22 @@ struct RelayActivationBaseKey {
 
 #[derive(Clone, PartialEq, Eq)]
 enum PlannedRelayExpectedResult {
-    FactMap(BTreeMap<String, registry_notary_core::RelayFactContract>),
-    ProjectedString(String),
-    PresenceOnly,
+    OutputMap(BTreeMap<String, registry_notary_core::RelayOutputContract>),
 }
 
 impl PlannedRelayExpectedResult {
     fn relay(&self) -> Result<RelayExpectedResult, StandaloneServerError> {
         match self {
-            Self::FactMap(facts) => {
-                RelayExpectedResult::fact_map(facts.clone()).map_err(map_relay_client_error)
+            Self::OutputMap(outputs) => {
+                RelayExpectedResult::output_map(outputs.clone()).map_err(map_relay_client_error)
             }
-            Self::ProjectedString(output) => RelayExpectedResult::projected_string(output.clone())
-                .map_err(map_relay_client_error),
-            Self::PresenceOnly => Ok(RelayExpectedResult::PresenceOnly),
         }
     }
 
     fn runtime(&self) -> Result<RuntimeRelayExpectedResult, StandaloneServerError> {
         match self {
-            Self::FactMap(facts) => RuntimeRelayExpectedResult::fact_map(facts.clone())
+            Self::OutputMap(outputs) => RuntimeRelayExpectedResult::output_map(outputs.clone())
                 .map_err(|_| StandaloneServerError::InvalidRelayActivationPlan),
-            Self::ProjectedString(output) => {
-                RuntimeRelayExpectedResult::projected_string(output.clone())
-                    .map_err(|_| StandaloneServerError::InvalidRelayActivationPlan)
-            }
-            Self::PresenceOnly => Ok(RuntimeRelayExpectedResult::PresenceOnly),
         }
     }
 }
@@ -311,7 +302,7 @@ fn activation_plans(
             .filter(|_| consultations.len() == 1)
             .ok_or(StandaloneServerError::InvalidRelayActivationPlan)?;
         let input_names = consultation.inputs.keys().cloned().collect::<Vec<_>>();
-        if !(1..=4).contains(&input_names.len()) {
+        if !(1..=16).contains(&input_names.len()) {
             return Err(StandaloneServerError::InvalidRelayActivationPlan);
         }
         let key = RelayActivationBaseKey {
@@ -322,35 +313,16 @@ fn activation_plans(
                 .ok_or(StandaloneServerError::InvalidRelayActivationPlan)?,
             input_names,
         };
-        let expected_result = if consultation.facts.is_empty() {
-            match &claim.rule {
-                RuleConfig::Extract { field, .. } => {
-                    PlannedRelayExpectedResult::ProjectedString(field.clone())
-                }
-                RuleConfig::Exists { .. } => PlannedRelayExpectedResult::PresenceOnly,
-                RuleConfig::Cel { .. } | RuleConfig::Plugin { .. } => {
-                    return Err(StandaloneServerError::InvalidRelayActivationPlan)
-                }
-            }
-        } else {
-            PlannedRelayExpectedResult::FactMap(consultation.facts.clone())
-        };
+        if consultation.outputs.is_empty() {
+            return Err(StandaloneServerError::InvalidRelayActivationPlan);
+        }
+        let expected_result = PlannedRelayExpectedResult::OutputMap(consultation.outputs.clone());
         match clients.entry(key) {
             Entry::Vacant(entry) => {
                 entry.insert(expected_result);
             }
-            Entry::Occupied(mut entry) => match (entry.get(), &expected_result) {
+            Entry::Occupied(entry) => match (entry.get(), &expected_result) {
                 (existing, candidate) if existing == candidate => {}
-                (
-                    PlannedRelayExpectedResult::PresenceOnly,
-                    PlannedRelayExpectedResult::ProjectedString(_),
-                ) => {
-                    entry.insert(expected_result);
-                }
-                (
-                    PlannedRelayExpectedResult::ProjectedString(_),
-                    PlannedRelayExpectedResult::PresenceOnly,
-                ) => {}
                 _ => return Err(StandaloneServerError::InvalidRelayActivationPlan),
             },
         }
@@ -391,6 +363,7 @@ evidence:
   enabled: true
   relay:
     base_url: http://127.0.0.1:1
+    workload_client_id: registry-notary
     allow_insecure_localhost: true
     token_file: {}
     allowed_private_cidrs: [10.42.0.0/16]
@@ -445,14 +418,16 @@ evidence:
           enrollment:
             profile:
               id: dhis2.tracker.enrollment-status.exact
-              version: "1"
               contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
             inputs:
               tracked_entity: target.id
+            outputs:
+              registration_status: { type: string, nullable: true, max_bytes: 64 }
       purpose: benefit-verification
       required_scopes: [registry:consult:dhis2]
       value:
         type: string
+        nullable: true
       rule:
         type: extract
         source: enrollment
@@ -488,7 +463,7 @@ evidence:
             .expect("invalid token fixture writes");
         let connection: registry_notary_core::RelayConnectionConfig =
             serde_norway::from_str(&format!(
-                "base_url: http://127.0.0.1:1\nallow_insecure_localhost: true\ntoken_file: {}\n",
+                "base_url: http://127.0.0.1:1\nworkload_client_id: registry-notary\nallow_insecure_localhost: true\ntoken_file: {}\n",
                 token_file.display()
             ))
             .expect("retry connection parses");
@@ -496,13 +471,19 @@ evidence:
             connection,
             pin: RelayProfilePin::new(
                 "example.snapshot-status.exact",
-                "1",
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
             .expect("profile pin is valid"),
             purpose: "benefit-verification".into(),
             input_names: vec!["subject_id".into()],
-            expected_result: RelayExpectedResult::PresenceOnly,
+            expected_result: RelayExpectedResult::output_map(BTreeMap::from([(
+                "status".to_string(),
+                registry_notary_core::RelayOutputContract::String {
+                    nullable: false,
+                    max_bytes: 64,
+                },
+            )]))
+            .expect("output contract is valid"),
         };
         let unavailable =
             retain_profile_activation(Err(RelayClientError::Unavailable), retry_plan.clone())
@@ -535,7 +516,7 @@ evidence:
     }
 
     #[test]
-    fn exists_only_config_selects_the_sealed_presence_result_contract() {
+    fn exists_config_selects_the_declared_output_contract() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let config = config_with_claim(
             r#"    - id: birth-record-exists
@@ -548,10 +529,11 @@ evidence:
           birth_record:
             profile:
               id: opencrvs.birth-record-exists.exact
-              version: "1"
               contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
             inputs:
               uin: target.id
+            outputs:
+              record_type: { type: string, nullable: false, max_bytes: 64 }
       purpose: civil-registration-verification
       required_scopes: [registry:consult:opencrvs]
       value:
@@ -567,7 +549,8 @@ evidence:
             .expect("Registry-backed activation is present");
         assert!(matches!(
             plans.clients[0].expected_result,
-            PlannedRelayExpectedResult::PresenceOnly
+            PlannedRelayExpectedResult::OutputMap(ref outputs)
+                if matches!(outputs.get("record_type"), Some(registry_notary_core::RelayOutputContract::String { nullable: false, max_bytes: 64 }))
         ));
     }
 
@@ -585,10 +568,11 @@ evidence:
           enrollment:
             profile:
               id: dhis2.tracker.enrollment-status.exact
-              version: "1"
               contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
             inputs:
               tracked_entity: request.target.identifiers.dhis2_tracked_entity
+            outputs:
+              status: { type: string, nullable: true, max_bytes: 64 }
       purpose: programme-verification
       required_scopes: [registry:programme]
       value: { type: string }
@@ -603,10 +587,11 @@ evidence:
           enrollment:
             profile:
               id: dhis2.tracker.enrollment-status.exact
-              version: "1"
               contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
             inputs:
               tracked_entity: request.target.identifiers.dhis2_tracked_entity
+            outputs:
+              status: { type: string, nullable: true, max_bytes: 64 }
       purpose: programme-verification
       required_scopes: [registry:programme]
       value: { type: boolean }
@@ -621,10 +606,11 @@ evidence:
           birth_record:
             profile:
               id: opencrvs.birth-record.exact
-              version: "1"
               contract_hash: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
             inputs:
               uin: request.target.identifiers.UIN
+            outputs:
+              record_type: { type: string, nullable: false, max_bytes: 64 }
       purpose: civil-verification
       required_scopes: [registry:civil]
       value: { type: boolean }
@@ -642,7 +628,7 @@ evidence:
                 && plan.purpose == "programme-verification"
                 && matches!(
                     plan.expected_result,
-                    PlannedRelayExpectedResult::ProjectedString(ref output) if output == "status"
+                    PlannedRelayExpectedResult::OutputMap(_)
                 )
         }));
         assert!(plans.clients.iter().any(|plan| {
@@ -650,7 +636,7 @@ evidence:
                 && plan.purpose == "civil-verification"
                 && matches!(
                     plan.expected_result,
-                    PlannedRelayExpectedResult::PresenceOnly
+                    PlannedRelayExpectedResult::OutputMap(_)
                 )
         }));
     }

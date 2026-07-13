@@ -293,6 +293,7 @@ pub(super) fn federation_profile_rejects_registry_backed_claim() {
         serde_norway::from_str(
             r#"
 base_url: https://relay.internal.example
+workload_client_id: registry-notary
 token_file: /run/secrets/registry-notary-relay.jwt
 "#,
         )
@@ -310,12 +311,14 @@ evidence_mode:
     disability_status:
       profile:
         id: example.disability-status.exact
-        version: "1"
         contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       inputs:
         subject_id: target.id
+      outputs:
+        status: { type: string, nullable: true, max_bytes: 64 }
 value:
   type: string
+  nullable: true
 purpose: benefit-verification
 required_scopes:
   - registry:consult:disability-status

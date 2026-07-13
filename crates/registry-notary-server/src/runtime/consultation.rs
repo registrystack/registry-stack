@@ -7,7 +7,7 @@ use std::fmt;
 use std::sync::{Arc, Mutex, Once, OnceLock};
 
 use base64::Engine as _;
-use registry_notary_core::{EvidenceAuthProfileId, RelayFactContract};
+use registry_notary_core::{EvidenceAuthProfileId, RelayOutputContract};
 use registry_platform_crypto::canonicalize_json;
 use registry_platform_httputil::destination::json::ProjectedJsonScalar;
 use serde_json::{Map, Value};
@@ -27,46 +27,36 @@ pub(crate) const MAX_BATCH_CONSULTATION_GROUPS_V1: usize = 256;
 const MAX_CHECKED_SCOPES_V1: usize = 16;
 const MAX_PRINCIPAL_ID_BYTES: usize = 256;
 const MAX_PROFILE_ID_BYTES: usize = 96;
-const MAX_PROFILE_VERSION_BYTES: usize = 10;
 const MAX_PURPOSE_BYTES: usize = 256;
 const MAX_INPUT_NAME_BYTES: usize = 96;
 const MAX_INPUT_VALUE_BYTES: usize = 256;
-const MAX_OUTPUT_NAME_BYTES: usize = 96;
-const MAX_OUTPUT_STRING_BYTES: usize = 64 * 1024;
+const MAX_CONSULTATION_INPUTS_V1: usize = 16;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum RuntimeRelayExpectedResult {
-    FactMap(BTreeMap<String, RelayFactContract>),
-    ProjectedString(Box<str>),
-    PresenceOnly,
+    OutputMap(BTreeMap<String, RelayOutputContract>),
 }
 
 impl RuntimeRelayExpectedResult {
-    pub(crate) fn fact_map(
-        facts: BTreeMap<String, RelayFactContract>,
+    pub(crate) fn output_map(
+        outputs: BTreeMap<String, RelayOutputContract>,
     ) -> Result<Self, ConsultationPlanError> {
-        if facts.is_empty() || facts.len() > 64 {
+        if outputs.is_empty()
+            || outputs.len() > 64
+            || outputs.keys().any(|name| {
+                !input_name(name, MAX_INPUT_NAME_BYTES)
+                    || matches!(name.as_str(), "matched" | "outcome")
+            })
+        {
             return Err(ConsultationPlanError::InvalidGroupKey);
         }
-        Ok(Self::FactMap(facts))
-    }
-
-    pub(crate) fn projected_string(
-        name: impl Into<Box<str>>,
-    ) -> Result<Self, ConsultationPlanError> {
-        let name = name.into();
-        if !input_name(&name, MAX_OUTPUT_NAME_BYTES) {
-            return Err(ConsultationPlanError::InvalidGroupKey);
-        }
-        Ok(Self::ProjectedString(name))
+        Ok(Self::OutputMap(outputs))
     }
 
     #[cfg(feature = "registry-notary-cel")]
-    pub(crate) const fn fact_contracts(&self) -> Option<&BTreeMap<String, RelayFactContract>> {
-        match self {
-            Self::FactMap(facts) => Some(facts),
-            Self::ProjectedString(_) | Self::PresenceOnly => None,
-        }
+    pub(crate) const fn output_contracts(&self) -> Option<&BTreeMap<String, RelayOutputContract>> {
+        let Self::OutputMap(outputs) = self;
+        Some(outputs)
     }
 }
 
@@ -79,7 +69,6 @@ impl fmt::Debug for RuntimeRelayExpectedResult {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct RelayClientSelectionV1 {
     profile_id: Box<str>,
-    profile_version: Box<str>,
     profile_contract_hash: Box<str>,
     purpose: Box<str>,
     input_names: Box<[String]>,
@@ -90,24 +79,21 @@ impl RelayClientSelectionV1 {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         profile_id: impl Into<Box<str>>,
-        profile_version: impl Into<Box<str>>,
         profile_contract_hash: impl Into<Box<str>>,
         purpose: impl Into<Box<str>>,
         input_names: impl Into<RelayInputNames>,
         expected_result: RuntimeRelayExpectedResult,
     ) -> Result<Self, ConsultationPlanError> {
         let profile_id = profile_id.into();
-        let profile_version = profile_version.into();
         let profile_contract_hash = profile_contract_hash.into();
         let purpose = purpose.into();
         let mut input_names = input_names.into().into_vec();
         input_names.sort();
         input_names.dedup();
         if !stable_id(&profile_id, MAX_PROFILE_ID_BYTES)
-            || !canonical_version(&profile_version)
             || !sha256_uri(&profile_contract_hash)
             || !valid_purpose(&purpose)
-            || !(1..=4).contains(&input_names.len())
+            || !(1..=16).contains(&input_names.len())
             || input_names
                 .iter()
                 .any(|name| !input_name(name, MAX_INPUT_NAME_BYTES))
@@ -116,7 +102,6 @@ impl RelayClientSelectionV1 {
         }
         Ok(Self {
             profile_id,
-            profile_version,
             profile_contract_hash,
             purpose,
             input_names: input_names.into_boxed_slice(),
@@ -127,7 +112,6 @@ impl RelayClientSelectionV1 {
     fn from_key(key: &ConsultationGroupKeyV1) -> Self {
         Self {
             profile_id: key.profile_id.clone(),
-            profile_version: key.profile_version.clone(),
             profile_contract_hash: key.profile_contract_hash.clone(),
             purpose: key.canonical_purpose.clone(),
             input_names: key.canonical_inputs.keys().cloned().collect(),
@@ -154,7 +138,6 @@ pub(crate) struct ConsultationGroupKeyV1 {
     principal_id: Zeroizing<String>,
     checked_scopes_sorted: Box<[String]>,
     profile_id: Box<str>,
-    profile_version: Box<str>,
     profile_contract_hash: Box<str>,
     canonical_purpose: Box<str>,
     canonical_inputs: BTreeMap<String, Zeroizing<String>>,
@@ -172,7 +155,6 @@ impl ConsultationGroupKeyV1 {
         principal_id: String,
         checked_scopes: Vec<String>,
         profile_id: impl Into<Box<str>>,
-        profile_version: impl Into<Box<str>>,
         profile_contract_hash: impl Into<Box<str>>,
         canonical_purpose: impl Into<Box<str>>,
         canonical_inputs: BTreeMap<String, Zeroizing<String>>,
@@ -183,11 +165,16 @@ impl ConsultationGroupKeyV1 {
             principal_id,
             checked_scopes,
             profile_id,
-            profile_version,
             profile_contract_hash,
             canonical_purpose,
             canonical_inputs,
-            RuntimeRelayExpectedResult::projected_string("registration_status")?,
+            RuntimeRelayExpectedResult::output_map(BTreeMap::from([(
+                "registration_status".to_string(),
+                RelayOutputContract::String {
+                    nullable: true,
+                    max_bytes: 64,
+                },
+            )]))?,
         )
     }
 
@@ -198,21 +185,18 @@ impl ConsultationGroupKeyV1 {
         principal_id: String,
         mut checked_scopes: Vec<String>,
         profile_id: impl Into<Box<str>>,
-        profile_version: impl Into<Box<str>>,
         profile_contract_hash: impl Into<Box<str>>,
         canonical_purpose: impl Into<Box<str>>,
         canonical_inputs: BTreeMap<String, Zeroizing<String>>,
         expected_result: RuntimeRelayExpectedResult,
     ) -> Result<Self, ConsultationPlanError> {
         let profile_id = profile_id.into();
-        let profile_version = profile_version.into();
         let profile_contract_hash = profile_contract_hash.into();
         let canonical_purpose = canonical_purpose.into();
         if !valid_principal_id(&principal_id)
             || checked_scopes.is_empty()
             || checked_scopes.iter().any(|scope| !valid_scope(scope))
             || !stable_id(&profile_id, MAX_PROFILE_ID_BYTES)
-            || !canonical_version(&profile_version)
             || !sha256_uri(&profile_contract_hash)
             || !valid_purpose(&canonical_purpose)
             || !valid_canonical_inputs(&canonical_inputs)
@@ -230,7 +214,6 @@ impl ConsultationGroupKeyV1 {
             principal_id: Zeroizing::new(principal_id),
             checked_scopes_sorted: checked_scopes.into_boxed_slice(),
             profile_id,
-            profile_version,
             profile_contract_hash,
             canonical_purpose,
             canonical_inputs,
@@ -267,11 +250,6 @@ impl ConsultationGroupKeyV1 {
     }
 
     #[must_use]
-    pub(crate) fn profile_version(&self) -> &str {
-        &self.profile_version
-    }
-
-    #[must_use]
     pub(crate) fn profile_contract_hash(&self) -> &str {
         &self.profile_contract_hash
     }
@@ -301,10 +279,10 @@ impl ConsultationGroupKeyV1 {
 
     #[must_use]
     #[cfg(feature = "registry-notary-cel")]
-    pub(crate) const fn expected_fact_contracts(
+    pub(crate) const fn expected_output_contracts(
         &self,
-    ) -> Option<&BTreeMap<String, RelayFactContract>> {
-        self.expected_result.fact_contracts()
+    ) -> Option<&BTreeMap<String, RelayOutputContract>> {
+        self.expected_result.output_contracts()
     }
 }
 
@@ -316,7 +294,6 @@ impl Ord for ConsultationGroupKeyV1 {
             .then_with(|| self.principal_id.as_str().cmp(other.principal_id.as_str()))
             .then_with(|| self.checked_scopes_sorted.cmp(&other.checked_scopes_sorted))
             .then_with(|| self.profile_id.cmp(&other.profile_id))
-            .then_with(|| self.profile_version.cmp(&other.profile_version))
             .then_with(|| self.profile_contract_hash.cmp(&other.profile_contract_hash))
             .then_with(|| self.canonical_purpose.cmp(&other.canonical_purpose))
             .then_with(|| compare_canonical_inputs(&self.canonical_inputs, &other.canonical_inputs))
@@ -357,7 +334,6 @@ impl BatchConsultationGroupCommitmentV1<'_> {
             "authenticated_evaluation_caller_binding": caller,
             "profile": {
                 "id": key.profile_id.as_ref(),
-                "version": key.profile_version.as_ref(),
                 "contract_hash": key.profile_contract_hash.as_ref(),
             },
             "canonical_purpose": key.canonical_purpose.as_ref(),
@@ -576,78 +552,36 @@ impl fmt::Debug for RuntimeRelayOutcome {
     }
 }
 
-/// The one decoded Relay string output released for a successful match.
-/// Both its name and its zeroizing value are redacted from `Debug`.
-pub(crate) struct RuntimeRelayOutput {
-    name: Box<str>,
-    value: Zeroizing<String>,
-}
-
-impl RuntimeRelayOutput {
-    pub(crate) fn new(
-        name: impl Into<Box<str>>,
-        value: Zeroizing<String>,
-    ) -> Result<Self, RelayClientError> {
-        let name = name.into();
-        if !input_name(&name, MAX_OUTPUT_NAME_BYTES) || value.len() > MAX_OUTPUT_STRING_BYTES {
-            return Err(RelayClientError::InvalidResult);
-        }
-        Ok(Self { name, value })
-    }
-
-    #[must_use]
-    pub(crate) fn name(&self) -> &str {
-        &self.name
-    }
-
-    #[must_use]
-    pub(crate) fn value(&self) -> &str {
-        self.value.as_str()
-    }
-}
-
-impl fmt::Debug for RuntimeRelayOutput {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RuntimeRelayOutput")
-            .field("name", &"[REDACTED]")
-            .field("value", &"[REDACTED]")
-            .finish()
-    }
-}
-
 /// Match-only data released by the verified Relay client.
 pub(crate) enum RuntimeRelayMatchData {
-    FactMap(RuntimeRelayFactMap),
-    ProjectedString(RuntimeRelayOutput),
-    PresenceOnly,
+    OutputMap(RuntimeRelayOutputMap),
 }
 
-pub(crate) struct RuntimeRelayFactMap {
-    fields: BTreeMap<Box<str>, RuntimeRelayFactValue>,
+pub(crate) struct RuntimeRelayOutputMap {
+    fields: BTreeMap<Box<str>, RuntimeRelayOutputValue>,
 }
 
-enum RuntimeRelayFactValue {
+enum RuntimeRelayOutputValue {
     Null,
     Boolean(bool),
     Integer(i64),
     String(Zeroizing<String>),
 }
 
-impl RuntimeRelayFactMap {
-    #[cfg(feature = "registry-notary-cel")]
+impl RuntimeRelayOutputMap {
+    #[cfg(any(test, feature = "registry-notary-cel"))]
     pub(crate) fn from_json(fields: BTreeMap<String, Value>) -> Result<Self, RelayClientError> {
         let fields = fields
             .into_iter()
             .map(|(name, value)| {
                 let value = match value {
-                    Value::Null => RuntimeRelayFactValue::Null,
-                    Value::Bool(value) => RuntimeRelayFactValue::Boolean(value),
+                    Value::Null => RuntimeRelayOutputValue::Null,
+                    Value::Bool(value) => RuntimeRelayOutputValue::Boolean(value),
                     Value::Number(value) => value
                         .as_i64()
-                        .map(RuntimeRelayFactValue::Integer)
+                        .map(RuntimeRelayOutputValue::Integer)
                         .ok_or(RelayClientError::InvalidResult)?,
-                    Value::String(value) => RuntimeRelayFactValue::String(Zeroizing::new(value)),
+                    Value::String(value) => RuntimeRelayOutputValue::String(Zeroizing::new(value)),
                     Value::Array(_) | Value::Object(_) => {
                         return Err(RelayClientError::InvalidResult)
                     }
@@ -658,16 +592,16 @@ impl RuntimeRelayFactMap {
         Ok(Self { fields })
     }
 
-    fn from_relay(facts: &crate::relay_client::RelayFactMap) -> Result<Self, RelayClientError> {
-        let fields = facts
+    fn from_relay(outputs: &crate::relay_client::RelayOutputMap) -> Result<Self, RelayClientError> {
+        let fields = outputs
             .fields()
             .map(|(name, value)| {
                 let value = match value {
-                    ProjectedJsonScalar::Null => RuntimeRelayFactValue::Null,
-                    ProjectedJsonScalar::Boolean(value) => RuntimeRelayFactValue::Boolean(*value),
-                    ProjectedJsonScalar::Integer(value) => RuntimeRelayFactValue::Integer(*value),
+                    ProjectedJsonScalar::Null => RuntimeRelayOutputValue::Null,
+                    ProjectedJsonScalar::Boolean(value) => RuntimeRelayOutputValue::Boolean(*value),
+                    ProjectedJsonScalar::Integer(value) => RuntimeRelayOutputValue::Integer(*value),
                     ProjectedJsonScalar::String(value) => {
-                        RuntimeRelayFactValue::String(Zeroizing::new(value.to_string()))
+                        RuntimeRelayOutputValue::String(Zeroizing::new(value.to_string()))
                     }
                     ProjectedJsonScalar::Number(_) => return Err(RelayClientError::InvalidResult),
                 };
@@ -682,10 +616,10 @@ impl RuntimeRelayFactMap {
             .iter()
             .map(|(name, value)| {
                 let value = match value {
-                    RuntimeRelayFactValue::Null => Value::Null,
-                    RuntimeRelayFactValue::Boolean(value) => Value::Bool(*value),
-                    RuntimeRelayFactValue::Integer(value) => Value::Number((*value).into()),
-                    RuntimeRelayFactValue::String(value) => Value::String(value.to_string()),
+                    RuntimeRelayOutputValue::Null => Value::Null,
+                    RuntimeRelayOutputValue::Boolean(value) => Value::Bool(*value),
+                    RuntimeRelayOutputValue::Integer(value) => Value::Number((*value).into()),
+                    RuntimeRelayOutputValue::String(value) => Value::String(value.to_string()),
                 };
                 (name.to_string(), value)
             })
@@ -693,10 +627,10 @@ impl RuntimeRelayFactMap {
     }
 }
 
-impl fmt::Debug for RuntimeRelayFactMap {
+impl fmt::Debug for RuntimeRelayOutputMap {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("RuntimeRelayFactMap")
+            .debug_struct("RuntimeRelayOutputMap")
             .field("fields", &"[REDACTED]")
             .finish()
     }
@@ -749,22 +683,10 @@ impl RuntimeRelayConsultationResult {
     }
 
     #[must_use]
-    pub(crate) const fn output(&self) -> Option<&RuntimeRelayOutput> {
+    pub(crate) const fn outputs(&self) -> Option<&RuntimeRelayOutputMap> {
         match self.match_data.as_ref() {
-            Some(RuntimeRelayMatchData::ProjectedString(output)) => Some(output),
-            Some(RuntimeRelayMatchData::FactMap(_) | RuntimeRelayMatchData::PresenceOnly)
-            | None => None,
-        }
-    }
-
-    #[must_use]
-    pub(crate) const fn facts(&self) -> Option<&RuntimeRelayFactMap> {
-        match self.match_data.as_ref() {
-            Some(RuntimeRelayMatchData::FactMap(facts)) => Some(facts),
-            Some(
-                RuntimeRelayMatchData::ProjectedString(_) | RuntimeRelayMatchData::PresenceOnly,
-            )
-            | None => None,
+            Some(RuntimeRelayMatchData::OutputMap(outputs)) => Some(outputs),
+            None => None,
         }
     }
 
@@ -965,7 +887,6 @@ impl ActivatedRelayConsultations for VerifiedRelayClient {
     fn validate(&self, key: &ConsultationGroupKeyV1) -> Result<(), RelayClientError> {
         let profile = self.profile();
         if profile.pin().id() != key.profile_id()
-            || profile.pin().version() != key.profile_version()
             || profile.pin().contract_hash() != key.profile_contract_hash()
             || profile.purpose() != key.canonical_purpose()
             || profile
@@ -1030,21 +951,16 @@ fn relay_result_to_runtime(
         RelayConsultationOutcome::Ambiguous => RuntimeRelayOutcome::Ambiguous,
     };
     let match_data = match result.match_data() {
-        Some(RelayMatchData::FactMap(facts)) => Some(RuntimeRelayMatchData::FactMap(
-            RuntimeRelayFactMap::from_relay(facts)?,
+        Some(RelayMatchData::OutputMap(outputs)) => Some(RuntimeRelayMatchData::OutputMap(
+            RuntimeRelayOutputMap::from_relay(outputs)?,
         )),
-        Some(RelayMatchData::ProjectedString(output)) => Some(
-            RuntimeRelayOutput::new(output.name(), Zeroizing::new(output.value().to_string()))
-                .map(RuntimeRelayMatchData::ProjectedString)?,
-        ),
-        Some(RelayMatchData::PresenceOnly) => Some(RuntimeRelayMatchData::PresenceOnly),
         None => None,
     };
     RuntimeRelayConsultationResult::new(
         result.consultation_id(),
         outcome,
         match_data,
-        result.provenance().relay_acquired_at(),
+        result.provenance().acquired_at(),
     )
 }
 
@@ -1343,13 +1259,6 @@ fn input_name(value: &str, max_bytes: usize) -> bool {
         && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
 }
 
-fn canonical_version(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_PROFILE_VERSION_BYTES
-        && matches!(value.as_bytes().first(), Some(b'1'..=b'9'))
-        && value.bytes().all(|byte| byte.is_ascii_digit())
-}
-
 fn sha256_uri(value: &str) -> bool {
     value.strip_prefix("sha256:").is_some_and(|digest| {
         digest.len() == 64
@@ -1369,7 +1278,7 @@ fn valid_purpose(value: &str) -> bool {
 }
 
 fn valid_canonical_inputs(inputs: &BTreeMap<String, Zeroizing<String>>) -> bool {
-    (1..=4).contains(&inputs.len())
+    (1..=MAX_CONSULTATION_INPUTS_V1).contains(&inputs.len())
         && inputs.iter().all(|(name, value)| {
             input_name(name, MAX_INPUT_NAME_BYTES)
                 && !value.is_empty()
@@ -1396,6 +1305,23 @@ mod tests {
         BTreeMap::from([(name.to_string(), Zeroizing::new(value.to_string()))])
     }
 
+    fn canonical_inputs_with_count(count: usize) -> BTreeMap<String, Zeroizing<String>> {
+        (0..count)
+            .map(|index| {
+                (
+                    format!("input_{index}"),
+                    Zeroizing::new(format!("value-{index}")),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn canonical_inputs_accept_sixteen_and_reject_seventeen() {
+        assert!(valid_canonical_inputs(&canonical_inputs_with_count(16)));
+        assert!(!valid_canonical_inputs(&canonical_inputs_with_count(17)));
+    }
+
     fn group_key(evaluation_random: u128) -> ConsultationGroupKeyV1 {
         group_key_with_scopes(
             evaluation_random,
@@ -1416,7 +1342,6 @@ mod tests {
             "principal-SENSITIVE".to_string(),
             scopes,
             "example.person-status.exact",
-            "1",
             CONTRACT_HASH,
             "benefit-verification",
             canonical_inputs("subject_id", TARGET_VALUE),
@@ -1428,14 +1353,13 @@ mod tests {
         RuntimeRelayConsultationResult::new(
             Ulid::from_parts(2, 1),
             RuntimeRelayOutcome::Match,
-            Some(
-                RuntimeRelayOutput::new(
-                    "registration_status",
-                    Zeroizing::new(OUTPUT_VALUE.to_string()),
-                )
-                .map(RuntimeRelayMatchData::ProjectedString)
-                .expect("valid output"),
-            ),
+            Some(RuntimeRelayMatchData::OutputMap(
+                RuntimeRelayOutputMap::from_json(BTreeMap::from([(
+                    "registration_status".to_string(),
+                    Value::String(OUTPUT_VALUE.to_string()),
+                )]))
+                .expect("valid output map"),
+            )),
             OffsetDateTime::UNIX_EPOCH,
         )
         .expect("valid result")
@@ -1559,7 +1483,6 @@ mod tests {
             ["registry:scope:a", "registry:scope:z"]
         );
         assert_eq!(key.profile_id(), "example.person-status.exact");
-        assert_eq!(key.profile_version(), "1");
         assert_eq!(key.profile_contract_hash(), CONTRACT_HASH);
         assert_eq!(key.canonical_purpose(), "benefit-verification");
         assert_eq!(key.canonical_inputs()["subject_id"].as_str(), TARGET_VALUE);
@@ -1573,9 +1496,13 @@ mod tests {
         assert_eq!(activated.calls(), 1);
         assert!(Arc::ptr_eq(&left, &right));
         assert_eq!(left.outcome(), RuntimeRelayOutcome::Match);
-        let output = left.output().expect("match output");
-        assert_eq!(output.name(), "registration_status");
-        assert_eq!(output.value(), OUTPUT_VALUE);
+        assert_eq!(
+            left.outputs().expect("match outputs").to_json_object(),
+            serde_json::json!({"registration_status": OUTPUT_VALUE})
+                .as_object()
+                .unwrap()
+                .clone()
+        );
     }
 
     #[tokio::test]
@@ -1717,10 +1644,6 @@ mod tests {
         keys.push(mismatch);
 
         let mut mismatch = base.clone();
-        mismatch.profile_version = "2".into();
-        keys.push(mismatch);
-
-        let mut mismatch = base.clone();
         mismatch.profile_contract_hash = OTHER_CONTRACT_HASH.into();
         keys.push(mismatch);
 
@@ -1737,7 +1660,14 @@ mod tests {
         keys.push(mismatch);
 
         let mut mismatch = base.clone();
-        mismatch.expected_result = RuntimeRelayExpectedResult::PresenceOnly;
+        mismatch.expected_result = RuntimeRelayExpectedResult::output_map(BTreeMap::from([(
+            "other_registration_status".to_string(),
+            RelayOutputContract::String {
+                nullable: true,
+                max_bytes: 64,
+            },
+        )]))
+        .unwrap();
         assert!(base == mismatch, "result decoding is not a group-key field");
 
         let mut mismatch = base.clone();
@@ -1958,7 +1888,6 @@ mod tests {
             "principal-SENSITIVE".to_string(),
             distinct,
             "example.person-status.exact",
-            "1",
             CONTRACT_HASH,
             "benefit-verification",
             canonical_inputs("subject_id", TARGET_VALUE),
@@ -1988,7 +1917,7 @@ mod tests {
     }
 
     #[test]
-    fn result_shape_is_sealed_fact_map_legacy_presence_or_no_match_data() {
+    fn result_shape_is_sealed_output_map_or_no_match_data() {
         RuntimeRelayConsultationResult::new(
             Ulid::from_parts(2, 1),
             RuntimeRelayOutcome::Match,
@@ -1997,35 +1926,29 @@ mod tests {
         )
         .expect_err("match requires one output");
 
-        let facts = RuntimeRelayConsultationResult::new(
+        let outputs = RuntimeRelayConsultationResult::new(
             Ulid::from_parts(2, 1),
             RuntimeRelayOutcome::Match,
-            Some(RuntimeRelayMatchData::FactMap(RuntimeRelayFactMap {
-                fields: BTreeMap::from([("exists".into(), RuntimeRelayFactValue::Boolean(true))]),
+            Some(RuntimeRelayMatchData::OutputMap(RuntimeRelayOutputMap {
+                fields: BTreeMap::from([("exists".into(), RuntimeRelayOutputValue::Boolean(true))]),
             })),
             OffsetDateTime::UNIX_EPOCH,
         )
-        .expect("typed fact map is explicit match data");
+        .expect("typed output map is explicit match data");
         assert_eq!(
-            Value::Object(facts.facts().unwrap().to_json_object()),
+            Value::Object(outputs.outputs().unwrap().to_json_object()),
             serde_json::json!({"exists": true})
         );
-
-        let presence = RuntimeRelayConsultationResult::new(
-            Ulid::from_parts(2, 1),
-            RuntimeRelayOutcome::Match,
-            Some(RuntimeRelayMatchData::PresenceOnly),
-            OffsetDateTime::UNIX_EPOCH,
-        )
-        .expect("presence-only is explicit match data");
-        assert!(presence.output().is_none());
 
         RuntimeRelayConsultationResult::new(
             Ulid::from_parts(2, 1),
             RuntimeRelayOutcome::NoMatch,
-            Some(RuntimeRelayMatchData::ProjectedString(
-                RuntimeRelayOutput::new("status", Zeroizing::new("value".to_string())).unwrap(),
-            )),
+            Some(RuntimeRelayMatchData::OutputMap(RuntimeRelayOutputMap {
+                fields: BTreeMap::from([(
+                    "status".into(),
+                    RuntimeRelayOutputValue::String(Zeroizing::new("value".to_string())),
+                )]),
+            })),
             OffsetDateTime::UNIX_EPOCH,
         )
         .expect_err("no_match cannot release output");
@@ -2037,7 +1960,7 @@ mod tests {
             OffsetDateTime::UNIX_EPOCH,
         )
         .expect("no_match without output is valid");
-        assert!(no_match.output().is_none());
+        assert!(no_match.outputs().is_none());
 
         let ambiguous = RuntimeRelayConsultationResult::new(
             Ulid::from_parts(2, 1),
@@ -2047,14 +1970,6 @@ mod tests {
         )
         .expect("ambiguous without output is valid");
         assert_eq!(ambiguous.outcome(), RuntimeRelayOutcome::Ambiguous);
-
-        RuntimeRelayOutput::new("nested.name", Zeroizing::new("value".to_string()))
-            .expect_err("output names use the input-name grammar");
-        RuntimeRelayOutput::new(
-            "status",
-            Zeroizing::new("x".repeat(MAX_OUTPUT_STRING_BYTES + 1)),
-        )
-        .expect_err("oversized string output is rejected");
     }
 
     #[test]
@@ -2063,10 +1978,10 @@ mod tests {
         let activated = Arc::new(CountingActivated::success());
         let coordinator = coordinator(vec![key.clone()], &activated);
         let result = success_result();
-        let output = result.output().expect("match output");
+        let outputs = result.outputs().expect("match outputs");
 
         let rendered = format!(
-            "{coordinator:?} {result:?} {output:?} {:?}",
+            "{coordinator:?} {result:?} {outputs:?} {:?}",
             RuntimeRelayOutcome::Match
         );
         let evaluation_id = key.evaluation_id().to_string();

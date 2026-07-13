@@ -22,6 +22,7 @@ pub(crate) mod posture;
 pub(crate) mod preauth_state;
 pub(crate) mod problem;
 pub(crate) mod relay_client;
+pub(crate) mod relay_contract;
 pub(crate) mod replay;
 pub(crate) mod request_context;
 pub(crate) mod response_context;

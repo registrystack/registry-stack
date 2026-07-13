@@ -135,6 +135,7 @@ fn doctor_relay_config(token_file: PathBuf) -> StandaloneRegistryNotaryConfig {
         token_file,
         allowed_private_cidrs: Vec::new(),
         allow_insecure_localhost: true,
+        max_in_flight: 8,
     });
     config
 }

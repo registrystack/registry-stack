@@ -6,6 +6,14 @@ struct FixedRelayConsultation {
     outcome: RuntimeRelayOutcome,
 }
 
+fn status_match_data() -> Result<RuntimeRelayMatchData, crate::relay_client::RelayClientError> {
+    RuntimeRelayOutputMap::from_json(BTreeMap::from([(
+        "registration_status".to_string(),
+        json!("ACTIVE"),
+    )]))
+    .map(RuntimeRelayMatchData::OutputMap)
+}
+
 #[async_trait::async_trait]
 impl ActivatedRelayConsultations for FixedRelayConsultation {
     async fn check_ready(&self) -> Result<(), crate::relay_client::RelayClientError> {
@@ -25,10 +33,7 @@ impl ActivatedRelayConsultations for FixedRelayConsultation {
     ) -> Result<RuntimeRelayConsultationResult, crate::relay_client::RelayClientError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let match_data = matches!(self.outcome, RuntimeRelayOutcome::Match)
-            .then(|| {
-                RuntimeRelayOutput::new("registration_status", Zeroizing::new("ACTIVE".to_string()))
-                    .map(RuntimeRelayMatchData::ProjectedString)
-            })
+            .then(status_match_data)
             .transpose()?;
         RuntimeRelayConsultationResult::new(
             Ulid::from_parts(2, 1),
@@ -76,12 +81,7 @@ impl ActivatedRelayConsultations for BatchIdentityRelay {
         RuntimeRelayConsultationResult::new(
             Ulid::new(),
             RuntimeRelayOutcome::Match,
-            Some(RuntimeRelayMatchData::ProjectedString(
-                RuntimeRelayOutput::new(
-                    "registration_status",
-                    Zeroizing::new("ACTIVE".to_string()),
-                )?,
-            )),
+            Some(status_match_data()?),
             OffsetDateTime::UNIX_EPOCH,
         )
     }
@@ -134,12 +134,7 @@ impl ActivatedRelayConsultations for CrashRetryBatchRelay {
         RuntimeRelayConsultationResult::new(
             Ulid::from_parts(5, 1),
             RuntimeRelayOutcome::Match,
-            Some(RuntimeRelayMatchData::ProjectedString(
-                RuntimeRelayOutput::new(
-                    "registration_status",
-                    Zeroizing::new("ACTIVE".to_string()),
-                )?,
-            )),
+            Some(status_match_data()?),
             OffsetDateTime::UNIX_EPOCH,
         )
     }
@@ -147,14 +142,14 @@ impl ActivatedRelayConsultations for CrashRetryBatchRelay {
 
 #[cfg(feature = "registry-notary-cel")]
 #[derive(Debug)]
-struct TypedFactRelay {
+struct TypedOutputRelay {
     calls: AtomicU64,
     outcome: RuntimeRelayOutcome,
 }
 
 #[cfg(feature = "registry-notary-cel")]
 #[async_trait::async_trait]
-impl ActivatedRelayConsultations for TypedFactRelay {
+impl ActivatedRelayConsultations for TypedOutputRelay {
     async fn check_ready(&self) -> Result<(), crate::relay_client::RelayClientError> {
         Ok(())
     }
@@ -173,11 +168,11 @@ impl ActivatedRelayConsultations for TypedFactRelay {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let match_data = (self.outcome == RuntimeRelayOutcome::Match)
             .then(|| {
-                RuntimeRelayFactMap::from_json(BTreeMap::from([
-                    ("date_of_birth".to_string(), json!("2010-06-15")),
-                    ("exists".to_string(), json!(true)),
-                ]))
-                .map(RuntimeRelayMatchData::FactMap)
+                RuntimeRelayOutputMap::from_json(BTreeMap::from([(
+                    "date_of_birth".to_string(),
+                    json!("2010-06-15"),
+                )]))
+                .map(RuntimeRelayMatchData::OutputMap)
             })
             .transpose()?;
         RuntimeRelayConsultationResult::new(
@@ -190,6 +185,7 @@ impl ActivatedRelayConsultations for TypedFactRelay {
 }
 
 fn registry_claim(id: &str, rule: RuleConfig, value_type: &str) -> ClaimDefinition {
+    let nullable = matches!(&rule, RuleConfig::Extract { .. });
     let mut claim = test_claim(id, Vec::new(), false);
     claim.evidence_mode = ClaimEvidenceMode::RegistryBacked {
         consultations: BTreeMap::from([(
@@ -197,7 +193,6 @@ fn registry_claim(id: &str, rule: RuleConfig, value_type: &str) -> ClaimDefiniti
             registry_notary_core::RelayConsultationConfig {
                 profile: registry_notary_core::RelayConsultationProfileRef {
                     id: "dhis2.tracker.enrollment-status.exact".to_string(),
-                    version: "1".to_string(),
                     contract_hash:
                         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                             .to_string(),
@@ -206,7 +201,13 @@ fn registry_claim(id: &str, rule: RuleConfig, value_type: &str) -> ClaimDefiniti
                     "tracked_entity".to_string(),
                     RelayConsultationInput::TargetId,
                 )]),
-                facts: BTreeMap::new(),
+                outputs: BTreeMap::from([(
+                    "registration_status".to_string(),
+                    registry_notary_core::RelayOutputContract::String {
+                        nullable: true,
+                        max_bytes: 64,
+                    },
+                )]),
             },
         )]),
     };
@@ -214,6 +215,7 @@ fn registry_claim(id: &str, rule: RuleConfig, value_type: &str) -> ClaimDefiniti
     claim.required_scopes = vec!["registry:evidence".to_string()];
     claim.rule = rule;
     claim.value.value_type = value_type.to_string();
+    claim.value.nullable = nullable;
     claim
 }
 
@@ -226,16 +228,10 @@ fn typed_registry_claim(id: &str, rule: RuleConfig, value_type: &str) -> ClaimDe
     consultations
         .get_mut("enrollment")
         .expect("consultation exists")
-        .facts = BTreeMap::from([
-        (
-            "date_of_birth".to_string(),
-            registry_notary_core::RelayFactContract::Date { nullable: true },
-        ),
-        (
-            "exists".to_string(),
-            registry_notary_core::RelayFactContract::Presence,
-        ),
-    ]);
+        .outputs = BTreeMap::from([(
+        "date_of_birth".to_string(),
+        registry_notary_core::RelayOutputContract::Date { nullable: true },
+    )]);
     claim.value.nullable = true;
     claim
 }
@@ -306,7 +302,7 @@ async fn relay_match_correlation_survives_success_without_public_relay_ids() {
 
 #[cfg(feature = "registry-notary-cel")]
 #[tokio::test]
-async fn typed_fact_map_is_reused_for_direct_and_date_age_on_claims() {
+async fn typed_output_map_is_reused_for_direct_and_date_age_on_claims() {
     let date = typed_registry_claim(
         "date-of-birth",
         RuleConfig::Extract {
@@ -318,7 +314,7 @@ async fn typed_fact_map_is_reused_for_direct_and_date_age_on_claims() {
     let age_band = typed_registry_claim(
             "age-band",
             RuleConfig::Cel {
-                expression: "enrollment.exists && enrollment.date_of_birth != null ? (date.age_on(enrollment.date_of_birth, as_of_date) < 18 ? \"child\" : \"adult\") : null".to_string(),
+                expression: "enrollment.matched && enrollment.date_of_birth != null ? (date.age_on(enrollment.date_of_birth, as_of_date) < 18 ? \"child\" : \"adult\") : null".to_string(),
                 bindings: Default::default(),
             },
             "string",
@@ -333,7 +329,7 @@ async fn typed_fact_map_is_reused_for_direct_and_date_age_on_claims() {
         },
     );
     let source = Arc::new(CountingSource::default());
-    let activated = Arc::new(TypedFactRelay {
+    let activated = Arc::new(TypedOutputRelay {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::Match,
     });
@@ -360,7 +356,7 @@ async fn typed_fact_map_is_reused_for_direct_and_date_age_on_claims() {
         )
         .await
         .0
-        .expect("typed facts evaluate");
+        .expect("typed outputs evaluate");
 
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].value, Some(json!("2010-06-15")));
@@ -375,7 +371,7 @@ async fn missing_declared_cel_variable_is_denied_before_relay_or_source() {
     let age_band = typed_registry_claim(
             "age-band",
             RuleConfig::Cel {
-                expression: "enrollment.exists && enrollment.date_of_birth != null ? date.age_on(enrollment.date_of_birth, as_of_date) : null".to_string(),
+                expression: "enrollment.matched && enrollment.date_of_birth != null ? date.age_on(enrollment.date_of_birth, as_of_date) : null".to_string(),
                 bindings: Default::default(),
             },
             "integer",
@@ -390,7 +386,7 @@ async fn missing_declared_cel_variable_is_denied_before_relay_or_source() {
         },
     );
     let source = Arc::new(CountingSource::default());
-    let activated = Arc::new(TypedFactRelay {
+    let activated = Arc::new(TypedOutputRelay {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::Match,
     });
@@ -428,7 +424,7 @@ async fn missing_declared_cel_variable_is_denied_before_relay_or_source() {
             test_evidence(vec![typed_registry_claim(
                 "age-band",
                 RuleConfig::Cel {
-                    expression: "enrollment.exists".to_string(),
+                    expression: "enrollment.matched".to_string(),
                     bindings: Default::default(),
                 },
                 "boolean",
@@ -450,11 +446,11 @@ async fn missing_declared_cel_variable_is_denied_before_relay_or_source() {
 
 #[cfg(feature = "registry-notary-cel")]
 #[test]
-fn no_match_builds_only_presence_and_nullable_absence_facts() {
+fn no_match_builds_only_presence_and_nullable_absence_outputs() {
     let claim = typed_registry_claim(
         "age-band",
         RuleConfig::Cel {
-            expression: "enrollment.exists ? \"known\" : null".to_string(),
+            expression: "enrollment.matched ? \"known\" : null".to_string(),
             bindings: Default::default(),
         },
         "string",
@@ -464,7 +460,8 @@ fn no_match_builds_only_presence_and_nullable_absence_facts() {
         sources.get("enrollment"),
         Some(&json!({
             "date_of_birth": null,
-            "exists": false
+            "matched": false,
+            "outcome": "no_match"
         }))
     );
 }
@@ -474,9 +471,8 @@ fn no_match_builds_only_presence_and_nullable_absence_facts() {
 async fn no_match_reuses_typed_absence_for_presence_and_nullable_direct_claims() {
     let mut exists = typed_registry_claim(
         "birth-record-exists",
-        RuleConfig::Extract {
+        RuleConfig::Exists {
             source: "enrollment".to_string(),
-            field: "exists".to_string(),
         },
         "boolean",
     );
@@ -492,7 +488,7 @@ async fn no_match_reuses_typed_absence_for_presence_and_nullable_direct_claims()
     let mut evidence = (*test_evidence(vec![exists, date])).clone();
     evidence.allowed_purposes = vec!["test".to_string()];
     let source = Arc::new(CountingSource::default());
-    let activated = Arc::new(TypedFactRelay {
+    let activated = Arc::new(TypedOutputRelay {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::NoMatch,
     });
@@ -523,7 +519,7 @@ async fn no_match_reuses_typed_absence_for_presence_and_nullable_direct_claims()
 }
 
 #[test]
-fn relay_exists_match_materializes_presence_without_source_output() {
+fn relay_exists_match_materializes_declared_outputs_and_outcome() {
     let claim = registry_claim(
         "enrollment-known",
         RuleConfig::Exists {
@@ -534,21 +530,32 @@ fn relay_exists_match_materializes_presence_without_source_output() {
     let result = RuntimeRelayConsultationResult::new(
         Ulid::from_parts(2, 1),
         RuntimeRelayOutcome::Match,
-        Some(RuntimeRelayMatchData::PresenceOnly),
+        Some(RuntimeRelayMatchData::OutputMap(
+            RuntimeRelayOutputMap::from_json(BTreeMap::from([(
+                "registration_status".to_string(),
+                json!("ACTIVE"),
+            )]))
+            .expect("valid output map"),
+        )),
         OffsetDateTime::UNIX_EPOCH,
     )
     .expect("valid Relay match");
 
     let sources = materialize_relay_match(&claim, &result)
-        .expect("exists match materializes only a presence sentinel");
-    let wire = serde_json::to_string(&sources).expect("presence sentinel serializes");
+        .expect("exists match materializes the declared output namespace");
 
-    assert_eq!(sources.get("enrollment"), Some(&json!({})));
-    assert!(!wire.contains("registration_status"));
+    assert_eq!(
+        sources.get("enrollment"),
+        Some(&json!({
+            "registration_status": "ACTIVE",
+            "matched": true,
+            "outcome": "match"
+        }))
+    );
 }
 
 #[tokio::test]
-async fn relay_no_match_extract_is_source_not_found_with_restricted_correlation() {
+async fn relay_no_match_extract_materializes_explicit_null_with_restricted_correlation() {
     let claim = registry_claim(
         "enrollment-status",
         RuleConfig::Extract {
@@ -560,7 +567,8 @@ async fn relay_no_match_extract_is_source_not_found_with_restricted_correlation(
     let (result, audit, activated, source) =
         audited_registry_evaluation(claim, RuntimeRelayOutcome::NoMatch).await;
 
-    assert!(matches!(result, Err(EvidenceError::SourceNotFound)));
+    let results = result.expect("no-match extraction evaluates to its explicit null view");
+    assert_eq!(results[0].value, Some(Value::Null));
     assert_relay_audit(audit);
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
     assert_eq!(source.read_count.load(Ordering::SeqCst), 0);

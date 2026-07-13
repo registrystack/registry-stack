@@ -204,16 +204,14 @@ pub(super) fn cel_preflight_root_bindings(
     if let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode {
         let mut roots = BTreeMap::new();
         if let Some((name, consultation)) = consultations.first_key_value() {
-            roots.insert(
-                name.clone(),
-                Value::Object(
-                    consultation
-                        .facts
-                        .iter()
-                        .map(|(name, fact)| (name.clone(), registry_fact_dummy_value(fact)))
-                        .collect(),
-                ),
-            );
+            let mut output_view = consultation
+                .outputs
+                .iter()
+                .map(|(name, output)| (name.clone(), registry_output_dummy_value(output)))
+                .collect::<Map<_, _>>();
+            output_view.insert("matched".to_string(), Value::Bool(true));
+            output_view.insert("outcome".to_string(), Value::String("match".to_string()));
+            roots.insert(name.clone(), Value::Object(output_view));
         }
         for (name, variable) in &evidence.variables {
             let value = match variable.value_type {
@@ -279,13 +277,12 @@ pub(super) fn cel_preflight_root_bindings(
 }
 
 #[cfg(feature = "registry-notary-cel")]
-fn registry_fact_dummy_value(fact: &registry_notary_core::RelayFactContract) -> Value {
-    match fact {
-        registry_notary_core::RelayFactContract::Boolean { .. }
-        | registry_notary_core::RelayFactContract::Presence => Value::Bool(true),
-        registry_notary_core::RelayFactContract::Integer { minimum, .. } => json!(minimum),
-        registry_notary_core::RelayFactContract::String { .. } => json!("preflight"),
-        registry_notary_core::RelayFactContract::Date { .. } => json!("2000-01-01"),
+fn registry_output_dummy_value(output: &registry_notary_core::RelayOutputContract) -> Value {
+    match output {
+        registry_notary_core::RelayOutputContract::Boolean { .. } => Value::Bool(true),
+        registry_notary_core::RelayOutputContract::Integer { minimum, .. } => json!(minimum),
+        registry_notary_core::RelayOutputContract::String { .. } => json!("preflight"),
+        registry_notary_core::RelayOutputContract::Date { .. } => json!("2000-01-01"),
     }
 }
 
@@ -342,8 +339,8 @@ fn validate_registry_cel_expression(
         .filter(|byte| !byte.is_ascii_whitespace())
         .map(char::from)
         .collect::<String>();
-    for (name, fact) in &consultation.facts {
-        if !fact.nullable() {
+    for (name, output) in &consultation.outputs {
+        if !output.nullable() {
             continue;
         }
         let path = format!("{consultation_name}.{name}");

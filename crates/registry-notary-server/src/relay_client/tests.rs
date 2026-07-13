@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-
 use super::*;
-
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -19,7 +17,7 @@ use registry_notary_core::StandaloneRegistryNotaryConfig;
 use registry_platform_authcommon::fingerprint_api_key;
 use registry_platform_crypto::canonicalize_json;
 use registry_platform_httputil::destination::{
-    DestinationProfile, ServiceHopDataDestinationPolicy, MAX_SERVICE_HOP_OPERATION_TIMEOUT,
+    DestinationProfile, ServiceHopDataDestinationPolicy,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -29,9 +27,6 @@ use tokio::task::JoinHandle;
 use zeroize::Zeroizing;
 
 const PROFILE_ID: &str = "dhis2.tracker.enrollment-status.exact";
-const PROFILE_VERSION: &str = "1";
-const CONTRACT_HASH: &str =
-    "sha256:d44a58740cf51b68d9a011380814568e6c569e35057d4350a4fb429b24289ea7";
 const PURPOSE: &str = "program-enrollment-verification";
 const INPUT_NAME: &str = "tracked_entity";
 const INPUT_VALUE: &str = "PQfMcpmXeFE";
@@ -47,9 +42,8 @@ const MAX_RESULT_BYTES: usize = 64 * 1024;
 const EVALUATION_ID: &str = "01JYZZZZZZZZZZZZZZZZZZZZZZ";
 const CONSULTATION_ID: &str = "01K05H0JKP4VSQNYCZ0TN4D87R";
 const SNAPSHOT_GENERATION_ID: &str = "01K05H0JKP4VSQNYCZ0TN4D87S";
-const PROFILE_ROUTE: &str = "/v1/consultations/dhis2.tracker.enrollment-status.exact/versions/1";
-const EXECUTE_ROUTE: &str =
-    "/v1/consultations/dhis2.tracker.enrollment-status.exact/versions/1/execute";
+const PROFILE_ROUTE: &str = "/v1/consultations/dhis2.tracker.enrollment-status.exact";
+const EXECUTE_ROUTE: &str = "/v1/consultations/dhis2.tracker.enrollment-status.exact/execute";
 const NOTARY_API_KEY: &str = "notary-relay-vertical-api-key";
 const NOTARY_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_RELAY_VERTICAL_API_KEY_HASH";
 const NOTARY_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_RELAY_VERTICAL_AUDIT_SECRET";
@@ -299,7 +293,11 @@ async fn observe_request(
     let exact_body = match operation {
         ObservedOperation::Metadata => body.is_empty(),
         ObservedOperation::Execute => {
-            body.as_ref() == br#"{"inputs":{"tracked_entity":"PQfMcpmXeFE"}}"#
+            let expected = format!(
+                r#"{{"contract_hash":"{}","inputs":{{"tracked_entity":"PQfMcpmXeFE"}}}}"#,
+                contract_hash()
+            );
+            body.as_ref() == expected.as_bytes()
         }
     };
     Observation {
@@ -334,60 +332,12 @@ fn contract_value() -> Value {
     .unwrap()
 }
 
-fn presence_contract_value() -> Value {
-    let mut contract = contract_value();
-    contract["spec"]["output_mode"] = json!("presence_only");
-    contract["spec"]["output"] = json!({});
-    contract["spec"]["acquisition"]["class"] = json!("bounded_full_record");
-    contract["spec"]["acquisition"]["fields"] = json!({
-        "record": {
-            "type": "object",
-            "nullable": false,
-            "reject_unknown_fields": true,
-            "fields": {
-                "registration": {
-                    "required": true,
-                    "schema": {
-                        "type": "object",
-                        "nullable": false,
-                        "reject_unknown_fields": true,
-                        "fields": {
-                            "status": {
-                                "required": true,
-                                "schema": {
-                                    "type": "string",
-                                    "nullable": false,
-                                    "max_bytes": 64
-                                }
-                            }
-                        }
-                    }
-                },
-                "identifiers": {
-                    "required": true,
-                    "schema": {
-                        "type": "array",
-                        "nullable": false,
-                        "max_items": 8,
-                        "items": {
-                            "type": "string",
-                            "nullable": false,
-                            "max_bytes": 128
-                        }
-                    }
-                }
-            }
-        }
-    });
-    contract
-}
-
-fn typed_fact_contract_value() -> Value {
+fn typed_output_contract_value() -> Value {
     let mut contract = contract_value();
     contract["spec"]["output"] = json!({
         "active": { "type": "boolean", "nullable": false },
-        "birth_date": { "type": "date", "nullable": true, "max_bytes": 10 },
-        "exists": { "type": "presence", "nullable": false },
+        "birth_date": { "type": "date", "nullable": true },
+        "exists": { "type": "boolean", "nullable": false },
         "sequence": {
             "type": "integer",
             "nullable": false,
@@ -410,20 +360,23 @@ fn typed_fact_contract_value() -> Value {
     contract
 }
 
-fn typed_fact_expectation() -> RelayExpectedResult {
-    RelayExpectedResult::fact_map(BTreeMap::from([
+fn typed_output_expectation() -> RelayExpectedResult {
+    RelayExpectedResult::output_map(BTreeMap::from([
         (
             "active".to_string(),
-            RelayFactContract::Boolean { nullable: false },
+            NotaryRelayOutputContract::Boolean { nullable: false },
         ),
         (
             "birth_date".to_string(),
-            RelayFactContract::Date { nullable: true },
+            NotaryRelayOutputContract::Date { nullable: true },
         ),
-        ("exists".to_string(), RelayFactContract::Presence),
+        (
+            "exists".to_string(),
+            NotaryRelayOutputContract::Boolean { nullable: false },
+        ),
         (
             "sequence".to_string(),
-            RelayFactContract::Integer {
+            NotaryRelayOutputContract::Integer {
                 nullable: false,
                 minimum: 0,
                 maximum: 9_007_199_254_740_991,
@@ -431,13 +384,26 @@ fn typed_fact_expectation() -> RelayExpectedResult {
         ),
         (
             "status".to_string(),
-            RelayFactContract::String {
+            NotaryRelayOutputContract::String {
                 nullable: false,
                 max_bytes: 64,
             },
         ),
     ]))
-    .expect("valid typed fact expectation")
+    .expect("valid typed output expectation")
+}
+
+#[test]
+fn output_contract_rejects_reserved_notary_view_names() {
+    for name in ["matched", "outcome", "status.code"] {
+        assert!(matches!(
+            RelayExpectedResult::output_map(BTreeMap::from([(
+                name.to_string(),
+                NotaryRelayOutputContract::Boolean { nullable: false },
+            )])),
+            Err(RelayClientError::InvalidConfiguration)
+        ));
+    }
 }
 
 fn snapshot_contract_value() -> Value {
@@ -462,41 +428,25 @@ fn snapshot_contract_value() -> Value {
         "immutable_generation": true,
         "digest_bound_active_pointer": true
     });
-    contract
-}
-
-fn snapshot_contract_with_source_provenance() -> Value {
-    let mut contract = snapshot_contract_value();
-    contract["spec"]["acquisition"]["fields"]["source_observed_at"] =
-        json!({"type": "string", "nullable": false, "max_bytes": 64});
-    contract["spec"]["acquisition"]["fields"]["source_revision"] =
-        json!({"type": "string", "nullable": false, "max_bytes": 32});
-    contract["spec"]["source_provenance"] = json!({
-        "source_observed_at": {
-            "type": "acquired_rfc3339",
-            "field": "source_observed_at"
-        },
-        "source_revision": {
-            "type": "acquired_string",
-            "field": "source_revision",
-            "max_bytes": 32
-        }
+    contract["spec"]["runtime"] = json!({
+        "platform_profile": "registry-stack.consultation.v1",
+        "source_capability": "snapshot",
+        "script_abi": null
     });
-    contract["spec"]["materialization"]["footprint"]["fields"] =
-        json!(["source_observed_at", "source_revision", "status"]);
     contract
 }
 
 fn metadata_value_for_contract(contract: &Value, contract_hash: &str) -> Value {
-    let contract_json = String::from_utf8(canonicalize_json(contract).unwrap()).unwrap();
     json!({
         "contract_hash": contract_hash,
-        "contract_json": contract_json,
+        "contract": contract,
     })
 }
 
 fn metadata_value() -> Value {
-    metadata_value_for_contract(&contract_value(), CONTRACT_HASH)
+    let contract = contract_value();
+    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+    metadata_value_for_contract(&contract, &contract_hash)
 }
 
 fn metadata_response() -> WireResponse {
@@ -516,30 +466,31 @@ fn typed_hash(domain: &[u8], value: &Value) -> String {
     encoded
 }
 
+fn contract_hash() -> String {
+    typed_hash(CONTRACT_DOMAIN, &contract_value())
+}
+
 fn result_value() -> Value {
+    let contract_hash = contract_hash();
     json!({
         "schema": RESULT_SCHEMA,
         "consultation_id": CONSULTATION_ID,
         "notary_evaluation_id": EVALUATION_ID,
         "profile": {
             "id": PROFILE_ID,
-            "version": PROFILE_VERSION,
-            "contract_hash": CONTRACT_HASH,
+            "contract_hash": contract_hash,
         },
         "outcome": "match",
-        "data": { "status": "ACTIVE" },
+        "outputs": { "status": "ACTIVE" },
         "provenance": {
-            "relay_acquired_at": "2026-07-12T00:00:00Z",
+            "acquired_at": "2026-07-12T00:00:00Z",
             "source_observed_at": null,
             "source_revision": null,
             "acquisition_class": "source_projected_exact",
-            "integration_pack": {
+            "integration": {
                 "id": "dhis2.tracker.enrollment-status",
-                "version": "1",
-                "hash": "sha256:c3965741e1d2da615a82a6ede91d0477c8c29204c675e043169bcc654915597f"
+                "revision": 1
             },
-            "policy_id": "relay.dhis2.tracker.enrollment-status.exact",
-            "policy_hash": "sha256:807d95f054244dc6e881672324d7e2468fe179af312f67f2bd162d523743bed9",
             "consent": {
                 "outcome": "not_required",
                 "verifier_id": null,
@@ -552,21 +503,14 @@ fn result_value() -> Value {
     })
 }
 
-fn presence_result_value(contract_hash: &str, outcome: &str, data: Value) -> Value {
-    let mut result = result_value();
-    result["profile"]["contract_hash"] = json!(contract_hash);
-    result["outcome"] = json!(outcome);
-    result["data"] = data;
-    result["provenance"]["acquisition_class"] = json!("bounded_full_record");
-    result
-}
-
 fn snapshot_result_value(contract_hash: &str) -> Value {
     let mut result = result_value();
     result["profile"]["contract_hash"] = json!(contract_hash);
     result["provenance"]["acquisition_class"] = json!("materialized_snapshot");
-    result["provenance"]["snapshot_generation_id"] = json!(SNAPSHOT_GENERATION_ID);
-    result["provenance"]["snapshot_published_at"] = json!("2026-07-11T23:59:00Z");
+    result["provenance"]["snapshot"] = json!({
+        "generation_id": SNAPSHOT_GENERATION_ID,
+        "published_at": "2026-07-11T23:59:00Z"
+    });
     result
 }
 
@@ -586,7 +530,7 @@ fn test_claims() -> Value {
         "nbf": 1_700_000_000_i64,
         "exp": 4_102_444_800_i64,
         "jti": "relay-test-token-1",
-        "tenant": { "id": "test-country" },
+        "tenant": { "id": "test-project" },
     })
 }
 
@@ -653,7 +597,14 @@ fn client_with_hash(
         server,
         token_file,
         contract_hash,
-        RelayExpectedResult::projected_string(OUTPUT_NAME).unwrap(),
+        RelayExpectedResult::output_map(BTreeMap::from([(
+            OUTPUT_NAME.to_string(),
+            NotaryRelayOutputContract::String {
+                nullable: false,
+                max_bytes: 32,
+            },
+        )]))
+        .unwrap(),
     )
 }
 
@@ -673,7 +624,8 @@ fn client_with_result(
     RelayConsultationClient::new(
         destination,
         token_file.credential(),
-        RelayProfilePin::new(PROFILE_ID, PROFILE_VERSION, contract_hash).unwrap(),
+        EXPECTED_CLIENT_ID,
+        RelayProfilePin::new(PROFILE_ID, contract_hash).unwrap(),
         PURPOSE,
         INPUT_NAME,
         expected_result,
@@ -682,7 +634,7 @@ fn client_with_result(
 }
 
 fn client(server: &FakeRelay, token_file: &TestTokenFile) -> RelayConsultationClient {
-    client_with_hash(server, token_file, CONTRACT_HASH)
+    client_with_hash(server, token_file, &contract_hash())
 }
 
 async fn verified(server: &FakeRelay, token_file: &TestTokenFile) -> VerifiedRelayClient {
@@ -748,6 +700,7 @@ fn assembled_notary_config(
         serde_json::to_string(&token_file.path.to_string_lossy()).expect("token path serializes");
     let audit_path =
         serde_json::to_string(&audit_path.to_string_lossy()).expect("audit path serializes");
+    let contract_hash = contract_hash();
     serde_norway::from_str(&format!(
         r#"
 deployment:
@@ -772,6 +725,7 @@ evidence:
   allowed_purposes: [{PURPOSE}]
   relay:
     base_url: {relay_origin}
+    workload_client_id: {EXPECTED_CLIENT_ID}
     token_file: {token_path}
     allow_insecure_localhost: true
   claims:
@@ -785,10 +739,11 @@ evidence:
           enrollment:
             profile:
               id: {PROFILE_ID}
-              version: "{PROFILE_VERSION}"
-              contract_hash: {CONTRACT_HASH}
+              contract_hash: {contract_hash}
             inputs:
               {INPUT_NAME}: target.id
+            outputs:
+              {OUTPUT_NAME}: {{ type: string, nullable: false, max_bytes: 32 }}
       value:
         type: boolean
       purpose: {PURPOSE}
@@ -810,12 +765,14 @@ evidence:
           enrollment:
             profile:
               id: {PROFILE_ID}
-              version: "{PROFILE_VERSION}"
-              contract_hash: {CONTRACT_HASH}
+              contract_hash: {contract_hash}
             inputs:
               {INPUT_NAME}: target.id
+            outputs:
+              {OUTPUT_NAME}: {{ type: string, nullable: false, max_bytes: 32 }}
       value:
         type: string
+        nullable: true
       purpose: {PURPOSE}
       required_scopes: [registry:evidence:dhis2-enrollment-status]
       rule:
@@ -937,9 +894,8 @@ async fn exact_profile_and_execute_journey_is_strict_and_bounded() {
     let server = FakeRelay::start(metadata_response(), result_response()).await;
     let client = verified(&server, &token_file).await;
     assert_eq!(client.profile().pin().id(), PROFILE_ID);
-    assert_eq!(client.profile().pin().version(), PROFILE_VERSION);
-    assert_eq!(client.profile().pin().contract_hash(), CONTRACT_HASH);
-    assert_eq!(client.profile().output_name(), Some(OUTPUT_NAME));
+    assert_eq!(client.profile().pin().contract_hash(), contract_hash());
+    assert_eq!(client.profile().input_names(), [INPUT_NAME]);
 
     let result = client
         .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
@@ -947,14 +903,83 @@ async fn exact_profile_and_execute_journey_is_strict_and_bounded() {
         .unwrap();
     assert_eq!(result.consultation_id().to_string(), CONSULTATION_ID);
     assert_eq!(result.outcome(), RelayConsultationOutcome::Match);
-    let data = result.data().unwrap();
-    assert_eq!(data.name(), OUTPUT_NAME);
-    assert_eq!(data.value(), "ACTIVE");
+    let Some(RelayMatchData::OutputMap(outputs)) = result.match_data() else {
+        panic!("match exposes the declared output map")
+    };
+    let fields = outputs.fields().collect::<Vec<_>>();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].0, OUTPUT_NAME);
+    assert!(matches!(
+        fields[0].1,
+        ProjectedJsonScalar::String(value) if value.as_str() == "ACTIVE"
+    ));
     let observations = server.observations().await;
     assert_eq!(observations.len(), 2);
     assert_eq!(observations[0].operation, ObservedOperation::Metadata);
     assert_eq!(observations[1].operation, ObservedOperation::Execute);
     assert!(observations.iter().all(all_shape_checks_pass));
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn result_union_requires_outputs_only_for_match() {
+    let token_file = TestTokenFile::new(&test_token());
+    let server = FakeRelay::start(metadata_response(), result_response()).await;
+    let client = verified(&server, &token_file).await;
+
+    for (wire_outcome, expected) in [
+        ("no_match", RelayConsultationOutcome::NoMatch),
+        ("ambiguous", RelayConsultationOutcome::Ambiguous),
+    ] {
+        let mut value = result_value();
+        value["outcome"] = json!(wire_outcome);
+        value
+            .as_object_mut()
+            .expect("result is an object")
+            .remove("outputs");
+        server
+            .set_execute(WireResponse::ok(serde_json::to_vec(&value).unwrap()))
+            .await;
+        let result = client
+            .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+            .await
+            .expect("non-match outcome without outputs is valid");
+        assert_eq!(result.outcome(), expected);
+        assert!(result.match_data().is_none());
+    }
+
+    let mut match_without_outputs = result_value();
+    match_without_outputs
+        .as_object_mut()
+        .expect("result is an object")
+        .remove("outputs");
+    server
+        .set_execute(WireResponse::ok(
+            serde_json::to_vec(&match_without_outputs).unwrap(),
+        ))
+        .await;
+    assert_eq!(
+        client
+            .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+            .await
+            .expect_err("match without outputs fails closed"),
+        RelayClientError::InvalidResult
+    );
+
+    let mut no_match_with_outputs = result_value();
+    no_match_with_outputs["outcome"] = json!("no_match");
+    server
+        .set_execute(WireResponse::ok(
+            serde_json::to_vec(&no_match_with_outputs).unwrap(),
+        ))
+        .await;
+    assert_eq!(
+        client
+            .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
+            .await
+            .expect_err("no_match with outputs fails closed"),
+        RelayClientError::InvalidResult
+    );
     server.shutdown().await;
 }
 
@@ -1026,21 +1051,26 @@ async fn batch_child_terminal_replay_accepts_a_fresh_notary_evaluation_id() {
 }
 
 #[tokio::test]
-async fn multi_input_profile_canonicalizes_every_typed_input_and_rejects_partial_maps() {
+async fn multi_input_profile_forwards_bounded_inputs_and_rejects_partial_maps() {
     let token_file = TestTokenFile::new(&test_token());
     let mut contract = contract_value();
     contract["spec"]["inputs"] = json!({
         "birth_date": {
-            "type": "full_date",
-            "max_bytes": 10,
+            "role": "selector",
+            "type": "string",
+            "format": "date",
+            "maxLength": 10,
+            "x-registry-max-bytes": 40,
             "pattern": "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$",
-            "canonicalization": "identity"
+            "x-registry-canonicalization": "identity"
         },
         "country_code": {
+            "role": "selector",
             "type": "string",
-            "max_bytes": 2,
+            "maxLength": 2,
+            "x-registry-max-bytes": 8,
             "pattern": "^[a-z][a-z]$",
-            "canonicalization": "ascii_lowercase"
+            "x-registry-canonicalization": "ascii_lowercase"
         },
         "tracked_entity": contract["spec"]["inputs"]["tracked_entity"].clone()
     });
@@ -1059,14 +1089,22 @@ async fn multi_input_profile_canonicalizes_every_typed_input_and_rejects_partial
     let client = RelayConsultationClient::new(
         destination,
         token_file.credential(),
-        RelayProfilePin::new(PROFILE_ID, PROFILE_VERSION, contract_hash.as_str()).unwrap(),
+        EXPECTED_CLIENT_ID,
+        RelayProfilePin::new(PROFILE_ID, contract_hash.as_str()).unwrap(),
         PURPOSE,
         vec![
             "tracked_entity".to_string(),
             "country_code".to_string(),
             "birth_date".to_string(),
         ],
-        RelayExpectedResult::projected_string(OUTPUT_NAME).unwrap(),
+        RelayExpectedResult::output_map(BTreeMap::from([(
+            OUTPUT_NAME.to_string(),
+            NotaryRelayOutputContract::String {
+                nullable: false,
+                max_bytes: 32,
+            },
+        )]))
+        .unwrap(),
     )
     .unwrap()
     .verify_profile()
@@ -1088,8 +1126,8 @@ async fn multi_input_profile_canonicalizes_every_typed_input_and_rejects_partial
                 ),
             ]),
         )
-        .expect("all typed values canonicalize");
-    assert_eq!(canonical["country_code"].as_str(), "th");
+        .expect("all bounded values pass to Relay for contract-defined canonicalization");
+    assert_eq!(canonical["country_code"].as_str(), "TH");
     assert_eq!(canonical["birth_date"].as_str(), "2000-01-02");
 
     assert!(matches!(
@@ -1102,233 +1140,17 @@ async fn multi_input_profile_canonicalizes_every_typed_input_and_rejects_partial
         ),
         Err(RelayClientError::InvalidRequest)
     ));
-    let mut invalid_date = canonical;
-    invalid_date.insert(
-        "birth_date".to_string(),
-        Zeroizing::new("2000-02-31".to_string()),
-    );
-    assert!(matches!(
-        client.canonicalize_execute_inputs(EVALUATION_ID, &invalid_date),
-        Err(RelayClientError::InvalidRequest)
-    ));
     server.shutdown().await;
 }
 
 #[tokio::test]
-async fn presence_only_profile_validates_complete_acquisition_and_releases_no_output() {
+async fn typed_output_map_verifies_exact_schema_and_rejects_bad_date() {
     let token_file = TestTokenFile::new(&test_token());
-    let contract = presence_contract_value();
-    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
-    let metadata = WireResponse::ok(
-        serde_json::to_vec(&metadata_value_for_contract(&contract, &contract_hash)).unwrap(),
-    );
-    let result = WireResponse::ok(
-        serde_json::to_vec(&presence_result_value(&contract_hash, "match", json!({}))).unwrap(),
-    );
-    let server = FakeRelay::start(metadata, result).await;
-    let client = client_with_result(
-        &server,
-        &token_file,
-        &contract_hash,
-        RelayExpectedResult::PresenceOnly,
-    )
-    .verify_profile()
-    .await
-    .expect("presence-only profile activates after complete contract validation");
-    assert_eq!(client.profile().output_name(), None);
-
-    let result = client
-        .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
-        .await
-        .expect("empty-object match result validates");
-    assert_eq!(result.outcome(), RelayConsultationOutcome::Match);
-    assert!(result.data().is_none());
-    assert!(matches!(
-        result.match_data(),
-        Some(RelayMatchData::PresenceOnly)
-    ));
-
-    server
-        .set_execute(WireResponse::ok(
-            serde_json::to_vec(&presence_result_value(
-                &contract_hash,
-                "no_match",
-                Value::Null,
-            ))
-            .unwrap(),
-        ))
-        .await;
-    let no_match = client
-        .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
-        .await
-        .expect("null no-match result validates");
-    assert_eq!(no_match.outcome(), RelayConsultationOutcome::NoMatch);
-    assert!(no_match.match_data().is_none());
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn presence_only_metadata_mode_and_complete_acquisition_fail_closed() {
-    let token_file = TestTokenFile::new(&test_token());
-    let mut cases = Vec::new();
-
-    let mut implicit_projected = presence_contract_value();
-    implicit_projected["spec"]
-        .as_object_mut()
-        .unwrap()
-        .remove("output_mode");
-    cases.push(implicit_projected);
-
-    let mut leaked_output = presence_contract_value();
-    leaked_output["spec"]["output"] = json!({
-        "status": {"type": "string", "nullable": false}
-    });
-    cases.push(leaked_output);
-
-    let mut incomplete_acquisition = presence_contract_value();
-    incomplete_acquisition["spec"]["acquisition"]["fields"]["record"]["reject_unknown_fields"] =
-        json!(false);
-    cases.push(incomplete_acquisition);
-
-    let mut excessive_depth = presence_contract_value();
-    let mut schema = json!({"type": "string", "nullable": false, "max_bytes": 1});
-    for _ in 0..8 {
-        schema = json!({
-            "type": "object",
-            "nullable": false,
-            "reject_unknown_fields": true,
-            "fields": {"nested": {"required": true, "schema": schema}}
-        });
-    }
-    excessive_depth["spec"]["acquisition"]["fields"] = json!({"record": schema});
-    cases.push(excessive_depth);
-
-    for contract in cases {
-        let hash = typed_hash(CONTRACT_DOMAIN, &contract);
-        let server = FakeRelay::start(
-            WireResponse::ok(
-                serde_json::to_vec(&metadata_value_for_contract(&contract, &hash)).unwrap(),
-            ),
-            result_response(),
-        )
-        .await;
-        assert_eq!(
-            client_with_result(
-                &server,
-                &token_file,
-                &hash,
-                RelayExpectedResult::PresenceOnly,
-            )
-            .verify_profile()
-            .await
-            .expect_err("invalid presence contract must fail activation"),
-            RelayClientError::InvalidProfileMetadata
-        );
-        server.shutdown().await;
-    }
-
-    let presence = presence_contract_value();
-    let presence_hash = typed_hash(CONTRACT_DOMAIN, &presence);
-    let server = FakeRelay::start(
-        WireResponse::ok(
-            serde_json::to_vec(&metadata_value_for_contract(&presence, &presence_hash)).unwrap(),
-        ),
-        result_response(),
-    )
-    .await;
-    assert_eq!(
-        client_with_result(
-            &server,
-            &token_file,
-            &presence_hash,
-            RelayExpectedResult::projected_string(OUTPUT_NAME).unwrap(),
-        )
-        .verify_profile()
-        .await
-        .expect_err("projected-string expectation cannot consume an outputless profile"),
-        RelayClientError::InvalidProfileMetadata
-    );
-    server.shutdown().await;
-
-    let projected = contract_value();
-    let projected_hash = typed_hash(CONTRACT_DOMAIN, &projected);
-    let server = FakeRelay::start(
-        WireResponse::ok(
-            serde_json::to_vec(&metadata_value_for_contract(&projected, &projected_hash)).unwrap(),
-        ),
-        result_response(),
-    )
-    .await;
-    assert_eq!(
-        client_with_result(
-            &server,
-            &token_file,
-            &projected_hash,
-            RelayExpectedResult::PresenceOnly,
-        )
-        .verify_profile()
-        .await
-        .expect_err("presence expectation cannot consume a projected profile"),
-        RelayClientError::InvalidProfileMetadata
-    );
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn presence_only_result_rejects_payloads_and_wrong_outcome_shapes() {
-    let token_file = TestTokenFile::new(&test_token());
-    let contract = presence_contract_value();
-    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
-    let server = FakeRelay::start(
-        WireResponse::ok(
-            serde_json::to_vec(&metadata_value_for_contract(&contract, &contract_hash)).unwrap(),
-        ),
-        WireResponse::ok(
-            serde_json::to_vec(&presence_result_value(&contract_hash, "match", json!({}))).unwrap(),
-        ),
-    )
-    .await;
-    let client = client_with_result(
-        &server,
-        &token_file,
-        &contract_hash,
-        RelayExpectedResult::PresenceOnly,
-    )
-    .verify_profile()
-    .await
-    .unwrap();
-
-    for (outcome, data) in [
-        ("match", Value::Null),
-        ("match", json!({"source_field": "SENSITIVE"})),
-        ("match", json!({"__notary_presence_contract_guard": true})),
-        ("no_match", json!({})),
-        ("ambiguous", json!({})),
-    ] {
-        server
-            .set_execute(WireResponse::ok(
-                serde_json::to_vec(&presence_result_value(&contract_hash, outcome, data)).unwrap(),
-            ))
-            .await;
-        assert_eq!(
-            client
-                .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
-                .await
-                .expect_err("presence result shape mismatch must fail closed"),
-            RelayClientError::InvalidResult
-        );
-    }
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn typed_fact_map_verifies_exact_schema_and_rejects_number_or_bad_date() {
-    let token_file = TestTokenFile::new(&test_token());
-    let contract = typed_fact_contract_value();
+    let contract = typed_output_contract_value();
     let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
     let mut result = result_value();
     result["profile"]["contract_hash"] = json!(contract_hash);
-    result["data"] = json!({
+    result["outputs"] = json!({
         "active": true,
         "birth_date": "2010-06-15",
         "exists": true,
@@ -1346,23 +1168,23 @@ async fn typed_fact_map_verifies_exact_schema_and_rejects_number_or_bad_date() {
         &server,
         &token_file,
         &contract_hash,
-        typed_fact_expectation(),
+        typed_output_expectation(),
     )
     .verify_profile()
     .await
-    .expect("typed fact profile verifies");
+    .expect("typed output profile verifies");
     let executed = client
         .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
         .await
-        .expect("typed fact result verifies");
-    let Some(RelayMatchData::FactMap(facts)) = executed.match_data() else {
-        panic!("typed fact map is released")
+        .expect("typed output result verifies");
+    let Some(RelayMatchData::OutputMap(outputs)) = executed.match_data() else {
+        panic!("typed output map is released")
     };
-    assert_eq!(facts.fields().len(), 5);
+    assert_eq!(outputs.fields().len(), 5);
 
     let mut bad_date = result_value();
     bad_date["profile"]["contract_hash"] = json!(contract_hash);
-    bad_date["data"] = json!({
+    bad_date["outputs"] = json!({
         "active": true,
         "birth_date": "2010-02-30",
         "exists": true,
@@ -1380,26 +1202,6 @@ async fn typed_fact_map_verifies_exact_schema_and_rejects_number_or_bad_date() {
         RelayClientError::InvalidResult
     );
     server.shutdown().await;
-
-    let mut number_contract = typed_fact_contract_value();
-    number_contract["spec"]["output"]["sequence"]["type"] = json!("number");
-    let number_hash = typed_hash(CONTRACT_DOMAIN, &number_contract);
-    let server = FakeRelay::start(
-        WireResponse::ok(
-            serde_json::to_vec(&metadata_value_for_contract(&number_contract, &number_hash))
-                .unwrap(),
-        ),
-        result_response(),
-    )
-    .await;
-    assert_eq!(
-        client_with_result(&server, &token_file, &number_hash, typed_fact_expectation(),)
-            .verify_profile()
-            .await
-            .expect_err("generic Number output is rejected"),
-        RelayClientError::InvalidProfileMetadata
-    );
-    server.shutdown().await;
 }
 
 #[tokio::test]
@@ -1410,28 +1212,15 @@ async fn metadata_pin_and_strict_json_fail_closed() {
     wrong_hash["contract_hash"] =
         json!("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     cases.push(serde_json::to_vec(&wrong_hash).unwrap());
-    let mut wrong_id_contract = contract_value();
-    wrong_id_contract["id"] = json!("other.profile");
-    let wrong_id = metadata_value_for_contract(&wrong_id_contract, CONTRACT_HASH);
-    cases.push(serde_json::to_vec(&wrong_id).unwrap());
     let mut unknown = metadata_value();
     unknown["unexpected"] = json!(true);
     cases.push(serde_json::to_vec(&unknown).unwrap());
-    let mut obligation_contract = contract_value();
-    obligation_contract["spec"]["authorization"]["mandatory_obligations"] = json!(["x"]);
-    let obligation = metadata_value_for_contract(&obligation_contract, CONTRACT_HASH);
-    cases.push(serde_json::to_vec(&obligation).unwrap());
     let valid = serde_json::to_string(&metadata_value()).unwrap();
     cases.push(
         valid
             .replacen("{", "{\"contract_hash\":\"duplicate-secret\",", 1)
             .into_bytes(),
     );
-    let mut duplicate_contract = metadata_value();
-    let contract_json = duplicate_contract["contract_json"].as_str().unwrap();
-    duplicate_contract["contract_json"] =
-        json!(contract_json.replacen('{', "{\"schema\":\"duplicate-secret\",", 1,));
-    cases.push(serde_json::to_vec(&duplicate_contract).unwrap());
     cases.push(format!("{valid} true").into_bytes());
 
     for body in cases {
@@ -1451,10 +1240,11 @@ async fn contract_digest_must_match_canonical_contract_returned_and_configured_h
     let mut contract = contract_value();
     contract["spec"]["bounds"]["timeout_ms"] = json!(4_999);
     let recomputed = typed_hash(b"registry.relay.consultation-contract.v1\0", &contract);
+    let contract_hash = contract_hash();
     for (returned_hash, configured_hash) in [
-        (CONTRACT_HASH.to_string(), CONTRACT_HASH.to_string()),
-        (recomputed.clone(), CONTRACT_HASH.to_string()),
-        (CONTRACT_HASH.to_string(), recomputed.clone()),
+        (contract_hash.clone(), contract_hash.clone()),
+        (recomputed.clone(), contract_hash.clone()),
+        (contract_hash, recomputed.clone()),
     ] {
         let metadata = metadata_value_for_contract(&contract, &returned_hash);
         let server = FakeRelay::start(
@@ -1474,46 +1264,70 @@ async fn contract_digest_must_match_canonical_contract_returned_and_configured_h
 }
 
 #[tokio::test]
-async fn metadata_schema_accepts_twenty_seconds_and_rejects_a_larger_source_timeout() {
+async fn readiness_rejects_each_semantic_contract_mismatch_before_execution() {
     let token_file = TestTokenFile::new(&test_token());
-    let mut accepted_contract = contract_value();
-    accepted_contract["spec"]["bounds"]["timeout_ms"] = json!(20_000);
-    let accepted_hash = typed_hash(
-        b"registry.relay.consultation-contract.v1\0",
-        &accepted_contract,
-    );
-    let accepted = metadata_value_for_contract(&accepted_contract, &accepted_hash);
-    let server = FakeRelay::start(
-        WireResponse::ok(serde_json::to_vec(&accepted).unwrap()),
-        result_response(),
-    )
-    .await;
-    client_with_hash(&server, &token_file, &accepted_hash)
-        .verify_profile()
-        .await
-        .expect("the maintained 20-second source timeout fits the metadata schema");
-    server.shutdown().await;
+    let mut cases = Vec::<(&str, Value)>::new();
 
-    let mut rejected_contract = contract_value();
-    rejected_contract["spec"]["bounds"]["timeout_ms"] = json!(20_001);
-    let recomputed = typed_hash(
-        b"registry.relay.consultation-contract.v1\0",
-        &rejected_contract,
-    );
-    let rejected = metadata_value_for_contract(&rejected_contract, &recomputed);
-    let server = FakeRelay::start(
-        WireResponse::ok(serde_json::to_vec(&rejected).unwrap()),
-        result_response(),
-    )
-    .await;
-    assert_eq!(
-        client_with_hash(&server, &token_file, &recomputed)
-            .verify_profile()
-            .await
-            .expect_err("the metadata schema caps source work at 20 seconds"),
-        RelayClientError::InvalidProfileMetadata
-    );
-    server.shutdown().await;
+    let mut identity = contract_value();
+    identity["id"] = json!("different.profile");
+    cases.push(("profile identity", identity));
+
+    let mut purpose = contract_value();
+    purpose["spec"]["authorization"]["purposes"] = json!(["different-purpose"]);
+    cases.push(("purpose", purpose));
+
+    let mut workload = contract_value();
+    workload["spec"]["authorization"]["workload"] = json!("different-workload");
+    cases.push(("configured workload identity", workload));
+
+    let mut input = contract_value();
+    input["spec"]["inputs"][INPUT_NAME]["role"] = json!("parameter");
+    cases.push(("input role", input));
+
+    let mut output = contract_value();
+    output["spec"]["output"][OUTPUT_NAME]["max_bytes"] = json!(31);
+    cases.push(("output bounds", output));
+
+    let mut outcome = contract_value();
+    outcome["spec"]["public_behavior"]["outcomes"] = json!(["match", "no_match"]);
+    cases.push(("closed outcome union", outcome));
+
+    let mut provenance = contract_value();
+    provenance["spec"]["source_provenance"]["source_observed_at"] = json!({
+        "type": "acquired_rfc3339",
+        "field": "missing_observation"
+    });
+    cases.push(("provenance", provenance));
+
+    let mut runtime = contract_value();
+    runtime["spec"]["runtime"]["source_capability"] = json!("script");
+    cases.push(("runtime ABI", runtime));
+
+    let mut platform = contract_value();
+    platform["spec"]["runtime"]["platform_profile"] = json!("registry-stack.consultation.v2");
+    cases.push(("platform profile", platform));
+
+    for (label, contract) in cases {
+        let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+        let server = FakeRelay::start(
+            WireResponse::ok(
+                serde_json::to_vec(&metadata_value_for_contract(&contract, &contract_hash))
+                    .unwrap(),
+            ),
+            result_response(),
+        )
+        .await;
+        assert_eq!(
+            client_with_hash(&server, &token_file, &contract_hash)
+                .verify_profile()
+                .await
+                .expect_err(label),
+            RelayClientError::InvalidProfileMetadata,
+            "{label}"
+        );
+        assert_eq!(server.execute_calls(), 0, "{label}");
+        server.shutdown().await;
+    }
 }
 
 #[tokio::test]
@@ -1537,298 +1351,30 @@ async fn materialized_snapshot_contract_and_result_are_strictly_verified() {
         .await
         .expect("closed materialized snapshot result verifies");
     assert_eq!(
-        result.provenance().relay_acquired_at(),
-        OffsetDateTime::parse("2026-07-12T00:00:00Z", &Rfc3339).unwrap()
-    );
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn materialized_snapshot_contract_rejects_widened_or_private_shapes() {
-    let token_file = TestTokenFile::new(&test_token());
-    let baseline = snapshot_contract_value();
-    let mut cases = Vec::new();
-
-    let mut missing = baseline.clone();
-    missing["spec"]["materialization"] = Value::Null;
-    cases.push(missing);
-    for (pointer, value) in [
-        ("max_snapshot_age_ms", json!(0)),
-        ("max_snapshot_age_ms", json!(MAX_SNAPSHOT_AGE_MS + 1)),
-        ("snapshot_retention_generations", json!(0)),
-        ("snapshot_retention_generations", json!(17)),
-        ("immutable_generation", json!(false)),
-        ("digest_bound_active_pointer", json!(false)),
-    ] {
-        let mut contract = baseline.clone();
-        contract["spec"]["materialization"][pointer] = value;
-        cases.push(contract);
-    }
-    for (pointer, value) in [
-        ("fields", json!([])),
-        ("max_source_records", json!(0)),
-        ("max_source_bytes", json!(0)),
-        ("max_data_exchanges", json!(0)),
-        ("max_credential_exchanges", json!(2)),
-        ("max_data_destinations", json!(0)),
-    ] {
-        let mut contract = baseline.clone();
-        contract["spec"]["materialization"]["footprint"][pointer] = value;
-        cases.push(contract);
-    }
-    let mut stale = baseline.clone();
-    stale["spec"]["materialization"]["stale_behavior"] = json!("serve_stale");
-    cases.push(stale);
-    let mut private = baseline.clone();
-    private["spec"]["materialization"]["table_provider"] = json!("private-provider");
-    cases.push(private);
-    for field in [
-        "max_data_exchanges",
-        "max_credential_exchanges",
-        "max_data_destinations",
-    ] {
-        let mut live_bound = baseline.clone();
-        live_bound["spec"]["bounds"][field] = json!(1);
-        cases.push(live_bound);
-    }
-    let mut materialization_on_live = contract_value();
-    materialization_on_live["spec"]["materialization"] =
-        baseline["spec"]["materialization"].clone();
-    cases.push(materialization_on_live);
-
-    for contract in cases {
-        let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
-        let metadata = metadata_value_for_contract(&contract, &contract_hash);
-        let server = FakeRelay::start(
-            WireResponse::ok(serde_json::to_vec(&metadata).unwrap()),
-            result_response(),
-        )
-        .await;
-        assert_eq!(
-            client_with_hash(&server, &token_file, &contract_hash)
-                .verify_profile()
-                .await
-                .expect_err("widened or private snapshot metadata must fail closed"),
-            RelayClientError::InvalidProfileMetadata
-        );
-        server.shutdown().await;
-    }
-}
-
-#[tokio::test]
-async fn source_provenance_declarations_and_values_are_closed() {
-    let token_file = TestTokenFile::new(&test_token());
-    let contract = snapshot_contract_with_source_provenance();
-    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
-    let metadata = metadata_value_for_contract(&contract, &contract_hash);
-    let mut result = snapshot_result_value(&contract_hash);
-    result["provenance"]["source_observed_at"] = json!("2026-07-11T23:58:00Z");
-    result["provenance"]["source_revision"] = json!("revision-42");
-    let server = FakeRelay::start(
-        WireResponse::ok(serde_json::to_vec(&metadata).unwrap()),
-        WireResponse::ok(serde_json::to_vec(&result).unwrap()),
-    )
-    .await;
-    let client = client_with_hash(&server, &token_file, &contract_hash)
-        .verify_profile()
-        .await
-        .expect("reviewed source provenance declaration verifies");
-    let verified = client
-        .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
-        .await
-        .expect("reviewed source provenance values verify");
-    assert_eq!(
-        verified.provenance().relay_acquired_at(),
+        result.provenance().acquired_at(),
         OffsetDateTime::parse("2026-07-12T00:00:00Z", &Rfc3339).unwrap()
     );
 
-    for (observed_at, revision) in [
-        (Value::Null, json!("revision-42")),
-        (json!("not-a-time"), json!("revision-42")),
-        (json!("2026-07-11T23:59:30Z"), json!("revision-42")),
-        (json!("2026-07-11T23:58:00Z"), json!("")),
-        (json!("2026-07-11T23:58:00Z"), json!("x".repeat(33))),
+    for (field, invalid) in [
+        ("generation_id", ""),
+        ("published_at", "not-a-timestamp"),
+        ("published_at", "2026-07-13T00:00:00Z"),
     ] {
-        let mut invalid = result.clone();
-        invalid["provenance"]["source_observed_at"] = observed_at;
-        invalid["provenance"]["source_revision"] = revision;
+        let mut invalid_result = snapshot_result_value(&contract_hash);
+        invalid_result["provenance"]["snapshot"][field] = json!(invalid);
         server
-            .set_execute(WireResponse::ok(serde_json::to_vec(&invalid).unwrap()))
+            .set_execute(WireResponse::ok(
+                serde_json::to_vec(&invalid_result).unwrap(),
+            ))
             .await;
         assert_eq!(
             client
                 .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
                 .await
-                .expect_err("invalid source provenance must fail closed"),
+                .expect_err("invalid snapshot provenance fails closed"),
             RelayClientError::InvalidResult
         );
     }
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn source_provenance_declaration_must_match_materialized_acquisition_fields() {
-    let token_file = TestTokenFile::new(&test_token());
-    let baseline = snapshot_contract_with_source_provenance();
-    let mut cases = Vec::new();
-    let mut missing_field = baseline.clone();
-    missing_field["spec"]["source_provenance"]["source_observed_at"]["field"] = json!("missing");
-    cases.push(missing_field);
-    let mut nullable = baseline.clone();
-    nullable["spec"]["acquisition"]["fields"]["source_observed_at"]["nullable"] = json!(true);
-    cases.push(nullable);
-    let mut wrong_max = baseline;
-    wrong_max["spec"]["source_provenance"]["source_revision"]["max_bytes"] = json!(31);
-    cases.push(wrong_max);
-    let mut live = contract_value();
-    live["spec"]["acquisition"]["fields"]["source_revision"] =
-        json!({"type": "string", "nullable": false, "max_bytes": 32});
-    live["spec"]["source_provenance"]["source_revision"] = json!({
-        "type": "acquired_string",
-        "field": "source_revision",
-        "max_bytes": 32
-    });
-    cases.push(live);
-
-    for contract in cases {
-        let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
-        let metadata = metadata_value_for_contract(&contract, &contract_hash);
-        let server = FakeRelay::start(
-            WireResponse::ok(serde_json::to_vec(&metadata).unwrap()),
-            result_response(),
-        )
-        .await;
-        assert_eq!(
-            client_with_hash(&server, &token_file, &contract_hash)
-                .verify_profile()
-                .await
-                .expect_err("unreviewed provenance declaration must fail closed"),
-            RelayClientError::InvalidProfileMetadata
-        );
-        server.shutdown().await;
-    }
-}
-
-#[test]
-fn client_operation_deadline_is_fixed_at_the_service_hop_bound() {
-    let before = Instant::now();
-    let deadline = operation_deadline().expect("fixed service-hop deadline is representable");
-    let after = Instant::now();
-
-    assert!(deadline >= before + MAX_SERVICE_HOP_OPERATION_TIMEOUT);
-    assert!(deadline <= after + MAX_SERVICE_HOP_OPERATION_TIMEOUT);
-    assert!(deadline > after + MAX_SERVICE_HOP_OPERATION_TIMEOUT - Duration::from_secs(1));
-    assert_eq!(
-        require_deadline(Instant::now()),
-        Err(RelayClientError::Unavailable),
-        "expiry is intentionally reported as generic Relay unavailability"
-    );
-    assert_eq!(
-        map_send_error(DestinationSendError::DeadlineExceeded),
-        RelayClientError::Unavailable
-    );
-    assert_eq!(
-        map_response_error(
-            DestinationResponseError::DeadlineExceeded,
-            RelayClientError::InvalidResult,
-        ),
-        RelayClientError::Unavailable
-    );
-}
-
-#[tokio::test]
-async fn independently_reconstructed_policy_rejects_a_stale_policy_digest() {
-    let token_file = TestTokenFile::new(&test_token());
-    const CONTRACT_DOMAIN: &[u8] = b"registry.relay.consultation-contract.v1\0";
-    let mut contract = contract_value();
-    contract["spec"]["authorization"]["policy"]["max_decision_age_ms"] = json!(999);
-    let recomputed = typed_hash(CONTRACT_DOMAIN, &contract);
-    let metadata = metadata_value_for_contract(&contract, &recomputed);
-    let server = FakeRelay::start(
-        WireResponse::ok(serde_json::to_vec(&metadata).unwrap()),
-        result_response(),
-    )
-    .await;
-    assert_eq!(
-        client_with_hash(&server, &token_file, &recomputed)
-            .verify_profile()
-            .await
-            .unwrap_err(),
-        RelayClientError::InvalidProfileMetadata
-    );
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn non_default_country_workload_is_accepted_only_with_its_exact_policy_hash() {
-    let token_file = TestTokenFile::new(&test_token());
-    let mut contract = contract_value();
-    contract["spec"]["authorization"]["workload"] = json!("health-registry-notary");
-    let policy_preimage = json!({
-        "schema": POLICY_SCHEMA,
-        "enforcement_profile": POLICY_ENFORCEMENT_PROFILE,
-        "rule_set": POLICY_RULE_SET,
-        "id": contract["spec"]["authorization"]["policy"]["id"].clone(),
-        "action": POLICY_ACTION,
-        "target": {
-            "profile": {
-                "id": contract["id"].clone(),
-                "version": contract["version"].clone()
-            },
-            "integration_pack": contract["spec"]["integration_pack"].clone()
-        },
-        "authorization": {
-            "workload": "health-registry-notary",
-            "required_scope": contract["spec"]["authorization"]["required_scope"].clone(),
-            "purposes": [PURPOSE],
-            "legal_basis": contract["spec"]["authorization"]["legal_basis"].clone(),
-            "consent": { "required": false },
-            "mandatory_obligations": []
-        },
-        "decision": {
-            "permit": POLICY_PERMIT,
-            "decision_cache": "disabled",
-            "max_decision_age_ms": contract["spec"]["authorization"]["policy"]
-                ["max_decision_age_ms"].clone(),
-            "unavailable": "deny"
-        }
-    });
-    contract["spec"]["authorization"]["policy"]["hash"] =
-        json!(typed_hash(POLICY_HASH_DOMAIN, &policy_preimage));
-    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
-    let server = FakeRelay::start(
-        WireResponse::ok(
-            serde_json::to_vec(&metadata_value_for_contract(&contract, &contract_hash)).unwrap(),
-        ),
-        result_response(),
-    )
-    .await;
-    client_with_hash(&server, &token_file, &contract_hash)
-        .verify_profile()
-        .await
-        .expect("a bounded non-default country workload is accepted when policy-hash-bound");
-    server.shutdown().await;
-
-    contract["spec"]["authorization"]["workload"] = json!("registry-notary");
-    let stale_policy_contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
-    let server = FakeRelay::start(
-        WireResponse::ok(
-            serde_json::to_vec(&metadata_value_for_contract(
-                &contract,
-                &stale_policy_contract_hash,
-            ))
-            .unwrap(),
-        ),
-        result_response(),
-    )
-    .await;
-    assert_eq!(
-        client_with_hash(&server, &token_file, &stale_policy_contract_hash)
-            .verify_profile()
-            .await
-            .expect_err("changing only the workload invalidates the exact policy binding"),
-        RelayClientError::InvalidProfileMetadata
-    );
     server.shutdown().await;
 }
 
@@ -1981,7 +1527,6 @@ async fn cancelled_credential_reads_share_one_blocking_worker_gate() {
         .expect("credential reload resumes after the original worker gate releases");
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn credential_fifo_is_rejected_promptly_without_a_blocked_reader() {
     let directory = tempfile::tempdir().unwrap();
@@ -1998,47 +1543,6 @@ async fn credential_fifo_is_rejected_promptly_without_a_blocked_reader() {
         .expect("nonblocking FIFO inspection returns promptly");
 
     assert_eq!(result.unwrap_err(), RelayClientError::CredentialUnavailable);
-}
-
-#[tokio::test]
-async fn input_pattern_rejection_performs_no_execute_network_call() {
-    let token_file = TestTokenFile::new(&test_token());
-    let server = FakeRelay::start(metadata_response(), result_response()).await;
-    let client = verified(&server, &token_file).await;
-    assert_eq!(server.execute_calls(), 0);
-    assert_eq!(
-        client
-            .execute(EVALUATION_ID, Zeroizing::new("A!!!!!!!!!!".to_string()))
-            .await
-            .unwrap_err(),
-        RelayClientError::InvalidRequest
-    );
-    assert_eq!(server.execute_calls(), 0);
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn unsupported_input_pattern_is_rejected_during_profile_activation() {
-    let token_file = TestTokenFile::new(&test_token());
-    const CONTRACT_DOMAIN: &[u8] = b"registry.relay.consultation-contract.v1\0";
-    let mut contract = contract_value();
-    contract["spec"]["inputs"][INPUT_NAME]["pattern"] = json!("^.*$");
-    let recomputed = typed_hash(CONTRACT_DOMAIN, &contract);
-    let metadata = metadata_value_for_contract(&contract, &recomputed);
-    let server = FakeRelay::start(
-        WireResponse::ok(serde_json::to_vec(&metadata).unwrap()),
-        result_response(),
-    )
-    .await;
-    assert_eq!(
-        client_with_hash(&server, &token_file, &recomputed)
-            .verify_profile()
-            .await
-            .unwrap_err(),
-        RelayClientError::InvalidProfileMetadata
-    );
-    assert_eq!(server.execute_calls(), 0);
-    server.shutdown().await;
 }
 
 #[tokio::test]
@@ -2086,157 +1590,6 @@ async fn metadata_and_result_require_one_exact_json_media_type() {
 }
 
 #[tokio::test]
-async fn result_identity_provenance_shape_and_outcome_data_are_exact() {
-    let token_file = TestTokenFile::new(&test_token());
-    let server = FakeRelay::start(metadata_response(), result_response()).await;
-    let client = verified(&server, &token_file).await;
-    let mut cases = Vec::new();
-
-    let mut wrong_hash = result_value();
-    wrong_hash["profile"]["contract_hash"] =
-        json!("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    cases.push(serde_json::to_vec(&wrong_hash).unwrap());
-    let mut wrong_evaluation = result_value();
-    wrong_evaluation["notary_evaluation_id"] = json!(CONSULTATION_ID);
-    cases.push(serde_json::to_vec(&wrong_evaluation).unwrap());
-    let mut wrong_consultation = result_value();
-    wrong_consultation["consultation_id"] = json!("01jYZZZZZZZZZZZZZZZZZZZZZZ");
-    cases.push(serde_json::to_vec(&wrong_consultation).unwrap());
-    let mut wrong_provenance = result_value();
-    wrong_provenance["provenance"]["policy_id"] = json!("other.policy");
-    cases.push(serde_json::to_vec(&wrong_provenance).unwrap());
-    let mut unknown = result_value();
-    unknown["data"]["extra"] = json!("SECRET");
-    cases.push(serde_json::to_vec(&unknown).unwrap());
-    let mut no_match_object = result_value();
-    no_match_object["outcome"] = json!("no_match");
-    no_match_object["data"] = json!({"status": null});
-    cases.push(serde_json::to_vec(&no_match_object).unwrap());
-    let mut match_null = result_value();
-    match_null["data"] = Value::Null;
-    cases.push(serde_json::to_vec(&match_null).unwrap());
-    let valid = serde_json::to_string(&result_value()).unwrap();
-    cases.push(
-        valid
-            .replacen("{", "{\"schema\":\"duplicate-secret\",", 1)
-            .into_bytes(),
-    );
-    cases.push(format!("{valid} false").into_bytes());
-
-    for body in cases {
-        server.set_execute(WireResponse::ok(body)).await;
-        assert_eq!(
-            client
-                .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
-                .await
-                .unwrap_err(),
-            RelayClientError::InvalidResult
-        );
-    }
-
-    for (outcome, expected) in [
-        ("no_match", RelayConsultationOutcome::NoMatch),
-        ("ambiguous", RelayConsultationOutcome::Ambiguous),
-    ] {
-        let mut value = result_value();
-        value["outcome"] = json!(outcome);
-        value["data"] = Value::Null;
-        server
-            .set_execute(WireResponse::ok(serde_json::to_vec(&value).unwrap()))
-            .await;
-        let result = client
-            .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
-            .await
-            .unwrap();
-        assert_eq!(result.outcome(), expected);
-        assert!(result.data().is_none());
-    }
-    server.shutdown().await;
-}
-
-#[tokio::test]
-async fn snapshot_generation_and_publication_are_required_ordered_and_profile_scoped() {
-    let token_file = TestTokenFile::new(&test_token());
-    let contract = snapshot_contract_value();
-    let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
-    let metadata = metadata_value_for_contract(&contract, &contract_hash);
-    let valid = snapshot_result_value(&contract_hash);
-    let server = FakeRelay::start(
-        WireResponse::ok(serde_json::to_vec(&metadata).unwrap()),
-        WireResponse::ok(serde_json::to_vec(&valid).unwrap()),
-    )
-    .await;
-    let client = client_with_hash(&server, &token_file, &contract_hash)
-        .verify_profile()
-        .await
-        .unwrap();
-    let mut cases = Vec::new();
-    let mut missing_generation = valid.clone();
-    missing_generation["provenance"]
-        .as_object_mut()
-        .unwrap()
-        .remove("snapshot_generation_id");
-    cases.push(missing_generation);
-    let mut missing_published = valid.clone();
-    missing_published["provenance"]
-        .as_object_mut()
-        .unwrap()
-        .remove("snapshot_published_at");
-    cases.push(missing_published);
-    let mut lowercase_generation = valid.clone();
-    lowercase_generation["provenance"]["snapshot_generation_id"] =
-        json!(SNAPSHOT_GENERATION_ID.to_ascii_lowercase());
-    cases.push(lowercase_generation);
-    let mut invalid_time = valid.clone();
-    invalid_time["provenance"]["snapshot_published_at"] = json!("not-a-time");
-    cases.push(invalid_time);
-    let mut private_digest = valid.clone();
-    private_digest["provenance"]["snapshot_content_digest"] =
-        json!("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-    cases.push(private_digest);
-    let mut private_provider = valid.clone();
-    private_provider["provenance"]["table_provider"] = json!("private-provider");
-    cases.push(private_provider);
-    let mut published_after_acquisition = valid;
-    published_after_acquisition["provenance"]["snapshot_published_at"] =
-        json!("2026-07-12T00:00:01Z");
-    cases.push(published_after_acquisition);
-
-    for value in cases {
-        server
-            .set_execute(WireResponse::ok(serde_json::to_vec(&value).unwrap()))
-            .await;
-        assert_eq!(
-            client
-                .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
-                .await
-                .expect_err("invalid snapshot provenance must fail closed"),
-            RelayClientError::InvalidResult
-        );
-    }
-    server.shutdown().await;
-
-    let live_server = FakeRelay::start(metadata_response(), result_response()).await;
-    let live_client = verified(&live_server, &token_file).await;
-    let mut snapshot_fields_on_live = result_value();
-    snapshot_fields_on_live["provenance"]["snapshot_generation_id"] = json!(SNAPSHOT_GENERATION_ID);
-    snapshot_fields_on_live["provenance"]["snapshot_published_at"] = json!("2026-07-11T23:59:00Z");
-    live_server
-        .set_execute(WireResponse::ok(
-            serde_json::to_vec(&snapshot_fields_on_live).unwrap(),
-        ))
-        .await;
-    assert_eq!(
-        live_client
-            .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
-            .await
-            .expect_err("live profile must reject snapshot-only provenance"),
-        RelayClientError::InvalidResult
-    );
-    live_server.shutdown().await;
-}
-
-#[tokio::test]
 async fn status_size_redirect_and_retry_behavior_is_closed() {
     let token_file = TestTokenFile::new(&test_token());
     let server = FakeRelay::start(metadata_response(), result_response()).await;
@@ -2249,6 +1602,7 @@ async fn status_size_redirect_and_retry_behavior_is_closed() {
         ),
         (StatusCode::FORBIDDEN, RelayClientError::Denied),
         (StatusCode::NOT_FOUND, RelayClientError::ProfileNotFound),
+        (StatusCode::CONFLICT, RelayClientError::ContractMismatch),
         (StatusCode::TOO_MANY_REQUESTS, RelayClientError::RateLimited),
         (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -2314,14 +1668,15 @@ async fn debug_and_errors_never_expose_transport_or_consultation_values() {
         .execute(EVALUATION_ID, Zeroizing::new(INPUT_VALUE.to_string()))
         .await
         .unwrap();
-    let result_debug = format!("{result:?} {:?}", result.data().unwrap());
+    let result_debug = format!("{result:?} {:?}", result.match_data().unwrap());
     let token = test_token();
+    let contract_hash = contract_hash();
     for diagnostic in [unverified_debug, verified_debug, result_debug] {
         for forbidden in [
             token.as_str(),
             &server.origin,
             PROFILE_ID,
-            CONTRACT_HASH,
+            &contract_hash,
             PURPOSE,
             INPUT_NAME,
             INPUT_VALUE,

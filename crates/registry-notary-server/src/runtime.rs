@@ -81,9 +81,6 @@ pub use catalog::*;
 #[cfg(feature = "registry-notary-cel")]
 pub(crate) use cel::validate_cel_claims_for_startup;
 pub(crate) use consultation::ConsultationGroupKeyV1;
-#[cfg(test)]
-#[cfg(feature = "registry-notary-cel")]
-use consultation::RuntimeRelayFactMap;
 pub(crate) use consultation::{
     ActivatedRelayClientSet, ActivatedRelayConsultations, EvaluationAuditSnapshot,
     RelayClientSelectionV1, RelayProfileReadiness, RuntimeRelayConsultationResult,
@@ -94,7 +91,7 @@ use consultation::{
     MAX_BATCH_CONSULTATION_GROUPS_V1,
 };
 #[cfg(test)]
-use consultation::{RuntimeRelayMatchData, RuntimeRelayOutput};
+use consultation::{RuntimeRelayMatchData, RuntimeRelayOutputMap};
 use disclosure::*;
 pub use evaluation::*;
 pub(crate) use matching::*;

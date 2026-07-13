@@ -132,15 +132,24 @@ async fn readiness_reports_each_relay_profile_without_hiding_partial_availabilit
     let unavailable: Arc<dyn crate::runtime::ActivatedRelayConsultations> =
         Arc::new(ReadinessRelay::new(false));
     let contract_hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let expected_result = || {
+        crate::runtime::RuntimeRelayExpectedResult::output_map(BTreeMap::from([(
+            "status".to_string(),
+            registry_notary_core::RelayOutputContract::String {
+                nullable: false,
+                max_bytes: 64,
+            },
+        )]))
+        .expect("output contract is valid")
+    };
     let clients = crate::runtime::ActivatedRelayClientSet::new([
         (
             crate::runtime::RelayClientSelectionV1::new(
                 "example.live-status.exact",
-                "1",
                 contract_hash,
                 "benefit-verification",
                 "subject_id",
-                crate::runtime::RuntimeRelayExpectedResult::PresenceOnly,
+                expected_result(),
             )
             .expect("ready profile selection is valid"),
             ready_profile,
@@ -148,11 +157,10 @@ async fn readiness_reports_each_relay_profile_without_hiding_partial_availabilit
         (
             crate::runtime::RelayClientSelectionV1::new(
                 "example.snapshot-status.exact",
-                "1",
                 contract_hash,
                 "benefit-verification",
                 "subject_id",
-                crate::runtime::RuntimeRelayExpectedResult::PresenceOnly,
+                expected_result(),
             )
             .expect("unavailable profile selection is valid"),
             unavailable,

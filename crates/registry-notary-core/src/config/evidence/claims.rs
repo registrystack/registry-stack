@@ -115,22 +115,21 @@ impl ClaimEvidenceMode {
 pub struct RelayConsultationConfig {
     pub profile: RelayConsultationProfileRef,
     pub inputs: BTreeMap<String, RelayConsultationInput>,
-    /// Complete closed public fact schema expected from the pinned profile.
+    /// Complete closed public output schema expected from the pinned profile.
     #[serde(default)]
-    pub facts: BTreeMap<String, RelayFactContract>,
+    pub outputs: BTreeMap<String, RelayOutputContract>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RelayConsultationProfileRef {
     pub id: String,
-    pub version: String,
     pub contract_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub enum RelayFactContract {
+pub enum RelayOutputContract {
     Boolean {
         #[serde(default)]
         nullable: bool,
@@ -150,10 +149,9 @@ pub enum RelayFactContract {
         #[serde(default)]
         nullable: bool,
     },
-    Presence,
 }
 
-impl RelayFactContract {
+impl RelayOutputContract {
     #[must_use]
     pub const fn nullable(&self) -> bool {
         match self {
@@ -161,14 +159,13 @@ impl RelayFactContract {
             | Self::Integer { nullable, .. }
             | Self::String { nullable, .. }
             | Self::Date { nullable } => *nullable,
-            Self::Presence => false,
         }
     }
 
     #[must_use]
     pub const fn value_type(&self) -> &'static str {
         match self {
-            Self::Boolean { .. } | Self::Presence => "boolean",
+            Self::Boolean { .. } => "boolean",
             Self::Integer { .. } => "integer",
             Self::String { .. } => "string",
             Self::Date { .. } => "date",
@@ -308,26 +305,24 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                             "registry_backed extract rule.field must be one top-level Relay output name",
                         );
                     }
-                    if let Some(fact) = consultation.facts.get(field) {
-                        if claim.value.value_type != fact.value_type()
-                            || claim.value.nullable != fact.nullable()
-                        {
+                    if let Some(output) = consultation.outputs.get(field) {
+                        if claim.value.value_type != output.value_type() || !claim.value.nullable {
                             return invalid_claim_evidence_mode(
                                 claim,
-                                "registry_backed extract claim value type and nullability must match its declared fact",
+                                "registry_backed extract claim value type must match its declared output and remain nullable for no_match",
                             );
                         }
-                    } else if consultation.facts.is_empty() {
+                    } else if consultation.outputs.is_empty() {
                         if claim.value.value_type != "string" {
                             return invalid_claim_evidence_mode(
                                 claim,
-                                "registry_backed extract claim value.type must be string in v1 unless typed facts are declared",
+                                "registry_backed extract claim value.type must be string in v1 unless typed outputs are declared",
                             );
                         }
                     } else {
                         return invalid_claim_evidence_mode(
                             claim,
-                            "registry_backed extract rule.field must name a declared consultation fact",
+                            "registry_backed extract rule.field must name a declared consultation output",
                         );
                     }
                 }
@@ -346,16 +341,16 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                     }
                 }
                 RuleConfig::Cel { bindings, .. } => {
-                    if consultation.facts.is_empty() {
+                    if consultation.outputs.is_empty() {
                         return invalid_claim_evidence_mode(
                             claim,
-                            "registry_backed supports only exists and extract rules in v1 unless a complete typed consultation fact schema is declared",
+                            "registry_backed supports only exists and extract rules in v1 unless a complete typed consultation output schema is declared",
                         );
                     }
                     if !bindings.claims.is_empty() || !bindings.vars.is_empty() {
                         return invalid_claim_evidence_mode(
                             claim,
-                            "registry_backed CEL receives only its consultation facts and declared service request variables",
+                            "registry_backed CEL receives only its consultation outputs and declared service request variables",
                         );
                     }
                     if !matches!(
@@ -480,7 +475,7 @@ pub(in crate::config) fn validate_registry_backed_dependency_modes(
 pub(in crate::config) fn validate_relay_activation_shape(
     claims: &[ClaimDefinition],
 ) -> Result<(), EvidenceConfigError> {
-    let mut facts_by_client = BTreeMap::new();
+    let mut outputs_by_client = BTreeMap::new();
     for claim in claims
         .iter()
         .filter(|claim| claim.evidence_mode.is_registry_backed())
@@ -505,7 +500,7 @@ pub(in crate::config) fn validate_relay_activation_shape(
             input_name.clone(),
         );
         let legacy_output = consultation
-            .facts
+            .outputs
             .is_empty()
             .then(|| match &claim.rule {
                 RuleConfig::Extract { field, .. } => Some(field.clone()),
@@ -513,9 +508,9 @@ pub(in crate::config) fn validate_relay_activation_shape(
                 RuleConfig::Cel { .. } | RuleConfig::Plugin { .. } => None,
             })
             .flatten();
-        match facts_by_client.get_mut(&client_key) {
-            Some((expected_facts, expected_legacy_output))
-                if expected_facts != &consultation.facts =>
+        match outputs_by_client.get_mut(&client_key) {
+            Some((expected_outputs, expected_legacy_output))
+                if expected_outputs != &consultation.outputs =>
             {
                 return invalid_claim_evidence_mode(
                     claim,
@@ -536,7 +531,7 @@ pub(in crate::config) fn validate_relay_activation_shape(
                 *expected = legacy_output;
             }
             None => {
-                facts_by_client.insert(client_key, (consultation.facts.clone(), legacy_output));
+                outputs_by_client.insert(client_key, (consultation.outputs.clone(), legacy_output));
             }
             Some(_) => {}
         }
@@ -628,22 +623,16 @@ fn validate_consultation(
             "consultation profile.id must match [a-z][a-z0-9._-]{0,95}",
         );
     }
-    if !is_profile_version(&consultation.profile.version) {
-        return invalid_claim_evidence_mode(
-            claim,
-            "consultation profile.version must match [1-9][0-9]{0,9}",
-        );
-    }
     validate_sha256_uri(&consultation.profile.contract_hash).map_err(|reason| {
         EvidenceConfigError::InvalidClaimEvidenceMode {
             claim: claim.id.clone(),
             reason: format!("consultation profile.contract_hash {reason}"),
         }
     })?;
-    if !(1..=4).contains(&consultation.inputs.len()) {
+    if !(1..=16).contains(&consultation.inputs.len()) {
         return invalid_claim_evidence_mode(
             claim,
-            "consultation inputs must contain one to four target identifier mappings in v1",
+            "consultation inputs must contain one to sixteen typed request mappings in v1",
         );
     }
     let mut request_paths = BTreeSet::new();
@@ -661,35 +650,33 @@ fn validate_consultation(
             );
         }
     }
-    if consultation.facts.len() > 64 {
+    if !(1..=64).contains(&consultation.outputs.len()) {
         return invalid_claim_evidence_mode(
             claim,
-            "consultation facts cannot contain more than 64 entries",
+            "consultation outputs must contain one to 64 entries",
         );
     }
-    for (fact_name, fact) in &consultation.facts {
-        if !is_input_name(fact_name) {
+    for (output_name, output) in &consultation.outputs {
+        if !is_input_name(output_name) || matches!(output_name.as_str(), "matched" | "outcome") {
             return invalid_claim_evidence_mode(
                 claim,
-                "consultation fact names must match [a-z][a-z0-9_]{0,95}",
+                "consultation output names must match [a-z][a-z0-9_]{0,95} and cannot be matched or outcome",
             );
         }
-        let valid = match fact {
-            RelayFactContract::String { max_bytes, .. } => (1..=64 * 1024).contains(max_bytes),
-            RelayFactContract::Integer {
+        let valid = match output {
+            RelayOutputContract::String { max_bytes, .. } => (1..=64 * 1024).contains(max_bytes),
+            RelayOutputContract::Integer {
                 minimum, maximum, ..
             } => {
                 const MAX_SAFE_INTEGER: i64 = (1_i64 << 53) - 1;
                 minimum <= maximum && *minimum >= -MAX_SAFE_INTEGER && *maximum <= MAX_SAFE_INTEGER
             }
-            RelayFactContract::Boolean { .. }
-            | RelayFactContract::Date { .. }
-            | RelayFactContract::Presence => true,
+            RelayOutputContract::Boolean { .. } | RelayOutputContract::Date { .. } => true,
         };
         if !valid {
             return invalid_claim_evidence_mode(
                 claim,
-                "consultation fact bounds must be positive and JSON-interoperable",
+                "consultation output bounds must be positive and JSON-interoperable",
             );
         }
     }
@@ -720,13 +707,6 @@ fn is_input_name(value: &str) -> bool {
     matches!(bytes.next(), Some(b'a'..=b'z'))
         && value.len() <= 96
         && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
-}
-
-fn is_profile_version(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 10
-        && matches!(value.as_bytes().first(), Some(b'1'..=b'9'))
-        && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 fn invalid_claim_evidence_mode<T>(

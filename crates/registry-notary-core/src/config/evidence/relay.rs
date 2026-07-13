@@ -12,16 +12,24 @@ use super::*;
 const MAX_RELAY_BASE_URL_BYTES: usize = 2_048;
 const MAX_RELAY_TOKEN_FILE_BYTES: usize = 4_096;
 const MAX_RELAY_PRIVATE_CIDRS: usize = 16;
+const MAX_RELAY_IN_FLIGHT: usize = 64;
+
+const fn default_relay_max_in_flight() -> usize {
+    8
+}
 
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RelayConnectionConfig {
     pub base_url: String,
+    pub workload_client_id: String,
     pub token_file: PathBuf,
     #[serde(default)]
     pub allowed_private_cidrs: Vec<IpNet>,
     #[serde(default)]
     pub allow_insecure_localhost: bool,
+    #[serde(default = "default_relay_max_in_flight")]
+    pub max_in_flight: usize,
 }
 
 impl std::fmt::Debug for RelayConnectionConfig {
@@ -35,6 +43,7 @@ impl std::fmt::Debug for RelayConnectionConfig {
                 &self.allowed_private_cidrs.len(),
             )
             .field("allow_insecure_localhost", &self.allow_insecure_localhost)
+            .field("max_in_flight", &self.max_in_flight)
             .finish()
     }
 }
@@ -46,6 +55,11 @@ impl RelayConnectionConfig {
             || self.base_url.trim() != self.base_url
         {
             return invalid_relay("base_url must be a non-empty URL of bounded length");
+        }
+        if !stable_workload_id(&self.workload_client_id) {
+            return invalid_relay(
+                "workload_client_id must be a stable lowercase workload identifier",
+            );
         }
         let Some(origin) = parse_relay_origin(&self.base_url) else {
             return invalid_relay(
@@ -66,6 +80,9 @@ impl RelayConnectionConfig {
             return invalid_relay("token_file must be a bounded absolute canonical file path");
         }
         validate_private_cidrs(&self.allowed_private_cidrs)?;
+        if !(1..=MAX_RELAY_IN_FLIGHT).contains(&self.max_in_flight) {
+            return invalid_relay("max_in_flight must be between 1 and 64");
+        }
         Ok(())
     }
 
@@ -73,6 +90,13 @@ impl RelayConnectionConfig {
     pub fn uses_insecure_url(&self) -> bool {
         self.base_url.starts_with("http://")
     }
+}
+
+fn stable_workload_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && value.len() <= 96
+        && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-'))
 }
 
 fn is_loopback_origin(origin: &url::Url) -> bool {

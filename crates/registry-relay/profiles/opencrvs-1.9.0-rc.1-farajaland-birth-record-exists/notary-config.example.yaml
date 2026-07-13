@@ -26,6 +26,7 @@ evidence:
   allowed_purposes: [civil-registration-verification]
   relay:
     base_url: "https://relay.example.gov"
+    workload_client_id: registry-notary
     # Mount a mode-0600 Relay-issued workload JWT and replace it atomically.
     token_file: /var/run/secrets/registry-notary/relay-access-token
     allowed_private_cidrs: []
@@ -41,7 +42,7 @@ evidence:
             profile:
               id: opencrvs.dci.farajaland.birth-record-exists.exact
               version: "1"
-              contract_hash: sha256:4153c6c95c0454c6278a239ed096715f08547666b03e5d8b7003f32d6c29e4a6
+              contract_hash: sha256:c86ebb8e721fe74a26b5c1726779e352ff120003c503b1a8e45740554218d583
             inputs:
               uin: target.id
       value:

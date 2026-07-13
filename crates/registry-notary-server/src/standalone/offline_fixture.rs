@@ -11,7 +11,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use registry_notary_core::{
     ClaimEvidenceMode, ClaimRef, ClaimResultView, EvaluateRequest, EvidenceAuthMode,
-    EvidenceConfig, EvidenceConfigError, EvidenceError, RelayFactContract, SourceBindingConfig,
+    EvidenceConfig, EvidenceConfigError, EvidenceError, RelayOutputContract, SourceBindingConfig,
     StandaloneRegistryNotaryConfig, SubjectRequest,
 };
 use registry_platform_audit::AuditKeyHasher;
@@ -24,7 +24,7 @@ use crate::cel_worker::{CelWorker, CelWorkerConfig, CelWorkerError};
 use crate::relay_client::RelayClientError;
 use crate::runtime::consultation::{
     ActivatedRelayConsultations, ConsultationGroupKeyV1, RuntimeRelayConsultationResult,
-    RuntimeRelayFactMap, RuntimeRelayMatchData, RuntimeRelayOutcome,
+    RuntimeRelayMatchData, RuntimeRelayOutcome, RuntimeRelayOutputMap,
 };
 use crate::runtime::validate_cel_claims_for_startup;
 use crate::{EvidenceStore, RegistryNotaryRuntime, SourceReader};
@@ -60,7 +60,7 @@ pub enum OfflineRelayOutcome {
 
 /// One exact, decoder-validated Relay result for an offline authoring run.
 ///
-/// This is not a runtime fact injection interface. It is accepted only by the
+/// This is not a runtime output injection interface. It is accepted only by the
 /// environment-free harness, must bind to a compiled Notary profile, contract,
 /// purpose, complete input-name set, and canonical input values, and is
 /// released through the same
@@ -68,12 +68,11 @@ pub enum OfflineRelayOutcome {
 #[doc(hidden)]
 pub struct OfflineRelayConsultation {
     profile_id: String,
-    profile_version: String,
     profile_contract_hash: String,
     purpose: String,
     inputs: BTreeMap<String, Zeroizing<String>>,
     outcome: OfflineRelayOutcome,
-    facts: BTreeMap<String, Value>,
+    outputs: BTreeMap<String, Value>,
 }
 
 impl OfflineRelayConsultation {
@@ -81,22 +80,20 @@ impl OfflineRelayConsultation {
     #[must_use]
     pub fn decoded(
         profile_id: impl Into<String>,
-        profile_version: impl Into<String>,
         profile_contract_hash: impl Into<String>,
         purpose: impl Into<String>,
         input_name: impl Into<String>,
         input_value: impl Into<String>,
         outcome: OfflineRelayOutcome,
-        facts: BTreeMap<String, Value>,
+        outputs: BTreeMap<String, Value>,
     ) -> Self {
         Self::decoded_inputs(
             profile_id,
-            profile_version,
             profile_contract_hash,
             purpose,
             BTreeMap::from([(input_name.into(), input_value.into())]),
             outcome,
-            facts,
+            outputs,
         )
     }
 
@@ -105,16 +102,14 @@ impl OfflineRelayConsultation {
     #[must_use]
     pub fn decoded_inputs(
         profile_id: impl Into<String>,
-        profile_version: impl Into<String>,
         profile_contract_hash: impl Into<String>,
         purpose: impl Into<String>,
         inputs: BTreeMap<String, String>,
         outcome: OfflineRelayOutcome,
-        facts: BTreeMap<String, Value>,
+        outputs: BTreeMap<String, Value>,
     ) -> Self {
         Self {
             profile_id: profile_id.into(),
-            profile_version: profile_version.into(),
             profile_contract_hash: profile_contract_hash.into(),
             purpose: purpose.into(),
             inputs: inputs
@@ -122,7 +117,7 @@ impl OfflineRelayConsultation {
                 .map(|(name, value)| (name, Zeroizing::new(value)))
                 .collect(),
             outcome,
-            facts,
+            outputs,
         }
     }
 }
@@ -132,13 +127,12 @@ impl std::fmt::Debug for OfflineRelayConsultation {
         formatter
             .debug_struct("OfflineRelayConsultation")
             .field("profile_id", &self.profile_id)
-            .field("profile_version", &self.profile_version)
             .field("profile_contract_hash", &self.profile_contract_hash)
             .field("purpose", &self.purpose)
             .field("input_names", &self.inputs.keys().collect::<Vec<_>>())
             .field("input_values", &"[REDACTED]")
             .field("outcome", &self.outcome)
-            .field("facts", &"[REDACTED]")
+            .field("outputs", &"[REDACTED]")
             .finish()
     }
 }
@@ -598,7 +592,6 @@ fn error_class(error: &EvidenceError) -> OfflineNotaryErrorClass {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct OfflineRelayKey {
     profile_id: String,
-    profile_version: String,
     profile_contract_hash: String,
     purpose: String,
     inputs: BTreeMap<String, String>,
@@ -606,8 +599,8 @@ struct OfflineRelayKey {
 
 struct OfflineRelayEntry {
     outcome: OfflineRelayOutcome,
-    facts: BTreeMap<String, Value>,
-    fact_contracts: BTreeMap<String, RelayFactContract>,
+    outputs: BTreeMap<String, Value>,
+    output_contracts: BTreeMap<String, RelayOutputContract>,
 }
 
 struct OfflineActivatedRelay {
@@ -622,19 +615,19 @@ impl OfflineActivatedRelay {
     ) -> Result<Self, OfflineNotaryHarnessError> {
         let mut entries = BTreeMap::new();
         for consultation in consultations {
-            if consultation.outcome != OfflineRelayOutcome::Match && !consultation.facts.is_empty()
+            if consultation.outcome != OfflineRelayOutcome::Match
+                && !consultation.outputs.is_empty()
             {
                 return Err(OfflineNotaryHarnessError::InvalidRelayEvidence);
             }
             if consultation.outcome == OfflineRelayOutcome::Match {
-                RuntimeRelayFactMap::from_json(consultation.facts.clone())
+                RuntimeRelayOutputMap::from_json(consultation.outputs.clone())
                     .map_err(|_| OfflineNotaryHarnessError::InvalidRelayEvidence)?;
             }
-            let fact_contracts = configured_fact_contracts(evidence, &consultation)
+            let output_contracts = configured_output_contracts(evidence, &consultation)
                 .ok_or(OfflineNotaryHarnessError::InvalidRelayEvidence)?;
             let key = OfflineRelayKey {
                 profile_id: consultation.profile_id,
-                profile_version: consultation.profile_version,
                 profile_contract_hash: consultation.profile_contract_hash,
                 purpose: consultation.purpose,
                 inputs: consultation
@@ -648,8 +641,8 @@ impl OfflineActivatedRelay {
                     key,
                     OfflineRelayEntry {
                         outcome: consultation.outcome,
-                        facts: consultation.facts,
-                        fact_contracts,
+                        outputs: consultation.outputs,
+                        output_contracts,
                     },
                 )
                 .is_some()
@@ -673,7 +666,6 @@ impl OfflineActivatedRelay {
         self.entries
             .get(&OfflineRelayKey {
                 profile_id: key.profile_id().to_string(),
-                profile_version: key.profile_version().to_string(),
                 profile_contract_hash: key.profile_contract_hash().to_string(),
                 purpose: key.canonical_purpose().to_string(),
                 inputs: key
@@ -683,8 +675,8 @@ impl OfflineActivatedRelay {
                     .collect(),
             })
             .filter(|entry| {
-                key.expected_fact_contracts()
-                    .is_some_and(|contracts| contracts == &entry.fact_contracts)
+                key.expected_output_contracts()
+                    .is_some_and(|contracts| contracts == &entry.output_contracts)
             })
             .ok_or(RelayClientError::InvalidRequest)
     }
@@ -723,8 +715,8 @@ impl ActivatedRelayConsultations for OfflineActivatedRelay {
         let (outcome, match_data) = match entry.outcome {
             OfflineRelayOutcome::Match => (
                 RuntimeRelayOutcome::Match,
-                Some(RuntimeRelayMatchData::FactMap(
-                    RuntimeRelayFactMap::from_json(entry.facts.clone())?,
+                Some(RuntimeRelayMatchData::OutputMap(
+                    RuntimeRelayOutputMap::from_json(entry.outputs.clone())?,
                 )),
             ),
             OfflineRelayOutcome::NoMatch => (RuntimeRelayOutcome::NoMatch, None),
@@ -739,10 +731,10 @@ impl ActivatedRelayConsultations for OfflineActivatedRelay {
     }
 }
 
-fn configured_fact_contracts(
+fn configured_output_contracts(
     evidence: &EvidenceConfig,
     offline: &OfflineRelayConsultation,
-) -> Option<BTreeMap<String, RelayFactContract>> {
+) -> Option<BTreeMap<String, RelayOutputContract>> {
     evidence.claims.iter().find_map(|claim| {
         let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
             return None;
@@ -750,11 +742,10 @@ fn configured_fact_contracts(
         let (_, consultation) = consultations.first_key_value()?;
         (claim.purpose.as_deref() == Some(offline.purpose.as_str())
             && consultation.profile.id == offline.profile_id
-            && consultation.profile.version == offline.profile_version
             && consultation.profile.contract_hash == offline.profile_contract_hash
             && consultation.inputs.keys().eq(offline.inputs.keys())
-            && !consultation.facts.is_empty())
-        .then(|| consultation.facts.clone())
+            && !consultation.outputs.is_empty())
+        .then(|| consultation.outputs.clone())
     })
 }
 

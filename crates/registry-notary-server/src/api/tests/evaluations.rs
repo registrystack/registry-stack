@@ -49,7 +49,6 @@ async fn ambiguous_relay_response_keeps_ids_only_in_restricted_audit_context() {
             registry_notary_core::RelayConsultationConfig {
                 profile: registry_notary_core::RelayConsultationProfileRef {
                     id: "dhis2.tracker.enrollment-status.exact".to_string(),
-                    version: "1".to_string(),
                     contract_hash:
                         "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
                             .to_string(),
@@ -58,13 +57,20 @@ async fn ambiguous_relay_response_keeps_ids_only_in_restricted_audit_context() {
                     "tracked_entity".to_string(),
                     registry_notary_core::RelayConsultationInput::TargetId,
                 )]),
-                facts: BTreeMap::new(),
+                outputs: BTreeMap::from([(
+                    "registration_status".to_string(),
+                    registry_notary_core::RelayOutputContract::String {
+                        nullable: true,
+                        max_bytes: 64,
+                    },
+                )]),
             },
         )]),
     };
     claim.purpose = Some("test".to_string());
     claim.required_scopes = vec!["registry:evidence".to_string()];
     claim.value.value_type = "string".to_string();
+    claim.value.nullable = true;
     claim.rule = registry_notary_core::RuleConfig::Extract {
         source: "enrollment".to_string(),
         field: "registration_status".to_string(),

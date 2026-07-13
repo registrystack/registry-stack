@@ -30,6 +30,7 @@ evidence:
     as_of_date: { from: request.variables.as_of_date, type: date }
   relay:
     base_url: https://relay.internal.example
+    workload_client_id: registry-notary
     token_file: /run/secrets/registry-notary-relay.jwt
   signing_keys:
     issuer-key:
@@ -49,11 +50,9 @@ evidence:
           enrollment:
             profile: &person_profile
               id: example.person.exact
-              version: "1"
               contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
             inputs: { subject_id: target.id }
-            facts: &person_facts
-              exists: { type: presence }
+            outputs: &person_outputs
               active: { type: boolean, nullable: true }
               birth_date: { type: date, nullable: true }
               category: { type: string, nullable: true, max_bytes: 32 }
@@ -76,7 +75,7 @@ evidence:
           enrollment:
             profile: *person_profile
             inputs: { subject_id: target.id }
-            facts: *person_facts
+            outputs: *person_outputs
       value: { type: boolean, nullable: true }
       purpose: benefit-verification
       required_scopes: [registry:person:read]
@@ -93,7 +92,7 @@ evidence:
           enrollment:
             profile: *person_profile
             inputs: { subject_id: target.id }
-            facts: *person_facts
+            outputs: *person_outputs
       value: { type: date, nullable: true }
       purpose: benefit-verification
       required_scopes: [registry:person:read]
@@ -110,7 +109,7 @@ evidence:
           enrollment:
             profile: *person_profile
             inputs: { subject_id: target.id }
-            facts: *person_facts
+            outputs: *person_outputs
       value: { type: string, nullable: true }
       purpose: benefit-verification
       required_scopes: [registry:person:read]
@@ -127,13 +126,13 @@ evidence:
           enrollment:
             profile: *person_profile
             inputs: { subject_id: target.id }
-            facts: *person_facts
+            outputs: *person_outputs
       value: { type: boolean, nullable: false }
       purpose: benefit-verification
       required_scopes: [registry:person:read]
       rule:
         type: cel
-        expression: enrollment.exists
+        expression: enrollment.matched
       formats: *formats
       disclosure: *disclosure
     - id: age-years
@@ -146,14 +145,14 @@ evidence:
           enrollment:
             profile: *person_profile
             inputs: { subject_id: target.id }
-            facts: *person_facts
+            outputs: *person_outputs
       value: { type: integer, nullable: true }
       purpose: benefit-verification
       required_scopes: [registry:person:read]
       rule:
         type: cel
         expression: >-
-          enrollment.exists && enrollment.birth_date != null
+          enrollment.matched && enrollment.birth_date != null
             ? date.age_on(enrollment.birth_date, as_of_date)
             : null
       formats: *formats
@@ -168,12 +167,11 @@ evidence:
           other:
             profile:
               id: example.other.exact
-              version: "2"
               contract_hash: sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
             inputs: { subject_id: target.id }
-            facts:
-              status: { type: string, nullable: false, max_bytes: 16 }
-      value: { type: string, nullable: false }
+            outputs:
+              status: { type: string, nullable: true, max_bytes: 16 }
+      value: { type: string, nullable: true }
       purpose: other-verification
       required_scopes: [registry:other:read]
       rule: { type: extract, source: other, field: status }
@@ -235,38 +233,35 @@ fn worker_config() -> CelWorkerConfig {
 
 fn relay(
     profile_id: &str,
-    version: &str,
     contract_hash: &str,
     purpose: &str,
     input: &str,
     outcome: OfflineRelayOutcome,
-    facts: BTreeMap<String, Value>,
+    outputs: BTreeMap<String, Value>,
 ) -> OfflineRelayConsultation {
     OfflineRelayConsultation::decoded(
         profile_id,
-        version,
         contract_hash,
         purpose,
         "subject_id",
         input,
         outcome,
-        facts,
+        outputs,
     )
 }
 
 fn person_relay(
     input: &str,
     outcome: OfflineRelayOutcome,
-    facts: BTreeMap<String, Value>,
+    outputs: BTreeMap<String, Value>,
 ) -> OfflineRelayConsultation {
     relay(
         "example.person.exact",
-        "1",
         CONTRACT_HASH,
         "benefit-verification",
         input,
         outcome,
-        facts,
+        outputs,
     )
 }
 
@@ -278,7 +273,6 @@ fn harness() -> OfflineNotaryHarness {
                 "person-1",
                 OfflineRelayOutcome::Match,
                 BTreeMap::from([
-                    ("exists".to_string(), json!(true)),
                     ("active".to_string(), json!(true)),
                     ("birth_date".to_string(), json!("2000-02-29")),
                     ("category".to_string(), Value::Null),
@@ -292,7 +286,6 @@ fn harness() -> OfflineNotaryHarness {
             ),
             relay(
                 "example.other.exact",
-                "2",
                 OTHER_CONTRACT_HASH,
                 "other-verification",
                 "person-2",
@@ -351,7 +344,6 @@ async fn composite_consultation_fixture_binds_the_complete_input_map() {
     }
     let fixture = OfflineRelayConsultation::decoded_inputs(
         "example.person.exact",
-        "1",
         CONTRACT_HASH,
         "benefit-verification",
         BTreeMap::from([
@@ -360,7 +352,6 @@ async fn composite_consultation_fixture_binds_the_complete_input_map() {
         ]),
         OfflineRelayOutcome::Match,
         BTreeMap::from([
-            ("exists".to_string(), json!(true)),
             ("active".to_string(), json!(true)),
             ("birth_date".to_string(), json!("2000-02-29")),
             ("category".to_string(), Value::Null),
@@ -456,7 +447,8 @@ async fn guarded_date_age_policy_receives_compiled_request_variable_after_relay(
             configured_expression,
             json!({
                 "enrollment": {
-                    "exists": true,
+                    "matched": true,
+                    "outcome": "match",
                     "active": true,
                     "birth_date": "2000-02-29",
                     "category": null,
@@ -677,7 +669,6 @@ fn decoder_evidence_must_bind_to_a_compiled_profile_contract() {
             "person-1",
             OfflineRelayOutcome::Match,
             BTreeMap::from([
-                ("exists".to_string(), json!(true)),
                 ("active".to_string(), json!(true)),
                 ("birth_date".to_string(), json!("2000-02-29")),
                 ("category".to_string(), json!("CURRENT")),
@@ -691,13 +682,11 @@ fn decoder_evidence_must_bind_to_a_compiled_profile_contract() {
         config(),
         vec![relay(
             "example.person.exact",
-            "1",
             OTHER_CONTRACT_HASH,
             "benefit-verification",
             "person-1",
             OfflineRelayOutcome::Match,
             BTreeMap::from([
-                ("exists".to_string(), json!(true)),
                 ("active".to_string(), json!(true)),
                 ("birth_date".to_string(), json!("2000-02-29")),
                 ("category".to_string(), json!("CURRENT")),

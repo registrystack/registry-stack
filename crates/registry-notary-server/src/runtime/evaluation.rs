@@ -1628,7 +1628,7 @@ fn plan_relay_consultations(
             .first_key_value()
             .filter(|_| consultations.len() == 1)
             .ok_or(EvidenceError::RuleEvaluationFailed)?;
-        if !(1..=4).contains(&consultation.inputs.len()) {
+        if !(1..=16).contains(&consultation.inputs.len()) {
             return Err(EvidenceError::RuleEvaluationFailed);
         }
         let inputs = consultation
@@ -1658,7 +1658,6 @@ fn plan_relay_consultations(
             principal.principal_id.clone(),
             claim.required_scopes.clone(),
             consultation.profile.id.as_str(),
-            consultation.profile.version.as_str(),
             consultation.profile.contract_hash.as_str(),
             purpose,
             inputs,
@@ -1685,44 +1684,13 @@ fn plan_relay_consultations(
 }
 
 fn relay_expected_result(
-    evidence: &EvidenceConfig,
+    _evidence: &EvidenceConfig,
     selected: &registry_notary_core::RelayConsultationConfig,
-    purpose: &str,
-    input_names: &[String],
+    _purpose: &str,
+    _input_names: &[String],
 ) -> Result<RuntimeRelayExpectedResult, EvidenceError> {
-    if !selected.facts.is_empty() {
-        return RuntimeRelayExpectedResult::fact_map(selected.facts.clone())
-            .map_err(|_| EvidenceError::InvalidRequest);
-    }
-    let mut projected_output: Option<&str> = None;
-    for claim in &evidence.claims {
-        let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
-            continue;
-        };
-        let Some((_, consultation)) = consultations.first_key_value() else {
-            continue;
-        };
-        let same_input_names = consultation.inputs.keys().eq(input_names.iter());
-        if consultation.profile != selected.profile
-            || claim.purpose.as_deref() != Some(purpose)
-            || !same_input_names
-        {
-            continue;
-        }
-        if let RuleConfig::Extract { field, .. } = &claim.rule {
-            match projected_output {
-                Some(expected) if expected != field => {
-                    return Err(EvidenceError::InvalidRequest);
-                }
-                None => projected_output = Some(field),
-                Some(_) => {}
-            }
-        }
-    }
-    projected_output.map_or(Ok(RuntimeRelayExpectedResult::PresenceOnly), |name| {
-        RuntimeRelayExpectedResult::projected_string(name)
-            .map_err(|_| EvidenceError::InvalidRequest)
-    })
+    RuntimeRelayExpectedResult::output_map(selected.outputs.clone())
+        .map_err(|_| EvidenceError::InvalidRequest)
 }
 
 /// Derive the evaluation policy identity for provenance from stored
@@ -1858,7 +1826,7 @@ pub(super) async fn evaluate_claim_task(
                 RuntimeRelayOutcome::Match => materialize_relay_match(&claim, &result)?,
                 RuntimeRelayOutcome::NoMatch
                     if matches!(&claim.rule, RuleConfig::Extract { .. })
-                        && registry_claim_has_typed_facts(&claim) =>
+                        && registry_claim_has_typed_outputs(&claim) =>
                 {
                     materialize_relay_absence(&claim)?
                 }
@@ -2045,26 +2013,15 @@ pub(super) fn materialize_relay_match(
         .first_key_value()
         .filter(|_| consultations.len() == 1)
         .ok_or(EvidenceError::RuleEvaluationFailed)?;
-    let record = if !consultation.facts.is_empty() {
-        result
-            .facts()
-            .ok_or(EvidenceError::RuleEvaluationFailed)?
-            .to_json_object()
-    } else {
-        match &claim.rule {
-            RuleConfig::Exists { .. } => serde_json::Map::new(),
-            RuleConfig::Extract { .. } => {
-                let output = result.output().ok_or(EvidenceError::RuleEvaluationFailed)?;
-                serde_json::Map::from_iter([(
-                    output.name().to_string(),
-                    Value::String(output.value().to_string()),
-                )])
-            }
-            RuleConfig::Cel { .. } | RuleConfig::Plugin { .. } => {
-                return Err(EvidenceError::RuleEvaluationFailed)
-            }
-        }
-    };
+    if consultation.outputs.is_empty() {
+        return Err(EvidenceError::RuleEvaluationFailed);
+    }
+    let mut record = result
+        .outputs()
+        .ok_or(EvidenceError::RuleEvaluationFailed)?
+        .to_json_object();
+    record.insert("matched".to_string(), Value::Bool(true));
+    record.insert("outcome".to_string(), Value::String("match".to_string()));
     Ok(BTreeMap::from([(
         consultation_name.clone(),
         Value::Object(record),
@@ -2081,28 +2038,24 @@ pub(super) fn materialize_relay_absence(
         .first_key_value()
         .filter(|_| consultations.len() == 1 && !consultations.is_empty())
         .ok_or(EvidenceError::RuleEvaluationFailed)?;
-    let record = consultation
-        .facts
+    let mut record: serde_json::Map<String, Value> = consultation
+        .outputs
         .iter()
-        .filter_map(|(name, fact)| match fact {
-            registry_notary_core::RelayFactContract::Presence => {
-                Some((name.clone(), Value::Bool(false)))
-            }
-            fact if fact.nullable() => Some((name.clone(), Value::Null)),
-            _ => None,
-        })
+        .map(|(name, _)| (name.clone(), Value::Null))
         .collect();
+    record.insert("matched".to_string(), Value::Bool(false));
+    record.insert("outcome".to_string(), Value::String("no_match".to_string()));
     Ok(BTreeMap::from([(
         consultation_name.clone(),
         Value::Object(record),
     )]))
 }
 
-fn registry_claim_has_typed_facts(claim: &ClaimDefinition) -> bool {
+fn registry_claim_has_typed_outputs(claim: &ClaimDefinition) -> bool {
     let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
         return false;
     };
     consultations
         .first_key_value()
-        .is_some_and(|(_, consultation)| !consultation.facts.is_empty())
+        .is_some_and(|(_, consultation)| !consultation.outputs.is_empty())
 }

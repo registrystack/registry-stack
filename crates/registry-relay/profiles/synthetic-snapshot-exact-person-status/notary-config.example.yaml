@@ -27,6 +27,7 @@ evidence:
   allowed_purposes: [benefit-status-verification]
   relay:
     base_url: "https://relay.example.gov"
+    workload_client_id: registry-notary
     # Mount a mode-0600 Relay-issued workload JWT and replace it atomically when rotating.
     # Relay is the sole cryptographic and semantic verifier on every request.
     token_file: /var/run/secrets/registry-notary/relay-access-token
@@ -43,7 +44,7 @@ evidence:
             profile:
               id: synthetic.snapshot.person-status.exact
               version: "1"
-              contract_hash: sha256:4c92251face2f70003931b4d49a160ca52f47b5bf29d83e48216b82c6d01b773
+              contract_hash: sha256:108759925d30fa99a77e99b9ef9c37c45291acae0431f43d6a2d81f5d2ca72a2
             inputs:
               person_id: target.id
       value:
@@ -69,7 +70,7 @@ evidence:
             profile:
               id: synthetic.snapshot.person-status.exact
               version: "1"
-              contract_hash: sha256:4c92251face2f70003931b4d49a160ca52f47b5bf29d83e48216b82c6d01b773
+              contract_hash: sha256:108759925d30fa99a77e99b9ef9c37c45291acae0431f43d6a2d81f5d2ca72a2
             inputs:
               person_id: target.id
       value:

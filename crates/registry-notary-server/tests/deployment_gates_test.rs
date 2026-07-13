@@ -436,9 +436,11 @@ fn registry_backed_config(tmp: &tempfile::TempDir) -> StandaloneRegistryNotaryCo
         .build();
     config.evidence.relay = Some(registry_notary_core::RelayConnectionConfig {
         base_url: "http://127.0.0.1:1".to_string(),
+        workload_client_id: "registry-notary".to_string(),
         token_file: tmp.path().join("relay-workload.jwt"),
         allowed_private_cidrs: Vec::new(),
         allow_insecure_localhost: true,
+        max_in_flight: 8,
     });
     config.evidence.claims[0] = serde_norway::from_str(
         r#"
@@ -452,12 +454,14 @@ evidence_mode:
     farmer:
       profile:
         id: example.farmed-land-size.exact
-        version: "1"
         contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       inputs:
         subject_id: target.id
+      outputs:
+        total_farmed_area: { type: string, nullable: true, max_bytes: 64 }
 value:
   type: string
+  nullable: true
 purpose: benefit-verification
 required_scopes: [farmer_registry:evidence_verification]
 rule:

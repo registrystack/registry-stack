@@ -11,6 +11,7 @@ fn relay_connection() -> RelayConnectionConfig {
     serde_norway::from_str(
         r#"
 base_url: https://relay.internal.example
+workload_client_id: registry-notary
 token_file: /run/secrets/registry-notary-relay.jwt
 "#,
     )
@@ -24,14 +25,19 @@ fn registry_mode(consultation_name: &str) -> ClaimEvidenceMode {
             RelayConsultationConfig {
                 profile: RelayConsultationProfileRef {
                     id: "example.person-status.exact".to_string(),
-                    version: "1".to_string(),
                     contract_hash: CONTRACT_HASH.to_string(),
                 },
                 inputs: std::collections::BTreeMap::from([(
                     "subject_id".to_string(),
                     RelayConsultationInput::TargetId,
                 )]),
-                facts: std::collections::BTreeMap::new(),
+                outputs: std::collections::BTreeMap::from([(
+                    "registration_status".to_string(),
+                    RelayOutputContract::String {
+                        nullable: true,
+                        max_bytes: 64,
+                    },
+                )]),
             },
         )]),
     }
@@ -43,6 +49,7 @@ fn make_registry_backed(claim: &mut ClaimDefinition, consultation_name: &str) {
     claim.purpose = Some("benefit-verification".to_string());
     claim.required_scopes = vec!["registry:consult:person-status".to_string()];
     claim.value.value_type = "string".to_string();
+    claim.value.nullable = true;
     claim.rule = RuleConfig::Extract {
         source: consultation_name.to_string(),
         field: "registration_status".to_string(),
@@ -169,7 +176,6 @@ evidence_mode:
     person_status:
       profile:
         id: example.person-status.exact
-        version: "1"
         contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       inputs:
         subject_id: target.id
@@ -194,7 +200,6 @@ evidence_mode:
     person_status:
       profile:
         id: example.person-status.exact
-        version: "1"
         contract_hash: {CONTRACT_HASH}
       inputs:
         subject_id: {sensitive_target}
@@ -221,7 +226,6 @@ evidence_mode:
     birth_record:
       profile:
         id: example.birth-record.exact
-        version: "1"
         contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       inputs:
         uin: request.target.identifiers.UIN
@@ -257,7 +261,6 @@ rule:
             r#"
 profile:
   id: example.birth-record.exact
-  version: "1"
   contract_hash: {CONTRACT_HASH}
 inputs:
   uin: {invalid}
@@ -303,7 +306,7 @@ fn relay_activation_allows_independent_profiles_purposes_inputs_and_outputs() {
     exists_only.evidence.claims.remove(0);
     exists_only
         .validate()
-        .expect("an exists-only journey selects the explicit presence-only Relay contract");
+        .expect("an exists-only journey retains the declared Relay output contract");
 
     let mut independent = config.clone();
     let ClaimEvidenceMode::RegistryBacked { consultations } =
@@ -315,10 +318,16 @@ fn relay_activation_allows_independent_profiles_purposes_inputs_and_outputs() {
         .get_mut("person_status")
         .expect("consultation");
     consultation.profile.id = "example.other-status.exact".to_string();
-    consultation.profile.version = "2".to_string();
     consultation.inputs = BTreeMap::from([(
         "uin".to_string(),
         RelayConsultationInput::TargetIdentifier("request.target.identifiers.UIN".to_string()),
+    )]);
+    consultation.outputs = BTreeMap::from([(
+        "other_status".to_string(),
+        RelayOutputContract::String {
+            nullable: true,
+            max_bytes: 64,
+        },
     )]);
     independent.evidence.claims[1].purpose = Some("civil-registration-verification".to_string());
     independent.evidence.claims[1].rule = RuleConfig::Extract {
@@ -336,11 +345,14 @@ fn relay_activation_allows_independent_profiles_purposes_inputs_and_outputs() {
         field: "other_status".to_string(),
     };
     different_output.evidence.claims[1].value.value_type = "string".to_string();
-    expect_mode_error(&different_output, "one shared string output");
+    expect_mode_error(
+        &different_output,
+        "must name a declared consultation output",
+    );
 }
 
 #[test]
-fn registry_backed_consultation_accepts_one_to_four_injective_inputs() {
+fn registry_backed_consultation_accepts_one_to_sixteen_injective_inputs() {
     let mut config = valid_registry_backed_config();
     let ClaimEvidenceMode::RegistryBacked { consultations } =
         &mut config.evidence.claims[0].evidence_mode
@@ -378,17 +390,35 @@ fn registry_backed_consultation_accepts_one_to_four_injective_inputs() {
     else {
         panic!("registry-backed mode")
     };
+    let inputs = &mut consultations
+        .get_mut("person_status")
+        .expect("consultation")
+        .inputs;
+    for index in 5..=16 {
+        inputs.insert(
+            format!("input_{index}"),
+            RelayConsultationInput::TargetIdentifier(format!(
+                "request.target.identifiers.input_{index}"
+            )),
+        );
+    }
+    config.validate().expect("sixteen typed inputs are valid");
+    let ClaimEvidenceMode::RegistryBacked { consultations } =
+        &mut config.evidence.claims[0].evidence_mode
+    else {
+        panic!("registry-backed mode")
+    };
     consultations
         .get_mut("person_status")
         .expect("consultation")
         .inputs
         .insert(
-            "fifth_input".to_string(),
+            "input_17".to_string(),
             RelayConsultationInput::TargetIdentifier(
-                "request.target.identifiers.fifth_input".to_string(),
+                "request.target.identifiers.input_17".to_string(),
             ),
         );
-    expect_mode_error(&config, "one to four");
+    expect_mode_error(&config, "one to sixteen");
 
     let mut duplicate_mapping = valid_registry_backed_config();
     let ClaimEvidenceMode::RegistryBacked { consultations } =
@@ -473,7 +503,9 @@ fn registry_backed_claim_enforces_gates_cardinality_and_rule_binding() {
         expression: "true".to_string(),
         bindings: CelBindingsConfig::default(),
     };
-    expect_mode_error(&config, "only exists and extract");
+    config
+        .validate()
+        .expect("registry-backed CEL may evaluate the declared output namespace");
 }
 
 #[test]
@@ -500,22 +532,9 @@ fn registry_backed_claim_matches_relay_identifier_and_scalar_contract() {
     consultations
         .get_mut("person_status")
         .expect("consultation")
-        .profile
-        .version = "01".to_string();
-    expect_mode_error(&config, "profile.version");
-
-    let mut config = valid_registry_backed_config();
-    let ClaimEvidenceMode::RegistryBacked { consultations } =
-        &mut config.evidence.claims[0].evidence_mode
-    else {
-        panic!("registry-backed mode")
-    };
-    consultations
-        .get_mut("person_status")
-        .expect("consultation")
         .inputs
         .clear();
-    expect_mode_error(&config, "one to four target identifier mappings");
+    expect_mode_error(&config, "one to sixteen typed request mappings");
 
     let mut config = valid_registry_backed_config();
     config.evidence.claims[0].rule = RuleConfig::Exists {
@@ -538,7 +557,7 @@ fn registry_backed_claim_matches_relay_identifier_and_scalar_contract() {
             field: "registration_status".to_string(),
         };
         config.evidence.claims[0].value.value_type = unsupported.to_string();
-        expect_mode_error(&config, "must be string in v1");
+        expect_mode_error(&config, "must match its declared output");
     }
 }
 
@@ -547,6 +566,7 @@ fn relay_connection_is_single_closed_bounded_and_redacted() {
     let relay: RelayConnectionConfig = serde_norway::from_str(
         r#"
 base_url: https://relay.internal.example
+workload_client_id: registry-notary
 token_file: /run/secrets/private-relay.jwt
 allowed_private_cidrs: [10.42.0.0/16, fd42::/64]
 "#,
@@ -554,6 +574,7 @@ allowed_private_cidrs: [10.42.0.0/16, fd42::/64]
     .expect("Relay connection parses");
     relay.validate().expect("Relay connection validates");
     assert_eq!(relay.allowed_private_cidrs.len(), 2);
+    assert_eq!(relay.max_in_flight, 8);
     let debug = format!("{relay:?}");
     assert!(!debug.contains("relay.internal.example"));
     assert!(!debug.contains("private-relay.jwt"));
@@ -562,11 +583,22 @@ allowed_private_cidrs: [10.42.0.0/16, fd42::/64]
     serde_norway::from_str::<RelayConnectionConfig>(
         r#"
 base_url: https://relay.internal.example
+workload_client_id: registry-notary
 token_file: /run/secrets/relay.jwt
 retry_on_5xx: true
 "#,
     )
     .expect_err("retry controls are not part of the closed Relay connection");
+
+    for workload_client_id in ["", "Registry-Notary", "registry:notary"] {
+        let mut relay = relay_connection();
+        relay.workload_client_id = workload_client_id.to_string();
+        assert!(matches!(
+            relay.validate(),
+            Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
+                if reason.contains("workload_client_id")
+        ));
+    }
 }
 
 #[test]
@@ -621,6 +653,7 @@ fn relay_token_file_and_private_cidrs_are_exact_and_bounded() {
     serde_norway::from_str::<RelayConnectionConfig>(
         r#"
 base_url: https://relay.internal.example
+workload_client_id: registry-notary
 token_env: REMOVED_RELAY_TOKEN
 "#,
     )
@@ -629,11 +662,29 @@ token_env: REMOVED_RELAY_TOKEN
     serde_norway::from_str::<RelayConnectionConfig>(
         r#"
 base_url: https://relay.internal.example
+workload_client_id: registry-notary
 token_file: /run/secrets/relay.jwt
 token_issuer: REMOVED_DUPLICATE_IDENTITY
 "#,
     )
     .expect_err("duplicated local workload-token semantics are rejected");
+}
+
+#[test]
+fn relay_connection_concurrency_is_operator_bounded() {
+    for value in [0, 65] {
+        let mut relay = relay_connection();
+        relay.max_in_flight = value;
+        assert!(matches!(
+            relay.validate(),
+            Err(EvidenceConfigError::InvalidRelayConfig { ref reason })
+                if reason.contains("max_in_flight")
+        ));
+    }
+
+    let mut relay = relay_connection();
+    relay.max_in_flight = 64;
+    relay.validate().expect("hard ceiling is accepted");
 }
 
 #[test]
@@ -916,7 +967,7 @@ fn transitional_direct_preserves_rule_source_validation() {
 }
 
 #[test]
-fn registry_backed_cel_accepts_one_complete_typed_fact_map_and_full_date_variable() {
+fn registry_backed_cel_accepts_one_complete_typed_output_map_and_full_date_variable() {
     let mut config = valid_registry_backed_config();
     config.evidence.variables.insert(
         "as_of_date".to_string(),
@@ -932,15 +983,14 @@ fn registry_backed_cel_accepts_one_complete_typed_fact_map_and_full_date_variabl
     let consultation = consultations
         .get_mut("person_status")
         .expect("consultation exists");
-    consultation.facts = BTreeMap::from([
-        ("exists".to_string(), RelayFactContract::Presence),
+    consultation.outputs = BTreeMap::from([
         (
             "date_of_birth".to_string(),
-            RelayFactContract::Date { nullable: true },
+            RelayOutputContract::Date { nullable: true },
         ),
         (
             "sequence".to_string(),
-            RelayFactContract::Integer {
+            RelayOutputContract::Integer {
                 nullable: false,
                 minimum: 0,
                 maximum: 9_007_199_254_740_991,
@@ -948,14 +998,14 @@ fn registry_backed_cel_accepts_one_complete_typed_fact_map_and_full_date_variabl
         ),
         (
             "status".to_string(),
-            RelayFactContract::String {
+            RelayOutputContract::String {
                 nullable: false,
                 max_bytes: 64,
             },
         ),
     ]);
     claim.rule = RuleConfig::Cel {
-        expression: "person_status.exists && person_status.date_of_birth != null ? date.age_on(person_status.date_of_birth, as_of_date) >= 18 : false".to_string(),
+        expression: "person_status.matched && person_status.date_of_birth != null ? date.age_on(person_status.date_of_birth, as_of_date) >= 18 : false".to_string(),
         bindings: CelBindingsConfig::default(),
     };
     claim.value.value_type = "boolean".to_string();
@@ -981,7 +1031,7 @@ fn registry_backed_cel_accepts_one_complete_typed_fact_map_and_full_date_variabl
 }
 
 #[test]
-fn authored_typed_fact_and_variable_yaml_shape_is_closed() {
+fn authored_typed_output_and_variable_yaml_shape_is_closed() {
     let evidence: EvidenceConfig = serde_norway::from_str(
         r#"
 enabled: true
@@ -1001,12 +1051,10 @@ variables:
         r#"
 profile:
   id: opencrvs.birth-record.exact
-  version: "1"
   contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 inputs:
   uin: request.target.identifiers.UIN
-facts:
-  exists: { type: presence }
+outputs:
   active: { type: boolean, nullable: false }
   date_of_birth: { type: date, nullable: true }
   sequence: { type: integer, nullable: false, minimum: 0, maximum: 9007199254740991 }
@@ -1014,20 +1062,19 @@ facts:
 "#,
     )
     .expect("authored typed consultation parses");
-    assert_eq!(consultation.facts.len(), 5);
+    assert_eq!(consultation.outputs.len(), 4);
     assert!(matches!(
-        consultation.facts.get("date_of_birth"),
-        Some(RelayFactContract::Date { nullable: true })
+        consultation.outputs.get("date_of_birth"),
+        Some(RelayOutputContract::Date { nullable: true })
     ));
 
     assert!(serde_norway::from_str::<RelayConsultationConfig>(
         r#"
 profile:
   id: opencrvs.birth-record.exact
-  version: "1"
   contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 inputs: { uin: request.target.identifiers.UIN }
-facts:
+outputs:
   score: { type: number, nullable: false }
 "#,
     )
