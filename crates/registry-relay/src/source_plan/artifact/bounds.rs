@@ -54,12 +54,6 @@ pub(in super::super) fn validate_request_shape(
         ),
         (ReadMethod::Get, RequestCodecDocument::None, false, None)
             | (
-                ReadMethod::Get,
-                RequestCodecDocument::FhirR4Search,
-                false,
-                None
-            )
-            | (
                 ReadMethod::ReadOnlyPost,
                 RequestCodecDocument::Json,
                 true,
@@ -100,14 +94,12 @@ pub(in super::super) fn validate_request_shape(
         let generic_script_authority = operation.body.is_none()
             && operation.request_signer.is_none()
             && operation.dci.is_none()
-            && operation.fhir.is_none()
             && codec == RequestCodecDocument::None
             && matches!(operation.method, ReadMethod::Get | ReadMethod::ReadOnlyPost);
         let signed_dci_helper = operation.method == ReadMethod::ReadOnlyPost
             && operation.body.is_none()
             && operation.request_signer.is_none()
             && operation.dci.is_some()
-            && operation.fhir.is_none()
             && codec == RequestCodecDocument::DciExactV1;
         let script_shape_matches = operation.path_parameters.is_empty()
             && operation.query.is_empty()
@@ -194,11 +186,6 @@ pub(in super::super) fn validate_request_shape(
         header_bytes = header_bytes
             .checked_add("accept".len() + b"application/json".len())
             .and_then(|total| total.checked_add("content-type".len() + b"application/json".len()))
-            .ok_or(SourcePlanArtifactError::InvalidLimits)?;
-    }
-    if codec == RequestCodecDocument::FhirR4Search {
-        header_bytes = header_bytes
-            .checked_add("accept".len() + b"application/fhir+json".len())
             .ok_or(SourcePlanArtifactError::InvalidLimits)?;
     }
     if header_bytes > MAX_REQUEST_HEADER_BYTES {

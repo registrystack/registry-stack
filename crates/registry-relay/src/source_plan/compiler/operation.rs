@@ -224,7 +224,6 @@ pub(super) fn compile_operation_descriptors(
                 RequestCodecDocument::None => CompiledRequestCodec::None,
                 RequestCodecDocument::Json => CompiledRequestCodec::Json,
                 RequestCodecDocument::DciExactV1 => CompiledRequestCodec::DciExactV1,
-                RequestCodecDocument::FhirR4Search => CompiledRequestCodec::FhirR4Search,
             };
             let request_signer = operation.request_signer.map(|signer| match signer {
                 RequestSignerDocument::DciJwsV1 => CompiledRequestSigner::DciJwsV1,
@@ -416,16 +415,6 @@ pub(super) fn compile_operation_descriptors(
                     api_key_query,
                     step_limits.max_request_bytes as usize,
                 )
-            } else if request_codec == CompiledRequestCodec::FhirR4Search {
-                DataDestinationRequestTemplate::new_with_exact_headers(
-                    destination_method,
-                    &fixed_path,
-                    &query_bounds,
-                    &[("accept", b"application/fhir+json")],
-                    authorization_template,
-                    body_template,
-                    step_limits.max_request_bytes as usize,
-                )
             } else if let Some((_, expression)) = path_parameter {
                 DataDestinationRequestTemplate::new_with_path_segment(
                     destination_method,
@@ -547,12 +536,6 @@ pub(super) fn compile_operation_descriptors(
             } else {
                 None
             };
-            let fhir = operation
-                .fhir
-                .as_ref()
-                .map(|fhir| super::CompiledFhirR4Search {
-                    resource_type: fhir.resource_type.as_str().into(),
-                });
             Ok(CompiledOperation {
                 id,
                 method: operation.method,
@@ -579,7 +562,6 @@ pub(super) fn compile_operation_descriptors(
                 acquired_fields,
                 disclosed_fields,
                 dci,
-                fhir,
             })
         })
         .collect()

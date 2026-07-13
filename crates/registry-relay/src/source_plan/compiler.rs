@@ -562,8 +562,6 @@ pub enum CompiledRequestCodec {
     Json,
     /// Exact DCI v1 request encoding.
     DciExactV1,
-    /// Closed fixed-resource FHIR R4 GET search.
-    FhirR4Search,
 }
 
 /// Request signature mechanism frozen by the reviewed operation.
@@ -1073,17 +1071,6 @@ pub struct CompiledOperation {
     acquired_fields: BTreeSet<AcquiredField>,
     disclosed_fields: BTreeSet<AcquiredField>,
     dci: Option<CompiledDciExact>,
-    fhir: Option<CompiledFhirR4Search>,
-}
-
-pub(crate) struct CompiledFhirR4Search {
-    resource_type: Box<str>,
-}
-
-impl CompiledFhirR4Search {
-    pub(crate) fn resource_type(&self) -> &str {
-        &self.resource_type
-    }
 }
 
 /// Fixed same-origin verification exchange selected by a reviewed primitive.
@@ -1409,10 +1396,6 @@ impl CompiledOperation {
 
     pub(crate) const fn api_key(&self) -> Option<&CompiledApiKeyPlacement> {
         self.api_key.as_ref()
-    }
-
-    pub(crate) const fn fhir_r4_search(&self) -> Option<&CompiledFhirR4Search> {
-        self.fhir.as_ref()
     }
 
     #[must_use]
@@ -2616,11 +2599,6 @@ fn validate_profile_bound_source_headers(
         let Some(ValueExpressionDocument::Literal { value }) =
             operation.headers.get("data-purpose")
         else {
-            if operation.fhir.is_some() {
-                return Err(SourcePlanCompileError::Artifact(
-                    SourcePlanArtifactError::InvalidPlan,
-                ));
-            }
             continue;
         };
         if !exact_profile_bound_source_purpose(

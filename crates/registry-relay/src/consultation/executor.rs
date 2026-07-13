@@ -314,9 +314,6 @@ pub(crate) fn validate_bounded_http_activation(
             CompiledRequestCodec::None => operation.body().is_none(),
             CompiledRequestCodec::Json => operation.body().is_some(),
             CompiledRequestCodec::DciExactV1 => validate_signed_dci_exact_activation(plan).is_ok(),
-            CompiledRequestCodec::FhirR4Search => {
-                operation.body().is_none() && operation.fhir_r4_search().is_some()
-            }
         };
         !codec_supported || operation.request_signer().is_some()
     }) {
@@ -881,13 +878,7 @@ async fn execute_bounded_http(
                         CompiledStatusOutcome::Ambiguous => ClosedJsonOutcome::Ambiguous,
                     });
                 }
-                let media_type_valid =
-                    if operation.request_codec() == CompiledRequestCodec::FhirR4Search {
-                        response.require_fhir_json_content_type().is_ok()
-                    } else {
-                        response.require_json_content_type().is_ok()
-                    };
-                if !media_type_valid {
+                if response.require_json_content_type().is_err() {
                     return Err(KnownFailureClass::ResponseContractViolation);
                 }
                 let max_bytes = usize::try_from(operation.response_max_bytes())
@@ -896,25 +887,6 @@ async fn execute_bounded_http(
                     .read_bounded(max_bytes)
                     .await
                     .map_err(map_response_error)?;
-                let body = if let Some(fhir) = operation.fhir_r4_search() {
-                    match registry_platform_httputil::destination::fhir::normalize_r4_searchset(
-                        body,
-                        fhir.resource_type(),
-                        operation.response().max_records(),
-                    )
-                    .map_err(|_| KnownFailureClass::ResponseContractViolation)?
-                    {
-                        registry_platform_httputil::destination::fhir::FhirR4SearchsetOutcome::NoMatch => {
-                            return Ok(ClosedJsonOutcome::NoMatch);
-                        }
-                        registry_platform_httputil::destination::fhir::FhirR4SearchsetOutcome::Records(body) => body,
-                        registry_platform_httputil::destination::fhir::FhirR4SearchsetOutcome::Ambiguous => {
-                            return Ok(ClosedJsonOutcome::Ambiguous);
-                        }
-                    }
-                } else {
-                    body
-                };
                 operation
                     .response_decoder()
                     .decode(body)

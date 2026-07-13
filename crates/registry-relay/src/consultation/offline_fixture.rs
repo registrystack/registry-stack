@@ -1437,25 +1437,6 @@ fn decode_operation(
     if body.len() > operation.response_max_bytes() as usize {
         return Err(OfflineFixtureError::SourceResponseTooLarge);
     }
-    if let Some(fhir) = operation.fhir_r4_search() {
-        return match registry_platform_httputil::destination::fhir::normalize_r4_searchset_offline_fixture(
-            &body,
-            fhir.resource_type(),
-            operation.response().max_records(),
-        )
-        .map_err(|_| OfflineFixtureError::SourceResponseMalformed)?
-        {
-            registry_platform_httputil::destination::fhir::FhirR4SearchsetOutcome::NoMatch => {
-                Ok(ClosedJsonOutcome::NoMatch)
-            }
-            registry_platform_httputil::destination::fhir::FhirR4SearchsetOutcome::Ambiguous => {
-                Ok(ClosedJsonOutcome::Ambiguous)
-            }
-            registry_platform_httputil::destination::fhir::FhirR4SearchsetOutcome::Records(body) => {
-                operation.response_decoder().decode(body).map_err(map_closed_decode)
-            }
-        };
-    }
     operation
         .response_decoder()
         .decode_offline_fixture(&body)

@@ -39,7 +39,6 @@ use zeroize::Zeroizing;
 
 use crate::{is_cloud_metadata_ip, DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT};
 
-pub mod fhir;
 pub mod input_pattern;
 pub mod json;
 pub mod oauth;
@@ -101,6 +100,19 @@ pub const DESTINATION_IANA_REGISTRY_SNAPSHOT: &str = "2026-07-11";
 static DESTINATION_DNS_PERMITS: Semaphore =
     Semaphore::const_new(MAX_CONCURRENT_DESTINATION_RESOLUTIONS);
 static DESTINATION_SYSTEM_RESOLVER: OnceLock<Option<TokioResolver>> = OnceLock::new();
+static DESTINATION_NATIVE_ROOTS: OnceLock<Vec<reqwest::Certificate>> = OnceLock::new();
+
+fn destination_native_roots() -> &'static [reqwest::Certificate] {
+    DESTINATION_NATIVE_ROOTS
+        .get_or_init(|| {
+            rustls_native_certs::load_native_certs()
+                .certs
+                .into_iter()
+                .filter_map(|certificate| reqwest::Certificate::from_der(certificate.as_ref()).ok())
+                .collect()
+        })
+        .as_slice()
+}
 
 /// Allocated IPv6 global-unicast prefixes from the pinned IANA registry.
 ///
@@ -545,6 +557,11 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         retained.sort_unstable();
         retained.dedup();
 
+        // Native trust discovery can require an expensive operating-system
+        // trust-store traversal. Initialize it once while activating the
+        // frozen destination, before any per-operation deadline exists.
+        let _ = destination_native_roots();
+
         Ok(Self {
             origin_id: origin_id.to_owned(),
             origin,
@@ -732,6 +749,10 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             // Workspace feature unification can enable multiple TLS backends.
             // Keep this security transport on its reviewed rustls substrate.
             .use_rustls_tls()
+            // Native roots are initialized once during policy construction
+            // and added below. Prevent reqwest from traversing the operating
+            // system trust store again inside every operation deadline.
+            .tls_built_in_native_certs(false)
             .timeout(request_remaining)
             .connect_timeout(request_remaining.min(DEFAULT_VALIDATED_FETCH_CONNECT_TIMEOUT))
             .redirect(reqwest::redirect::Policy::none())
@@ -749,6 +770,10 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             .no_zstd()
             .no_deflate()
             .resolve_to_addrs(host, pinned.as_slice());
+        let mut client_builder = client_builder;
+        for root in destination_native_roots() {
+            client_builder = client_builder.add_root_certificate(root.clone());
+        }
         let client_builder = match trust {
             TransportTrust::Policy => match &self.tls {
                 DestinationTlsState::System => client_builder,
@@ -2832,13 +2857,6 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
             .ok_or(DestinationResponseMediaTypeError::NotExactJson)
     }
 
-    /// Require the exact FHIR R4 JSON media type before decoding a Bundle.
-    pub fn require_fhir_json_content_type(&self) -> Result<(), DestinationResponseMediaTypeError> {
-        closed_utf8_json_content_type(self.response.headers(), "application/fhir+json")
-            .then_some(())
-            .ok_or(DestinationResponseMediaTypeError::NotExactFhirJson)
-    }
-
     /// Consume the response body under both the operation deadline and byte cap.
     pub async fn read_bounded(
         self,
@@ -2931,8 +2949,6 @@ fn closed_utf8_json_content_type(headers: &HeaderMap, expected_type: &str) -> bo
 pub enum DestinationResponseMediaTypeError {
     #[error("destination response media type is not exactly application/json")]
     NotExactJson,
-    #[error("destination response media type is not exactly application/fhir+json")]
-    NotExactFhirJson,
 }
 
 /// Value-free failure selecting script-visible response headers.

@@ -1337,31 +1337,6 @@ fn validate_http_operation(
     {
         return Err(SourcePlanArtifactError::InvalidPlan);
     }
-    if (operation.request_codec == Some(RequestCodecDocument::FhirR4Search))
-        != operation.fhir.is_some()
-    {
-        return Err(SourcePlanArtifactError::InvalidPlan);
-    }
-    if let Some(fhir) = &operation.fhir {
-        let valid_resource_type = (1..=64).contains(&fhir.resource_type.len())
-            && fhir
-                .resource_type
-                .bytes()
-                .all(|byte| byte.is_ascii_alphabetic())
-            && !matches!(fhir.resource_type.as_str(), "Bundle" | "OperationOutcome")
-            && operation.method == ReadMethod::Get
-            && operation.body.is_none()
-            && operation.request_signer.is_none()
-            && operation.path.rsplit('/').next() == Some(fhir.resource_type.as_str())
-            && valid_fhir_count(&operation.query, operation.response.max_records)
-            && operation.query.keys().all(|name| {
-                name == "_count"
-                    || (!name.starts_with('_') && !name.contains('.') && !name.contains(':'))
-            });
-        if !valid_resource_type {
-            return Err(SourcePlanArtifactError::InvalidPlan);
-        }
-    }
     if operation.input_selector.is_some() && operation.relation_selector.is_some() {
         return Err(SourcePlanArtifactError::InvalidAcquisition);
     }
@@ -1381,9 +1356,6 @@ fn validate_http_operation(
         {
             return Err(SourcePlanArtifactError::InvalidSet);
         }
-    }
-    if operation.fhir.is_some() && !operation.headers.contains_key("data-purpose") {
-        return Err(SourcePlanArtifactError::InvalidPlan);
     }
     match &operation.auth {
         SourceAuthDocument::ApiKeyHeader {
@@ -1490,7 +1462,6 @@ fn validate_http_operation(
                 None | Some(RequestCodecDocument::None)
             )
             || operation.dci.is_some()
-            || operation.fhir.is_some()
             || operation.response.max_records != 1
             || operation.response.records_field.is_some()
             || !operation.acquisition_fields.is_empty()
@@ -1657,15 +1628,6 @@ fn validate_http_operation(
         }
     }
     Ok(())
-}
-
-fn valid_fhir_count(query: &BTreeMap<String, ValueExpressionDocument>, max_records: u8) -> bool {
-    (1..=2).contains(&max_records)
-        && matches!(
-            query.get("_count"),
-            Some(ValueExpressionDocument::Literal { value })
-                if value == &max_records.to_string()
-        )
 }
 
 pub(in crate::source_plan) fn validate_response_schema(
@@ -1969,7 +1931,6 @@ struct HashedRequestTemplate<'a> {
     body: &'a Option<BodyTemplateDocument>,
     request_codec: Option<RequestCodecDocument>,
     dci: &'a Option<DciExactDocument>,
-    fhir: &'a Option<FhirR4SearchDocument>,
     request_signer: Option<RequestSignerDocument>,
     auth: SourceAuthDocument,
 }
@@ -1985,7 +1946,6 @@ pub(super) fn request_template_hash(
         body: &operation.body,
         request_codec: operation.request_codec,
         dci: &operation.dci,
-        fhir: &operation.fhir,
         request_signer: operation.request_signer,
         auth: operation.auth.clone(),
     };
@@ -2289,51 +2249,6 @@ mod tests {
         assert_eq!(
             validate_inputs(&inputs),
             Err(SourcePlanArtifactError::InvalidLimits)
-        );
-    }
-
-    #[test]
-    fn fhir_count_is_one_canonical_compiler_owned_literal() {
-        let mut query = BTreeMap::new();
-        assert!(!valid_fhir_count(&query, 2));
-
-        query.insert(
-            "_count".to_owned(),
-            ValueExpressionDocument::Literal {
-                value: "1".to_owned(),
-            },
-        );
-        assert!(!valid_fhir_count(&query, 2));
-
-        query.insert(
-            "_count".to_owned(),
-            ValueExpressionDocument::ConsultationInput {
-                name: "subject_id".to_owned(),
-            },
-        );
-        assert!(!valid_fhir_count(&query, 2));
-
-        query.insert(
-            "_count".to_owned(),
-            ValueExpressionDocument::Literal {
-                value: "02".to_owned(),
-            },
-        );
-        assert!(!valid_fhir_count(&query, 2));
-
-        query.insert(
-            "_count".to_owned(),
-            ValueExpressionDocument::Literal {
-                value: "2".to_owned(),
-            },
-        );
-        assert!(valid_fhir_count(&query, 2));
-        assert_eq!(
-            query
-                .keys()
-                .filter(|name| name.as_str() == "_count")
-                .count(),
-            1
         );
     }
 }

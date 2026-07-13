@@ -1045,9 +1045,6 @@ fn generated_snapshot_pack_semantics(
 }
 
 fn operation_record_schema(operation: &OperationDeclaration) -> Result<&SchemaNode> {
-    if operation.primitive.as_deref() == Some("fhir_r4_search_get") {
-        return Ok(&operation.response.schema);
-    }
     let Some(cardinality) = &operation.response.cardinality else {
         return Ok(&operation.response.schema);
     };
@@ -1252,7 +1249,6 @@ fn generated_http_operation(
     evidence: &[GeneratedEvidence],
 ) -> Result<Value> {
     let is_dci = operation.primitive.as_deref() == Some("dci_search_v1");
-    let is_fhir = operation.primitive.as_deref() == Some("fhir_r4_search_get");
     let is_rhai = matches!(integration.capability, CapabilityDeclaration::Script { .. });
     let is_generic_script = is_rhai && !is_dci;
     let record = operation_record_schema(operation)?;
@@ -1326,7 +1322,7 @@ fn generated_http_operation(
     let cardinality = operation.response.cardinality.as_ref();
     let (normalization, records_field, max_records) = if is_generic_script {
         ("script_body", None, 1)
-    } else if is_dci || is_fhir {
+    } else if is_dci {
         ("json_array_probe_two", None, 2)
     } else {
         match cardinality {
@@ -1374,13 +1370,6 @@ fn generated_http_operation(
                 },
             },
         })
-    } else if is_fhir {
-        json!({
-            "type": "array",
-            "nullable": false,
-            "max_items": 2,
-            "items": relay_schema_node(record, false),
-        })
     } else {
         relay_projection_schema_node(&operation.response.schema, false)
     };
@@ -1409,7 +1398,6 @@ fn generated_http_operation(
         None => "none",
         Some("strict_json_v1") => "json",
         Some("dci_search_v1") => "dci_exact_v1",
-        Some("fhir_r4_search_get") => "fhir_r4_search",
         Some(other) => bail!("unsupported reviewed request codec {other}"),
     };
     let request_signer: Option<&str> = None;
@@ -1481,16 +1469,6 @@ fn generated_http_operation(
     });
     if is_dci {
         document["dci"] = generated_dci_document(operation)?;
-    }
-    if is_fhir {
-        let resource_type = operation
-            .request
-            .path
-            .rsplit('/')
-            .next()
-            .filter(|resource| !resource.is_empty())
-            .ok_or_else(|| anyhow!("FHIR operation path must end with its resource type"))?;
-        document["fhir"] = json!({ "resource_type": resource_type });
     }
     if !path_parameters.is_empty() {
         document["path_parameters"] = Value::Object(path_parameters);

@@ -773,13 +773,6 @@ pub(in super::super) enum RequestCodecDocument {
     None,
     Json,
     DciExactV1,
-    FhirR4Search,
-}
-
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(in super::super) struct FhirR4SearchDocument {
-    pub(in super::super) resource_type: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1013,8 +1006,6 @@ pub(in super::super) struct HttpOperationDocument {
     pub(in super::super) request_codec: Option<RequestCodecDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) dci: Option<DciExactDocument>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in super::super) fhir: Option<FhirR4SearchDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) request_signer: Option<RequestSignerDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

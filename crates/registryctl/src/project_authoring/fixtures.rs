@@ -960,22 +960,6 @@ fn validate_operation(
             validate_dci_exact_and(operation, inputs)?;
         }
         OperationRole::Data
-            if operation.primitive.as_deref() == Some("fhir_r4_search_get")
-                && operation.request.method == ReadMethod::Get
-                && operation.request.destination == "data"
-                && operation.request.codec.as_deref() == Some("fhir_r4_search_get")
-                && operation.request.authorization.is_none()
-                && operation.response.codec.as_deref() == Some("fhir_r4_searchset")
-                && operation.verification.is_none()
-                && operation
-                    .response
-                    .cardinality
-                    .as_ref()
-                    .is_some_and(|cardinality| {
-                        cardinality.mode == CardinalityMode::ProbeTwo
-                            && cardinality.records.is_none()
-                    }) => {}
-        OperationRole::Data
             if operation.primitive.is_none()
                 && operation.verification.is_none()
                 && operation.request.destination == "data"
