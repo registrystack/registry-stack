@@ -16,16 +16,6 @@ pub const SD_JWT_VC_JWT_TYP: &str = "dc+sd-jwt";
 pub const SD_JWT_VC_SIGNING_ALG: &str = "EdDSA";
 pub const SD_JWT_VC_ISSUER_KEY_TYPE: &str = "OKP/Ed25519";
 pub const SD_JWT_VC_HOLDER_BINDING_METHOD: &str = "did:jwk";
-pub const MATCHING_POLICY_BASE_RULE_SUFFIXES: &[&str] = &[
-    "policy_identity",
-    "odrl_terms",
-    "requested_fact",
-    "requested_disclosure",
-    "credential_format",
-    "source_binding",
-    "route_identity",
-];
-
 pub const MAX_BOUNDED_CLAIM_ID_LEN: usize = 128;
 pub const MAX_CONFIG_METADATA_LEN: usize = 256;
 pub const MAX_CORRELATION_ID_LEN: usize = 128;
@@ -1729,26 +1719,6 @@ pub struct EvidenceAuditEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_ref_hash: Option<Hashed<EvidenceEntityReference>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching_policy_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching_policy_hash: Option<Hashed<PolicyIdentifier>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching_evaluated_rule_ids: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ecosystem_binding_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ecosystem_binding_version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pack_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pack_version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching_method: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching_outcome: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching_error_code: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redacted_fields: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_items: Option<Vec<EvidenceBatchItemAuditEvent>>,
@@ -1836,26 +1806,6 @@ pub struct EvidenceBatchItemAuditEvent {
     pub requester_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_ref_hash: Option<Hashed<EvidenceEntityReference>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching_policy_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching_policy_hash: Option<Hashed<PolicyIdentifier>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching_evaluated_rule_ids: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ecosystem_binding_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ecosystem_binding_version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pack_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pack_version: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching_method: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching_outcome: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching_error_code: Option<String>,
 }
 
 #[cfg(test)]
@@ -2118,7 +2068,6 @@ mod tests {
                 identifier_schemes: Vec::new(),
                 profile: None,
             },
-            matching: None,
             value: Some(json!(true)),
             satisfied: Some(true),
             disclosure: "predicate".to_string(),
@@ -2439,16 +2388,6 @@ mod tests {
             target_ref_hash: Some(Hashed::from_hash("hmac-sha256:target")),
             requester_type: Some("person".to_string()),
             requester_ref_hash: Some(Hashed::from_hash("hmac-sha256:requester")),
-            matching_policy_id: Some("civil-registry-v1".to_string()),
-            matching_policy_hash: Some(Hashed::from_hash("sha256:matching-policy")),
-            matching_evaluated_rule_ids: Some(vec!["source-binding-policy:person".to_string()]),
-            ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
-            ecosystem_binding_version: Some("2026-06-19".to_string()),
-            pack_id: Some("baseline-dpi/v1".to_string()),
-            pack_version: Some("2026-06-19".to_string()),
-            matching_method: Some("configured_lookup".to_string()),
-            matching_outcome: Some("matched".to_string()),
-            matching_error_code: None,
             redacted_fields: None,
             batch_items: Some(vec![EvidenceBatchItemAuditEvent {
                 input_index: 0,
@@ -2456,16 +2395,6 @@ mod tests {
                 target_ref_hash: Some(Hashed::from_hash("hmac-sha256:batch-target")),
                 requester_type: Some("person".to_string()),
                 requester_ref_hash: Some(Hashed::from_hash("hmac-sha256:batch-requester")),
-                matching_policy_id: Some("civil-registry-v1".to_string()),
-                matching_policy_hash: Some(Hashed::from_hash("sha256:matching-policy")),
-                matching_evaluated_rule_ids: Some(vec!["source-binding-policy:person".to_string()]),
-                ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
-                ecosystem_binding_version: Some("2026-06-19".to_string()),
-                pack_id: Some("baseline-dpi/v1".to_string()),
-                pack_version: Some("2026-06-19".to_string()),
-                matching_method: Some("configured_lookup".to_string()),
-                matching_outcome: Some("matched".to_string()),
-                matching_error_code: None,
             }]),
             config: None,
         };
@@ -2499,9 +2428,6 @@ mod tests {
         assert_eq!(value["target_ref_hash"], json!("hmac-sha256:target"));
         assert_eq!(value["requester_type"], json!("person"));
         assert_eq!(value["requester_ref_hash"], json!("hmac-sha256:requester"));
-        assert_eq!(value["matching_policy_id"], json!("civil-registry-v1"));
-        assert_eq!(value["matching_method"], json!("configured_lookup"));
-        assert_eq!(value["matching_outcome"], json!("matched"));
         assert_eq!(
             value["batch_items"][0]["target_ref_hash"],
             json!("hmac-sha256:batch-target")
@@ -2541,15 +2467,6 @@ mod tests {
             decoded.requester_ref_hash.as_ref().map(Hashed::as_str),
             Some("hmac-sha256:requester")
         );
-        assert_eq!(
-            decoded.matching_policy_id.as_deref(),
-            Some("civil-registry-v1")
-        );
-        assert_eq!(
-            decoded.matching_method.as_deref(),
-            Some("configured_lookup")
-        );
-        assert_eq!(decoded.matching_outcome.as_deref(), Some("matched"));
         assert_eq!(decoded.batch_items.as_ref().map(Vec::len), Some(1));
     }
 
@@ -2576,10 +2493,6 @@ mod tests {
         assert!(decoded.target_ref_hash.is_none());
         assert!(decoded.requester_type.is_none());
         assert!(decoded.requester_ref_hash.is_none());
-        assert!(decoded.matching_policy_id.is_none());
-        assert!(decoded.matching_method.is_none());
-        assert!(decoded.matching_outcome.is_none());
-        assert!(decoded.matching_error_code.is_none());
         assert!(decoded.batch_items.is_none());
     }
 

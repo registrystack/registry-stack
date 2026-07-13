@@ -1009,7 +1009,6 @@ mod tests {
             subject_type: "person".to_string(),
             requester_ref: None,
             target_ref: target_ref_view("subject-ref"),
-            matching: None,
             value: Some(json!({ "claim": claim_id })),
             satisfied: Some(true),
             disclosure: "redacted".to_string(),
