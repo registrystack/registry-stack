@@ -174,7 +174,7 @@ fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
         anchor: None,
     })
     .expect("unknown-product Rhai project checks");
-    assert_eq!(check_report.status, "passed");
+    assert_eq!(check_report.status, "valid");
 
     let build_report = build_country_project(&CountryBuildOptions {
         project_directory: project.clone(),
