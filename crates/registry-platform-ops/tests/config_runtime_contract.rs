@@ -113,11 +113,9 @@ fn shared_runtime_classifier_ignores_secret_and_topology_changes() {
         },
         "evidence": {
             "api_base_url": "https://notary-a.example.test",
-            "source_connections": {
-                "dci": {
-                    "base_url": "https://dci-a.internal",
-                    "token_env": "DCI_TOKEN_A"
-                }
+            "relay": {
+                "base_url": "https://relay-a.internal",
+                "token_file": "/run/secrets/relay-token-a"
             }
         }
     });
@@ -127,8 +125,8 @@ fn shared_runtime_classifier_ignores_secret_and_topology_changes() {
     second["auth"]["api_keys"][0]["hash_env"] = json!("OPS_HASH_B");
     second["audit"]["hash_secret_env"] = json!("AUDIT_SECRET_B");
     second["evidence"]["api_base_url"] = json!("https://notary-b.example.test");
-    second["evidence"]["source_connections"]["dci"]["base_url"] = json!("https://dci-b.internal");
-    second["evidence"]["source_connections"]["dci"]["token_env"] = json!("DCI_TOKEN_B");
+    second["evidence"]["relay"]["base_url"] = json!("https://relay-b.internal");
+    second["evidence"]["relay"]["token_file"] = json!("/run/secrets/relay-token-b");
 
     assert_eq!(
         posture_safe_runtime_config_hash(&first),
