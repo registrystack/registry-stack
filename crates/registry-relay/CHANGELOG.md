@@ -4,17 +4,20 @@
 
 ### Added
 
-- Relay's restart-only consultation compiler now accepts generic, fully
-  authored bounded HTTP plans, exact signed DCI searches, immutable snapshot
-  plans, and release-gated SandboxedRhai orchestration. Every plan retains
-  fixed destinations, closed schemas, typed outputs, bounded operation unions,
-  parent-owned credentials, and the existing authorization and audit gates.
+- Relay's restart-only consultation compiler now accepts the three
+  product-neutral authored capabilities: one-request `http`, reviewed Rhai
+  `script`, and immutable `snapshot`. Signed DCI and FHIR R4 behavior are
+  reusable protocol facilities within `script`, not product-specific executor
+  kinds. Every integration retains fixed source authority, closed typed
+  outputs, bounded calls and bytes, Relay-owned credentials, and the existing
+  authorization and audit gates.
 - Immutable snapshot profiles now keep physical provider, table, key, and
   projection mappings in private bindings. Compatible profiles share one
   immutable materialization slot while readiness remains isolated per profile.
-- SandboxedRhai executes in fresh, environment-scrubbed child processes. The
-  worker receives only typed inputs and prior outputs, chooses only reviewed
-  named operations, and returns a closed typed output map under fixed resource
+- Rhai scripts execute in fresh, environment-scrubbed child processes. The
+  worker receives only typed inputs and the reviewed source authority, can use
+  only the bounded `source` and `protocol` host facilities compiled for that
+  integration, and returns a closed typed output map under fixed resource
   limits. Production activation is Linux-only and caps the worker address space
   at 128 MiB so the configured memory and process isolation are enforced by the
   operating system; non-Linux hosts retain only offline, authority-free
@@ -33,9 +36,10 @@
   authorized OIDC workload. Every request binds the active generated
   `contract_hash` before source access. Generic HTTP, script, signed-DCI,
   FHIR, and snapshot journeys execute behind PostgreSQL quota, audit,
-  dispatch-fence, and publication guarantees without selecting behavior from
-  a source product or version. Requests use one to eight required exact
-  selector components, up to sixteen typed inputs in total, and a
+  dispatch-fence, and publication guarantees. Source product and tested-version
+  metadata record interoperability evidence and never select behavior.
+  Requests use one to eight required exact selector components, up to sixteen
+  typed inputs in total, and a
   contract-enforced `Data-Purpose`; this remains one subject, not a subject
   batch. Public results use the closed `match`, `no_match`, or `ambiguous`
   envelope and the stable failure taxonomy, including
