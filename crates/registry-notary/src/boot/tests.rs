@@ -106,7 +106,7 @@ async fn run_server_compiles_runtime_before_binding_listener() {
         "registry-notary-invalid-startup-{}.yaml",
         Ulid::new()
     ));
-    let config = doctor_live_test_config("http://127.0.0.1:1");
+    let config = notary_test_config();
     fs::write(
         &config_path,
         serde_norway::to_string(&config).expect("startup config serializes"),

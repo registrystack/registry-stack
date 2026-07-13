@@ -179,9 +179,20 @@ mod tests {
             let _ = shutdown_rx.await;
         }));
         let request = tokio::spawn(async move {
-            reqwest::get(format!("http://{addr}/slow"))
+            let mut stream = TcpStream::connect(addr).await.expect("connects");
+            stream
+                .write_all(
+                    format!("GET /slow HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n")
+                        .as_bytes(),
+                )
                 .await
-                .expect("request completes")
+                .expect("request writes");
+            let mut response = Vec::new();
+            stream
+                .read_to_end(&mut response)
+                .await
+                .expect("response reads");
+            response
         });
 
         tokio::time::timeout(Duration::from_secs(2), started.notified())
@@ -191,7 +202,10 @@ mod tests {
         release.notify_one();
 
         let response = request.await.expect("request task joins");
-        assert_eq!(response.status(), reqwest::StatusCode::NO_CONTENT);
+        assert!(
+            response.starts_with(b"HTTP/1.1 204"),
+            "in-flight request completed successfully"
+        );
         handle
             .await
             .expect("serve task joins")

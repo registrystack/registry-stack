@@ -4,10 +4,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use registryctl::{
-    BundleSignOptions, DeploymentProfile, DoctorFormat, NotaryInitOptions, NotaryInitSourceKind,
-    NotarySource, OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions, ProjectBuildOptions,
-    ProjectCheckOptions, ProjectInitOptions, ProjectStarter, ProjectTestOptions,
-    ProjectTestSelection, Sample,
+    BundleSignOptions, DeploymentProfile, DoctorFormat, ProjectBuildOptions, ProjectCheckOptions,
+    ProjectInitOptions, ProjectStarter, ProjectTestOptions, ProjectTestSelection, Sample,
 };
 
 fn main() -> Result<()> {
@@ -49,54 +47,6 @@ fn main() -> Result<()> {
                     }
                     InitCommand::SpreadsheetApi { dir, sample } => {
                         registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?;
-                    }
-                    InitCommand::Notary {
-                        dir,
-                        source_kind,
-                        source_url,
-                        source_token_from_env,
-                        source_token_env,
-                        source_dataset,
-                        source_entity,
-                        source_lookup_field,
-                        source_network,
-                        source_claim,
-                        source_claim_title,
-                        smoke_target_id,
-                    } => {
-                        registryctl::init_notary_project(
-                            &dir,
-                            NotaryInitOptions {
-                                source_kind,
-                                source_url: source_url.unwrap_or_else(|| {
-                                    source_kind.default_source_url().to_string()
-                                }),
-                                source_token_from_env,
-                                source_token_env: source_token_env.unwrap_or_else(|| {
-                                    source_kind.default_source_token_env().to_string()
-                                }),
-                                source_dataset: source_dataset.unwrap_or_else(|| {
-                                    source_kind.default_source_dataset().to_string()
-                                }),
-                                source_entity: source_entity.unwrap_or_else(|| {
-                                    source_kind.default_source_entity().to_string()
-                                }),
-                                source_lookup_field: source_lookup_field.unwrap_or_else(|| {
-                                    source_kind.default_source_lookup_field().to_string()
-                                }),
-                                source_network,
-                                source_claim: source_claim.unwrap_or_else(|| {
-                                    source_kind.default_source_claim().to_string()
-                                }),
-                                source_claim_title: source_claim_title.unwrap_or_else(|| {
-                                    source_kind.default_source_claim_title().to_string()
-                                }),
-                                smoke_target_id: smoke_target_id.unwrap_or_else(|| {
-                                    source_kind.default_smoke_target_id().to_string()
-                                }),
-                            },
-                            &image_lock,
-                        )?;
                     }
                 }
             }
@@ -168,14 +118,6 @@ fn main() -> Result<()> {
                 anchor,
             },
         )?)?,
-        Commands::Add { command } => {
-            let image_lock = registryctl::load_registryctl_image_lock()?;
-            match command {
-                AddCommand::Notary { from, force } => {
-                    registryctl::add_notary(&std::env::current_dir()?, from, force, &image_lock)?;
-                }
-            }
-        }
         Commands::Start => registryctl::start_project(&std::env::current_dir()?)?,
         Commands::Stop => registryctl::stop_project(&std::env::current_dir()?)?,
         Commands::Restart => registryctl::restart_project(&std::env::current_dir()?)?,
@@ -186,10 +128,6 @@ fn main() -> Result<()> {
             registryctl::doctor_project(&std::env::current_dir()?, format, profile)?
         }
         Commands::Logs => registryctl::logs_project(&std::env::current_dir()?)?,
-        Commands::Notary { command } => match command {
-            NotaryCommand::Smoke => registryctl::notary_smoke_project(&std::env::current_dir()?)?,
-            NotaryCommand::Open => registryctl::notary_open_project(&std::env::current_dir()?)?,
-        },
         Commands::Bundle { command } => match command {
             BundleCommand::Inspect { bundle_dir } => {
                 print_json(&registryctl::inspect_config_bundle(&bundle_dir)?)?;
@@ -257,151 +195,6 @@ fn main() -> Result<()> {
             AnchorCommand::RemoveKey { anchor_path, kid } => {
                 print_json(&registryctl::remove_config_anchor_key(&anchor_path, &kid)?)?;
             }
-        },
-        Commands::Openfn { command } => match *command {
-            OpenFnCommand::Import {
-                input,
-                openfn_token_env,
-                workflow,
-                output,
-                jobs_dir,
-                expression_prefix,
-                source_id,
-                dataset,
-                entity,
-                credential_env,
-                allowed_base_url,
-                smoke,
-                smoke_fields,
-                smoke_purpose,
-                auth_hash_env,
-                server_bind,
-                cli_build_tool,
-                runtime,
-                worker_command,
-                worker_script,
-                max_workers,
-                worker_timeout_ms,
-                max_worker_memory_mb,
-                max_output_bytes,
-                max_request_bytes,
-                max_query_parameter_bytes,
-                max_batch_items,
-                batch_mode,
-                notary_snippet_output,
-                no_notary_snippet,
-                sidecar_base_url,
-                sidecar_token_env,
-                allow_latest_adaptors,
-                allow_empty_job_bodies,
-            } => registryctl::import_openfn_project(OpenFnImportOptions {
-                input,
-                openfn_token_env,
-                workflow,
-                output,
-                jobs_dir,
-                expression_prefix,
-                source_id,
-                dataset,
-                entity,
-                credential_env,
-                allowed_base_urls: allowed_base_url,
-                smoke,
-                smoke_fields,
-                smoke_purpose,
-                auth_hash_env,
-                server_bind,
-                cli_build_tool,
-                runtime,
-                worker_command,
-                worker_script,
-                max_workers,
-                worker_timeout_ms,
-                max_worker_memory_mb,
-                max_output_bytes,
-                max_request_bytes,
-                max_query_parameter_bytes,
-                max_batch_items,
-                batch_mode,
-                notary_snippet_output: if no_notary_snippet {
-                    None
-                } else {
-                    notary_snippet_output
-                },
-                sidecar_base_url,
-                sidecar_token_env,
-                allow_latest_adaptors,
-                allow_empty_job_bodies,
-            })?,
-            OpenFnCommand::Convert {
-                input,
-                workflow,
-                output,
-                jobs_dir,
-                expression_prefix,
-                source_id,
-                dataset,
-                entity,
-                credential_env,
-                allowed_base_url,
-                smoke_field,
-                smoke_value,
-                smoke_fields,
-                smoke_purpose,
-                auth_hash_env,
-                server_bind,
-                cli_build_tool,
-                runtime,
-                worker_command,
-                worker_script,
-                max_workers,
-                worker_timeout_ms,
-                max_worker_memory_mb,
-                max_output_bytes,
-                max_request_bytes,
-                max_query_parameter_bytes,
-                max_batch_items,
-                batch_mode,
-                notary_snippet_output,
-                sidecar_base_url,
-                sidecar_token_env,
-                allow_latest_adaptors,
-                allow_empty_job_bodies,
-            } => registryctl::convert_openfn_project(OpenFnConvertOptions {
-                input,
-                workflow,
-                output,
-                jobs_dir,
-                expression_prefix,
-                source_id,
-                dataset,
-                entity,
-                credential_env,
-                allowed_base_urls: allowed_base_url,
-                smoke_field,
-                smoke_value,
-                smoke_fields,
-                smoke_purpose,
-                auth_hash_env,
-                server_bind,
-                cli_build_tool,
-                runtime,
-                worker_command,
-                worker_script,
-                max_workers,
-                worker_timeout_ms,
-                max_worker_memory_mb,
-                max_output_bytes,
-                max_request_bytes,
-                max_query_parameter_bytes,
-                max_batch_items,
-                batch_mode,
-                notary_snippet_output,
-                sidecar_base_url,
-                sidecar_token_env,
-                allow_latest_adaptors,
-                allow_empty_job_bodies,
-            })?,
         },
         Commands::Bruno { command } => match command {
             BrunoCommand::Generate { force } => {
@@ -571,11 +364,6 @@ enum Commands {
         #[arg(long)]
         anchor: Option<PathBuf>,
     },
-    /// Add a Registry Stack product to the current project.
-    Add {
-        #[command(subcommand)]
-        command: AddCommand,
-    },
     /// Start the local Registry Stack project.
     Start,
     /// Stop the local Registry Stack project.
@@ -599,11 +387,6 @@ enum Commands {
     },
     /// Stream Compose logs for the local project.
     Logs,
-    /// Work with the local Registry Notary product.
-    Notary {
-        #[command(subcommand)]
-        command: NotaryCommand,
-    },
     /// Work with Registry Config Bundle directories.
     Bundle {
         #[command(subcommand)]
@@ -613,11 +396,6 @@ enum Commands {
     Anchor {
         #[command(subcommand)]
         command: AnchorCommand,
-    },
-    /// Work with OpenFn workflow exports.
-    Openfn {
-        #[command(subcommand)]
-        command: Box<OpenFnCommand>,
     },
     /// Work with the optional generated Bruno API collection.
     Bruno {
@@ -757,8 +535,8 @@ mod tests {
     }
 
     #[test]
-    fn project_init_rejects_mixed_or_missing_modes_at_dispatch_boundary() {
-        let mixed = Cli::try_parse_from([
+    fn project_init_rejects_removed_mixed_mode_and_preserves_missing_dispatch_check() {
+        assert!(Cli::try_parse_from([
             "registryctl",
             "init",
             "--from",
@@ -766,15 +544,7 @@ mod tests {
             "notary",
             "legacy",
         ])
-        .unwrap();
-        assert!(matches!(
-            mixed.command,
-            Commands::Init {
-                from: Some(_),
-                command: Some(_),
-                ..
-            }
-        ));
+        .is_err());
 
         let missing = Cli::try_parse_from(["registryctl", "init"]).unwrap();
         assert!(matches!(
@@ -821,57 +591,15 @@ mod tests {
     }
 
     #[test]
-    fn notary_init_cli_accepts_fhir_source_kind() {
-        let cli = Cli::try_parse_from([
-            "registryctl",
-            "init",
-            "notary",
-            "my-fhir-notary",
-            "--source-kind",
-            "fhir-sidecar",
-        ])
-        .unwrap();
-
-        let Commands::Init { command, .. } = cli.command else {
-            panic!("expected init command");
-        };
-        let command = command.expect("legacy init subcommand");
-        let InitCommand::Notary {
-            source_kind,
-            source_url,
-            source_token_env,
-            smoke_target_id,
-            ..
-        } = *command
-        else {
-            panic!("expected init notary command");
-        };
-        assert_eq!(source_kind, NotaryInitSourceKind::FhirSidecar);
-        assert_eq!(source_url, None);
-        assert_eq!(source_token_env, None);
-        assert_eq!(smoke_target_id, None);
-    }
-
-    #[test]
-    fn notary_init_cli_accepts_opencrvs_dci_source_kind() {
-        let cli = Cli::try_parse_from([
-            "registryctl",
-            "init",
-            "notary",
-            "my-opencrvs-notary",
-            "--source-kind",
-            "opencrvs-dci",
-        ])
-        .unwrap();
-
-        let Commands::Init { command, .. } = cli.command else {
-            panic!("expected init command");
-        };
-        let command = command.expect("legacy init subcommand");
-        let InitCommand::Notary { source_kind, .. } = *command else {
-            panic!("expected init notary command");
-        };
-        assert_eq!(source_kind, NotaryInitSourceKind::OpencrvsDci);
+    fn legacy_notary_authoring_commands_are_removed() {
+        assert!(Cli::try_parse_from(["registryctl", "init", "notary", "project"]).is_err());
+        assert!(
+            Cli::try_parse_from(["registryctl", "add", "notary", "--from", "local-relay",])
+                .is_err()
+        );
+        assert!(
+            Cli::try_parse_from(["registryctl", "openfn", "convert", "workflow.yaml"]).is_err()
+        );
     }
 
     #[test]
@@ -1032,65 +760,6 @@ enum InitCommand {
         #[arg(long, value_enum, default_value_t = Sample::Benefits)]
         sample: Sample,
     },
-    /// Create a standalone local Notary project for an existing API.
-    Notary {
-        /// Directory to create.
-        dir: PathBuf,
-        /// Source kind to use for the starter Notary project.
-        #[arg(long, value_enum, default_value_t = NotaryInitSourceKind::RegistryDataApi)]
-        source_kind: NotaryInitSourceKind,
-        /// Source API base URL as seen from the Notary container.
-        #[arg(long)]
-        source_url: Option<String>,
-        /// Read the source API bearer token from this process environment variable.
-        #[arg(long)]
-        source_token_from_env: Option<String>,
-        /// Env var name Notary should read for the source API bearer token.
-        #[arg(long)]
-        source_token_env: Option<String>,
-        /// Source dataset used by the starter claim.
-        #[arg(long)]
-        source_dataset: Option<String>,
-        /// Source entity used by the starter claim.
-        #[arg(long)]
-        source_entity: Option<String>,
-        /// Source field used by the starter claim lookup.
-        #[arg(long)]
-        source_lookup_field: Option<String>,
-        /// Docker Compose network to join when the source API runs in another local Compose project.
-        #[arg(long)]
-        source_network: Option<String>,
-        /// Starter claim id to generate.
-        #[arg(long)]
-        source_claim: Option<String>,
-        /// Starter claim title to generate.
-        #[arg(long)]
-        source_claim_title: Option<String>,
-        /// Target id used by generated smoke and Bruno evaluation requests.
-        #[arg(long)]
-        smoke_target_id: Option<String>,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum AddCommand {
-    /// Add a local Notary backed by the generated Relay project.
-    Notary {
-        /// Source to use for the Notary evidence connection.
-        #[arg(long, value_enum)]
-        from: NotarySource,
-        /// Replace existing Notary generated files.
-        #[arg(long)]
-        force: bool,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum NotaryCommand {
-    /// Run built-in local Notary smoke checks.
-    Smoke,
-    /// Open or print the local Notary API docs URL.
-    Open,
 }
 
 #[derive(Debug, Subcommand)]
@@ -1182,219 +851,6 @@ enum AnchorCommand {
         /// Signer key id to remove.
         #[arg(long)]
         kid: String,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum OpenFnCommand {
-    /// Import an OpenFn workflow URL or exported YAML into a sidecar manifest.
-    #[command(
-        after_help = "Examples:\n  registryctl openfn import 'https://app.openfn.org/projects/<project-id>/w/<workflow-id>' --source person_lookup --dataset civil_registry --entity civil_person --credential-env REGISTRY_SOURCE_CREDENTIAL_JSON --smoke national_id=smoke-person\n  registryctl openfn import ./openfn.yaml --workflow person-lookup --source person_lookup --dataset civil_registry --entity civil_person --credential-env REGISTRY_SOURCE_CREDENTIAL_JSON --smoke national_id=smoke-person\n  registryctl openfn import ./openfn.yaml --workflow native-batch-person-lookup --source person_lookup --dataset civil_registry --entity civil_person --credential-env REGISTRY_SOURCE_CREDENTIAL_JSON --smoke national_id=smoke-person --batch-mode native"
-    )]
-    Import {
-        /// OpenFn workflow URL or exported OpenFn YAML file.
-        input: String,
-        /// Env var containing an OpenFn API token for URL imports.
-        #[arg(long, default_value = "OPENFN_TOKEN")]
-        openfn_token_env: String,
-        /// Workflow key to import. For URLs, omitted value is inferred from the workflow name when the API allows it.
-        #[arg(long)]
-        workflow: Option<String>,
-        /// Sidecar manifest path to write.
-        #[arg(long, default_value = "openfn/openfn-sidecar.yaml")]
-        output: PathBuf,
-        /// Local directory where OpenFn job expression files will be written.
-        #[arg(long, default_value = "openfn/jobs")]
-        jobs_dir: PathBuf,
-        /// Path prefix written into the manifest for expression files.
-        #[arg(long, default_value = "/opt/openfn/jobs")]
-        expression_prefix: PathBuf,
-        /// Sidecar source id to create.
-        #[arg(long = "source", alias = "source-id")]
-        source_id: String,
-        /// Registry Data API dataset served by this source.
-        #[arg(long)]
-        dataset: String,
-        /// Registry Data API entity served by this source.
-        #[arg(long)]
-        entity: String,
-        /// Env var containing the sidecar credential JSON for this source.
-        #[arg(long)]
-        credential_env: String,
-        /// Allowed base URL for credential baseUrl validation. Can be repeated.
-        #[arg(long = "allowed-base-url")]
-        allowed_base_url: Vec<String>,
-        /// Smoke lookup as field=value.
-        #[arg(long)]
-        smoke: String,
-        /// Comma-separated smoke response fields. Defaults to the smoke lookup field.
-        #[arg(long)]
-        smoke_fields: Option<String>,
-        /// Smoke lookup purpose.
-        #[arg(long, default_value = "startup-readiness-smoke")]
-        smoke_purpose: String,
-        /// Env var containing the notary-to-sidecar bearer token hash.
-        #[arg(long, default_value = "DEV_SIDECAR_TOKEN_HASH")]
-        auth_hash_env: String,
-        /// Sidecar bind address.
-        #[arg(long, default_value = "127.0.0.1:9191")]
-        server_bind: String,
-        /// Pinned OpenFn compiler/build tool version.
-        #[arg(long, default_value = "1.2.5")]
-        cli_build_tool: String,
-        /// Pinned OpenFn runtime version.
-        #[arg(long, default_value = "1.9.3")]
-        runtime: String,
-        /// Worker command.
-        #[arg(long, default_value = "node")]
-        worker_command: PathBuf,
-        /// Worker script path as seen by the sidecar process.
-        #[arg(long, default_value = "/opt/openfn/openfn_worker.mjs")]
-        worker_script: PathBuf,
-        /// Maximum worker processes.
-        #[arg(long, default_value_t = 2)]
-        max_workers: usize,
-        /// Worker timeout in milliseconds.
-        #[arg(long, default_value_t = 10000)]
-        worker_timeout_ms: u64,
-        /// Maximum worker memory in MiB.
-        #[arg(long, default_value_t = 512)]
-        max_worker_memory_mb: u64,
-        /// Maximum worker output bytes.
-        #[arg(long, default_value_t = 1048576)]
-        max_output_bytes: usize,
-        /// Maximum request body bytes.
-        #[arg(long, default_value_t = 16384)]
-        max_request_bytes: usize,
-        /// Maximum query parameter bytes.
-        #[arg(long, default_value_t = 1024)]
-        max_query_parameter_bytes: usize,
-        /// Maximum items accepted by sidecar records:batchMatch.
-        #[arg(long, default_value_t = 100)]
-        max_batch_items: usize,
-        /// How the sidecar invokes this workflow for records:batchMatch.
-        #[arg(long, value_enum, default_value = "per-item")]
-        batch_mode: OpenFnBatchMode,
-        /// Notary config snippet path to write. Use --no-notary-snippet to skip.
-        #[arg(long, default_value = "openfn/notary-source-snippet.yaml")]
-        notary_snippet_output: Option<PathBuf>,
-        /// Do not write the generated Notary config snippet.
-        #[arg(long = "no-notary-snippet", action = clap::ArgAction::SetTrue)]
-        no_notary_snippet: bool,
-        /// Base URL Notary should use for the sidecar in the generated snippet.
-        #[arg(long)]
-        sidecar_base_url: Option<String>,
-        /// Env var containing the raw notary-to-sidecar bearer token.
-        #[arg(long, default_value = "OPENFN_SIDECAR_TOKEN")]
-        sidecar_token_env: String,
-        /// Permit @latest adaptor specs in the generated sidecar manifest.
-        #[arg(long)]
-        allow_latest_adaptors: bool,
-        /// Permit empty OpenFn job bodies.
-        #[arg(long)]
-        allow_empty_job_bodies: bool,
-    },
-    /// Convert an exported OpenFn project YAML into an OpenFn sidecar manifest.
-    Convert {
-        /// OpenFn project YAML exported from Lightning.
-        #[arg(long)]
-        input: PathBuf,
-        /// Workflow key to convert. Required when the export has multiple workflows.
-        #[arg(long)]
-        workflow: Option<String>,
-        /// Sidecar manifest path to write.
-        #[arg(long, default_value = "openfn-sidecar.yaml")]
-        output: PathBuf,
-        /// Local directory where OpenFn job expression files will be written.
-        #[arg(long, default_value = "openfn/jobs")]
-        jobs_dir: PathBuf,
-        /// Path prefix written into the manifest for expression files.
-        #[arg(long)]
-        expression_prefix: Option<PathBuf>,
-        /// Sidecar source id to create.
-        #[arg(long)]
-        source_id: String,
-        /// Registry Data API dataset served by this source.
-        #[arg(long)]
-        dataset: String,
-        /// Registry Data API entity served by this source.
-        #[arg(long)]
-        entity: String,
-        /// Env var containing the sidecar credential JSON for this source.
-        #[arg(long)]
-        credential_env: String,
-        /// Allowed base URL for credential baseUrl validation. Can be repeated.
-        #[arg(long = "allowed-base-url")]
-        allowed_base_url: Vec<String>,
-        /// Smoke lookup field.
-        #[arg(long)]
-        smoke_field: String,
-        /// Smoke lookup value.
-        #[arg(long)]
-        smoke_value: String,
-        /// Comma-separated smoke response fields. Defaults to smoke-field.
-        #[arg(long)]
-        smoke_fields: Option<String>,
-        /// Smoke lookup purpose.
-        #[arg(long, default_value = "startup-readiness-smoke")]
-        smoke_purpose: String,
-        /// Env var containing the notary-to-sidecar bearer token hash.
-        #[arg(long, default_value = "DEV_SIDECAR_TOKEN_HASH")]
-        auth_hash_env: String,
-        /// Sidecar bind address.
-        #[arg(long, default_value = "127.0.0.1:9191")]
-        server_bind: String,
-        /// Pinned OpenFn compiler/build tool version.
-        #[arg(long, default_value = "1.2.5")]
-        cli_build_tool: String,
-        /// Pinned OpenFn runtime version.
-        #[arg(long, default_value = "1.9.3")]
-        runtime: String,
-        /// Worker command.
-        #[arg(long, default_value = "node")]
-        worker_command: PathBuf,
-        /// Worker script path as seen by the sidecar process.
-        #[arg(long, default_value = "/opt/openfn/openfn_worker.mjs")]
-        worker_script: PathBuf,
-        /// Maximum worker processes.
-        #[arg(long, default_value_t = 2)]
-        max_workers: usize,
-        /// Worker timeout in milliseconds.
-        #[arg(long, default_value_t = 10000)]
-        worker_timeout_ms: u64,
-        /// Maximum worker memory in MiB.
-        #[arg(long, default_value_t = 512)]
-        max_worker_memory_mb: u64,
-        /// Maximum worker output bytes.
-        #[arg(long, default_value_t = 1048576)]
-        max_output_bytes: usize,
-        /// Maximum request body bytes.
-        #[arg(long, default_value_t = 16384)]
-        max_request_bytes: usize,
-        /// Maximum query parameter bytes.
-        #[arg(long, default_value_t = 1024)]
-        max_query_parameter_bytes: usize,
-        /// Maximum items accepted by sidecar records:batchMatch.
-        #[arg(long, default_value_t = 100)]
-        max_batch_items: usize,
-        /// How the sidecar invokes this workflow for records:batchMatch.
-        #[arg(long, value_enum, default_value = "per-item")]
-        batch_mode: OpenFnBatchMode,
-        /// Notary config snippet path to write.
-        #[arg(long)]
-        notary_snippet_output: Option<PathBuf>,
-        /// Base URL Notary should use for the sidecar in the generated snippet.
-        #[arg(long)]
-        sidecar_base_url: Option<String>,
-        /// Env var containing the raw notary-to-sidecar bearer token.
-        #[arg(long, default_value = "OPENFN_SIDECAR_TOKEN")]
-        sidecar_token_env: String,
-        /// Permit @latest adaptor specs in the generated sidecar manifest.
-        #[arg(long)]
-        allow_latest_adaptors: bool,
-        /// Permit empty OpenFn job bodies.
-        #[arg(long)]
-        allow_empty_job_bodies: bool,
     },
 }
 

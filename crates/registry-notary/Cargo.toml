@@ -33,7 +33,6 @@ registry-notary-server = { workspace = true, default-features = false }
 registry-config-report.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
-registry-platform-httputil.workspace = true
 registry-platform-ops.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true

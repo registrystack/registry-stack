@@ -13,7 +13,6 @@ anyhow = "1"
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 crc32fast = "1.4"
-ed25519-dalek = "2"
 getrandom = "0.4"
 hex.workspace = true
 include_dir = "0.7"

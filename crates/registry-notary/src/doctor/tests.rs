@@ -90,7 +90,7 @@ fn redaction_covers_pin_key_and_credential_names() {
 
 #[test]
 fn local_file_audit_sink_emits_beta_tamper_evidence_warning() {
-    let mut config = doctor_live_test_config("http://127.0.0.1:1");
+    let mut config = notary_test_config();
     config.audit.sink = "jsonl".to_string();
 
     let diagnostics = local_env_diagnostics(&config, &EnvFileReport::default());
@@ -110,7 +110,7 @@ fn local_file_audit_sink_emits_beta_tamper_evidence_warning() {
 
 #[test]
 fn attested_local_file_audit_sink_suppresses_beta_tamper_evidence_warning() {
-    let mut config = doctor_live_test_config("http://127.0.0.1:1");
+    let mut config = notary_test_config();
     config.audit.sink = "jsonl".to_string();
     config.deployment.evidence.audit_offhost_shipping = true;
 
@@ -125,13 +125,14 @@ fn attested_local_file_audit_sink_suppresses_beta_tamper_evidence_warning() {
 }
 
 fn doctor_relay_config(token_file: PathBuf) -> StandaloneRegistryNotaryConfig {
-    let mut config = doctor_live_test_config("http://127.0.0.1:1");
+    let mut config = notary_test_config();
     config.evidence.claims[0].evidence_mode =
         registry_notary_core::ClaimEvidenceMode::RegistryBacked {
             consultations: std::collections::BTreeMap::new(),
         };
     config.evidence.relay = Some(registry_notary_core::RelayConnectionConfig {
         base_url: "http://127.0.0.1:1".to_string(),
+        workload_client_id: "registry-notary".to_string(),
         token_file,
         allowed_private_cidrs: Vec::new(),
         allow_insecure_localhost: true,
@@ -222,7 +223,7 @@ fn relay_live_failures_have_stable_safe_categories() {
 
 #[test]
 fn notary_audit_shipping_reports_stdout_sink_as_shipped() {
-    let mut config = doctor_live_test_config("http://127.0.0.1:1");
+    let mut config = notary_test_config();
     config.audit.sink = "stdout".to_string();
 
     let shipping = notary_audit_shipping(&config);
@@ -237,7 +238,7 @@ fn notary_audit_shipping_reports_stdout_sink_as_shipped() {
 
 #[test]
 fn notary_audit_shipping_reports_local_file_sink_without_attestation_as_unshipped() {
-    let mut config = doctor_live_test_config("http://127.0.0.1:1");
+    let mut config = notary_test_config();
     config.audit.sink = "jsonl".to_string();
     config.deployment.evidence.audit_offhost_shipping = false;
 
@@ -253,7 +254,7 @@ fn notary_audit_shipping_reports_local_file_sink_without_attestation_as_unshippe
 
 #[test]
 fn notary_audit_shipping_reports_attested_local_file_sink_as_declared_external() {
-    let mut config = doctor_live_test_config("http://127.0.0.1:1");
+    let mut config = notary_test_config();
     config.audit.sink = "file".to_string();
     config.deployment.evidence.audit_offhost_shipping = true;
 
@@ -269,7 +270,7 @@ fn notary_audit_shipping_reports_attested_local_file_sink_as_declared_external()
 
 #[test]
 fn notary_audit_shipping_maps_unrecognized_sink_to_unknown() {
-    let mut config = doctor_live_test_config("http://127.0.0.1:1");
+    let mut config = notary_test_config();
     config.audit.sink = "s3".to_string();
 
     let shipping = notary_audit_shipping(&config);
@@ -299,7 +300,7 @@ fn notary_audit_shipping_reports_unverified_for_fresh_offline_cursor() {
         .format(&Rfc3339)
         .expect("now formats");
     let cursor = write_doctor_ack_cursor(&tmp, &acked_at);
-    let mut config = doctor_live_test_config("http://127.0.0.1:1");
+    let mut config = notary_test_config();
     config.audit.sink = "stdout".to_string();
     config.deployment.evidence.audit_ack_cursor_path = Some(cursor);
 
@@ -314,7 +315,7 @@ fn notary_audit_shipping_reports_stale_for_old_cursor() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     // Far past the default 900s window relative to any plausible test clock.
     let cursor = write_doctor_ack_cursor(&tmp, "2026-06-04T09:59:00Z");
-    let mut config = doctor_live_test_config("http://127.0.0.1:1");
+    let mut config = notary_test_config();
     config.audit.sink = "stdout".to_string();
     config.deployment.evidence.audit_ack_cursor_path = Some(cursor);
 
@@ -328,7 +329,7 @@ fn notary_audit_shipping_reports_stale_for_old_cursor() {
 fn notary_audit_shipping_reports_missing_for_absent_cursor_file() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let cursor = tmp.path().join("does-not-exist.json");
-    let mut config = doctor_live_test_config("http://127.0.0.1:1");
+    let mut config = notary_test_config();
     config.audit.sink = "stdout".to_string();
     config.deployment.evidence.audit_ack_cursor_path = Some(cursor);
 
@@ -343,7 +344,7 @@ fn notary_audit_shipping_reports_invalid_for_malformed_cursor_file() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let cursor = tmp.path().join("ack-cursor.json");
     std::fs::write(&cursor, "{ not valid json").expect("cursor writes");
-    let mut config = doctor_live_test_config("http://127.0.0.1:1");
+    let mut config = notary_test_config();
     config.audit.sink = "stdout".to_string();
     config.deployment.evidence.audit_ack_cursor_path = Some(cursor);
 
@@ -361,7 +362,7 @@ fn doctor_pkcs11_preflight_attempts_module_loading() {
         r#"{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.example#hsm"}"#,
     );
     std::env::set_var("TEST_DOCTOR_PKCS11_PIN", "1234");
-    let mut config = doctor_live_test_config("http://127.0.0.1:1");
+    let mut config = notary_test_config();
     config.evidence.signing_keys.insert(
         "hsm-key".to_string(),
         registry_notary_core::SigningKeyConfig {
@@ -399,98 +400,6 @@ fn doctor_pkcs11_preflight_attempts_module_loading() {
     );
     std::env::remove_var("TEST_DOCTOR_PKCS11_PUBLIC_JWK");
     std::env::remove_var("TEST_DOCTOR_PKCS11_PIN");
-}
-
-#[test]
-fn dci_diagnostics_skip_registry_data_api_bindings() {
-    let mut config = doctor_live_test_config("http://127.0.0.1:1");
-    let binding = config.evidence.claims[0]
-        .source_bindings
-        .get_mut("record")
-        .expect("source binding exists");
-    binding.connector = registry_notary_core::SourceConnectorKind::RegistryDataApi;
-
-    let diagnostics = dci_diagnostics(&config, None);
-
-    assert!(diagnostics.is_empty());
-}
-
-#[test]
-fn dci_probe_body_uses_binding_lookup_field_for_idtype_value_queries_by_default() {
-    let config: StandaloneRegistryNotaryConfig =
-        serde_norway::from_str(&dci_config_yaml(&test_dci_options(false)))
-            .expect("generated config parses");
-    let connection = config
-        .evidence
-        .source_connections
-        .get("dci_registry")
-        .expect("connection exists");
-    let binding =
-        first_dci_binding_for_connection(&config, "dci_registry").expect("dci binding exists");
-    let body = dci_probe_body(
-        &connection.effective_dci().expect("effective dci"),
-        binding,
-        "secret-subject-123",
-        None,
-    )
-    .expect("body builds");
-    assert_eq!(
-        body["message"]["search_request"][0]["search_criteria"]["query"],
-        json!({
-            "type": "SUBJECT_ID",
-            "value": "secret-subject-123"
-        })
-    );
-}
-
-#[test]
-fn dci_probe_body_allows_subject_id_type_override_for_idtype_value_queries() {
-    let config: StandaloneRegistryNotaryConfig =
-        serde_norway::from_str(&dci_config_yaml(&test_dci_options(false)))
-            .expect("generated config parses");
-    let connection = config
-        .evidence
-        .source_connections
-        .get("dci_registry")
-        .expect("connection exists");
-    let binding =
-        first_dci_binding_for_connection(&config, "dci_registry").expect("dci binding exists");
-    let body = dci_probe_body(
-        &connection.effective_dci().expect("effective dci"),
-        binding,
-        "secret-subject-123",
-        Some("NATIONAL_ID"),
-    )
-    .expect("body builds");
-    assert_eq!(
-        body["message"]["search_request"][0]["search_criteria"]["query"],
-        json!({
-            "type": "NATIONAL_ID",
-            "value": "secret-subject-123"
-        })
-    );
-}
-
-#[test]
-fn doctor_source_url_preserves_base_path_prefix() {
-    let url = source_url_for_cli("https://dci.example.test/api/v1", "/registry/sync/search")
-        .expect("relative DCI path builds");
-
-    assert_eq!(
-        url.as_str(),
-        "https://dci.example.test/api/v1/registry/sync/search"
-    );
-}
-
-#[test]
-fn doctor_source_url_ignores_empty_relative_path_segments() {
-    let url = source_url_for_cli("https://dci.example.test/api/v1/", "registry//sync/search")
-        .expect("relative DCI path builds");
-
-    assert_eq!(
-        url.as_str(),
-        "https://dci.example.test/api/v1/registry/sync/search"
-    );
 }
 
 #[test]
@@ -591,84 +500,11 @@ fn local_jwk_diagnostic_rejects_mismatched_alg() {
     );
 }
 
-#[cfg(unix)]
-#[test]
-fn generated_secret_file_overwrite_forces_private_permissions() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let path = std::env::temp_dir().join(format!(
-        "registry-notary-secret-permissions-{}",
-        Ulid::new()
-    ));
-    std::fs::write(&path, "old").expect("test file is written");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
-        .expect("test file permissions are set");
-
-    write_generated_file(&path, "secret", true, true).expect("secret file is overwritten");
-
-    let mode = std::fs::metadata(&path)
-        .expect("test file metadata")
-        .permissions()
-        .mode()
-        & 0o777;
-    std::fs::remove_file(&path).expect("test file is removed");
-    assert_eq!(mode, 0o600);
-}
-
-#[tokio::test]
-async fn doctor_live_fetches_oauth_runs_dci_probe_and_redacts_subject_and_token() {
-    std::env::set_var("TEST_DOCTOR_OAUTH_CLIENT_ID", "doctor-client");
-    std::env::set_var("TEST_DOCTOR_OAUTH_CLIENT_SECRET", "doctor-secret");
-    let state = DoctorLiveState::default();
-    let upstream = TestServer::builder().http_transport().build(
-        Router::new()
-            .fallback(post(doctor_live_upstream))
-            .with_state(state.clone()),
-    );
-    let base_url = upstream
-        .server_address()
-        .expect("upstream address")
-        .to_string();
-    let config = doctor_live_test_config(base_url.trim_end_matches('/'));
-    let diagnostics = live_diagnostics(&config, Some("secret-subject-123"), None).await;
-
-    assert!(
-        state.token_called.load(Ordering::SeqCst),
-        "doctor should call OAuth token endpoint"
-    );
-    assert!(
-        state.dci_called.load(Ordering::SeqCst),
-        "doctor should run DCI record probe"
-    );
-    assert!(
-        diagnostics.iter().all(|diagnostic| diagnostic.ok),
-        "expected all diagnostics ok: {diagnostics:?}"
-    );
-    let output = diagnostics
-        .iter()
-        .map(|diagnostic| {
-            format!(
-                "{} {}",
-                diagnostic.label,
-                diagnostic.action.as_deref().unwrap_or_default()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(!output.contains("secret-subject-123"));
-    assert!(!output.contains("doctor-live-token"));
-
-    std::env::remove_var("TEST_DOCTOR_OAUTH_CLIENT_ID");
-    std::env::remove_var("TEST_DOCTOR_OAUTH_CLIENT_SECRET");
-}
-
 #[test]
 fn doctor_parse_expanded_config_surfaces_disclosure_default_violation() {
     // GH#170 / RS-DM-CLAIM Section 10: `registry-notary doctor` calls
-    // parse_expanded_config (see the `doctor` function above), which now
-    // rejects a disclosure default that isn't a member of the claim's
-    // allowed set (REQ-DM-CLAIM-008) at load instead of loading cleanly
-    // and surfacing the inconsistency only when a result is rendered.
+    // parse_expanded_config (see the `doctor` function above), which rejects
+    // a disclosure default that is not a member of the claim's allowed set.
     let raw = r#"
 deployment:
   profile: local
@@ -681,55 +517,22 @@ auth:
       fingerprint:
         provider: env
         name: TEST_DOCTOR_API_HASH
-      scopes: [dci:evidence_verification]
+      scopes: [registry_notary:credential_issue]
 audit:
   sink: stdout
 evidence:
   enabled: true
   service_id: doctor-disclosure-test
-  source_connections:
-    dci_registry:
-      base_url: "https://dci.example.test"
-      source_auth:
-        type: oauth2_client_credentials
-        token_url: "https://dci.example.test/oauth/token"
-        client_id_env: TEST_DOCTOR_OAUTH_CLIENT_ID
-        client_secret_env: TEST_DOCTOR_OAUTH_CLIENT_SECRET
-        request_format: json
-      dci:
-        search_path: /registry/sync/search
-        sender_id: registry-notary
-        query_type: idtype-value
-        records_path: /message/search_response/0/data/reg_records
   claims:
-    - id: dci-record-exists
-      title: DCI record exists
+    - id: self-attested-test
+      title: Self-attested test
       version: 2026-05
       subject_type: person
       evidence_mode:
-        type: transitional_direct
-      value:
-        type: boolean
-      source_bindings:
-        record:
-          connector: dci
-          connection: dci_registry
-          required_scope: dci:evidence_verification
-          dataset: registry_records
-          entity: record
-          lookup:
-            input: target.id
-            field: SUBJECT_ID
-            op: eq
-            cardinality: one
-          fields:
-            id:
-              field: id
-              type: string
-              required: false
+        type: self_attested
       rule:
-        type: exists
-        source: record
+        type: cel
+        expression: "true"
       disclosure:
         default: value
         allowed: [redacted]
@@ -741,7 +544,7 @@ evidence:
         .expect_err("disclosure default outside allowed must fail at the doctor entrypoint");
     let message = err.to_string();
     assert!(
-        message.contains("dci-record-exists") && message.contains("disclosure"),
+        message.contains("self-attested-test") && message.contains("disclosure"),
         "doctor-facing error must name the offending claim id and field: {message}"
     );
 }

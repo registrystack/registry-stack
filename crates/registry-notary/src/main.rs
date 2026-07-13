@@ -20,8 +20,8 @@ use logging::*;
 
 use std::collections::BTreeSet;
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -35,19 +35,14 @@ use base64::Engine;
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use ed25519_dalek::SigningKey;
 use registry_config_report::{
-    ConfigValueClassification, LiveApplyClass, ReportStatus, RequiredEnvStatus, TrustedValueSource,
-    PLATFORM_CONTEXT_CONSTRAINTS_CONTRACT_V1,
-    PLATFORM_CONTEXT_CONSTRAINTS_HASH_MATERIAL_CONTRACT_V1,
+    ConfigValueClassification, LiveApplyClass, ReportStatus, RequiredEnvStatus,
 };
 use registry_notary_core::deployment::{
-    evaluate_gates, gate_severity_for_profile, DeploymentFindingStatus, DeploymentProfile,
-    EvaluatedFinding, FINDING_SOURCE_BINDING_NO_MATCHING_POLICY,
+    evaluate_gates, DeploymentFindingStatus, DeploymentProfile, EvaluatedFinding,
 };
 use registry_notary_core::{
-    deprecated_config_fields, ConfigAuditEvent, ConfigTrustConfig, EvidenceAuthMode,
-    Oauth2ClientCredentialsSourceAuthConfig, RegistryNotaryAdminListenerMode,
-    SigningKeyProviderConfig, SourceAuthConfig, SourceConnectorKind,
-    StandaloneRegistryNotaryConfig,
+    deprecated_config_fields, ConfigAuditEvent, ConfigTrustConfig, RegistryNotaryAdminListenerMode,
+    SigningKeyProviderConfig, StandaloneRegistryNotaryConfig,
 };
 use registry_notary_server::{
     compile_notary_runtime_with_provenance, notary_router_from_runtime,
@@ -59,7 +54,6 @@ use registry_platform_config::{
     ConfigBundleError, VerifiedConfigBundle,
 };
 use registry_platform_crypto::{LocalJwkSigner, PrivateJwk, PublicJwk};
-use registry_platform_httputil::{url as httputil_url, FetchUrlPolicy};
 use registry_platform_ops::{
     antirollback_key_from_verified_bundle, audit_shipping_target, bundle_verify_rejection_result,
     evaluate_ack_health, load_unsigned_break_glass_or_pin,
@@ -79,9 +73,6 @@ use ulid::Ulid;
 
 const DEFAULT_LOG_FILTER: &str = "info";
 const NOTARY_CONFIG_SCHEMA_VERSION: &str = "registry.notary.config.v1";
-
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about = "Run the standalone Registry Notary")]
@@ -109,17 +100,11 @@ struct Args {
 enum Command {
     /// Print the Registry Notary OpenAPI document as JSON.
     Openapi,
-    /// Validate config, env-backed secrets, source auth, and VC wiring.
+    /// Validate config, env-backed secrets, Relay activation, and VC wiring.
     Doctor {
-        /// Verify Relay activation and run OAuth source reachability checks.
+        /// Verify Relay activation for Registry-backed claims.
         #[arg(long)]
         live: bool,
-        /// Target id for record-level live probes. Output is redacted.
-        #[arg(long)]
-        target_id: Option<String>,
-        /// Override the lookup field used by DCI idtype-value probes.
-        #[arg(long)]
-        target_id_type: Option<String>,
         /// Validate local VC issuing setup. This does not print credentials.
         #[arg(long)]
         issue_demo_vc: bool,
@@ -147,11 +132,6 @@ enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
-    },
-    /// Generate starter files.
-    Init {
-        #[command(subcommand)]
-        template: InitCommand,
     },
     /// Generate or hash a Registry Notary API key.
     HashApiKey {
@@ -220,43 +200,6 @@ struct ConfigVerifyBundleArgs {
     state_path: PathBuf,
 }
 
-#[derive(Debug, Subcommand)]
-enum InitCommand {
-    /// Generate a generic DCI source starter skeleton.
-    Dci {
-        /// Output directory for generated files.
-        #[arg(long, default_value = ".")]
-        output: PathBuf,
-        /// DCI upstream base URL.
-        #[arg(long, default_value = "https://dci.example.test")]
-        base_url: String,
-        /// DCI OAuth token URL.
-        #[arg(long, default_value = "https://dci.example.test/oauth2/client/token")]
-        token_url: String,
-        /// DCI lookup field used by idtype-value queries.
-        #[arg(long, default_value = "SUBJECT_ID")]
-        lookup_field: String,
-        /// Claim id to generate.
-        #[arg(long, default_value = "dci-record-exists")]
-        claim_id: String,
-        /// Human-readable claim title.
-        #[arg(long, default_value = "DCI record exists")]
-        claim_title: String,
-        /// Include local VC issuer wiring and a generated issuer key.
-        #[arg(long)]
-        demo_issuer: bool,
-        /// Create .env.local with generated local secrets.
-        #[arg(long, alias = "write-local-secrets")]
-        with_env_file: bool,
-        /// Overwrite generated files if they already exist.
-        #[arg(long)]
-        force: bool,
-        /// Print generated local secrets to stdout.
-        #[arg(long)]
-        print_secrets: bool,
-    },
-}
-
 #[tokio::main]
 async fn main() -> ExitCode {
     match run(Args::parse()).await {
@@ -282,8 +225,6 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         Some(Command::Doctor {
             live,
-            target_id,
-            target_id_type,
             issue_demo_vc,
             show_expanded_config,
             profile,
@@ -296,8 +237,6 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
                 args.bind,
                 DoctorOptions {
                     live,
-                    target_id,
-                    target_id_type,
                     issue_demo_vc,
                     show_expanded_config,
                     profile_override: profile,
@@ -320,36 +259,6 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             command: ConfigCommand::VerifyBundle(verify_args),
         }) => {
             config_verify_bundle(verify_args).await?;
-            Ok(ExitCode::SUCCESS)
-        }
-        Some(Command::Init { template }) => {
-            match template {
-                InitCommand::Dci {
-                    output,
-                    base_url,
-                    token_url,
-                    lookup_field,
-                    claim_id,
-                    claim_title,
-                    demo_issuer,
-                    with_env_file,
-                    force,
-                    print_secrets,
-                } => init_dci(
-                    &output,
-                    InitDciOptions {
-                        base_url,
-                        token_url,
-                        lookup_field,
-                        claim_id,
-                        claim_title,
-                        demo_issuer,
-                        with_env_file,
-                        force,
-                        print_secrets,
-                    },
-                )?,
-            }
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::HashApiKey {

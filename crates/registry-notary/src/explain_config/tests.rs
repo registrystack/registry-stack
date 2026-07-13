@@ -25,6 +25,7 @@ evidence:
   enabled: true
   relay:
     base_url: https://relay.internal.example
+    workload_client_id: registry-notary
     token_file: {}
     allowed_private_cidrs: [10.20.0.0/16]
   claims:
@@ -38,12 +39,17 @@ evidence:
           person_status:
             profile:
               id: example.person-status.exact
-              version: "1"
               contract_hash: {CONTRACT_HASH}
             inputs:
               tracked_entity: target.id
+            outputs:
+              status:
+                type: string
+                nullable: true
+                max_bytes: 64
       value:
         type: string
+        nullable: true
       purpose: benefit-verification
       required_scopes: [registry:evidence]
       rule:
@@ -143,7 +149,6 @@ fn relay_consultation_report_exposes_only_pinned_operator_contract() {
             "consultation": "person_status",
             "profile": {
                 "id": "example.person-status.exact",
-                "version": "1",
                 "contract_hash": CONTRACT_HASH,
             },
             "purpose": "benefit-verification",

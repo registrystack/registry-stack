@@ -1,12 +1,9 @@
 use crate::*;
-pub(crate) use std::sync::atomic::{AtomicBool, Ordering};
-pub(crate) use std::sync::{Arc, Mutex};
+pub(crate) use std::sync::Mutex;
 
-pub(crate) use axum::extract::State;
-pub(crate) use axum::http::{HeaderMap, StatusCode};
-pub(crate) use axum::response::{IntoResponse, Response};
-pub(crate) use axum::routing::{get, post};
-pub(crate) use axum::{Json, Router};
+pub(crate) use axum::http::StatusCode;
+pub(crate) use axum::routing::get;
+pub(crate) use axum::Router;
 pub(crate) use axum_test::TestServer;
 pub(crate) use registry_platform_config::{
     sha256_uri, ConfigBundleFile, ConfigBundleManifest, ConfigBundleSignature,
@@ -16,12 +13,6 @@ pub(crate) use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 
 pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 pub(crate) const CONFIG_BUNDLE_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
-
-#[derive(Clone, Default)]
-pub(crate) struct DoctorLiveState {
-    pub(crate) token_called: Arc<AtomicBool>,
-    pub(crate) dci_called: Arc<AtomicBool>,
-}
 
 pub(crate) struct SignedBundleFixture {
     pub(crate) bundle_dir: PathBuf,
@@ -160,92 +151,8 @@ config_trust:
     )
 }
 
-pub(crate) async fn test_oauth_token(
-    State(state): State<DoctorLiveState>,
-    Json(body): Json<Value>,
-) -> Response {
-    state.token_called.store(true, Ordering::SeqCst);
-    if body["grant_type"] != json!("client_credentials")
-        || body["client_id"] != json!("doctor-client")
-        || body["client_secret"] != json!("doctor-secret")
-    {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    Json(json!({
-        "access_token": "doctor-live-token",
-        "expires_in": 300,
-    }))
-    .into_response()
-}
-
-pub(crate) async fn test_dci_search(
-    State(state): State<DoctorLiveState>,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
-) -> Response {
-    state.dci_called.store(true, Ordering::SeqCst);
-    if headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        != Some("Bearer doctor-live-token")
-    {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    if headers
-        .get("data-purpose")
-        .and_then(|value| value.to_str().ok())
-        != Some("https://registry-notary.local/purpose/doctor")
-    {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    let query = &body["message"]["search_request"][0]["search_criteria"]["query"];
-    if query["type"] != json!("SUBJECT_ID") || query["value"] != json!("secret-subject-123") {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    Json(json!({
-        "message": {
-            "search_response": [{
-                "data": {
-                    "reg_records": [{
-                        "id": "record-1"
-                    }]
-                }
-            }]
-        }
-    }))
-    .into_response()
-}
-
-pub(crate) async fn doctor_live_upstream(
-    State(state): State<DoctorLiveState>,
-    headers: HeaderMap,
-    uri: axum::http::Uri,
-    Json(body): Json<Value>,
-) -> Response {
-    match uri.path() {
-        "/oauth/token" => test_oauth_token(State(state), Json(body)).await,
-        "/registry/sync/search" => test_dci_search(State(state), headers, Json(body)).await,
-        _ => StatusCode::NOT_FOUND.into_response(),
-    }
-}
-
-pub(crate) fn test_dci_options(demo_issuer: bool) -> InitDciOptions {
-    InitDciOptions {
-        base_url: "https://dci.example.test".to_string(),
-        token_url: "https://dci.example.test/oauth2/client/token".to_string(),
-        lookup_field: "SUBJECT_ID".to_string(),
-        claim_id: "dci-record-exists".to_string(),
-        claim_title: "DCI record exists".to_string(),
-        demo_issuer,
-        with_env_file: false,
-        force: false,
-        print_secrets: false,
-    }
-}
-
-pub(crate) fn doctor_live_test_config(base_url: &str) -> StandaloneRegistryNotaryConfig {
-    let raw = format!(
-        r#"
+pub(crate) fn notary_test_config() -> StandaloneRegistryNotaryConfig {
+    let raw = r#"
 deployment:
   profile: local
 server:
@@ -257,62 +164,27 @@ auth:
       fingerprint:
         provider: env
         name: TEST_DOCTOR_API_HASH
-      scopes: [dci:evidence_verification]
+      scopes: [registry_notary:credential_issue]
 audit:
   sink: stdout
 evidence:
   enabled: true
   service_id: doctor-live-test
-  source_connections:
-    dci_registry:
-      base_url: "{base_url}"
-      allow_insecure_localhost: true
-      source_auth:
-        type: oauth2_client_credentials
-        token_url: "{base_url}/oauth/token"
-        client_id_env: TEST_DOCTOR_OAUTH_CLIENT_ID
-        client_secret_env: TEST_DOCTOR_OAUTH_CLIENT_SECRET
-        request_format: json
-      dci:
-        search_path: /registry/sync/search
-        sender_id: registry-notary
-        query_type: idtype-value
-        records_path: /message/search_response/0/data/reg_records
   claims:
-    - id: dci-record-exists
-      title: DCI record exists
+    - id: self-attested-test
+      title: Self-attested test
       version: 2026-05
       subject_type: person
       evidence_mode:
-        type: transitional_direct
-      value:
-        type: boolean
-      source_bindings:
-        record:
-          connector: dci
-          connection: dci_registry
-          required_scope: dci:evidence_verification
-          dataset: registry_records
-          entity: record
-          lookup:
-            input: target.id
-            field: SUBJECT_ID
-            op: eq
-            cardinality: one
-          fields:
-            id:
-              field: id
-              type: string
-              required: false
+        type: self_attested
       rule:
-        type: exists
-        source: record
+        type: cel
+        expression: "true"
       disclosure:
         default: value
         allowed: [value, redacted]
       formats:
         - application/vnd.registry-notary.claim-result+json
-"#
-    );
+"#;
     serde_norway::from_str::<StandaloneRegistryNotaryConfig>(&raw).expect("config parses")
 }

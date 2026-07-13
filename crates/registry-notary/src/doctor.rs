@@ -112,8 +112,6 @@ impl Diagnostic {
 #[derive(Debug)]
 pub(crate) struct DoctorOptions {
     pub(crate) live: bool,
-    pub(crate) target_id: Option<String>,
-    pub(crate) target_id_type: Option<String>,
     pub(crate) issue_demo_vc: bool,
     pub(crate) show_expanded_config: bool,
     pub(crate) profile_override: Option<String>,
@@ -202,21 +200,12 @@ pub(crate) async fn doctor(
         diagnostics.extend(deployment_profile_diagnostics(config, profile_value));
         diagnostics.extend(local_env_diagnostics(config, env_report));
         diagnostics.extend(holder_binding_diagnostics(config));
-        diagnostics.extend(matching_policy_diagnostics(config, profile_value));
         if let Some(diagnostic) = pkcs11_preflight_diagnostic(config) {
             diagnostics.push(diagnostic);
         }
         diagnostics.extend(vc_diagnostics(config, options.issue_demo_vc));
-        diagnostics.extend(dci_diagnostics(config, options.target_id_type.as_deref()));
         if options.live {
-            diagnostics.extend(
-                live_diagnostics(
-                    config,
-                    options.target_id.as_deref(),
-                    options.target_id_type.as_deref(),
-                )
-                .await,
-            );
+            diagnostics.extend(live_diagnostics(config).await);
         }
         if options.show_expanded_config {
             expanded_config = Some(redacted_config(config));
@@ -327,44 +316,6 @@ pub(crate) fn holder_binding_diagnostics(
         ),
         "set holder_binding.mode: did with allowed_did_methods: [did:jwk], or keep mode: none only for an explicit bearer-style credential profile",
         "notary.credential_profile.unbound_holder_binding",
-    )]
-}
-
-pub(crate) fn matching_policy_diagnostics(
-    config: &StandaloneRegistryNotaryConfig,
-    profile_value: Option<DeploymentProfile>,
-) -> Vec<Diagnostic> {
-    // The deployment gate catalog already covers this finding under any
-    // profile that binds it (currently production and evidence_grade); skip
-    // the explicit diagnostic there so doctor doesn't double-report the same
-    // code. Profiles that leave the gate unbound (local, hosted_lab,
-    // undeclared) still need this explicit diagnostic for visibility.
-    if gate_severity_for_profile(FINDING_SOURCE_BINDING_NO_MATCHING_POLICY, profile_value).is_some()
-    {
-        return Vec::new();
-    }
-    let unconstrained_bindings = config
-        .evidence
-        .claims
-        .iter()
-        .flat_map(|claim| {
-            claim
-                .source_bindings
-                .iter()
-                .filter(|(_, binding)| binding.matching.lacks_matching_policy())
-                .map(move |(binding_id, _)| format!("{}/{binding_id}", claim.id))
-        })
-        .collect::<Vec<_>>();
-    if unconstrained_bindings.is_empty() {
-        return Vec::new();
-    }
-    vec![Diagnostic::warn_with_code(
-        format!(
-            "claim source binding(s) declare no matching policy or matching gates, so resolution falls back to unrestricted, identifier-only matching: {}",
-            unconstrained_bindings.join(", ")
-        ),
-        "declare a matching: block (policy_id, purpose, relationship, input, requester type, ecosystem binding, or context_constraints gates) on each binding, or accept unrestricted identifier-only resolution knowingly",
-        "notary.source_binding.no_matching_policy",
     )]
 }
 
@@ -490,9 +441,7 @@ pub(crate) fn doctor_json_report(
             config.map(required_env_vars).unwrap_or_default(),
             env_report,
         ),
-        "context_constraints": config
-            .map(notary_context_constraints_report)
-            .unwrap_or_default(),
+        "context_constraints": [],
         "generated_at": now_rfc3339(),
     });
     if let Some(config) = config {
@@ -678,27 +627,6 @@ pub(crate) fn local_env_diagnostics(
             env_report,
             "federation pairwise subject hash secret",
         ));
-    }
-    for (connection_id, connection) in &config.evidence.source_connections {
-        if !connection.token_env.trim().is_empty() {
-            diagnostics.push(check_present_env(
-                &connection.token_env,
-                env_report,
-                &format!("source token for {connection_id}"),
-            ));
-        }
-        if let Some(SourceAuthConfig::Oauth2ClientCredentials(auth)) = &connection.source_auth {
-            diagnostics.push(check_present_env(
-                &auth.client_id_env,
-                env_report,
-                &format!("OAuth client id for {connection_id}"),
-            ));
-            diagnostics.push(check_present_env(
-                &auth.client_secret_env,
-                env_report,
-                &format!("OAuth client secret for {connection_id}"),
-            ));
-        }
     }
     for (key_id, key) in &config.evidence.signing_keys {
         if matches!(key.provider, SigningKeyProviderConfig::LocalJwkEnv) && key.status.may_sign() {
@@ -935,50 +863,7 @@ pub(crate) fn vc_diagnostics(
     diagnostics
 }
 
-pub(crate) fn dci_diagnostics(
-    config: &StandaloneRegistryNotaryConfig,
-    subject_id_type: Option<&str>,
-) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-    for (connection_id, connection) in &config.evidence.source_connections {
-        let Some(binding) = first_dci_binding_for_connection(config, connection_id) else {
-            continue;
-        };
-        if connection.dci.search_path.trim().is_empty() {
-            continue;
-        }
-        let dci = match connection.effective_dci() {
-            Ok(dci) => dci,
-            Err(err) => {
-                diagnostics.push(Diagnostic::fail(
-                    format!("{connection_id} DCI expansion failed: {err}"),
-                    "fix the DCI block",
-                ));
-                continue;
-            }
-        };
-        if dci.records_path.trim().is_empty() {
-            diagnostics.push(Diagnostic::fail(
-                format!("{connection_id} DCI records_path is empty"),
-                "set records_path to the JSON pointer containing registry records",
-            ));
-        } else {
-            let lookup_field = subject_id_type
-                .or(Some(binding.lookup.field.as_str()))
-                .unwrap_or("configured lookup field");
-            diagnostics.push(Diagnostic::ok(format!(
-                "{connection_id} DCI request can be constructed for lookup field {lookup_field}"
-            )));
-        }
-    }
-    diagnostics
-}
-
-pub(crate) async fn live_diagnostics(
-    config: &StandaloneRegistryNotaryConfig,
-    target_id: Option<&str>,
-    target_id_type: Option<&str>,
-) -> Vec<Diagnostic> {
+pub(crate) async fn live_diagnostics(config: &StandaloneRegistryNotaryConfig) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     if config
         .evidence
@@ -998,38 +883,9 @@ pub(crate) async fn live_diagnostics(
             Err(error) => relay_live_failure_diagnostic(&error),
         });
     }
-    for (connection_id, connection) in &config.evidence.source_connections {
-        if let Some(SourceAuthConfig::Oauth2ClientCredentials(auth)) = &connection.source_auth {
-            match fetch_oauth_token_for_doctor(connection_id, connection, auth).await {
-                Ok(token) => {
-                    diagnostics.push(Diagnostic::ok(format!(
-                        "{connection_id} OAuth token fetched without printing the token"
-                    )));
-                    if let Some(target_id) = target_id {
-                        diagnostics.push(
-                            dci_record_probe(
-                                config,
-                                connection_id,
-                                connection,
-                                &token,
-                                target_id,
-                                target_id_type,
-                            )
-                            .await,
-                        );
-                    } else {
-                        diagnostics.push(Diagnostic::ok(
-                            "record-level live probe skipped because --target-id was not supplied",
-                        ));
-                    }
-                }
-                Err(diagnostic) => diagnostics.push(diagnostic),
-            }
-        }
-    }
     if diagnostics.is_empty() {
         diagnostics.push(Diagnostic::ok(
-            "live source probe skipped because no OAuth source_auth is configured",
+            "live Relay probe skipped because no Registry-backed claim is configured",
         ));
     }
     diagnostics
@@ -1049,12 +905,12 @@ fn relay_live_failure_diagnostic(error: &StandaloneServerError) -> Diagnostic {
         ),
         StandaloneServerError::RelayProfileNotFound => Diagnostic::fail_with_code(
             "Relay consultation profile was not found",
-            "deploy the configured Relay profile id and version, then retry the live check",
+            "deploy the configured Relay profile id, then retry the live check",
             "notary.relay.profile_not_found",
         ),
         StandaloneServerError::RelayProfileMismatch => Diagnostic::fail_with_code(
             "Relay consultation profile does not match the configured contract pin",
-            "reconcile the Notary profile pin with the reviewed Relay consultation contract",
+            "reconcile the Notary profile id and contract hash with the reviewed Relay consultation contract",
             "notary.relay.profile_mismatch",
         ),
         StandaloneServerError::RelayUnavailable => Diagnostic::fail_with_code(
@@ -1079,336 +935,6 @@ fn relay_live_failure_diagnostic(error: &StandaloneServerError) -> Diagnostic {
     }
 }
 
-pub(crate) async fn fetch_oauth_token_for_doctor(
-    connection_id: &str,
-    connection: &registry_notary_core::SourceConnectionConfig,
-    auth: &Oauth2ClientCredentialsSourceAuthConfig,
-) -> Result<String, Diagnostic> {
-    let token_url = match reqwest::Url::parse(&auth.token_url) {
-        Ok(url) => url,
-        Err(err) => {
-            return Err(Diagnostic::fail(
-                format!("{connection_id} OAuth token_url is invalid: {err}"),
-                "fix source_auth.token_url",
-            ));
-        }
-    };
-    let validated_token_url = match cli_fetch_url_policy(connection)
-        .validate_dns_pinned_for_immediate_fetch(&token_url)
-    {
-        Ok(validated) => validated,
-        Err(err) => {
-            return Err(Diagnostic::fail(
-                format!("{connection_id} OAuth token_url is blocked by fetch policy: {err}"),
-                "use HTTPS for production or explicitly enable the localhost/private-network development escape hatch",
-            ));
-        }
-    };
-    let client_id = match std::env::var(&auth.client_id_env) {
-        Ok(value) if !value.trim().is_empty() => value,
-        _ => {
-            return Err(Diagnostic::fail(
-                format!("{connection_id} OAuth client id is unavailable"),
-                format!("set {}", auth.client_id_env),
-            ));
-        }
-    };
-    let client_secret = match std::env::var(&auth.client_secret_env) {
-        Ok(value) if !value.trim().is_empty() => value,
-        _ => {
-            return Err(Diagnostic::fail(
-                format!("{connection_id} OAuth client secret is unavailable"),
-                format!("set {}", auth.client_secret_env),
-            ));
-        }
-    };
-    let mut request = validated_token_url
-        .immediate_post_with_timeout(Duration::from_secs(10))
-        .map_err(|err| {
-            Diagnostic::fail(
-                format!("{connection_id} OAuth token request could not be built: {err}"),
-                "check token_url reachability and local network/TLS settings",
-            )
-        })?;
-    if auth.request_format == "json" {
-        let mut body = json!({
-            "grant_type": "client_credentials",
-            "client_id": client_id,
-            "client_secret": client_secret,
-        });
-        if !auth.scope.trim().is_empty() {
-            body["scope"] = Value::String(auth.scope.clone());
-        }
-        request = request.json(&body);
-    } else {
-        let mut form = vec![
-            ("grant_type", "client_credentials".to_string()),
-            ("client_id", client_id),
-            ("client_secret", client_secret),
-        ];
-        if !auth.scope.trim().is_empty() {
-            form.push(("scope", auth.scope.clone()));
-        }
-        request = request.form(&form);
-    }
-    let response = match request.send().await {
-        Ok(response) if response.status().is_success() => response,
-        Ok(response) => {
-            return Err(Diagnostic::fail(
-                format!(
-                    "{connection_id} OAuth token endpoint returned {}",
-                    response.status()
-                ),
-                "check client id, client secret, token URL, and request_format",
-            ))
-        }
-        Err(err) => {
-            return Err(Diagnostic::fail(
-                format!("{connection_id} OAuth token fetch failed: {err}"),
-                "check token_url reachability and local network/TLS settings",
-            ))
-        }
-    };
-    let body = response.json::<Value>().await.map_err(|err| {
-        Diagnostic::fail(
-            format!("{connection_id} OAuth token response was not JSON: {err}"),
-            "check the token endpoint response shape",
-        )
-    })?;
-    body.get("access_token")
-        .and_then(Value::as_str)
-        .filter(|token| !token.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| {
-            Diagnostic::fail(
-                format!("{connection_id} OAuth token response had no access_token"),
-                "check the token endpoint response shape",
-            )
-        })
-}
-
-pub(crate) async fn dci_record_probe(
-    config: &StandaloneRegistryNotaryConfig,
-    connection_id: &str,
-    connection: &registry_notary_core::SourceConnectionConfig,
-    token: &str,
-    subject_id: &str,
-    subject_id_type: Option<&str>,
-) -> Diagnostic {
-    let Some(binding) = first_dci_binding_for_connection(config, connection_id) else {
-        return Diagnostic::ok(format!(
-            "{connection_id} record-level live probe skipped because no DCI binding uses it"
-        ));
-    };
-    let dci = match connection.effective_dci() {
-        Ok(dci) => dci,
-        Err(err) => {
-            return Diagnostic::fail(
-                format!("{connection_id} DCI expansion failed during live probe: {err}"),
-                "fix the DCI block",
-            );
-        }
-    };
-    let url = match source_url_for_cli(&connection.base_url, &dci.search_path) {
-        Ok(url) => url,
-        Err(err) => {
-            return Diagnostic::fail(
-                format!("{connection_id} DCI search URL is invalid: {err}"),
-                "fix source base_url and dci.search_path",
-            );
-        }
-    };
-    let validated_url = match cli_fetch_url_policy(connection)
-        .validate_dns_pinned_for_immediate_fetch(&url)
-    {
-        Ok(validated) => validated,
-        Err(err) => {
-            return Diagnostic::fail(
-                format!("{connection_id} DCI search URL is blocked by fetch policy: {err}"),
-                "use HTTPS for production or explicitly enable the localhost/private-network development escape hatch",
-            );
-        }
-    };
-    let body = match dci_probe_body(&dci, binding, subject_id, subject_id_type) {
-        Ok(body) => body,
-        Err(err) => {
-            return Diagnostic::fail(
-                format!("{connection_id} DCI probe body could not be built: {err}"),
-                "check dci.query_type and binding lookup fields",
-            );
-        }
-    };
-    let request = match validated_url.immediate_post_with_timeout(Duration::from_secs(10)) {
-        Ok(request) => request,
-        Err(err) => {
-            return Diagnostic::fail(
-                format!("{connection_id} DCI search request could not be built: {err}"),
-                "check source base_url reachability and local network/TLS settings",
-            );
-        }
-    };
-    let response = match request
-        .bearer_auth(token)
-        .header("accept", "application/json")
-        .header("content-type", "application/json")
-        .header(
-            "data-purpose",
-            "https://registry-notary.local/purpose/doctor",
-        )
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(err) => {
-            return Diagnostic::fail(
-                format!("{connection_id} DCI live probe failed: {err}"),
-                "check DCI endpoint reachability",
-            );
-        }
-    };
-    let status = response.status();
-    if !status.is_success() {
-        return Diagnostic::fail(
-            format!("{connection_id} DCI live probe returned {status}"),
-            "check the sample subject, DCI auth, and source DCI request settings",
-        );
-    }
-    let body = match response.json::<Value>().await {
-        Ok(body) => body,
-        Err(err) => {
-            return Diagnostic::fail(
-                format!("{connection_id} DCI live probe response was not JSON: {err}"),
-                "check the DCI response shape",
-            );
-        }
-    };
-    match body.pointer(&dci.records_path).and_then(Value::as_array) {
-        Some(records) if !records.is_empty() => Diagnostic::ok(format!(
-            "{connection_id} DCI records_path resolved for sample subject (subject redacted)"
-        )),
-        Some(_) => Diagnostic::fail(
-            format!("{connection_id} DCI records_path resolved but contained no records"),
-            "check the redacted sample subject id exists in the upstream demo or test environment",
-        ),
-        None => Diagnostic::fail(
-            format!("{connection_id} DCI records_path did not resolve in live response"),
-            "check dci.records_path against the DCI response shape",
-        ),
-    }
-}
-
-pub(crate) fn first_dci_binding_for_connection<'a>(
-    config: &'a StandaloneRegistryNotaryConfig,
-    connection_id: &str,
-) -> Option<&'a registry_notary_core::SourceBindingConfig> {
-    config
-        .evidence
-        .claims
-        .iter()
-        .flat_map(|claim| claim.source_bindings.values())
-        .find(|binding| {
-            binding.connection.as_deref() == Some(connection_id)
-                && binding.connector == registry_notary_core::SourceConnectorKind::Dci
-        })
-}
-
-pub(crate) fn source_url_for_cli(base_url: &str, path: &str) -> Result<reqwest::Url, String> {
-    if reqwest::Url::parse(path).is_ok() {
-        return Err("dci.search_path must be relative".to_string());
-    }
-    let base = reqwest::Url::parse(base_url).map_err(|err| err.to_string())?;
-    let trimmed = path.trim_matches('/');
-    if trimmed.is_empty() {
-        return Ok(base);
-    }
-    let segments = trimmed
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    httputil_url::append_path_segments(&base, &segments).map_err(|err| err.to_string())
-}
-
-pub(crate) fn dci_probe_body(
-    dci: &registry_notary_core::DciSourceConnectionConfig,
-    binding: &registry_notary_core::SourceBindingConfig,
-    subject_id: &str,
-    subject_id_type: Option<&str>,
-) -> Result<Value, String> {
-    let message_id = Ulid::new().to_string();
-    let timestamp = OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .map_err(|err| err.to_string())?;
-    let lookup_field = if dci.query_type == "idtype-value" {
-        subject_id_type.unwrap_or(binding.lookup.field.as_str())
-    } else {
-        binding.lookup.field.as_str()
-    };
-    let lookup_value = Value::String(subject_id.to_string());
-    let query = match dci.query_type.as_str() {
-        "idtype-value" => json!({
-            "type": lookup_field,
-            "value": lookup_value,
-        }),
-        "expression" => json!({
-            lookup_field: {
-                binding.lookup.op.clone(): lookup_value,
-            },
-        }),
-        "predicate" => json!([{
-            "expression1": {
-                "attribute_name": lookup_field,
-                "operator": binding.lookup.op,
-                "attribute_value": lookup_value,
-            },
-        }]),
-        _ => return Err("unsupported dci.query_type".to_string()),
-    };
-    let mut search_criteria = serde_json::Map::from_iter([
-        (
-            "query_type".to_string(),
-            Value::String(dci.query_type.clone()),
-        ),
-        ("query".to_string(), query),
-        (
-            "pagination".to_string(),
-            json!({ "page_size": dci.max_results.max(2), "page_number": 1 }),
-        ),
-    ]);
-    if let Some(registry_type) = &dci.registry_type {
-        search_criteria.insert("reg_type".to_string(), Value::String(registry_type.clone()));
-    }
-    if let Some(registry_event_type) = &dci.registry_event_type {
-        search_criteria.insert(
-            "reg_event_type".to_string(),
-            Value::String(registry_event_type.clone()),
-        );
-    }
-    if let Some(record_type) = &dci.record_type {
-        search_criteria.insert(
-            "reg_record_type".to_string(),
-            Value::String(record_type.clone()),
-        );
-    }
-    Ok(json!({
-        "header": {
-            "message_id": message_id,
-            "message_ts": timestamp,
-            "action": "search",
-            "sender_id": dci.sender_id,
-            "total_count": 1,
-            "is_msg_encrypted": false,
-        },
-        "message": {
-            "transaction_id": message_id,
-            "search_request": [{
-                "reference_id": message_id,
-                "timestamp": timestamp,
-                "search_criteria": Value::Object(search_criteria),
-            }],
-        },
-    }))
-}
 #[cfg(test)]
 #[path = "doctor/tests.rs"]
 mod tests;
