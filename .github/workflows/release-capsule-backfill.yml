@@ -72,7 +72,7 @@ jobs:
           capsule_md="registry-stack-${TAG}-release-capsule.md"
           {
             printf '%s\n' "${capsule_json}" "${capsule_md}"
-            for image in registry-notary registry-notary-source-adapter-sidecar registry-relay; do
+            for image in registry-notary registry-relay; do
               printf '%s\n' "${image}.digest-bound.spdx.json" "${image}.digest-bound.grype.json"
             done
           } | sort > dist/backfill-assets

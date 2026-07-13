@@ -265,7 +265,6 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
     optional_release_file_names = [f"registryctl-{tag}-image-lock.json"]
     image_names = [
         "registry-notary",
-        "registry-notary-source-adapter-sidecar",
         "registry-relay",
     ]
 

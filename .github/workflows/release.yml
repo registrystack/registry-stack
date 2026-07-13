@@ -177,7 +177,6 @@ jobs:
                 -p registry-manifest-cli \
                 -p registry-relay \
                 -p registry-notary \
-                -p registry-notary-source-adapter-sidecar \
                 --features registry-relay/spdci-api-standards,registry-relay/standards-cel-mapping,registry-relay/ogcapi-edr,registry-notary/registry-notary-cel
               cp target/release/registry-notary dist/image-bin/registry-notary
               cargo build --release --locked \
@@ -190,11 +189,10 @@ jobs:
           cp target/release/registry-relay-rhai-worker "dist/bin/registry-relay-rhai-worker-${{ needs.verify.outputs.tag }}-linux-amd64"
           cp dist/image-bin/registry-notary "dist/bin/registry-notary-${{ needs.verify.outputs.tag }}-linux-amd64"
           mv dist/image-bin/registry-notary-pkcs11 dist/image-bin/registry-notary
-          cp target/release/registry-notary-source-adapter-sidecar dist/image-bin/registry-notary-openfn-sidecar
           cp target/release/registry-relay dist/image-bin/registry-relay
           cp target/release/registry-relay-rhai-worker dist/image-bin/registry-relay-rhai-worker
           printf '%s\n' "${RELEASE_BUILDER_IMAGE}" > dist/image-bin/RELEASE_BUILDER_IMAGE
-          chmod 0755 dist/bin/* dist/image-bin/registry-notary dist/image-bin/registry-notary-openfn-sidecar dist/image-bin/registry-relay dist/image-bin/registry-relay-rhai-worker
+          chmod 0755 dist/bin/* dist/image-bin/registry-notary dist/image-bin/registry-relay dist/image-bin/registry-relay-rhai-worker
           (cd dist/bin && sha256sum -- * > SHA256SUMS)
           (cd dist/image-bin && sha256sum -- * > SHA256SUMS)
 
@@ -343,7 +341,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          chmod 0755 dist/image-bin/registry-notary dist/image-bin/registry-notary-openfn-sidecar dist/image-bin/registry-relay dist/image-bin/registry-relay-rhai-worker
+          chmod 0755 dist/image-bin/registry-notary dist/image-bin/registry-relay dist/image-bin/registry-relay-rhai-worker
           (cd dist/image-bin && sha256sum --check SHA256SUMS)
           mkdir -p dist/images dist/sbom dist/grype
           cp dist/image-bin/SHA256SUMS dist/images/image-binaries.SHA256SUMS
@@ -374,7 +372,6 @@ jobs:
             grype "${digest_ref}" -o json > "dist/grype/${name}.grype.json"
           }
           build_image registry-notary release/docker/Dockerfile.registry-notary
-          build_image registry-notary-source-adapter-sidecar release/docker/Dockerfile.registry-notary-openfn-sidecar
           build_image registry-relay release/docker/Dockerfile.registry-relay
 
       - name: Generate image binary SBOMs

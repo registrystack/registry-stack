@@ -64,7 +64,8 @@ section is about challenging it.
       gaps closed with tests that assert denial and correct audit records.
       Mapping evidence: [`negative-path-coverage-map.md`](notes/negative-path-coverage-map.md).
 - [ ] cargo-fuzz targets for manifest and artifact parsers (#26).
-- [ ] cargo-fuzz targets for token, credential, and sidecar parse boundaries.
+- [ ] cargo-fuzz targets for token, credential, Relay consultation, and script
+      adapter parse boundaries.
 - [ ] Data-minimization leak review across logs, error paths, audit records,
       and caches (maintainer work; #176 is the known open case).
 

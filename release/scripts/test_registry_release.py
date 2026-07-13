@@ -45,12 +45,10 @@ class RegistryReleaseTest(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         release_dockerfiles = [
             "release/docker/Dockerfile.registry-notary",
-            "release/docker/Dockerfile.registry-notary-openfn-sidecar",
             "release/docker/Dockerfile.registry-relay",
         ]
         lab_dockerfiles = [
             "lab/Dockerfile.registry-notary",
-            "lab/Dockerfile.registry-notary-openfn-sidecar",
             "lab/Dockerfile.registry-relay",
         ]
 
@@ -64,6 +62,25 @@ class RegistryReleaseTest(unittest.TestCase):
             text = (ROOT / dockerfile).read_text(encoding="utf-8")
             self.assertNotIn("dist/image-bin", text)
             self.assertIn("cargo build --release --locked", text)
+
+    def test_release_packaging_excludes_retired_notary_source_sidecar(self) -> None:
+        retired_names = (
+            "registry-notary-source-adapter-sidecar",
+            "registry-notary-openfn-sidecar",
+        )
+        current_surfaces = (
+            ROOT / ".github/workflows/release.yml",
+            ROOT / ".github/workflows/release-capsule-backfill.yml",
+            ROOT / "release/scripts/registry-release",
+        )
+
+        for path in current_surfaces:
+            text = path.read_text(encoding="utf-8")
+            for retired_name in retired_names:
+                self.assertNotIn(retired_name, text, path)
+        self.assertFalse(
+            (ROOT / "release/docker/Dockerfile.registry-notary-openfn-sidecar").exists()
+        )
 
     def test_relay_packaging_includes_dedicated_rhai_worker(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -916,9 +933,8 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertTrue((binary_dir / "registry-notary-v0.8.0-linux-amd64").is_file())
             self.assertTrue((binary_dir / "SHA256SUMS").is_file())
             self.assertTrue((image_dir / "registry-notary.digest").is_file())
-            self.assertTrue((image_dir / "registry-notary-source-adapter-sidecar.digest").is_file())
             self.assertTrue((image_dir / "registry-relay.digest").is_file())
-            self.assertFalse((image_dir / "registry-notary-source-adapter-sidecar.spdx.json").exists())
+            self.assertFalse((image_dir / "registry-notary-source-adapter-sidecar.digest").exists())
             self.assertFalse((image_dir / "registry-relay.grype.json").exists())
             self.assertFalse((image_dir / "registry-stack-v0.8.0-release-evidence.json").exists())
             # Cross-platform binaries are optional and absent in this fixture.
@@ -993,17 +1009,17 @@ class RegistryReleaseTest(unittest.TestCase):
     def test_bind_spdx_subject_adds_digest_bound_described_package(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            spdx = root / "sidecar.spdx.json"
+            spdx = root / "registry-notary.spdx.json"
             spdx.write_text(
                 json.dumps(
                     {
                         "spdxVersion": "SPDX-2.3",
-                        "name": "syft-sidecar-output",
+                        "name": "syft-registry-notary-output",
                         "documentDescribes": ["SPDXRef-DocumentRoot"],
                         "packages": [
                             {
                                 "SPDXID": "SPDXRef-DocumentRoot",
-                                "name": "registry-notary-source-adapter-sidecar",
+                                "name": "registry-notary",
                                 "downloadLocation": "NOASSERTION",
                             }
                         ],
@@ -1016,7 +1032,7 @@ class RegistryReleaseTest(unittest.TestCase):
                 "bind-spdx-subject",
                 str(spdx),
                 "--image-name",
-                "registry-notary-source-adapter-sidecar",
+                "registry-notary",
                 "--digest-ref",
                 IMAGE_DIGEST_REF,
             )
@@ -1321,7 +1337,7 @@ def write_release_asset_fixture(
         path.write_text(f"{name}\n", encoding="utf-8")
         checksums.append(subprocess.check_output(["sha256sum", name], cwd=asset_dir, text=True))
     (asset_dir / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
-    for image in ("registry-notary", "registry-notary-source-adapter-sidecar", "registry-relay"):
+    for image in ("registry-notary", "registry-relay"):
         (asset_dir / f"{image}.digest").write_text(f"{IMAGE_DIGEST_REF}\n", encoding="utf-8")
         (asset_dir / f"{image}.spdx.json").write_text("{}", encoding="utf-8")
         (asset_dir / f"{image}.grype.json").write_text("{}", encoding="utf-8")
