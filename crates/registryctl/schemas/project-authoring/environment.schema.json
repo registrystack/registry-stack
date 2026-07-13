@@ -2,18 +2,21 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://registrystack.example/schemas/project-authoring/environment.v1.json",
   "title": "Registry Stack project environment v1",
+  "description": "Binds a Registry Stack project to environment-specific services, sources, credentials, and deployment topology.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "deployment"],
   "properties": {
-    "version": { "const": 1 },
-    "integrations": { "type": "object", "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "$ref": "#/$defs/integration" } },
-    "entities": { "type": "object", "maxProperties": 32, "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "$ref": "#/$defs/entity" } },
+    "version": { "const": 1, "default": 1, "description": "Environment authoring format version." },
+    "integrations": { "type": "object", "maxProperties": 16, "description": "Environment bindings keyed by authored integration identifier.", "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "$ref": "#/$defs/integration" } },
+    "entities": { "type": "object", "maxProperties": 32, "description": "Environment-specific source bindings keyed by entity identifier.", "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "$ref": "#/$defs/entity" } },
     "issuance": {
+      "description": "Notary issuer and signing-key bindings for credential issuance.",
       "type": "object", "additionalProperties": false, "required": ["issuer", "signing_key", "signing_kid", "generation"],
       "properties": { "issuer": { "type": "string", "minLength": 1 }, "signing_key": { "$ref": "#/$defs/secret" }, "signing_kid": { "$ref": "#/$defs/stableId" }, "generation": { "type": "integer", "minimum": 1 } }
     },
     "callers": {
+      "description": "Relay caller identities and the scopes each identity receives.",
       "type": "object", "minProperties": 1, "maxProperties": 64, "propertyNames": { "$ref": "#/$defs/stableId" },
       "additionalProperties": {
         "type": "object", "additionalProperties": false, "required": ["api_key_fingerprint", "scopes"],
@@ -21,15 +24,18 @@
       }
     },
     "relay": {
+      "description": "Public Relay identity and token-validation settings for a Relay deployment.",
       "type": "object", "additionalProperties": false,
       "required": ["origin", "issuer", "jwks_url", "audience", "allowed_clients"],
       "properties": { "origin": { "$ref": "#/$defs/origin" }, "issuer": { "$ref": "#/$defs/origin" }, "jwks_url": { "type": "string", "format": "uri", "pattern": "^https://[^/?#]+/[^?#]+$" }, "audience": { "type": "string", "minLength": 1, "maxLength": 256 }, "allowed_clients": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 256 } } }
     },
     "notary_relay": {
+      "description": "Notary workload identity and token file used only when Notary consults Relay.",
       "type": "object", "additionalProperties": false, "required": ["workload_client_id", "token_file"],
       "properties": { "workload_client_id": { "type": "string", "minLength": 1, "maxLength": 256 }, "token_file": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$" } }
     },
     "deployment": {
+      "description": "Products deployed in this environment and the operational profile they use.",
       "type": "object", "additionalProperties": false, "required": ["profile"],
       "properties": { "profile": { "enum": ["local", "hosted_lab", "production", "evidence_grade"] }, "relay": { "$ref": "#/$defs/service" }, "notary": { "$ref": "#/$defs/service" } },
       "anyOf": [{ "required": ["relay"] }, { "required": ["notary"] }]
@@ -46,23 +52,36 @@
       "then": { "properties": { "deployment": { "required": ["relay", "notary"] } } }
     }
   ],
+  "examples": [
+    {
+      "version": 1,
+      "deployment": {
+        "profile": "local",
+        "notary": { "service": "notary" }
+      }
+    }
+  ],
   "$defs": {
-    "stableId": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
-    "secret": { "type": "object", "additionalProperties": false, "required": ["secret"], "properties": { "secret": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]{0,127}$" } } },
-    "origin": { "type": "string", "format": "uri", "pattern": "^https://[^/?#]+/?$" },
+    "stableId": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$", "description": "Lowercase stable identifier used in project references." },
+    "secret": { "type": "object", "additionalProperties": false, "description": "Reference to a process-environment variable; secret values are never authored here.", "required": ["secret"], "properties": { "secret": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]{0,127}$" } } },
+    "origin": { "type": "string", "format": "uri", "pattern": "^https://[^/?#]+/?$", "description": "HTTPS origin without path, query, or fragment." },
     "privateCidrs": {
+      "description": "Explicit private network ranges this source may resolve to.",
       "type": "array", "maxItems": 16, "uniqueItems": true,
       "items": { "type": "string", "minLength": 3, "maxLength": 64 }
     },
     "ca": {
+      "description": "Pinned certificate-authority file and its rotation generation.",
       "type": "object", "additionalProperties": false, "required": ["file", "generation"],
       "properties": { "file": { "$ref": "#/$defs/absolutePath" }, "generation": { "type": "integer", "minimum": 1 } }
     },
     "mtls": {
+      "description": "Client certificate and private-key reference for mutual TLS.",
       "type": "object", "additionalProperties": false, "required": ["certificate_file", "private_key", "generation"],
       "properties": { "certificate_file": { "$ref": "#/$defs/absolutePath" }, "private_key": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } }
     },
     "endpoint": {
+      "description": "Security-bound HTTPS endpoint with optional private-network, CA, and mTLS policy.",
       "type": "object", "additionalProperties": false, "required": ["origin", "path", "generation"],
       "properties": {
         "origin": { "$ref": "#/$defs/origin" },
@@ -74,6 +93,7 @@
       }
     },
     "credential": {
+      "description": "One supported source credential shape, containing references rather than values.",
       "oneOf": [
         { "type": "object", "additionalProperties": false, "required": ["username", "password", "generation"], "properties": { "username": { "$ref": "#/$defs/secret" }, "password": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } },
         { "type": "object", "additionalProperties": false, "required": ["token", "generation"], "properties": { "token": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } },
@@ -82,6 +102,7 @@
       ]
     },
     "provider": {
+      "description": "Environment-specific physical provider for a materialized entity.",
       "oneOf": [
         { "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": { "const": "csv" }, "path": { "$ref": "#/$defs/absolutePath" }, "header_row": { "type": "integer", "minimum": 1 }, "delimiter": { "type": "integer", "minimum": 0, "maximum": 255 }, "quote": { "type": "integer", "minimum": 0, "maximum": 255 } } },
         { "type": "object", "additionalProperties": false, "required": ["type", "path", "sheet"], "properties": { "type": { "const": "xlsx" }, "path": { "$ref": "#/$defs/absolutePath" }, "sheet": { "type": "string", "minLength": 1, "maxLength": 256 }, "header_row": { "type": "integer", "minimum": 1 }, "data_range": { "type": "string", "minLength": 1, "maxLength": 256 } } },
@@ -90,10 +111,12 @@
       ]
     },
     "entity": {
+      "description": "Maps an authored entity to provider columns and immutable source-generation identifiers.",
       "type": "object", "additionalProperties": false, "required": ["provider", "columns", "source_revision", "generation"],
       "properties": { "provider": { "$ref": "#/$defs/provider" }, "columns": { "type": "object", "minProperties": 1, "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "$ref": "#/$defs/stableId" } }, "source_revision": { "type": "string", "minLength": 1, "maxLength": 256 }, "generation": { "type": "string", "minLength": 1, "maxLength": 256 } }
     },
     "source": {
+      "description": "Runtime source connection policy for one authored integration.",
       "type": "object", "additionalProperties": false, "required": ["origin"],
       "properties": {
         "origin": { "$ref": "#/$defs/origin" },
@@ -109,11 +132,12 @@
       }
     },
     "integration": {
+      "description": "Environment binding for an authored source integration.",
       "type": "object", "additionalProperties": false, "required": ["source"],
       "properties": { "source": { "$ref": "#/$defs/source" } }
     },
-    "service": { "type": "object", "additionalProperties": false, "required": ["service"], "properties": { "service": { "$ref": "#/$defs/stableId" } } },
-    "postgresIdentifier": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$" },
-    "absolutePath": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$" }
+    "service": { "type": "object", "additionalProperties": false, "description": "Binds an authored product role to a deployed service identifier.", "required": ["service"], "properties": { "service": { "$ref": "#/$defs/stableId" } } },
+    "postgresIdentifier": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$", "description": "Portable unquoted PostgreSQL schema or table identifier." },
+    "absolutePath": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$", "description": "Normalized absolute path without dot segments or duplicate separators." }
   }
 }

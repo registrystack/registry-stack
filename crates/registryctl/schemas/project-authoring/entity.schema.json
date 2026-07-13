@@ -2,41 +2,68 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://registrystack.example/schemas/project-authoring/entity.v1.json",
   "title": "Registry Stack project entity v1",
+  "description": "Defines a bounded, materialized entity that Relay can query without coupling the project to a specific source product.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "id", "revision", "primary_key", "schema", "materialization"],
   "properties": {
-    "version": { "const": 1 },
-    "id": { "$ref": "#/$defs/stableId" },
-    "revision": { "type": "integer", "minimum": 1 },
-    "primary_key": { "$ref": "#/$defs/stableId" },
-    "schema": { "$ref": "#/$defs/objectSchema" },
+    "version": { "const": 1, "default": 1, "description": "Entity authoring format version." },
+    "id": { "$ref": "#/$defs/stableId", "description": "Stable project-local identifier for the entity." },
+    "revision": { "type": "integer", "minimum": 1, "description": "Monotonically increasing revision of this entity definition.", "examples": [1] },
+    "primary_key": { "$ref": "#/$defs/stableId", "description": "Field whose value uniquely identifies each materialized record.", "examples": ["person_id"] },
+    "schema": { "$ref": "#/$defs/objectSchema", "description": "Closed JSON object schema for materialized records." },
     "materialization": {
+      "description": "Resource and refresh bounds applied while building entity generations.",
       "type": "object",
       "additionalProperties": false,
       "required": ["max_records", "max_bytes", "refresh", "retain_generations"],
       "properties": {
-        "max_records": { "type": "integer", "minimum": 1 },
+        "max_records": { "type": "integer", "minimum": 1, "description": "Maximum number of records allowed in one generation.", "examples": [10000] },
         "max_bytes": {
+          "description": "Maximum encoded size of one generation, as bytes or a KiB/MiB quantity.",
+          "examples": ["16MiB"],
           "oneOf": [
             { "type": "integer", "minimum": 1 },
             { "type": "string", "pattern": "^[1-9][0-9]*(?:KiB|MiB)$" }
           ]
         },
         "refresh": {
+          "description": "Refresh cadence, or manual when an operator initiates every refresh.",
+          "examples": ["1h"],
           "oneOf": [
             { "const": "manual" },
             { "type": "string", "pattern": "^[1-9][0-9]*(?:ms|s|m|h|d)$" }
           ]
         },
-        "retain_generations": { "type": "integer", "minimum": 1, "maximum": 16 }
+        "retain_generations": { "type": "integer", "minimum": 1, "maximum": 16, "description": "Number of completed generations retained for rollback and readers.", "examples": [2] }
       }
     }
   },
+  "examples": [
+    {
+      "version": 1,
+      "id": "people",
+      "revision": 1,
+      "primary_key": "person_id",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["person_id"],
+        "properties": { "person_id": { "type": "string" } }
+      },
+      "materialization": {
+        "max_records": 10000,
+        "max_bytes": "16MiB",
+        "refresh": "1h",
+        "retain_generations": 2
+      }
+    }
+  ],
   "$defs": {
-    "stableId": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
-    "propertyName": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+    "stableId": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$", "description": "Lowercase stable identifier used in project references." },
+    "propertyName": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$", "description": "Portable lowercase record field name." },
     "scalarType": {
+      "description": "Supported scalar type, optionally paired with null for a nullable field.",
       "oneOf": [
         { "enum": ["string", "boolean", "integer"] },
         {
@@ -53,6 +80,7 @@
       ]
     },
     "fieldSchema": {
+      "description": "Bounded schema keywords supported for one scalar materialized field.",
       "type": "object",
       "additionalProperties": false,
       "required": ["type"],
@@ -69,6 +97,7 @@
       }
     },
     "objectSchema": {
+      "description": "Closed object schema whose declared required fields must appear in properties.",
       "type": "object",
       "additionalProperties": false,
       "required": ["type", "additionalProperties", "required", "properties"],

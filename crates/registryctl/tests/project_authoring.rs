@@ -933,6 +933,131 @@ fn live_testing_requires_an_explicit_environment_before_reading_credentials() {
 }
 
 #[test]
+fn project_authoring_schemas_keep_editor_annotations_and_valid_examples() {
+    const SCHEMAS: &[&str] = &[
+        "project.schema.json",
+        "environment.schema.json",
+        "integration.schema.json",
+        "fixture.schema.json",
+        "entity.schema.json",
+    ];
+
+    fn schema_annotation_counts(value: &serde_json::Value) -> (usize, usize, usize) {
+        let Some(object) = value.as_object() else {
+            return (0, 0, 0);
+        };
+        let is_schema = [
+            "$ref",
+            "type",
+            "const",
+            "enum",
+            "oneOf",
+            "anyOf",
+            "allOf",
+            "properties",
+        ]
+        .iter()
+        .any(|keyword| object.contains_key(*keyword));
+        let mut counts = (
+            usize::from(
+                object
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|description| description.len() >= 16),
+            ),
+            usize::from(is_schema && object.contains_key("default")),
+            usize::from(
+                is_schema
+                    && object
+                        .get("examples")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|examples| !examples.is_empty()),
+            ),
+        );
+        for child in object.values() {
+            let child_counts = match child {
+                serde_json::Value::Array(values) => values
+                    .iter()
+                    .map(schema_annotation_counts)
+                    .fold((0, 0, 0), |totals, counts| {
+                        (
+                            totals.0 + counts.0,
+                            totals.1 + counts.1,
+                            totals.2 + counts.2,
+                        )
+                    }),
+                _ => schema_annotation_counts(child),
+            };
+            counts.0 += child_counts.0;
+            counts.1 += child_counts.1;
+            counts.2 += child_counts.2;
+        }
+        counts
+    }
+
+    let schema_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/project-authoring");
+    for schema_name in SCHEMAS {
+        let schema: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(schema_root.join(schema_name)).expect("schema reads"),
+        )
+        .expect("schema is JSON");
+        let description = schema
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .expect("schema has a top-level description");
+        assert!(
+            description.len() >= 32,
+            "{schema_name} needs a meaningful top-level description"
+        );
+
+        let properties = schema["properties"]
+            .as_object()
+            .expect("schema has root properties");
+        for (name, property) in properties {
+            assert!(
+                property
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|description| description.len() >= 16),
+                "{schema_name} root property {name} needs a meaningful description"
+            );
+        }
+        let definitions = schema["$defs"].as_object().expect("schema has definitions");
+        for (name, definition) in definitions {
+            assert!(
+                definition
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|description| description.len() >= 16),
+                "{schema_name} definition {name} needs a meaningful description"
+            );
+        }
+
+        let (descriptions, defaults, examples) = schema_annotation_counts(&schema);
+        assert!(
+            descriptions >= properties.len() + definitions.len() + 1,
+            "{schema_name} description coverage regressed"
+        );
+        assert!(defaults >= 1, "{schema_name} needs at least one default");
+        assert!(examples >= 1, "{schema_name} needs at least one example");
+
+        let compiled = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap_or_else(|error| panic!("{schema_name} did not compile: {error}"));
+        for example in schema["examples"]
+            .as_array()
+            .expect("schema has top-level examples")
+        {
+            if let Err(errors) = compiled.validate(example) {
+                let messages = errors.map(|error| error.to_string()).collect::<Vec<_>>();
+                panic!("{schema_name} has an invalid example: {messages:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn strict_project_authoring_schemas_compile_and_accept_every_golden() {
     let schema_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/project-authoring");
     let compile = |schema_name: &str| {

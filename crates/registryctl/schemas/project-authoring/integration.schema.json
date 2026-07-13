@@ -2,23 +2,26 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://registrystack.example/schemas/project-authoring/integration.v1.json",
   "title": "Registry Stack project integration v1",
+  "description": "Defines a product-neutral source adaptation contract using bounded HTTP, Rhai script, or exact snapshot capabilities.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "id", "revision", "input", "capability", "outputs"],
   "properties": {
-    "version": { "const": 1 },
-    "id": { "$ref": "#/$defs/stableId" },
-    "revision": { "type": "integer", "minimum": 1 },
-    "source": { "$ref": "#/$defs/source" },
+    "version": { "const": 1, "default": 1, "description": "Integration authoring format version." },
+    "id": { "$ref": "#/$defs/stableId", "description": "Stable project-local identifier for the integration." },
+    "revision": { "type": "integer", "minimum": 1, "description": "Monotonically increasing revision of this integration contract.", "examples": [1] },
+    "source": { "$ref": "#/$defs/source", "description": "Optional source product metadata and transport policy; capabilities remain product-neutral." },
     "input": {
+      "description": "Typed selector and parameter inputs accepted by this integration.",
       "type": "object",
       "minProperties": 1,
       "maxProperties": 16,
       "propertyNames": { "$ref": "#/$defs/inputName" },
       "additionalProperties": { "$ref": "#/$defs/input" }
     },
-    "capability": { "$ref": "#/$defs/capability" },
+    "capability": { "$ref": "#/$defs/capability", "description": "Exactly one bounded execution mechanism for the source adaptation." },
     "outputs": {
+      "description": "Named typed outputs, or a shorthand list of output names inferred by the authoring compiler.",
       "oneOf": [
         {
           "type": "object",
@@ -41,30 +44,51 @@
         }
       ]
     },
-    "limits": { "$ref": "#/$defs/limits" }
+    "limits": { "$ref": "#/$defs/limits", "description": "Optional tighter resource limits for one integration execution." }
   },
+  "examples": [
+    {
+      "version": 1,
+      "id": "household_lookup",
+      "revision": 1,
+      "input": {
+        "household_id": { "role": "selector", "type": "string" }
+      },
+      "capability": {
+        "script": { "file": "adapter.rhai" }
+      },
+      "outputs": {
+        "active": { "type": "boolean" }
+      }
+    }
+  ],
   "$defs": {
     "stableId": {
+      "description": "Lowercase stable identifier used in project references.",
       "type": "string",
       "pattern": "^[a-z][a-z0-9._-]{0,95}$"
     },
     "inputName": {
+      "description": "Portable lowercase name for an integration input or output.",
       "type": "string",
       "pattern": "^[a-z][a-z0-9_]{0,63}$"
     },
     "relativePath": {
+      "description": "Project-relative path without traversal or duplicate separators.",
       "type": "string",
       "minLength": 1,
       "maxLength": 4096,
       "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$"
     },
     "byteSize": {
+      "description": "Positive byte count expressed as an integer or a KiB/MiB quantity.",
       "oneOf": [
         { "type": "integer", "minimum": 1 },
         { "type": "string", "pattern": "^[1-9][0-9]*(?:KiB|MiB)$" }
       ]
     },
     "scalarType": {
+      "description": "Supported scalar type, optionally paired with null for nullable values.",
       "oneOf": [
         { "enum": ["string", "boolean", "integer"] },
         {
@@ -80,6 +104,7 @@
       ]
     },
     "input": {
+      "description": "Type, validation, and canonicalization rules for one authored input.",
       "type": "object",
       "additionalProperties": false,
       "required": ["role", "type"],
@@ -96,6 +121,7 @@
       }
     },
     "versions": {
+      "description": "Source versions tested by the project and versions explicitly accepted as unverified.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -108,12 +134,14 @@
       ]
     },
     "versionList": {
+      "description": "Bounded list of source version labels.",
       "type": "array",
       "maxItems": 32,
       "uniqueItems": true,
       "items": { "type": "string", "minLength": 1, "maxLength": 256 }
     },
     "credential": {
+      "description": "Authentication mechanism expected by the source adapter, without environment secret values.",
       "oneOf": [
         {
           "type": "object",
@@ -159,6 +187,7 @@
       ]
     },
     "allowRule": {
+      "description": "One read-only upstream method and path pattern the adapter may call.",
       "type": "object",
       "additionalProperties": false,
       "required": ["method", "path"],
@@ -174,6 +203,7 @@
       }
     },
     "source": {
+      "description": "Optional source metadata, authentication shape, allowlist, and protocol profile.",
       "type": "object",
       "additionalProperties": false,
       "required": ["auth"],
@@ -211,6 +241,7 @@
       }
     },
     "protocol": {
+      "description": "Optional interoperable protocol profiles layered over the source transport.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -244,18 +275,21 @@
       "minProperties": 1
     },
     "inputReference": {
+      "description": "Reference to a declared integration input.",
       "type": "object",
       "additionalProperties": false,
       "required": ["input"],
       "properties": { "input": { "$ref": "#/$defs/inputName" } }
     },
     "inputOrLiteral": {
+      "description": "Request value supplied from a declared input or an authored scalar literal.",
       "oneOf": [
         { "$ref": "#/$defs/inputReference" },
         { "type": ["string", "boolean", "integer"] }
       ]
     },
     "httpRequest": {
+      "description": "Bounded read-only HTTP request template.",
       "type": "object",
       "additionalProperties": false,
       "required": ["method", "path"],
@@ -269,6 +303,7 @@
       }
     },
     "httpResponse": {
+      "description": "Rules for translating upstream status and body cardinality into normalized outcomes.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -299,6 +334,7 @@
       }
     },
     "capability": {
+      "description": "Closed choice among direct HTTP, Rhai script, and exact snapshot execution.",
       "oneOf": [
         {
           "type": "object",
@@ -362,6 +398,7 @@
       ]
     },
     "output": {
+      "description": "Type and optional source pointer for one normalized integration output.",
       "type": "object",
       "additionalProperties": false,
       "required": ["type"],
@@ -378,6 +415,7 @@
       }
     },
     "limits": {
+      "description": "Per-execution call, byte, and deadline budgets.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
