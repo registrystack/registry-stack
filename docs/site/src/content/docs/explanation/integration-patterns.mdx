@@ -4,6 +4,7 @@ description: How Registry Stack wires in behind exchange layers, workflow engine
 status: current
 owner: registry-docs
 source_repos:
+  - registry-stack
   - registry-manifest
   - registry-relay
   - registry-notary
@@ -38,8 +39,8 @@ For how the registry family relates to the wider ecosystem, see the
 ## Country evidence mesh
 
 At country scale, the same pattern can sit next to several domain platforms.
-Clinical health systems can expose bounded outputs through a reviewed FHIR integration, public-health
-program systems such as DHIS2 are reached through Relay's authored bounded HTTP capability, and
+Clinical health systems can expose bounded outputs through a reviewed FHIR integration,
+public-health program systems such as DHIS2 can use Relay's generic HTTP or script capability, and
 social protection, agriculture, education, and civil
 registration systems can keep their own authoritative stores.
 Relay keeps source credentials and returns only reviewed typed outputs. Registry Notary instances
@@ -75,9 +76,9 @@ One integration in a Registry Stack project can serve two different governed nee
 creating two source definitions.
 A local materialization can back Relay's records API, including configured filters, projection,
 cursor pagination, relationships, aggregates, and enabled standards adapters.
-SnapshotExact consultations can use that same immutable published materialization for exact
+`snapshot` consultations can use that same immutable published materialization for exact
 evidence lookup.
-The logical records definition stays in the project workspace; provider paths, worksheets, tables,
+The logical entity definition stays in the project workspace; provider paths, worksheets, tables,
 and physical columns stay in the private environment binding.
 
 {/* Evidence: crates/registryctl/src/project_authoring.rs and
@@ -93,9 +94,10 @@ Wire Registry Stack in alongside a domain platform when:
 
 ## Exact subjects and batch envelopes
 
-A Relay consultation selects one subject with one to four required typed components.
+A Relay consultation selects one subject with one to eight required typed selector components.
 The components form one fixed exact conjunction, not a general search or a subject batch.
-Each component is bounded and canonicalized under the profile contract.
+Each component is bounded and canonicalized under the compiled consultation contract.
+Up to sixteen total inputs may also include bounded parameters that are not selector components.
 Relay reports no match, one match, or ambiguity instead of choosing between duplicate records.
 
 Registry Notary keeps batch evaluation as a separate outer API.
@@ -111,7 +113,7 @@ This split preserves ordered batch results without granting Relay a multi-subjec
 upstream bulk operation.
 
 {/* Evidence: crates/registry-relay/src/api/consultation.rs,
-    envelope_accepts_only_one_to_four_closed_string_components; and
+    execute_body_requires_the_exact_active_contract_hash; and
     crates/registry-notary-server/src/runtime/tests/evaluation.rs,
     registry_batch_requires_outer_key_before_relay_or_source_work,
     registry_batch_preflights_every_item_before_first_relay_call, and
@@ -120,26 +122,26 @@ upstream bulk operation.
 ## Closed source adaptation
 
 Registry Relay compiles source access from a closed plan.
-One plan has at most five fixed read operations with fixed methods, paths, parameter names,
-response schemas, projections, and bounds.
-Validated consultation inputs and bounded earlier outputs may fill declared value slots, but they
-cannot choose a destination, operation, credential, or projection.
-OpenCRVS, DHIS2, OpenSPP, and jurisdiction-specific systems remain authored integrations rather than
-runtime executor types.
+The public capabilities are `http`, `script`, and `snapshot`.
+`http` performs one bounded request and projects the declared typed outputs.
+Unknown response fields that no output selects are ignored and never cross the consultation
+boundary. A second request, response-dependent request construction, pagination, branching, or
+custom normalization uses `script` instead of a public operation graph.
 
-The Digital Convergence Initiative (DCI) exact-search primitive follows the same rule.
-Its closed `exact_and` map is keyed by every typed consultation input and fixes both the reviewed
-predicate field and the signed-record response pointer for each component.
-If a reviewed profile requires `identifier_type`, the closed codec may permit it only as a fixed
-protocol constant that never carries selector identity.
-No product-specific executor or separate authored identifier-value carrier selects the subject.
+Rhai is the first `script` runtime, not a DHIS2 feature.
+The reviewed adapter runs once and asks Relay to perform calls through `source.path`, `source.get`,
+`source.post_json`, and `source.post_form`. Relay validates every complete call against the authored
+same-origin method and path authority before it resolves credentials or dispatches. Responses
+contain bounded JSON or text plus only selected safe headers. Returned links remain usable for
+pagination only after same-origin canonicalization and the ordinary authority and budget checks.
+Scripts default to five source calls and cannot exceed sixteen.
 
-FHIR R4 uses the same boundary.
-The retained shape is one fixed anchor search plus predeclared relation searches within the
-five-operation limit, bounded search-set Bundle validation, fixed resource types and parameters,
-closed projection, and no followed pagination links.
-Registry Relay does not expose arbitrary FHIR requests, caller-selected includes, a generic FHIR
-server facade, or FHIR-native bulk evaluation.
+`snapshot` performs an exact lookup against a Relay-local immutable entity generation.
+The entity may also back a records service, but records publication is optional and carries a
+separate access, purpose, projection, filter, and pagination policy.
+OpenCRVS, DHIS2, OpenSPP, FHIR, and jurisdiction-specific systems remain authored integrations,
+not runtime executor types. Product and version metadata record interoperability evidence and never
+select a capability.
 
 Fixed source credentials are compiled providers.
 Basic, bearer, OAuth 2.0 client credentials, API-key header, and API-key query placement do not
@@ -151,10 +153,10 @@ Query placement requires verified HTTPS outside loopback tests and an operator-s
 because an upstream server, proxy, web application firewall, or network appliance may retain the
 URL outside Registry Stack's control.
 
-{/* Evidence: crates/registry-relay/src/source_plan/compiler/operation.rs,
+{/* Evidence: crates/registryctl/src/project_authoring/authoring_contract.rs,
     crates/registry-relay/src/source_plan/artifact/validation.rs,
     crates/registry-relay/src/consultation/executor.rs, and
-    crates/registry-platform-httputil/src/destination/fhir.rs. */}
+    crates/registry-relay/src/consultation/response.rs. */}
 
 ## Workflow engines
 

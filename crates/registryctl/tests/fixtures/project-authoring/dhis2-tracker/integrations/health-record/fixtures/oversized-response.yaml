@@ -1,6 +1,0 @@
-name: dhis2-oversized-response
-input: { tracked_entity: A0000000001 }
-variables: { as_of_date: 2026-01-01 }
-source:
-  identity: { status: 200, body_bytes: 32769 }
-expect: { error: source.response_too_large, source_access: true, disclosed_claims: [] }

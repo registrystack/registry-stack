@@ -11,10 +11,6 @@ fn generated_notary_config(
         .notary
         .as_ref()
         .ok_or_else(|| anyhow!("Notary deployment binding is absent"))?;
-    let issuance = environment
-        .issuance
-        .as_ref()
-        .ok_or_else(|| anyhow!("Notary issuance binding is absent"))?;
     let mut variables = Map::new();
     let mut claims = Vec::new();
     let mut credential_profiles = Map::new();
@@ -25,6 +21,9 @@ fn generated_notary_config(
         if service.kind != ServiceKind::Evidence {
             continue;
         }
+        let notary_consultation_aliases = generated_notary_consultation_aliases(
+            service.consultations.keys().map(String::as_str),
+        );
         allowed_purposes.insert(service.purpose.clone());
         for (name, variable) in &service.variables {
             let declaration = json!({ "from": variable.from, "type": "date" });
@@ -35,7 +34,11 @@ fn generated_notary_config(
                 bail!("request variable has conflicting service declarations");
             }
         }
-        for (credential_id, credential) in &service.credentials {
+        for (credential_id, credential) in &service.credential_profiles {
+            let issuance = environment
+                .issuance
+                .as_ref()
+                .ok_or_else(|| anyhow!("Notary issuance binding is absent"))?;
             let profile_id = bounded_join_id(&[service_id, credential_id])?;
             let validity_seconds = parse_validity_seconds(&credential.validity)?;
             max_validity_seconds = max_validity_seconds.max(validity_seconds);
@@ -57,7 +60,7 @@ fn generated_notary_config(
                 bail!("Notary claim ids must be unique across project services");
             }
             let claim_credential_profiles = service
-                .credentials
+                .credential_profiles
                 .iter()
                 .filter(|(_, credential)| credential.claims.iter().any(|id| id == claim_id))
                 .map(|(credential, _)| bounded_join_id(&[service_id, credential]))
@@ -65,7 +68,7 @@ fn generated_notary_config(
             let mut formats = vec!["application/vnd.registry-notary.claim-result+json".to_string()];
             formats.extend(
                 service
-                    .credentials
+                    .credential_profiles
                     .values()
                     .filter(|credential| credential.claims.iter().any(|id| id == claim_id))
                     .map(|credential| normalize_credential_format(&credential.format)),
@@ -73,75 +76,80 @@ fn generated_notary_config(
             formats.sort();
             formats.dedup();
             let (default_disclosure, allowed_disclosures) = expanded_disclosure(&claim.disclosure);
-            let (evidence_mode, value_type, nullable, rule) = match claim.evidence {
-                ClaimEvidence::RegistryBacked => {
-                    let consultation_name = claim_consultation_name(service, claim)?;
-                    let consultation = &service.consultations[consultation_name];
-                    let integration = &loaded.integrations[&consultation.integration];
-                    let profile = profiles
-                        .iter()
-                        .find(|profile| {
-                            profile.service_id == *service_id
-                                && profile.consultation_name == consultation_name
-                        })
-                        .ok_or_else(|| anyhow!("claim consultation profile is absent"))?;
-                    let facts = generated_notary_fact_contracts(&integration.document)?;
-                    let (value_type, nullable, rule) = generated_notary_claim_rule(
-                        claim_id,
-                        claim,
-                        consultation_name,
-                        &integration.document,
-                        integration,
-                    )?;
-                    let inputs = consultation
-                        .input
-                        .iter()
-                        .map(|(name, source)| {
-                            (
-                                name.clone(),
-                                Value::String(if source == "request.target.id" {
-                                    "target.id".to_string()
-                                } else {
-                                    source.clone()
-                                }),
-                            )
-                        })
-                        .collect::<Map<String, Value>>();
-                    let consultation_config = json!({
-                        "profile": {
-                            "id": profile.id,
-                            "version": profile.version,
-                            "contract_hash": profile.contract.artifact().typed_hash(),
-                        },
-                        "inputs": inputs,
-                        "facts": facts,
-                    });
-                    let consultations =
-                        Map::from_iter([(consultation_name.to_string(), consultation_config)]);
-                    (
-                        json!({ "type": "registry_backed", "consultations": consultations }),
-                        value_type,
-                        nullable,
-                        rule,
-                    )
-                }
-                ClaimEvidence::SelfAttested => {
-                    let value = claim
-                        .value
-                        .as_ref()
-                        .ok_or_else(|| anyhow!("self-attested claim value contract is absent"))?;
-                    let expression = claim
-                        .cel
-                        .as_ref()
-                        .ok_or_else(|| anyhow!("self-attested claim CEL rule is absent"))?;
-                    (
-                        json!({ "type": "self_attested" }),
-                        claim_value_type(value)?.to_string(),
-                        value.nullable,
-                        json!({ "type": "cel", "expression": expression, "bindings": {} }),
-                    )
-                }
-            };
+            let (evidence_mode, value_type, nullable, rule) =
+                match inferred_claim_evidence(service, claim)? {
+                    ClaimEvidence::RegistryBacked => {
+                        let consultation_name = claim_consultation_name(service, claim)?;
+                        let notary_consultation_name = notary_consultation_aliases
+                            .get(consultation_name)
+                            .ok_or_else(|| anyhow!("generated Notary consultation alias is absent"))?;
+                        let consultation = &service.consultations[consultation_name];
+                        let integration = &loaded.integrations[&consultation.integration];
+                        let profile = profiles
+                            .iter()
+                            .find(|profile| {
+                                profile.service_id == *service_id
+                                    && profile.consultation_name == consultation_name
+                            })
+                            .ok_or_else(|| anyhow!("claim consultation profile is absent"))?;
+                        let outputs = generated_notary_output_contracts(&integration.document)?;
+                        let (value_type, nullable, rule) = generated_notary_claim_rule(
+                            claim_id,
+                            claim,
+                            consultation_name,
+                            notary_consultation_name,
+                            &integration.document,
+                            integration,
+                        )?;
+                        let inputs = consultation
+                            .input
+                            .iter()
+                            .map(|(name, source)| {
+                                (
+                                    name.clone(),
+                                    Value::String(if source == "request.target.id" {
+                                        "target.id".to_string()
+                                    } else {
+                                        source.clone()
+                                    }),
+                                )
+                            })
+                            .collect::<Map<String, Value>>();
+                        let consultation_config = json!({
+                            "profile": {
+                                "id": profile.id,
+                                "contract_hash": profile.contract.artifact().typed_hash(),
+                            },
+                            "inputs": inputs,
+                            "outputs": outputs,
+                        });
+                        let consultations = Map::from_iter([(
+                            notary_consultation_name.clone(),
+                            consultation_config,
+                        )]);
+                        (
+                            json!({ "type": "registry_backed", "consultations": consultations }),
+                            value_type,
+                            nullable,
+                            rule,
+                        )
+                    }
+                    ClaimEvidence::SelfAttested => {
+                        let value = claim.value.as_ref().ok_or_else(|| {
+                            anyhow!("self-attested claim value contract is absent")
+                        })?;
+                        let expression = claim
+                            .cel
+                            .as_ref()
+                            .ok_or_else(|| anyhow!("self-attested claim CEL rule is absent"))?;
+                        (
+                            json!({ "type": "self_attested" }),
+                            claim_value_type(value)?.to_string(),
+                            value.nullable,
+                            json!({ "type": "cel", "expression": expression, "bindings": {} }),
+                        )
+                    }
+                };
             claims.push(json!({
                 "id": claim_id,
                 "title": claim_id.replace('-', " "),
@@ -183,7 +191,10 @@ fn generated_notary_config(
         "allowed_purposes": allowed_purposes,
         "variables": variables,
         "claims": claims,
-        "signing_keys": {
+        "credential_profiles": credential_profiles,
+    });
+    if let Some(issuance) = &environment.issuance {
+        evidence["signing_keys"] = json!({
             "project-issuer": {
                 "provider": "local_jwk_env",
                 "private_jwk_env": issuance.signing_key.secret,
@@ -191,14 +202,15 @@ fn generated_notary_config(
                 "kid": issuance.signing_kid,
                 "status": "active",
             },
-        },
-        "credential_profiles": credential_profiles,
-    });
+        });
+    }
     if let (Some(relay), Some(connection)) = (&environment.relay, &environment.notary_relay) {
         evidence["relay"] = json!({
             "base_url": relay.origin,
+            "workload_client_id": connection.workload_client_id,
             "token_file": connection.token_file,
             "allowed_private_cidrs": [],
+            "max_in_flight": 8,
         });
     }
     Ok(json!({
@@ -227,82 +239,100 @@ fn claim_value_type(value: &ClaimValueDeclaration) -> Result<&'static str> {
     }
 }
 
-fn generated_notary_fact_contracts(integration: &IntegrationDocument) -> Result<Value> {
-    let facts = integration
+fn generated_notary_output_contracts(integration: &IntegrationDocument) -> Result<Value> {
+    let outputs = integration
         .outputs
         .iter()
-        .map(|(name, fact)| {
-            let contract = if fact.from.ends_with(".presence") {
-                json!({ "type": "presence" })
-            } else {
-                match fact.output_type {
-                    FactType::Boolean | FactType::Presence => {
-                        json!({ "type": "boolean", "nullable": fact.nullable })
-                    }
-                    FactType::Integer => {
-                        if matches!(
-                            integration.capability,
-                            CapabilityDeclaration::Snapshot { .. }
-                        ) {
-                            json!({
-                                "type": "integer",
-                                "nullable": fact.nullable,
-                                "minimum": -((1_i64 << 53) - 1),
-                                "maximum": (1_i64 << 53) - 1,
-                            })
-                        } else {
-                            let schema = output_source_schema(integration, fact)?;
-                            let SchemaNode::Integer { min, max } = schema else {
-                                bail!("integer fact must resolve to an integer response field");
-                            };
-                            json!({ "type": "integer", "nullable": fact.nullable, "minimum": min, "maximum": max })
-                        }
-                    }
-                    FactType::String => json!({
-                        "type": "string",
-                        "nullable": fact.nullable,
-                        "max_bytes": fact.max_bytes.ok_or_else(|| anyhow!("string fact bound is absent"))?,
-                    }),
-                    FactType::Date => {
-                        json!({ "type": "date", "nullable": fact.nullable })
+        .map(|(name, output)| {
+            let contract = match output.output_type {
+                FactType::Boolean => {
+                    json!({ "type": "boolean", "nullable": output.nullable })
+                }
+                FactType::Integer => {
+                    if let (Some(minimum), Some(maximum)) = (output.minimum, output.maximum) {
+                        json!({
+                            "type": "integer",
+                            "nullable": output.nullable,
+                            "minimum": minimum,
+                            "maximum": maximum,
+                        })
+                    } else {
+                        let schema = output_source_schema(integration, output)?;
+                        let SchemaNode::Integer { min, max } = schema else {
+                            bail!("integer output must resolve to an integer response field");
+                        };
+                        json!({ "type": "integer", "nullable": output.nullable, "minimum": min, "maximum": max })
                     }
                 }
+                FactType::String => json!({
+                    "type": "string",
+                    "nullable": output.nullable,
+                    "max_bytes": output.max_bytes.ok_or_else(|| anyhow!("string output bound is absent"))?,
+                }),
+                FactType::Date => {
+                    json!({ "type": "date", "nullable": output.nullable })
+                }
+                FactType::Presence => bail!("presence is an outcome, not a declared output"),
             };
             Ok((name.clone(), contract))
         })
         .collect::<Result<Map<String, Value>>>()?;
-    Ok(Value::Object(facts))
+    Ok(Value::Object(outputs))
 }
 
 fn output_source_schema<'a>(
     integration: &'a IntegrationDocument,
     fact: &OutputDeclaration,
 ) -> Result<&'a SchemaNode> {
-    let (operation, path) = fact
+    let (operation, _) = fact
         .from
+        .as_deref()
+        .ok_or_else(|| anyhow!("output path is absent"))?
         .split_once('.')
-        .ok_or_else(|| anyhow!("fact path is invalid"))?;
+        .ok_or_else(|| anyhow!("output path is invalid"))?;
     let operation = integration_operations(integration)
         .get(operation)
-        .ok_or_else(|| anyhow!("fact operation is absent"))?;
+        .ok_or_else(|| anyhow!("output operation is absent"))?;
     let mut schema = operation_record_schema(operation)?;
-    let path = path.strip_prefix("record.").unwrap_or(path);
-    for segment in path.split('.') {
+    let pointer = fact
+        .source_pointer
+        .as_deref()
+        .ok_or_else(|| anyhow!("HTTP output pointer is absent"))?;
+    for segment in output_pointer_segments(pointer)? {
         schema = match schema {
             SchemaNode::Object { fields, .. } => fields
-                .get(segment)
+                .get(&segment)
                 .map(|field| &field.schema)
-                .ok_or_else(|| anyhow!("fact path is absent from the response schema"))?,
-            _ => bail!("fact path traverses a non-object response schema"),
+                .ok_or_else(|| anyhow!("output path is absent from the response schema"))?,
+            _ => bail!("output path traverses a non-object response schema"),
         };
     }
     Ok(schema)
+}
+
+fn output_pointer_segments(pointer: &str) -> Result<Vec<String>> {
+    let pointer = pointer
+        .strip_prefix('/')
+        .ok_or_else(|| anyhow!("HTTP output pointer must be absolute"))?;
+    if pointer.is_empty() {
+        bail!("HTTP output pointer cannot select the root");
+    }
+    pointer
+        .split('/')
+        .map(|segment| {
+            let decoded = segment.replace("~1", "/").replace("~0", "~");
+            (!decoded.is_empty())
+                .then_some(decoded)
+                .ok_or_else(|| anyhow!("HTTP output pointer contains an empty token"))
+        })
+        .collect()
 }
 
 fn generated_notary_claim_rule(
     claim_id: &str,
     claim: &ClaimDeclaration,
     consultation_name: &str,
+    notary_consultation_name: &str,
     integration: &IntegrationDocument,
     loaded: &LoadedIntegration,
 ) -> Result<(String, bool, Value)> {
@@ -317,36 +347,164 @@ fn generated_notary_claim_rule(
             .outputs
             .get(fact_name)
             .ok_or_else(|| anyhow!("direct claim references an unknown output"))?;
-        let (value_type, nullable) = if fact.from.ends_with(".presence") {
-            ("boolean", false)
-        } else {
-            (
-                match fact.output_type {
-                    FactType::Boolean | FactType::Presence => "boolean",
-                    FactType::Integer => "integer",
-                    FactType::String => "string",
-                    FactType::Date => "date",
-                },
-                fact.nullable,
-            )
+        let value_type = match fact.output_type {
+            FactType::Boolean => "boolean",
+            FactType::Integer => "integer",
+            FactType::String => "string",
+            FactType::Date => "date",
+            FactType::Presence => bail!("presence cannot be referenced as an output"),
         };
-        let rule = if fact.from.ends_with(".presence") {
-            json!({ "type": "exists", "source": consultation_name })
-        } else {
-            json!({ "type": "extract", "source": consultation_name, "field": fact_name })
-        };
+        let nullable = true;
+        let rule = json!({ "type": "extract", "source": notary_consultation_name, "field": fact_name });
         return Ok((value_type.to_string(), nullable, rule));
     }
     let expression = claim
         .cel
         .as_ref()
         .ok_or_else(|| anyhow!("claim source is absent"))?;
+    let expression = rewrite_notary_consultation_root(
+        expression,
+        consultation_name,
+        notary_consultation_name,
+        integration.outputs.keys().map(String::as_str),
+    );
     let (value_type, nullable) = infer_fixture_claim_type(claim_id, loaded)?;
     Ok((
         value_type,
         nullable,
         json!({ "type": "cel", "expression": expression, "bindings": {} }),
     ))
+}
+
+// Crosswalk lowers these namespace-qualified helper calls before evaluating
+// CEL. Authored consultation names remain product-neutral, so collisions are
+// lowered only inside the generated Notary contract rather than rejected.
+const CROSSWALK_CEL_HELPER_NAMESPACES: &[&str] = &[
+    "address", "code", "date", "email", "geo", "id", "json", "list", "map", "name",
+    "num", "person", "phone", "privacy", "text", "type", "validate",
+];
+
+fn generated_notary_consultation_aliases<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+) -> BTreeMap<String, String> {
+    let names = names.into_iter().collect::<BTreeSet<_>>();
+    let mut aliases = BTreeMap::new();
+    let mut used = BTreeSet::new();
+    for name in &names {
+        let base = if CROSSWALK_CEL_HELPER_NAMESPACES.contains(name) {
+            format!("relay_{name}")
+        } else {
+            (*name).to_string()
+        };
+        let mut alias = base.clone();
+        let mut suffix = 2_u8;
+        while used.contains(alias.as_str())
+            || (alias.as_str() != *name && names.contains(alias.as_str()))
+        {
+            alias = format!("{base}_{suffix}");
+            suffix = suffix.saturating_add(1);
+        }
+        used.insert(alias.clone());
+        aliases.insert((*name).to_string(), alias);
+    }
+    aliases
+}
+
+fn rewrite_notary_consultation_root<'a>(
+    expression: &str,
+    authored_name: &str,
+    notary_name: &str,
+    output_names: impl IntoIterator<Item = &'a str>,
+) -> String {
+    if authored_name == notary_name {
+        return expression.to_string();
+    }
+    // Only typed consultation members move to the internal alias. This keeps
+    // real helper calls such as date.age_on(...) intact when an author also
+    // chose a helper namespace as the consultation name.
+    let mut members = output_names.into_iter().collect::<BTreeSet<_>>();
+    members.extend(["matched", "outcome"]);
+    let bytes = expression.as_bytes();
+    let mut rewritten = Vec::with_capacity(expression.len() + notary_name.len());
+    let mut index = 0;
+    let mut quote = None;
+    let mut escaped = false;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if let Some(active_quote) = quote {
+            rewritten.push(byte);
+            index += 1;
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == active_quote {
+                quote = None;
+            }
+            continue;
+        }
+        if matches!(byte, b'\'' | b'"' | b'`') {
+            quote = Some(byte);
+            rewritten.push(byte);
+            index += 1;
+            continue;
+        }
+        if !is_cel_identifier_start_byte(byte) {
+            rewritten.push(byte);
+            index += 1;
+            continue;
+        }
+
+        let start = index;
+        index += 1;
+        while index < bytes.len() && is_cel_identifier_continue_byte(bytes[index]) {
+            index += 1;
+        }
+        let token = &expression[start..index];
+        let previous = bytes[..start]
+            .iter()
+            .rfind(|byte| !byte.is_ascii_whitespace())
+            .copied();
+        let mut dot = index;
+        while dot < bytes.len() && bytes[dot].is_ascii_whitespace() {
+            dot += 1;
+        }
+        let mut member_start = dot.saturating_add(1);
+        while member_start < bytes.len() && bytes[member_start].is_ascii_whitespace() {
+            member_start += 1;
+        }
+        let mut member_end = member_start;
+        if bytes.get(dot) == Some(&b'.')
+            && bytes
+                .get(member_start)
+                .is_some_and(|byte| is_cel_identifier_start_byte(*byte))
+        {
+            member_end += 1;
+            while member_end < bytes.len()
+                && is_cel_identifier_continue_byte(bytes[member_end])
+            {
+                member_end += 1;
+            }
+        }
+        let member = expression.get(member_start..member_end);
+        if token == authored_name
+            && previous != Some(b'.')
+            && member.is_some_and(|member| members.contains(member))
+        {
+            rewritten.extend_from_slice(notary_name.as_bytes());
+        } else {
+            rewritten.extend_from_slice(token.as_bytes());
+        }
+    }
+    String::from_utf8(rewritten).expect("CEL root rewriting preserves UTF-8")
+}
+
+fn is_cel_identifier_start_byte(byte: u8) -> bool {
+    byte == b'_' || byte.is_ascii_alphabetic()
+}
+
+fn is_cel_identifier_continue_byte(byte: u8) -> bool {
+    byte == b'_' || byte.is_ascii_alphanumeric()
 }
 
 fn infer_fixture_claim_type(
@@ -535,6 +693,7 @@ fn disclosure_review_profiles(project: &RegistryProject) -> DisclosureReviewProf
         .collect()
 }
 
+#[cfg(test)]
 fn disclosure_rank(mode: DisclosureMode) -> u8 {
     match mode {
         DisclosureMode::Redacted => 0,
@@ -543,6 +702,7 @@ fn disclosure_rank(mode: DisclosureMode) -> u8 {
     }
 }
 
+#[cfg(test)]
 fn disclosure_change_classes(
     current: &DisclosureReviewProfiles,
     baseline: Option<&Value>,
@@ -599,6 +759,7 @@ fn disclosure_change_classes(
     (narrowing, widening)
 }
 
+#[cfg(test)]
 fn disclosure_profile_no_wider(
     candidate: &DisclosureReviewProfile,
     reference: &DisclosureReviewProfile,
@@ -637,7 +798,6 @@ fn parse_validity_seconds(value: &str) -> Result<u64> {
 fn generated_explanation(
     loaded: &LoadedRegistryProject,
     environment_name: &str,
-    packs: &BTreeMap<String, GeneratedPack>,
     profiles: &[GeneratedProfile],
 ) -> Value {
     json!({
@@ -646,6 +806,8 @@ fn generated_explanation(
         "environment": environment_name,
         "integrations": loaded.integrations.iter().map(|(alias, integration)| {
             (alias.clone(), json!({
+                "authoring_version": integration.document.version,
+                "revision": integration.document.revision,
                 "source_product": integration.document.source.product,
                 "source_versions": integration.document.source.versions,
                 "input": integration.document.input,
@@ -683,18 +845,13 @@ fn generated_explanation(
                 }).collect::<Vec<_>>(),
                 "outputs": integration.document.outputs,
                 "bounds": integration.document.bounds,
-                "generated_pack": packs.get(alias).map(|pack| json!({
-                    "id": pack.id,
-                    "version": pack.version,
-                    "hash": pack.artifact.typed_hash(),
-                })),
             }))
         }).collect::<Map<String, Value>>(),
         "services": loaded.project.services.iter().map(|(id, service)| {
             (id.clone(), json!({
                 "kind": service.kind,
-                "definition": service.definition,
                 "entity": service.entity,
+                "api": service.api,
                 "purpose": service.purpose,
                 "legal_basis": service.legal_basis,
                 "consent": service.consent,
@@ -706,42 +863,129 @@ fn generated_explanation(
                     "cel": declaration.cel,
                     "disclosure": declaration.disclosure,
                 }))).collect::<BTreeMap<_, _>>(),
-                "credentials": service.credentials,
+                "credential_profiles": service.credential_profiles,
                 "profiles": profiles.iter().filter(|profile| profile.service_id == *id).map(|profile| json!({
                     "consultation": profile.consultation_name,
                     "integration": profile.integration_alias,
-                    "id": profile.id,
-                    "version": profile.version,
                     "contract_hash": profile.contract.artifact().typed_hash(),
-                    "policy_hash": profile.contract.policy_hash(),
                 })).collect::<Vec<_>>(),
             }))
         }).collect::<Map<String, Value>>(),
         "environment_binding": loaded.environment.as_ref().map(|environment| json!({
             "deployment_profile": environment.deployment.profile,
             "integrations": environment.integrations.iter().map(|(alias, binding)| (alias.clone(), json!({
-                "source_version": binding.source_version,
-                "data_origin": binding.data_destination.as_ref().map(|destination| &destination.origin),
-                "credential_origin": binding.credential_destination.as_ref().map(|destination| &destination.origin),
-                "credential_interface": binding.credential.as_ref().map(|credential| credential.credential_type),
-                "snapshot_entity": match &loaded.integrations[alias].document.capability {
-                    CapabilityDeclaration::Snapshot { snapshot } => Some(snapshot.entity.as_str()),
-                    CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Script { .. } => None,
+                "source_origin": binding.source.origin,
+                "allowed_private_cidrs": binding.source.allowed_private_cidrs,
+                "source_auth_type": credential_interface(&loaded.integrations[alias].document).credential_type,
+                "credential_generation": binding.source.credential.as_ref().map(|credential| credential.generation),
+                "oauth_endpoint": binding.source.oauth.as_ref().map(|endpoint| json!({
+                    "origin": endpoint.origin,
+                    "path": endpoint.path,
+                    "generation": endpoint.generation,
+                })),
+                "jwks_endpoint": binding.source.jwks.as_ref().map(|endpoint| json!({
+                    "origin": endpoint.origin,
+                    "path": endpoint.path,
+                    "generation": endpoint.generation,
+                })),
+                "ca_generation": binding.source.ca.as_ref().map(|ca| ca.generation),
+                "mtls_generation": binding.source.mtls.as_ref().map(|mtls| mtls.generation),
+                "rate": binding.source.rate,
+                "concurrency": binding.source.concurrency,
+                "timeout": binding.source.timeout,
+                "script_runtime": match &loaded.integrations[alias].document.capability {
+                    CapabilityDeclaration::Script { script } => Some(script.runtime),
+                    CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Snapshot { .. } => None,
                 },
-                "rhai_enabled": binding.advanced_capabilities.as_ref().is_some_and(|advanced| advanced.script.enabled),
             }))).collect::<Map<String, Value>>(),
             "entities": environment.entities.iter().map(|(id, binding)| (id.clone(), json!({
                 "source_revision": binding.source_revision,
                 "generation": binding.generation,
-                "materialization_identity": loaded.records.get(id).and_then(|records| records_materialization_resource_id(&records.document, binding).ok()),
+                "materialization_identity": loaded.entities.get(id).and_then(|entity| entity_materialization_resource_id(&entity.document, binding).ok()),
             }))).collect::<Map<String, Value>>(),
             "callers": environment.callers.iter().map(|(caller, binding)| (caller.clone(), json!({
                 "scopes": binding.scopes,
             }))).collect::<Map<String, Value>>(),
-            "relay_workload": {
-                "client_id": environment.relay.as_ref().map(|relay| relay.workload_client_id.as_str()),
+            "relay_oidc": {
+                "allowed_clients": environment.relay.as_ref().map(|relay| &relay.allowed_clients),
                 "audience": environment.relay.as_ref().map(|relay| relay.audience.as_str()),
             },
+            "notary_relay_workload": environment.notary_relay.as_ref().map(|connection| json!({
+                "client_id": connection.workload_client_id,
+            })),
         })),
     })
+}
+
+#[cfg(test)]
+mod notary_compiler_tests {
+    use super::*;
+
+    #[test]
+    fn crosswalk_helper_namespaces_receive_unique_internal_aliases() {
+        let mut names = CROSSWALK_CEL_HELPER_NAMESPACES.to_vec();
+        names.extend(["relay_person", "relay_person_2", "household"]);
+        let aliases = generated_notary_consultation_aliases(names.iter().copied());
+
+        assert_eq!(aliases["person"], "relay_person_3");
+        assert_eq!(aliases["relay_person"], "relay_person");
+        assert_eq!(aliases["relay_person_2"], "relay_person_2");
+        assert_eq!(aliases["household"], "household");
+        assert!(CROSSWALK_CEL_HELPER_NAMESPACES
+            .iter()
+            .all(|name| aliases[*name] != *name));
+        assert_eq!(
+            aliases.values().collect::<BTreeSet<_>>().len(),
+            aliases.len()
+        );
+    }
+
+    #[test]
+    fn consultation_root_rewrite_is_token_and_string_literal_aware() {
+        let expression = r#"person.matched
+            && person . status == "person.status"
+            && 'escaped \' person.matched'
+            && `person.status`
+            && payload.person.status == "active"
+            && person.age(person.birth_date, today) > 17"#;
+        let rewritten = rewrite_notary_consultation_root(
+            expression,
+            "person",
+            "relay_person",
+            ["status", "birth_date"],
+        );
+
+        assert_eq!(
+            rewritten,
+            r#"relay_person.matched
+            && relay_person . status == "person.status"
+            && 'escaped \' person.matched'
+            && `person.status`
+            && payload.person.status == "active"
+            && person.age(relay_person.birth_date, today) > 17"#
+        );
+    }
+
+    #[test]
+    fn consultation_root_rewrite_leaves_unrelated_identifiers_unchanged() {
+        let expression = "person_id == 'person.matched' && other.matched";
+        assert_eq!(
+            rewrite_notary_consultation_root(
+                expression,
+                "person",
+                "relay_person",
+                ["person_id"]
+            ),
+            expression
+        );
+        assert_eq!(
+            rewrite_notary_consultation_root(
+                "household.matched",
+                "household",
+                "household",
+                std::iter::empty()
+            ),
+            "household.matched"
+        );
+    }
 }

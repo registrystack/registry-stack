@@ -2,13 +2,11 @@ version: 1
 
 integrations:
   person-record:
-    source_version: project-fixture-v1
-    data_destination:
+    source:
       origin: https://citizen-registry.invalid
-    credential:
-      type: static_bearer
-      token: { secret: FICTIONAL_REGISTRY_TOKEN }
-      generation: 1
+      credential:
+        token: { secret: FICTIONAL_REGISTRY_TOKEN }
+        generation: 1
 
 issuance:
   issuer: did:web:notary.invalid
@@ -26,9 +24,10 @@ relay:
   issuer: https://workload-issuer.internal.invalid
   jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
   audience: registry-relay
-  workload_client_id: fictional-registry-notary
+  allowed_clients: [fictional-relay-client]
 
 notary_relay:
+  workload_client_id: fictional-registry-notary
   token_file: /run/secrets/relay-workload-token
 
 deployment:

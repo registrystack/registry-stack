@@ -1,7 +1,10 @@
 name: ambiguous-household
+classification: synthetic
 input: { household_reference: HH-AB12CD34 }
-source:
-  resolve:
-    status: 200
-    body: { matches: [{ key: synthetic-key-1 }, { key: synthetic-key-2 }] }
-expect: { outcome: ambiguous, source_access: true, disclosed_claims: [], calls: [resolve] }
+interactions:
+  - expect:
+      method: GET
+      path: /households/HH-AB12CD34
+      query: { fields: "approved,category" }
+    respond: { status: 409, body: {} }
+expect: { outcome: ambiguous, outputs: {}, claims: {} }

@@ -1,6 +1,0 @@
-name: dhis2-malformed-response
-input: { tracked_entity: A0000000001 }
-variables: { as_of_date: 2026-01-01 }
-source:
-  identity: { status: 200, raw_body: '{"trackedEntities":[' }
-expect: { error: source.response_malformed, source_access: true, disclosed_claims: [] }

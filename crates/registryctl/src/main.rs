@@ -6,7 +6,8 @@ use clap::{Parser, Subcommand};
 use registryctl::{
     BundleSignOptions, DeploymentProfile, DoctorFormat, NotaryInitOptions, NotaryInitSourceKind,
     NotarySource, OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions, ProjectBuildOptions,
-    ProjectCheckOptions, ProjectInitOptions, ProjectStarter, ProjectTestOptions, Sample,
+    ProjectCheckOptions, ProjectInitOptions, ProjectStarter, ProjectTestOptions,
+    ProjectTestSelection, Sample,
 };
 
 fn main() -> Result<()> {
@@ -107,11 +108,38 @@ fn main() -> Result<()> {
             project_dir,
             environment,
             live,
-        } => print_json(&registryctl::test_registry_project(&ProjectTestOptions {
-            project_directory: project_dir,
-            environment,
-            live,
-        })?)?,
+            integration,
+            fixture,
+            trace,
+            watch,
+        } => {
+            if watch {
+                return watch_project_tests(
+                    ProjectTestOptions {
+                        project_directory: project_dir,
+                        environment,
+                        live,
+                    },
+                    ProjectTestSelection {
+                        integration,
+                        fixture,
+                        trace,
+                    },
+                );
+            }
+            print_json(&registryctl::test_registry_project_selected(
+                &ProjectTestOptions {
+                    project_directory: project_dir,
+                    environment,
+                    live,
+                },
+                &ProjectTestSelection {
+                    integration,
+                    fixture,
+                    trace,
+                },
+            )?)?
+        }
         Commands::Check {
             project_dir,
             environment,
@@ -386,6 +414,65 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn watch_project_tests(options: ProjectTestOptions, selection: ProjectTestSelection) -> Result<()> {
+    loop {
+        print_json(&registryctl::test_registry_project_selected(
+            &options, &selection,
+        )?)?;
+        let observed = project_watch_fingerprint(&options.project_directory)?;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            if project_watch_fingerprint(&options.project_directory)? != observed {
+                break;
+            }
+        }
+    }
+}
+
+fn project_watch_fingerprint(
+    root: &std::path::Path,
+) -> Result<Vec<(PathBuf, u64, Option<std::time::SystemTime>)>> {
+    fn visit(
+        root: &std::path::Path,
+        directory: &std::path::Path,
+        values: &mut Vec<(PathBuf, u64, Option<std::time::SystemTime>)>,
+    ) -> Result<()> {
+        for entry in std::fs::read_dir(directory)
+            .with_context(|| format!("failed to watch project directory {}", directory.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            let relative = path.strip_prefix(root).unwrap_or(&path);
+            if relative
+                .components()
+                .next()
+                .is_some_and(|component| component.as_os_str() == ".registry-stack")
+            {
+                continue;
+            }
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                continue;
+            }
+            if metadata.is_dir() {
+                visit(root, &path, values)?;
+            } else if metadata.is_file() {
+                values.push((
+                    relative.to_path_buf(),
+                    metadata.len(),
+                    metadata.modified().ok(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    let mut values = Vec::new();
+    visit(root, root, &mut values)?;
+    values.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(values)
+}
+
 fn is_exact_internal_mode(expected: &str) -> bool {
     let mut args = std::env::args_os();
     let _program = args.next();
@@ -438,6 +525,18 @@ enum Commands {
         /// Use the deployed governed path. Direct registry access is never performed.
         #[arg(long)]
         live: bool,
+        /// Run fixtures for one integration id.
+        #[arg(long)]
+        integration: Option<String>,
+        /// Run one named fixture within the selected integration.
+        #[arg(long, requires = "integration")]
+        fixture: Option<String>,
+        /// Include the safe synthetic interaction trace in the report.
+        #[arg(long)]
+        trace: bool,
+        /// Rerun the selected offline scope when authored files change.
+        #[arg(long, conflicts_with = "live")]
+        watch: bool,
     },
     /// Validate and explain generated Relay and Notary configuration.
     Check {
@@ -450,7 +549,7 @@ enum Commands {
         /// Print the complete redacted acquisition and disclosure plan.
         #[arg(long)]
         explain: bool,
-        /// Previously signed Config Bundle containing approval/review.json.
+        /// Previously signed product Config Bundle with review and internal approval state.
         #[arg(long)]
         against: Option<PathBuf>,
         /// Trust anchor for --against.
@@ -465,7 +564,7 @@ enum Commands {
         /// Explicit environment binding.
         #[arg(long)]
         environment: String,
-        /// Previously signed Config Bundle containing approval/review.json.
+        /// Previously signed product Config Bundle with review and internal approval state.
         #[arg(long)]
         against: Option<PathBuf>,
         /// Trust anchor for --against.
@@ -582,6 +681,10 @@ mod tests {
                 project_dir,
                 environment: Some(environment),
                 live: true,
+                integration: None,
+                fixture: None,
+                trace: false,
+                watch: false,
             } if project_dir == std::path::Path::new("registry-project") && environment == "staging"
         ));
 

@@ -1,131 +1,50 @@
 version: 1
 id: fictional-dci-birth-record
+revision: 1
+
 source:
   product: opencrvs
-  versions:
-    unverified: [project-fixture-v1]
+  versions: { unverified: [farajaland-fixture-v1] }
+  auth:
+    type: oauth2_client_credentials
+    request: json
+    response_profile: oauth2_bearer
+  allow:
+    - method: POST
+      path: /dci/v1/birth/search
+      semantics: read_only
+  response: { format: json, max_bytes: 256KiB }
+  protocol:
+    signed_dci:
+      profile: dci-search-v1
+      path: /dci/v1/birth/search
+      jwks_profile: rsa-signing-jwks-v1
+      sender: fictional-notary
+      receiver: fictional-civil-registry
+      registry_type: civil-registry
+      record_type: birth
+      locale: en
+      selectors:
+        uin:
+          field: identifier_value
+          response_pointer: /identifier/0/identifier_value
+
 input:
   uin:
+    role: selector
     type: string
-    bytes: 16
+    maxLength: 16
     pattern: "^[0-9]{10}$"
-    canonicalization: identity
+
 capability:
-  http:
-    credential: { type: oauth2_client_credentials }
-    operations:
-      oauth:
-        role: credential
-        primitive: oauth2_client_credentials
-        request:
-          method: POST
-          destination: credential
-          path: /oauth/token
-          codec: oauth2_client_credentials_json_v1
-        response:
-          statuses: [200]
-          max_bytes: 4096
-          codec: oauth2_token_v1
-          schema:
-            type: object
-            additional_fields: reject
-            fields:
-              access_token: { required: true, type: string, max_bytes: 2048 }
-              token_type: { required: true, type: string, max_bytes: 16 }
-      jwks:
-        role: verification
-        primitive: jwks_json_v1
-        request: { method: GET, destination: data, path: /.well-known/jwks.json }
-        response:
-          statuses: [200]
-          max_bytes: 32768
-          codec: jwks_json_v1
-          schema:
-            type: object
-            additional_fields: reject
-            fields:
-              keys:
-                required: true
-                type: array
-                max_items: 2
-                items:
-                  type: object
-                  additional_fields: reject
-                  fields:
-                    kid: { required: true, type: string, max_bytes: 80 }
-                    kty: { required: true, type: string, max_bytes: 8 }
-                    use: { required: true, type: string, max_bytes: 8 }
-                    alg: { required: true, type: string, max_bytes: 24 }
-                    n: { required: true, type: string, max_bytes: 1366 }
-                    e: { required: true, type: string, max_bytes: 12 }
-      birth:
-        depends_on: [oauth, jwks]
-        primitive: dci_search_v1
-        request:
-          method: POST
-          destination: data
-          path: /dci/v1/birth/search
-          codec: dci_search_v1
-          authorization: { prior: oauth.access_token }
-          body:
-            protocol_version: { value: 1.0.0 }
-            sender: { value: fictional-notary }
-            receiver: { value: fictional-civil-registry }
-            registry_type: { value: civil-registry }
-            registry_event_type: { value: birth }
-            record_type: { value: birth }
-            identifier_type: { value: UIN }
-            exact_and:
-              uin:
-                field: identifier_value
-                response_pointer: /identifier/0/identifier_value
-            locale: { value: en }
-            page_number: { value: 1 }
-        verification: { primitive: dci_jws_v1, jwks: jwks.keys }
-        response:
-          statuses: [200]
-          max_bytes: 65536
-          codec: dci_search_response_v1
-          schema:
-            type: object
-            additional_fields: reject
-            fields:
-              records:
-                required: true
-                type: array
-                max_items: 2
-                items:
-                  type: object
-                  additional_fields: reject
-                  fields:
-                    identifier:
-                      required: true
-                      type: array
-                      max_items: 2
-                      items:
-                        type: object
-                        additional_fields: reject
-                        fields:
-                          identifier_type: { required: true, type: string, max_bytes: 32 }
-                          identifier_value: { required: true, type: string, max_bytes: 16 }
-                    child:
-                      required: true
-                      type: object
-                      additional_fields: reject
-                      fields:
-                        given_name: { required: true, type: string, max_bytes: 80 }
-                        family_name: { required: true, type: string, max_bytes: 80 }
-                        date_of_birth: { required: true, type: date }
-                        sex: { required: true, type: string, max_bytes: 16 }
-                    place_of_birth: { required: true, type: string, max_bytes: 120 }
-              signature: { required: true, type: string, max_bytes: 4096 }
-          cardinality: { records: records, mode: probe_two }
+  script:
+    file: adapter.rhai
+
 outputs:
-  exists: { type: boolean, from: birth.presence }
-  date_of_birth: { type: date, nullable: true, from: birth.record.child.date_of_birth }
-  sex: { type: string, nullable: true, max_bytes: 16, from: birth.record.child.sex }
-  child_given_name: { type: string, nullable: true, max_bytes: 80, from: birth.record.child.given_name }
-  child_family_name: { type: string, nullable: true, max_bytes: 80, from: birth.record.child.family_name }
-  place_of_birth: { type: string, nullable: true, max_bytes: 120, from: birth.record.place_of_birth }
-bounds: { calls: 3, source_bytes: 102400, request_bytes: 16384, deadline: 20s, concurrency: 8 }
-fixtures: fixtures/
+  date_of_birth: { type: [string, "null"], format: date, maxLength: 10 }
+  sex: { type: [string, "null"], maxLength: 16 }
+  child_given_name: { type: [string, "null"], maxLength: 80 }
+  child_family_name: { type: [string, "null"], maxLength: 80 }
+  place_of_birth: { type: [string, "null"], maxLength: 120 }
+
+limits: { calls: 1, source_bytes: 512KiB, request_bytes: 32KiB, deadline: 20s }

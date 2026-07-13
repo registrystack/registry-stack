@@ -81,9 +81,9 @@ The JSON report contains:
 "status": "passed"
 ```
 
-The fixture set covers match, no match, malformed and oversized responses, invalid input,
-unexpected source status, timeout, wrong caller or scope, wrong purpose, and attempted request
-authority changes.
+The authored fixture set covers meaningful synthetic match, no-match, ambiguity, and source-shape
+variations. The harness derives malformed decoding, byte and structural limits, timeout,
+authorization-before-source, and output-minimization cases from the same integration.
 The command does not contact Registry Relay, Registry Notary, or a source registry.
 
 ## Adapt the authored contract
@@ -93,33 +93,32 @@ For this synthetic journey, make these exact substitutions with your editor:
 | File | Field | Replace | With |
 | --- | --- | --- | --- |
 | `registry-stack.yaml` | `registry.id` | `fictional-citizen-registry` | `fictional-civic-support-registry` |
-| `integrations/person-record/integration.yaml` | `source.product` | `fictional-citizen-system` | `fictional-civic-support-api` |
-| `integrations/person-record/integration.yaml` | `source.versions.unverified` | `[project-fixture-v1]` | `[tutorial-contract-v2]` |
-| `integrations/person-record/integration.yaml` | the `person` request `path` | `/v1/person-records` | `/v2/citizens/status` |
-| `environments/local.yaml` | `source_version` | `project-fixture-v1` | `tutorial-contract-v2` |
-| `environments/local.yaml` | `data_destination.origin` | `https://citizen-registry.invalid` | `https://civic-support.invalid` |
+| `integrations/person-record/integration.yaml` | `source.product` | `replace-with-source-product` | `fictional-civic-support-api` |
+| `integrations/person-record/integration.yaml` | `source.versions.unverified` | `[replace-with-source-version]` | `[tutorial-contract-v2]` |
+| `environments/local.yaml` | `source.origin` | `https://citizen-registry.invalid` | `https://civic-support.invalid` |
 
-These values remain fictional and `.invalid` destinations cannot identify a live service. The
-fixture observations describe response bodies rather than executing HTTP requests, so they remain
-valid after the fixed request paths change.
+These values remain fictional and `.invalid` destinations cannot identify a live service. They do
+not alter the request shape proved by the starter fixtures. When you later change a method, path,
+query, header, or body, update each affected fixture's expected interaction so the test proves the
+new canonical request.
 
 For an actual integration, review all four authored surfaces and replace the fictional contract
 with approved project values:
 
 1. In `registry-stack.yaml`, name the registry, service, purpose, caller scopes, consultation
    input mapping, outputs, claims, disclosure modes, and credential claim allow-list.
-2. In `integrations/person-record/integration.yaml`, define the typed subject input, fixed
-   operation, closed response schema, output mapping, cardinality, bytes, calls, deadline, and
-   concurrency.
-3. In `integrations/person-record/fixtures/`, replace the synthetic source observations and
-   expected outputs and claims. Keep positive and denial fixtures.
+2. In `integrations/person-record/integration.yaml`, define selector and parameter input schemas,
+   one fixed HTTP request, output pointers and schemas, cardinality, and any limit override proven
+   necessary by fixtures.
+3. In `integrations/person-record/fixtures/`, replace the synthetic interactions and expected
+   outputs and claims. Each fixture proves the canonical request as well as the response.
 4. In `environments/local.yaml`, bind the source version, non-production destination, secret
    references, caller fingerprints, Relay trust, and deployment services.
 
-The integration fixes the destination slot, method, path, parameter names, response fields, and
-bounds before deployment.
-Consultation inputs can populate only declared value slots.
-They cannot select an origin, operation, credential, codec, projection, or response mapper.
+The integration fixes the method, path, input placement, minimized output fields, and bounds before
+deployment. The environment binds the one logical source origin and credentials.
+Consultation inputs can populate only declared request values.
+They cannot select an origin, method, credential, capability, projection, or response mapper.
 
 Use `source.product` as review metadata for the source system.
 It does not select a product executor or runtime capability.
@@ -166,7 +165,7 @@ The JSON report contains:
 "baseline": "initial_without_baseline"
 ```
 
-Review the fixed operations, input mappings, caller scopes, purpose, outputs, claims, disclosure
+Review the fixed request authority, input mappings, caller scopes, purpose, outputs, claims, disclosure
 modes, and credential membership in `explanation`.
 An initial project without an approved baseline requires the `claim`, `integration`,
 `service_policy`, and `operator_security` review classes.
@@ -235,8 +234,8 @@ The generated profile keeps source acquisition in Relay and claim disclosure in 
   a fixed Patient anchor and declared relation.
 - [Configure an exact snapshot materialization](../configure-project-snapshot-materialization/)
   when consultation reads an immutable local snapshot.
-- [Configure Sandboxed Rhai orchestration](../configure-project-sandboxed-rhai/) only when the
-  reviewed source recipe cannot be expressed as declarative bounded HTTP operations.
+- [Configure a script source adapter](../configure-project-sandboxed-rhai/) only when the reviewed
+  source recipe needs more than one bounded HTTP request.
 
 ## Troubleshooting
 
@@ -244,6 +243,6 @@ The generated profile keeps source acquisition in Relay and claim disclosure in 
 | --- | --- | --- |
 | `project destination must be absent or an empty real directory` | `init` found content, a non-directory, or a symlink. | Choose an absent or empty real directory. |
 | `input.pattern_mismatch` | A fixture input does not satisfy the declared type or pattern. | Correct the synthetic fixture or the reviewed input contract. |
-| `fixture.request_override_forbidden` | A fixture attempted to choose request authority. | Keep transport and credential authority in the integration and environment. |
+| A fixture request proof differs from the trace | The expected interaction does not match the canonical request produced by the integration. | Correct the integration or update the wholly synthetic interaction proof. |
 | `--against and --anchor must be supplied together` | Only one approved-baseline argument was present. | Supply the verified bundle and matching trust anchor together. |
 | Generated configuration fails validation | Authored fields cannot produce a valid Relay or Notary startup contract. | Correct the reported authored file and field, then rerun `test` and `check`. |

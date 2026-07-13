@@ -1,12 +1,11 @@
 version: 1
 integrations:
   individual:
-    source_version: fixture-api-v2
-    data_destination: { origin: https://social-registry.invalid }
-    credential:
-      type: static_bearer
-      token: { secret: SOCIAL_REGISTRY_TOKEN }
-      generation: 1
+    source:
+      origin: https://social-registry.invalid
+      credential:
+        token: { secret: SOCIAL_REGISTRY_TOKEN }
+        generation: 1
 issuance:
   issuer: did:web:social-registry-notary.invalid
   signing_kid: project-issuer-key
@@ -21,9 +20,10 @@ relay:
   issuer: https://workload-issuer.internal.invalid
   jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
   audience: registry-relay
-  workload_client_id: social-registry-notary
+  allowed_clients: [social-registry-relay-client]
 
 notary_relay:
+  workload_client_id: social-registry-notary
   token_file: /run/secrets/relay-workload-token
 
 deployment:

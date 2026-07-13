@@ -7,7 +7,7 @@ use registryctl::{
     add_config_anchor_key, build_registry_project, check_registry_project, init_config_anchor,
     init_registry_project, sign_config_bundle, test_registry_project, verify_config_bundle_cli,
     BundleSignOptions, ProjectBuildOptions, ProjectCheckOptions, ProjectInitOptions,
-    ProjectStarter, ProjectTestOptions, ReviewClass,
+    ProjectStarter, ProjectTestOptions,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -30,6 +30,7 @@ fn every_project_golden_passes_the_offline_journey() {
         "opencrvs-country-variant",
         "openspp-exact",
         "snapshot-exact",
+        "snapshot-with-records",
     ] {
         let report = test_registry_project(&ProjectTestOptions {
             project_directory: golden(project),
@@ -55,7 +56,17 @@ fn fhir_r4_coverage_active_passes_the_closed_bundle_matrix() {
     })
     .expect("FHIR R4 Coverage-active golden passes");
     assert_eq!(report.status, "passed");
-    assert_eq!(report.fixtures.len(), 13);
+    assert!(
+        report.fixtures.len() >= 5,
+        "the five authored journeys and their derived security cases must execute"
+    );
+    assert!(report
+        .fixtures
+        .iter()
+        .any(|fixture| fixture.fixture.ends_with("::derived/request_authority")));
+    assert!(report.fixtures.iter().any(|fixture| fixture
+        .fixture
+        .ends_with("::derived/authorization_before_source")));
     assert!(report.fixtures.iter().all(|fixture| fixture.passed));
 }
 
@@ -87,20 +98,24 @@ fn successful_negative_fixtures_report_the_closed_denial_assertion() {
     let denied_before_access = report
         .fixtures
         .iter()
-        .find(|fixture| fixture.fixture == "wrong-purpose-denied-before-source")
-        .expect("wrong-purpose fixture report");
+        .find(|fixture| {
+            fixture
+                .fixture
+                .ends_with("::derived/authorization_before_source")
+        })
+        .expect("derived authorization fixture report");
     assert!(denied_before_access.passed);
     assert_eq!(
         denied_before_access.expected_error.as_deref(),
-        Some("authorization.purpose_denied")
+        Some("authorization.denied")
     );
     assert_eq!(denied_before_access.source_access, Some(false));
 
     let denied_after_access = report
         .fixtures
         .iter()
-        .find(|fixture| fixture.fixture == "custom-malformed-response")
-        .expect("malformed-response fixture report");
+        .find(|fixture| fixture.fixture.ends_with("::derived/malformed_decode"))
+        .expect("derived malformed-response fixture report");
     assert!(denied_after_access.passed);
     assert_eq!(
         denied_after_access.expected_error.as_deref(),
@@ -120,7 +135,7 @@ fn successful_negative_fixtures_report_the_closed_denial_assertion() {
 #[test]
 fn authored_rhai_script_compiles_under_the_production_surface() {
     let script = std::fs::read_to_string(
-        golden("dhis2-sandboxed-rhai").join("integrations/health-record/orchestration.rhai"),
+        golden("dhis2-sandboxed-rhai").join("integrations/health-record/adapter.rhai"),
     )
     .expect("authored Rhai script");
     registry_relay::rhai_worker::probe_script(
@@ -139,9 +154,57 @@ fn authored_rhai_script_compiles_under_the_production_surface() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
+fn local_rhai_modules_are_a_static_hash_covered_closure() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("dhis2-sandboxed-rhai", temporary.path());
+    let integration_directory = project.join("integrations/health-record");
+    std::fs::create_dir(integration_directory.join("lib")).expect("module directory creates");
+    let module = integration_directory.join("lib/normalize.rhai");
+    std::fs::write(&module, "fn normalize_status(value) { value }\n").expect("local module writes");
+    let integration_path = integration_directory.join("integration.yaml");
+    let mut integration = read_yaml(&integration_path);
+    integration["capability"]["script"]["modules"] =
+        serde_yaml::from_str("[lib/normalize.rhai]").expect("module list");
+    write_yaml(&integration_path, &integration);
+
+    let options = ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    };
+    let first = build_registry_project(&options).expect("project with local module builds");
+    let first_output = PathBuf::from(first.output.expect("first build output"));
+    let compiled_path = first_output.join("private/relay/config/artifacts/rhai/health-record.rhai");
+    let compiled = std::fs::read_to_string(&compiled_path).expect("compiled closure reads");
+    assert!(compiled.contains("registry-local-module:lib/normalize.rhai"));
+    assert!(compiled.contains("fn normalize_status(value)"));
+    assert!(compiled.contains("registry-entrypoint:adapter.rhai"));
+    let first_closure = directory_closure(&first_output);
+
+    std::fs::write(&module, "fn normalize_status(value) { value == () }\n")
+        .expect("local module changes");
+    let second = build_registry_project(&options).expect("changed local module builds");
+    let second_output = PathBuf::from(second.output.expect("second build output"));
+    assert_ne!(
+        closure_digest(&first_closure),
+        closure_digest(&directory_closure(&second_output)),
+        "changing a local module must change the generated project closure"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let baseline_root = temporary.path().join("baseline");
+    let changed_root = temporary.path().join("changed");
+    let absent_root = temporary.path().join("absent");
+    std::fs::create_dir(&baseline_root).expect("baseline root creates");
+    std::fs::create_dir(&changed_root).expect("changed root creates");
+    std::fs::create_dir(&absent_root).expect("absent root creates");
+    let baseline = copy_project("dhis2-sandboxed-rhai", &baseline_root);
+    let project = copy_project("dhis2-sandboxed-rhai", &changed_root);
     replace_in_file(
         &project.join("integrations/health-record/integration.yaml"),
         "product: dhis2",
@@ -149,21 +212,82 @@ fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
     );
     replace_in_file(
         &project.join("integrations/health-record/integration.yaml"),
-        "versions: { tested: [2.41.9] }",
+        "versions: { unverified: [2.41.9] }",
         "versions: { unverified: [7.3] }",
     );
-    replace_in_file(
-        &project.join("environments/local.yaml"),
-        "source_version: 2.41.9",
-        "source_version: 7.3",
-    );
+
+    let metadata_free = copy_project("dhis2-sandboxed-rhai", &absent_root);
+    let metadata_free_integration =
+        metadata_free.join("integrations/health-record/integration.yaml");
+    let mut integration = read_yaml(&metadata_free_integration);
+    let source = integration["source"]
+        .as_mapping_mut()
+        .expect("Rhai source mapping");
+    source.remove(serde_yaml::Value::String("product".to_string()));
+    source.remove(serde_yaml::Value::String("versions".to_string()));
+    write_yaml(&metadata_free_integration, &integration);
+
+    let exercise = |project_directory: PathBuf| {
+        let test_report = test_registry_project(&ProjectTestOptions {
+            project_directory: project_directory.clone(),
+            environment: None,
+            live: false,
+        })
+        .expect("released Rhai contract tests independent of product metadata");
+        assert_eq!(test_report.status, "passed");
+
+        let check_report = check_registry_project(&ProjectCheckOptions {
+            project_directory: project_directory.clone(),
+            environment: "local".to_string(),
+            explain: false,
+            against: None,
+            anchor: None,
+        })
+        .expect("product-neutral Rhai project checks");
+        assert_eq!(check_report.status, "valid");
+
+        let build_report = build_registry_project(&ProjectBuildOptions {
+            project_directory,
+            environment: "local".to_string(),
+            against: None,
+            anchor: None,
+        })
+        .expect("product-neutral Rhai project builds");
+        assert_eq!(build_report.status, "built");
+        let output = PathBuf::from(build_report.output.expect("build output"));
+        let pack: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                output.join("private/relay/config/artifacts/integration-packs/health-record.json"),
+            )
+            .expect("Rhai integration pack reads"),
+        )
+        .expect("Rhai integration pack parses");
+        (
+            serde_json::to_value(test_report.fixtures).expect("fixture reports serialize"),
+            pack["spec"]["plan"]["kind"].clone(),
+            pack["spec"]["plan"]["rhai"]["script_hash"].clone(),
+        )
+    };
+
+    let baseline_dispatch = exercise(baseline);
+    let changed_dispatch = exercise(project);
+    let absent_dispatch = exercise(metadata_free);
+    assert_eq!(baseline_dispatch, changed_dispatch);
+    assert_eq!(baseline_dispatch, absent_dispatch);
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn project_authoring_rhai_commands_are_portable_offline() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("dhis2-sandboxed-rhai", temporary.path());
 
     let test_report = test_registry_project(&ProjectTestOptions {
         project_directory: project.clone(),
         environment: None,
         live: false,
     })
-    .expect("released Rhai contract accepts an unknown product");
+    .expect("portable offline Rhai test passes without production activation");
     assert_eq!(test_report.status, "passed");
 
     let check_report = check_registry_project(&ProjectCheckOptions {
@@ -173,60 +297,17 @@ fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
         against: None,
         anchor: None,
     })
-    .expect("unknown-product Rhai project checks");
+    .expect("portable project check compiles the reviewed Rhai program");
     assert_eq!(check_report.status, "valid");
 
     let build_report = build_registry_project(&ProjectBuildOptions {
-        project_directory: project.clone(),
+        project_directory: project,
         environment: "local".to_string(),
         against: None,
         anchor: None,
     })
-    .expect("unknown-product Rhai project builds");
+    .expect("portable project build compiles product inputs");
     assert_eq!(build_report.status, "built");
-    assert!(project.join(".registry-stack/build/local").exists());
-}
-
-#[cfg(not(target_os = "linux"))]
-#[test]
-fn public_rhai_commands_enforce_the_production_platform_gate() {
-    let temporary = tempfile::tempdir().expect("temporary directory");
-    let project = copy_project("dhis2-sandboxed-rhai", temporary.path());
-
-    let test_error = test_registry_project(&ProjectTestOptions {
-        project_directory: project.clone(),
-        environment: None,
-        live: false,
-    })
-    .expect_err("public test must enforce the Rhai platform gate");
-    assert!(
-        format!("{test_error:#}").contains("consultation service plan is unsupported"),
-        "{test_error:#}"
-    );
-
-    for error in [
-        check_registry_project(&ProjectCheckOptions {
-            project_directory: project.clone(),
-            environment: "local".to_string(),
-            explain: false,
-            against: None,
-            anchor: None,
-        })
-        .expect_err("public check must enforce the Rhai platform gate"),
-        build_registry_project(&ProjectBuildOptions {
-            project_directory: project.clone(),
-            environment: "local".to_string(),
-            against: None,
-            anchor: None,
-        })
-        .expect_err("public build must enforce the Rhai platform gate"),
-    ] {
-        assert!(
-            format!("{error:#}").contains("consultation service plan is unsupported"),
-            "{error:#}"
-        );
-    }
-    assert!(!project.join(".registry-stack/build/local").exists());
 }
 
 #[test]
@@ -259,7 +340,7 @@ fn rhai_conformance_controls_are_code_only_and_deny_ambient_capabilities() {
     }
 
     let request = registry_relay::rhai_worker::WorkerRequest::v1(
-        "fn consult(input, prior) { #{ operations: [], outputs: #{} } }",
+        "fn consult(input) { result.no_match() }",
         "consult",
         limits,
     );
@@ -341,8 +422,9 @@ fn all_advertised_starters_initialize_and_test_without_source_access() {
     for starter in [
         ProjectStarter::Http,
         ProjectStarter::Dhis2Tracker,
-        ProjectStarter::Opencrvs,
-        ProjectStarter::Openspp,
+        ProjectStarter::OpencrvsDci,
+        ProjectStarter::FhirR4,
+        ProjectStarter::Snapshot,
     ] {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let project = temporary.path().join("registry-project");
@@ -374,62 +456,32 @@ fn http_starter_adapts_to_a_structurally_different_source_api() {
     std::fs::write(
         &integration,
         r#"version: 1
-id: fictional-two-step-person-record
+id: fictional-municipal-person-record
+revision: 1
 source:
   product: unanticipated-municipal-api
   versions: { unverified: [municipal-contract-v3] }
+  auth: { type: static_bearer }
 input:
-  person_id: { type: string, bytes: 24, pattern: "^[A-Z]{2}-[0-9]{6}$", canonicalization: identity }
+  municipal_reference:
+    role: selector
+    type: string
+    maxLength: 9
+    pattern: "^[A-Z]{2}-[0-9]{6}$"
 capability:
   http:
-    credential: { type: static_bearer }
-    operations:
-      resolve:
-        request:
-          method: POST
-          destination: data
-          path: /lookup/resolve
-          codec: strict_json_v1
-          body:
-            subject: { input: person_id }
-            projection: { value: key }
-            limit: { value: 2 }
-        response:
-          statuses: [200]
-          max_bytes: 8192
-          schema:
-            type: object
-            additional_fields: reject
-            fields:
-              matches:
-                required: true
-                type: array
-                max_items: 2
-                items:
-                  type: object
-                  additional_fields: reject
-                  fields: { key: { required: true, type: string, max_bytes: 32 } }
-          cardinality: { records: matches, mode: probe_two }
-      status:
-        depends_on: [resolve]
-        request:
-          method: GET
-          destination: data
-          path: /lookup/status
-          query: { key: { prior: resolve.key } }
-        response:
-          statuses: [200]
-          max_bytes: 8192
-          schema:
-            type: object
-            additional_fields: reject
-            fields: { status: { required: true, type: string, max_bytes: 24 } }
-          cardinality: { mode: singleton }
+    request:
+      method: GET
+      path: /municipal/registry/lookup
+      query:
+        reference: { input: municipal_reference }
+        include: status,category
+    response:
+      no_match: [404]
+      ambiguous: [409]
 outputs:
-  exists: { type: presence, from: resolve.presence }
-  status: { type: string, nullable: true, max_bytes: 24, from: status.status }
-bounds: { calls: 2, source_bytes: 16384, request_bytes: 2048, deadline: 5s, concurrency: 4 }
-fixtures: fixtures/
+  status: { type: [string, "null"], maxLength: 24, x-registry-source: /record/status }
+  category: { type: [string, "null"], maxLength: 32, x-registry-source: /record/category }
 "#,
     )
     .expect("adapted integration writes");
@@ -443,33 +495,52 @@ fixtures: fixtures/
     std::fs::write(
         fixture_directory.join("active.yaml"),
         r#"name: adapted-active-person
-input: { person_id: AB-123456 }
-source:
-  resolve: { status: 200, body: { matches: [{ key: municipal-key-1 }] } }
-  status: { status: 200, body: { status: ACTIVE } }
+classification: synthetic
+input: { municipal_reference: AB-123456 }
+interactions:
+  - expect:
+      method: GET
+      path: /municipal/registry/lookup
+      query: { reference: AB-123456, include: "status,category" }
+    respond:
+      status: 200
+      body: { record: { status: ACTIVE, category: RESIDENT, ignored_additive_field: safe } }
 expect:
-  outputs: { exists: true, status: ACTIVE }
+  outcome: match
+  outputs: { status: ACTIVE, category: RESIDENT }
   claims: { person-record-exists: true, person-status: ACTIVE }
 "#,
     )
     .expect("adapted fixture writes");
-    replace_in_file(
-        &project.join("environments/local.yaml"),
-        "project-fixture-v1",
-        "municipal-contract-v3",
-    );
     let project_file = project.join("registry-stack.yaml");
     let mut project_document = read_yaml(&project_file);
     let service = &mut project_document["services"]["person-verification"];
     service["purpose"] = serde_yaml::Value::String("municipal-benefit-screening".to_string());
+    service["consultations"]["person_record"]["input"] = serde_yaml::from_str(
+        "municipal_reference: request.target.identifiers.registry_person_id\n",
+    )
+    .expect("adapted consultation input");
     service["claims"]
         .as_mapping_mut()
         .expect("starter claims")
         .remove(serde_yaml::Value::String("person-active".to_string()));
-    service["credentials"]["person-status"]["claims"]
+    service["claims"]
+        .as_mapping_mut()
+        .expect("starter claims")
+        .insert(
+            serde_yaml::Value::String("person-status".to_string()),
+            serde_yaml::from_str("output: person_record.status\ndisclosure: value\n")
+                .expect("adapted status claim"),
+        );
+    service["credential_profiles"]["person-status"]["claims"]
         .as_sequence_mut()
         .expect("starter credential claims")
-        .retain(|claim| claim.as_str() != Some("person-active"));
+        .iter_mut()
+        .for_each(|claim| {
+            if claim.as_str() == Some("person-active") {
+                *claim = serde_yaml::Value::String("person-status".to_string());
+            }
+        });
     write_yaml(&project_file, &project_document);
 
     let report = check_registry_project(&ProjectCheckOptions {
@@ -480,10 +551,14 @@ expect:
         anchor: None,
     })
     .expect("structurally adapted starter compiles and executes");
-    assert!(report.required_reviews.contains(&ReviewClass::Integration));
     assert!(report
-        .required_reviews
-        .contains(&ReviewClass::ServicePolicy));
+        .semantic_changes
+        .iter()
+        .any(|change| change.dimension == "integration"));
+    assert!(report
+        .semantic_changes
+        .iter()
+        .any(|change| change.dimension == "service_policy"));
 }
 
 #[test]
@@ -499,11 +574,6 @@ fn source_product_is_metadata_not_runtime_dispatch() {
             "opencrvs",
             "integrations/birth-record/integration.yaml",
             "opencrvs",
-        ),
-        (
-            "snapshot-exact",
-            "integrations/person-snapshot/integration.yaml",
-            "population-snapshot",
         ),
     ] {
         let case_root = temporary.path().join(format!("case-{name}"));
@@ -534,12 +604,6 @@ fn source_product_is_metadata_not_runtime_dispatch() {
         "unverified: [fixture-contract-v2]",
         "unverified: [project-contract-99]",
     );
-    replace_in_file(
-        &project.join("environments/local.yaml"),
-        "source_version: fixture-contract-v2",
-        "source_version: project-contract-99",
-    );
-
     let offline = test_registry_project(&ProjectTestOptions {
         project_directory: project.clone(),
         environment: None,
@@ -566,6 +630,24 @@ fn source_product_is_metadata_not_runtime_dispatch() {
     })
     .expect("unknown product builds generic Relay and Notary inputs");
     assert_eq!(build.status, "built");
+
+    let metadata_free_root = tempfile::tempdir().expect("metadata-free temporary directory");
+    let metadata_free = copy_project("custom-system", metadata_free_root.path());
+    let integration_path = metadata_free.join("integrations/eligibility/integration.yaml");
+    let mut integration = read_yaml(&integration_path);
+    let source = integration["source"]
+        .as_mapping_mut()
+        .expect("authored source mapping");
+    source.remove(serde_yaml::Value::String("product".to_string()));
+    source.remove(serde_yaml::Value::String("versions".to_string()));
+    write_yaml(&integration_path, &integration);
+    let report = test_registry_project(&ProjectTestOptions {
+        project_directory: metadata_free,
+        environment: None,
+        live: false,
+    })
+    .expect("product and version metadata are optional for generic HTTP");
+    assert_eq!(report.status, "passed");
 }
 
 #[test]
@@ -590,22 +672,21 @@ fn project_integrations_share_one_logical_source_without_conflating_protocol_hel
         "product: aurora-household-service",
         "product: unrelated-registry",
     );
-    let error = check_registry_project(&ProjectCheckOptions {
+    check_registry_project(&ProjectCheckOptions {
         project_directory: independent_product,
         environment: "local".to_string(),
         explain: false,
         against: None,
         anchor: None,
     })
-    .expect_err("two source identities in one project fail closed");
-    assert!(format!("{error:#}").contains("same logical source"));
+    .expect("product evidence never defines or dispatches the project source");
 
     let origin_root = tempfile::tempdir().expect("independent-origin temporary directory");
     let independent_origin = copy_project("custom-system", origin_root.path());
     duplicate_project_integration(&independent_origin, "eligibility", "secondary");
     let environment_path = independent_origin.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
-    environment["integrations"]["secondary"]["data_destination"]["origin"] =
+    environment["integrations"]["secondary"]["source"]["origin"] =
         serde_yaml::Value::String("https://unrelated-registry.invalid".to_string());
     write_yaml(&environment_path, &environment);
     let error = check_registry_project(&ProjectCheckOptions {
@@ -623,7 +704,7 @@ fn project_integrations_share_one_logical_source_without_conflating_protocol_hel
     duplicate_project_integration(&protocol_helper, "birth-record", "secondary");
     let environment_path = protocol_helper.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
-    environment["integrations"]["secondary"]["credential_destination"]["origin"] =
+    environment["integrations"]["secondary"]["source"]["oauth"]["origin"] =
         serde_yaml::Value::String("https://oauth-helper.invalid".to_string());
     write_yaml(&environment_path, &environment);
     check_registry_project(&ProjectCheckOptions {
@@ -657,8 +738,8 @@ fn pre_freeze_fact_authoring_keys_are_rejected_without_aliases() {
     let claim = copy_project("custom-system", claim_root.path());
     replace_in_file(
         &claim.join("registry-stack.yaml"),
-        "output: household.exists",
-        "fact: household.exists",
+        "output: household.category",
+        "fact: household.category",
     );
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: claim,
@@ -728,10 +809,9 @@ fn authored_unknown_fields_and_traversal_fail_closed() {
 
     let conformance_escape = copy_project("dhis2-sandboxed-rhai", temporary.path());
     let fixture_path = conformance_escape.join("integrations/health-record/fixtures/match.yaml");
-    let fixture = std::fs::read_to_string(&fixture_path)
-        .expect("Rhai fixture reads")
-        .replace("source:\n", "worker_probe: network\nsource:\n");
-    std::fs::write(&fixture_path, fixture).expect("hostile Rhai fixture writes");
+    let mut fixture = read_yaml(&fixture_path);
+    fixture["worker_probe"] = serde_yaml::Value::String("network".to_string());
+    write_yaml(&fixture_path, &fixture);
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: conformance_escape,
         environment: None,
@@ -764,7 +844,7 @@ fn authored_unknown_fields_and_traversal_fail_closed() {
 }
 
 #[test]
-fn fixture_failure_reports_safe_actual_error_code() {
+fn fixture_failure_reports_safe_validation_error_without_input_value() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     let fixture_path = project.join("integrations/eligibility/fixtures/eligible.yaml");
@@ -777,10 +857,10 @@ fn fixture_failure_reports_safe_actual_error_code() {
     })
     .expect_err("invalid positive fixture must fail");
     let diagnostic = format!("{error:#}");
-    assert!(diagnostic.contains("eligibility.eligible-household"));
-    assert!(diagnostic.contains("integrations/eligibility/fixtures/eligible.yaml"));
-    assert!(diagnostic.contains("field=input.household_reference"));
-    assert!(diagnostic.contains("actual=input.pattern_mismatch"));
+    assert!(
+        diagnostic.contains("fixture input household_reference violates its pattern"),
+        "{diagnostic}"
+    );
     assert!(!diagnostic.contains("invalid-reference"));
 }
 
@@ -812,7 +892,7 @@ fn authored_fixture_symlinks_fail_closed() {
         live: false,
     })
     .expect_err("fixture symlink must fail");
-    assert!(format!("{error:#}").contains("regular YAML files"));
+    assert!(format!("{error:#}").contains("symlink"));
 }
 
 #[cfg(unix)]
@@ -860,14 +940,16 @@ fn strict_project_authoring_schemas_compile_and_accept_every_golden() {
             &std::fs::read(schema_root.join(schema_name)).expect("schema reads"),
         )
         .expect("schema is JSON");
-        jsonschema::JSONSchema::compile(&schema)
+        jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
             .unwrap_or_else(|error| panic!("{schema_name} did not compile: {error}"))
     };
     let project_schema = compile("project.schema.json");
     let environment_schema = compile("environment.schema.json");
     let integration_schema = compile("integration.schema.json");
     let fixture_schema = compile("fixture.schema.json");
-    let records_schema = compile("records.schema.json");
+    let entity_schema = compile("entity.schema.json");
     let mut projects =
         vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/project-starters/bounded-http")];
     projects.extend(
@@ -880,7 +962,9 @@ fn strict_project_authoring_schemas_compile_and_accept_every_golden() {
             "opencrvs-country-variant",
             "openspp-exact",
             "snapshot-exact",
+            "snapshot-with-records",
             "relay-only-records",
+            "relay-only-materialization",
             "notary-only-self-attested",
         ]
         .map(golden),
@@ -891,10 +975,13 @@ fn strict_project_authoring_schemas_compile_and_accept_every_golden() {
             &environment_schema,
             &project.join("environments/local.yaml"),
         );
-        let records = project.join("records");
-        if records.is_dir() {
-            for definition in std::fs::read_dir(records).expect("records directory reads") {
-                validate_yaml(&records_schema, &definition.expect("records entry").path());
+        let entities = project.join("entities");
+        if entities.is_dir() {
+            for definition in std::fs::read_dir(entities).expect("entities directory reads") {
+                let definition = definition.expect("entity entry").path();
+                if definition.extension().and_then(|value| value.to_str()) == Some("yaml") {
+                    validate_yaml(&entity_schema, &definition);
+                }
             }
         }
         let integrations = project.join("integrations");
@@ -910,7 +997,10 @@ fn strict_project_authoring_schemas_compile_and_accept_every_golden() {
                 for fixture in std::fs::read_dir(integration_dir.join("fixtures"))
                     .expect("fixture directory reads")
                 {
-                    validate_yaml(&fixture_schema, &fixture.expect("fixture entry").path());
+                    let fixture = fixture.expect("fixture entry").path();
+                    if fixture.extension().and_then(|value| value.to_str()) == Some("yaml") {
+                        validate_yaml(&fixture_schema, &fixture);
+                    }
                 }
             }
         }
@@ -918,8 +1008,178 @@ fn strict_project_authoring_schemas_compile_and_accept_every_golden() {
 }
 
 #[test]
-fn exact_selector_sizes_one_through_four_compile_for_http_and_snapshot() {
-    for size in 1..=4 {
+fn project_schema_accepts_sixteen_consultation_inputs_and_rejects_seventeen() {
+    let schema: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("schemas/project-authoring/project.schema.json"),
+        )
+        .expect("project schema reads"),
+    )
+    .expect("project schema is JSON");
+    let schema = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .expect("project schema compiles");
+    let mut project = serde_json::to_value(read_yaml(
+        &golden("custom-system").join("registry-stack.yaml"),
+    ))
+    .expect("project converts to JSON");
+    {
+        let input = project
+            .pointer_mut("/services/household-eligibility/consultations/household/input")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("consultation input map exists");
+        input.clear();
+        for index in 0..16 {
+            input.insert(
+                format!("input_{index}"),
+                serde_json::Value::String(format!("request.target.identifiers.identifier_{index}")),
+            );
+        }
+    }
+    assert!(schema.is_valid(&project));
+    project
+        .pointer_mut("/services/household-eligibility/consultations/household/input")
+        .and_then(serde_json::Value::as_object_mut)
+        .expect("consultation input map exists")
+        .insert(
+            "input_16".to_string(),
+            serde_json::Value::String("request.target.identifiers.identifier_16".to_string()),
+        );
+    assert!(!schema.is_valid(&project));
+}
+
+#[test]
+fn project_authoring_schemas_reject_incoherent_product_topologies() {
+    let schema_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/project-authoring");
+    let compile = |schema_name: &str| {
+        let schema: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(schema_root.join(schema_name)).expect("schema reads"),
+        )
+        .expect("schema is JSON");
+        jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap_or_else(|error| panic!("{schema_name} did not compile: {error}"))
+    };
+    let project_schema = compile("project.schema.json");
+    assert!(!project_schema.is_valid(&serde_json::json!({
+        "version": 1,
+        "registry": { "id": "empty-registry" },
+        "services": {},
+    })));
+
+    let environment_schema = compile("environment.schema.json");
+    let relay_binding = serde_json::json!({
+        "origin": "https://relay.internal.invalid",
+        "issuer": "https://issuer.internal.invalid",
+        "jwks_url": "https://issuer.internal.invalid/.well-known/jwks.json",
+        "audience": "registry-relay",
+        "allowed_clients": ["registry-client"],
+    });
+    let connection = serde_json::json!({
+        "workload_client_id": "registry-notary",
+        "token_file": "/run/secrets/notary-relay-token",
+    });
+    for (name, environment) in [
+        (
+            "Relay deployment without Relay bindings",
+            serde_json::json!({
+                "version": 1,
+                "deployment": { "profile": "local", "relay": { "service": "relay" } },
+            }),
+        ),
+        (
+            "Notary-only deployment with Relay bindings",
+            serde_json::json!({
+                "version": 1,
+                "relay": relay_binding.clone(),
+                "deployment": { "profile": "local", "notary": { "service": "notary" } },
+            }),
+        ),
+        (
+            "Relay-only deployment with a Notary-to-Relay connection",
+            serde_json::json!({
+                "version": 1,
+                "relay": relay_binding.clone(),
+                "notary_relay": connection,
+                "deployment": { "profile": "local", "relay": { "service": "relay" } },
+            }),
+        ),
+    ] {
+        assert!(
+            !environment_schema.is_valid(&environment),
+            "schema accepted {name}"
+        );
+    }
+    assert!(environment_schema.is_valid(&serde_json::json!({
+        "version": 1,
+        "relay": relay_binding,
+        "deployment": {
+            "profile": "local",
+            "relay": { "service": "relay" },
+            "notary": { "service": "notary" },
+        },
+    })));
+    assert!(!environment_schema.is_valid(&serde_json::json!({
+        "version": 1,
+        "relay": {
+            "origin": "https://relay.internal.invalid",
+            "issuer": "https://issuer.internal.invalid",
+            "jwks_url": "https://issuer.internal.invalid/.well-known/jwks.json",
+            "audience": "registry-relay",
+            "workload_client_id": "obsolete-overloaded-client",
+        },
+        "deployment": { "profile": "local", "relay": { "service": "relay" } },
+    })));
+}
+
+#[test]
+fn relay_authorization_bindings_follow_authored_service_topology() {
+    let missing_workload_root = tempfile::tempdir().expect("temporary directory");
+    let missing_workload = copy_project("custom-system", missing_workload_root.path());
+    let environment_path = missing_workload.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment
+        .as_mapping_mut()
+        .expect("environment mapping")
+        .remove(serde_yaml::Value::String("notary_relay".to_string()));
+    write_yaml(&environment_path, &environment);
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: missing_workload,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("Relay consultation without a Notary workload must fail");
+    assert!(format!("{error:#}")
+        .contains("Notary-to-Relay connection is required exactly for Relay consultations"));
+
+    let missing_records_client_root = tempfile::tempdir().expect("temporary directory");
+    let missing_records_client =
+        copy_project("relay-only-records", missing_records_client_root.path());
+    let environment_path = missing_records_client.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["relay"]["allowed_clients"] =
+        serde_yaml::from_str("[]\n").expect("empty allowed client list");
+    write_yaml(&environment_path, &environment);
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: missing_records_client,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("records publication without an admitted client must fail");
+    assert!(format!("{error:#}")
+        .contains("records_api service requires at least one admitted Relay OIDC client"));
+}
+
+#[test]
+fn exact_selector_sizes_one_through_eight_compile_for_http_and_snapshot() {
+    for size in 1..=8 {
         let temporary = tempfile::tempdir().expect("temporary directory");
         for golden_name in ["custom-system", "snapshot-exact"] {
             let project = copy_project(golden_name, temporary.path());
@@ -948,8 +1208,8 @@ fn integration_input_bounds_match_the_production_compiler_limit() {
     remove_custom_cel_claim(&accepted);
     replace_in_file(
         &accepted.join("integrations/eligibility/integration.yaml"),
-        "bytes: 18",
-        "bytes: 256",
+        "maxLength: 18",
+        "maxLength: 64",
     );
     let report = build_registry_project(&ProjectBuildOptions {
         project_directory: accepted,
@@ -967,7 +1227,7 @@ fn integration_input_bounds_match_the_production_compiler_limit() {
     )
     .expect("generated integration pack parses");
     assert_eq!(
-        pack["spec"]["input_slots"]["household_reference"]["max_bytes"],
+        pack["spec"]["input_slots"]["household_reference"]["x-registry-max-bytes"],
         256
     );
 
@@ -975,18 +1235,18 @@ fn integration_input_bounds_match_the_production_compiler_limit() {
     let rejected = copy_project("custom-system", rejected_root.path());
     replace_in_file(
         &rejected.join("integrations/eligibility/integration.yaml"),
-        "bytes: 18",
-        "bytes: 257",
+        "maxLength: 18",
+        "maxLength: 1025",
     );
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: rejected,
         environment: None,
         live: false,
     })
-    .expect_err("257-byte input must be rejected before source access");
+    .expect_err("selector above the aggregate byte ceiling must be rejected before source access");
     let error = format!("{error:#}");
-    assert!(error.contains("integration.yaml"), "{error}");
-    assert!(error.contains("input.household_reference.bytes"), "{error}");
+    assert!(error.contains("input.household_reference"), "{error}");
+    assert!(error.contains("exceeds 4096 bytes"), "{error}");
 }
 
 #[test]
@@ -1036,7 +1296,6 @@ fn integration_input_names_match_the_wire_grammar() {
         })
         .expect_err("invalid input name must be rejected before source access");
         let error = format!("{error:#}");
-        assert!(error.contains("integration.yaml"), "{error}");
         assert!(
             error.contains(&format!("input.{invalid_name}.name")),
             "{error}"
@@ -1054,7 +1313,10 @@ fn integration_input_pattern_schema_matches_the_wire_limit() {
         .expect("integration schema reads"),
     )
     .expect("integration schema parses");
-    let schema = jsonschema::JSONSchema::compile(&schema).expect("integration schema compiles");
+    let schema = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .expect("integration schema compiles");
     let authored: serde_yaml::Value = serde_yaml::from_slice(
         &std::fs::read(golden("custom-system").join("integrations/eligibility/integration.yaml"))
             .expect("integration reads"),
@@ -1062,10 +1324,10 @@ fn integration_input_pattern_schema_matches_the_wire_limit() {
     .expect("integration parses");
     let mut authored = serde_json::to_value(authored).expect("integration converts to JSON");
     authored["input"]["household_reference"]["pattern"] =
-        serde_json::Value::String("a".repeat(1024));
+        serde_json::Value::String("a".repeat(16_384));
     assert!(schema.validate(&authored).is_ok());
     authored["input"]["household_reference"]["pattern"] =
-        serde_json::Value::String("a".repeat(1025));
+        serde_json::Value::String("a".repeat(16_385));
     assert!(schema.validate(&authored).is_err());
 }
 
@@ -1125,7 +1387,7 @@ fn exact_selector_authored_member_order_is_canonical() {
 }
 
 #[test]
-fn api_key_interfaces_keep_values_environment_only_and_enforce_query_review() {
+fn api_key_interfaces_keep_values_environment_only_and_use_the_stable_auth_type() {
     for (credential_type, name) in [
         ("api_key_header", "x-project-api-key"),
         ("api_key_query", "apiKey"),
@@ -1135,7 +1397,7 @@ fn api_key_interfaces_keep_values_environment_only_and_enforce_query_review() {
         remove_custom_cel_claim(&project);
         let integration = project.join("integrations/eligibility/integration.yaml");
         let mut document = read_yaml(&integration);
-        document["capability"]["http"]["credential"] = serde_yaml::from_str(&format!(
+        document["source"]["auth"] = serde_yaml::from_str(&format!(
             "type: {credential_type}\nname: {name}\nmax_value_bytes: 128\n"
         ))
         .expect("API-key interface YAML");
@@ -1143,15 +1405,9 @@ fn api_key_interfaces_keep_values_environment_only_and_enforce_query_review() {
 
         let environment = project.join("environments/local.yaml");
         let mut document = read_yaml(&environment);
-        document["integrations"]["eligibility"]["credential"] = serde_yaml::from_str(&format!(
-            "type: {credential_type}\nvalue: {{ secret: PROJECT_SOURCE_API_KEY }}\ngeneration: 1\n{}",
-            if credential_type == "api_key_query" {
-                "review: operator_security\n"
-            } else {
-                ""
-            }
-        ))
-        .expect("API-key environment YAML");
+        document["integrations"]["eligibility"]["source"]["credential"] =
+            serde_yaml::from_str("value: { secret: PROJECT_SOURCE_API_KEY }\ngeneration: 1\n")
+                .expect("API-key environment YAML");
         write_yaml(&environment, &document);
 
         let report = build_registry_project(&ProjectBuildOptions {
@@ -1176,11 +1432,11 @@ fn api_key_interfaces_keep_values_environment_only_and_enforce_query_review() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     let integration = project.join("integrations/eligibility/integration.yaml");
-    replace_in_file(
-        &integration,
-        "type: basic",
-        "type: api_key_header\n      name: authorization\n      max_value_bytes: 128",
-    );
+    let mut document = read_yaml(&integration);
+    document["source"]["auth"] =
+        serde_yaml::from_str("type: api_key_header\nname: authorization\nmax_value_bytes: 128\n")
+            .expect("invalid API-key header interface");
+    write_yaml(&integration, &document);
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
@@ -1192,11 +1448,11 @@ fn api_key_interfaces_keep_values_environment_only_and_enforce_query_review() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     let integration = project.join("integrations/eligibility/integration.yaml");
-    replace_in_file(
-        &integration,
-        "type: basic",
-        "type: api_key_query\n      name: fields\n      max_value_bytes: 128",
-    );
+    let mut document = read_yaml(&integration);
+    document["source"]["auth"] =
+        serde_yaml::from_str("type: api_key_query\nname: fields\nmax_value_bytes: 128\n")
+            .expect("colliding API-key query interface");
+    write_yaml(&integration, &document);
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
         environment: None,
@@ -1208,16 +1464,16 @@ fn api_key_interfaces_keep_values_environment_only_and_enforce_query_review() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     let integration = project.join("integrations/eligibility/integration.yaml");
-    replace_in_file(
-        &integration,
-        "type: basic",
-        "type: api_key_query\n      name: apiKey\n      max_value_bytes: 128",
-    );
+    let mut document = read_yaml(&integration);
+    document["source"]["auth"] =
+        serde_yaml::from_str("type: api_key_query\nname: apiKey\nmax_value_bytes: 128\n")
+            .expect("API-key query interface");
+    write_yaml(&integration, &document);
     let environment = project.join("environments/local.yaml");
     replace_in_file(
         &environment,
-        "type: basic\n      username: { secret: HOUSEHOLD_USERNAME }\n      password: { secret: HOUSEHOLD_PASSWORD }",
-        "type: api_key_query\n      value: { secret: PROJECT_SOURCE_API_KEY }",
+        "username: { secret: HOUSEHOLD_USERNAME }\n        password: { secret: HOUSEHOLD_PASSWORD }",
+        "type: api_key_query\n        value: { secret: PROJECT_SOURCE_API_KEY }",
     );
     let error = check_registry_project(&ProjectCheckOptions {
         project_directory: project,
@@ -1226,8 +1482,8 @@ fn api_key_interfaces_keep_values_environment_only_and_enforce_query_review() {
         against: None,
         anchor: None,
     })
-    .expect_err("query credential without operator-security review must fail");
-    assert!(format!("{error:#}").contains("environment credential"));
+    .expect_err("environment auth-type compatibility alias must fail");
+    assert!(format!("{error:#}").contains("unknown field `type`"));
 }
 
 #[test]
@@ -1242,11 +1498,6 @@ fn dci_exact_and_and_full_date_inputs_fail_closed_before_source_access() {
             "response_pointer: /identifier/0/identifier_value",
             "response_pointer: /identifier/0/missing",
             "outside the signed record schema",
-        ),
-        (
-            "exact_and:\n              uin:",
-            "exact_and:\n              other:",
-            "keys must equal",
         ),
     ];
     for (from, to, expected) in cases {
@@ -1267,6 +1518,26 @@ fn dci_exact_and_and_full_date_inputs_fail_closed_before_source_access() {
     }
 
     let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("opencrvs", temporary.path());
+    let integration_path = project.join("integrations/birth-record/integration.yaml");
+    let mut integration = read_yaml(&integration_path);
+    let selectors = integration["source"]["protocol"]["signed_dci"]["selectors"]
+        .as_mapping_mut()
+        .expect("DCI selectors");
+    let uin = selectors
+        .remove(serde_yaml::Value::String("uin".to_string()))
+        .expect("UIN selector");
+    selectors.insert(serde_yaml::Value::String("other".to_string()), uin);
+    write_yaml(&integration_path, &integration);
+    let error = test_registry_project(&ProjectTestOptions {
+        project_directory: project,
+        environment: None,
+        live: false,
+    })
+    .expect_err("DCI must bind every authored selector exactly once");
+    assert!(format!("{error:#}").contains("bind every selector exactly once"));
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     extend_exact_selector(&project, "custom-system", 4);
     let fixture = project.join("integrations/eligibility/fixtures/eligible.yaml");
@@ -1277,7 +1548,7 @@ fn dci_exact_and_and_full_date_inputs_fail_closed_before_source_access() {
         live: false,
     })
     .expect_err("nonexistent full date must fail before source access");
-    assert!(format!("{error:#}").contains("full_date input is not canonical"));
+    assert!(format!("{error:#}").contains("fixture full-date input selector_4 is not canonical"));
 
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
@@ -1327,15 +1598,7 @@ fn opencrvs_composite_dci_uses_unified_exact_predicates_canonically() {
     assert!(ambiguous.claims.is_empty());
     reverse_yaml_mapping(
         &second.join("integrations/birth-record/integration.yaml"),
-        &[
-            "capability",
-            "http",
-            "operations",
-            "birth",
-            "request",
-            "body",
-            "exact_and",
-        ],
+        &["source", "protocol", "signed_dci", "selectors"],
     );
 
     let build = |project_directory| {
@@ -1365,9 +1628,6 @@ fn opencrvs_composite_dci_uses_unified_exact_predicates_canonically() {
         .expect("selector components")
         .values()
         .all(|component| component["role"] == "dci_exact_predicate"));
-    let dci = &pack["spec"]["plan"]["operations"][0]["dci"];
-    assert!(dci.get("identifier_type").is_none());
-    assert_eq!(dci["exact_and"].as_object().map(|map| map.len()), Some(3));
 }
 
 fn validate_yaml(schema: &jsonschema::JSONSchema, path: &Path) {
@@ -1396,11 +1656,34 @@ fn check_and_build_produce_deterministic_product_inputs() {
     .expect("golden project checks");
     assert_eq!(check.status, "valid");
     assert_eq!(check.semantic_changes.len(), 5);
-    assert!(check
-        .semantic_changes
-        .iter()
-        .all(|change| change.previous_digest.is_none()));
+    assert_eq!(
+        check
+            .semantic_changes
+            .iter()
+            .map(|change| change.dimension)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "claim",
+            "disclosure",
+            "integration",
+            "operator_security",
+            "service_policy",
+        ])
+    );
     let explanation = check.explanation.expect("explanation is present");
+    assert!(explanation
+        .pointer("/integrations/eligibility/generated_pack")
+        .is_none());
+    assert!(explanation
+        .pointer("/services/household-eligibility/profiles/0/policy_hash")
+        .is_none());
+    assert!(explanation
+        .pointer("/services/household-eligibility/profiles/0/version")
+        .is_none());
+    assert!(explanation
+        .pointer("/services/household-eligibility/profiles/0/contract_hash")
+        .and_then(serde_json::Value::as_str)
+        .is_some());
     assert!(explanation
         .pointer("/environment_binding/callers")
         .is_some());
@@ -1412,13 +1695,12 @@ fn check_and_build_produce_deterministic_product_inputs() {
         .and_then(serde_json::Value::as_str)
         .is_some());
     assert!(explanation
-        .pointer("/services/household-eligibility/credentials")
+        .pointer("/services/household-eligibility/credential_profiles")
         .is_some());
-    assert!(explanation["integrations"]["eligibility"]["operations"]
-        .as_array()
-        .is_some_and(|operations| operations.iter().any(|operation| {
-            operation.get("body").is_some() && operation.get("query").is_some()
-        })));
+    assert_eq!(
+        explanation["integrations"]["eligibility"]["capability"],
+        "http"
+    );
 
     let options = ProjectBuildOptions {
         project_directory: project,
@@ -1433,7 +1715,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "fc11f6350c39b1682012485d1a27725a53279389ab2a9be6f26209dd68a6bd18",
+        "fd946a48cd1ad52623337e229392c53bf228b183f397ec6da00484a31abe088a",
         "project inputs must match the cross-machine golden digest"
     );
 }
@@ -1441,7 +1723,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
 #[test]
 fn records_and_snapshot_share_one_generated_materialization() {
     let temporary = tempfile::tempdir().expect("temporary directory");
-    let project = copy_project("snapshot-exact", temporary.path());
+    let project = copy_project("snapshot-with-records", temporary.path());
     let build = build_registry_project(&ProjectBuildOptions {
         project_directory: project,
         environment: "local".to_string(),
@@ -1480,13 +1762,11 @@ fn records_and_snapshot_share_one_generated_materialization() {
     );
     assert!(entity["api"]["allowed_filters"]
         .as_array()
-        .is_some_and(|filters| filters.len() == 3));
+        .is_some_and(|filters| filters.len() == 1));
     assert!(entity["relationships"]
         .as_array()
-        .is_some_and(|relationships| relationships.len() == 1));
-    assert!(entity["aggregates"]
-        .as_array()
-        .is_some_and(|aggregates| aggregates.len() == 1));
+        .is_some_and(Vec::is_empty));
+    assert!(entity["aggregates"].as_array().is_some_and(Vec::is_empty));
 
     let binding_root = relay_root.join("config/artifacts/private-bindings");
     let mut binding_count = 0;
@@ -1515,6 +1795,11 @@ fn records_and_snapshot_share_one_generated_materialization() {
         review["entity_materializations"]["people"]["table_provider"],
         provider
     );
+    assert!(review["entity_materializations"]["people"]["provider"].is_object());
+    assert!(review["entity_materializations"]["people"]["columns"].is_object());
+    assert!(review["entity_materializations"]["people"]
+        .get("provider_digest")
+        .is_none());
 }
 
 #[test]
@@ -1541,27 +1826,250 @@ fn relay_only_and_notary_only_projects_emit_only_selected_products() {
             !output.join("private").join(absent).exists(),
             "{project_name} emitted unselected {absent} configuration"
         );
-        let review: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(output.join("reviewable/review.json")).expect("review reads"),
+        let approval_state: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                output
+                    .join("private")
+                    .join(present)
+                    .join("approval/project-state.json"),
+            )
+            .expect("approval state reads"),
         )
-        .expect("review parses");
-        assert!(review["generated_closure_digests"][present].is_string());
-        assert!(review["generated_closure_digests"][absent].is_null());
+        .expect("approval state parses");
+        assert!(approval_state["generated_closure_digests"][present].is_string());
+        assert!(approval_state["generated_closure_digests"][absent].is_null());
     }
+}
+
+#[test]
+fn materialization_only_project_emits_private_relay_table_without_public_records() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("relay-only-materialization", temporary.path());
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("materialization-only Relay project builds");
+    let output = PathBuf::from(build.output.expect("build output"));
+    assert!(output.join("private/relay").is_dir());
+    assert!(!output.join("private/notary").exists());
+
+    let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
+    let datasets = relay["datasets"].as_sequence().expect("Relay datasets");
+    assert_eq!(datasets.len(), 1);
+    assert_eq!(
+        datasets[0]["tables"].as_sequence().map(std::vec::Vec::len),
+        Some(1)
+    );
+    assert!(datasets[0]["entities"]
+        .as_sequence()
+        .is_some_and(std::vec::Vec::is_empty));
+    assert!(relay.get("consultation").is_none());
+
+    let approval_state: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(output.join("private/relay/approval/project-state.json"))
+            .expect("approval state reads"),
+    )
+    .expect("approval state parses");
+    assert!(approval_state["generated_closure_digests"]["relay"].is_string());
+    assert!(approval_state["generated_closure_digests"]["notary"].is_null());
+}
+
+#[test]
+fn relay_oidc_clients_are_separate_from_the_notary_consultation_workload() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("combined project builds with separate Relay identities");
+    let output = PathBuf::from(build.output.expect("build output"));
+    let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
+    let allowed_clients = relay["auth"]["oidc"]["allowed_clients"]
+        .as_sequence()
+        .expect("Relay OIDC allowed clients");
+    assert!(allowed_clients
+        .iter()
+        .any(|client| client.as_str() == Some("household-relay-client")));
+    assert!(allowed_clients
+        .iter()
+        .any(|client| client.as_str() == Some("household-notary")));
+    assert_eq!(
+        relay["consultation"]["authorized_workload"]["client_value"].as_str(),
+        Some("household-notary")
+    );
+    assert_eq!(
+        relay["consultation"]["authorized_workload"]["principal_id"].as_str(),
+        Some("household-notary")
+    );
+    assert_ne!(
+        relay["consultation"]["authorized_workload"]["client_value"].as_str(),
+        Some("household-relay-client")
+    );
+}
+
+#[test]
+fn combined_project_without_relay_consultations_needs_no_notary_relay_workload() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("relay-only-records", temporary.path());
+    let project_path = project.join("registry-stack.yaml");
+    let mut authored_project = read_yaml(&project_path);
+    authored_project["services"]["applicant-declaration"] = serde_yaml::from_str(
+        r#"kind: evidence
+version: 1
+purpose: application-processing
+legal_basis: application-processing
+consent: not_required
+access: { scopes: ["evidence:declaration:read"] }
+claims:
+  applicant-declaration:
+    cel: "true"
+    value: { type: boolean }
+    disclosure: predicate
+credential_profiles: {}
+"#,
+    )
+    .expect("self-attested evaluation service");
+    write_yaml(&project_path, &authored_project);
+
+    let environment_path = project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["callers"] = serde_yaml::from_str(
+        "application-service:\n  api_key_fingerprint: { secret: APPLICATION_SERVICE_TOKEN_HASH }\n  scopes: ['evidence:declaration:read']\n",
+    )
+    .expect("Notary caller binding");
+    environment["deployment"]["notary"] =
+        serde_yaml::from_str("service: declaration-notary\n").expect("Notary deployment");
+    write_yaml(&environment_path, &environment);
+
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("combined records and evaluation project builds without a Relay consultation");
+    let output = PathBuf::from(build.output.expect("build output"));
+    let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
+    assert!(relay.get("consultation").is_none());
+    let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
+    assert!(notary["evidence"].get("relay").is_none());
+    assert!(notary["evidence"].get("signing_keys").is_none());
+}
+
+#[test]
+fn notary_without_credential_profiles_omits_issuance_and_signing_keys() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("notary-only-self-attested", temporary.path());
+    let project_path = project.join("registry-stack.yaml");
+    let mut authored_project = read_yaml(&project_path);
+    authored_project["services"]["applicant-declaration"]["credential_profiles"] =
+        serde_yaml::from_str("{}\n").expect("empty credential profiles");
+    write_yaml(&project_path, &authored_project);
+    let environment_path = project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment
+        .as_mapping_mut()
+        .expect("environment mapping")
+        .remove(serde_yaml::Value::String("issuance".to_string()));
+    write_yaml(&environment_path, &environment);
+
+    let check = check_registry_project(&ProjectCheckOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect("evaluation-only Notary project checks without issuance");
+    assert_eq!(check.status, "valid");
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("evaluation-only Notary project builds without issuance");
+    let output = PathBuf::from(build.output.expect("build output"));
+    let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
+    assert!(notary["evidence"].get("signing_keys").is_none());
+    assert!(notary["evidence"]["credential_profiles"]
+        .as_mapping()
+        .is_some_and(serde_yaml::Mapping::is_empty));
+
+    let missing_issuance_root = tempfile::tempdir().expect("temporary directory");
+    let missing_issuance = copy_project("notary-only-self-attested", missing_issuance_root.path());
+    let missing_issuance_environment = missing_issuance.join("environments/local.yaml");
+    let mut environment = read_yaml(&missing_issuance_environment);
+    environment
+        .as_mapping_mut()
+        .expect("environment mapping")
+        .remove(serde_yaml::Value::String("issuance".to_string()));
+    write_yaml(&missing_issuance_environment, &environment);
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: missing_issuance,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("credential profiles without issuance must fail");
+    assert!(format!("{error:#}").contains(
+        "environment issuance binding is required exactly when credential profiles exist"
+    ));
+
+    let unexpected_issuance_root = tempfile::tempdir().expect("temporary directory");
+    let unexpected_issuance =
+        copy_project("notary-only-self-attested", unexpected_issuance_root.path());
+    let project_path = unexpected_issuance.join("registry-stack.yaml");
+    let mut authored_project = read_yaml(&project_path);
+    authored_project["services"]["applicant-declaration"]["credential_profiles"] =
+        serde_yaml::from_str("{}\n").expect("empty credential profiles");
+    write_yaml(&project_path, &authored_project);
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: unexpected_issuance,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("issuance without credential profiles must fail");
+    assert!(format!("{error:#}").contains(
+        "environment issuance binding is required exactly when credential profiles exist"
+    ));
 }
 
 #[test]
 fn records_standards_share_the_validated_materialization() {
     let temporary = tempfile::tempdir().expect("temporary directory");
-    let project = copy_project("snapshot-exact", temporary.path());
-    let records_path = project.join("records/people.yaml");
-    let mut records = read_yaml(&records_path);
-    records["fields"]["longitude"] =
-        serde_yaml::from_str("type: number\nnullable: true\n").expect("longitude field");
-    records["fields"]["latitude"] =
-        serde_yaml::from_str("type: number\nnullable: true\n").expect("latitude field");
-    records["api"]["standards"]["ogc_features"] = serde_yaml::from_str(
-        r#"collection_id: people
+    let project = copy_project("snapshot-with-records", temporary.path());
+    let entity_path = project.join("entities/people.yaml");
+    let mut entity = read_yaml(&entity_path);
+    entity["schema"]["properties"]["longitude"] =
+        serde_yaml::from_str("type: [integer, 'null']\nminimum: -180\nmaximum: 180\n")
+            .expect("longitude field");
+    entity["schema"]["properties"]["latitude"] =
+        serde_yaml::from_str("type: [integer, 'null']\nminimum: -90\nmaximum: 90\n")
+            .expect("latitude field");
+    entity["schema"]["required"]
+        .as_sequence_mut()
+        .expect("entity required fields")
+        .extend([
+            serde_yaml::Value::String("longitude".to_string()),
+            serde_yaml::Value::String("latitude".to_string()),
+        ]);
+    write_yaml(&entity_path, &entity);
+
+    let project_path = project.join("registry-stack.yaml");
+    let mut authored_project = read_yaml(&project_path);
+    authored_project["services"]["people-records"]["api"]["standards"]["ogc_features"] =
+        serde_yaml::from_str(
+            r#"collection_id: people
 title: Population locations
 geometry:
   kind: point
@@ -1571,19 +2079,41 @@ geometry:
 max_bbox_degrees: 5
 max_geometry_vertices: 1
 "#,
-    )
-    .expect("OGC spatial mapping");
-    records["api"]["standards"]["sp_dci"] = serde_yaml::from_str(
-        r#"registry: population
+        )
+        .expect("OGC spatial mapping");
+    authored_project["services"]["people-records"]["api"]["standards"]["sp_dci"] =
+        serde_yaml::from_str(
+            r#"registry: population
 registry_type: civil-registry
 record_type: person
 identifiers: { person_id: person_id }
 expression_fields: { registration_status: registration_status }
 response_fields: { eligible: eligible }
 "#,
-    )
-    .expect("SP DCI mapping");
-    write_yaml(&records_path, &records);
+        )
+        .expect("SP DCI mapping");
+    write_yaml(&project_path, &authored_project);
+
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("standards must not widen the explicit records projection");
+    assert!(format!("{error:#}").contains("must be explicitly projected"));
+
+    authored_project["services"]["people-records"]["api"]["projection"]
+        .as_sequence_mut()
+        .expect("records projection")
+        .extend([
+            serde_yaml::Value::String("longitude".to_string()),
+            serde_yaml::Value::String("latitude".to_string()),
+        ]);
+    authored_project["services"]["people-records"]["api"]["filters"]["registration_status"] =
+        serde_yaml::from_str("[eq]").expect("SP DCI expression filter");
+    write_yaml(&project_path, &authored_project);
 
     let environment_path = project.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
@@ -1661,10 +2191,10 @@ fn records_environment_mapping_fails_closed() {
 
     let physical = temporary.path().join("physical");
     copy_tree(&golden("snapshot-exact"), &physical);
-    let records = physical.join("records/people.yaml");
-    let mut authored = std::fs::read_to_string(&records).expect("records reads");
+    let entity = physical.join("entities/people.yaml");
+    let mut authored = std::fs::read_to_string(&entity).expect("entity reads");
     authored.push_str("path: /private/people.csv\n");
-    std::fs::write(&records, authored).expect("hostile records writes");
+    std::fs::write(&entity, authored).expect("hostile entity writes");
     let error = check_registry_project(&ProjectCheckOptions {
         project_directory: physical,
         environment: "local".to_string(),
@@ -1746,23 +2276,13 @@ fn records_provider_change_requires_a_new_generation() {
     })
     .expect("provider change with a new generation checks");
     assert!(report
-        .required_reviews
-        .contains(&ReviewClass::OperatorSecurity));
+        .semantic_changes
+        .iter()
+        .any(|change| change.dimension == "operator_security"));
 }
 
 #[test]
 fn every_required_golden_builds_registry_backed_notary_without_transitional_sources() {
-    #[cfg(not(target_os = "linux"))]
-    let project_names = [
-        "custom-system",
-        "dhis2-tracker",
-        "fhir-r4-coverage-active",
-        "opencrvs",
-        "opencrvs-country-variant",
-        "openspp-exact",
-        "snapshot-exact",
-    ];
-    #[cfg(target_os = "linux")]
     let project_names = [
         "custom-system",
         "dhis2-tracker",
@@ -1772,6 +2292,7 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
         "opencrvs-country-variant",
         "openspp-exact",
         "snapshot-exact",
+        "snapshot-with-records",
     ];
     for project_name in project_names {
         let temporary = tempfile::tempdir().expect("temporary directory");
@@ -1786,7 +2307,6 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
         .unwrap_or_else(|error| panic!("{project_name} check failed: {error:#}"));
         assert_eq!(check.status, "valid", "{project_name}");
         assert_eq!(check.baseline, "initial_without_baseline", "{project_name}");
-        assert_eq!(check.required_reviews.len(), 4, "{project_name}");
         assert!(check.explanation.is_some(), "{project_name}");
 
         let build = build_registry_project(&ProjectBuildOptions {
@@ -1798,6 +2318,9 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
         .unwrap_or_else(|error| panic!("{project_name} build failed: {error:#}"));
         let output = PathBuf::from(build.output.expect("build output"));
         assert!(output.join("reviewable/review.json").is_file());
+        assert!(output
+            .join("private/relay/approval/project-state.json")
+            .is_file());
         assert!(output.join("private/relay/config/relay.yaml").is_file());
         let notary_config_path = output.join("private/notary/config/notary.yaml");
         let notary_config = std::fs::read_to_string(&notary_config_path)
@@ -1822,6 +2345,26 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
                 ))
                 .is_file());
         }
+        let review_bytes =
+            std::fs::read(output.join("reviewable/review.json")).expect("human review reads");
+        let review: serde_json::Value =
+            serde_json::from_slice(&review_bytes).expect("human review parses");
+        assert_public_review_has_only_contract_hashes(&review);
+        for product in ["relay", "notary"] {
+            assert_eq!(
+                std::fs::read(output.join(format!("private/{product}/approval/review.json")))
+                    .expect("signed review input reads"),
+                review_bytes,
+                "{project_name} {product} approval carries the exact human review"
+            );
+        }
+        assert_eq!(
+            std::fs::read(output.join("private/relay/approval/project-state.json"))
+                .expect("Relay approval state reads"),
+            std::fs::read(output.join("private/notary/approval/project-state.json"))
+                .expect("Notary approval state reads"),
+            "{project_name} products carry identical approval state"
+        );
         let relay_descriptor: serde_json::Value = serde_json::from_slice(
             &std::fs::read(output.join("private/relay/descriptors/secret-consumers.json"))
                 .expect("Relay secret descriptor reads"),
@@ -1848,24 +2391,6 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
                         .is_some_and(|locator| locator.ends_with("_TOKEN_HASH"))
                 })
             }));
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let project = copy_project("dhis2-sandboxed-rhai", temporary.path());
-        let error = check_registry_project(&ProjectCheckOptions {
-            project_directory: project,
-            environment: "local".to_string(),
-            explain: true,
-            against: None,
-            anchor: None,
-        })
-        .expect_err("ordinary Rhai activation must remain platform-gated");
-        assert!(
-            format!("{error:#}").contains("consultation service plan is unsupported"),
-            "{error:#}"
-        );
     }
 }
 
@@ -1949,13 +2474,10 @@ fn authored_request_literals_cannot_smuggle_secret_material() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
     let integration_path = project.join("integrations/eligibility/integration.yaml");
-    let integration = std::fs::read_to_string(&integration_path)
-        .expect("integration reads")
-        .replace(
-            "projection: { value: key }",
-            &format!("password: {{ value: {SECRET_SENTINEL} }}"),
-        );
-    std::fs::write(&integration_path, integration).expect("hostile integration writes");
+    let mut integration = read_yaml(&integration_path);
+    integration["capability"]["http"]["request"]["query"]["password"] =
+        serde_yaml::Value::String(SECRET_SENTINEL.to_string());
+    write_yaml(&integration_path, &integration);
     let error = check_registry_project(&ProjectCheckOptions {
         project_directory: project.clone(),
         environment: "local".to_string(),
@@ -1973,15 +2495,10 @@ fn authored_request_literals_cannot_smuggle_secret_material() {
         let temporary = tempfile::tempdir().expect("temporary directory");
         let project = copy_project("custom-system", temporary.path());
         let integration_path = project.join("integrations/eligibility/integration.yaml");
-        let integration = std::fs::read_to_string(&integration_path)
-            .expect("integration reads")
-            .replace(
-                "          path: /consultations/eligibility\n",
-                &format!(
-                    "          path: /consultations/eligibility\n          headers:\n            {header}: {{ value: {SECRET_SENTINEL} }}\n"
-                ),
-            );
-        std::fs::write(&integration_path, integration).expect("hostile integration writes");
+        let mut integration = read_yaml(&integration_path);
+        integration["capability"]["http"]["request"]["headers"][header] =
+            serde_yaml::Value::String(SECRET_SENTINEL.to_string());
+        write_yaml(&integration_path, &integration);
         let error = check_registry_project(&ProjectCheckOptions {
             project_directory: project.clone(),
             environment: "local".to_string(),
@@ -2045,23 +2562,42 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     })
     .expect("baseline signs");
 
+    for relative in ["approval/review.json", "approval/project-state.json"] {
+        let tampered = temporary.path().join(format!(
+            "tampered-{}",
+            relative.replace('/', "-").replace('.', "-")
+        ));
+        copy_tree(&baseline, &tampered);
+        let path = tampered.join(relative);
+        let mut bytes = std::fs::read(&path).expect("signed approval payload reads");
+        bytes.push(b' ');
+        std::fs::write(&path, bytes).expect("signed approval payload tampers");
+        let error = check_registry_project(&ProjectCheckOptions {
+            project_directory: project.clone(),
+            environment: "local".to_string(),
+            explain: false,
+            against: Some(tampered),
+            anchor: Some(anchor.clone()),
+        })
+        .expect_err("post-signature approval payload tamper must fail");
+        assert!(format!("{error:#}").contains("failed to verify config bundle"));
+    }
+
     let initial_review: serde_json::Value = serde_json::from_slice(
         &std::fs::read(output.join("reviewable/review.json")).expect("initial review reads"),
     )
     .expect("initial review parses");
-    assert!(initial_review["baseline"].is_null());
+    let initial_state: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(output.join("private/notary/approval/project-state.json"))
+            .expect("initial approval state reads"),
+    )
+    .expect("initial approval state parses");
+    assert_eq!(initial_review["baseline"], "initial_without_baseline");
     assert!(initial_review["disclosure_profiles"].is_object());
-    for class in [
-        "claim",
-        "integration",
-        "service_policy",
-        "operator_security",
-    ] {
-        assert!(
-            initial_review["review_digests"][class].is_string(),
-            "{class}"
-        );
-    }
+    assert_public_review_has_only_contract_hashes(&initial_review);
+    assert!(initial_state["semantic_digests"].is_object());
+    assert!(initial_state["generated_closure_digests"]["notary"].is_string());
+    assert!(initial_state["report_digest"].is_string());
 
     let reviewed_build = build_registry_project(&ProjectBuildOptions {
         project_directory: project.clone(),
@@ -2076,20 +2612,25 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
             .expect("reviewed record reads"),
     )
     .expect("reviewed record parses");
+    let reviewed_state: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(reviewed_output.join("private/notary/approval/project-state.json"))
+            .expect("reviewed approval state reads"),
+    )
+    .expect("reviewed approval state parses");
+    assert_eq!(reviewed_record["baseline"], "verified_signed_bundle");
+    assert_public_review_has_only_contract_hashes(&reviewed_record);
     assert_eq!(
-        reviewed_record["baseline"]["review_digests"],
-        initial_review["review_digests"]
-    );
-    assert!(reviewed_record["review_digests"]
-        .as_object()
-        .expect("current review digest slots")
-        .values()
-        .all(serde_json::Value::is_null));
-    assert_eq!(
-        reviewed_record["baseline"]["verified_manifest"]["schema"],
+        reviewed_state["baseline"]["verified_manifest"]["schema"],
         "registry.platform.config_bundle.v1"
     );
-    assert!(reviewed_record["baseline"]["verified_manifest"]["files"].is_array());
+    let signed_paths = reviewed_state["baseline"]["verified_manifest"]["files"]
+        .as_array()
+        .expect("verified manifest files")
+        .iter()
+        .filter_map(|file| file["path"].as_str())
+        .collect::<BTreeSet<_>>();
+    assert!(signed_paths.contains("approval/review.json"));
+    assert!(signed_paths.contains("approval/project-state.json"));
 
     let unchanged = check_registry_project(&ProjectCheckOptions {
         project_directory: project.clone(),
@@ -2100,7 +2641,7 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     })
     .expect("unchanged project checks against signed baseline");
     assert_eq!(unchanged.baseline, "verified_signed_bundle");
-    assert!(unchanged.required_reviews.is_empty());
+    assert!(unchanged.semantic_changes.is_empty());
 
     let mismatched_input = temporary.path().join("mismatched-baseline-input");
     copy_tree(&output.join("private/notary"), &mismatched_input);
@@ -2131,6 +2672,42 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     .expect_err("signed product closure must match the signed review");
     assert!(format!("{mismatch:#}").contains("product closure does not match"));
 
+    let report_mismatch_input = temporary.path().join("report-mismatch-input");
+    copy_tree(&output.join("private/notary"), &report_mismatch_input);
+    let report_mismatch_path = report_mismatch_input.join("approval/review.json");
+    let mut mismatched_report: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&report_mismatch_path).expect("approval review reads"),
+    )
+    .expect("approval review parses");
+    mismatched_report["semantic_changes"] = serde_json::Value::Array(Vec::new());
+    std::fs::write(
+        &report_mismatch_path,
+        serde_json::to_vec(&mismatched_report).expect("mismatched review serializes"),
+    )
+    .expect("mismatched approval review writes");
+    let report_mismatch_bundle = temporary.path().join("report-mismatch-bundle");
+    sign_config_bundle(BundleSignOptions {
+        input: report_mismatch_input,
+        key: private_key.display().to_string(),
+        product: "registry-notary".to_string(),
+        environment: "local".to_string(),
+        stream_id: "project-authoring".to_string(),
+        instance_id: Some("project-instance".to_string()),
+        sequence: 2,
+        bundle_id: "project-authoring-report-mismatch".to_string(),
+        out: report_mismatch_bundle.clone(),
+    })
+    .expect("report mismatch bundle signs");
+    let report_mismatch = check_registry_project(&ProjectCheckOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        explain: false,
+        against: Some(report_mismatch_bundle),
+        anchor: Some(anchor.clone()),
+    })
+    .expect_err("signed report/state binding mismatch must fail");
+    assert!(format!("{report_mismatch:#}").contains("does not bind the signed review"));
+
     let scenarios = temporary.path().join("scenarios");
     std::fs::create_dir(&scenarios).expect("scenario root creates");
     let claim_project = scenarios.join("claim");
@@ -2152,8 +2729,8 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     let authored = std::fs::read_to_string(&project_file)
         .expect("project reads")
         .replace(
-            "household.approved != null ? household.exists && household.approved : false",
-            "household.approved != null ? household.exists && household.approved == true : false",
+            "household.approved != null ? household.matched && household.approved : false",
+            "household.approved != null ? household.matched && household.approved == true : false",
         );
     std::fs::write(&project_file, authored).expect("claim-only edit writes");
     let changed = check_registry_project(&ProjectCheckOptions {
@@ -2165,23 +2742,27 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     })
     .expect("claim-only edit checks against signed baseline");
     assert_eq!(
-        changed.required_reviews,
-        BTreeSet::from([ReviewClass::Claim])
+        changed
+            .semantic_changes
+            .iter()
+            .map(|change| change.dimension)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["claim"])
     );
 
     let compiler_input = temporary.path().join("compiler-baseline-input");
     copy_tree(&output.join("private/notary"), &compiler_input);
-    let compiler_review_path = compiler_input.join("approval/review.json");
-    let mut compiler_review: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(&compiler_review_path).expect("compiler baseline review reads"),
+    let compiler_state_path = compiler_input.join("approval/project-state.json");
+    let mut compiler_state: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(&compiler_state_path).expect("compiler baseline approval state reads"),
     )
-    .expect("compiler baseline review parses");
-    compiler_review["compiler_version"] = serde_json::Value::String("0.0.0".to_string());
+    .expect("compiler baseline approval state parses");
+    compiler_state["compiler_version"] = serde_json::Value::String("0.0.0".to_string());
     std::fs::write(
-        &compiler_review_path,
-        serde_json::to_vec(&compiler_review).expect("compiler baseline review serializes"),
+        &compiler_state_path,
+        serde_json::to_vec(&compiler_state).expect("compiler baseline state serializes"),
     )
-    .expect("compiler baseline review writes");
+    .expect("compiler baseline approval state writes");
     let compiler_baseline = temporary.path().join("compiler-baseline-bundle");
     sign_config_bundle(BundleSignOptions {
         input: compiler_input,
@@ -2195,28 +2776,26 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
         out: compiler_baseline.clone(),
     })
     .expect("compiler baseline signs");
-    assert_review_classes(
-        claim_project,
-        &compiler_baseline,
-        &anchor,
-        BTreeSet::from([
-            ReviewClass::Claim,
-            ReviewClass::Integration,
-            ReviewClass::ServicePolicy,
-            ReviewClass::OperatorSecurity,
-        ]),
-    );
+    let compiler_mismatch = check_registry_project(&ProjectCheckOptions {
+        project_directory: claim_project,
+        environment: "local".to_string(),
+        explain: false,
+        against: Some(compiler_baseline),
+        anchor: Some(anchor.clone()),
+    })
+    .expect_err("signed report and approval-state mismatch must fail");
+    assert!(format!("{compiler_mismatch:#}").contains("disagree on compiler version"));
 
     replace_in_file(
-        &source_version_project.join("environments/local.yaml"),
-        "source_version: fixture-contract-v2",
-        "source_version: fixture-contract-v3",
+        &source_version_project.join("integrations/eligibility/integration.yaml"),
+        "unverified: [fixture-contract-v2, fixture-contract-v3]",
+        "unverified: [fixture-contract-v2, fixture-contract-v3, fixture-contract-v4]",
     );
-    assert_review_classes(
+    assert_change_dimensions(
         source_version_project,
         &baseline,
         &anchor,
-        BTreeSet::from([ReviewClass::Integration]),
+        BTreeSet::from(["integration"]),
     );
 
     replace_in_file(
@@ -2224,11 +2803,11 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
         "https://household-authority.invalid",
         "https://household-authority-two.invalid",
     );
-    assert_review_classes(
+    assert_change_dimensions(
         operator_project,
         &baseline,
         &anchor,
-        BTreeSet::from([ReviewClass::OperatorSecurity]),
+        BTreeSet::from(["operator_security"]),
     );
 
     replace_in_file(
@@ -2236,11 +2815,11 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
         "legal_basis: public-service-delivery",
         "legal_basis: statutory-benefit-screening",
     );
-    assert_review_classes(
+    assert_change_dimensions(
         policy_project,
         &baseline,
         &anchor,
-        BTreeSet::from([ReviewClass::ServicePolicy]),
+        BTreeSet::from(["service_policy"]),
     );
 
     replace_in_file(
@@ -2248,19 +2827,19 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
         "request.target.identifiers.household_reference",
         "request.target.identifiers.household_case_number",
     );
-    assert_review_classes(
+    assert_change_dimensions(
         consultation_project,
         &baseline,
         &anchor,
-        BTreeSet::from([ReviewClass::Integration]),
+        BTreeSet::from(["integration"]),
     );
 }
 
-fn assert_review_classes(
+fn assert_change_dimensions(
     project: PathBuf,
     baseline: &Path,
     anchor: &Path,
-    expected: BTreeSet<ReviewClass>,
+    expected: BTreeSet<&str>,
 ) {
     let report = check_registry_project(&ProjectCheckOptions {
         project_directory: project,
@@ -2270,7 +2849,53 @@ fn assert_review_classes(
         anchor: Some(anchor.to_path_buf()),
     })
     .expect("semantic review scenario checks against signed baseline");
-    assert_eq!(report.required_reviews, expected);
+    assert_eq!(
+        report
+            .semantic_changes
+            .iter()
+            .map(|change| change.dimension)
+            .collect::<BTreeSet<_>>(),
+        expected
+    );
+}
+
+fn assert_public_review_has_only_contract_hashes(review: &serde_json::Value) {
+    fn visit(value: &serde_json::Value, contract_hashes: &mut usize) {
+        match value {
+            serde_json::Value::Object(object) => {
+                for (key, value) in object {
+                    let lower = key.to_ascii_lowercase();
+                    if lower.contains("hash") || lower.contains("digest") {
+                        assert_eq!(
+                            key, "contract_hash",
+                            "human review exposes lower-level field {key}"
+                        );
+                        let contract_hash =
+                            value.as_str().expect("generated contract_hash is a string");
+                        assert!(contract_hash.starts_with("sha256:"));
+                        *contract_hashes += 1;
+                    }
+                    visit(value, contract_hashes);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    visit(value, contract_hashes);
+                }
+            }
+            serde_json::Value::Null
+            | serde_json::Value::Bool(_)
+            | serde_json::Value::Number(_)
+            | serde_json::Value::String(_) => {}
+        }
+    }
+
+    let mut contract_hashes = 0;
+    visit(review, &mut contract_hashes);
+    assert!(
+        contract_hashes > 0,
+        "registry-backed human review exposes its generated contract_hash"
+    );
 }
 
 fn replace_in_file(path: &Path, from: &str, to: &str) {
@@ -2299,12 +2924,12 @@ fn extend_exact_selector(project: &Path, golden_name: &str, size: usize) {
         let name = format!("selector_{component}");
         let declaration = if component == 4 {
             serde_yaml::from_str(
-                "type: full_date\nbytes: 10\npattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'\ncanonicalization: identity\n",
+                "role: selector\ntype: string\nformat: date\nminLength: 10\nmaxLength: 10\n",
             )
             .expect("full-date input declaration")
         } else {
             serde_yaml::from_str(&format!(
-                "type: string\nbytes: 32\npattern: '^S{component}$'\ncanonicalization: identity\n"
+                "role: selector\ntype: string\nmaxLength: 8\npattern: '^S{component}$'\n"
             ))
             .expect("string input declaration")
         };
@@ -2313,13 +2938,22 @@ fn extend_exact_selector(project: &Path, golden_name: &str, size: usize) {
             .expect("integration input mapping")
             .insert(serde_yaml::Value::String(name.clone()), declaration);
         if golden_name == "custom-system" {
-            integration["capability"]["http"]["operations"]["resolve"]["request"]["body"]
+            integration["capability"]["http"]["request"]["query"]
                 .as_mapping_mut()
-                .expect("root body mapping")
+                .expect("HTTP query mapping")
                 .insert(
                     serde_yaml::Value::String(name.clone()),
                     serde_yaml::from_str(&format!("input: {name}\n"))
-                        .expect("body input expression"),
+                        .expect("query input expression"),
+                );
+        } else {
+            integration["capability"]["snapshot"]["exact"]
+                .as_mapping_mut()
+                .expect("snapshot exact mapping")
+                .insert(
+                    serde_yaml::Value::String(name.clone()),
+                    serde_yaml::from_str(&format!("input: {name}\n"))
+                        .expect("snapshot input expression"),
                 );
         }
     }
@@ -2357,6 +2991,9 @@ fn extend_exact_selector(project: &Path, golden_name: &str, size: usize) {
         .join("fixtures");
     for fixture in std::fs::read_dir(fixture_directory).expect("fixture directory") {
         let path = fixture.expect("fixture entry").path();
+        if path.extension().and_then(|value| value.to_str()) != Some("yaml") {
+            continue;
+        }
         let mut document = read_yaml(&path);
         for component in 2..=size {
             let value = if component == 4 {
@@ -2369,26 +3006,54 @@ fn extend_exact_selector(project: &Path, golden_name: &str, size: usize) {
                 .expect("fixture input mapping")
                 .insert(
                     serde_yaml::Value::String(format!("selector_{component}")),
-                    serde_yaml::Value::String(value),
+                    serde_yaml::Value::String(value.clone()),
                 );
+            if golden_name == "custom-system" {
+                if let Some(interactions) = document
+                    .get_mut("interactions")
+                    .and_then(serde_yaml::Value::as_sequence_mut)
+                {
+                    for interaction in interactions {
+                        let query = interaction["expect"]["query"]
+                            .as_mapping_mut()
+                            .expect("fixture expected query mapping");
+                        query.insert(
+                            serde_yaml::Value::String(format!("selector_{component}")),
+                            serde_yaml::Value::String(value.clone()),
+                        );
+                    }
+                }
+            }
         }
         write_yaml(&path, &document);
     }
 
     if golden_name == "snapshot-exact" {
-        let records_path = project.join("records/people.yaml");
-        let mut records = read_yaml(&records_path);
+        let entity_path = project.join("entities/people.yaml");
+        let mut entity = read_yaml(&entity_path);
         let environment_path = project.join("environments/local.yaml");
         let mut environment = read_yaml(&environment_path);
         for component in 2..=size {
             let name = format!("selector_{component}");
-            records["fields"]
+            entity["schema"]["properties"]
                 .as_mapping_mut()
-                .expect("records fields")
+                .expect("entity properties")
                 .insert(
                     serde_yaml::Value::String(name.clone()),
-                    serde_yaml::from_str("type: string\n").expect("records selector field"),
+                    if component == 4 {
+                        // Full-date canonicalization belongs to the consultation input.
+                        // Snapshot exact keys remain physical UTF-8 binary values.
+                        serde_yaml::from_str("type: string\nmaxLength: 10\n")
+                            .expect("full-date snapshot key field")
+                    } else {
+                        serde_yaml::from_str("type: string\nmaxLength: 8\n")
+                            .expect("string entity selector field")
+                    },
                 );
+            entity["schema"]["required"]
+                .as_sequence_mut()
+                .expect("entity required fields")
+                .push(serde_yaml::Value::String(name.clone()));
             environment["entities"]["people"]["columns"]
                 .as_mapping_mut()
                 .expect("entity columns")
@@ -2397,7 +3062,7 @@ fn extend_exact_selector(project: &Path, golden_name: &str, size: usize) {
                     serde_yaml::Value::String(format!("selector_col_{component}")),
                 );
         }
-        write_yaml(&records_path, &records);
+        write_yaml(&entity_path, &entity);
         write_yaml(&environment_path, &environment);
     }
 
@@ -2495,7 +3160,7 @@ fn duplicate_project_integration(project: &Path, source_alias: &str, target_alia
             serde_yaml::Value::String(claim_name.clone()),
             duplicated_claim,
         );
-    for credential in service["credentials"]
+    for credential in service["credential_profiles"]
         .as_mapping_mut()
         .expect("project credential profiles")
         .values_mut()
@@ -2651,7 +3316,7 @@ fn remove_custom_cel_claim(project: &Path) {
         .as_mapping_mut()
         .expect("custom claims")
         .remove(serde_yaml::Value::String("household-eligible".to_string()));
-    service["credentials"]["household-eligibility"]["claims"]
+    service["credential_profiles"]["household-eligibility"]["claims"]
         .as_sequence_mut()
         .expect("custom credential claims")
         .retain(|claim| claim.as_str() != Some("household-eligible"));
@@ -2678,28 +3343,24 @@ fn make_opencrvs_composite_dci(project: &Path) {
     let mut integration = read_yaml(&integration_path);
     integration["input"] = serde_yaml::from_str(
         r#"uin:
+  role: selector
   type: string
-  bytes: 16
+  maxLength: 16
   pattern: "^[0-9]{10}$"
-  canonicalization: identity
 family:
+  role: selector
   type: string
-  bytes: 80
+  maxLength: 80
   pattern: "^Example$"
-  canonicalization: identity
 place:
+  role: selector
   type: string
-  bytes: 120
+  maxLength: 120
   pattern: "^Fictional District$"
-  canonicalization: identity
 "#,
     )
     .expect("composite DCI inputs");
-    let body = &mut integration["capability"]["http"]["operations"]["birth"]["request"]["body"];
-    body.as_mapping_mut()
-        .expect("DCI body")
-        .remove(serde_yaml::Value::String("identifier_type".to_string()));
-    body["exact_and"] = serde_yaml::from_str(
+    integration["source"]["protocol"]["signed_dci"]["selectors"] = serde_yaml::from_str(
         r#"uin: { field: identifier_value, response_pointer: /identifier/0/identifier_value }
 family: { field: family_name, response_pointer: /child/family_name }
 place: { field: place_of_birth, response_pointer: /place_of_birth }
@@ -2707,6 +3368,11 @@ place: { field: place_of_birth, response_pointer: /place_of_birth }
     )
     .expect("composite DCI predicates");
     write_yaml(&integration_path, &integration);
+    replace_in_file(
+        &project.join("integrations/birth-record/adapter.rhai"),
+        "selectors: #{ uin: ctx.input.uin }",
+        "selectors: #{\n            uin: ctx.input.uin,\n            family: ctx.input.family,\n            place: ctx.input.place\n        }",
+    );
 
     let project_path = project.join("registry-stack.yaml");
     let mut project_document = read_yaml(&project_path);
@@ -2723,7 +3389,7 @@ place: request.target.identifiers.place
         .as_mapping_mut()
         .expect("OpenCRVS claims")
         .remove(serde_yaml::Value::String("age-band".to_string()));
-    service["credentials"]["birth-summary"]["claims"]
+    service["credential_profiles"]["birth-summary"]["claims"]
         .as_sequence_mut()
         .expect("OpenCRVS credential claims")
         .retain(|claim| claim.as_str() != Some("age-band"));
@@ -2732,6 +3398,9 @@ place: request.target.identifiers.place
     let fixture_directory = project.join("integrations/birth-record/fixtures");
     for entry in std::fs::read_dir(&fixture_directory).expect("OpenCRVS fixture directory") {
         let path = entry.expect("OpenCRVS fixture entry").path();
+        if !path.is_file() {
+            continue;
+        }
         let retained = matches!(
             path.file_name().and_then(|name| name.to_str()),
             Some("match.yaml" | "ambiguous.yaml")
@@ -2744,6 +3413,22 @@ place: request.target.identifiers.place
         fixture["input"] =
             serde_yaml::from_str("uin: '0000000001'\nfamily: Example\nplace: Fictional District\n")
                 .expect("composite DCI fixture inputs");
+        let data_interaction = fixture["interactions"]
+            .as_sequence_mut()
+            .and_then(|interactions| {
+                interactions.iter_mut().find(|interaction| {
+                    interaction["expect"]["path"].as_str() == Some("/dci/v1/birth/search")
+                })
+            })
+            .expect("DCI data interaction");
+        data_interaction["expect"]["body"]["message"]["search_request"][0]["search_criteria"]
+            ["query"]["predicates"] = serde_yaml::from_str(
+            r#"- { field: family_name, operator: eq, value: Example }
+- { field: place_of_birth, operator: eq, value: Fictional District }
+- { field: identifier_value, operator: eq, value: "0000000001" }
+"#,
+        )
+        .expect("composite DCI request predicates");
         if let Some(claims) = fixture
             .get_mut("expect")
             .and_then(serde_yaml::Value::as_mapping_mut)

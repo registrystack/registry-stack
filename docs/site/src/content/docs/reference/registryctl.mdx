@@ -30,23 +30,23 @@ complete workflow and generated trust boundary.
 
 | Subcommand or flag | Purpose |
 | --- | --- |
-| `init --from <starter>` | Copy `http`, `dhis2-tracker`, `opencrvs`, or `openspp` into a local workspace. |
+| `init --from <starter>` | Copy `http`, `dhis2-tracker`, `opencrvs-dci`, `fhir-r4`, or `snapshot` into a local workspace. |
 | `init --project-dir <dir>` | Destination for `init --from`. Defaults to the current directory. |
-| `test --project-dir <dir>` | Compile and run every integration fixture through the product Relay decoder and Notary evaluator offline. Defaults to the current directory. |
+| `test --project-dir <dir>` | Compile and run every integration fixture through the Relay decoder and configured claim evaluator offline. Defaults to the current directory. |
 | `test --environment <name>` | Include one explicit environment binding in offline validation. |
 | `test --environment <name> --live` | After offline fixtures pass, send one governed evaluation through a deployed Notary. The environment must be explicitly non-production. |
-| `check --project-dir <dir> --environment <name>` | Validate fixtures and generated Relay and Notary configuration without writing build output. |
+| `check --project-dir <dir> --environment <name>` | Validate fixtures and the generated configuration for the project's Relay-only, Notary-only, or combined topology without writing build output. |
 | `check --explain` | Include the redacted acquisition, authorization, output, claim, and disclosure plan. |
-| `check --against <bundle> --anchor <anchor>` | Verify a signed baseline and compare against its `approval/review.json`. Both flags are required together. |
-| `build --project-dir <dir> --environment <name>` | Emit deterministic unsigned Relay and Notary Config Bundle input directories. |
+| `check --against <bundle> --anchor <anchor>` | Verify a signed product baseline and compare against its signed human review plus internal approval state. Both flags are required together. |
+| `build --project-dir <dir> --environment <name>` | Emit deterministic unsigned Config Bundle input directories for the products in the selected topology. |
 | `build --against <bundle> --anchor <anchor>` | Build against an explicitly verified signed baseline. Both flags are required together. |
 
 The commands print JSON reports.
 Without `--against`, `check` and `build` label the baseline
 `initial_without_baseline`.
-Their `semantic_changes` entries identify changed `claim`, `integration`, `service_policy`, and
-`operator_security` dimensions with previous and current digests; `required_reviews` remains the
-separate external approval set.
+Their `semantic_changes` entries identify changed `claim`, `integration`, `service_policy`,
+`operator_security`, and `disclosure` dimensions. The authorized bundle signer reviews that report;
+Registry Stack does not create a separate reviewer workflow.
 Generated files are written under `.registry-stack/build/<environment>/` only by `build`.
 
 ### Project authoring schemas
@@ -61,7 +61,7 @@ Use the files from the exact source revision that produced your `registryctl` bi
 | `integrations/*/integration.yaml` | `crates/registryctl/schemas/project-authoring/integration.schema.json` | `https://registrystack.example/schemas/project-authoring/integration.v1.json` |
 | `integrations/*/fixtures/*.yaml` | `crates/registryctl/schemas/project-authoring/fixture.schema.json` | `https://registrystack.example/schemas/project-authoring/fixture.v1.json` |
 | `environments/*.yaml` | `crates/registryctl/schemas/project-authoring/environment.schema.json` | `https://registrystack.example/schemas/project-authoring/environment.v1.json` |
-| `records/*.yaml` | `crates/registryctl/schemas/project-authoring/records.schema.json` | `https://registrystack.example/schemas/project-authoring/records.v1.json` |
+| `entities/*.yaml` | `crates/registryctl/schemas/project-authoring/entity.schema.json` | `https://registrystack.example/schemas/project-authoring/entity.v1.json` |
 
 For example, a VS Code workspace inside the Registry Stack checkout can associate the project
 schema in `.vscode/settings.json`:
@@ -79,17 +79,15 @@ schema in `.vscode/settings.json`:
 Add the other four schema paths with their authored-file patterns from the table.
 
 Offline fixture execution uses an implementation-owned, fixture-only binding. It runs the
-same Relay source-plan compiler, closed response decoder, typed normalization, Notary static
-authentication and policy gates, and claim evaluator used by the products. Fixture YAML supplies
-only synthetic logical inputs and bounded source observations. It cannot select destinations,
-credentials, worker commands, authority context, or decoder bypasses. OpenCRVS signed fixtures
-exercise the exact RSA JWKS, RS256 JWS, and DCI binding decoder, but remain deterministic codec
-evidence rather than proof of interoperability with a deployed OpenCRVS instance.
+same Relay source-plan compiler, closed response decoder, typed normalization, static
+authentication and service-policy gates, and claim evaluator used by the products. Fixture YAML
+supplies only synthetic logical inputs and bounded source observations. It cannot select destinations,
+credentials, worker commands, authority context, or decoder bypasses. A product-named starter does
+not select a runtime executor or enable a protocol helper based on source product or version.
 
-`snapshot` is supported through authored integration, records definition, and private
-environment files even though it is not an `init --from` starter.
-A `records_api` service and one or more SnapshotExact profiles can reference the same logical
-entity.
+`snapshot` is supported through an authored integration, entity definition, and private
+environment files.
+A records service and one or more snapshot integrations can reference the same logical entity.
 `build` then emits one ingest plan and materialization identity, while the governed records routes
 and exact consultations retain their separate authorization contracts.
 See the exact snapshot guide for the logical output contract and private physical mapping.
@@ -101,7 +99,7 @@ The governed live test reads `REGISTRY_STACK_LIVE_NOTARY_ORIGIN`,
 `REGISTRY_STACK_LIVE_NOTARY_API_KEY`, `REGISTRY_STACK_LIVE_REQUEST_FILE`, and
 `REGISTRY_STACK_LIVE_EXPECTED_FILE` from the invoking process environment. The origin must be
 HTTPS, except that HTTP loopback is accepted for local testing. The gate first requires every
-Relay-backed consultation profile to report ready, then sends the request only to
+Relay-backed consultation contract to report ready, then sends the request only to
 `POST /v1/evaluations`. Returned claim fields must match the expected file and include
 source-backed provenance. Do not put registry or source credentials in the request or Registry
 Stack project.
@@ -120,10 +118,17 @@ live authoring check is not batch evidence.
 
 ## Config bundle commands
 
-The `build` output for a Registry Stack project is a pair of unsigned product Config Bundle input
-directories. It is not a signed project root or a deployable bundle. Package and sign each product
-directory with `bundle sign`, then verify the resulting product bundle against its product trust
-anchor with `bundle verify`. Activation remains a product-specific deployment step.
+The `build` output for a Registry Stack project contains an unsigned Config Bundle input directory
+for each product in the selected topology. Relay-only and Notary-only projects produce one product
+input; a combined project produces separate Relay and Notary inputs. This output is not a signed
+project root or a deployable bundle. Package and sign each product directory with `bundle sign`,
+then verify the resulting product bundle against its product trust anchor with `bundle verify`.
+Activation remains a product-specific deployment step.
+A product input carries the same human review as `reviewable/review.json` plus an internal approval
+state. Product signing covers both files. The internal state binds the report, semantic comparison
+state, and generated product closures without exposing those lower-level digests in the human
+report. In a combined build, Relay and Notary receive identical approval state, but separate product
+signatures do not make their activation atomic.
 A signed project-level deployment bundle with a root manifest that binds compatible product
 submanifests is future work and is not emitted by the current CLI.
 
@@ -221,9 +226,9 @@ Smoke commands run built-in local checks and write a JSON result file.
 ## Legacy OpenFn conversion
 
 `openfn` is a compatibility command for converting existing OpenFn workflow exports into sidecar
-runtime files. Current source-adapter projects use the built-in `http_json`, `http_flow`, `fhir`,
-or `script_rhai` engines instead. The flags below apply to both `openfn import` and `openfn convert`
-unless noted.
+runtime files. This legacy sidecar contract is separate from Registry Stack project authoring and
+its product-neutral `http`, `script`, and `snapshot` capabilities. The flags below apply to both
+`openfn import` and `openfn convert` unless noted.
 
 | Subcommand or flag | Purpose |
 | --- | --- |

@@ -22,12 +22,12 @@
     },
     "relay": {
       "type": "object", "additionalProperties": false,
-      "required": ["origin", "issuer", "jwks_url", "audience", "workload_client_id"],
-      "properties": { "origin": { "$ref": "#/$defs/origin" }, "issuer": { "$ref": "#/$defs/origin" }, "jwks_url": { "type": "string", "format": "uri", "pattern": "^https://[^/?#]+/[^?#]+$" }, "audience": { "type": "string", "minLength": 1, "maxLength": 256 }, "workload_client_id": { "type": "string", "minLength": 1, "maxLength": 256 } }
+      "required": ["origin", "issuer", "jwks_url", "audience", "allowed_clients"],
+      "properties": { "origin": { "$ref": "#/$defs/origin" }, "issuer": { "$ref": "#/$defs/origin" }, "jwks_url": { "type": "string", "format": "uri", "pattern": "^https://[^/?#]+/[^?#]+$" }, "audience": { "type": "string", "minLength": 1, "maxLength": 256 }, "allowed_clients": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 256 } } }
     },
     "notary_relay": {
-      "type": "object", "additionalProperties": false, "required": ["token_file"],
-      "properties": { "token_file": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$" } }
+      "type": "object", "additionalProperties": false, "required": ["workload_client_id", "token_file"],
+      "properties": { "workload_client_id": { "type": "string", "minLength": 1, "maxLength": 256 }, "token_file": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$" } }
     },
     "deployment": {
       "type": "object", "additionalProperties": false, "required": ["profile"],
@@ -35,41 +35,85 @@
       "anyOf": [{ "required": ["relay"] }, { "required": ["notary"] }]
     }
   },
+  "allOf": [
+    {
+      "if": { "required": ["deployment"], "properties": { "deployment": { "required": ["relay"] } } },
+      "then": { "required": ["relay"] },
+      "else": { "not": { "required": ["relay"] } }
+    },
+    {
+      "if": { "required": ["notary_relay"] },
+      "then": { "properties": { "deployment": { "required": ["relay", "notary"] } } }
+    }
+  ],
   "$defs": {
     "stableId": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
     "secret": { "type": "object", "additionalProperties": false, "required": ["secret"], "properties": { "secret": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]{0,127}$" } } },
     "origin": { "type": "string", "format": "uri", "pattern": "^https://[^/?#]+/?$" },
-    "destination": { "type": "object", "additionalProperties": false, "required": ["origin"], "properties": { "origin": { "$ref": "#/$defs/origin" } } },
+    "privateCidrs": {
+      "type": "array", "maxItems": 16, "uniqueItems": true,
+      "items": { "type": "string", "minLength": 3, "maxLength": 64 }
+    },
+    "ca": {
+      "type": "object", "additionalProperties": false, "required": ["file", "generation"],
+      "properties": { "file": { "$ref": "#/$defs/absolutePath" }, "generation": { "type": "integer", "minimum": 1 } }
+    },
+    "mtls": {
+      "type": "object", "additionalProperties": false, "required": ["certificate_file", "private_key", "generation"],
+      "properties": { "certificate_file": { "$ref": "#/$defs/absolutePath" }, "private_key": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } }
+    },
+    "endpoint": {
+      "type": "object", "additionalProperties": false, "required": ["origin", "path", "generation"],
+      "properties": {
+        "origin": { "$ref": "#/$defs/origin" },
+        "path": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//)(?!.*[?#]).+$" },
+        "allowed_private_cidrs": { "$ref": "#/$defs/privateCidrs" },
+        "ca": { "$ref": "#/$defs/ca" },
+        "mtls": { "$ref": "#/$defs/mtls" },
+        "generation": { "type": "integer", "minimum": 1 }
+      }
+    },
     "credential": {
       "oneOf": [
-        { "type": "object", "additionalProperties": false, "required": ["type", "generation"], "properties": { "type": { "const": "none" }, "generation": { "type": "integer", "minimum": 1 } } },
-        { "type": "object", "additionalProperties": false, "required": ["type", "username", "password", "generation"], "properties": { "type": { "const": "basic" }, "username": { "$ref": "#/$defs/secret" }, "password": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } },
-        { "type": "object", "additionalProperties": false, "required": ["type", "token", "generation"], "properties": { "type": { "const": "static_bearer" }, "token": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } },
-        { "type": "object", "additionalProperties": false, "required": ["type", "client_id", "client_secret", "generation"], "properties": { "type": { "const": "oauth2_client_credentials" }, "client_id": { "$ref": "#/$defs/secret" }, "client_secret": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } },
-        { "type": "object", "additionalProperties": false, "required": ["type", "value", "generation"], "properties": { "type": { "const": "api_key_header" }, "value": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } },
-        { "type": "object", "additionalProperties": false, "required": ["type", "value", "generation", "review"], "properties": { "type": { "const": "api_key_query" }, "value": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 }, "review": { "const": "operator_security" } } }
+        { "type": "object", "additionalProperties": false, "required": ["username", "password", "generation"], "properties": { "username": { "$ref": "#/$defs/secret" }, "password": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } },
+        { "type": "object", "additionalProperties": false, "required": ["token", "generation"], "properties": { "token": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } },
+        { "type": "object", "additionalProperties": false, "required": ["client_id", "client_secret", "generation"], "properties": { "client_id": { "$ref": "#/$defs/secret" }, "client_secret": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } },
+        { "type": "object", "additionalProperties": false, "required": ["value", "generation"], "properties": { "value": { "$ref": "#/$defs/secret" }, "generation": { "type": "integer", "minimum": 1 } } }
       ]
     },
     "provider": {
       "oneOf": [
         { "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": { "const": "csv" }, "path": { "$ref": "#/$defs/absolutePath" }, "header_row": { "type": "integer", "minimum": 1 }, "delimiter": { "type": "integer", "minimum": 0, "maximum": 255 }, "quote": { "type": "integer", "minimum": 0, "maximum": 255 } } },
         { "type": "object", "additionalProperties": false, "required": ["type", "path", "sheet"], "properties": { "type": { "const": "xlsx" }, "path": { "$ref": "#/$defs/absolutePath" }, "sheet": { "type": "string", "minLength": 1, "maxLength": 256 }, "header_row": { "type": "integer", "minimum": 1 }, "data_range": { "type": "string", "minLength": 1, "maxLength": 256 } } },
-        { "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": { "const": "parquet" }, "path": { "$ref": "#/$defs/absolutePath" } } }
+        { "type": "object", "additionalProperties": false, "required": ["type", "path"], "properties": { "type": { "const": "parquet" }, "path": { "$ref": "#/$defs/absolutePath" } } },
+        { "type": "object", "additionalProperties": false, "required": ["type", "connection", "schema", "table"], "properties": { "type": { "const": "postgres" }, "connection": { "$ref": "#/$defs/secret" }, "schema": { "$ref": "#/$defs/postgresIdentifier" }, "table": { "$ref": "#/$defs/postgresIdentifier" } } }
       ]
     },
     "entity": {
       "type": "object", "additionalProperties": false, "required": ["provider", "columns", "source_revision", "generation"],
       "properties": { "provider": { "$ref": "#/$defs/provider" }, "columns": { "type": "object", "minProperties": 1, "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "$ref": "#/$defs/stableId" } }, "source_revision": { "type": "string", "minLength": 1, "maxLength": 256 }, "generation": { "type": "string", "minLength": 1, "maxLength": 256 } }
     },
-    "advanced": {
-      "type": "object", "additionalProperties": false, "required": ["script"],
-      "properties": { "script": { "type": "object", "additionalProperties": false, "required": ["enabled", "review"], "properties": { "enabled": { "const": true }, "review": { "const": "operator_security" } } } }
+    "source": {
+      "type": "object", "additionalProperties": false, "required": ["origin"],
+      "properties": {
+        "origin": { "$ref": "#/$defs/origin" },
+        "allowed_private_cidrs": { "$ref": "#/$defs/privateCidrs" },
+        "ca": { "$ref": "#/$defs/ca" },
+        "mtls": { "$ref": "#/$defs/mtls" },
+        "credential": { "$ref": "#/$defs/credential" },
+        "oauth": { "$ref": "#/$defs/endpoint" },
+        "jwks": { "$ref": "#/$defs/endpoint" },
+        "rate": { "type": "object", "additionalProperties": false, "required": ["per_minute", "burst"], "properties": { "per_minute": { "type": "integer", "minimum": 1, "maximum": 60000 }, "burst": { "type": "integer", "minimum": 1, "maximum": 1024 } } },
+        "concurrency": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "timeout": { "type": "string", "pattern": "^[1-9][0-9]*(?:ms|s)$" }
+      }
     },
     "integration": {
-      "type": "object", "additionalProperties": false, "required": ["source_version"],
-      "properties": { "source_version": { "type": "string", "minLength": 1, "maxLength": 256 }, "data_destination": { "$ref": "#/$defs/destination" }, "credential_destination": { "$ref": "#/$defs/destination" }, "credential": { "$ref": "#/$defs/credential" }, "advanced_capabilities": { "$ref": "#/$defs/advanced" } }
+      "type": "object", "additionalProperties": false, "required": ["source"],
+      "properties": { "source": { "$ref": "#/$defs/source" } }
     },
     "service": { "type": "object", "additionalProperties": false, "required": ["service"], "properties": { "service": { "$ref": "#/$defs/stableId" } } },
+    "postgresIdentifier": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,62}$" },
     "absolutePath": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$" }
   }
 }

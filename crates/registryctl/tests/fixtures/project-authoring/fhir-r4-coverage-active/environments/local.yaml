@@ -1,12 +1,11 @@
 version: 1
 integrations:
   coverage:
-    source_version: r4-fixture-v1
-    data_destination: { origin: https://fhir.fixture.invalid }
-    credential:
-      type: static_bearer
-      token: { secret: FHIR_ACCESS_TOKEN }
-      generation: 1
+    source:
+      origin: https://coverage.fixture.invalid
+      credential:
+        token: { secret: FHIR_ACCESS_TOKEN }
+        generation: 1
 issuance:
   issuer: did:web:fhir-notary.invalid
   signing_kid: project-issuer-key
@@ -21,9 +20,10 @@ relay:
   issuer: https://workload-issuer.internal.invalid
   jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
   audience: registry-relay
-  workload_client_id: fhir-notary
+  allowed_clients: [fhir-relay-client]
 
 notary_relay:
+  workload_client_id: fhir-notary
   token_file: /run/secrets/relay-workload-token
 
 deployment:

@@ -46,11 +46,12 @@ fn generated_relay_config(
             })
         })
         .collect::<Vec<_>>();
-    let evidence = packs
-        .values()
-        .flat_map(|pack| &pack.evidence)
-        .map(|artifact| {
-            json!({
+    let mut evidence_by_hash = BTreeMap::new();
+    for artifact in packs.values().flat_map(|pack| &pack.evidence) {
+        evidence_by_hash
+            .entry(artifact.sha256.clone())
+            .or_insert_with(|| {
+                json!({
                 "class": match artifact.class {
                     EvidenceClass::Conformance => "conformance",
                     EvidenceClass::NegativeSecurity => "negative_security",
@@ -59,69 +60,82 @@ fn generated_relay_config(
                 "path": artifact.path,
                 "sha256": artifact.sha256,
             })
-        })
-        .collect::<Vec<_>>();
-    let rhai_scripts = loaded
-        .integrations
-        .iter()
-        .filter_map(|(alias, integration)| {
-            integration.script.as_ref().map(|(_, script)| {
-                json!({
-                    "path": format!("artifacts/rhai/{alias}.rhai"),
-                    "sha256": sha256_uri(script),
-                })
-            })
-        })
-        .collect::<Vec<_>>();
-    let source_credentials = environment
-        .integrations
-        .iter()
-        .filter(|(_, binding)| binding.credential.is_some())
-        .map(|(alias, binding)| {
+            });
+    }
+    let evidence = evidence_by_hash.into_values().collect::<Vec<_>>();
+    let mut rhai_scripts_by_hash = BTreeMap::new();
+    for (alias, integration) in &loaded.integrations {
+        if integration.script.is_some() {
+            let script = compiled_rhai_source(integration)?;
+            let hash = sha256_uri(&script);
+            rhai_scripts_by_hash.entry(hash.clone()).or_insert(json!({
+                "path": canonical_rhai_script_path(loaded, alias)?,
+                "sha256": hash,
+            }));
+        }
+    }
+    let rhai_scripts = rhai_scripts_by_hash.into_values().collect::<Vec<_>>();
+    let mut source_credentials = Vec::new();
+    let mut emitted_credential_references = BTreeSet::new();
+    for (alias, binding) in &environment.integrations {
+        if binding.source.credential.is_some() {
             let credential = binding
+                .source
                 .credential
                 .as_ref()
                 .ok_or_else(|| anyhow!("credential binding disappeared"))?;
-            let reference = format!("{alias}-credential");
-            match credential.credential_type {
+            let interface = credential_interface(&loaded.integrations[alias].document);
+            let reference = source_credential_reference(loaded, environment, alias)?
+                .ok_or_else(|| anyhow!("credential reference disappeared"))?;
+            if !emitted_credential_references.insert(reference.clone()) {
+                continue;
+            }
+            let entry = match interface.credential_type {
                 CredentialType::None => bail!("none credential must not have an environment binding"),
-                CredentialType::Basic => Ok(json!({
+                CredentialType::Basic => json!({
                     "type": "basic",
                     "ref": reference,
                     "generation": credential.generation,
                     "username_env": required_secret_name(credential.username.as_ref(), "basic username")?,
                     "password_env": required_secret_name(credential.password.as_ref(), "basic password")?,
-                })),
-                CredentialType::StaticBearer => Ok(json!({
+                }),
+                CredentialType::StaticBearer => json!({
                     "type": "static_bearer",
                     "ref": reference,
                     "generation": credential.generation,
                     "token_env": required_secret_name(credential.token.as_ref(), "bearer token")?,
-                })),
-                CredentialType::Oauth2ClientCredentials => Ok(json!({
+                }),
+                CredentialType::Oauth2ClientCredentials => json!({
                     "type": "oauth_client_credentials",
                     "ref": reference,
                     "generation": credential.generation,
                     "client_id_env": required_secret_name(credential.client_id.as_ref(), "OAuth client id")?,
                     "client_secret_env": required_secret_name(credential.client_secret.as_ref(), "OAuth client secret")?,
-                })),
-                CredentialType::ApiKeyHeader => Ok(json!({
+                }),
+                CredentialType::ApiKeyHeader => json!({
                     "type": "api_key_header",
                     "ref": reference,
                     "generation": credential.generation,
                     "value_env": required_secret_name(credential.value.as_ref(), "API-key value")?,
-                })),
-                CredentialType::ApiKeyQuery => Ok(json!({
+                }),
+                CredentialType::ApiKeyQuery => json!({
                     "type": "api_key_query",
                     "ref": reference,
                     "generation": credential.generation,
                     "value_env": required_secret_name(credential.value.as_ref(), "API-key value")?,
-                })),
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
+                }),
+            };
+            source_credentials.push(entry);
+        }
+    }
     let datasets = generated_records_datasets(loaded, environment)?;
     let standards = generated_records_standards(loaded)?;
+    let mut allowed_clients = relay.allowed_clients.clone();
+    if let Some(connection) = &environment.notary_relay {
+        allowed_clients.push(connection.workload_client_id.clone());
+    }
+    allowed_clients.sort();
+    allowed_clients.dedup();
     let mut config = json!({
         "instance": {
             "id": relay_service.service,
@@ -139,7 +153,7 @@ fn generated_relay_config(
                 "issuer": relay.issuer,
                 "audiences": [relay.audience.as_str()],
                 "jwks_url": relay.jwks_url,
-                "allowed_clients": [relay.workload_client_id.as_str()],
+                "allowed_clients": allowed_clients,
             },
         },
         "audit": {
@@ -151,12 +165,16 @@ fn generated_relay_config(
         "deployment": { "profile": environment.deployment.profile.as_str() },
     });
     if !profiles.is_empty() && !packs.is_empty() {
+        let workload = environment
+            .notary_relay
+            .as_ref()
+            .ok_or_else(|| anyhow!("Notary-to-Relay workload binding is absent"))?;
         config["consultation"] = json!({
             "authorized_workload": {
                 "audience": relay.audience,
                 "client_claim_selector": "azp",
-                "client_value": relay.workload_client_id,
-                "principal_id": relay.workload_client_id,
+                "client_value": workload.workload_client_id,
+                "principal_id": workload.workload_client_id,
             },
             "state_plane": {
                 "database_url_env": "REGISTRY_RELAY_CONSULTATION_DATABASE_URL",
@@ -181,20 +199,72 @@ fn generated_relay_config(
     Ok(config)
 }
 
+fn source_credential_reference(
+    loaded: &LoadedRegistryProject,
+    environment: &EnvironmentDocument,
+    alias: &str,
+) -> Result<Option<String>> {
+    let Some(target_binding) = environment.integrations.get(alias) else {
+        return Ok(None);
+    };
+    let Some(target_credential) = target_binding.source.credential.as_ref() else {
+        return Ok(None);
+    };
+    let target = json!({
+        "interface": credential_interface(&loaded.integrations[alias].document).credential_type,
+        "binding": target_credential,
+    });
+    for (candidate_alias, candidate_binding) in &environment.integrations {
+        let Some(candidate_credential) = candidate_binding.source.credential.as_ref() else {
+            continue;
+        };
+        let candidate = json!({
+            "interface": credential_interface(&loaded.integrations[candidate_alias].document).credential_type,
+            "binding": candidate_credential,
+        });
+        if candidate == target {
+            return Ok(Some(format!("{candidate_alias}-credential")));
+        }
+    }
+    bail!("environment credential has no integration owner")
+}
+
+fn canonical_rhai_script_path(
+    loaded: &LoadedRegistryProject,
+    alias: &str,
+) -> Result<PathBuf> {
+    let target = compiled_rhai_source(
+        loaded
+            .integrations
+            .get(alias)
+            .ok_or_else(|| anyhow!("script integration is absent"))?,
+    )?;
+    for (candidate_alias, candidate) in &loaded.integrations {
+        if candidate.script.is_some() && compiled_rhai_source(candidate)? == target {
+            return Ok(PathBuf::from(format!(
+                "artifacts/rhai/{candidate_alias}.rhai"
+            )));
+        }
+    }
+    bail!("compiled Rhai script has no integration owner")
+}
+
 fn generated_records_datasets(
     loaded: &LoadedRegistryProject,
     environment: &EnvironmentDocument,
 ) -> Result<Vec<Value>> {
     loaded
-        .records
+        .entities
         .values()
-        .map(|loaded_records| {
-            let records = &loaded_records.document;
+        .map(|loaded_entity| {
+            let entity = &loaded_entity.document;
+            let publication = records_service_for_entity(loaded, &entity.id);
+            let api = publication.and_then(|service| service.api.as_ref());
             let binding = environment
                 .entities
-                .get(&records.id)
-                .ok_or_else(|| anyhow!("generated records entity binding is absent"))?;
-            let resource_id = records_materialization_resource_id(records, binding)?;
+                .get(&entity.id)
+                .ok_or_else(|| anyhow!("generated entity binding is absent"))?;
+            let resource_id = entity_materialization_resource_id(entity, binding)?;
             let source = match &binding.provider {
                 RecordProvider::Csv {
                     path,
@@ -229,54 +299,58 @@ fn generated_records_datasets(
                     "path": path,
                     "format": { "parquet": {} },
                 }),
+                RecordProvider::Postgres {
+                    connection,
+                    schema,
+                    table,
+                } => json!({
+                    "type": "postgres",
+                    "connection_env": connection.secret,
+                    "table": { "schema": schema, "name": table },
+                }),
             };
-            let fields = records
-                .fields
+            let fields = entity
+                .schema
+                .properties
                 .iter()
                 .map(|(logical, field)| {
-                    json!({
+                    let record_field = entity_record_field(logical, field)?;
+                    Ok(json!({
                         "name": binding.columns[logical],
-                        "type": field.field_type,
-                        "nullable": field.nullable,
-                        "sensitive": field.sensitive,
-                        "concept_uri": field.concept_uri,
-                        "codelist": field.codelist,
-                        "unit": field.unit,
-                        "language": field.language,
-                    })
+                        "type": record_field.field_type,
+                        "nullable": record_field.nullable,
+                        "sensitive": false,
+                    }))
                 })
-                .collect::<Vec<_>>();
-            let public_fields = records
-                .fields
+                .collect::<Result<Vec<_>>>()?;
+            let public_fields = entity
+                .schema
+                .properties
                 .iter()
-                .map(|(logical, field)| {
+                .filter(|(logical, _)| {
+                    api.is_some_and(|api| api.projection.contains(*logical))
+                })
+                .map(|(logical, _)| {
                     json!({
                         "name": logical,
                         "from": binding.columns[logical],
-                        "sensitive": field.sensitive,
-                        "concept_uri": field.concept_uri,
-                        "codelist": field.codelist,
-                        "unit": field.unit,
-                        "language": field.language,
+                        "sensitive": false,
                     })
                 })
                 .collect::<Vec<_>>();
-            let allowed_filters = records
-                .api
-                .filters
-                .iter()
+            let allowed_filters = api
+                .into_iter()
+                .flat_map(|api| api.filters.iter())
                 .map(|(field, ops)| json!({ "field": field, "ops": ops }))
                 .collect::<Vec<_>>();
-            let required_filter_bindings = records
-                .api
-                .required_principal_filters
-                .iter()
+            let required_filter_bindings = api
+                .into_iter()
+                .flat_map(|api| api.required_principal_filters.iter())
                 .map(|field| json!({ "field": field, "source": "principal_id" }))
                 .collect::<Vec<_>>();
-            let relationships = records
-                .api
-                .relationships
-                .iter()
+            let relationships = api
+                .into_iter()
+                .flat_map(|api| api.relationships.iter())
                 .map(|(name, relationship)| {
                     json!({
                         "name": name,
@@ -287,10 +361,9 @@ fn generated_records_datasets(
                     })
                 })
                 .collect::<Vec<_>>();
-            let aggregates = records
-                .api
-                .aggregates
-                .iter()
+            let aggregates = api
+                .into_iter()
+                .flat_map(|api| api.aggregates.iter())
                 .map(|(id, aggregate)| {
                     let allowed_filters = aggregate
                         .allowed_filters
@@ -306,7 +379,7 @@ fn generated_records_datasets(
                         "id": id,
                         "title": aggregate.title,
                         "description": aggregate.description,
-                        "source_entity": records.id,
+                        "source_entity": entity.id,
                         "default_group_by": aggregate.default_group_by,
                         "dimensions": aggregate.dimensions,
                         "indicators": aggregate.indicators,
@@ -326,15 +399,12 @@ fn generated_records_datasets(
                     })
                 })
                 .collect::<Vec<_>>();
-            let aggregate_scope = records
-                .api
-                .scopes
-                .aggregate
-                .clone()
-                .unwrap_or_else(|| format!("{}:aggregate", records.id));
-            let governed_policy = (!records.api.purposes.is_empty()).then(|| {
+            let aggregate_scope = api
+                .and_then(|api| api.scopes.aggregate.clone())
+                .unwrap_or_else(|| format!("{}:aggregate", entity.id));
+            let governed_policy = api.filter(|api| !api.purposes.is_empty()).map(|api| {
                 json!({
-                    "permitted_purposes": records.api.purposes,
+                    "permitted_purposes": api.purposes,
                     "permitted_jurisdictions": [],
                     "allowed_assurance": [],
                     "require_legal_basis": false,
@@ -343,65 +413,76 @@ fn generated_records_datasets(
                     "trusted_context": {},
                 })
             });
-            let spatial = match &records.api.standards.ogc_features {
-                RecordStandard::Enabled(spatial) => Some(serde_json::to_value(spatial)?),
-                RecordStandard::Disabled(_) => None,
+            let spatial = match api.map(|api| &api.standards.ogc_features) {
+                Some(RecordStandard::Enabled(spatial)) => Some(serde_json::to_value(spatial)?),
+                Some(RecordStandard::Disabled(_)) | None => None,
             };
+            let refresh = entity_refresh_config(&entity.materialization.refresh)?;
+            let metadata_scope = api
+                .map(|api| api.scopes.metadata.as_str())
+                .unwrap_or("registry-internal:materialization");
+            let publication_entities = publication
+                .map(|service| {
+                    let api = service.api.as_ref().expect("records service was validated");
+                    json!({
+                        "name": entity.id,
+                        "title": service.title,
+                        "description": service.description,
+                        "table": resource_id,
+                        "fields": public_fields,
+                        "relationships": relationships,
+                        "access": {
+                            "metadata_scope": api.scopes.metadata,
+                            "aggregate_scope": aggregate_scope,
+                            "read_scope": api.scopes.rows,
+                            "evidence_verification_scope": api.scopes.evidence_verification.clone().unwrap_or_default(),
+                        },
+                        "api": {
+                            "default_limit": api.pagination.default_limit,
+                            "max_limit": api.pagination.max_limit,
+                            "require_purpose_header": !api.purposes.is_empty(),
+                            "governed_policy": governed_policy,
+                            "required_filters": api.required_principal_filters,
+                            "required_filter_bindings": required_filter_bindings,
+                            "allowed_filters": allowed_filters,
+                            "allowed_expansions": api.relationships.keys().collect::<Vec<_>>(),
+                        },
+                        "aggregates": aggregates,
+                        "spatial": spatial,
+                    })
+                })
+                .into_iter()
+                .collect::<Vec<_>>();
             Ok(json!({
-                "id": records.id,
-                "title": records.title.clone().unwrap_or_else(|| records.id.clone()),
-                "description": records.description.clone().unwrap_or_else(|| format!("Governed {} records", records.id)),
-                "owner": records.owner.clone().unwrap_or_else(|| loaded.project.registry.id.clone()),
-                "sensitivity": records.sensitivity.unwrap_or(RecordSensitivity::Personal),
-                "access_rights": records.access_rights.unwrap_or(RecordAccessRights::Restricted),
-                "update_frequency": records.update_frequency.unwrap_or(RecordUpdateFrequency::AsNeeded),
-                "conforms_to": records.conforms_to,
-                "defaults": { "refresh": { "mode": "manual" }, "materialization": "snapshot" },
+                "id": entity.id,
+                "title": publication.and_then(|service| service.title.clone()).unwrap_or_else(|| entity.id.clone()),
+                "description": publication.and_then(|service| service.description.clone()).unwrap_or_else(|| format!("Materialized {} entity", entity.id)),
+                "owner": publication.and_then(|service| service.owner.clone()).unwrap_or_else(|| loaded.project.registry.id.clone()),
+                "sensitivity": publication.and_then(|service| service.sensitivity).unwrap_or(RecordSensitivity::Personal),
+                "access_rights": publication.and_then(|service| service.access_rights).unwrap_or(RecordAccessRights::Restricted),
+                "update_frequency": publication.and_then(|service| service.update_frequency).unwrap_or(RecordUpdateFrequency::AsNeeded),
+                "conforms_to": publication.map(|service| &service.conforms_to).into_iter().flatten().collect::<Vec<_>>(),
+                "defaults": { "refresh": refresh, "materialization": "snapshot" },
                 "tables": [{
                     "id": resource_id,
                     "source": source,
-                    "refresh": { "mode": "manual" },
+                    "refresh": refresh,
                     "materialization": "snapshot",
-                    "primary_key": binding.columns[&records.primary_key],
+                    "primary_key": binding.columns[&entity.primary_key],
                     "schema": { "strict": true, "fields": fields },
                     "access": {
-                        "metadata_scope": records.api.scopes.metadata,
+                        "metadata_scope": metadata_scope,
                         "aggregate_scope": aggregate_scope,
                     },
                     "api": {
-                        "default_limit": records.api.pagination.default_limit,
-                        "max_limit": records.api.pagination.max_limit,
-                        "require_purpose_header": !records.api.purposes.is_empty(),
+                        "default_limit": api.map(|api| api.pagination.default_limit).unwrap_or(1),
+                        "max_limit": api.map(|api| api.pagination.max_limit).unwrap_or(1),
+                        "require_purpose_header": api.is_some_and(|api| !api.purposes.is_empty()),
                         "allowed_filters": [],
                     },
                     "aggregates": [],
                 }],
-                "entities": [{
-                    "name": records.id,
-                    "title": records.title,
-                    "description": records.description,
-                    "table": resource_id,
-                    "fields": public_fields,
-                    "relationships": relationships,
-                    "access": {
-                        "metadata_scope": records.api.scopes.metadata,
-                        "aggregate_scope": aggregate_scope,
-                        "read_scope": records.api.scopes.rows,
-                        "evidence_verification_scope": records.api.scopes.evidence_verification.clone().unwrap_or_default(),
-                    },
-                    "api": {
-                        "default_limit": records.api.pagination.default_limit,
-                        "max_limit": records.api.pagination.max_limit,
-                        "require_purpose_header": !records.api.purposes.is_empty(),
-                        "governed_policy": governed_policy,
-                        "required_filters": records.api.required_principal_filters,
-                        "required_filter_bindings": required_filter_bindings,
-                        "allowed_filters": allowed_filters,
-                        "allowed_expansions": records.api.relationships.keys().collect::<Vec<_>>(),
-                    },
-                    "aggregates": aggregates,
-                    "spatial": spatial,
-                }],
+                "entities": publication_entities,
                 "aggregates": [],
             }))
         })
@@ -410,16 +491,26 @@ fn generated_records_datasets(
 
 fn generated_records_standards(loaded: &LoadedRegistryProject) -> Result<Value> {
     let mut registries = Map::new();
-    for records in loaded.records.values().map(|loaded| &loaded.document) {
-        let RecordStandard::Enabled(spdci) = &records.api.standards.sp_dci else {
+    for service in loaded
+        .project
+        .services
+        .values()
+        .filter(|service| service.kind == ServiceKind::RecordsApi)
+    {
+        let entity = service
+            .entity
+            .as_deref()
+            .expect("records service was validated");
+        let api = service.api.as_ref().expect("records service was validated");
+        let RecordStandard::Enabled(spdci) = &api.standards.sp_dci else {
             continue;
         };
         if registries
             .insert(
                 spdci.registry.clone(),
                 json!({
-                    "dataset": records.id,
-                    "entity": records.id,
+                    "dataset": entity,
+                    "entity": entity,
                     "registry_type": spdci.registry_type,
                     "record_type": spdci.record_type,
                     "identifiers": spdci.identifiers,
@@ -429,7 +520,7 @@ fn generated_records_standards(loaded: &LoadedRegistryProject) -> Result<Value> 
             )
             .is_some()
         {
-            bail!("SP DCI registry ids must be unique across records definitions");
+            bail!("SP DCI registry ids must be unique across records services");
         }
     }
     Ok(if registries.is_empty() {
@@ -455,12 +546,66 @@ fn deterministic_lock_key(registry: &str, lane: u8) -> i64 {
     i64::from_be_bytes(bytes) & i64::MAX
 }
 
-fn records_materialization_resource_id(
-    records: &RecordsDefinition,
+fn records_service_for_entity<'a>(
+    loaded: &'a LoadedRegistryProject,
+    entity: &str,
+) -> Option<&'a ServiceDeclaration> {
+    loaded.project.services.values().find(|service| {
+        service.kind == ServiceKind::RecordsApi && service.entity.as_deref() == Some(entity)
+    })
+}
+
+fn entity_record_field(name: &str, field: &EntityFieldSchema) -> Result<RecordField> {
+    let (scalar, nullable) = schema_type_parts(&field.field_type)?;
+    let field_type = match (scalar, field.format) {
+        (AuthoredScalarType::String, Some(AuthoredStringFormat::Date)) => RecordFieldType::Date,
+        (AuthoredScalarType::String, None) => RecordFieldType::String,
+        (AuthoredScalarType::Boolean, None) => RecordFieldType::Boolean,
+        (AuthoredScalarType::Integer, None) => RecordFieldType::Integer,
+        (AuthoredScalarType::Null, _) => bail!("entity field {name} cannot have only null type"),
+        (_, Some(_)) => bail!("entity field {name} format is valid only for String"),
+    };
+    Ok(RecordField {
+        field_type,
+        nullable,
+        sensitive: false,
+        concept_uri: None,
+        codelist: None,
+        unit: None,
+        language: None,
+    })
+}
+
+fn entity_refresh_config(refresh: &str) -> Result<Value> {
+    if refresh == "manual" {
+        Ok(json!({ "mode": "manual" }))
+    } else {
+        parse_duration_ms(refresh).context("entity materialization refresh is invalid")?;
+        Ok(json!({ "mode": "interval", "interval": refresh }))
+    }
+}
+
+fn entity_materialization_resource_id(
+    entity: &EntityDefinition,
     binding: &EnvironmentEntityBinding,
 ) -> Result<String> {
+    let refresh_ms = (entity.materialization.refresh != "manual")
+        .then(|| parse_duration_ms(&entity.materialization.refresh))
+        .transpose()?;
     let digest = digest_json(&json!({
-        "entity_definition": records,
+        "entity": {
+            "version": entity.version,
+            "id": entity.id,
+            "revision": entity.revision,
+            "primary_key": entity.primary_key,
+            "schema": entity.schema,
+        },
+        "acquisition_policy": {
+            "max_records": entity.materialization.max_records,
+            "max_bytes": entity.materialization.max_bytes.bytes("entity.materialization.max_bytes")?,
+            "refresh_ms": refresh_ms,
+            "retain_generations": entity.materialization.retain_generations,
+        },
         "provider": binding.provider,
         "columns": binding.columns,
         "source_revision": binding.source_revision,
@@ -472,14 +617,14 @@ fn records_materialization_resource_id(
     Ok(format!("materialization_{hexadecimal}"))
 }
 
-fn records_table_provider(
-    records: &RecordsDefinition,
+fn entity_table_provider(
+    entity: &EntityDefinition,
     binding: &EnvironmentEntityBinding,
 ) -> Result<String> {
     Ok(format!(
         "{}__{}",
-        records.id,
-        records_materialization_resource_id(records, binding)?
+        entity.id,
+        entity_materialization_resource_id(entity, binding)?
     ))
 }
 
@@ -488,26 +633,64 @@ fn generated_entity_materialization_review(
     environment: &EnvironmentDocument,
 ) -> Result<Map<String, Value>> {
     loaded
-        .records
+        .entities
         .iter()
-        .map(|(id, loaded_records)| {
+        .map(|(id, loaded_entity)| {
             let binding = &environment.entities[id];
-            let provider_digest = digest_json(&json!({
-                "provider": binding.provider,
-                "columns": binding.columns,
-            }))?;
             Ok((
                 id.clone(),
                 json!({
-                    "provider_digest": provider_digest,
+                    "provider": entity_provider_review(&binding.provider),
+                    "columns": binding.columns,
                     "source_revision": binding.source_revision,
                     "generation": binding.generation,
-                    "materialization_identity": records_materialization_resource_id(&loaded_records.document, binding)?,
-                    "table_provider": records_table_provider(&loaded_records.document, binding)?,
+                    "stored_fields": loaded_entity.document.schema.properties,
+                    "materialization_policy": loaded_entity.document.materialization,
+                    "materialization_identity": entity_materialization_resource_id(&loaded_entity.document, binding)?,
+                    "table_provider": entity_table_provider(&loaded_entity.document, binding)?,
                 }),
             ))
         })
         .collect()
+}
+
+fn entity_provider_review(provider: &RecordProvider) -> Value {
+    match provider {
+        RecordProvider::Csv {
+            path,
+            header_row,
+            delimiter,
+            quote,
+        } => json!({
+            "type": "csv",
+            "path": path,
+            "header_row": header_row,
+            "delimiter": delimiter,
+            "quote": quote,
+        }),
+        RecordProvider::Xlsx {
+            path,
+            sheet,
+            header_row,
+            data_range,
+        } => json!({
+            "type": "xlsx",
+            "path": path,
+            "sheet": sheet,
+            "header_row": header_row,
+            "data_range": data_range,
+        }),
+        RecordProvider::Parquet { path } => json!({
+            "type": "parquet",
+            "path": path,
+        }),
+        RecordProvider::Postgres { schema, table, .. } => json!({
+            "type": "postgres",
+            "connection": "configured_secret",
+            "schema": schema,
+            "table": table,
+        }),
+    }
 }
 
 fn validate_entity_generation_changes(
@@ -516,7 +699,7 @@ fn validate_entity_generation_changes(
     baseline: Option<&VerifiedBaseline>,
 ) -> Result<()> {
     let Some(previous) = baseline
-        .and_then(|baseline| baseline.review.get("entity_materializations"))
+        .and_then(|baseline| baseline.approval_state.get("entity_materializations"))
         .and_then(Value::as_object)
     else {
         return Ok(());
@@ -526,10 +709,10 @@ fn validate_entity_generation_changes(
         let Some(prior) = previous.get(id) else {
             continue;
         };
-        if prior.get("provider_digest") != materialization.get("provider_digest")
+        if prior.get("materialization_identity") != materialization.get("materialization_identity")
             && prior.get("generation") == materialization.get("generation")
         {
-            bail!("records provider or physical mapping changed without a new generation");
+            bail!("entity materialization changed without a new generation");
         }
     }
     Ok(())

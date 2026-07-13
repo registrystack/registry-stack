@@ -1,0 +1,55 @@
+name: same-origin-continuation-match
+classification: synthetic
+input: { birthdate: 2018-05-12, family: Example, given: Ada }
+interactions:
+  - expect:
+      method: GET
+      path: /fhir/Patient
+      query: { _count: 2, birthdate: 2018-05-12, family: Example, given: Ada }
+    respond:
+      status: 200
+      body:
+        resourceType: Bundle
+        type: searchset
+        total: 1
+        link: [{ relation: next, url: "https://coverage.fixture.invalid/fhir/Patient?_count=2&page=2" }]
+        entry: []
+  - expect:
+      method: GET
+      path: /fhir/Patient
+      query: { _count: 2, page: 2 }
+    respond:
+      status: 200
+      body:
+        resourceType: Bundle
+        type: searchset
+        total: 1
+        entry:
+          - search: { mode: match }
+            resource:
+              resourceType: Patient
+              id: patient-1
+              birthDate: 2018-05-12
+              name: [{ family: Example, given: [Ada] }]
+  - expect:
+      method: GET
+      path: /fhir/Coverage
+      query: { _count: 2, beneficiary: Patient/patient-1 }
+    respond:
+      status: 200
+      body:
+        resourceType: Bundle
+        type: searchset
+        total: 1
+        entry:
+          - search: { mode: match }
+            resource:
+              resourceType: Coverage
+              status: active
+              payor: [{ reference: Organization/org-1 }]
+  - expect: { method: GET, path: /fhir/Organization/org-1 }
+    respond: { status: 200, body: { resourceType: Organization, id: org-1, name: Synthetic Health Fund } }
+expect:
+  outcome: match
+  outputs: { coverage_status: active, insurer_name: Synthetic Health Fund }
+  claims: { patient-record-exists: true, coverage-active: true, insurer-name: Synthetic Health Fund }

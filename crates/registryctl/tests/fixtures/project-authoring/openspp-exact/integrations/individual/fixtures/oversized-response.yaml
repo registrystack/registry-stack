@@ -1,5 +1,0 @@
-name: openspp-oversized-response
-input: { individual_id: IND-AB12CD34 }
-source:
-  individual: { status: 200, body_bytes: 16385 }
-expect: { error: source.response_too_large, source_access: true, disclosed_claims: [] }

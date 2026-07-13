@@ -1,13 +1,12 @@
 version: 1
 integrations:
   health-record:
-    source_version: 2.41.9
-    data_destination: { origin: https://health-registry.invalid }
-    credential:
-      type: basic
-      username: { secret: HEALTH_REGISTRY_USERNAME }
-      password: { secret: HEALTH_REGISTRY_PASSWORD }
-      generation: 1
+    source:
+      origin: https://health-registry.invalid
+      credential:
+        username: { secret: HEALTH_REGISTRY_USERNAME }
+        password: { secret: HEALTH_REGISTRY_PASSWORD }
+        generation: 1
 issuance:
   issuer: did:web:health-notary.invalid
   signing_kid: project-issuer-key
@@ -22,9 +21,10 @@ relay:
   issuer: https://workload-issuer.internal.invalid
   jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
   audience: registry-relay
-  workload_client_id: health-registry-notary
+  allowed_clients: [health-relay-client]
 
 notary_relay:
+  workload_client_id: health-registry-notary
   token_file: /run/secrets/relay-workload-token
 
 deployment:

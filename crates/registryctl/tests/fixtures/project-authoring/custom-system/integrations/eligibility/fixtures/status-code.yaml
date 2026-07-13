@@ -1,5 +1,0 @@
-name: custom-status-code
-input: { household_reference: HH-AB12CD34 }
-source:
-  resolve: { status: 500, body: {} }
-expect: { error: source.status_rejected, source_access: true, disclosed_claims: [] }

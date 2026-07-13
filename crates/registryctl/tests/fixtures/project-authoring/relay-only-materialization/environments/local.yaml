@@ -1,0 +1,16 @@
+version: 1
+entities:
+  people:
+    provider: { type: csv, path: /var/lib/registry/people.csv, header_row: 1 }
+    columns: { person_id: subject_key, status: status_code }
+    source_revision: people-export-v1
+    generation: 2026-07-13
+relay:
+  origin: https://materialization-relay.internal.invalid
+  issuer: https://workload-issuer.internal.invalid
+  jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
+  audience: registry-relay
+  allowed_clients: [materialization-operator]
+deployment:
+  profile: local
+  relay: { service: materialization-relay }

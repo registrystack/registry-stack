@@ -1,65 +1,31 @@
 version: 1
-id: fictional-person-record
+id: person-record
+revision: 1
 
 source:
-  product: fictional-citizen-system
+  product: replace-with-source-product
   versions:
-    unverified: [project-fixture-v1]
+    unverified: [replace-with-source-version]
+  auth: { type: static_bearer }
 
 input:
   person_id:
+    role: selector
     type: string
-    bytes: 24
-    pattern: "^[A-Z]{2}-[0-9]{6}$"
-    canonicalization: identity
+    maxLength: 64
 
 capability:
   http:
-    credential:
-      type: static_bearer
-    operations:
-      person:
-        request:
-          method: GET
-          destination: data
-          path: /v1/person-records
-          query:
-            personId: { input: person_id }
-            fields: { value: status }
-            limit: { value: 2 }
-        response:
-          statuses: [200]
-          max_bytes: 16384
-          schema:
-            type: object
-            additional_fields: reject
-            fields:
-              records:
-                required: true
-                type: array
-                max_items: 2
-                items:
-                  type: object
-                  additional_fields: reject
-                  fields:
-                    status: { required: true, type: string, max_bytes: 24 }
-          cardinality:
-            records: records
-            mode: probe_two
+    request:
+      method: GET
+      path: /people/{input.person_id}
+      query:
+        fields: active
+    response:
+      no_match: [404]
+      ambiguous: [409]
 
 outputs:
-  exists: { type: boolean, from: person.presence }
-  status:
-    type: string
-    nullable: true
-    max_bytes: 24
-    from: person.record.status
-
-bounds:
-  calls: 1
-  source_bytes: 16384
-  request_bytes: 2048
-  deadline: 5s
-  concurrency: 4
-
-fixtures: fixtures/
+  active:
+    type: boolean
+    x-registry-source: /active

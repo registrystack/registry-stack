@@ -148,7 +148,10 @@ fn compile_generated_relay_fixture(
         .collect::<Vec<_>>();
     let bundle = SourcePlanArtifactBundle::new(&public_refs, &pack_refs, &binding_refs)
         .with_evidence(&evidence_refs);
-    registry_relay::offline_fixture::OfflineRelayFixture::compile(&bundle)
+    registry_relay::offline_fixture::OfflineRelayFixture::compile_with_worker_program(
+        &bundle,
+        project_registryctl_program()?,
+    )
         .context("generated Relay artifacts failed the production source-plan compiler")
 }
 
@@ -288,18 +291,27 @@ fn write_compiled_project(root: &Path, output: &Path, compiled: &CompiledProject
     create_dir_owner_only(&reviewable_root)?;
     write_file_map(&reviewable_root, &compiled.reviewable)?;
     let review_bytes = canonical_json_line(&compiled.review)?;
+    let approval_state_bytes = canonical_json_line(&compiled.approval_state)?;
     write_private_file(&reviewable_root.join("review.json"), &review_bytes)?;
     if !compiled.relay_private.is_empty() {
         let relay_root = temporary.join("private/relay");
         create_dir_owner_only(&relay_root)?;
         write_file_map(&relay_root, &compiled.relay_private)?;
-        write_private_file(&relay_root.join("approval/review.json"), &review_bytes)?;
+        write_private_file(&relay_root.join(APPROVAL_REVIEW_PATH), &review_bytes)?;
+        write_private_file(
+            &relay_root.join(APPROVAL_STATE_PATH),
+            &approval_state_bytes,
+        )?;
     }
     if !compiled.notary_private.is_empty() {
         let notary_root = temporary.join("private/notary");
         create_dir_owner_only(&notary_root)?;
         write_file_map(&notary_root, &compiled.notary_private)?;
-        write_private_file(&notary_root.join("approval/review.json"), &review_bytes)?;
+        write_private_file(&notary_root.join(APPROVAL_REVIEW_PATH), &review_bytes)?;
+        write_private_file(
+            &notary_root.join(APPROVAL_STATE_PATH),
+            &approval_state_bytes,
+        )?;
     }
 
     let backup = expected_parent.join(format!(".{name}.previous-{}", std::process::id()));
@@ -409,40 +421,109 @@ fn load_verified_baseline(
     {
         bail!("verified baseline manifest is not bound to this product environment");
     }
-    let review_path = bundle.join("approval/review.json");
-    let bytes = fs::read(&review_path)
-        .with_context(|| format!("verified baseline lacks {}", review_path.display()))?;
-    let review_hash = sha256_uri(&bytes);
-    if verified
-        .manifest
-        .files
-        .iter()
-        .find(|file| file.path == "approval/review.json")
-        .map(|file| file.sha256.as_str())
-        != Some(review_hash.as_str())
-    {
-        bail!("verified baseline review changed after bundle verification");
-    }
-    let value = parse_json_strict(&bytes).context("baseline review record is not strict JSON")?;
-    validate_signed_review_record(&value)?;
-    if value.get("schema").and_then(Value::as_str) != Some(REVIEW_SCHEMA) {
+    let review_bytes = read_verified_bundle_payload(
+        bundle,
+        &verified.manifest,
+        APPROVAL_REVIEW_PATH,
+        "review",
+    )?;
+    let approval_state_bytes = read_verified_bundle_payload(
+        bundle,
+        &verified.manifest,
+        APPROVAL_STATE_PATH,
+        "approval state",
+    )?;
+    let review = parse_json_strict(&review_bytes)
+        .context("baseline review record is not strict JSON")?;
+    let approval_state = parse_json_strict(&approval_state_bytes)
+        .context("baseline approval state is not strict JSON")?;
+    validate_signed_review_record(&review)?;
+    validate_signed_approval_state(&approval_state)?;
+    if review.get("schema").and_then(Value::as_str) != Some(REVIEW_SCHEMA) {
         bail!("baseline review record has the wrong schema");
     }
-    if value.get("registry").and_then(Value::as_str) != Some(loaded.project.registry.id.as_str())
-        || value.get("environment").and_then(Value::as_str) != Some(environment)
-    {
-        bail!("verified baseline review is not bound to this registry and environment");
+    if approval_state.get("schema").and_then(Value::as_str) != Some(APPROVAL_STATE_SCHEMA) {
+        bail!("baseline approval state has the wrong schema");
     }
-    validate_verified_product_closure(&value, &verified.manifest)?;
+    for value in [&review, &approval_state] {
+        if value.get("registry").and_then(Value::as_str)
+            != Some(loaded.project.registry.id.as_str())
+            || value.get("environment").and_then(Value::as_str) != Some(environment)
+        {
+            bail!("verified baseline is not bound to this registry and environment");
+        }
+    }
+    if approval_state.get("compiler_version") != review.get("compiler_version") {
+        bail!("verified baseline review and approval state disagree on compiler version");
+    }
+    let review_has_baseline = review.get("baseline").and_then(Value::as_str)
+        == Some("verified_signed_bundle");
+    let state_has_baseline = approval_state
+        .get("baseline")
+        .is_some_and(|baseline| !baseline.is_null());
+    if review_has_baseline != state_has_baseline {
+        bail!("verified baseline review and approval state disagree on baseline status");
+    }
+    if approval_state
+        .get("report_digest")
+        .and_then(Value::as_str)
+        != Some(sha256_uri(&review_bytes).as_str())
+    {
+        bail!("verified baseline approval state does not bind the signed review");
+    }
+    if approval_state.get("entity_materializations") != review.get("entity_materializations") {
+        bail!("verified baseline review and approval state disagree on entity materializations");
+    }
+    let disclosure_profiles: DisclosureReviewProfiles = serde_json::from_value(
+        review
+            .get("disclosure_profiles")
+            .cloned()
+            .ok_or_else(|| anyhow!("baseline review record lacks disclosure_profiles"))?,
+    )
+    .context("baseline review disclosure_profiles are invalid")?;
+    let disclosure_digest = digest_json(
+        &serde_json::to_value(&disclosure_profiles)
+            .context("failed to canonicalize baseline disclosure_profiles")?,
+    )?;
+    if approval_state
+        .get("disclosure_digest")
+        .and_then(Value::as_str)
+        != Some(disclosure_digest.as_str())
+    {
+        bail!("verified baseline approval state does not bind the review disclosure profiles");
+    }
+    validate_verified_product_closure(&approval_state, &verified.manifest)?;
     Ok(Some(VerifiedBaseline {
-        review: value,
+        approval_state,
         verified_manifest: serde_json::to_value(verified.manifest)
             .context("failed to retain verified baseline manifest identity")?,
     }))
 }
 
+fn read_verified_bundle_payload(
+    bundle: &Path,
+    manifest: &registry_platform_config::ConfigBundleManifest,
+    relative: &str,
+    label: &str,
+) -> Result<Vec<u8>> {
+    let path = bundle.join(relative);
+    let bytes = fs::read(&path)
+        .with_context(|| format!("verified baseline lacks {}", path.display()))?;
+    let digest = sha256_uri(&bytes);
+    if manifest
+        .files
+        .iter()
+        .find(|file| file.path == relative)
+        .map(|file| file.sha256.as_str())
+        != Some(digest.as_str())
+    {
+        bail!("verified baseline {label} changed after bundle verification");
+    }
+    Ok(bytes)
+}
+
 fn validate_verified_product_closure(
-    review: &Value,
+    approval_state: &Value,
     manifest: &registry_platform_config::ConfigBundleManifest,
 ) -> Result<()> {
     let product = match manifest.product.as_str() {
@@ -450,23 +531,24 @@ fn validate_verified_product_closure(
         "registry-notary" => "notary",
         _ => bail!("verified baseline manifest has an unsupported product"),
     };
-    let expected = review
+    let expected = approval_state
         .pointer(&format!("/generated_closure_digests/{product}"))
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("verified baseline review lacks its {product} closure digest"))?;
+        .ok_or_else(|| anyhow!("verified baseline approval state lacks its {product} closure digest"))?;
     let mut files = manifest
         .files
         .iter()
-        .filter(|file| file.path != "approval/review.json")
+        .filter(|file| {
+            !matches!(
+                file.path.as_str(),
+                APPROVAL_REVIEW_PATH | APPROVAL_STATE_PATH
+            )
+        })
         .map(|file| json!({ "path": file.path, "sha256": file.sha256 }))
         .collect::<Vec<_>>();
-    files.sort_by(|left, right| {
-        left["path"]
-            .as_str()
-            .cmp(&right["path"].as_str())
-    });
+    files.sort_by(|left, right| left["path"].as_str().cmp(&right["path"].as_str()));
     if digest_json(&Value::Array(files))? != expected {
-        bail!("verified baseline product closure does not match its signed review");
+        bail!("verified baseline product closure does not match its signed approval state");
     }
     Ok(())
 }
@@ -477,19 +559,13 @@ fn validate_signed_review_record(value: &Value) -> Result<()> {
         &[
             "schema",
             "registry",
-            "source_revision",
             "compiler_version",
             "baseline",
-            "authored_input_digest",
-            "semantic_digests",
             "disclosure_profiles",
-            "disclosure_digest",
-            "generated_closure_digests",
             "semantic_changes",
-            "required_reviews",
-            "review_digests",
             "environment",
             "entity_materializations",
+            "consultations",
         ],
         "baseline review record",
     )?;
@@ -498,27 +574,91 @@ fn validate_signed_review_record(value: &Value) -> Result<()> {
             bail!("baseline review record field {field} must be a string");
         }
     }
-    for field in ["source_revision", "authored_input_digest", "disclosure_digest"] {
-        validate_review_sha256(review.get(field), field, false)?;
+    if !matches!(
+        review.get("baseline").and_then(Value::as_str),
+        Some("initial_without_baseline" | "verified_signed_bundle")
+    ) {
+        bail!("baseline review record baseline status is invalid");
     }
-
-    let semantic = exact_review_object(
+    let profiles_value = review
+        .get("disclosure_profiles")
+        .ok_or_else(|| anyhow!("baseline review record lacks disclosure_profiles"))?;
+    let _: DisclosureReviewProfiles = serde_json::from_value(profiles_value.clone())
+        .context("baseline review disclosure_profiles are invalid")?;
+    validate_semantic_changes(
         review
+            .get("semantic_changes")
+            .ok_or_else(|| anyhow!("baseline review record lacks semantic_changes"))?,
+    )?;
+    if !review
+        .get("entity_materializations")
+        .is_some_and(Value::is_object)
+    {
+        bail!("baseline review entity_materializations must be an object");
+    }
+    let consultations = review
+        .get("consultations")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("baseline review consultations must be an object"))?;
+    for consultation in consultations.values() {
+        let consultation = exact_review_object(
+            consultation,
+            &["profile_id", "integration", "contract_hash"],
+            "baseline review consultation",
+        )?;
+        for field in ["profile_id", "integration"] {
+            if consultation.get(field).and_then(Value::as_str).is_none() {
+                bail!("baseline review consultation field {field} must be a string");
+            }
+        }
+        validate_review_sha256(consultation.get("contract_hash"), "contract_hash", false)?;
+    }
+    validate_public_report_hash_fields(value)?;
+    Ok(())
+}
+
+fn validate_signed_approval_state(value: &Value) -> Result<()> {
+    let state = exact_review_object(
+        value,
+        &[
+            "schema",
+            "registry",
+            "environment",
+            "compiler_version",
+            "report_digest",
+            "authored_input_digest",
+            "semantic_digests",
+            "disclosure_digest",
+            "generated_closure_digests",
+            "baseline",
+            "entity_materializations",
+        ],
+        "baseline approval state",
+    )?;
+    for field in ["schema", "registry", "environment", "compiler_version"] {
+        if state.get(field).and_then(Value::as_str).is_none() {
+            bail!("baseline approval state field {field} must be a string");
+        }
+    }
+    for field in ["report_digest", "authored_input_digest", "disclosure_digest"] {
+        validate_review_sha256(state.get(field), field, false)?;
+    }
+    let semantic = exact_review_object(
+        state
             .get("semantic_digests")
-            .ok_or_else(|| anyhow!("baseline review record lacks semantic_digests"))?,
+            .ok_or_else(|| anyhow!("baseline approval state lacks semantic_digests"))?,
         &["claim", "integration", "service_policy", "operator_security"],
-        "baseline semantic_digests",
+        "baseline approval semantic_digests",
     )?;
     for field in ["claim", "integration", "service_policy", "operator_security"] {
         validate_review_sha256(semantic.get(field), field, false)?;
     }
-
     let closure = exact_review_object(
-        review
+        state
             .get("generated_closure_digests")
-            .ok_or_else(|| anyhow!("baseline review record lacks generated_closure_digests"))?,
+            .ok_or_else(|| anyhow!("baseline approval state lacks generated_closure_digests"))?,
         &["reviewable", "relay", "notary"],
-        "baseline generated_closure_digests",
+        "baseline approval generated_closure_digests",
     )?;
     validate_review_sha256(closure.get("reviewable"), "reviewable", false)?;
     for field in ["relay", "notary"] {
@@ -526,77 +666,33 @@ fn validate_signed_review_record(value: &Value) -> Result<()> {
             validate_review_sha256(closure.get(field), field, false)?;
         }
     }
-
-    let profiles_value = review
-        .get("disclosure_profiles")
-        .ok_or_else(|| anyhow!("baseline review record lacks disclosure_profiles"))?;
-    let profiles: DisclosureReviewProfiles = serde_json::from_value(profiles_value.clone())
-        .context("baseline review disclosure_profiles are invalid")?;
-    let computed_disclosure_digest = digest_json(
-        &serde_json::to_value(&profiles)
-            .context("failed to canonicalize baseline disclosure_profiles")?,
-    )?;
-    if review.get("disclosure_digest").and_then(Value::as_str)
-        != Some(computed_disclosure_digest.as_str())
-    {
-        bail!("baseline review disclosure digest does not match its profiles");
-    }
-
-    let required = validate_required_review_classes(
-        review
-            .get("required_reviews")
-            .ok_or_else(|| anyhow!("baseline review record lacks required_reviews"))?,
-    )?;
-    let review_digests = review
-        .get("review_digests")
-        .ok_or_else(|| anyhow!("baseline review record lacks review_digests"))?;
-    validate_review_digest_slots(
-        review_digests,
-        Some(&required),
-        "baseline review_digests",
-    )?;
-    let review_digests = review_digests
-        .as_object()
-        .ok_or_else(|| anyhow!("baseline review_digests must be an object"))?;
-    let claim_review_digest = digest_json(&json!({
-        "semantic": semantic["claim"],
-        "disclosure": computed_disclosure_digest,
-    }))?;
-    let service_policy_review_digest = digest_json(&json!({
-        "semantic": semantic["service_policy"],
-        "disclosure": computed_disclosure_digest,
-    }))?;
-    let integration_digest = semantic
-        .get("integration")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("baseline integration semantic digest is invalid"))?;
-    let operator_security_digest = semantic
-        .get("operator_security")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("baseline operator-security semantic digest is invalid"))?;
-    for (class, expected) in [
-        ("claim", claim_review_digest.as_str()),
-        ("integration", integration_digest),
-        ("service_policy", service_policy_review_digest.as_str()),
-        ("operator_security", operator_security_digest),
-    ] {
-        if required.contains(class)
-            && review_digests.get(class).and_then(Value::as_str) != Some(expected)
-        {
-            bail!("baseline review digest does not match its signed review inputs");
-        }
-    }
-    validate_semantic_changes(
-        review
-            .get("semantic_changes")
-            .ok_or_else(|| anyhow!("baseline review record lacks semantic_changes"))?,
-    )?;
-    validate_nested_baseline(review.get("baseline"))?;
-    if !review
+    validate_approval_baseline(state.get("baseline"))?;
+    if !state
         .get("entity_materializations")
         .is_some_and(Value::is_object)
     {
-        bail!("baseline review entity_materializations must be an object");
+        bail!("baseline approval state entity_materializations must be an object");
+    }
+    Ok(())
+}
+
+fn validate_public_report_hash_fields(value: &Value) -> Result<()> {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                let lower = key.to_ascii_lowercase();
+                if (lower.contains("hash") || lower.contains("digest")) && key != "contract_hash" {
+                    bail!("baseline review record exposes lower-level hash or digest field {key}");
+                }
+                validate_public_report_hash_fields(value)?;
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                validate_public_report_hash_fields(value)?;
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
     }
     Ok(())
 }
@@ -640,50 +736,6 @@ fn validate_review_sha256(value: Option<&Value>, field: &str, nullable: bool) ->
     Ok(())
 }
 
-fn validate_required_review_classes(value: &Value) -> Result<BTreeSet<String>> {
-    let reviews = value
-        .as_array()
-        .ok_or_else(|| anyhow!("baseline required_reviews must be an array"))?;
-    let mut required = BTreeSet::new();
-    for review in reviews {
-        let review = review
-            .as_str()
-            .ok_or_else(|| anyhow!("baseline required review must be a string"))?;
-        if !matches!(
-            review,
-            "claim" | "integration" | "service_policy" | "operator_security"
-        ) || !required.insert(review.to_string())
-        {
-            bail!("baseline required_reviews contain an unknown or duplicate class");
-        }
-    }
-    Ok(required)
-}
-
-fn validate_review_digest_slots(
-    value: &Value,
-    required: Option<&BTreeSet<String>>,
-    label: &str,
-) -> Result<()> {
-    let slots = exact_review_object(
-        value,
-        &["claim", "integration", "service_policy", "operator_security"],
-        label,
-    )?;
-    for class in ["claim", "integration", "service_policy", "operator_security"] {
-        let value = slots
-            .get(class)
-            .ok_or_else(|| anyhow!("{label} lacks {class}"))?;
-        validate_review_sha256(Some(value), class, true)?;
-        if let Some(required) = required {
-            if required.contains(class) == value.is_null() {
-                bail!("baseline review digest slots do not match required_reviews");
-            }
-        }
-    }
-    Ok(())
-}
-
 fn validate_semantic_changes(value: &Value) -> Result<()> {
     let changes = value
         .as_array()
@@ -692,7 +744,7 @@ fn validate_semantic_changes(value: &Value) -> Result<()> {
     for change in changes {
         let change = exact_review_object(
             change,
-            &["dimension", "previous_digest", "current_digest"],
+            &["dimension"],
             "baseline semantic change",
         )?;
         let dimension = change
@@ -706,118 +758,33 @@ fn validate_semantic_changes(value: &Value) -> Result<()> {
         {
             bail!("baseline semantic_changes contain an unknown or duplicate dimension");
         }
-        validate_review_sha256(change.get("previous_digest"), "previous_digest", true)?;
-        validate_review_sha256(change.get("current_digest"), "current_digest", false)?;
     }
     Ok(())
 }
 
-fn validate_nested_baseline(value: Option<&Value>) -> Result<()> {
+fn validate_approval_baseline(value: Option<&Value>) -> Result<()> {
     let Some(value) = value else {
-        bail!("baseline review record lacks baseline");
+        bail!("baseline approval state lacks baseline");
     };
     if value.is_null() {
         return Ok(());
     }
     let baseline = exact_review_object(
         value,
-        &[
-            "review_digest",
-            "review_digests",
-            "authored_input_digest",
-            "verified_manifest",
-        ],
-        "baseline review baseline",
-    )?;
-    validate_review_sha256(baseline.get("review_digest"), "review_digest", false)?;
-    validate_review_digest_slots(
-        baseline
-            .get("review_digests")
-            .ok_or_else(|| anyhow!("baseline review baseline lacks review_digests"))?,
-        None,
-        "baseline prior review_digests",
-    )?;
-    validate_review_sha256(
-        baseline.get("authored_input_digest"),
-        "authored_input_digest",
-        true,
+        &["verified_manifest"],
+        "baseline approval state baseline",
     )?;
     let manifest: registry_platform_config::ConfigBundleManifest = serde_json::from_value(
         baseline
             .get("verified_manifest")
             .cloned()
-            .ok_or_else(|| anyhow!("baseline review baseline lacks verified_manifest"))?,
+            .ok_or_else(|| anyhow!("baseline approval state lacks verified_manifest"))?,
     )
-    .context("baseline prior verified_manifest is invalid")?;
+    .context("baseline approval verified_manifest is invalid")?;
     manifest
         .validate()
-        .context("baseline prior verified_manifest is invalid")?;
+        .context("baseline approval verified_manifest is invalid")?;
     Ok(())
-}
-
-fn required_reviews(
-    loaded: &LoadedRegistryProject,
-    baseline: Option<&Value>,
-) -> BTreeSet<ReviewClass> {
-    let Some(baseline) = baseline else {
-        return BTreeSet::from([
-            ReviewClass::Claim,
-            ReviewClass::Integration,
-            ReviewClass::ServicePolicy,
-            ReviewClass::OperatorSecurity,
-        ]);
-    };
-    let mut reviews = BTreeSet::new();
-    for (class, field, current) in [
-        (
-            ReviewClass::Claim,
-            "claim",
-            loaded.semantic_digests.claim.as_str(),
-        ),
-        (
-            ReviewClass::Integration,
-            "integration",
-            loaded.semantic_digests.integration.as_str(),
-        ),
-        (
-            ReviewClass::ServicePolicy,
-            "service_policy",
-            loaded.semantic_digests.service_policy.as_str(),
-        ),
-        (
-            ReviewClass::OperatorSecurity,
-            "operator_security",
-            loaded.semantic_digests.operator_security.as_str(),
-        ),
-    ] {
-        if baseline
-            .get("semantic_digests")
-            .and_then(|digests| digests.get(field))
-            .and_then(Value::as_str)
-            != Some(current)
-        {
-            reviews.insert(class);
-        }
-    }
-    let disclosure_profiles = disclosure_review_profiles(&loaded.project);
-    let (disclosure_narrowed, disclosure_widened) =
-        disclosure_change_classes(&disclosure_profiles, Some(baseline));
-    if disclosure_narrowed {
-        reviews.insert(ReviewClass::Claim);
-    }
-    if disclosure_widened {
-        reviews.insert(ReviewClass::ServicePolicy);
-    }
-    reviews
-}
-
-fn null_review_digests() -> Value {
-    json!({
-        "claim": null,
-        "integration": null,
-        "service_policy": null,
-        "operator_security": null,
-    })
 }
 
 fn semantic_change_records(
@@ -868,11 +835,7 @@ fn semantic_change_records(
     ]
     .into_iter()
     .filter(|(_, current, previous)| *previous != Some(*current))
-    .map(|(dimension, current, previous)| SemanticChange {
-        dimension,
-        previous_digest: previous.map(str::to_string),
-        current_digest: current.to_string(),
-    })
+    .map(|(dimension, _, _)| SemanticChange { dimension })
     .collect()
 }
 
@@ -980,6 +943,9 @@ fn load_fixtures(
     directory: &Path,
     hasher: &mut Sha256,
 ) -> Result<Vec<(PathBuf, FixtureDocument)>> {
+    const MAX_FIXTURE_BODY_BYTES: u64 = 8 * 1024 * 1024;
+    const MAX_FIXTURE_BODY_CLOSURE_BYTES: u64 = 16 * 1024 * 1024;
+
     reject_symlink_components(root, directory)?;
     let metadata = fs::symlink_metadata(directory)
         .with_context(|| format!("failed to stat fixture directory {}", directory.display()))?;
@@ -994,8 +960,14 @@ fn load_fixtures(
         let path = entry.path();
         let metadata = fs::symlink_metadata(&path)
             .with_context(|| format!("failed to stat fixture {}", path.display()))?;
-        if metadata.file_type().is_symlink() || metadata.is_dir() {
-            bail!("fixture directories may contain only direct regular YAML files");
+        if metadata.file_type().is_symlink() {
+            bail!("fixture directories and bodies may not contain symlinks");
+        }
+        if metadata.is_dir() {
+            if path.file_name().and_then(|value| value.to_str()) == Some("bodies") {
+                continue;
+            }
+            bail!("fixture directories may contain only direct YAML files and bodies/");
         }
         if path.extension().and_then(|value| value.to_str()) != Some("yaml") {
             bail!("fixture directory contains an unsupported file");
@@ -1010,7 +982,8 @@ fn load_fixtures(
     if paths.is_empty() || paths.len() > MAX_FIXTURES {
         bail!("integration must contain between one and 128 fixtures");
     }
-    paths
+    let mut body_cache = BTreeMap::<PathBuf, Value>::new();
+    let mut fixtures = paths
         .into_iter()
         .map(|path| {
             let bytes = read_authored_file(root, &path)?;
@@ -1024,10 +997,158 @@ fn load_fixtures(
                     .ok_or_else(|| anyhow!("fixture path is not Unicode"))?,
                 &bytes,
             );
-            let fixture = parse_yaml(&bytes, &relative.display().to_string())?;
+            let authored: AuthoredFixtureDocument =
+                parse_yaml(&bytes, &relative.display().to_string())?;
+            let fixture = lower_authored_fixture(
+                root,
+                directory,
+                authored,
+                &mut body_cache,
+                MAX_FIXTURE_BODY_BYTES,
+            )?;
             Ok((path, fixture))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    let closure_bytes = body_cache.keys().try_fold(0_u64, |total, path| {
+        let metadata = fs::metadata(path)
+            .with_context(|| format!("failed to stat fixture body {}", path.display()))?;
+        total
+            .checked_add(metadata.len())
+            .ok_or_else(|| anyhow!("fixture body closure exceeds its size bound"))
+    })?;
+    if closure_bytes > MAX_FIXTURE_BODY_CLOSURE_BYTES {
+        bail!("fixture body closure exceeds the 16 MiB bound");
+    }
+    for path in body_cache.keys() {
+        let bytes = read_bounded_fixture_body(root, path, MAX_FIXTURE_BODY_BYTES)?;
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| anyhow!("fixture body escapes project root"))?;
+        hash_authored_file(
+            hasher,
+            relative
+                .to_str()
+                .ok_or_else(|| anyhow!("fixture body path is not Unicode"))?,
+            &bytes,
+        );
+    }
+    fixtures.sort_by(|left, right| left.1.name.as_bytes().cmp(right.1.name.as_bytes()));
+    Ok(fixtures)
+}
+
+fn lower_authored_fixture(
+    root: &Path,
+    fixture_directory: &Path,
+    authored: AuthoredFixtureDocument,
+    body_cache: &mut BTreeMap<PathBuf, Value>,
+    max_body_bytes: u64,
+) -> Result<FixtureDocument> {
+    let interactions = authored
+        .interactions
+        .into_iter()
+        .map(|interaction| {
+            let expected_body = interaction
+                .expect
+                .body
+                .map(|body| {
+                    resolve_fixture_body(root, fixture_directory, body, body_cache, max_body_bytes)
+                })
+                .transpose()?;
+            let respond = match interaction.respond {
+                AuthoredFixtureResponse::Http {
+                    status,
+                    headers,
+                    body,
+                } => FixtureSourceResponse::Http {
+                    status,
+                    headers,
+                    body: body
+                        .map(|body| {
+                            resolve_fixture_body(
+                                root,
+                                fixture_directory,
+                                body,
+                                body_cache,
+                                max_body_bytes,
+                            )
+                        })
+                        .transpose()?
+                        .unwrap_or(Value::Null),
+                },
+                AuthoredFixtureResponse::Timeout { timeout } => {
+                    FixtureSourceResponse::Timeout { timeout }
+                }
+            };
+            Ok(FixtureInteraction {
+                expect: FixtureRequestExpectation {
+                    method: interaction.expect.method,
+                    path: interaction.expect.path,
+                    query: interaction.expect.query,
+                    headers: interaction.expect.headers,
+                    body: expected_body,
+                },
+                respond,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(FixtureDocument {
+        name: authored.name,
+        classification: authored.classification,
+        input: authored.input,
+        variables: authored.variables,
+        interactions,
+        expect: authored.expect,
+    })
+}
+
+fn resolve_fixture_body(
+    root: &Path,
+    fixture_directory: &Path,
+    body: AuthoredFixtureBody,
+    body_cache: &mut BTreeMap<PathBuf, Value>,
+    max_body_bytes: u64,
+) -> Result<Value> {
+    match body {
+        AuthoredFixtureBody::Inline(value) => Ok(value),
+        AuthoredFixtureBody::File { file } => {
+            let mut components = file.components();
+            if components.next() != Some(Component::Normal(std::ffi::OsStr::new("bodies")))
+                || components.next().is_none()
+                || components.any(|component| !matches!(component, Component::Normal(_)))
+            {
+                bail!("fixture body file must be a normalized bodies/<file> path");
+            }
+            let path = fixture_directory.join(&file);
+            reject_symlink_components(root, &path)?;
+            if let Some(value) = body_cache.get(&path) {
+                return Ok(value.clone());
+            }
+            let bytes = read_bounded_fixture_body(root, &path, max_body_bytes)?;
+            let value = parse_json_strict(&bytes)
+                .map_err(|_| anyhow!("fixture body file must contain strict JSON"))?;
+            body_cache.insert(path, value.clone());
+            Ok(value)
+        }
+    }
+}
+
+fn read_bounded_fixture_body(root: &Path, path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
+    reject_symlink_components(root, path)?;
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to stat fixture body {}", path.display()))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > max_bytes {
+        bail!("fixture body must be a bounded regular non-symlink file");
+    }
+    let file = fs::File::open(path)
+        .with_context(|| format!("failed to open fixture body {}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read fixture body {}", path.display()))?;
+    if bytes.len() as u64 > max_bytes {
+        bail!("fixture body exceeds the 8 MiB bound");
+    }
+    Ok(bytes)
 }
 
 fn parse_yaml<T: for<'de> Deserialize<'de>>(bytes: &[u8], label: &str) -> Result<T> {
@@ -1155,95 +1276,6 @@ fn validate_secret_reference(reference: &SecretReference) -> Result<()> {
     Ok(())
 }
 
-fn validate_environment_credential(
-    interface: &CredentialInterface,
-    binding: &EnvironmentIntegration,
-) -> Result<()> {
-    match (&interface.credential_type, &binding.credential) {
-        (CredentialType::None, None) => Ok(()),
-        (expected, Some(credential))
-            if std::mem::discriminant(expected)
-                == std::mem::discriminant(&credential.credential_type)
-                && credential.generation > 0 =>
-        {
-            for reference in [
-                credential.username.as_ref(),
-                credential.password.as_ref(),
-                credential.token.as_ref(),
-                credential.client_id.as_ref(),
-                credential.client_secret.as_ref(),
-                credential.value.as_ref(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                validate_secret_reference(reference)?;
-            }
-            let exact = match credential.credential_type {
-                CredentialType::None => false,
-                CredentialType::Basic => {
-                    credential.username.is_some()
-                        && credential.password.is_some()
-                        && credential.token.is_none()
-                        && credential.client_id.is_none()
-                        && credential.client_secret.is_none()
-                        && credential.value.is_none()
-                        && credential.review.is_none()
-                        && binding.credential_destination.is_none()
-                }
-                CredentialType::StaticBearer => {
-                    credential.username.is_none()
-                        && credential.password.is_none()
-                        && credential.token.is_some()
-                        && credential.client_id.is_none()
-                        && credential.client_secret.is_none()
-                        && credential.value.is_none()
-                        && credential.review.is_none()
-                        && binding.credential_destination.is_none()
-                }
-                CredentialType::Oauth2ClientCredentials => {
-                    credential.username.is_none()
-                        && credential.password.is_none()
-                        && credential.token.is_none()
-                        && credential.client_id.is_some()
-                        && credential.client_secret.is_some()
-                        && credential.value.is_none()
-                        && credential.review.is_none()
-                        && binding.credential_destination.is_some()
-                }
-                CredentialType::ApiKeyHeader => {
-                    credential.username.is_none()
-                        && credential.password.is_none()
-                        && credential.token.is_none()
-                        && credential.client_id.is_none()
-                        && credential.client_secret.is_none()
-                        && credential.value.is_some()
-                        && credential.review.is_none()
-                        && binding.credential_destination.is_none()
-                }
-                CredentialType::ApiKeyQuery => {
-                    credential.username.is_none()
-                        && credential.password.is_none()
-                        && credential.token.is_none()
-                        && credential.client_id.is_none()
-                        && credential.client_secret.is_none()
-                        && credential.value.is_some()
-                        && credential.review == Some(ReviewClassInput::OperatorSecurity)
-                        && binding.credential_destination.is_none()
-                }
-            };
-            if !exact {
-                bail!("environment credential fields do not match the closed credential type");
-            }
-            if let Some(destination) = &binding.credential_destination {
-                validate_https_origin(&destination.origin, "credential destination")?;
-            }
-            Ok(())
-        }
-        _ => bail!("environment credential does not match the reviewed integration interface"),
-    }
-}
-
 fn validate_https_origin(value: &str, field: &str) -> Result<()> {
     let origin = url::Url::parse(value).with_context(|| format!("{field} is not a URL"))?;
     if origin.scheme() != "https"
@@ -1279,10 +1311,16 @@ fn parse_duration_ms(value: &str) -> Result<u32> {
 }
 
 fn parse_duration_ms_with_max(value: &str, maximum: u32, label: &str) -> Result<u32> {
-    let milliseconds = if let Some(seconds) = value.strip_suffix('s') {
-        seconds.parse::<u32>()?.checked_mul(1000)
-    } else if let Some(milliseconds) = value.strip_suffix("ms") {
+    let milliseconds = if let Some(milliseconds) = value.strip_suffix("ms") {
         Some(milliseconds.parse::<u32>()?)
+    } else if let Some(seconds) = value.strip_suffix('s') {
+        seconds.parse::<u32>()?.checked_mul(1_000)
+    } else if let Some(minutes) = value.strip_suffix('m') {
+        minutes.parse::<u32>()?.checked_mul(60_000)
+    } else if let Some(hours) = value.strip_suffix('h') {
+        hours.parse::<u32>()?.checked_mul(60 * 60 * 1_000)
+    } else if let Some(days) = value.strip_suffix('d') {
+        days.parse::<u32>()?.checked_mul(24 * 60 * 60 * 1_000)
     } else {
         None
     }
@@ -1324,4 +1362,66 @@ fn canonical_json_line(value: &Value) -> Result<Vec<u8>> {
 
 fn sha256_uri(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
+#[cfg(test)]
+mod fixture_body_security_tests {
+    use super::*;
+
+    fn temporary_root() -> PathBuf {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).expect("temporary root randomness");
+        let root = std::env::temp_dir().join(format!(
+            "registryctl-fixture-body-test-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        fs::create_dir_all(root.join("integrations/example/fixtures/bodies"))
+            .expect("fixture body directory");
+        root
+    }
+
+    #[test]
+    fn fixture_body_reference_is_confined_to_bodies_subtree() {
+        let root = temporary_root();
+        let fixture_directory = root.join("integrations/example/fixtures");
+        let mut cache = BTreeMap::new();
+        let result = resolve_fixture_body(
+            &root,
+            &fixture_directory,
+            AuthoredFixtureBody::File {
+                file: PathBuf::from("../outside.json"),
+            },
+            &mut cache,
+            8 * 1024 * 1024,
+        );
+        assert!(result.is_err());
+        fs::remove_dir_all(root).expect("remove fixture root");
+    }
+
+    #[test]
+    fn fixture_body_bound_is_checked_before_reading() {
+        let root = temporary_root();
+        let path = root.join("integrations/example/fixtures/bodies/large.json");
+        let file = fs::File::create(&path).expect("large fixture body");
+        file.set_len(8 * 1024 * 1024 + 1)
+            .expect("set fixture body length");
+        assert!(read_bounded_fixture_body(&root, &path, 8 * 1024 * 1024).is_err());
+        fs::remove_dir_all(root).expect("remove fixture root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fixture_body_symlink_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let root = temporary_root();
+        let bodies = root.join("integrations/example/fixtures/bodies");
+        let target = bodies.join("target.json");
+        fs::write(&target, b"{}\n").expect("target body");
+        let link = bodies.join("link.json");
+        symlink(&target, &link).expect("fixture body symlink");
+        assert!(read_bounded_fixture_body(&root, &link, 8 * 1024 * 1024).is_err());
+        fs::remove_dir_all(root).expect("remove fixture root");
+    }
 }

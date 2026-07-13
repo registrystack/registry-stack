@@ -9,55 +9,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - `registryctl init --from`, `test`, `check`, and `build` provide a strict
-  project-owned authoring workflow for bounded HTTP, DHIS2 Tracker, OpenCRVS,
-  and fixture-backed OpenSPP integrations. The compiler produces deterministic,
+  Registry Stack project authoring workflow for product-neutral `http`,
+  `script`, and `snapshot` integrations. Maintained HTTP, DHIS2 Tracker,
+  OpenCRVS DCI, FHIR R4, and snapshot starters exercise the same contract. The
+  compiler produces deterministic,
   closed Relay and Notary Config Bundle v1 inputs, verifies them with the exact
   product startup compilers, and supports explicitly verified signed baselines
   for independent claim, integration, service-policy, and operator-security
   review classification.
-- Advanced `script` authoring is available only through explicit
-  operator-security enablement and the release-gated isolated worker. Ordinary
-  starters remain declarative and do not depend on Rhai.
+- `script` authoring uses the release-gated isolated Rhai worker, fixed source
+  authority, bounded host calls, and a hash-covered static local module
+  closure. Script availability never depends on source product or version and
+  does not require an unreleased environment feature switch.
 - Generated project inputs include exact signed-DCI, immutable snapshot, and
   multi-profile/multi-purpose journeys, plus deterministic operational and
   redacted secret-consumer descriptors for Relay and Notary. Snapshot physical
   mappings remain private and shared compatible profiles reuse one immutable
   materialization slot.
-- Tagged `records_api` services compile strict logical records definitions and
+- Tagged `records_api` services compile strict logical entity definitions and
   private environment entity bindings into Relay's existing governed records
-  model. A Snapshot integration references the same logical entity, so one
+  model. A `snapshot` integration references the same logical entity, so one
   immutable local materialization serves records and evidence while retaining
   principal-bound filters, projection, cursor pagination, relationships,
   aggregates, metadata, and configured OGC or SP DCI adapters.
-- Exact consultation selectors now accept one to four required, typed,
-  canonical components across bounded HTTP, unified DCI exact predicates, and
-  Snapshot. The compiler emits canonical exact-AND artifacts and validates
-  full-date inputs, complete fixture and request mappings, and injective private
-  physical bindings before source access. Authored input names use Relay's exact
-  64-byte lower-snake wire grammar, values are bounded to 256 bytes, and regex
-  patterns are bounded to 1024 bytes before generated product compilation.
+- Consultations accept one to eight required selector inputs and up to sixteen
+  typed inputs in total across HTTP, script, signed DCI, and snapshot. The
+  compiler enforces the scalar JSON Schema subset, a 4096-byte canonical
+  selector aggregate, complete fixture and request mappings, and injective
+  private physical bindings before source access. Authored input names use
+  Relay's exact 64-byte lower-snake wire grammar.
 - Bounded HTTP credential interfaces now include reviewed API-key header and
   query modes. Names remain fixed public integration configuration, values
   remain environment-only secret references, query credentials require an
   operator-security review, and sensitive header names or query collisions are
   rejected.
-- The fixture-backed `fhir-r4-coverage-active` golden journey replaces the
-  retained sidecar path with two fixed FHIR R4 searches, strict resource
-  projection, composite Patient selection, bounded ambiguity handling, and
-  malformed, wrong-resource, oversized, OperationOutcome, and pagination-link
-  negative vectors.
+- The fixture-backed `fhir-r4-coverage-active` journey replaces the retained
+  sidecar path with bounded script-selected FHIR R4 reads, the reusable
+  `protocol.fhir.parse_searchset` helper, same-origin pagination, minimized
+  projection, and composite Patient selection.
 - OpenCRVS and DHIS2 golden workspaces now expose the approved age-band claims
   derived from explicit caller-supplied full dates while preserving the listed
   direct outputs, predicates, disclosure modes, and credential claim allow-lists.
 - Project reports separate semantic digest changes from required review
   classes and identify safe actual fixture failure codes without disclosing
   fixture values.
-- Offline project fixtures compile an internal authority-free product artifact
-  closure and reuse Relay's closed decoders and typed normalization plus
+- Offline project fixtures bind ordered canonical request interactions to
+  synthetic responses, compile an internal authority-free product artifact
+  closure, and reuse Relay's closed decoders and typed normalization plus
   Notary's static authentication, pre-source policy gates, CEL worker, claim
   evaluation, and disclosure behavior. Exact OpenCRVS fixtures use public RSA
   JWKS material and precomputed RS256 DCI envelopes; they remain deterministic
-  codec evidence rather than live interoperability evidence.
+  codec evidence rather than live interoperability evidence. Platform-generic
+  malformed, boundedness, timeout, authorization-before-source, and
+  minimization negatives are derived instead of copied into every project.
 
 ### Security
 

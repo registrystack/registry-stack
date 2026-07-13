@@ -13,8 +13,9 @@ standards_referenced: []
 
 Use this guide when Registry Relay must query an immutable local materialization instead of
 opening a source connection for each consultation.
-You will declare one logical records definition, bind its physical source once in the private
-environment, and reuse the published snapshot for a governed records API and SnapshotExact.
+You will declare one logical entity, bind its physical source once in the private
+environment, and reuse the published snapshot for a governed records API and exact `snapshot`
+consultations.
 
 {/* Evidence: crates/registryctl/tests/fixtures/project-authoring/snapshot-exact/ and
     crates/registryctl/tests/project_authoring.rs,
@@ -39,60 +40,69 @@ You need:
 - A private provider path and one physical column for every logical field.
 - Reviewed records API scopes, purposes, filters, pagination, relationships, and aggregates.
 
-Keep provider paths, worksheet or table names, and physical columns out of public records and
+Keep provider paths, worksheet or table names, and physical columns out of public entity and
 integration files.
 
-## Define the logical records surface
+## Define the logical entity
 
-Create `records/people.yaml` with logical names only:
+Create `entities/people.yaml` with logical names only:
 
 ```yaml
 version: 1
 id: people
-title: Population records
-description: Governed population records shared with evidence consultation.
-owner: Population Registry
-sensitivity: personal
-access_rights: restricted
-update_frequency: daily
+revision: 1
 primary_key: person_id
-fields:
-  person_id: { type: string }
-  registration_status: { type: string, nullable: true }
-  eligible: { type: boolean, nullable: true }
-api:
-  scopes:
-    metadata: people:metadata
-    rows: people:rows
-  purposes: [case-management]
-  pagination: { default_limit: 50, max_limit: 100 }
-  filters:
-    person_id: [eq]
-    registration_status: [eq]
-  required_principal_filters: [person_id]
-  relationships: {}
-  aggregates: {}
-  standards: { ogc_features: false, sp_dci: false }
+schema:
+  type: object
+  additionalProperties: false
+  required: [person_id, registration_status, eligible]
+  properties:
+    person_id: { type: string, maxLength: 64 }
+    registration_status: { type: [string, "null"], maxLength: 32 }
+    eligible: { type: [boolean, "null"] }
+materialization:
+  max_records: 1000000
+  max_bytes: 256MiB
+  refresh: manual
+  retain_generations: 2
 ```
 
-The records definition owns the governed public fields and routes.
-It rejects physical provider, path, table, worksheet, and column members.
+The entity owns the reusable logical schema and bounded materialization footprint.
+It rejects physical provider, path, table, worksheet, and column members. A records service is
+optional and does not change the entity used by `snapshot`.
 
 ## Add the records service
 
-Reference the entity once from `registry-stack.yaml`:
+Reference the entity and configure its optional records service in `registry-stack.yaml`:
 
 ```yaml
+entities:
+  people: { file: entities/people.yaml }
 services:
   people-records:
     kind: records_api
-    definition: records/people.yaml
     entity: people
+    title: Population records
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: daily
+    api:
+      scopes:
+        metadata: people:metadata
+        rows: people:rows
+      purposes: [case-management]
+      projection: [person_id, registration_status, eligible]
+      pagination: { default_limit: 50, max_limit: 100 }
+      filters:
+        person_id: [eq]
+        registration_status: [eq]
+      required_principal_filters: [person_id]
+      standards: { ogc_features: false, sp_dci: false }
 ```
 
-This records service is the Relay-owned records API exposure of `people`. It preserves only the
-scopes, purposes, fields, filters, pagination, relationships, aggregates, and standards adapters
-declared in the records definition.
+This records service is the Relay-owned records API exposure of `people`. It preserves only its
+declared scopes, purposes, projection, filters, pagination, relationships, aggregates, and
+standards adapters.
 
 ## Define the exact snapshot integration
 
@@ -101,40 +111,23 @@ Create an integration that refers to logical entity fields:
 ```yaml
 version: 1
 id: population-person-snapshot
-source:
-  product: population-snapshot
-  versions: { tested: [project-snapshot-v1] }
+revision: 1
 input:
   person_id:
+    role: selector
     type: string
-    bytes: 12
+    maxLength: 12
     pattern: "^PER-[0-9]{8}$"
-    canonicalization: identity
 capability:
   snapshot:
     entity: people
-    cardinality: probe_two
-    freshness: 86400s
-    materialization:
-      max_source_records: 1000000
-      max_source_bytes: 268435456
-outputs:
-  exists: { type: presence, from: snapshot.presence }
-  registration_status:
-    type: string
-    nullable: true
-    max_bytes: 32
-    from: snapshot.record.registration_status
-bounds:
-  calls: 0
-  source_bytes: 4096
-  request_bytes: 1024
-  deadline: 5s
-  concurrency: 4
-fixtures: fixtures/
+    exact:
+      person_id: { input: person_id }
+    freshness: 24h
+outputs: [registration_status, eligible]
 ```
 
-SnapshotExact applies the complete exact selector to one immutable published handle and probes at
+The `snapshot` capability applies the complete exact selector to one immutable published handle and probes at
 most two rows.
 Two matches return `ambiguous`; Registry Relay does not choose one.
 
@@ -166,7 +159,7 @@ Every logical field has one physical column, and physical columns must be unique
 Change `generation` when the provider or mapping changes.
 
 `registryctl build` emits one ingest plan and one materialization identity.
-The records service and compatible SnapshotExact profiles capture the same published handle
+The records service and compatible snapshot profiles capture the same published handle
 instead of creating another source path or copying the physical mapping.
 
 ## Verify shared materialization
@@ -196,7 +189,7 @@ Registry Relay does not fall back to live source access.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| The records schema rejects a provider or column | Physical mapping was placed in the public definition. | Move the provider and columns into the environment entity binding. |
+| The entity schema rejects a provider or column | Physical mapping was placed in the public definition. | Move the provider and columns into the environment entity binding. |
 | The environment rejects duplicate columns | Two logical fields map to one physical column. | Provide an injective physical mapping. |
 | A provider change is rejected | The mapping changed without a new generation. | Advance the generation and repeat operator-security review. |
 | Only snapshot profiles are unready | The shared materialization is missing, stale, or inconsistent. | Publish and verify the expected immutable generation without enabling live fallback. |

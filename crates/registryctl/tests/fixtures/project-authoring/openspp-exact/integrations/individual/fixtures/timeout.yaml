@@ -1,5 +1,0 @@
-name: openspp-timeout
-input: { individual_id: IND-AB12CD34 }
-source:
-  individual: { timeout: 6s }
-expect: { error: source.deadline_exceeded, source_access: true, disclosed_claims: [] }

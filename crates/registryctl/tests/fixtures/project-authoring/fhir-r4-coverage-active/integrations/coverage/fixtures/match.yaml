@@ -1,13 +1,50 @@
 name: coverage-active
+classification: synthetic
 input: { birthdate: 2018-05-12, family: Example, given: Ada }
-source:
-  patient:
-    status: 200
-    body: { resourceType: Bundle, type: searchset, total: 1, entry: [{ resource: { resourceType: Patient, id: patient-1 } }] }
-  coverage:
-    status: 200
-    body: { resourceType: Bundle, type: searchset, total: 1, entry: [{ resource: { resourceType: Coverage, status: active } }] }
+interactions:
+  - expect:
+      method: GET
+      path: /fhir/Patient
+      query: { _count: 2, birthdate: 2018-05-12, family: Example, given: Ada }
+    respond:
+      status: 200
+      body:
+        resourceType: Bundle
+        type: searchset
+        total: 1
+        entry:
+          - search: { mode: match }
+            resource:
+              resourceType: Patient
+              id: patient-1
+              birthDate: 2018-05-12
+              name: [{ use: official, family: Example, given: [Ada, Synthetic] }]
+              managingOrganization: { reference: Organization/org-1 }
+              extension: [{ url: https://example.invalid/ignored, valueString: synthetic-extra }]
+  - expect:
+      method: GET
+      path: /fhir/Coverage
+      query: { _count: 2, beneficiary: Patient/patient-1 }
+    respond:
+      status: 200
+      body:
+        resourceType: Bundle
+        type: searchset
+        total: 1
+        entry:
+          - search: { mode: match }
+            resource:
+              resourceType: Coverage
+              id: coverage-1
+              status: active
+              beneficiary: { reference: Patient/patient-1 }
+              payor: [{ reference: Organization/org-1 }]
+              period: { start: 2026-01-01 }
+  - expect: { method: GET, path: /fhir/Organization/org-1 }
+    respond:
+      status: 200
+      body: { resourceType: Organization, id: org-1, active: true, name: Synthetic Health Fund }
 expect:
   outcome: match
-  outputs: { patient_exists: true, coverage_status: active }
-  claims: { patient-record-exists: true, coverage-active: true }
+  outputs: { coverage_status: active, insurer_name: Synthetic Health Fund }
+  claims: { patient-record-exists: true, coverage-active: true, insurer-name: Synthetic Health Fund }

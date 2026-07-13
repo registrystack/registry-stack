@@ -18,17 +18,17 @@ services:
           family: request.target.identifiers.family
           given: request.target.identifiers.given
     claims:
-      patient-record-exists: { evidence: registry_backed, output: coverage.patient_exists, disclosure: predicate }
+      patient-record-exists: { cel: "coverage.matched", disclosure: predicate }
       coverage-active:
-        evidence: registry_backed
         cel: >-
           coverage.coverage_status != null
-            ? coverage.patient_exists && coverage.coverage_status == "active"
+            ? coverage.matched && coverage.coverage_status == "active"
             : false
         disclosure: predicate
-    credentials:
+      insurer-name: { output: coverage.insurer_name, disclosure: value }
+    credential_profiles:
       coverage-status:
         format: dc+sd-jwt
         type: https://credentials.invalid/coverage-status/v1
         validity: 5m
-        claims: [patient-record-exists, coverage-active]
+        claims: [patient-record-exists, coverage-active, insurer-name]

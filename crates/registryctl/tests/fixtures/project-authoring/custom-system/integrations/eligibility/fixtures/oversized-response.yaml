@@ -1,5 +1,0 @@
-name: custom-oversized-response
-input: { household_reference: HH-AB12CD34 }
-source:
-  resolve: { status: 200, body_bytes: 8193 }
-expect: { error: source.response_too_large, source_access: true, disclosed_claims: [] }

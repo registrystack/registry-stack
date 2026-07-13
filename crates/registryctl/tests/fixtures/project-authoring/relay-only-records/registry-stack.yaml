@@ -1,7 +1,21 @@
 version: 1
 registry: { id: fictional-records-registry }
+entities:
+  people: { file: entities/people.yaml }
 services:
   people-records:
     kind: records_api
-    definition: records/people.yaml
     entity: people
+    title: Fictional people records
+    api:
+      scopes:
+        metadata: people:metadata
+        rows: people:rows
+        aggregate: people:aggregate
+        evidence_verification: people:evidence_verification
+      purposes: [case-management]
+      projection: [person_id, status]
+      pagination: { default_limit: 50, max_limit: 100 }
+      filters: { person_id: [eq] }
+      required_principal_filters: [person_id]
+      standards: { ogc_features: false, sp_dci: false }

@@ -10,7 +10,7 @@ relay:
   issuer: https://workload-issuer.internal.invalid
   jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
   audience: registry-relay
-  workload_client_id: records-api-client
+  allowed_clients: [records-api-client]
 deployment:
   profile: local
   relay: { service: records-relay }

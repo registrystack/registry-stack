@@ -1,5 +1,0 @@
-name: openspp-malformed-response
-input: { individual_id: IND-AB12CD34 }
-source:
-  individual: { status: 200, raw_body: '{"active":' }
-expect: { error: source.response_malformed, source_access: true, disclosed_claims: [] }

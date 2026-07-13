@@ -16,11 +16,11 @@ services:
         input:
           individual_id: request.target.identifiers.openspp_individual_id
     claims:
-      social-registry-record-exists: { evidence: registry_backed, output: individual.exists, disclosure: predicate }
-      social-registry-active: { evidence: registry_backed, output: individual.active, disclosure: predicate }
-      programme-code: { evidence: registry_backed, output: individual.programme_code, disclosure: value }
-      household-reference: { evidence: registry_backed, output: individual.household_reference, disclosure: redacted }
-    credentials:
+      social-registry-record-exists: { cel: individual.matched, disclosure: predicate }
+      social-registry-active: { output: individual.active, disclosure: predicate }
+      programme-code: { output: individual.programme_code, disclosure: value }
+      household-reference: { output: individual.household_reference, disclosure: redacted }
+    credential_profiles:
       social-registry-status:
         format: dc+sd-jwt
         type: https://credentials.invalid/social-registry-status/v1

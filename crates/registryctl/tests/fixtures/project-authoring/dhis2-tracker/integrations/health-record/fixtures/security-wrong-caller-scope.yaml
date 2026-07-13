@@ -1,8 +1,0 @@
-name: wrong-caller-and-scope-denied-before-source
-input: { tracked_entity: A0000000001 }
-request_context:
-  caller: unauthorized-fixture-client
-  scopes: ["evidence:unrelated:read"]
-  purpose: programme-enrollment-verification
-source: {}
-expect: { error: authorization.denied, source_access: false, disclosed_claims: [] }

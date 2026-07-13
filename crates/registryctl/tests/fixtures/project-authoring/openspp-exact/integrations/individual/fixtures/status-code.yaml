@@ -1,5 +1,0 @@
-name: openspp-status-code
-input: { individual_id: IND-AB12CD34 }
-source:
-  individual: { status: 503, body: {} }
-expect: { error: source.status_rejected, source_access: true, disclosed_claims: [] }

@@ -23,23 +23,14 @@ services:
           person_id: request.target.identifiers.registry_person_id
     claims:
       person-record-exists:
-        evidence: registry_backed
-        output: person_record.exists
+        cel: person_record.matched
         disclosure: predicate
-      person-status:
-        evidence: registry_backed
-        output: person_record.status
-        disclosure: value
       person-active:
-        evidence: registry_backed
-        cel: >-
-          person_record.status != null
-            ? person_record.exists && person_record.status == "ACTIVE"
-            : false
-        disclosure: predicate
-    credentials:
+        output: person_record.active
+        disclosure: value
+    credential_profiles:
       person-status:
         format: dc+sd-jwt
         type: https://credentials.invalid/person-status/v1
         validity: 10m
-        claims: [person-record-exists, person-status, person-active]
+        claims: [person-record-exists, person-active]

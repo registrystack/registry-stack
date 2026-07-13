@@ -3,6 +3,9 @@
 fn execute_all_fixtures(
     loaded: &LoadedRegistryProject,
     compiled: &CompiledProject,
+    integration_filter: Option<&str>,
+    fixture_filter: Option<&str>,
+    _trace: bool,
 ) -> Result<Vec<FixtureReport>> {
     if loaded.integrations.is_empty() {
         return Ok(Vec::new());
@@ -14,57 +17,48 @@ fn execute_all_fixtures(
     let relay_fixture = compile_generated_relay_fixture(relay_config, &compiled.relay_private)?;
     let mut reports = Vec::new();
     for (alias, integration) in &loaded.integrations {
+        if integration_filter.is_some_and(|selected| selected != alias) {
+            continue;
+        }
         for (fixture_path, fixture) in &integration.fixtures {
-            let preflight = fixture_preflight(loaded, alias, fixture);
+            if fixture_filter.is_some_and(|selected| selected != fixture.name) {
+                continue;
+            }
             let mut actual_calls = Vec::new();
-            let (result, evaluated_claims) = match preflight {
-                Err(error) => (Err(error), None),
-                Ok(()) if fixture_requires_product_pre_relay_denial(loaded, alias, fixture) => {
-                    match evaluate_product_claims(loaded, compiled, alias, fixture, None)
-                        .with_context(|| {
-                            format!(
-                                "failed the product Notary pre-Relay denial for fixture {}.{}",
-                                alias, fixture.name
-                            )
-                        })? {
-                        Ok(claims) => (Ok((BTreeMap::new(), "no_match")), Some(claims)),
-                        Err(error) => (Err(error), None),
-                    }
+            let relay =
+                execute_fixture(compiled, &relay_fixture, alias, fixture, &mut actual_calls);
+            let (result, evaluated_claims) = match relay {
+                Ok((outputs, outcome))
+                    if matches!(outcome, "match" | "no_match")
+                        && !integration_has_product_claims(loaded, alias) =>
+                {
+                    (Ok((outputs, outcome)), Some(BTreeMap::new()))
                 }
-                Ok(()) => {
-                    let relay = execute_fixture(
+                Ok((outputs, outcome)) if matches!(outcome, "match" | "no_match") => {
+                    match evaluate_product_claims(
+                        loaded,
                         compiled,
-                        &relay_fixture,
                         alias,
                         fixture,
-                        &mut actual_calls,
-                    );
-                    match relay {
-                        Ok((facts, outcome)) if matches!(outcome, "match" | "no_match") => {
-                            match evaluate_product_claims(
-                                loaded,
-                                compiled,
-                                alias,
-                                fixture,
-                                Some((&facts, outcome)),
-                            )
-                            .with_context(|| {
-                                format!(
-                                    "failed to evaluate product claims for fixture {}.{}",
-                                    alias, fixture.name
-                                )
-                            })? {
-                                Ok(claims) => (Ok((facts, outcome)), Some(claims)),
-                                Err(error) => (Err(error), None),
-                            }
-                        }
-                        Ok(result) => (Ok(result), None),
+                        Some((&outputs, outcome)),
+                        registry_notary_server::standalone::OfflineAuthentication::Valid,
+                        false,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "failed to evaluate product claims for fixture {}.{}",
+                            alias, fixture.name
+                        )
+                    })? {
+                        Ok(claims) => (Ok((outputs, outcome)), Some(claims)),
                         Err(error) => (Err(error), None),
                     }
                 }
+                Ok(result) => (Ok(result), None),
+                Err(error) => (Err(error), None),
             };
             let passed = match (&result, &fixture.expect.error) {
-                (Ok((facts, _)), None) => {
+                (Ok((outputs, _)), None) => {
                     let outcome_matches =
                         fixture.expect.outcome.as_deref().is_none_or(|expected| {
                             result
@@ -76,31 +70,18 @@ fn execute_all_fixtures(
                         .is_ok_and(|(_, outcome)| *outcome == "ambiguous")
                     {
                         fixture.expect.claims.is_empty()
-                            && fixture.expect.disclosed_claims.is_empty()
                     } else {
                         evaluated_claims.as_ref() == Some(&fixture.expect.claims)
                     };
-                    facts == &fixture.expect.outputs
-                        && claims_match
-                        && outcome_matches
-                        && (fixture.expect.calls.is_empty() || fixture.expect.calls == actual_calls)
-                        && fixture.expect.source_access.is_none_or(|expected| expected)
+                    outputs == &fixture.expect.outputs && claims_match && outcome_matches
                 }
-                (Err(code), Some(expected)) => {
-                    code == expected
-                        && (fixture.expect.calls.is_empty() || fixture.expect.calls == actual_calls)
-                        && fixture.expect.disclosed_claims.is_empty()
-                        && fixture
-                            .expect
-                            .source_access
-                            .is_none_or(|expected| expected == error_implies_source_access(code))
-                }
+                (Err(code), Some(expected)) => code == expected,
                 _ => false,
             };
             let failure = (!passed).then(|| match (&result, &fixture.expect.error) {
-                (Ok((facts, _)), None) if facts != &fixture.expect.outputs => format!(
+                (Ok((outputs, _)), None) if outputs != &fixture.expect.outputs => format!(
                     "outputs_mismatch: fields={}",
-                    mismatched_map_keys(facts, &fixture.expect.outputs).join("|")
+                    mismatched_map_keys(outputs, &fixture.expect.outputs).join("|")
                 ),
                 (Ok((_, outcome)), None)
                     if fixture
@@ -122,15 +103,6 @@ fn execute_all_fixtures(
                             &fixture.expect.claims,
                         )
                         .join("|")
-                    )
-                }
-                (Ok(_), None) | (Err(_), Some(_))
-                    if !fixture.expect.calls.is_empty() && fixture.expect.calls != actual_calls =>
-                {
-                    format!(
-                        "calls_mismatch: expected={}, actual={}",
-                        fixture.expect.calls.join("|"),
-                        actual_calls.join("|")
                     )
                 }
                 (Err(actual), Some(expected)) if actual != expected => {
@@ -156,17 +128,17 @@ fn execute_all_fixtures(
                     .unwrap_or_default();
                 format!("file={relative}{field} {failure}")
             });
-            let facts = result
+            let outputs = result
                 .as_ref()
                 .ok()
-                .map(|(facts, _)| facts.keys().cloned().collect())
+                .map(|(outputs, _)| outputs.keys().cloned().collect())
                 .unwrap_or_default();
             reports.push(FixtureReport {
                 integration: alias.clone(),
                 fixture: fixture.name.clone(),
                 inputs: fixture.input.keys().cloned().collect(),
                 calls: actual_calls,
-                outputs: facts,
+                outputs,
                 claims: evaluated_claims
                     .as_ref()
                     .map(|claims| claims.keys().cloned().collect())
@@ -183,9 +155,281 @@ fn execute_all_fixtures(
                 passed,
                 failure,
             });
+            reports.extend(derived_fixture_reports(
+                loaded,
+                compiled,
+                &relay_fixture,
+                alias,
+                fixture,
+            )?);
+        }
+    }
+    if reports.is_empty() && (integration_filter.is_some() || fixture_filter.is_some()) {
+        bail!("the selected integration or fixture does not exist");
+    }
+    Ok(reports)
+}
+
+fn derived_fixture_reports(
+    loaded: &LoadedRegistryProject,
+    compiled: &CompiledProject,
+    relay_fixture: &registry_relay::offline_fixture::OfflineRelayFixture,
+    integration_alias: &str,
+    fixture: &FixtureDocument,
+) -> Result<Vec<FixtureReport>> {
+    use registry_relay::offline_fixture::OfflineSourceResponse;
+
+    let base = offline_fixture_interactions(fixture).map_err(|error| anyhow!(error))?;
+    let input = offline_fixture_input(fixture).map_err(|error| anyhow!(error))?;
+    let mut cases = Vec::<(
+        &str,
+        Vec<registry_relay::offline_fixture::OfflineInteraction>,
+        &str,
+    )>::new();
+
+    let mut request_mismatch = base.clone();
+    if let Some(interaction) = request_mismatch.first_mut() {
+        interaction
+            .request
+            .path
+            .push_str("/__registry_fixture_mismatch");
+        cases.push((
+            "request_authority",
+            request_mismatch,
+            "fixture.request_mismatch",
+        ));
+    }
+    let mut malformed = base.clone();
+    if let Some(interaction) = malformed.last_mut() {
+        interaction.response = OfflineSourceResponse::Http {
+            status: 200,
+            headers: BTreeMap::new(),
+            body: b"{".to_vec(),
+        };
+        cases.push(("malformed_decode", malformed, "source.response_malformed"));
+    }
+    let mut oversized = base.clone();
+    if let Some(interaction) = oversized.last_mut() {
+        interaction.response = OfflineSourceResponse::DeclaredBodyBytes {
+            status: 200,
+            body_bytes: u64::MAX,
+        };
+        cases.push(("byte_ceiling", oversized, "source.response_too_large"));
+    }
+    let mut timeout = base.clone();
+    if let Some(interaction) = timeout.last_mut() {
+        interaction.response = OfflineSourceResponse::Timeout;
+        cases.push(("timeout", timeout, "source.deadline_exceeded"));
+    }
+    if fixture.interactions.iter().any(|interaction| {
+        interaction
+            .expect
+            .body
+            .as_ref()
+            .is_some_and(contains_generated_fixture_matcher)
+    }) {
+        let mut protocol = base.clone();
+        if let Some(registry_relay::offline_fixture::OfflineInteraction {
+            response: OfflineSourceResponse::Http { body, .. },
+            ..
+        }) = protocol.last_mut()
+        {
+            if let Ok(Value::Object(mut object)) = serde_json::from_slice::<Value>(body) {
+                object.insert("__registry_protocol_mutation".to_owned(), Value::Bool(true));
+                *body = serde_json::to_vec(&Value::Object(object))?;
+                cases.push((
+                    "protocol_verification",
+                    protocol,
+                    "source.response_malformed",
+                ));
+            }
+        }
+    }
+
+    let mut reports = cases
+        .into_iter()
+        .map(|(case, interactions, expected)| {
+            let mut calls = Vec::new();
+            let result = execute_offline_profiles(
+                compiled,
+                relay_fixture,
+                integration_alias,
+                input.clone(),
+                interactions,
+            )
+            .map(|mut observation| {
+                calls = std::mem::take(&mut observation.calls);
+                observation
+            })
+            .map_err(|error| error);
+            let actual = result.as_ref().err().map(String::as_str);
+            let passed = actual == Some(expected);
+            FixtureReport {
+                integration: integration_alias.to_owned(),
+                fixture: format!("{}::derived/{case}", fixture.name),
+                inputs: fixture.input.keys().cloned().collect(),
+                calls,
+                outputs: Vec::new(),
+                claims: Vec::new(),
+                outcome: None,
+                expected_error: Some(expected.to_owned()),
+                source_access: Some(error_implies_source_access(expected)),
+                passed,
+                failure: (!passed).then(|| {
+                    format!(
+                        "derived_error_mismatch: expected={expected}, actual={}",
+                        actual.unwrap_or("success")
+                    )
+                }),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if integration_has_product_claims(loaded, integration_alias) {
+        let authorization = evaluate_product_claims(
+            loaded,
+            compiled,
+            integration_alias,
+            fixture,
+            None,
+            registry_notary_server::standalone::OfflineAuthentication::WrongCredential,
+            true,
+        )?;
+        let authorization_error = authorization.err();
+        let authorization_passed = authorization_error.as_deref() == Some("authorization.denied");
+        reports.push(FixtureReport {
+            integration: integration_alias.to_owned(),
+            fixture: format!("{}::derived/authorization_before_source", fixture.name),
+            inputs: fixture.input.keys().cloned().collect(),
+            calls: Vec::new(),
+            outputs: Vec::new(),
+            claims: Vec::new(),
+            outcome: None,
+            expected_error: Some("authorization.denied".to_owned()),
+            source_access: Some(false),
+            passed: authorization_passed,
+            failure: (!authorization_passed).then(|| {
+                format!(
+                    "derived_authorization_mismatch: expected=authorization.denied, actual={}",
+                    authorization_error.as_deref().unwrap_or("success")
+                )
+            }),
+        });
+    }
+
+    let mut minimized = base;
+    // Ignoring unselected upstream members is a declarative HTTP projection
+    // guarantee. Snapshot rows are the reviewed materialization contract, so
+    // injecting an undeclared field there must remain a malformed response.
+    let is_declarative_http = matches!(
+        loaded.integrations[integration_alias].document.capability,
+        CapabilityDeclaration::Http { .. }
+    );
+    if is_declarative_http
+        && !fixture.interactions.iter().any(|interaction| {
+            interaction
+                .expect
+                .body
+                .as_ref()
+                .is_some_and(contains_generated_fixture_matcher)
+        })
+    {
+        if let Some(registry_relay::offline_fixture::OfflineInteraction {
+            response: OfflineSourceResponse::Http { body, .. },
+            ..
+        }) = minimized.last_mut()
+        {
+            if let Ok(Value::Object(mut object)) = serde_json::from_slice::<Value>(body) {
+                object.insert(
+                    "__registry_unselected_synthetic".to_owned(),
+                    Value::String("ignored".to_owned()),
+                );
+                *body = serde_json::to_vec(&Value::Object(object))?;
+                let result = execute_offline_profiles(
+                    compiled,
+                    relay_fixture,
+                    integration_alias,
+                    input,
+                    minimized,
+                );
+                let (passed, calls, outputs, outcome, failure) = match result {
+                    Ok(observation) => {
+                        let outcome = match observation.outcome {
+                            registry_relay::offline_fixture::OfflineFixtureOutcome::Match => {
+                                "match"
+                            }
+                            registry_relay::offline_fixture::OfflineFixtureOutcome::NoMatch => {
+                                "no_match"
+                            }
+                            registry_relay::offline_fixture::OfflineFixtureOutcome::Ambiguous => {
+                                "ambiguous"
+                            }
+                        };
+                        let passed = observation.outputs == fixture.expect.outputs
+                            && fixture
+                                .expect
+                                .outcome
+                                .as_deref()
+                                .is_none_or(|expected| expected == outcome);
+                        (
+                            passed,
+                            observation.calls,
+                            observation.outputs.keys().cloned().collect(),
+                            Some(outcome.to_owned()),
+                            (!passed)
+                                .then(|| "derived_output_minimization_changed_result".to_owned()),
+                        )
+                    }
+                    Err(error) => (
+                        false,
+                        Vec::new(),
+                        Vec::new(),
+                        None,
+                        Some(format!("derived_output_minimization_failed: {error}")),
+                    ),
+                };
+                reports.push(FixtureReport {
+                    integration: integration_alias.to_owned(),
+                    fixture: format!("{}::derived/output_minimization", fixture.name),
+                    inputs: fixture.input.keys().cloned().collect(),
+                    calls,
+                    outputs,
+                    claims: Vec::new(),
+                    outcome,
+                    expected_error: None,
+                    source_access: Some(true),
+                    passed,
+                    failure,
+                });
+            }
         }
     }
     Ok(reports)
+}
+
+fn integration_has_product_claims(
+    loaded: &LoadedRegistryProject,
+    integration_alias: &str,
+) -> bool {
+    loaded.project.services.values().any(|service| {
+        service.kind == ServiceKind::Evidence
+            && service.claims.values().any(|claim| {
+                claim_consultation_name(service, claim).is_ok_and(|consultation| {
+                    service.consultations[consultation].integration == integration_alias
+                })
+            })
+    })
+}
+
+fn contains_generated_fixture_matcher(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.iter().any(contains_generated_fixture_matcher),
+        Value::Object(object) => {
+            object.contains_key("generated")
+                || object.values().any(contains_generated_fixture_matcher)
+        }
+        _ => false,
+    }
 }
 
 fn invalid_fixture_input_field<'a>(
@@ -193,21 +437,12 @@ fn invalid_fixture_input_field<'a>(
     fixture: &FixtureDocument,
 ) -> Option<&'a str> {
     integration.input.iter().find_map(|(name, declaration)| {
-        let Some(value) = fixture.input.get(name).and_then(Value::as_str) else {
-            return Some(name.as_str());
-        };
-        if value.len() > usize::from(declaration.bytes) {
-            return Some(name.as_str());
-        }
-        if declaration.input_type == InputType::FullDate && validate_full_date(value).is_err() {
-            return Some(name.as_str());
-        }
-        let canonical = match declaration.canonicalization {
-            Canonicalization::Identity => std::borrow::Cow::Borrowed(value),
-            Canonicalization::AsciiLowercase => std::borrow::Cow::Owned(value.to_ascii_lowercase()),
-        };
-        let pattern = relay_input_pattern(&declaration.pattern).ok()?;
-        (!regex::Regex::new(&pattern).ok()?.is_match(&canonical)).then_some(name.as_str())
+        fixture
+            .input
+            .get(name)
+            .filter(|value| validate_fixture_input_value(name, declaration, value).is_ok())
+            .is_none()
+            .then_some(name.as_str())
     })
 }
 
@@ -239,54 +474,25 @@ fn error_implies_source_access(code: &str) -> bool {
     code.starts_with("source.")
 }
 
-fn fixture_preflight(
-    _loaded: &LoadedRegistryProject,
-    _integration_alias: &str,
-    fixture: &FixtureDocument,
-) -> std::result::Result<(), String> {
-    if fixture.request_overrides.is_some() {
-        return Err("fixture.request_override_forbidden".to_string());
-    }
-    Ok(())
-}
-
-fn fixture_requires_product_pre_relay_denial(
-    loaded: &LoadedRegistryProject,
-    integration_alias: &str,
-    fixture: &FixtureDocument,
-) -> bool {
-    fixture.request_context.as_ref().is_some_and(|context| {
-        context.caller.starts_with("unauthorized")
-            || !context.scopes.is_empty()
-            || !loaded.project.services.values().any(|service| {
-                service.kind == ServiceKind::Evidence
-                    && service.purpose == context.purpose
-                    && service
-                        .consultations
-                        .values()
-                        .any(|consultation| consultation.integration == integration_alias)
-            })
-    })
-}
-
 fn evaluate_product_claims(
     loaded: &LoadedRegistryProject,
     compiled: &CompiledProject,
     integration_alias: &str,
     fixture: &FixtureDocument,
     relay_result: Option<(&BTreeMap<String, Value>, &str)>,
+    authentication: registry_notary_server::standalone::OfflineAuthentication,
+    require_pre_source_denial: bool,
 ) -> Result<std::result::Result<BTreeMap<String, Value>, String>> {
     use registry_notary_core::{
         ClaimRef, EvaluateRequest, EvidenceEntity, EvidenceIdentifier, RequestVariables,
         FORMAT_CLAIM_RESULT_JSON,
     };
     use registry_notary_server::standalone::{
-        OfflineAuthentication, OfflineNotaryHarness, OfflineNotaryRequest,
-        OfflineRelayConsultation, OfflineRelayOutcome,
+        OfflineNotaryHarness, OfflineNotaryRequest, OfflineRelayConsultation, OfflineRelayOutcome,
     };
 
-    let empty_facts = BTreeMap::new();
-    let (facts, outcome) = relay_result.unwrap_or((&empty_facts, "no_match"));
+    let empty_outputs = BTreeMap::new();
+    let (outputs, outcome) = relay_result.unwrap_or((&empty_outputs, "no_match"));
     let relay_outcome = match outcome {
         "match" => OfflineRelayOutcome::Match,
         "no_match" => OfflineRelayOutcome::NoMatch,
@@ -297,10 +503,16 @@ fn evaluate_product_claims(
         .input
         .iter()
         .map(|(name, value)| {
-            let value = value
-                .as_str()
-                .ok_or_else(|| anyhow!("fixture input is not a bounded string"))?;
-            Ok((name.clone(), value.to_string()))
+            let value = match value {
+                Value::Null => "null".to_owned(),
+                Value::Bool(value) => value.to_string(),
+                Value::Number(value) => value.to_string(),
+                Value::String(value) => value.clone(),
+                Value::Array(_) | Value::Object(_) => {
+                    bail!("fixture input is not a bounded scalar")
+                }
+            };
+            Ok((name.clone(), value))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
     let relay_evidence = compiled
@@ -311,7 +523,6 @@ fn evaluate_product_claims(
             let is_fixture_integration = profile.integration_alias == integration_alias;
             OfflineRelayConsultation::decoded_inputs(
                 profile.id.clone(),
-                profile.version.clone(),
                 profile.contract_hash.clone(),
                 purpose.clone(),
                 relay_inputs.clone(),
@@ -321,7 +532,7 @@ fn evaluate_product_claims(
                     OfflineRelayOutcome::NoMatch
                 },
                 if is_fixture_integration && relay_outcome == OfflineRelayOutcome::Match {
-                    facts.clone()
+                    outputs.clone()
                 } else {
                     BTreeMap::new()
                 },
@@ -340,19 +551,6 @@ fn evaluate_product_claims(
     let harness =
         OfflineNotaryHarness::compile(notary_config, relay_evidence, project_cel_worker_config()?)
             .context("production Notary offline harness did not compile")?;
-    let authentication =
-        fixture
-            .request_context
-            .as_ref()
-            .map_or(OfflineAuthentication::Valid, |context| {
-                if context.caller.starts_with("unauthorized") {
-                    OfflineAuthentication::WrongCredential
-                } else if !context.scopes.is_empty() {
-                    OfflineAuthentication::InsufficientScope
-                } else {
-                    OfflineAuthentication::Valid
-                }
-            });
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -425,10 +623,7 @@ fn evaluate_product_claims(
                     .ok_or_else(|| anyhow!("fixture variable is not a full-date string"))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let purpose = fixture
-            .request_context
-            .as_ref()
-            .map_or(service.purpose.as_str(), |context| context.purpose.as_str());
+        let purpose = service.purpose.as_str();
         let variables = RequestVariables::try_new(variables).map_err(|error| anyhow!(error))?;
         for (disclosure, claim_ids) in claim_groups {
             let request = EvaluateRequest {
@@ -459,15 +654,8 @@ fn evaluate_product_claims(
                 bail!("offline Notary attempted a forbidden direct source read");
             }
             if let Some(error) = evidence.error_class() {
-                if fixture_requires_product_pre_relay_denial(loaded, integration_alias, fixture)
-                    && evidence.relay_calls() != 0
-                {
-                    bail!("offline Notary authorization denial occurred after Relay access");
-                }
-                if !fixture_requires_product_pre_relay_denial(loaded, integration_alias, fixture) {
-                    if let Some(product_error_code) = evidence.product_error_code() {
-                        bail!("offline Notary product evaluation failed: {product_error_code}");
-                    }
+                if require_pre_source_denial && evidence.relay_calls() != 0 {
+                    bail!("derived authorization denial occurred after Relay access");
                 }
                 return Ok(Err(error.as_str().to_string()));
             }
@@ -550,18 +738,45 @@ fn execute_compiled_relay_fixture<'a>(
     fixture: &'a FixtureDocument,
     calls: &mut Vec<String>,
 ) -> std::result::Result<(BTreeMap<String, Value>, &'a str), String> {
+    use registry_relay::offline_fixture::OfflineFixtureOutcome;
+
+    let interactions = offline_fixture_interactions(fixture)?;
+    let input = offline_fixture_input(fixture)?;
+    let observation = execute_offline_profiles(
+        compiled,
+        relay_fixture,
+        integration_alias,
+        input,
+        interactions,
+    )?;
+    calls.extend(observation.calls);
+    let outcome = match observation.outcome {
+        OfflineFixtureOutcome::Match => "match",
+        OfflineFixtureOutcome::NoMatch => "no_match",
+        OfflineFixtureOutcome::Ambiguous => "ambiguous",
+    };
+    Ok((observation.outputs, outcome))
+}
+
+fn offline_fixture_interactions(
+    fixture: &FixtureDocument,
+) -> std::result::Result<Vec<registry_relay::offline_fixture::OfflineInteraction>, String> {
     use registry_relay::offline_fixture::{
-        OfflineFixtureError, OfflineFixtureOutcome, OfflineFixtureRequest, OfflineProfilePin,
-        OfflineSourceResponse,
+        OfflineExpectedRequest, OfflineInteraction, OfflineRequestMethod, OfflineSourceResponse,
     };
 
-    let source = fixture
-        .source
+    fixture
+        .interactions
         .iter()
-        .map(|(operation, response)| {
-            let response = match response {
-                FixtureSourceResponse::Http { status, body } => OfflineSourceResponse::Http {
+        .map(|interaction| {
+            let response = match &interaction.respond {
+                FixtureSourceResponse::Http {
+                    status,
+                    headers,
+                    body,
+                } => OfflineSourceResponse::Http {
                     status: *status,
+                    headers: headers.clone(),
                     body: serde_json::to_vec(body)
                         .map_err(|_| "source.response_malformed".to_string())?,
                 },
@@ -570,49 +785,54 @@ fn execute_compiled_relay_fixture<'a>(
                         .map_err(|_| "source.deadline_exceeded".to_string())?;
                     OfflineSourceResponse::Timeout
                 }
-                FixtureSourceResponse::RawBody { status, raw_body } => {
-                    OfflineSourceResponse::Http {
-                        status: *status,
-                        body: raw_body.as_bytes().to_vec(),
-                    }
-                }
-                FixtureSourceResponse::BodyBytes { status, body_bytes } => {
-                    OfflineSourceResponse::DeclaredBodyBytes {
-                        status: *status,
-                        body_bytes: *body_bytes,
-                    }
-                }
-                FixtureSourceResponse::Outcome { outcome }
-                    if matches!(
-                        outcome.as_str(),
-                        "credential_success" | "credential-operation-succeeded"
-                    ) =>
-                {
-                    OfflineSourceResponse::CredentialSuccess
-                }
-                FixtureSourceResponse::Outcome { outcome } if outcome == "no_match" => {
-                    OfflineSourceResponse::NoMatch
-                }
-                FixtureSourceResponse::Outcome { outcome } if outcome == "unavailable" => {
-                    OfflineSourceResponse::Unavailable
-                }
-                FixtureSourceResponse::Outcome { .. } => {
-                    return Err("source.response_malformed".to_string())
-                }
             };
-            Ok((operation.clone(), response))
+            Ok(OfflineInteraction {
+                request: OfflineExpectedRequest {
+                    method: match interaction.expect.method {
+                        ReadMethod::Get => OfflineRequestMethod::Get,
+                        ReadMethod::Post => OfflineRequestMethod::Post,
+                    },
+                    path: interaction.expect.path.clone(),
+                    query: interaction.expect.query.clone(),
+                    headers: interaction.expect.headers.clone(),
+                    body: interaction.expect.body.clone(),
+                },
+                response,
+            })
         })
-        .collect::<std::result::Result<BTreeMap<_, _>, String>>()?;
-    let input = fixture
+        .collect()
+}
+
+fn offline_fixture_input(
+    fixture: &FixtureDocument,
+) -> std::result::Result<BTreeMap<String, String>, String> {
+    fixture
         .input
         .iter()
         .map(|(name, value)| {
-            value
-                .as_str()
-                .map(|value| (name.clone(), value.to_string()))
-                .ok_or_else(|| "invalid_input".to_string())
+            let value = match value {
+                Value::Null => "null".to_string(),
+                Value::Bool(value) => value.to_string(),
+                Value::Number(value) => value.to_string(),
+                Value::String(value) => value.clone(),
+                Value::Array(_) | Value::Object(_) => return Err("invalid_input".to_string()),
+            };
+            Ok((name.clone(), value))
         })
-        .collect::<std::result::Result<BTreeMap<_, _>, _>>()?;
+        .collect()
+}
+
+fn execute_offline_profiles(
+    compiled: &CompiledProject,
+    relay_fixture: &registry_relay::offline_fixture::OfflineRelayFixture,
+    integration_alias: &str,
+    input: BTreeMap<String, String>,
+    interactions: Vec<registry_relay::offline_fixture::OfflineInteraction>,
+) -> std::result::Result<registry_relay::offline_fixture::OfflineFixtureObservation, String> {
+    use registry_relay::offline_fixture::{
+        OfflineFixtureError, OfflineFixtureRequest, OfflineProfilePin,
+    };
+
     let mut selected = compiled
         .fixture_profiles
         .iter()
@@ -631,7 +851,7 @@ fn execute_compiled_relay_fixture<'a>(
                 contract_hash: profile.contract_hash.clone(),
             },
             input: input.clone(),
-            source: source.clone(),
+            interactions: interactions.clone(),
         })
     };
     let observation = execute(first).map_err(map_offline_relay_error)?;
@@ -641,13 +861,7 @@ fn execute_compiled_relay_fixture<'a>(
             return Err("fixture.product_contract_invalid".to_string());
         }
     }
-    calls.extend(observation.calls);
-    let outcome = match observation.outcome {
-        OfflineFixtureOutcome::Match => "match",
-        OfflineFixtureOutcome::NoMatch => "no_match",
-        OfflineFixtureOutcome::Ambiguous => "ambiguous",
-    };
-    Ok((observation.facts, outcome))
+    Ok(observation)
 }
 
 fn map_offline_relay_error(error: registry_relay::offline_fixture::OfflineFixtureError) -> String {
@@ -656,6 +870,7 @@ fn map_offline_relay_error(error: registry_relay::offline_fixture::OfflineFixtur
         OfflineFixtureError::InvalidInput => "input.pattern_mismatch",
         OfflineFixtureError::UnknownSourceOperation => "fixture.source_operation_unknown",
         OfflineFixtureError::MissingSourceObservation => "source_unavailable",
+        OfflineFixtureError::RequestMismatch => "fixture.request_mismatch",
         OfflineFixtureError::SourceDeadlineExceeded => "source.deadline_exceeded",
         OfflineFixtureError::SourceUnavailable => "source.unavailable",
         OfflineFixtureError::SourceStatusRejected => "source.status_rejected",
@@ -682,28 +897,34 @@ fn validate_operation(
     }
     let closed_credential_post = operation.role == OperationRole::Credential
         && operation.primitive.as_deref() == Some("oauth2_client_credentials")
-        && operation.request.codec.as_deref() == Some("oauth2_client_credentials_json_v1");
+        && matches!(
+            operation.request.codec.as_deref(),
+            Some("oauth2_client_credentials_json_v1" | "oauth2_client_credentials_form_v1")
+        );
     if operation.request.method == ReadMethod::Get && operation.request.body.is_some() {
         bail!("reviewed GET operations cannot carry a request body");
     }
     if operation.request.method == ReadMethod::Post
         && operation.request.body.is_none()
         && !closed_credential_post
+        && operation.request.codec.is_some()
     {
-        bail!("reviewed read-only POST requires a fixed bounded body template");
+        bail!("reviewed read-only POST codec requires a fixed bounded body template");
     }
     match operation.role {
         OperationRole::Credential
             if operation.primitive.as_deref() == Some("oauth2_client_credentials")
                 && operation.request.destination == "credential"
-                && operation.request.codec.as_deref()
-                    == Some("oauth2_client_credentials_json_v1")
+                && matches!(
+                    operation.request.codec.as_deref(),
+                    Some("oauth2_client_credentials_json_v1" | "oauth2_client_credentials_form_v1")
+                )
                 && operation.response.codec.as_deref() == Some("oauth2_token_v1")
                 && operation.verification.is_none() => {}
         OperationRole::Verification
             if operation.primitive.as_deref() == Some("jwks_json_v1")
                 && operation.request.method == ReadMethod::Get
-                && operation.request.destination == "data"
+                && operation.request.destination == "verification"
                 && operation.request.codec.is_none()
                 && operation.request.authorization.is_none()
                 && operation.response.codec.as_deref() == Some("jwks_json_v1")
@@ -759,10 +980,11 @@ fn validate_operation(
                 && operation.verification.is_none()
                 && operation.request.destination == "data"
                 && operation.request.authorization.is_none()
-                && operation.response.codec.is_none()
+                && operation.response.codec.as_deref() == Some("json_v1")
                 && matches!(
                     (operation.request.method, operation.request.codec.as_deref()),
-                    (ReadMethod::Get, None) | (ReadMethod::Post, Some("strict_json_v1"))
+                    (ReadMethod::Get, None)
+                        | (ReadMethod::Post, None | Some("strict_json_v1"))
                 ) => {}
         _ => bail!("operation role and reviewed primitive do not form a supported closed shape"),
     }
@@ -835,9 +1057,12 @@ fn validate_operation(
                     })
         })
         || operation.response.max_bytes == 0
-        || operation.response.max_bytes > 256 * 1024
+        || operation.response.max_bytes > 8 * 1024 * 1024
     {
         bail!("operation response bounds are invalid");
+    }
+    if operation.role == OperationRole::Verification && operation.response.max_bytes > 64 * 1024 {
+        bail!("verification response exceeds the 64 KiB bound");
     }
     if let Some(semantics) = &operation.response.status_semantics {
         if semantics.no_match.is_empty() && semantics.ambiguous.is_empty() {
@@ -867,8 +1092,12 @@ fn validate_dci_exact_and(
         .and_then(|body| body.get("exact_and"))
         .and_then(Value::as_object)
         .ok_or_else(|| anyhow!("DCI request must declare one exact_and selector map"))?;
-    if components.keys().ne(inputs.keys()) {
-        bail!("DCI exact_and keys must equal the integration input keys");
+    if components.keys().map(String::as_str).ne(inputs
+        .iter()
+        .filter(|(_, declaration)| declaration.role == AuthoredInputRole::Selector)
+        .map(|(name, _)| name.as_str()))
+    {
+        bail!("DCI exact_and keys must equal the integration selector input keys");
     }
     if operation
         .request
@@ -908,6 +1137,8 @@ fn validate_dci_exact_and(
             (&inputs[input].input_type, response),
             (InputType::String, SchemaNode::String { .. })
                 | (InputType::FullDate, SchemaNode::Date)
+                | (InputType::Boolean, SchemaNode::Boolean)
+                | (InputType::Integer, SchemaNode::Integer { .. })
         );
         if !same_type {
             bail!("DCI exact_and response pointer type must match its consultation input");
@@ -1125,7 +1356,13 @@ fn validate_output(
     declaration: &OutputDeclaration,
     operations: &BTreeMap<String, OperationDeclaration>,
 ) -> Result<()> {
-    let (operation, path) = declaration.from.split_once('.').ok_or_else(|| {
+    let Some(source) = declaration.from.as_deref() else {
+        if declaration.output_type == FactType::Presence {
+            bail!("script terminal outputs cannot use the internal presence type");
+        }
+        return Ok(());
+    };
+    let (operation, path) = source.split_once('.').ok_or_else(|| {
         anyhow!("output mapping must name operation.presence or operation.record.path")
     })?;
     if !operations.contains_key(operation) {
@@ -1139,7 +1376,7 @@ fn validate_output(
         {
             bail!("presence mapping must use a non-null Boolean or presence type");
         }
-    } else if path.split('.').any(|segment| {
+    } else if declaration.source_pointer.is_none() && path.split('.').any(|segment| {
         segment.is_empty()
             || !segment
                 .bytes()
@@ -1165,14 +1402,23 @@ fn validate_output(
             .get(operation)
             .expect("output operation presence was checked");
         let mut schema = operation_record_schema(operation)?;
-        let path = path.strip_prefix("record.").unwrap_or(path);
-        for segment in path.split('.') {
+        let segments = if let Some(pointer) = declaration.source_pointer.as_deref() {
+            fixture_pointer_segments(pointer)?
+        } else {
+            path.strip_prefix("record.")
+                .unwrap_or(path)
+                .split('.')
+                .map(str::to_string)
+                .collect()
+        };
+        for (index, segment) in segments.iter().enumerate() {
             schema = match schema {
                 SchemaNode::Object { fields, .. } => {
                     let field = fields
                         .get(segment)
                         .ok_or_else(|| anyhow!("output path is absent from the response schema"))?;
-                    if !field.required {
+                    let nullable_leaf = index + 1 == segments.len() && declaration.nullable;
+                    if !field.required && !nullable_leaf {
                         bail!("output paths must traverse required response fields");
                     }
                     &field.schema
@@ -1196,9 +1442,29 @@ fn validate_output(
     Ok(())
 }
 
+fn fixture_pointer_segments(pointer: &str) -> Result<Vec<String>> {
+    let pointer = pointer
+        .strip_prefix('/')
+        .ok_or_else(|| anyhow!("HTTP output pointer must be absolute"))?;
+    if pointer.is_empty() {
+        bail!("HTTP output pointer cannot select the root");
+    }
+    pointer
+        .split('/')
+        .map(|segment| {
+            let decoded = segment.replace("~1", "/").replace("~0", "~");
+            (!decoded.is_empty())
+                .then_some(decoded)
+                .ok_or_else(|| anyhow!("HTTP output pointer contains an empty token"))
+        })
+        .collect()
+}
+
 fn validate_snapshot_output(name: &str, declaration: &OutputDeclaration) -> Result<()> {
     let (source, field) = declaration
         .from
+        .as_deref()
+        .ok_or_else(|| anyhow!("snapshot output source is absent"))?
         .split_once('.')
         .ok_or_else(|| anyhow!("snapshot output mapping must name snapshot.field"))?;
     let field = field.strip_prefix("record.").unwrap_or(field);
@@ -1294,6 +1560,11 @@ fn credential_interface(integration: &IntegrationDocument) -> &CredentialInterfa
                 credential_type: CredentialType::None,
                 name: None,
                 max_value_bytes: None,
+                request: None,
+                response_profile: None,
+                scope: None,
+                audience: None,
+                refresh_skew: None,
             };
             &NONE
         }
@@ -1302,11 +1573,7 @@ fn credential_interface(integration: &IntegrationDocument) -> &CredentialInterfa
 
 fn integration_script(integration: &IntegrationDocument) -> Option<&Path> {
     match &integration.capability {
-        CapabilityDeclaration::Script { script } => {
-            Some(script.script.as_path())
-        }
-        CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Snapshot { .. } => {
-            None
-        }
+        CapabilityDeclaration::Script { script } => Some(script.script.as_path()),
+        CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Snapshot { .. } => None,
     }
 }

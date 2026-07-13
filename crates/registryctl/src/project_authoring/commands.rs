@@ -26,12 +26,6 @@ pub fn init_registry_project(options: &ProjectInitOptions) -> Result<ProjectComm
         environment: None,
         fixtures: Vec::new(),
         semantic_changes: Vec::new(),
-        required_reviews: BTreeSet::from([
-            ReviewClass::Claim,
-            ReviewClass::Integration,
-            ReviewClass::ServicePolicy,
-            ReviewClass::OperatorSecurity,
-        ]),
         baseline: "initial_without_baseline",
         output: Some(options.directory.display().to_string()),
         explanation: None,
@@ -39,6 +33,13 @@ pub fn init_registry_project(options: &ProjectInitOptions) -> Result<ProjectComm
 }
 
 pub fn test_registry_project(options: &ProjectTestOptions) -> Result<ProjectCommandReport> {
+    test_registry_project_selected(options, &ProjectTestSelection::default())
+}
+
+pub fn test_registry_project_selected(
+    options: &ProjectTestOptions,
+    selection: &ProjectTestSelection,
+) -> Result<ProjectCommandReport> {
     if options.live && options.environment.is_none() {
         bail!("live project tests require an explicit non-production --environment");
     }
@@ -47,13 +48,19 @@ pub fn test_registry_project(options: &ProjectTestOptions) -> Result<ProjectComm
     validate_environment(
         &loaded.project,
         &loaded.integrations,
-        &loaded.records,
+        &loaded.entities,
         &offline_environment,
     )?;
     let compiled =
         compile_project_for_environment(&loaded, "offline-fixture", &offline_environment, None)?;
     validate_generated_product_configs(&compiled)?;
-    let mut reports = execute_all_fixtures(&loaded, &compiled)?;
+    let mut reports = execute_all_fixtures(
+        &loaded,
+        &compiled,
+        selection.integration.as_deref(),
+        selection.fixture.as_deref(),
+        selection.trace,
+    )?;
     require_passing_fixtures(&reports)?;
     if options.live {
         reports.push(execute_governed_live_test(&loaded)?);
@@ -64,7 +71,6 @@ pub fn test_registry_project(options: &ProjectTestOptions) -> Result<ProjectComm
         environment: loaded.environment_name.clone(),
         fixtures: reports,
         semantic_changes: Vec::new(),
-        required_reviews: required_reviews(&loaded, None),
         baseline: "initial_without_baseline",
         output: None,
         explanation: None,
@@ -73,23 +79,20 @@ pub fn test_registry_project(options: &ProjectTestOptions) -> Result<ProjectComm
 
 fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<EnvironmentDocument> {
     let (requires_relay, requires_notary) = project_product_topology(&loaded.project);
+    let requires_issuance = project_issues_credentials(&loaded.project);
+    let requires_notary_relay = project_requires_notary_relay(&loaded.project);
     let mut integrations = BTreeMap::new();
     for (alias, integration) in &loaded.integrations {
-        let source_version = integration
-            .document
-            .source
-            .versions
-            .tested
-            .first()
-            .or_else(|| integration.document.source.versions.supported.first())
-            .or_else(|| integration.document.source.versions.unverified.first())
-            .ok_or_else(|| anyhow!("offline fixture integration has no reviewed source version"))?
-            .clone();
+        if matches!(
+            integration.document.capability,
+            CapabilityDeclaration::Snapshot { .. }
+        ) {
+            continue;
+        }
         let credential_type = credential_interface(&integration.document).credential_type;
         let credential = match credential_type {
             CredentialType::None => None,
             CredentialType::Basic => Some(EnvironmentCredential {
-                credential_type,
                 username: Some(SecretReference {
                     secret: "REGISTRY_PROJECT_FIXTURE_USERNAME".to_string(),
                 }),
@@ -100,11 +103,9 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
                 client_id: None,
                 client_secret: None,
                 value: None,
-                review: None,
                 generation: 1,
             }),
             CredentialType::StaticBearer => Some(EnvironmentCredential {
-                credential_type,
                 username: None,
                 password: None,
                 token: Some(SecretReference {
@@ -113,11 +114,9 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
                 client_id: None,
                 client_secret: None,
                 value: None,
-                review: None,
                 generation: 1,
             }),
             CredentialType::Oauth2ClientCredentials => Some(EnvironmentCredential {
-                credential_type,
                 username: None,
                 password: None,
                 token: None,
@@ -128,12 +127,10 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
                     secret: "REGISTRY_PROJECT_FIXTURE_CLIENT_SECRET".to_string(),
                 }),
                 value: None,
-                review: None,
                 generation: 1,
             }),
             CredentialType::ApiKeyHeader | CredentialType::ApiKeyQuery => {
                 Some(EnvironmentCredential {
-                    credential_type,
                     username: None,
                     password: None,
                     token: None,
@@ -142,47 +139,57 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
                     value: Some(SecretReference {
                         secret: "REGISTRY_PROJECT_FIXTURE_API_KEY".to_string(),
                     }),
-                    review: (credential_type == CredentialType::ApiKeyQuery)
-                        .then_some(ReviewClassInput::OperatorSecurity),
                     generation: 1,
                 })
             }
         };
         let operations = integration_operations(&integration.document);
-        let has_http = !matches!(
-            integration.document.capability,
-            CapabilityDeclaration::Snapshot { .. }
-        );
         let has_credential_destination = operations
             .values()
             .any(|operation| operation.role == OperationRole::Credential);
-        let advanced_capabilities = matches!(
-            integration.document.capability,
-            CapabilityDeclaration::Script { .. }
-        )
-        .then_some(IntegrationAdvancedCapabilities {
-            script: ScriptEnablement {
-                enabled: true,
-                review: ReviewClassInput::OperatorSecurity,
-            },
-        });
+        let has_verification_destination = operations
+            .values()
+            .any(|operation| operation.role == OperationRole::Verification);
+        let credential_path = has_credential_destination
+            .then(|| offline_oauth_path(integration))
+            .transpose()?;
+        let verification_path = has_verification_destination
+            .then(|| offline_verification_path(integration))
+            .transpose()?;
         integrations.insert(
             alias.clone(),
             EnvironmentIntegration {
-                source_version,
-                data_destination: has_http.then(|| DestinationBinding {
+                source: EnvironmentSourceBinding {
                     origin: format!("https://{alias}.fixture.invalid"),
-                }),
-                credential_destination: has_credential_destination.then(|| DestinationBinding {
-                    origin: format!("https://{alias}-credential.fixture.invalid"),
-                }),
-                credential,
-                advanced_capabilities,
+                    allowed_private_cidrs: Vec::new(),
+                    ca: None,
+                    mtls: None,
+                    credential,
+                    oauth: has_credential_destination.then(|| PrivateEndpointBinding {
+                        origin: format!("https://{alias}-credential.fixture.invalid"),
+                        path: credential_path.expect("credential path was derived"),
+                        allowed_private_cidrs: Vec::new(),
+                        ca: None,
+                        mtls: None,
+                        generation: 1,
+                    }),
+                    jwks: has_verification_destination.then(|| PrivateEndpointBinding {
+                        origin: format!("https://{alias}-verification.fixture.invalid"),
+                        path: verification_path.expect("verification path was derived"),
+                        allowed_private_cidrs: Vec::new(),
+                        ca: None,
+                        mtls: None,
+                        generation: 1,
+                    }),
+                    rate: None,
+                    concurrency: None,
+                    timeout: None,
+                },
             },
         );
     }
     let entities = loaded
-        .records
+        .entities
         .iter()
         .map(|(id, definition)| {
             (
@@ -196,7 +203,8 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
                     },
                     columns: definition
                         .document
-                        .fields
+                        .schema
+                        .properties
                         .keys()
                         .map(|field| (field.clone(), field.clone()))
                         .collect(),
@@ -227,7 +235,7 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
         version: 1,
         integrations,
         entities,
-        issuance: requires_notary.then(|| IssuanceBinding {
+        issuance: requires_issuance.then(|| IssuanceBinding {
             issuer: "did:web:notary.fixture.invalid".to_string(),
             signing_key: SecretReference {
                 secret: "REGISTRY_PROJECT_FIXTURE_ISSUER_JWK".to_string(),
@@ -241,13 +249,10 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
             issuer: "https://workload.fixture.invalid".to_string(),
             jwks_url: "https://workload.fixture.invalid/.well-known/jwks.json".to_string(),
             audience: "registry-relay".to_string(),
-            workload_client_id: if requires_notary {
-                "registry-project-fixture-notary".to_string()
-            } else {
-                "registry-project-fixture-client".to_string()
-            },
+            allowed_clients: vec!["registry-project-fixture-client".to_string()],
         }),
-        notary_relay: (requires_relay && requires_notary).then(|| NotaryRelayBinding {
+        notary_relay: requires_notary_relay.then(|| NotaryRelayBinding {
+            workload_client_id: "registry-project-fixture-notary".to_string(),
             token_file: PathBuf::from("/run/secrets/offline-fixture-token"),
         }),
         deployment: DeploymentBinding {
@@ -260,6 +265,47 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
             }),
         },
     })
+}
+
+fn offline_oauth_path(integration: &LoadedIntegration) -> Result<String> {
+    offline_private_path(integration, "OAuth", |request| {
+        request.method == ReadMethod::Post
+            && request.body.as_ref().is_some_and(|body| {
+                body.as_object().is_some_and(|body| {
+                    body.len() == 1
+                        && body.get("grant_type").and_then(Value::as_str)
+                            == Some("client_credentials")
+                })
+            })
+    })
+}
+
+fn offline_verification_path(integration: &LoadedIntegration) -> Result<String> {
+    offline_private_path(integration, "verification", |request| {
+        request.method == ReadMethod::Get && request.body.is_none()
+    })
+}
+
+fn offline_private_path(
+    integration: &LoadedIntegration,
+    kind: &str,
+    matches: impl Fn(&FixtureRequestExpectation) -> bool,
+) -> Result<String> {
+    let paths = integration
+        .fixtures
+        .iter()
+        .flat_map(|(_, fixture)| &fixture.interactions)
+        .filter(|interaction| matches(&interaction.expect))
+        .map(|interaction| interaction.expect.path.as_str())
+        .collect::<BTreeSet<_>>();
+    if paths.len() != 1 {
+        bail!("offline fixtures must prove one consistent {kind} request path");
+    }
+    Ok(paths
+        .into_iter()
+        .next()
+        .expect("one private path was checked")
+        .to_owned())
 }
 
 fn execute_governed_live_test(loaded: &LoadedRegistryProject) -> Result<FixtureReport> {
@@ -555,7 +601,7 @@ pub fn check_registry_project(options: &ProjectCheckOptions) -> Result<ProjectCo
     )?;
     let compiled = compile_project(&loaded, baseline.as_ref())?;
     validate_generated_product_configs(&compiled)?;
-    let fixtures = execute_all_fixtures(&loaded, &compiled)?;
+    let fixtures = execute_all_fixtures(&loaded, &compiled, None, None, false)?;
     require_passing_fixtures(&fixtures)?;
     Ok(ProjectCommandReport {
         status: "valid",
@@ -563,7 +609,6 @@ pub fn check_registry_project(options: &ProjectCheckOptions) -> Result<ProjectCo
         environment: loaded.environment_name.clone(),
         fixtures,
         semantic_changes: compiled.semantic_changes,
-        required_reviews: compiled.required_reviews.clone(),
         baseline: if baseline.is_some() {
             "verified_signed_bundle"
         } else {
@@ -587,7 +632,7 @@ pub fn build_registry_project(options: &ProjectBuildOptions) -> Result<ProjectCo
     )?;
     let compiled = compile_project(&loaded, baseline.as_ref())?;
     validate_generated_product_configs(&compiled)?;
-    let fixtures = execute_all_fixtures(&loaded, &compiled)?;
+    let fixtures = execute_all_fixtures(&loaded, &compiled, None, None, false)?;
     require_passing_fixtures(&fixtures)?;
     let output = loaded
         .root
@@ -600,7 +645,6 @@ pub fn build_registry_project(options: &ProjectBuildOptions) -> Result<ProjectCo
         environment: loaded.environment_name.clone(),
         fixtures,
         semantic_changes: compiled.semantic_changes,
-        required_reviews: compiled.required_reviews.clone(),
         baseline: if baseline.is_some() {
             "verified_signed_bundle"
         } else {

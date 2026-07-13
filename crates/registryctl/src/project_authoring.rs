@@ -25,21 +25,27 @@ static PROJECT_STARTERS: include_dir::Dir<'_> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/assets/project-starters");
 static DHIS2_TRACKER_STARTER: include_dir::Dir<'_> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/tests/fixtures/project-authoring/dhis2-tracker");
-static OPENCRVS_STARTER: include_dir::Dir<'_> =
+static OPENCRVS_DCI_STARTER: include_dir::Dir<'_> =
     include_dir::include_dir!("$CARGO_MANIFEST_DIR/tests/fixtures/project-authoring/opencrvs");
-static OPENSPP_STARTER: include_dir::Dir<'_> =
-    include_dir::include_dir!("$CARGO_MANIFEST_DIR/tests/fixtures/project-authoring/openspp-exact");
+static FHIR_R4_STARTER: include_dir::Dir<'_> = include_dir::include_dir!(
+    "$CARGO_MANIFEST_DIR/tests/fixtures/project-authoring/fhir-r4-coverage-active"
+);
+static SNAPSHOT_STARTER: include_dir::Dir<'_> = include_dir::include_dir!(
+    "$CARGO_MANIFEST_DIR/tests/fixtures/project-authoring/snapshot-exact"
+);
 
 const PROJECT_FILE: &str = "registry-stack.yaml";
 const BUILD_ROOT: &str = ".registry-stack/build";
 const REVIEW_SCHEMA: &str = "registry.project.review.v1";
+const APPROVAL_STATE_SCHEMA: &str = "registry.project.approval-state.v1";
+const APPROVAL_REVIEW_PATH: &str = "approval/review.json";
+const APPROVAL_STATE_PATH: &str = "approval/project-state.json";
 const MAX_AUTHORED_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_LIVE_RESPONSE_BYTES: u64 = 1024 * 1024;
 const MAX_FIXTURES: usize = 128;
-const MAX_OPERATIONS: usize = 5;
+const MAX_OPERATIONS: usize = 16;
 const MAX_OUTPUTS: usize = 64;
 const MAX_CLAIMS: usize = 64;
-const MAX_BOUNDED_INPUT_BYTES: u16 = 256;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReleasedScriptRuntime {
     RhaiV1,
@@ -51,6 +57,7 @@ const RELEASED_SCRIPT_RUNTIMES: &[ReleasedScriptRuntime] = &[ReleasedScriptRunti
 // authoring compiler can retain one closed internal type system without a
 // public API or visibility expansion.
 include!("project_authoring/model.rs");
+include!("project_authoring/authoring_contract.rs");
 include!("project_authoring/commands.rs");
 include!("project_authoring/compiler/artifacts.rs");
 include!("project_authoring/compiler/relay.rs");

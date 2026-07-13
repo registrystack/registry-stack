@@ -1,8 +1,0 @@
-name: wrong-caller-and-scope-denied-before-source
-input: { person_id: AB-123456 }
-request_context:
-  caller: unauthorized-fixture-client
-  scopes: ["evidence:unrelated:read"]
-  purpose: public-service-person-verification
-source: {}
-expect: { error: authorization.denied, source_access: false, disclosed_claims: [] }

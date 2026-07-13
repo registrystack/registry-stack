@@ -1,8 +1,13 @@
 name: no-household
+classification: synthetic
 input: { household_reference: HH-AB12CD34 }
-source:
-  resolve: { status: 200, body: { matches: [] } }
+interactions:
+  - expect:
+      method: GET
+      path: /households/HH-AB12CD34
+      query: { fields: "approved,category" }
+    respond: { status: 404 }
 expect:
+  outcome: no_match
   outputs: {}
   claims: { household-record-exists: false, household-category: null, household-eligible: false }
-  calls: [resolve]

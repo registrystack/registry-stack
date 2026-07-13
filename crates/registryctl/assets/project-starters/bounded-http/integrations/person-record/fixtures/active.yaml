@@ -1,9 +1,13 @@
 name: active-person
+classification: synthetic
 input: { person_id: AB-123456 }
-source:
-  person:
-    status: 200
-    body: { records: [{ status: ACTIVE }] }
+interactions:
+  - expect:
+      method: GET
+      path: /people/AB-123456
+      query: { fields: active }
+    respond: { status: 200, body: { active: true } }
 expect:
-  outputs: { exists: true, status: ACTIVE }
-  claims: { person-record-exists: true, person-status: ACTIVE, person-active: true }
+  outcome: match
+  outputs: { active: true }
+  claims: { person-record-exists: true, person-active: true }

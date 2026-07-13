@@ -38,8 +38,8 @@ mod project_authoring;
 
 pub use project_authoring::{
     build_registry_project, check_registry_project, init_registry_project, test_registry_project,
-    ProjectBuildOptions, ProjectCheckOptions, ProjectCommandReport, ProjectInitOptions,
-    ProjectStarter, ProjectTestOptions, ReviewClass, SemanticChange,
+    test_registry_project_selected, ProjectBuildOptions, ProjectCheckOptions, ProjectCommandReport,
+    ProjectInitOptions, ProjectStarter, ProjectTestOptions, ProjectTestSelection, SemanticChange,
 };
 
 pub use crate::sample::Sample;

@@ -1,0 +1,64 @@
+version: 1
+registry: { id: fictional-population-with-records-registry }
+integrations:
+  person-snapshot: { file: integrations/person-snapshot/integration.yaml }
+entities:
+  people: { file: entities/people.yaml }
+services:
+  people-records:
+    kind: records_api
+    entity: people
+    title: Governed fictional population records
+    api:
+      scopes:
+        metadata: people:metadata
+        rows: people:rows
+        aggregate: people:aggregate
+        evidence_verification: people:evidence_verification
+      purposes: [case-management]
+      projection: [person_id, registration_status, eligible]
+      pagination: { default_limit: 50, max_limit: 100 }
+      filters: { person_id: [eq] }
+      required_principal_filters: [person_id]
+      standards: { ogc_features: false, sp_dci: false }
+  benefits-eligibility:
+    kind: evidence
+    version: 1
+    purpose: benefits-eligibility
+    legal_basis: public-service-delivery
+    consent: not_required
+    access: { scopes: ["evidence:population:read"] }
+    consultations:
+      person:
+        integration: person-snapshot
+        input: { person_id: request.target.identifiers.population_person_id }
+    claims:
+      population-record-exists: { cel: person.matched, disclosure: predicate }
+      benefits-status: { output: person.registration_status, disclosure: value }
+      benefits-eligible: { output: person.eligible, disclosure: predicate }
+    credential_profiles:
+      benefits-status:
+        format: dc+sd-jwt
+        type: https://credentials.invalid/benefits-status/v1
+        validity: 10m
+        claims: [population-record-exists, benefits-status, benefits-eligible]
+  emergency-assistance:
+    kind: evidence
+    version: 1
+    purpose: emergency-assistance
+    legal_basis: vital-interests
+    consent: not_required
+    access: { scopes: ["evidence:population:emergency"] }
+    consultations:
+      person:
+        integration: person-snapshot
+        input: { person_id: request.target.identifiers.population_person_id }
+    claims:
+      emergency-record-exists: { cel: person.matched, disclosure: predicate }
+      emergency-status: { output: person.registration_status, disclosure: redacted }
+    credential_profiles:
+      emergency-status:
+        format: dc+sd-jwt
+        type: https://credentials.invalid/emergency-status/v1
+        validity: 5m
+        claims: [emergency-record-exists, emergency-status]

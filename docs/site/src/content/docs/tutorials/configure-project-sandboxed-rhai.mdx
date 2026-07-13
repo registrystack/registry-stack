@@ -1,199 +1,199 @@
 ---
-title: Configure Sandboxed Rhai orchestration
-description: Add reviewed orchestration over fixed bounded HTTP operations without giving a project script transport, credential, policy, or disclosure authority.
+title: Configure a script source adapter
+description: Add bounded Rhai adaptation for pagination, branching, and normalization without granting ambient source or credential access.
 status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-12"
+last_reviewed: "2026-07-13"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-Use this guide only when a reviewed live HTTP recipe cannot be expressed as declarative
-bounded HTTP operations.
-You will keep every request and response shape in the integration, add one orchestration script,
-and enable the advanced capability through an operator-security review.
+Use the script capability when one fixed HTTP request is not enough. Rhai is the v1 script
+runtime, but the capability is product-neutral. A DHIS2 label or version does not enable it, and
+an unknown source product can use exactly the same host API.
 
-{/* Evidence: crates/registryctl/src/project_authoring.rs,
-    crates/registryctl/tests/project_authoring.rs,
-    crates/registry-relay/src/rhai_worker.rs, and
-    crates/registry-relay/src/consultation/executor.rs. */}
+The worker has no network, filesystem, environment, subprocess, clock, random, credential, or
+production logging access. It asks the Relay parent to make each bounded source call. Relay
+validates the complete request against the authored same-origin authority, commits the request
+before dispatch, consumes the next durable call permit, and returns only bounded JSON or text.
 
-## When to use this
+## Declare source authority
 
-Use bounded HTTP when a fixed dependency graph and declarative conditions express the journey.
-Use `script` only when the reviewed recipe needs bounded choices among predeclared
-operations or closed output assembly that would otherwise be hard to maintain.
+The public integration declares input schemas, authentication interface, allowed source paths,
+the script file, outputs, and only the limits that differ from the defaults:
 
-The script is not a general connector.
-It cannot define a destination, method, path, parameter, credential, decoder, response field,
-policy, claim, disclosure mode, or provenance.
+~~~yaml
+version: 1
+id: person-status
+revision: 1
 
-## Before you start
+input:
+  person_id:
+    role: selector
+    type: string
+    maxLength: 64
 
-You need:
+source:
+  product: fictional-registry
+  versions: { unverified: [project-api-v1] }
+  auth: { type: static_bearer }
+  allow:
+    - method: GET
+      path: /v1/people/**
+  response:
+    format: json
+  response_headers: [Link]
 
-- A Registry Stack project whose ordinary
-  [bounded HTTP authoring journey](../author-registry-project/) passes offline.
-- One to five complete bounded HTTP operations with fixed request and closed response contracts.
-- Synthetic fixtures for each script branch, denial case, malformed response, ambiguity, timeout,
-  and resource-budget failure.
-- An operator-security reviewer for the advanced capability and worker deployment.
-
-Keep source product and version as review metadata only.
-The authored `runtime: rhai_v1` contract selects the Rhai runtime independently of either value;
-runtime availability is governed by the implementation-owned runtime and ABI capability table.
-
-## Declare the reviewed operations
-
-Replace `capability.http` with `capability.script`, select the reviewed `rhai_v1` runtime, add the script path, and retain
-the complete fixed operation contracts:
-
-```yaml
 capability:
   script:
-    runtime: rhai_v1
-    script: orchestration.rhai
-    credential: { type: static_bearer }
-    operations:
-      identity:
-        request:
-          method: GET
-          destination: data
-          path: /v1/people
-          query:
-            personId: { input: person_id }
-            limit: { value: 2 }
-        response:
-          statuses: [200]
-          max_bytes: 32768
-          schema:
-            type: object
-            additional_fields: reject
-            fields:
-              records:
-                required: true
-                type: array
-                max_items: 2
-                items:
-                  type: object
-                  additional_fields: reject
-                  fields:
-                    status: { required: true, type: string, max_bytes: 32 }
-          cardinality: { records: records, mode: probe_two }
-```
+    file: adapter.rhai
 
-Declare `person_id` as the one typed integration input and declare each terminal output in the
-integration's closed `outputs` block.
-Add any dependent operation beside `identity` with its complete fixed request, response, and
-cardinality contract.
+outputs:
+  active: { type: boolean }
+  programme_code: { type: [string, "null"], maxLength: 32 }
+~~~
 
-The script can choose only names from this compiled operation set.
-It cannot construct a request or introduce another source call.
+Source product and version are interoperability evidence only. Runtime dispatch uses the generic
+source, capability, and environment contracts.
 
-## Add the orchestration script
+Every input lives in one typed map and declares `role: selector` or `role: parameter`. An
+integration has one to eight non-null selectors and at most sixteen total inputs. The canonical
+selector values share a fixed 4096-byte ceiling. A nullable parameter is still present in the
+consultation request as explicit JSON null; the adapter receives the validated value beneath
+`ctx.input`.
 
-Create the declared `orchestration.rhai` file with the fixed `consult(input, prior)` entry point.
-This example chooses one declared operation, handles no match, and returns the closed outputs:
+An asterisk admits one non-empty path segment. A terminal double asterisk admits zero or more
+complete non-empty segments. Matching is case-sensitive. Dot segments, encoded separators,
+fragments, user information, and another origin fail before credentials are resolved. A source
+POST also requires `semantics: read_only` and evidence that the admitted operation is
+non-mutating.
 
-```txt
-fn consult(input, prior) {
-    if !prior.contains("identity") {
-        return #{ operations: ["identity"], outputs: #{} };
+The defaults are five calls, 64 KiB of aggregate author-controlled request bytes, a 512 KiB
+per-response body, 2 MiB of aggregate source-response bytes, and a 15 second deadline. The hard
+ceilings are 16 calls, 1 MiB of request bytes, 8 MiB per response, 16 MiB of source responses, and
+60 seconds. Deployment settings may lower these limits but cannot widen the reviewed integration.
+
+## Write the adapter
+
+Create adapter.rhai with one consult(ctx) function:
+
+~~~rhai
+fn consult(ctx) {
+    let target = source.path(
+        "/v1/people/{person_id}",
+        #{ person_id: ctx.input.person_id }
+    );
+    let response = source.get(target, #{
+        query: #{ fields: "id,active,programmeCode" }
+    });
+
+    if response.status == 404 {
+        return result.no_match();
     }
-    if !prior.identity.presence {
-        return #{ operations: [], outputs: #{
-            exists: #{ type: "presence", value: false },
-            status: #{ type: "string", value: () }
-        }};
+    if response.status != 200 {
+        return result.fail(failure.source_rejected);
     }
-    return #{ operations: [], outputs: #{
-        exists: #{ type: "presence", value: true },
-        status: #{ type: "string", value: prior.identity.status }
-    }};
+    if response.body.id != ctx.input.person_id {
+        return result.fail(failure.subject_mismatch);
+    }
+
+    result.match(#{
+        active: response.body.active,
+        programme_code: response.body.programmeCode
+    })
 }
-```
+~~~
 
-The worker receives only typed integration inputs, typed prior operation outputs, allowed
-operation names, the closed output schema, and fixed resource limits.
-It does not receive caller identity, scopes, purpose, service, claim, format, disclosure mode,
-authorization material, credentials, destination authority, raw responses, or provenance.
-The Rhai engine has no network, filesystem, process, environment, clock, or random interface.
+The host API provides `source.path`, `source.get`, `source.post_json`, `source.post_form`, the three
+successful result constructors, and fixed source failure constants. Every response has `status`,
+`body`, and the safe headers named by `source.response_headers`. The body is bounded decoded JSON
+by default. Set `source.response.format: text` when the reviewed endpoint returns text. Non-2xx
+statuses return normally except `401`, `403`, and `429`, which remain host-owned failures. JSON
+null is Rhai unit. A match returns every declared output with its exact type and nullability.
 
-Return either more declared operation names or the complete terminal output map.
-An unknown operation, wrong output name or type, incomplete terminal map, duplicate choice, or
-resource-budget breach fails closed.
+An adapter may branch, transform collections, repeat a request, and follow a bounded same-origin
+pagination link. Relay canonicalizes an absolute returned link back to a relative source reference,
+rejects another origin, and reapplies the path, method, header, request, response, call, and deadline
+checks before dispatch. Each call is independently authorized and counts against the same
+cumulative budgets.
 
-## Enable the advanced capability
+## Split an adapter into local modules
 
-Add explicit operator-security enablement to the environment integration binding:
+For a larger adapter, list up to 32 project-local Rhai files in their deterministic evaluation
+order:
 
-```yaml
-integrations:
-  person-record:
-    source_version: project-contract-v1
-    data_destination: { origin: https://project-source.invalid }
-    advanced_capabilities:
-      script:
-        enabled: true
-        review: operator_security
-    credential:
-      type: static_bearer
-      token: { secret: PROJECT_SOURCE_BEARER_TOKEN }
-      generation: 1
-```
+~~~yaml
+capability:
+  script:
+    file: adapter.rhai
+    modules:
+      - lib/normalization.rhai
+      - lib/cardinality.rhai
+~~~
 
-This opt-in is necessary but not sufficient.
-The release capability table must admit the implementation-owned `rhai_v1` runtime,
-and the generated Relay binding must preserve its compiled operation and resource limits.
-No project-authored field can select a worker executable, worker path, worker digest, or worker
-sandbox ceiling. Authored integration bounds still select the reviewed source-byte, timeout, and
-concurrency limits within those compiler-owned ceilings.
+Local modules contain ordinary top-level Rhai functions. They cannot add source authority or load
+another file at runtime. `registryctl` resolves each normalized `.rhai` path beneath the integration
+directory without following symlinks, combines the declared modules with the entrypoint, and
+enforces a 64 KiB compiled-script ceiling. Module paths, order, and contents are hash-covered by the
+authored and generated closures, so a module edit changes the review and deployment inputs. There
+is no ambient module search path, remote package resolution, or runtime `import` fallback.
 
-For production activation, Registry Relay requires Linux and the code-owned
-`registry-relay-rhai-worker` executable installed beside Relay.
-Each evaluation runs in a fresh, environment-scrubbed, one-shot process with a maximum 128 MiB
-address-space ceiling and the compiled CPU, instruction, depth, collection, output, IPC, wall-time,
-and concurrency limits.
-Treat a missing worker or unavailable sandbox as an unready or failed integration, not a reason to
-fall back to in-process script execution.
+## Add interaction fixtures
 
-## Verify the reviewed branches
+Committed fixtures must be wholly synthetic and prove the rendered request as well as response:
 
-Run the offline fixtures and semantic check:
+~~~yaml
+name: match
+classification: synthetic
+input:
+  person_id: SYNTHETIC_PERSON_001
+interactions:
+  - expect:
+      method: GET
+      path: /v1/people/SYNTHETIC_PERSON_001
+      query:
+        fields: id,active,programmeCode
+    respond:
+      status: 200
+      body:
+        id: SYNTHETIC_PERSON_001
+        active: true
+        programmeCode: DEMO
+expect:
+  outcome: match
+  outputs:
+    active: true
+    programme_code: DEMO
+~~~
 
-```sh
-registryctl test --project-dir <project>
-registryctl check \
-  --project-dir <project> \
-  --environment <environment> \
-  --explain
-```
+Keep match, no-match, ambiguity, identifier-mismatch, and meaningful project variations. The
+harness derives malformed decoding, limits, timeout, authorization-before-source, output
+minimization, and protocol-verification negatives. Large synthetic bodies belong in
+fixtures/bodies/.
 
-The reports contain `"status": "passed"` and `"status": "valid"`.
-Confirm that the explanation requires `operator_security`, lists only the declared operation
-names, and exposes fixed resource ceilings without script source, credential values, or private
-source observations.
+## Verify
 
-Fixture success proves the reviewed script against synthetic observations and the worker
-contract.
-It does not prove source interoperability, production sandbox availability, legal suitability, or
-deployment approval.
+~~~sh
+registryctl test --project-dir <project> --integration person-status --fixture match --trace
+registryctl test --project-dir <project> --integration person-status --watch
+registryctl check --project-dir <project> --environment <environment> --explain
+~~~
+
+Offline tests are portable and use no real credentials or network. Production activation remains
+Linux-only while the process controls are code-owned. Fixture success proves the adapter against
+synthetic observations, not production source interoperability or deployment approval.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `script requires a released authoring contract and explicit operator-security enablement` | The runtime release gate or environment opt-in is absent. | Use a release that admits the reviewed runtime and add the explicit operator-security enablement. |
-| The script selects an unknown operation | The returned name is outside the compiled operation set. | Return only a predeclared operation name. |
-| A terminal result is rejected | The script omitted an output or returned a name, type, nullability, or bound outside the closed schema. | Return the complete output map with the declared scalar types and bounds. |
-| The integration is unready on a production host | Linux isolation or the adjacent code-owned worker is unavailable. | Correct the reviewed deployment; do not configure an alternate worker or in-process fallback. |
+| A source call fails before dispatch | The method, path, target, header, query, body, or remaining budget is outside authored authority. | Narrowly admit the real read operation or correct the adapter. |
+| A terminal result is rejected | The adapter omitted an output or returned a wrong name, type, nullability, or size. | Return the complete declared output map. |
+| A fixture response matches but its request proof does not | Its expected interaction differs from the production canonical request. | Update the synthetic request expectation or fix the adapter. |
+| Production reports the worker unavailable | The adjacent code-owned worker or required Linux isolation is absent. | Correct the deployment. Do not configure an in-process fallback. |
 
-## Next
-
-- Return to [Author an HTTP Registry Stack project](../author-registry-project/) to review
-  and build the project.
-- Use [Configure an exact snapshot materialization](../configure-project-snapshot-materialization/)
-  when consultation should read an immutable local snapshot instead of a live HTTP recipe.
+Return to [Author an HTTP Registry Stack project](../author-registry-project/) to review and build
+the project.

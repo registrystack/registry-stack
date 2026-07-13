@@ -1,9 +1,24 @@
 name: health-no-match
+classification: synthetic
 input: { tracked_entity: A0000000001 }
 variables: { as_of_date: 2026-01-01 }
-source:
-  identity: { status: 200, body: { trackedEntities: [] } }
+interactions:
+  - expect:
+      method: GET
+      path: /api/tracker/trackedEntities/A0000000001
+      query:
+        fields: trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]
+    respond: { status: 404, body: {} }
 expect:
+  outcome: no_match
   outputs: {}
-  claims: { tracked-entity-first-name: null, tracked-entity-last-name: null, child-program-active: false, child-age-band: null, programme-code: null, reconciliation-reference: redacted, maternal-postnatal-care-active: false, child-health-visit-recorded: false, tb-program-active: false }
-  calls: [identity]
+  claims:
+    tracked-entity-first-name: null
+    tracked-entity-last-name: null
+    child-program-active: false
+    child-age-band: null
+    programme-code: null
+    reconciliation-reference: redacted
+    maternal-postnatal-care-active: false
+    child-health-visit-recorded: false
+    tb-program-active: false

@@ -26,10 +26,10 @@ fn compile_project_for_environment(
     let mut relay_private = BTreeMap::new();
     let mut packs = BTreeMap::new();
 
-    for (id, records) in &loaded.records {
+    for (id, entity) in &loaded.entities {
         reviewable.insert(
-            PathBuf::from(format!("records/{id}.json")),
-            canonical_json_line(&serde_json::to_value(&records.document)?)?.into_boxed_slice(),
+            PathBuf::from(format!("entities/{id}.json")),
+            canonical_json_line(&serde_json::to_value(&entity.document)?)?.into_boxed_slice(),
         );
     }
 
@@ -51,10 +51,11 @@ fn compile_project_for_environment(
                 artifact.bytes.clone(),
             );
         }
-        if let Some((_, script)) = &integration.script {
+        if integration.script.is_some() {
+            let script_path = canonical_rhai_script_path(loaded, alias)?;
             relay_private.insert(
-                PathBuf::from(format!("config/artifacts/rhai/{alias}.rhai")),
-                script.clone(),
+                PathBuf::from("config").join(script_path),
+                compiled_rhai_source(integration)?,
             );
         }
         let id = pack_document["id"]
@@ -183,8 +184,11 @@ fn compile_project_for_environment(
         );
         notary_private.insert(
             PathBuf::from("descriptors/secret-consumers.json"),
-            canonical_json_line(&secret_consumer_descriptor("registry-notary", &notary_config))?
-                .into_boxed_slice(),
+            canonical_json_line(&secret_consumer_descriptor(
+                "registry-notary",
+                &notary_config,
+            ))?
+            .into_boxed_slice(),
         );
     }
 
@@ -207,63 +211,44 @@ fn compile_project_for_environment(
     )?;
     let semantic_changes = semantic_change_records(
         loaded,
-        baseline.map(|baseline| &baseline.review),
+        baseline.map(|baseline| &baseline.approval_state),
         &disclosure_digest,
     );
-    let reviews = required_reviews(loaded, baseline.map(|baseline| &baseline.review));
-    let semantic_unchanged = reviews.is_empty();
-    let mut reviews = reviews;
-    if let Some(baseline) = baseline {
-        let compiler_changed = baseline
-            .review
-            .get("compiler_version")
-            .and_then(Value::as_str)
-            != Some(env!("CARGO_PKG_VERSION"));
-        let generated_changed =
-            baseline.review.get("generated_closure_digests") != Some(&closure_digests);
-        if compiler_changed || (semantic_unchanged && generated_changed) {
-            reviews.extend([
-                ReviewClass::Claim,
-                ReviewClass::Integration,
-                ReviewClass::ServicePolicy,
-                ReviewClass::OperatorSecurity,
-            ]);
-        }
-    }
-    let baseline_record = baseline
-        .map(|baseline| {
-            Ok::<Value, anyhow::Error>(json!({
-                "review_digest": digest_json(&baseline.review)?,
-                "review_digests": baseline.review.get("review_digests").cloned()
-                    .unwrap_or_else(null_review_digests),
-                "authored_input_digest": baseline.review.get("authored_input_digest"),
-                "verified_manifest": baseline.verified_manifest,
-            }))
-        })
-        .transpose()?;
-    let review_digests = current_review_digests(
-        &loaded.semantic_digests,
-        &disclosure_digest,
-        &reviews,
-    )?;
+    let entity_materializations = generated_entity_materialization_review(loaded, environment)?;
     let review = json!({
         "schema": REVIEW_SCHEMA,
         "registry": loaded.project.registry.id,
-        "source_revision": loaded.authored_hash,
         "compiler_version": env!("CARGO_PKG_VERSION"),
-        "baseline": baseline_record,
+        "baseline": if baseline.is_some() { "verified_signed_bundle" } else { "initial_without_baseline" },
+        "disclosure_profiles": disclosure_profiles,
+        "semantic_changes": semantic_changes,
+        "environment": environment_name,
+        "entity_materializations": entity_materializations,
+        "consultations": profiles.iter().map(|profile| (
+            format!("{}.{}", profile.service_id, profile.consultation_name),
+            json!({
+                "profile_id": profile.id,
+                "integration": profile.integration_alias,
+                "contract_hash": profile.contract.artifact().typed_hash(),
+            }),
+        )).collect::<Map<String, Value>>(),
+    });
+    let approval_state = json!({
+        "schema": APPROVAL_STATE_SCHEMA,
+        "registry": loaded.project.registry.id,
+        "environment": environment_name,
+        "compiler_version": env!("CARGO_PKG_VERSION"),
+        "report_digest": sha256_uri(&canonical_json_line(&review)?),
         "authored_input_digest": loaded.authored_hash,
         "semantic_digests": loaded.semantic_digests,
-        "disclosure_profiles": disclosure_profiles,
         "disclosure_digest": disclosure_digest,
         "generated_closure_digests": closure_digests,
-        "semantic_changes": semantic_changes,
-        "required_reviews": reviews,
-        "review_digests": review_digests,
-        "environment": environment_name,
-        "entity_materializations": generated_entity_materialization_review(loaded, environment)?,
+        "baseline": baseline.map(|baseline| json!({
+            "verified_manifest": baseline.verified_manifest,
+        })),
+        "entity_materializations": entity_materializations,
     });
-    let explanation = generated_explanation(loaded, environment_name, &packs, &profiles);
+    let explanation = generated_explanation(loaded, environment_name, &profiles);
     let fixture_profiles = profiles
         .iter()
         .map(|profile| FixtureProfile {
@@ -274,42 +259,19 @@ fn compile_project_for_environment(
             contract_hash: profile.contract.artifact().typed_hash().to_string(),
         })
         .collect();
-    // The review record itself is deliberately excluded from the digests above.
-    // It becomes a signed payload member only when the existing bundle command runs.
+    // The human review and internal approval state are deliberately excluded from
+    // the closure digests above. Both become signed payload members when the
+    // existing product Config Bundle command runs, avoiding a digest cycle.
     Ok(CompiledProject {
         reviewable,
         relay_private,
         notary_private,
         review,
+        approval_state,
         explanation,
         fixture_profiles,
         semantic_changes,
-        required_reviews: reviews,
     })
-}
-
-fn current_review_digests(
-    semantic: &SemanticDigests,
-    disclosure_digest: &str,
-    required: &BTreeSet<ReviewClass>,
-) -> Result<Value> {
-    let claim = digest_json(&json!({
-        "semantic": semantic.claim,
-        "disclosure": disclosure_digest,
-    }))?;
-    let service_policy = digest_json(&json!({
-        "semantic": semantic.service_policy,
-        "disclosure": disclosure_digest,
-    }))?;
-    Ok(json!({
-        "claim": required.contains(&ReviewClass::Claim).then_some(claim),
-        "integration": required.contains(&ReviewClass::Integration)
-            .then_some(semantic.integration.as_str()),
-        "service_policy": required.contains(&ReviewClass::ServicePolicy)
-            .then_some(service_policy),
-        "operator_security": required.contains(&ReviewClass::OperatorSecurity)
-            .then_some(semantic.operator_security.as_str()),
-    }))
 }
 
 fn operational_descriptor(
@@ -489,54 +451,31 @@ fn generate_evidence(
 
 fn integration_pack_document(
     loaded: &LoadedRegistryProject,
-    environment: &EnvironmentDocument,
+    _environment: &EnvironmentDocument,
     alias: &str,
     integration: &LoadedIntegration,
     evidence: &[GeneratedEvidence],
 ) -> Result<Value> {
-    let binding = environment
-        .integrations
-        .get(alias)
-        .ok_or_else(|| anyhow!("integration environment binding is absent"))?;
     let pack_id = bounded_join_id(&[
         loaded.project.registry.id.as_str(),
         integration.document.id.as_str(),
     ])?;
-    let version_seed = json!({
-        "integration": integration.document,
-        "fixtures": integration.fixtures.iter().map(|(_, fixture)| fixture).collect::<Vec<_>>(),
-        "script": integration.script.as_ref().map(|(_, bytes)| sha256_uri(bytes)),
-        "source_version": binding.source_version,
-    });
-    let version = numeric_artifact_version(&digest_json(&version_seed)?)?;
+    let version = integration.document.revision.to_string();
     let input_slots = integration
         .document
         .input
         .iter()
-        .map(|(name, input)| {
-            Ok((
-                name.clone(),
-                json!({
-                    "type": match input.input_type {
-                        InputType::String => "string",
-                        InputType::FullDate => "full_date",
-                    },
-                    "max_bytes": input.bytes,
-                    "pattern": relay_input_pattern(&input.pattern)?,
-                    "canonicalization": match input.canonicalization {
-                        Canonicalization::Identity => "identity",
-                        Canonicalization::AsciiLowercase => "ascii_lowercase",
-                    },
-                }),
-            ))
-        })
+        .map(|(name, input)| Ok((name.clone(), relay_input_slot(input)?)))
         .collect::<Result<Map<String, Value>>>()?;
     let (acquisition, reviewed, output, plan, limits, _materialization) =
-        generated_pack_semantics(alias, integration, evidence)?;
+        generated_pack_semantics(loaded, alias, integration, evidence)?;
     let evidence_manifest = evidence_manifest(evidence);
     let specification = json!({
         "product_family": integration.document.source.product,
-        "supported_version_evidence": [format!("{}:{}", source_version_class(&integration.document, &binding.source_version), binding.source_version)],
+        "supported_version_evidence": integration.document.source.versions.tested.iter()
+            .map(|version| format!("tested:{version}"))
+            .chain(integration.document.source.versions.unverified.iter().map(|version| format!("unverified:{version}")))
+            .collect::<Vec<_>>(),
         "logical_operation": integration.document.id,
         "input_slots": input_slots,
         "acquisition": acquisition,
@@ -559,26 +498,48 @@ fn integration_pack_document(
     }))
 }
 
-fn source_version_class(integration: &IntegrationDocument, version: &str) -> &'static str {
-    if integration
-        .source
-        .versions
-        .tested
-        .iter()
-        .any(|item| item == version)
-    {
-        "tested"
-    } else if integration
-        .source
-        .versions
-        .supported
-        .iter()
-        .any(|item| item == version)
-    {
-        "supported"
+fn relay_input_slot(input: &InputDeclaration) -> Result<Value> {
+    let scalar = match input.input_type {
+        InputType::String | InputType::FullDate => "string",
+        InputType::Boolean => "boolean",
+        InputType::Integer => "integer",
+    };
+    let schema_type = if input.nullable {
+        json!([scalar, "null"])
     } else {
-        "unverified"
+        json!(scalar)
+    };
+    let mut slot = json!({
+        "role": match input.role {
+            AuthoredInputRole::Selector => "selector",
+            AuthoredInputRole::Parameter => "parameter",
+        },
+        "type": schema_type,
+        "x-registry-canonicalization": match input.canonicalization {
+            Canonicalization::Identity => "identity",
+            Canonicalization::AsciiLowercase => "ascii_lowercase",
+        },
+    });
+    match input.input_type {
+        InputType::String => {
+            slot["maxLength"] = json!(input.max_length);
+            slot["x-registry-max-bytes"] = json!(input.bytes);
+            if let Some(pattern) = &input.pattern {
+                slot["pattern"] = json!(relay_input_pattern(pattern)?);
+            }
+        }
+        InputType::FullDate => {
+            slot["format"] = json!("date");
+            slot["maxLength"] = json!(10);
+            slot["x-registry-max-bytes"] = json!(10);
+        }
+        InputType::Boolean => {}
+        InputType::Integer => {
+            slot["minimum"] = json!(input.minimum);
+            slot["maximum"] = json!(input.maximum);
+        }
     }
+    Ok(slot)
 }
 
 fn relay_input_pattern(pattern: &str) -> Result<String> {
@@ -665,6 +626,7 @@ fn numeric_artifact_version(digest: &str) -> Result<String> {
 type PackSemantics = (Value, Value, Value, Value, Value, Option<Value>);
 
 fn generated_pack_semantics(
+    loaded: &LoadedRegistryProject,
     alias: &str,
     integration: &LoadedIntegration,
     evidence: &[GeneratedEvidence],
@@ -674,7 +636,8 @@ fn generated_pack_semantics(
             generated_http_pack_semantics(alias, integration, evidence)
         }
         CapabilityDeclaration::Snapshot { snapshot } => {
-            generated_snapshot_pack_semantics(alias, integration, snapshot)
+            let entity = &loaded.entities[&snapshot.entity].document;
+            generated_snapshot_pack_semantics(alias, integration, snapshot, entity)
         }
     }
 }
@@ -697,7 +660,25 @@ fn generated_http_pack_semantics(
     let mut reviewed_fields = Map::new();
     let mut reviewed_controls = Map::new();
     let control_fields = referenced_prior_fields(&integration.document)?;
+    let is_script = matches!(
+        integration.document.capability,
+        CapabilityDeclaration::Script { .. }
+    );
+    if is_script {
+        for (name, output) in &integration.document.outputs {
+            let schema = relay_acquisition_schema_for_output(output)?;
+            acquired_fields.insert(name.clone(), schema.clone());
+            reviewed_fields.insert(name.clone(), schema);
+        }
+    }
+    let is_declarative_http = matches!(
+        integration.document.capability,
+        CapabilityDeclaration::Http { .. }
+    );
     for (operation_id, operation) in &data_operations {
+        if is_script {
+            continue;
+        }
         let record = operation_record_schema(operation)?;
         if operation.primitive.as_deref() == Some("dci_search_v1") {
             let SchemaNode::Object { .. } = record else {
@@ -712,7 +693,11 @@ fn generated_http_pack_semantics(
             bail!("operation normalized record schema must be an object");
         };
         for (field, schema) in fields {
-            let compiled = relay_schema_node(&schema.schema, false);
+            let compiled = if is_declarative_http && operation.primitive.is_none() {
+                relay_retained_projection_schema_node(&schema.schema, !schema.required)
+            } else {
+                relay_schema_node(&schema.schema, !schema.required)
+            };
             if acquired_fields
                 .insert(field.clone(), compiled.clone())
                 .is_some_and(|prior| prior != compiled)
@@ -734,7 +719,11 @@ fn generated_http_pack_semantics(
         .outputs
         .iter()
         .map(|(name, fact)| {
-            let output_type = if fact.from.ends_with(".presence") {
+            let output_type = if fact
+                .from
+                .as_deref()
+                .is_some_and(|source| source.ends_with(".presence"))
+            {
                 "presence"
             } else {
                 match fact.output_type {
@@ -750,12 +739,8 @@ fn generated_http_pack_semantics(
                     declaration["max_bytes"] = json!(fact.max_bytes);
                 }
                 FactType::Integer => {
-                    let schema = output_source_schema(&integration.document, fact)
-                        .expect("validated integer fact source schema");
-                    if let SchemaNode::Integer { min, max } = schema {
-                        declaration["minimum"] = json!(min);
-                        declaration["maximum"] = json!(max);
-                    }
+                    declaration["minimum"] = json!(fact.minimum);
+                    declaration["maximum"] = json!(fact.maximum);
                 }
                 FactType::Date => declaration["max_bytes"] = json!(10),
                 FactType::Boolean | FactType::Presence => {}
@@ -788,7 +773,15 @@ fn generated_http_pack_semantics(
     };
     let verification_operations = generated_verification_operations(alias, &integration.document)?;
     let first = data_operations[0];
-    let selector = exact_selector(&integration.document.input, first.0, first.1)?;
+    let selector = if matches!(
+        integration.document.capability,
+        CapabilityDeclaration::Script { .. }
+    ) && first.1.primitive.as_deref() != Some("dci_search_v1")
+    {
+        Value::Null
+    } else {
+        exact_selector(&integration.document.input, first.0, first.1)?
+    };
     let any_probe_two = data_operations.iter().any(|(_, operation)| {
         operation
             .response
@@ -818,6 +811,17 @@ fn generated_http_pack_semantics(
         CapabilityDeclaration::Script { .. } => "sandboxed_rhai",
         CapabilityDeclaration::Snapshot { .. } => unreachable!(),
     };
+    let steps = if matches!(
+        integration.document.capability,
+        CapabilityDeclaration::Script { .. }
+    ) {
+        Vec::new()
+    } else {
+        data_operations
+            .iter()
+            .map(|(id, _)| id.to_string())
+            .collect::<Vec<_>>()
+    };
     let credential_operation = generated_credential_operation(alias, &integration.document)?;
     let credential_slot = credential_operation
         .as_ref()
@@ -827,9 +831,11 @@ fn generated_http_pack_semantics(
         "kind": plan_kind,
         "data_destination_slot": format!("{alias}-data"),
         "credential_destination_slot": credential_slot,
+        "verification_destination_slot": (!verification_operations.is_empty())
+            .then(|| format!("{alias}-verification")),
         "operations": operations,
         "verification_operations": verification_operations,
-        "steps": data_operations.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+        "steps": steps,
         "step_conditions": step_conditions,
         "credential_operation": credential_operation,
         "snapshot": null,
@@ -839,7 +845,11 @@ fn generated_http_pack_semantics(
     let limits = json!({
         "max_source_matches": if any_probe_two { 2 } else { 1 },
         "max_disclosed_records": 1,
-        "max_data_exchanges": data_operations.len() + verification_operations.len(),
+        "max_data_exchanges": if matches!(integration.document.capability, CapabilityDeclaration::Script { .. }) {
+            usize::from(integration.document.bounds.calls)
+        } else {
+            1
+        },
         "max_credential_exchanges": credential_exchanges,
         "max_data_destinations": 1,
         "max_source_bytes": integration.document.bounds.source_bytes,
@@ -858,64 +868,100 @@ fn generated_http_pack_semantics(
     ))
 }
 
+fn relay_acquisition_schema_for_output(output: &OutputDeclaration) -> Result<Value> {
+    Ok(match output.output_type {
+        FactType::String => json!({
+            "type": "string",
+            "nullable": output.nullable,
+            "max_bytes": output.max_bytes.context("string output max_bytes is absent")?,
+        }),
+        FactType::Date => json!({
+            "type": "string",
+            "nullable": output.nullable,
+            "max_bytes": 10,
+        }),
+        FactType::Boolean | FactType::Presence => json!({
+            "type": "boolean",
+            "nullable": output.nullable,
+        }),
+        FactType::Integer => json!({
+            "type": "integer",
+            "nullable": output.nullable,
+            "minimum": output.minimum.context("integer output minimum is absent")?,
+            "maximum": output.maximum.context("integer output maximum is absent")?,
+        }),
+    })
+}
+
 fn generated_snapshot_pack_semantics(
     _alias: &str,
     integration: &LoadedIntegration,
     snapshot: &SnapshotDeclaration,
+    entity: &EntityDefinition,
 ) -> Result<PackSemantics> {
     let mut fields = Map::new();
     let mut output = Map::new();
     for (fact_name, fact) in &integration.document.outputs {
         let (_, path) = fact
             .from
+            .as_deref()
+            .ok_or_else(|| anyhow!("snapshot output source is absent"))?
             .split_once('.')
-            .ok_or_else(|| anyhow!("snapshot fact path is invalid"))?;
+            .ok_or_else(|| anyhow!("snapshot output path is invalid"))?;
         let field = path.strip_prefix("record.").unwrap_or(path);
-        if field == "presence" {
-            output.insert(
-                fact_name.clone(),
-                json!({ "type": "presence", "nullable": false }),
-            );
-            continue;
-        }
-        let schema = match fact.output_type {
-            FactType::Boolean | FactType::Presence => {
-                json!({ "type": "boolean", "nullable": fact.nullable })
+        let entity_field = entity
+            .schema
+            .properties
+            .get(field)
+            .ok_or_else(|| anyhow!("snapshot output is not an entity property"))?;
+        let (scalar, nullable) = schema_type_parts(&entity_field.field_type)?;
+        let schema = match (scalar, entity_field.format) {
+            (AuthoredScalarType::Boolean, None) => {
+                json!({ "type": "boolean", "nullable": nullable })
             }
-            FactType::Integer => json!({
+            (AuthoredScalarType::Integer, None) => json!({
                 "type": "integer",
-                "nullable": fact.nullable,
-                "minimum": -((1_i64 << 53) - 1),
-                "maximum": (1_i64 << 53) - 1,
+                "nullable": nullable,
+                "minimum": entity_field.minimum,
+                "maximum": entity_field.maximum,
             }),
-            FactType::String => json!({
+            (AuthoredScalarType::String, None) => json!({
                 "type": "string",
-                "nullable": fact.nullable,
-                "max_bytes": fact.max_bytes.ok_or_else(|| anyhow!("snapshot string fact bound is absent"))?,
+                "nullable": nullable,
+                "max_bytes": entity_field.max_length.and_then(|value| value.checked_mul(4)).ok_or_else(|| anyhow!("snapshot String entity bound is absent"))?,
             }),
-            FactType::Date => {
-                json!({ "type": "string", "nullable": fact.nullable, "max_bytes": 10 })
+            (AuthoredScalarType::String, Some(AuthoredStringFormat::Date)) => {
+                json!({ "type": "string", "nullable": nullable, "max_bytes": 10 })
             }
+            _ => bail!("snapshot entity field has an unsupported scalar contract"),
         };
         fields.insert(field.to_string(), schema);
         output.insert(fact_name.clone(), {
             let mut declaration = json!({
-            "type": match fact.output_type {
-                FactType::Boolean | FactType::Presence => "boolean",
-                FactType::Integer => "integer",
-                FactType::String => "string",
-                FactType::Date => "date",
+            "type": match (scalar, entity_field.format) {
+                (AuthoredScalarType::Boolean, None) => "boolean",
+                (AuthoredScalarType::Integer, None) => "integer",
+                (AuthoredScalarType::String, None) => "string",
+                (AuthoredScalarType::String, Some(AuthoredStringFormat::Date)) => "date",
+                _ => unreachable!("entity field validation rejects unsupported scalar contracts"),
             },
-            "nullable": fact.nullable,
+            "nullable": nullable,
             });
-            match fact.output_type {
-                FactType::String => declaration["max_bytes"] = json!(fact.max_bytes),
-                FactType::Integer => {
-                    declaration["minimum"] = json!(-((1_i64 << 53) - 1));
-                    declaration["maximum"] = json!((1_i64 << 53) - 1);
+            match (scalar, entity_field.format) {
+                (AuthoredScalarType::String, None) => {
+                    declaration["max_bytes"] = json!(entity_field
+                        .max_length
+                        .and_then(|value| value.checked_mul(4)));
                 }
-                FactType::Date => declaration["max_bytes"] = json!(10),
-                FactType::Boolean | FactType::Presence => {}
+                (AuthoredScalarType::Integer, None) => {
+                    declaration["minimum"] = json!(entity_field.minimum);
+                    declaration["maximum"] = json!(entity_field.maximum);
+                }
+                (AuthoredScalarType::String, Some(AuthoredStringFormat::Date)) => {
+                    declaration["max_bytes"] = json!(10)
+                }
+                (AuthoredScalarType::Boolean, None) => {}
+                _ => unreachable!("entity field validation rejects unsupported scalar contracts"),
             }
             declaration
         });
@@ -983,8 +1029,8 @@ fn generated_snapshot_pack_semantics(
             "max_credential_exchanges": 0,
             "max_data_destinations": 1,
         },
-        "refresh_class": "operator_triggered",
-        "snapshot_retention_generations": 2,
+        "refresh_class": if entity.materialization.refresh == "manual" { "operator_triggered" } else { "scheduled" },
+        "snapshot_retention_generations": entity.materialization.retain_generations,
         "immutable_generation": true,
         "digest_bound_active_pointer": true,
     });
@@ -1026,13 +1072,16 @@ fn operation_record_schema(operation: &OperationDeclaration) -> Result<&SchemaNo
 
 fn relay_schema_node(schema: &SchemaNode, nullable: bool) -> Value {
     match schema {
-        SchemaNode::Object { fields, .. } => json!({
+        SchemaNode::Object {
+            additional_fields,
+            fields,
+        } => json!({
             "type": "object",
             "nullable": nullable,
-            "reject_unknown_fields": true,
+            "reject_unknown_fields": *additional_fields == AdditionalFields::Reject,
             "fields": fields.iter().map(|(name, field)| (name.clone(), json!({
                 "required": field.required,
-                "schema": relay_schema_node(&field.schema, false),
+                "schema": relay_schema_node(&field.schema, !field.required),
             }))).collect::<Map<String, Value>>(),
         }),
         SchemaNode::Array { max_items, items } => json!({
@@ -1040,6 +1089,78 @@ fn relay_schema_node(schema: &SchemaNode, nullable: bool) -> Value {
             "nullable": nullable,
             "max_items": max_items,
             "items": relay_schema_node(items, false),
+        }),
+        SchemaNode::String { max_bytes } => {
+            json!({ "type": "string", "nullable": nullable, "max_bytes": max_bytes })
+        }
+        SchemaNode::Integer { min, max } => json!({
+            "type": "integer",
+            "nullable": nullable,
+            "minimum": min,
+            "maximum": max,
+        }),
+        SchemaNode::Boolean => json!({ "type": "boolean", "nullable": nullable }),
+        SchemaNode::Date => {
+            json!({ "type": "string", "nullable": nullable, "max_bytes": 10 })
+        }
+    }
+}
+
+fn relay_projection_schema_node(schema: &SchemaNode, nullable: bool) -> Value {
+    // This validates the selected projection, not an exhaustive upstream
+    // object. Ignored members remain structurally bounded and are never
+    // projected by Relay's response decoder.
+    match schema {
+        SchemaNode::Object {
+            additional_fields,
+            fields,
+        } => json!({
+            "type": "object",
+            "nullable": nullable,
+            "reject_unknown_fields": *additional_fields == AdditionalFields::Reject,
+            "fields": fields.iter().map(|(name, field)| (name.clone(), json!({
+                "required": field.required,
+                "schema": relay_projection_schema_node(&field.schema, !field.required),
+            }))).collect::<Map<String, Value>>(),
+        }),
+        SchemaNode::Array { max_items, items } => json!({
+            "type": "array",
+            "nullable": nullable,
+            "max_items": max_items,
+            "items": relay_projection_schema_node(items, false),
+        }),
+        SchemaNode::String { max_bytes } => {
+            json!({ "type": "string", "nullable": nullable, "max_bytes": max_bytes })
+        }
+        SchemaNode::Integer { min, max } => json!({
+            "type": "integer",
+            "nullable": nullable,
+            "minimum": min,
+            "maximum": max,
+        }),
+        SchemaNode::Boolean => json!({ "type": "boolean", "nullable": nullable }),
+        SchemaNode::Date => {
+            json!({ "type": "string", "nullable": nullable, "max_bytes": 10 })
+        }
+    }
+}
+
+fn relay_retained_projection_schema_node(schema: &SchemaNode, nullable: bool) -> Value {
+    match schema {
+        SchemaNode::Object { fields, .. } => json!({
+            "type": "object",
+            "nullable": nullable,
+            "reject_unknown_fields": true,
+            "fields": fields.iter().map(|(name, field)| (name.clone(), json!({
+                "required": field.required,
+                "schema": relay_retained_projection_schema_node(&field.schema, !field.required),
+            }))).collect::<Map<String, Value>>(),
+        }),
+        SchemaNode::Array { max_items, items } => json!({
+            "type": "array",
+            "nullable": nullable,
+            "max_items": max_items,
+            "items": relay_retained_projection_schema_node(items, false),
         }),
         SchemaNode::String { max_bytes } => {
             json!({ "type": "string", "nullable": nullable, "max_bytes": max_bytes })
@@ -1132,10 +1253,8 @@ fn generated_http_operation(
 ) -> Result<Value> {
     let is_dci = operation.primitive.as_deref() == Some("dci_search_v1");
     let is_fhir = operation.primitive.as_deref() == Some("fhir_r4_search_get");
-    let is_rhai = matches!(
-        integration.capability,
-        CapabilityDeclaration::Script { .. }
-    );
+    let is_rhai = matches!(integration.capability, CapabilityDeclaration::Script { .. });
+    let is_generic_script = is_rhai && !is_dci;
     let record = operation_record_schema(operation)?;
     let SchemaNode::Object { fields, .. } = record else {
         bail!("normalized operation record must be an object");
@@ -1145,21 +1264,22 @@ fn generated_http_operation(
         .iter()
         .filter_map(|(name, fact)| {
             fact.from
-                .split_once('.')
+                .as_deref()
+                .and_then(|source| source.split_once('.'))
                 .is_some_and(|(source, _)| source == operation_id)
                 .then_some((name, fact))
         })
         .collect::<Vec<_>>();
     let acquisition_fields = if is_dci {
-        BTreeSet::from(["record"])
+        BTreeSet::from(["record".to_string()])
     } else {
         operation_outputs
             .iter()
             .filter_map(|(_, fact)| {
-                let (_, path) = fact.from.split_once('.')?;
-                (!path.ends_with("presence"))
-                    .then(|| path.strip_prefix("record.").unwrap_or(path))
-                    .and_then(|path| path.split('.').next())
+                fact.source_pointer
+                    .as_deref()
+                    .and_then(|pointer| pointer_segments(pointer).ok())
+                    .and_then(|segments| segments.into_iter().next())
             })
             .collect::<BTreeSet<_>>()
     };
@@ -1173,34 +1293,14 @@ fn generated_http_operation(
         operation_outputs
             .iter()
             .filter_map(|(name, fact)| {
-                let (_, path) = fact.from.split_once('.')?;
-                if path == "presence" {
-                    None
-                } else {
-                    let path = path.strip_prefix("record.").unwrap_or(path);
-                    let pointer = if is_dci {
-                        format!("record.{path}")
-                    } else {
-                        path.to_string()
-                    };
-                    Some(((*name).clone(), static_json_pointer(&pointer)))
-                }
+                fact.source_pointer
+                    .as_ref()
+                    .map(|pointer| ((*name).clone(), Value::String(pointer.clone())))
             })
             .collect::<Map<String, Value>>()
     };
-    let presence_outputs = if is_rhai {
-        Vec::new()
-    } else {
-        operation_outputs
-            .iter()
-            .filter_map(|(name, fact)| fact.from.ends_with(".presence").then_some((*name).clone()))
-            .collect::<Vec<_>>()
-    };
-    let prior_fields = if matches!(
-        integration.capability,
-        CapabilityDeclaration::Script { .. }
-    ) {
-        fields.keys().cloned().collect::<BTreeSet<_>>()
+    let prior_fields = if is_rhai {
+        BTreeSet::new()
     } else {
         controls.clone()
     };
@@ -1216,13 +1316,17 @@ fn generated_http_operation(
             ))
         })
         .collect::<Result<Map<String, Value>>>()?;
-    let response_cardinality = if is_dci {
+    let response_cardinality = if is_generic_script {
+        json!({ "mechanism": "script_managed" })
+    } else if is_dci {
         json!({ "mechanism": "dci_probe_two" })
     } else {
         generated_cardinality(operation, evidence)?
     };
     let cardinality = operation.response.cardinality.as_ref();
-    let (normalization, records_field, max_records) = if is_dci || is_fhir {
+    let (normalization, records_field, max_records) = if is_generic_script {
+        ("script_body", None, 1)
+    } else if is_dci || is_fhir {
         ("json_array_probe_two", None, 2)
     } else {
         match cardinality {
@@ -1251,7 +1355,9 @@ fn generated_http_operation(
             ),
         }
     };
-    let response_schema = if is_dci {
+    let response_schema = if is_generic_script {
+        json!({ "type": "script_body" })
+    } else if is_dci {
         json!({
             "type": "array",
             "nullable": false,
@@ -1276,7 +1382,7 @@ fn generated_http_operation(
             "items": relay_schema_node(record, false),
         })
     } else {
-        relay_schema_node(&operation.response.schema, false)
+        relay_projection_schema_node(&operation.response.schema, false)
     };
     let mut response = json!({
         "max_bytes": operation.response.max_bytes,
@@ -1285,10 +1391,11 @@ fn generated_http_operation(
         "cardinality": response_cardinality,
         "schema": response_schema,
         "output_mapping": output_mapping,
-        "presence_outputs": presence_outputs,
         "prior_outputs": prior_outputs,
-        "accepted_statuses": operation.response.statuses,
     });
+    if !is_generic_script {
+        response["accepted_statuses"] = json!(operation.response.statuses);
+    }
     if let Some(records_field) = records_field {
         response["records_field"] = Value::String(records_field);
     }
@@ -1422,16 +1529,6 @@ fn prior_output_document(schema: &SchemaNode, pointer: &str) -> Result<Value> {
         }
     };
     Ok(value)
-}
-
-fn static_json_pointer(path: &str) -> Value {
-    Value::String(format!(
-        "/{}",
-        path.split('.')
-            .map(|token| token.replace('~', "~0").replace('/', "~1"))
-            .collect::<Vec<_>>()
-            .join("/")
-    ))
 }
 
 fn relay_value_expression(source: &ValueSource) -> Result<Value> {
@@ -1587,8 +1684,9 @@ fn exact_selector(
     operation: &OperationDeclaration,
 ) -> Result<Value> {
     let components = inputs
-        .keys()
-        .map(|input| {
+        .iter()
+        .filter(|(_, declaration)| declaration.role == AuthoredInputRole::Selector)
+        .map(|(input, _)| {
             let location = if operation.primitive.as_deref() == Some("dci_search_v1")
                 && operation.request.body.as_ref().is_some_and(|body| {
                     body.get("exact_and")
@@ -1725,9 +1823,10 @@ fn generated_step_conditions(integration: &IntegrationDocument) -> Result<Map<St
                         .outputs
                         .iter()
                         .find_map(|(name, fact)| {
-                            (fact.from == format!("{step}.presence")).then_some(name)
+                            (fact.from.as_deref() == Some(format!("{step}.presence").as_str()))
+                                .then_some(name)
                         })
-                        .ok_or_else(|| anyhow!("presence condition requires a declared presence fact"))?;
+                        .ok_or_else(|| anyhow!("presence condition requires a declared presence output"))?;
                     json!({ "predicate": "exists", "step": step, "output": output })
                 } else {
                     let output = path.strip_prefix("record.").unwrap_or(path);
@@ -1788,26 +1887,51 @@ fn generated_credential_operation(
         Some(SchemaNode::String { max_bytes }) => *max_bytes,
         _ => bail!("OAuth response schema must bound access_token"),
     };
+    let interface = credential_interface(integration);
+    let format = match interface
+        .request
+        .ok_or_else(|| anyhow!("OAuth request format is absent"))?
+    {
+        OAuthRequestFormat::Form => "form_client_secret_body",
+        OAuthRequestFormat::Json => "json_client_secret_body",
+    };
+    let scopes = interface
+        .scope
+        .as_deref()
+        .map(|scope| scope.split_ascii_whitespace().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let expiry_safety_skew_ms = interface
+        .refresh_skew
+        .as_deref()
+        .map(parse_duration_ms)
+        .transpose()?
+        .unwrap_or(30_000);
     Ok(Some(json!({
         "id": id,
         "kind": "oauth2_client_credentials",
         "destination_slot": format!("{alias}-credential"),
         "path": operation.request.path,
         "request": {
-            "format": "json_client_secret_body",
+            "format": format,
             "max_client_id_bytes": 256,
             "max_client_secret_bytes": 512,
             "max_body_bytes": integration.bounds.request_bytes.min(8192),
             "max_request_bytes": integration.bounds.request_bytes,
             "timeout_ms": parse_duration_ms(&integration.bounds.deadline)?.min(10_000),
+            "audience": interface.audience,
+            "scopes": scopes,
         },
         "response": {
             "max_bytes": operation.response.max_bytes,
             "accepted_statuses": operation.response.statuses,
-            "schema": "strict_access_token_bearer_no_expiry",
+            "schema": "strict_access_token_bearer_expires_in",
             "access_token_max_bytes": access_token_max_bytes,
             "token_type": "Bearer",
-            "cache_mode": "disabled",
+            "expires_in_min_seconds": 60,
+            "expires_in_max_seconds": 3600,
+            "max_token_lifetime_ms": 3600000,
+            "expiry_safety_skew_ms": expiry_safety_skew_ms,
+            "cache_mode": "expiry_bound",
         },
         "failure_policy": "fail_closed_source_unavailable_no_retry_no_stale_no_data_dispatch",
     })))
@@ -1830,7 +1954,7 @@ fn generated_verification_operations(
             Ok(json!({
                 "id": id,
                 "primitive": "jwks_v1",
-                "destination_slot": format!("{alias}-data"),
+                "destination_slot": format!("{alias}-verification"),
                 "method": "GET",
                 "path": operation.request.path,
                 "step_limits": {
@@ -1864,7 +1988,8 @@ fn generated_dci_document(operation: &OperationDeclaration) -> Result<Value> {
         .get("page_number")
         .and_then(Value::as_object)
         .and_then(|value| value.get("value"))
-        .and_then(Value::as_u64)
+        .and_then(Value::as_str)
+        .and_then(|value| value.parse::<u64>().ok())
         .ok_or_else(|| anyhow!("DCI page_number must be one fixed positive integer"))?;
     if page_number == 0 || page_number > u64::from(u16::MAX) {
         bail!("DCI page_number is outside its fixed bound");
@@ -1905,14 +2030,11 @@ fn generated_rhai_template(_alias: &str, integration: &LoadedIntegration) -> Res
     let CapabilityDeclaration::Script { .. } = integration.document.capability else {
         return Ok(None);
     };
-    let (_, script) = integration
-        .script
-        .as_ref()
-        .ok_or_else(|| anyhow!("sandboxed Rhai script is absent"))?;
-    let source = std::str::from_utf8(script).context("sandboxed Rhai script is not UTF-8")?;
+    let script = compiled_rhai_source(integration)?;
+    let source = std::str::from_utf8(&script).context("sandboxed Rhai closure is not UTF-8")?;
     Ok(Some(json!({
         "script": source,
-        "script_hash": sha256_uri(script),
+        "script_hash": sha256_uri(&script),
         "entrypoint": "consult",
         "memory_bytes": 128 * 1024 * 1024,
         "cpu_ms": 250,
@@ -1925,6 +2047,46 @@ fn generated_rhai_template(_alias: &str, integration: &LoadedIntegration) -> Res
         "output_bytes": 64 * 1024,
         "concurrency": 1,
     })))
+}
+
+fn compiled_rhai_source(integration: &LoadedIntegration) -> Result<Box<[u8]>> {
+    const MAX_COMPILED_RHAI_BYTES: usize = 64 * 1024;
+
+    let (script_path, script) = integration
+        .script
+        .as_ref()
+        .ok_or_else(|| anyhow!("sandboxed Rhai script is absent"))?;
+    let mut source = Vec::new();
+    for (module_path, module) in &integration.script_modules {
+        let module_path = module_path
+            .strip_prefix(&integration_root(script_path, &integration.document)?)
+            .unwrap_or(module_path)
+            .to_string_lossy();
+        std::str::from_utf8(module).context("sandboxed Rhai module is not UTF-8")?;
+        source.extend_from_slice(format!("// registry-local-module:{module_path}\n").as_bytes());
+        source.extend_from_slice(module);
+        source.extend_from_slice(b"\n");
+    }
+    std::str::from_utf8(script).context("sandboxed Rhai script is not UTF-8")?;
+    let script_name = script_path
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .ok_or_else(|| anyhow!("sandboxed Rhai script name is not Unicode"))?;
+    source.extend_from_slice(format!("// registry-entrypoint:{script_name}\n").as_bytes());
+    source.extend_from_slice(script);
+    if source.is_empty() || source.len() > MAX_COMPILED_RHAI_BYTES || source.contains(&0) {
+        bail!("sandboxed Rhai script and local modules must form a non-empty 64 KiB closure");
+    }
+    Ok(source.into_boxed_slice())
+}
+
+fn integration_root<'a>(
+    script_path: &'a Path,
+    _integration: &IntegrationDocument,
+) -> Result<&'a Path> {
+    script_path
+        .parent()
+        .ok_or_else(|| anyhow!("sandboxed Rhai script has no integration directory"))
 }
 
 fn generated_profile_identity(
@@ -1977,7 +2139,29 @@ fn consultation_contract_document(
         .and_then(Value::as_u64)
         .ok_or_else(|| anyhow!("generated integration pack cardinality is absent"))?;
     let policy_id = bounded_join_id(&["relay", service_id, consultation_name])?;
+    let integration = loaded
+        .integrations
+        .get(&consultation.integration)
+        .ok_or_else(|| anyhow!("consultation integration is absent"))?;
+    let runtime = match &integration.document.capability {
+        CapabilityDeclaration::Http { .. } => json!({
+            "platform_profile": "registry-stack.consultation.v1",
+            "source_capability": "http",
+            "script_abi": null,
+        }),
+        CapabilityDeclaration::Script { .. } => json!({
+            "platform_profile": "registry-stack.consultation.v1",
+            "source_capability": "script",
+            "script_abi": registry_relay::rhai_worker::xw::XW_ABI_VERSION,
+        }),
+        CapabilityDeclaration::Snapshot { .. } => json!({
+            "platform_profile": "registry-stack.consultation.v1",
+            "source_capability": "snapshot",
+            "script_abi": null,
+        }),
+    };
     let mut specification = json!({
+        "runtime": runtime,
         "subject": {
             "mode": "single_subject",
             "selector_provenance": { "type": "workload_selected" },
@@ -1993,9 +2177,9 @@ fn consultation_contract_document(
         "output": pack_spec.get("output"),
         "authorization": {
             "workload": environment
-                .relay
+                .notary_relay
                 .as_ref()
-                .ok_or_else(|| anyhow!("Relay environment binding is absent"))?
+                .ok_or_else(|| anyhow!("Notary-to-Relay workload binding is absent"))?
                 .workload_client_id,
             "required_scope": bounded_scope(&["registry", "consult", service_id])?,
             "purposes": [service.purpose.as_str()],
@@ -2017,12 +2201,12 @@ fn consultation_contract_document(
             "denial_timing_profile": "measured-uniform-v1",
         },
     });
-    let integration = loaded
-        .integrations
-        .get(&consultation.integration)
-        .ok_or_else(|| anyhow!("consultation integration is absent"))?;
-    let (_, _, _, _, _, materialization) =
-        generated_pack_semantics(&consultation.integration, integration, &pack.evidence)?;
+    let (_, _, _, _, _, materialization) = generated_pack_semantics(
+        loaded,
+        &consultation.integration,
+        integration,
+        &pack.evidence,
+    )?;
     if let Some(materialization) = materialization {
         specification["materialization"] = materialization;
     }
@@ -2043,34 +2227,67 @@ fn private_binding_document(
     profile_version: &str,
 ) -> Result<Value> {
     let integration = &loaded.integrations[&consultation.integration];
-    let binding = &environment.integrations[&consultation.integration];
-    let data_destination = binding.data_destination.as_ref().map(|destination| {
+    let binding = environment.integrations.get(&consultation.integration);
+    let data_destination = binding.map(|binding| &binding.source).map(|source| {
         json!({
             "id": format!("{}-data", consultation.integration),
-            "origin": destination.origin,
-            "allowed_private_cidrs": [],
+            "origin": source.origin,
+            "allowed_private_cidrs": source.allowed_private_cidrs,
+            "ca": source.ca,
+            "mtls": source.mtls,
         })
     });
-    let credential_destination = binding.credential_destination.as_ref().map(|destination| {
-        json!({
-            "id": format!("{}-credential", consultation.integration),
-            "origin": destination.origin,
-            "allowed_private_cidrs": [],
+    let credential_destination = binding
+        .and_then(|binding| binding.source.oauth.as_ref())
+        .map(|endpoint| {
+            json!({
+                "id": format!("{}-credential", consultation.integration),
+                "origin": endpoint.origin,
+                "application_base_path": endpoint.path,
+                "allowed_private_cidrs": endpoint.allowed_private_cidrs,
+                "ca": endpoint.ca,
+                "mtls": endpoint.mtls,
+            })
+        });
+    let verification_destination = binding
+        .and_then(|binding| binding.source.jwks.as_ref())
+        .map(|endpoint| {
+            json!({
+                "id": format!("{}-verification", consultation.integration),
+                "origin": endpoint.origin,
+                "application_base_path": endpoint.path,
+                "allowed_private_cidrs": endpoint.allowed_private_cidrs,
+                "ca": endpoint.ca,
+                "mtls": endpoint.mtls,
+            })
+        });
+    let credential = binding
+        .and_then(|binding| binding.source.credential.as_ref())
+        .map(|credential| {
+            Ok::<Value, anyhow::Error>(json!({
+                "ref": source_credential_reference(
+                    loaded,
+                    environment,
+                    &consultation.integration,
+                )?
+                .ok_or_else(|| anyhow!("credential reference disappeared"))?,
+                "generation": credential.generation,
+            }))
         })
-    });
-    let credential = binding.credential.as_ref().map(|credential| {
-        json!({
-            "ref": format!("{}-credential", consultation.integration),
-            "generation": credential.generation,
-        })
-    });
+        .transpose()?;
     let allow_rhai = matches!(
         integration.document.capability,
         CapabilityDeclaration::Script { .. }
     );
+    let callable_operations = integration_operations(&integration.document)
+        .iter()
+        .filter_map(|(id, operation)| {
+            (operation.role == OperationRole::Data).then_some(id.as_str())
+        })
+        .collect::<Vec<_>>();
     let rhai = allow_rhai.then(|| {
         json!({
-            "callable_operations": integration_operations(&integration.document).keys().collect::<Vec<_>>(),
+            "callable_operations": callable_operations,
             "max_calls": integration.document.bounds.calls,
             "memory_bytes": 128 * 1024 * 1024,
             "cpu_ms": 250,
@@ -2085,70 +2302,68 @@ fn private_binding_document(
             "isolation": "one_shot_worker_v1",
         })
     });
-    let materialization =
-        match &integration.document.capability {
-            CapabilityDeclaration::Snapshot { snapshot } => {
-                let records = &loaded
-                    .records
-                    .get(&snapshot.entity)
-                    .ok_or_else(|| anyhow!("snapshot records definition is absent"))?
-                    .document;
-                let entity = environment
-                    .entities
-                    .get(&snapshot.entity)
-                    .ok_or_else(|| anyhow!("snapshot environment entity is absent"))?;
-                let keys = integration
-                    .document
-                    .input
-                    .keys()
-                    .map(|input| {
-                        let physical = entity.columns.get(input).ok_or_else(|| {
-                            anyhow!("snapshot input has no private physical mapping")
-                        })?;
-                        Ok((
-                            input.clone(),
-                            json!({
-                                "input": input,
-                                "physical_field": physical,
-                                "physical_type": "utf8",
-                                "comparison": "binary_equality",
-                            }),
-                        ))
-                    })
-                    .collect::<Result<Map<String, Value>>>()?;
-                let projection = integration
-                    .document
-                    .outputs
-                    .values()
-                    .filter_map(|fact| {
-                        let (_, path) = fact.from.split_once('.')?;
-                        let field = path.strip_prefix("record.").unwrap_or(path);
-                        (field != "presence").then_some(field)
-                    })
-                    .map(|field| {
-                        let physical = entity
-                            .columns
-                            .get(field)
-                            .ok_or_else(|| anyhow!("environment entity omits a logical field"))?;
-                        Ok((field.to_string(), Value::String(physical.clone())))
-                    })
-                    .collect::<Result<Map<String, Value>>>()?;
-                Some(json!({
-                    "table_provider": records_table_provider(records, entity)?,
-                    "mapping": {
-                        "keys": keys,
-                        "projection": projection,
-                    },
-                }))
-            }
-            CapabilityDeclaration::Http { .. }
-            | CapabilityDeclaration::Script { .. } => None,
-        };
+    let materialization = match &integration.document.capability {
+        CapabilityDeclaration::Snapshot { snapshot } => {
+            let entity_definition = &loaded
+                .entities
+                .get(&snapshot.entity)
+                .ok_or_else(|| anyhow!("snapshot entity definition is absent"))?
+                .document;
+            let entity = environment
+                .entities
+                .get(&snapshot.entity)
+                .ok_or_else(|| anyhow!("snapshot environment entity is absent"))?;
+            let keys = snapshot
+                .exact
+                .iter()
+                .map(|(logical, input)| {
+                    let physical = entity
+                        .columns
+                        .get(logical)
+                        .ok_or_else(|| anyhow!("snapshot input has no private physical mapping"))?;
+                    Ok((
+                        input.clone(),
+                        json!({
+                            "input": input,
+                            "physical_field": physical,
+                            "physical_type": "utf8",
+                            "comparison": "binary_equality",
+                        }),
+                    ))
+                })
+                .collect::<Result<Map<String, Value>>>()?;
+            let projection = integration
+                .document
+                .outputs
+                .values()
+                .filter_map(|fact| {
+                    let (_, path) = fact.from.as_deref()?.split_once('.')?;
+                    let field = path.strip_prefix("record.").unwrap_or(path);
+                    (field != "presence").then_some(field)
+                })
+                .map(|field| {
+                    let physical = entity
+                        .columns
+                        .get(field)
+                        .ok_or_else(|| anyhow!("environment entity omits a logical field"))?;
+                    Ok((field.to_string(), Value::String(physical.clone())))
+                })
+                .collect::<Result<Map<String, Value>>>()?;
+            Some(json!({
+                "table_provider": entity_table_provider(entity_definition, entity)?,
+                "mapping": {
+                    "keys": keys,
+                    "projection": projection,
+                },
+            }))
+        }
+        CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Script { .. } => None,
+    };
     let source_instance = match &integration.document.capability {
         CapabilityDeclaration::Snapshot { snapshot } => {
-            let records = &loaded.records[&snapshot.entity].document;
+            let entity_definition = &loaded.entities[&snapshot.entity].document;
             let entity = &environment.entities[&snapshot.entity];
-            records_materialization_resource_id(records, entity)?
+            entity_materialization_resource_id(entity_definition, entity)?
         }
         CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Script { .. } => {
             format!("{}-source", consultation.integration)
@@ -2166,15 +2381,29 @@ fn private_binding_document(
         "source_instance": source_instance,
         "data_destination": data_destination,
         "credential_destination": credential_destination,
+        "verification_destination": verification_destination,
         "credential": credential,
         "deployment_parameters": {},
         "limits": {
             "max_source_bytes": integration.document.bounds.source_bytes,
-            "timeout_ms": parse_duration_ms(&integration.document.bounds.deadline)?,
-            "max_in_flight": integration.document.bounds.concurrency,
-            "quota_per_minute": 60,
-            "quota_burst": integration.document.bounds.concurrency.min(60),
+            "timeout_ms": binding
+                .and_then(|binding| binding.source.timeout.as_deref())
+                .map(parse_duration_ms)
+                .transpose()?
+                .unwrap_or(parse_duration_ms(&integration.document.bounds.deadline)?)
+                .min(parse_duration_ms(&integration.document.bounds.deadline)?),
+            "max_in_flight": binding
+                .and_then(|binding| binding.source.concurrency)
+                .unwrap_or(integration.document.bounds.concurrency)
+                .min(integration.document.bounds.concurrency),
+            "quota_per_minute": binding
+                .and_then(|binding| binding.source.rate.as_ref())
+                .map_or(60, |rate| rate.per_minute),
+            "quota_burst": binding
+                .and_then(|binding| binding.source.rate.as_ref())
+                .map_or(integration.document.bounds.concurrency.min(60), |rate| rate.burst),
             "max_public_response_bytes": 64 * 1024,
+            "max_token_lifetime_ms": credential_destination.as_ref().map(|_| 3_600_000),
         },
         "capabilities": {
             "allow_sandboxed_rhai": allow_rhai,
@@ -2182,4 +2411,97 @@ fn private_binding_document(
         },
         "materialization": materialization,
     }))
+}
+
+#[cfg(test)]
+mod artifact_projection_tests {
+    use super::*;
+
+    #[test]
+    fn raw_projection_schema_preserves_recursive_additional_field_policy() {
+        let schema = SchemaNode::Object {
+            additional_fields: AdditionalFields::Ignore,
+            fields: BTreeMap::from([(
+                "record".to_string(),
+                SchemaField {
+                    required: true,
+                    schema: SchemaNode::Object {
+                        additional_fields: AdditionalFields::Ignore,
+                        fields: BTreeMap::from([
+                            (
+                                "status".to_string(),
+                                SchemaField {
+                                    required: true,
+                                    schema: SchemaNode::String { max_bytes: 24 },
+                                },
+                            ),
+                            (
+                                "metadata".to_string(),
+                                SchemaField {
+                                    required: false,
+                                    schema: SchemaNode::Object {
+                                        additional_fields: AdditionalFields::Reject,
+                                        fields: BTreeMap::from([(
+                                            "source".to_string(),
+                                            SchemaField {
+                                                required: true,
+                                                schema: SchemaNode::String { max_bytes: 32 },
+                                            },
+                                        )]),
+                                    },
+                                },
+                            ),
+                        ]),
+                    },
+                },
+            )]),
+        };
+
+        let compiled = relay_projection_schema_node(&schema, false);
+        assert_eq!(
+            compiled.pointer("/reject_unknown_fields"),
+            Some(&json!(false))
+        );
+        assert_eq!(
+            compiled.pointer("/fields/record/schema/reject_unknown_fields"),
+            Some(&json!(false))
+        );
+        assert_eq!(
+            compiled.pointer("/fields/record/schema/fields/metadata/schema/reject_unknown_fields"),
+            Some(&json!(true))
+        );
+    }
+
+    #[test]
+    fn retained_projection_schema_closes_every_object_boundary() {
+        let schema = SchemaNode::Object {
+            additional_fields: AdditionalFields::Ignore,
+            fields: BTreeMap::from([(
+                "record".to_string(),
+                SchemaField {
+                    required: true,
+                    schema: SchemaNode::Object {
+                        additional_fields: AdditionalFields::Ignore,
+                        fields: BTreeMap::from([(
+                            "status".to_string(),
+                            SchemaField {
+                                required: true,
+                                schema: SchemaNode::String { max_bytes: 24 },
+                            },
+                        )]),
+                    },
+                },
+            )]),
+        };
+
+        let compiled = relay_retained_projection_schema_node(&schema, false);
+        assert_eq!(
+            compiled.pointer("/reject_unknown_fields"),
+            Some(&json!(true))
+        );
+        assert_eq!(
+            compiled.pointer("/fields/record/schema/reject_unknown_fields"),
+            Some(&json!(true))
+        );
+    }
 }

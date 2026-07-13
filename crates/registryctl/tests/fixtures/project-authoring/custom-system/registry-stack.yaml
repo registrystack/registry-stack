@@ -23,19 +23,16 @@ services:
           household_reference: request.target.identifiers.household_reference
     claims:
       household-record-exists:
-        evidence: registry_backed
-        output: household.exists
+        cel: household.matched
         disclosure: predicate
       household-category:
-        evidence: registry_backed
         output: household.category
         disclosure: value
       household-eligible:
-        evidence: registry_backed
         cel: >-
-          household.approved != null ? household.exists && household.approved : false
+          household.approved != null ? household.matched && household.approved : false
         disclosure: predicate
-    credentials:
+    credential_profiles:
       household-eligibility:
         format: dc+sd-jwt
         type: https://credentials.invalid/household-eligibility/v1

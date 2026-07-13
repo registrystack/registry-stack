@@ -1,10 +1,15 @@
 name: patient-no-match
+classification: synthetic
 input: { birthdate: 2018-05-12, family: Example, given: Ada }
-source:
-  patient:
-    status: 200
-    body: { resourceType: Bundle, type: searchset, total: 0, entry: [] }
+interactions:
+  - expect:
+      method: GET
+      path: /fhir/Patient
+      query: { _count: 2, birthdate: 2018-05-12, family: Example, given: Ada }
+    respond:
+      status: 200
+      body: { resourceType: Bundle, type: searchset, total: 0, entry: [] }
 expect:
   outcome: no_match
   outputs: {}
-  claims: { patient-record-exists: false, coverage-active: false }
+  claims: { patient-record-exists: false, coverage-active: false, insurer-name: null }

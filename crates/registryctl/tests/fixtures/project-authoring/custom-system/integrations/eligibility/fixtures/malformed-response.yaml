@@ -1,5 +1,0 @@
-name: custom-malformed-response
-input: { household_reference: HH-AB12CD34 }
-source:
-  resolve: { status: 200, raw_body: '{"matches":[' }
-expect: { error: source.response_malformed, source_access: true, disclosed_claims: [] }

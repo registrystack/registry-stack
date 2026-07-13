@@ -2,11 +2,9 @@ version: 1
 registry: { id: fictional-population-registry }
 integrations:
   person-snapshot: { file: integrations/person-snapshot/integration.yaml }
+entities:
+  people: { file: entities/people.yaml }
 services:
-  people-records:
-    kind: records_api
-    definition: records/people.yaml
-    entity: people
   benefits-eligibility:
     kind: evidence
     version: 1
@@ -19,10 +17,10 @@ services:
         integration: person-snapshot
         input: { person_id: request.target.identifiers.population_person_id }
     claims:
-      population-record-exists: { evidence: registry_backed, output: person.exists, disclosure: predicate }
-      benefits-status: { evidence: registry_backed, output: person.registration_status, disclosure: value }
-      benefits-eligible: { evidence: registry_backed, output: person.eligible, disclosure: predicate }
-    credentials:
+      population-record-exists: { cel: person.matched, disclosure: predicate }
+      benefits-status: { output: person.registration_status, disclosure: value }
+      benefits-eligible: { output: person.eligible, disclosure: predicate }
+    credential_profiles:
       benefits-status:
         format: dc+sd-jwt
         type: https://credentials.invalid/benefits-status/v1
@@ -40,9 +38,9 @@ services:
         integration: person-snapshot
         input: { person_id: request.target.identifiers.population_person_id }
     claims:
-      emergency-record-exists: { evidence: registry_backed, output: person.exists, disclosure: predicate }
-      emergency-status: { evidence: registry_backed, output: person.registration_status, disclosure: redacted }
-    credentials:
+      emergency-record-exists: { cel: person.matched, disclosure: predicate }
+      emergency-status: { output: person.registration_status, disclosure: redacted }
+    credential_profiles:
       emergency-status:
         format: dc+sd-jwt
         type: https://credentials.invalid/emergency-status/v1

@@ -1,12 +1,50 @@
 name: birth-record-ambiguous
+classification: synthetic
 input: { uin: "0000000001" }
 variables: { as_of_date: 2026-01-01 }
-source:
-  oauth: { outcome: credential_success }
-  jwks:
-    status: 200
-    body: {"keys":[{"alg":"RS256","e":"AQAB","kid":"registry-country-opencrvs-signing-2026-07-12","kty":"RSA","n":"mVJZcmmylo1eBjZsjKBa7rJhjHH-ClLZNFeNhbog6PyAuRUGxGj3JrEDsy4z-icnVWXu4AkwCvgAAjx1lCmBBBnwfXvSjab40ejiWan7N4y1ivyESf7JI1mSpHQGkG5csadlYSxT2sZvg7yjkd1-JGG4KEYEyWunKuAD9ITo-ZTcDTqAxlFmfSAI871KT9bKMX55QS_LaMtlsJJMnF5K6MjOt2h0H92jhO1CJ6Kkj8Uj8D7tiSUvfVpjDS5oSZKcqRYghDciFDYagAqZrJeMsKLI_lyFmHX1JY1U0jOEprAEGhN-Wn1a6GNNXydjoI4ltxS-1kIUWm5te0D-BTz6vw","use":"sig"},{"alg":"RSA-OAEP-256","e":"AQAB","kid":"registry-country-opencrvs-encryption-2026-07-12","kty":"RSA","n":"mVJZcmmylo1eBjZsjKBa7rJhjHH-ClLZNFeNhbog6PyAuRUGxGj3JrEDsy4z-icnVWXu4AkwCvgAAjx1lCmBBBnwfXvSjab40ejiWan7N4y1ivyESf7JI1mSpHQGkG5csadlYSxT2sZvg7yjkd1-JGG4KEYEyWunKuAD9ITo-ZTcDTqAxlFmfSAI871KT9bKMX55QS_LaMtlsJJMnF5K6MjOt2h0H92jhO1CJ6Kkj8Uj8D7tiSUvfVpjDS5oSZKcqRYghDciFDYagAqZrJeMsKLI_lyFmHX1JY1U0jOEprAEGhN-Wn1a6GNNXydjoI4ltxS-1kIUWm5te0D-BTz6vw","use":"enc"}]}
-  birth:
-    status: 200
-    raw_body: '{"header":{"action":"on-search","is_msg_encrypted":false,"message_id":"01JZ0000000000000000000000","message_ts":"2026-07-12T08:30:00Z","receiver_id":"fictional-civil-registry","sender_id":"fictional-notary","status":"succ","total_count":2,"version":"1.0.0"},"message":{"correlation_id":"123e4567-e89b-42d3-a456-426614174000","search_response":[{"data":{"reg_record_type":"birth","reg_records":[{"child":{"date_of_birth":"2018-05-12","family_name":"Example","given_name":"Ada","sex":"female"},"identifier":[{"identifier_type":"UIN","identifier_value":"0000000001"}],"place_of_birth":"Fictional District"},{"child":{"date_of_birth":"2017-04-10","family_name":"Example","given_name":"Alex","sex":"male"},"identifier":[{"identifier_type":"UIN","identifier_value":"0000000001"}],"place_of_birth":"Fictional District"}],"reg_type":"civil-registry","version":"1.0.0"},"locale":"en","pagination":{"page_number":1,"page_size":2,"total_count":2},"reference_id":"01JZ0000000000000000000000","status":"succ","timestamp":"2026-07-12T08:30:00Z"}],"transaction_id":"01JZ0000000000000000000000"},"signature":"eyJhbGciOiJSUzI1NiIsImtpZCI6InJlZ2lzdHJ5LWNvdW50cnktb3BlbmNydnMtc2lnbmluZy0yMDI2LTA3LTEyIn0.eyJoZWFkZXIiOnsiYWN0aW9uIjoib24tc2VhcmNoIiwiaXNfbXNnX2VuY3J5cHRlZCI6ZmFsc2UsIm1lc3NhZ2VfaWQiOiIwMUpaMDAwMDAwMDAwMDAwMDAwMDAwMDAwMCIsIm1lc3NhZ2VfdHMiOiIyMDI2LTA3LTEyVDA4OjMwOjAwWiIsInJlY2VpdmVyX2lkIjoiZmljdGlvbmFsLWNpdmlsLXJlZ2lzdHJ5Iiwic2VuZGVyX2lkIjoiZmljdGlvbmFsLW5vdGFyeSIsInN0YXR1cyI6InN1Y2MiLCJ0b3RhbF9jb3VudCI6MiwidmVyc2lvbiI6IjEuMC4wIn0sIm1lc3NhZ2UiOnsiY29ycmVsYXRpb25faWQiOiIxMjNlNDU2Ny1lODliLTQyZDMtYTQ1Ni00MjY2MTQxNzQwMDAiLCJzZWFyY2hfcmVzcG9uc2UiOlt7ImRhdGEiOnsicmVnX3JlY29yZF90eXBlIjoiYmlydGgiLCJyZWdfcmVjb3JkcyI6W3siY2hpbGQiOnsiZGF0ZV9vZl9iaXJ0aCI6IjIwMTgtMDUtMTIiLCJmYW1pbHlfbmFtZSI6IkV4YW1wbGUiLCJnaXZlbl9uYW1lIjoiQWRhIiwic2V4IjoiZmVtYWxlIn0sImlkZW50aWZpZXIiOlt7ImlkZW50aWZpZXJfdHlwZSI6IlVJTiIsImlkZW50aWZpZXJfdmFsdWUiOiIwMDAwMDAwMDAxIn1dLCJwbGFjZV9vZl9iaXJ0aCI6IkZpY3Rpb25hbCBEaXN0cmljdCJ9LHsiY2hpbGQiOnsiZGF0ZV9vZl9iaXJ0aCI6IjIwMTctMDQtMTAiLCJmYW1pbHlfbmFtZSI6IkV4YW1wbGUiLCJnaXZlbl9uYW1lIjoiQWxleCIsInNleCI6Im1hbGUifSwiaWRlbnRpZmllciI6W3siaWRlbnRpZmllcl90eXBlIjoiVUlOIiwiaWRlbnRpZmllcl92YWx1ZSI6IjAwMDAwMDAwMDEifV0sInBsYWNlX29mX2JpcnRoIjoiRmljdGlvbmFsIERpc3RyaWN0In1dLCJyZWdfdHlwZSI6ImNpdmlsLXJlZ2lzdHJ5IiwidmVyc2lvbiI6IjEuMC4wIn0sImxvY2FsZSI6ImVuIiwicGFnaW5hdGlvbiI6eyJwYWdlX251bWJlciI6MSwicGFnZV9zaXplIjoyLCJ0b3RhbF9jb3VudCI6Mn0sInJlZmVyZW5jZV9pZCI6IjAxSlowMDAwMDAwMDAwMDAwMDAwMDAwMDAwIiwic3RhdHVzIjoic3VjYyIsInRpbWVzdGFtcCI6IjIwMjYtMDctMTJUMDg6MzA6MDBaIn1dLCJ0cmFuc2FjdGlvbl9pZCI6IjAxSlowMDAwMDAwMDAwMDAwMDAwMDAwMDAwIn19.Kp9CH1GVe3S3PWQ3sWVuRj_Dw9x6i09emsDKx8L4MSu_G0Z8hsXaD1RHO_V4HoxFcY8KRjcE4ULKFJu9GmI4JYJKoZiBb5DZa6HG4ZHTAaQAC3H-KWUAV1Zexmn2z-E_2jpCcWAUVPi7oGgw1EksCTQ31ICHDe8lWLXJcwXO2ffb6Cr7UEOO1Azv4igc2YLnp6KWP2zwHb6-K2Y-TqJt4piDpk3Njt8TyH_XvoliI6o3_a_0p0jtQfoXfC1QiIiu4oTVVRj7d1ePQvq2IAsIKC8t4Bh77DFiZv6crVvy1O6UUTW44B_rfFe344kRtUmPI9pDi-8jVIDcXeCqbmjsVg"}'
-expect: { outcome: ambiguous, disclosed_claims: [] }
+interactions:
+  - expect:
+      method: POST
+      path: /oauth/token
+      headers: { Accept: application/json, Content-Type: application/json }
+      body: { grant_type: client_credentials }
+    respond:
+      status: 200
+      body: { access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: Bearer, expires_in: 300 }
+  - expect: { method: GET, path: /.well-known/jwks.json }
+    respond: { status: 200, body: { file: bodies/jwks.json } }
+  - expect:
+      method: POST
+      path: /dci/v1/birth/search
+      headers: { Accept: application/json, Content-Type: application/json }
+      body:
+        header:
+          version: 1.0.0
+          message_id: { generated: dci-correlation }
+          message_ts: { generated: rfc3339-timestamp }
+          action: search
+          sender_id: fictional-notary
+          receiver_id: fictional-civil-registry
+          total_count: 1
+          is_msg_encrypted: false
+        message:
+          transaction_id: { generated: dci-correlation }
+          search_request:
+            - reference_id: { generated: dci-correlation }
+              timestamp: { generated: rfc3339-timestamp }
+              search_criteria:
+                version: 1.0.0
+                reg_type: civil-registry
+                reg_event_type: birth
+                reg_record_type: birth
+                query_type: exact-and
+                query:
+                  operator: and
+                  predicates:
+                    - { field: identifier_value, operator: eq, value: "0000000001" }
+                pagination: { page_size: 2, page_number: 1 }
+    respond: { status: 200, body: { file: bodies/ambiguous.json } }
+expect:
+  outcome: ambiguous
+  outputs: {}
+  claims: {}

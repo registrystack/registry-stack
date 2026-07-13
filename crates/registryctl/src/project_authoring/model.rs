@@ -4,8 +4,9 @@
 pub enum ProjectStarter {
     Http,
     Dhis2Tracker,
-    Opencrvs,
-    Openspp,
+    OpencrvsDci,
+    FhirR4,
+    Snapshot,
 }
 
 impl ProjectStarter {
@@ -13,8 +14,9 @@ impl ProjectStarter {
         match self {
             Self::Http => "bounded-http",
             Self::Dhis2Tracker => "dhis2-tracker",
-            Self::Opencrvs => "opencrvs",
-            Self::Openspp => "openspp",
+            Self::OpencrvsDci => "opencrvs-dci",
+            Self::FhirR4 => "fhir-r4",
+            Self::Snapshot => "snapshot",
         }
     }
 
@@ -24,8 +26,9 @@ impl ProjectStarter {
                 .get_dir(self.directory())
                 .ok_or_else(|| anyhow!("project starter is unavailable")),
             Self::Dhis2Tracker => Ok(&DHIS2_TRACKER_STARTER),
-            Self::Opencrvs => Ok(&OPENCRVS_STARTER),
-            Self::Openspp => Ok(&OPENSPP_STARTER),
+            Self::OpencrvsDci => Ok(&OPENCRVS_DCI_STARTER),
+            Self::FhirR4 => Ok(&FHIR_R4_STARTER),
+            Self::Snapshot => Ok(&SNAPSHOT_STARTER),
         }
     }
 }
@@ -41,6 +44,13 @@ pub struct ProjectTestOptions {
     pub project_directory: PathBuf,
     pub environment: Option<String>,
     pub live: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProjectTestSelection {
+    pub integration: Option<String>,
+    pub fixture: Option<String>,
+    pub trace: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -69,7 +79,6 @@ pub struct ProjectCommandReport {
     pub fixtures: Vec<FixtureReport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub semantic_changes: Vec<SemanticChange>,
-    pub required_reviews: BTreeSet<ReviewClass>,
     pub baseline: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
@@ -101,17 +110,6 @@ pub struct FixtureReport {
 #[serde(deny_unknown_fields)]
 pub struct SemanticChange {
     pub dimension: &'static str,
-    pub previous_digest: Option<String>,
-    pub current_digest: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ReviewClass {
-    Claim,
-    Integration,
-    ServicePolicy,
-    OperatorSecurity,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -121,6 +119,8 @@ struct RegistryProject {
     registry: RegistryDeclaration,
     #[serde(default)]
     integrations: BTreeMap<String, IntegrationReference>,
+    #[serde(default)]
+    entities: BTreeMap<String, EntityReference>,
     services: BTreeMap<String, ServiceDeclaration>,
 }
 
@@ -133,6 +133,12 @@ struct RegistryDeclaration {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct IntegrationReference {
+    file: PathBuf,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EntityReference {
     file: PathBuf,
 }
 
@@ -157,11 +163,25 @@ struct ServiceDeclaration {
     #[serde(default)]
     claims: BTreeMap<String, ClaimDeclaration>,
     #[serde(default)]
-    credentials: BTreeMap<String, CredentialDeclaration>,
-    #[serde(default)]
-    definition: Option<PathBuf>,
+    credential_profiles: BTreeMap<String, CredentialProfileDeclaration>,
     #[serde(default)]
     entity: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    owner: Option<String>,
+    #[serde(default)]
+    sensitivity: Option<RecordSensitivity>,
+    #[serde(default)]
+    access_rights: Option<RecordAccessRights>,
+    #[serde(default)]
+    update_frequency: Option<RecordUpdateFrequency>,
+    #[serde(default)]
+    conforms_to: Vec<String>,
+    #[serde(default)]
+    api: Option<RecordsApiDeclaration>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -182,7 +202,7 @@ enum ConsentDeclaration {
     Required,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AccessDeclaration {
     #[serde(default)]
@@ -191,26 +211,62 @@ struct AccessDeclaration {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct RecordsDefinition {
+struct EntityDefinition {
     version: u8,
     id: String,
-    #[serde(default)]
-    title: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    #[serde(default)]
-    owner: Option<String>,
-    #[serde(default)]
-    sensitivity: Option<RecordSensitivity>,
-    #[serde(default)]
-    access_rights: Option<RecordAccessRights>,
-    #[serde(default)]
-    update_frequency: Option<RecordUpdateFrequency>,
-    #[serde(default)]
-    conforms_to: Vec<String>,
+    revision: u32,
     primary_key: String,
-    fields: BTreeMap<String, RecordField>,
-    api: RecordsApiDeclaration,
+    schema: EntityObjectSchema,
+    materialization: EntityMaterialization,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EntityObjectSchema {
+    #[serde(rename = "type")]
+    schema_type: EntityObjectType,
+    #[serde(rename = "additionalProperties")]
+    additional_properties: bool,
+    required: Vec<String>,
+    properties: BTreeMap<String, EntityFieldSchema>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum EntityObjectType {
+    Object,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EntityFieldSchema {
+    #[serde(rename = "type")]
+    field_type: AuthoredSchemaType,
+    #[serde(default)]
+    format: Option<AuthoredStringFormat>,
+    #[serde(default, rename = "enum")]
+    enum_values: Option<Vec<Value>>,
+    #[serde(default, rename = "const")]
+    const_value: Option<Value>,
+    #[serde(default, rename = "minLength")]
+    min_length: Option<u32>,
+    #[serde(default, rename = "maxLength")]
+    max_length: Option<u32>,
+    #[serde(default)]
+    pattern: Option<String>,
+    #[serde(default)]
+    minimum: Option<i64>,
+    #[serde(default)]
+    maximum: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EntityMaterialization {
+    max_records: u64,
+    max_bytes: AuthoredByteSize,
+    refresh: String,
+    retain_generations: u8,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -282,6 +338,7 @@ struct RecordsApiDeclaration {
     scopes: RecordScopes,
     #[serde(default)]
     purposes: Vec<String>,
+    projection: Vec<String>,
     pagination: RecordPagination,
     #[serde(default)]
     filters: BTreeMap<String, Vec<RecordFilterOperator>>,
@@ -573,7 +630,6 @@ struct ConsultationDeclaration {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ClaimDeclaration {
-    evidence: ClaimEvidence,
     #[serde(default)]
     output: Option<String>,
     #[serde(default)]
@@ -621,7 +677,7 @@ enum DisclosureMode {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct CredentialDeclaration {
+struct CredentialProfileDeclaration {
     format: String,
     #[serde(rename = "type")]
     credential_type: String,
@@ -634,6 +690,8 @@ struct CredentialDeclaration {
 struct IntegrationDocument {
     version: u8,
     id: String,
+    #[serde(default = "default_integration_revision")]
+    revision: u32,
     source: SourceDeclaration,
     input: BTreeMap<String, InputDeclaration>,
     capability: CapabilityDeclaration,
@@ -642,20 +700,22 @@ struct IntegrationDocument {
     fixtures: PathBuf,
 }
 
+fn default_integration_revision() -> u32 {
+    1
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SourceDeclaration {
-    product: String,
+    product: Option<String>,
     versions: SourceVersions,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct SourceVersions {
     #[serde(default)]
     tested: Vec<String>,
-    #[serde(default)]
-    supported: Vec<String>,
     #[serde(default)]
     unverified: Vec<String>,
 }
@@ -663,11 +723,26 @@ struct SourceVersions {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct InputDeclaration {
+    role: AuthoredInputRole,
     #[serde(rename = "type")]
     input_type: InputType,
+    nullable: bool,
+    #[serde(default, rename = "maxLength")]
+    max_length: Option<u16>,
+    #[serde(default, rename = "minLength")]
+    min_length: Option<u16>,
     bytes: u16,
-    pattern: String,
+    #[serde(default)]
+    pattern: Option<String>,
+    #[serde(default, rename = "enum")]
+    enum_values: Option<Vec<Value>>,
+    #[serde(default, rename = "const")]
+    const_value: Option<Value>,
     canonicalization: Canonicalization,
+    #[serde(default)]
+    minimum: Option<i64>,
+    #[serde(default)]
+    maximum: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -675,9 +750,11 @@ struct InputDeclaration {
 enum InputType {
     String,
     FullDate,
+    Boolean,
+    Integer,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum Canonicalization {
     Identity,
@@ -695,7 +772,7 @@ enum CredentialType {
     ApiKeyQuery,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct CredentialInterface {
     #[serde(rename = "type")]
@@ -704,20 +781,37 @@ struct CredentialInterface {
     name: Option<String>,
     #[serde(default)]
     max_value_bytes: Option<u16>,
+    #[serde(default)]
+    request: Option<OAuthRequestFormat>,
+    #[serde(default)]
+    response_profile: Option<OAuthResponseProfile>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    audience: Option<String>,
+    #[serde(default)]
+    refresh_skew: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum OAuthRequestFormat {
+    Form,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum OAuthResponseProfile {
+    Oauth2Bearer,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum CapabilityDeclaration {
-    Http {
-        http: HttpDeclaration,
-    },
-    Snapshot {
-        snapshot: SnapshotDeclaration,
-    },
-    Script {
-        script: ScriptDeclaration,
-    },
+    Http { http: HttpDeclaration },
+    Snapshot { snapshot: SnapshotDeclaration },
+    Script { script: ScriptDeclaration },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -734,6 +828,7 @@ struct ScriptDeclaration {
     credential: CredentialInterface,
     operations: BTreeMap<String, OperationDeclaration>,
     script: PathBuf,
+    modules: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -746,6 +841,7 @@ enum ScriptRuntime {
 #[serde(deny_unknown_fields)]
 struct SnapshotDeclaration {
     entity: String,
+    exact: BTreeMap<String, String>,
     cardinality: CardinalityMode,
     freshness: String,
     materialization: SnapshotFootprint,
@@ -904,6 +1000,7 @@ fn reject_additional() -> AdditionalFields {
 #[serde(rename_all = "snake_case")]
 enum AdditionalFields {
     Reject,
+    Ignore,
 }
 
 #[derive(Debug)]
@@ -968,7 +1065,14 @@ struct OutputDeclaration {
     nullable: bool,
     #[serde(default)]
     max_bytes: Option<u32>,
-    from: String,
+    #[serde(default)]
+    minimum: Option<i64>,
+    #[serde(default)]
+    maximum: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_pointer: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1003,28 +1107,72 @@ struct EnvironmentDocument {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EnvironmentIntegration {
-    source_version: String,
-    #[serde(default)]
-    data_destination: Option<DestinationBinding>,
-    #[serde(default)]
-    credential_destination: Option<DestinationBinding>,
-    #[serde(default)]
-    credential: Option<EnvironmentCredential>,
-    #[serde(default)]
-    advanced_capabilities: Option<IntegrationAdvancedCapabilities>,
+    source: EnvironmentSourceBinding,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct DestinationBinding {
+struct EnvironmentSourceBinding {
     origin: String,
+    #[serde(default)]
+    allowed_private_cidrs: Vec<String>,
+    #[serde(default)]
+    ca: Option<CertificateAuthorityBinding>,
+    #[serde(default)]
+    mtls: Option<MutualTlsBinding>,
+    #[serde(default)]
+    credential: Option<EnvironmentCredential>,
+    #[serde(default)]
+    oauth: Option<PrivateEndpointBinding>,
+    #[serde(default)]
+    jwks: Option<PrivateEndpointBinding>,
+    #[serde(default)]
+    rate: Option<SourceRateBinding>,
+    #[serde(default)]
+    concurrency: Option<u16>,
+    #[serde(default)]
+    timeout: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CertificateAuthorityBinding {
+    file: PathBuf,
+    generation: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct MutualTlsBinding {
+    certificate_file: PathBuf,
+    private_key: SecretReference,
+    generation: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateEndpointBinding {
+    origin: String,
+    path: String,
+    #[serde(default)]
+    allowed_private_cidrs: Vec<String>,
+    #[serde(default)]
+    ca: Option<CertificateAuthorityBinding>,
+    #[serde(default)]
+    mtls: Option<MutualTlsBinding>,
+    generation: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SourceRateBinding {
+    per_minute: u32,
+    burst: u16,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EnvironmentCredential {
-    #[serde(rename = "type")]
-    credential_type: CredentialType,
     #[serde(default)]
     username: Option<SecretReference>,
     #[serde(default)]
@@ -1037,8 +1185,6 @@ struct EnvironmentCredential {
     client_secret: Option<SecretReference>,
     #[serde(default)]
     value: Option<SecretReference>,
-    #[serde(default)]
-    review: Option<ReviewClassInput>,
     generation: u64,
 }
 
@@ -1080,6 +1226,11 @@ enum RecordProvider {
     Parquet {
         path: PathBuf,
     },
+    Postgres {
+        connection: SecretReference,
+        schema: String,
+        table: String,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1105,12 +1256,13 @@ struct RelayBinding {
     issuer: String,
     jwks_url: String,
     audience: String,
-    workload_client_id: String,
+    allowed_clients: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct NotaryRelayBinding {
+    workload_client_id: String,
     token_file: PathBuf,
 }
 
@@ -1150,72 +1302,42 @@ struct ServiceBinding {
     service: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct IntegrationAdvancedCapabilities {
-    script: ScriptEnablement,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ScriptEnablement {
-    enabled: bool,
-    review: ReviewClassInput,
-}
-
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-enum ReviewClassInput {
-    OperatorSecurity,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Serialize)]
 struct FixtureDocument {
     name: String,
+    classification: AuthoredFixtureClassification,
     input: BTreeMap<String, Value>,
     #[serde(default)]
     variables: BTreeMap<String, Value>,
-    #[serde(default)]
-    request_context: Option<FixtureRequestContext>,
-    #[serde(default)]
-    request_overrides: Option<Value>,
-    source: BTreeMap<String, FixtureSourceResponse>,
+    interactions: Vec<FixtureInteraction>,
     expect: FixtureExpectation,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-#[serde(untagged)]
+#[derive(Debug, Clone, Serialize)]
+struct FixtureInteraction {
+    expect: FixtureRequestExpectation,
+    respond: FixtureSourceResponse,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct FixtureRequestExpectation {
+    method: ReadMethod,
+    path: String,
+    query: BTreeMap<String, Value>,
+    headers: BTreeMap<String, String>,
+    body: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 enum FixtureSourceResponse {
     Http {
         status: u16,
-        #[serde(default)]
+        headers: BTreeMap<String, String>,
         body: Value,
     },
     Timeout {
         timeout: String,
     },
-    RawBody {
-        status: u16,
-        raw_body: String,
-    },
-    BodyBytes {
-        status: u16,
-        body_bytes: u64,
-    },
-    Outcome {
-        outcome: String,
-    },
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct FixtureRequestContext {
-    caller: String,
-    #[serde(default)]
-    scopes: Vec<String>,
-    purpose: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1229,14 +1351,6 @@ struct FixtureExpectation {
     error: Option<String>,
     #[serde(default)]
     outcome: Option<String>,
-    #[serde(default)]
-    source_access: Option<bool>,
-    #[serde(default)]
-    disclosed_claims: Vec<String>,
-    #[serde(default)]
-    calls: Vec<String>,
-    #[serde(default)]
-    fresh_worker: Option<bool>,
 }
 
 struct LoadedRegistryProject {
@@ -1245,19 +1359,20 @@ struct LoadedRegistryProject {
     environment_name: Option<String>,
     environment: Option<EnvironmentDocument>,
     integrations: BTreeMap<String, LoadedIntegration>,
-    records: BTreeMap<String, LoadedRecordsDefinition>,
+    entities: BTreeMap<String, LoadedEntityDefinition>,
     authored_hash: String,
     semantic_digests: SemanticDigests,
 }
 
-struct LoadedRecordsDefinition {
-    document: RecordsDefinition,
+struct LoadedEntityDefinition {
+    document: EntityDefinition,
 }
 
 struct LoadedIntegration {
     document: IntegrationDocument,
     fixtures: Vec<(PathBuf, FixtureDocument)>,
     script: Option<(PathBuf, Box<[u8]>)>,
+    script_modules: Vec<(PathBuf, Box<[u8]>)>,
 }
 
 struct CompiledProject {
@@ -1265,10 +1380,10 @@ struct CompiledProject {
     relay_private: BTreeMap<PathBuf, Box<[u8]>>,
     notary_private: BTreeMap<PathBuf, Box<[u8]>>,
     review: Value,
+    approval_state: Value,
     explanation: Value,
     fixture_profiles: Vec<FixtureProfile>,
     semantic_changes: Vec<SemanticChange>,
-    required_reviews: BTreeSet<ReviewClass>,
 }
 
 struct FixtureProfile {
@@ -1280,7 +1395,7 @@ struct FixtureProfile {
 }
 
 struct VerifiedBaseline {
-    review: Value,
+    approval_state: Value,
     verified_manifest: Value,
 }
 

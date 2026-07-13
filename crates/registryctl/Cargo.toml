@@ -17,6 +17,7 @@ ed25519-dalek = "2"
 getrandom = "0.4"
 hex.workspace = true
 include_dir = "0.7"
+ipnet.workspace = true
 registry-config-report = { workspace = true }
 registry-notary-core.workspace = true
 registry-notary-server = { workspace = true, features = ["registry-notary-cel"] }

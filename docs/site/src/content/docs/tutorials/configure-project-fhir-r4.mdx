@@ -1,151 +1,150 @@
 ---
 title: Configure a FHIR R4 integration
-description: Define a fixed Patient anchor and Coverage relation with bounded FHIR R4 request and response primitives in a Registry Stack project.
+description: Use product-neutral script calls and the bounded FHIR R4 search-set helper in a Registry Stack project.
 status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-12"
+last_reviewed: "2026-07-13"
 doc_type: how-to
 locale: en
 standards_referenced:
   - fhir-r4
 ---
 
-Use this guide when a reviewed source exposes the fixed Fast Healthcare Interoperability
-Resources Release 4 (FHIR R4) search journey supported by Registry Stack.
-You will declare one exact Patient anchor, one Coverage relation, bounded search-set Bundles, and
-a closed output projection.
+Use this guide when a reviewed source exposes a bounded FHIR R4 search journey that needs more
+than one HTTP request. You will keep source authority in configuration, use ordinary Rhai for
+project-specific decisions, and delegate FHIR search-set parsing to the versioned protocol helper.
 
 {/* Evidence: crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active/ and
-    crates/registryctl/tests/project_authoring.rs,
-    fhir_r4_coverage_active_passes_the_closed_bundle_matrix. */}
+    crates/registryctl/tests/project_authoring.rs. */}
 
 ## When to use this
 
-Use the FHIR R4 primitives for the maintained `fhir-r4-coverage-active` contract shape:
+Use `script` when one consultation must follow a bounded relationship or same-origin pagination
+link. A maintained journey can:
 
-1. Search `Patient` with exact reviewed parameters and `_count=2`.
-2. Use the matched Patient id in one fixed `Coverage` relation search.
-3. Project presence and bounded Coverage status outputs for a closed claim rule.
+1. search `Patient` with reviewed selector parameters;
+2. follow at most the declared number of same-origin pages;
+3. search `Coverage` using the selected Patient id; and
+4. fetch a related `Organization` through a reviewed path rule.
 
-This is not a generic FHIR proxy or a claim of interoperability with an untested deployment.
-Registry Relay does not follow Bundle pagination links or accept caller-selected FHIR resources,
-parameters, paths, projections, FHIRPath, `_include`, `_revinclude`, chained search, `_has`,
-transactions, subscriptions, GraphQL, or writes.
+This is not a generic FHIR proxy. The script cannot select another origin, credential, HTTP
+method, unreviewed path, or output field. Transactions, subscriptions, GraphQL, writes, and
+unbounded pagination remain outside the contract.
 
 ## Before you start
 
 You need:
 
-- A Registry Stack project that uses the bounded HTTP authoring schema.
-- A reviewed FHIR R4 endpoint and credential interface.
-- Exact Patient selector parameters and one reviewed Coverage relation.
-- Synthetic search-set Bundle fixtures for match, no match, ambiguity, and denial cases.
+- a Registry Stack project and reviewed FHIR R4 endpoint;
+- exact Patient selectors and bounded relationship rules;
+- an `adapter.rhai` file; and
+- synthetic request-aware fixtures for match, no match, and ambiguity.
 
-Keep resource types, search parameter names, relation bindings, and projections fixed in the
-integration.
+## Declare typed inputs and source authority
 
-## Declare the Patient anchor
-
-Add the anchor operation under `capability.http.operations`:
+The source product and version are optional interoperability evidence. They never select the
+executor or make Rhai available.
 
 ```yaml
-patient:
-  primitive: fhir_r4_search_get
-  request:
-    method: GET
-    destination: data
-    path: /fhir/Patient
-    codec: fhir_r4_search_get
-    query:
-      _count: { value: "2" }
-      birthdate: { input: birthdate }
-      family: { input: family }
-      given: { input: given }
-  response:
-    statuses: [200]
-    codec: fhir_r4_searchset
-    max_bytes: 32768
-    schema:
-      type: object
-      additional_fields: reject
-      fields:
-        id: { required: true, type: string, max_bytes: 64 }
-    cardinality: { mode: probe_two }
-```
+version: 1
+id: coverage-active
+revision: 1
 
-Declare `birthdate`, `family`, and `given` as required typed consultation inputs.
-The complete exact selector is one subject predicate.
-Two Patient matches produce `ambiguous`; Registry Relay does not choose one.
+source:
+  product: fhir-server
+  versions: { unverified: [r4-api] }
+  auth: { type: none }
+  allow:
+    - { method: GET, path: /fhir/Patient }
+    - { method: GET, path: /fhir/Coverage }
+    - { method: GET, path: /fhir/Organization/* }
 
-## Declare the Coverage relation
-
-Add one dependent relation operation:
-
-```yaml
-coverage:
-  depends_on: [patient]
-  primitive: fhir_r4_search_get
-  request:
-    method: GET
-    destination: data
-    path: /fhir/Coverage
-    codec: fhir_r4_search_get
-    query:
-      _count: { value: "2" }
-      beneficiary: { prior: patient.id }
-  response:
-    statuses: [200]
-    codec: fhir_r4_searchset
-    max_bytes: 32768
-    schema:
-      type: object
-      additional_fields: reject
-      fields:
-        status: { required: true, type: string, max_bytes: 16 }
-    cardinality: { mode: probe_two }
-```
-
-The prior Patient id can populate only the declared `beneficiary` value.
-It cannot select a resource, path, operation, credential, projection, or new relation.
-
-Map the relation result to a closed output:
-
-```yaml
-outputs:
-  patient_exists: { type: presence, from: patient.presence }
-  coverage_status:
+input:
+  birthdate:
+    role: selector
     type: string
-    nullable: true
-    max_bytes: 16
-    from: coverage.status
+    format: date
+    minLength: 10
+    maxLength: 10
+  family: { role: selector, type: string, maxLength: 80 }
+  given: { role: selector, type: string, maxLength: 80 }
+
+capability:
+  script: { file: adapter.rhai }
+
+outputs:
+  coverage_status: { type: string, maxLength: 32 }
+  insurer_name: { type: string, maxLength: 160 }
+
+limits:
+  calls: 5
+  source_bytes: 2MiB
+  deadline: 15s
 ```
 
-Map a claim from the bounded status output in `registry-stack.yaml` while preserving the closed
-output contract. The claim declaration selects it with `output`, for example
-`output: coverage.status`.
+An exact rule admits only that path. `*` admits one bounded path segment. A terminal `/**` is
+available when a reviewed API genuinely needs a bounded suffix. Query names and values remain
+script-selected but are independently bounded and canonicalized by the host.
 
-## Add the Bundle denial matrix
+## Parse search-set Bundles in Rhai
 
-Add synthetic fixtures that cover:
+Call the source through the host API, then pass the response to the FHIR helper:
 
-- Patient and Coverage match.
-- No Patient match.
-- Ambiguous Patient anchor.
-- Ambiguous Coverage relation.
-- Malformed or oversized Bundle.
-- Wrong resource type.
-- `OperationOutcome` instead of the declared search-set Bundle.
-- A pagination link that Registry Relay does not follow.
-- Wrong caller or scope and wrong purpose before source access.
+```rhai
+let response = source.get("/fhir/Patient", #{
+    query: #{
+        _count: 2,
+        birthdate: ctx.input.birthdate,
+        family: ctx.input.family,
+        given: ctx.input.given
+    }
+});
+if response.status != 200 {
+    return result.fail(failure.source_rejected);
+}
+let page = protocol.fhir.parse_searchset(response, "Patient");
+```
 
-Fixtures contain bounded source observations, not a destination, credential, or real health
-record.
+`protocol.fhir.parse_searchset` requires a FHIR R4 `Bundle` whose type is `searchset`. It returns
+bounded `matches`, `included`, `outcomes`, and an optional `next` link. It rejects malformed
+structure, wrong match resource types, and conflicting next links before the script can use them.
 
-## Verify the fixed journey
+An absolute `next` link can be passed to `source.get` only when it has the configured source
+origin and its path matches an allow rule. Fragments, user information, another port, another
+scheme, and another host fail before dispatch.
 
-Run the offline fixtures and production compiler checks:
+The project script owns profile-specific choices such as identifier systems, Patient matching,
+Coverage relationships, and the final minimized output map. Keep those decisions visible in the
+script instead of adding product-specific Rust branches.
+
+## Bind the private source
+
+The environment supplies the deployment origin and secrets without repeating the auth type:
+
+```yaml
+integrations:
+  coverage:
+    source:
+      origin: https://fhir.internal.invalid
+      timeout: 10s
+      concurrency: 4
+      rate: { per_minute: 120, burst: 10 }
+```
+
+Add private CIDRs, a private CA, mTLS, or a credential binding only when the deployment needs
+them. These settings cannot widen the stable method and path authority.
+
+## Add request-aware fixtures
+
+Each semantic fixture describes the exact canonical request and its synthetic response. Large
+FHIR bodies belong under `fixtures/bodies/` and are referenced with `file`. Cover a positive
+match, no match, ambiguity, and meaningful project-specific variations. The harness derives
+platform-generic malformed, oversized, timeout, authorization-before-source, and minimization
+checks.
+
+## Verify the journey
 
 ```sh
 registryctl test --project-dir <project>
@@ -155,26 +154,23 @@ registryctl check \
   --explain
 ```
 
-The reports contain `"status": "passed"` and `"status": "valid"`.
-In the explanation, confirm the two fixed resource paths, exact parameters, `_count=2`, response
-byte ceilings, probe-two cardinality, and closed presence and Coverage status outputs.
-
-Fixture success proves the compiled contract and decoder behavior.
-It does not prove interoperability, legal suitability, or source semantics for a deployment that
-has not passed the separate integration review.
+Confirm the request trace contains only reviewed methods and paths, safe header names, bounded
+query shape, and the expected call order. Fixture success proves the compiled contract and local
+decoder behavior. It does not prove interoperability, legal suitability, or deployment source
+semantics.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| The compiler rejects a search parameter | The parameter is not declared by the fixed request codec. | Remove caller-selected search or add a separately reviewed reusable primitive. |
-| A Bundle fails as ambiguous | More than one anchor or relation matched the exact query. | Correct the source data or use a reviewed selector that proves uniqueness. |
-| A Bundle fails on an unknown field or type | The observed resource shape is outside the closed schema. | Update the reviewed integration and fixtures, then repeat integration review. |
-| A response with `link.next` does not continue | Pagination following is outside the contract. | Use a source query whose fixed cardinality fits the bounded journey. |
+| `source.get` rejects a target | The path or absolute link is outside the reviewed source authority. | Correct the script or add the narrow reviewed allow rule. |
+| The FHIR helper rejects a Bundle | The response is not one valid R4 search-set shape. | Correct the synthetic body or review the real source contract. |
+| The result is ambiguous | More than one subject or relation matched within the bounded journey. | Strengthen reviewed selectors or correct the source data. |
+| A later page is not fetched | The call limit, path rule, same-origin check, or deadline closed the request. | Use the smallest honest bounds demonstrated by fixtures. |
 
 ## Next
 
-- Return to [Author an HTTP Registry Stack project](../author-registry-project/) to review
-  and build the project.
+- Return to [Author an HTTP Registry Stack project](../author-registry-project/) to review and
+  build the project.
 - Use [Configure API-key source authentication](../configure-project-api-key-authentication/) if
   the FHIR endpoint requires a fixed API key.

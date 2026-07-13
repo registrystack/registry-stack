@@ -1,9 +1,13 @@
 name: no-person
+classification: synthetic
 input: { person_id: AB-123456 }
-source:
-  person:
-    status: 200
-    body: { records: [] }
+interactions:
+  - expect:
+      method: GET
+      path: /people/AB-123456
+      query: { fields: active }
+    respond: { status: 404, body: {} }
 expect:
+  outcome: no_match
   outputs: {}
-  claims: { person-record-exists: false, person-status: null, person-active: false }
+  claims: { person-record-exists: false, person-active: null }

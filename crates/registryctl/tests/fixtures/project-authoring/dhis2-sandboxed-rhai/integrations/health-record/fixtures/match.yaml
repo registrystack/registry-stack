@@ -1,27 +1,37 @@
 name: complete-health-match
+classification: synthetic
 input: { tracked_entity: A0000000001 }
 variables: { as_of_date: 2026-01-01 }
-source:
-  identity:
-    status: 200
-    body:
-      trackedEntities:
-        - { first_name: Nia, last_name: Example, date_of_birth: 2017-06-15 }
-  child_program:
-    status: 200
-    body:
-      enrollments:
-        - { active: true, programme_code: CHILD, reconciliation_reference: REF-0001 }
-  care: { status: 200, body: { maternal_postnatal_active: true, child_health_visit_recorded: true } }
-  tb_program: { status: 200, body: { enrollments: [{ active: false }] } }
+interactions:
+  - expect:
+      method: GET
+      path: /api/tracker/trackedEntities/A0000000001
+      query:
+        fields: trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]
+    respond:
+      status: 200
+      body:
+        trackedEntity: A0000000001
+        attributes:
+          - { attribute: DEMO_FIRST_NAME_ATTRIBUTE_UID, value: Nia }
+          - { attribute: DEMO_LAST_NAME_ATTRIBUTE_UID, value: Example }
+          - { attribute: DEMO_BIRTH_DATE_ATTRIBUTE_UID, value: 2017-06-15 }
+          - { attribute: DEMO_RECONCILIATION_ATTRIBUTE_UID, value: REF-0001 }
+        enrollments:
+          - program: DEMO_CHILD_PROGRAM_UID
+            status: ACTIVE
+            events: [{ programStage: DEMO_CHILD_VISIT_STAGE_UID, status: COMPLETED }]
+          - { program: DEMO_MATERNAL_PROGRAM_UID, status: ACTIVE, events: [] }
+          - { program: DEMO_TB_PROGRAM_UID, status: CANCELLED, events: [] }
+        ignored_upstream_field: safe-extra-field
 expect:
+  outcome: match
   outputs:
-    exists: true
     first_name: Nia
     last_name: Example
     date_of_birth: 2017-06-15
     child_program_active: true
-    programme_code: CHILD
+    programme_code: DEMO_CHILD_PROGRAM
     reconciliation_reference: REF-0001
     maternal_postnatal_active: true
     child_health_visit_recorded: true
@@ -31,9 +41,8 @@ expect:
     tracked-entity-last-name: Example
     child-program-active: true
     child-age-band: 5-17
-    programme-code: CHILD
+    programme-code: DEMO_CHILD_PROGRAM
     reconciliation-reference: redacted
     maternal-postnatal-care-active: true
     child-health-visit-recorded: true
     tb-program-active: false
-  calls: [identity, child_program, care, tb_program]

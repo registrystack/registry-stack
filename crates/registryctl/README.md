@@ -51,20 +51,21 @@ registryctl check --project-dir registry-project --environment local --explain
 registryctl build --project-dir registry-project --environment local
 ```
 
-The authoring contract accepts one to four exact subject inputs. Input names
-match `[a-z][a-z0-9_]{0,63}`, values are bounded to 256 bytes, and patterns are
-bounded to 1024 bytes. Credentials are fixed interfaces whose values remain
-environment-only secret references. `check` and `build` compile the generated
-closure with the validators for the selected Relay, Notary, or combined deployment. `test` additionally
-executes deterministic source fixtures without granting fixture YAML network,
+The authoring contract accepts one to eight exact selector inputs and up to
+sixteen typed inputs in total. Canonical selectors have a fixed 4096-byte
+aggregate ceiling. Input names match `[a-z][a-z0-9_]{0,63}` and use a bounded
+scalar JSON Schema subset. Credentials are fixed interfaces whose values
+remain environment-only secret references. `check` and `build` compile the
+generated closure with the validators for the selected Relay-only, Notary-only,
+or combined deployment. `test` additionally executes deterministic,
+request-aware source fixtures without granting fixture YAML network,
 credential, filesystem, or worker authority.
 
-`script` with `runtime: rhai_v1` is an advanced, release-gated integration mode. Its offline
-conformance fixtures use the isolated implementation-owned worker harness;
-ordinary startup remains unavailable unless the release includes the reviewed
-Rhai runtime and worker contract and the project environment has
-explicit operator-security enablement. Source product and version remain review
-and provenance metadata; they do not select the Rhai runtime or executor.
+`script` uses the release-gated Rhai v1 authoring ABI. Its offline conformance
+fixtures use the isolated implementation-owned worker harness, and deployment
+uses the same fixed source authority, budgets, and reviewed script closure.
+Source product and version remain optional interoperability evidence; they do
+not select the Rhai runtime, source operations, or executor.
 `test --live` requires an explicit non-production environment and uses only the
 governed deployed Notary path. It never contacts a source registry directly.
 

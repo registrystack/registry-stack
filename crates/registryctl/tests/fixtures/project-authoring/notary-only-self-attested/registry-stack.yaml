@@ -10,11 +10,10 @@ services:
     access: { scopes: ["evidence:declaration:read"] }
     claims:
       applicant-declaration:
-        evidence: self_attested
         cel: "true"
         value: { type: boolean }
         disclosure: predicate
-    credentials:
+    credential_profiles:
       applicant-declaration:
         format: dc+sd-jwt
         type: https://credentials.invalid/applicant-declaration/v1

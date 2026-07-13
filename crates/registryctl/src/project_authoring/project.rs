@@ -9,35 +9,28 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
 
     let mut hasher = Sha256::new();
     hash_authored_file(&mut hasher, PROJECT_FILE, &project_bytes);
-    let mut records = BTreeMap::new();
-    for service in project
-        .services
-        .values()
-        .filter(|service| service.kind == ServiceKind::RecordsApi)
-    {
-        let relative = service
-            .definition
-            .as_ref()
-            .ok_or_else(|| anyhow!("records_api definition is absent"))?;
+    let mut entities = BTreeMap::new();
+    for (alias, reference) in &project.entities {
+        let relative = &reference.file;
         let path = resolve_authored_path(&root, relative)?;
         let bytes = read_authored_file(&root, &path)?;
         hash_authored_file(
             &mut hasher,
             relative
                 .to_str()
-                .ok_or_else(|| anyhow!("records definition path is not Unicode"))?,
+                .ok_or_else(|| anyhow!("entity definition path is not Unicode"))?,
             &bytes,
         );
-        let document: RecordsDefinition = parse_yaml(&bytes, &relative.display().to_string())?;
-        validate_records_definition(&document)?;
-        if service.entity.as_deref() != Some(document.id.as_str()) {
-            bail!("records_api entity must match its records definition id");
+        let document: EntityDefinition = parse_yaml(&bytes, &relative.display().to_string())?;
+        validate_entity_definition(&document)?;
+        if alias != &document.id {
+            bail!("entity alias must match the referenced entity id");
         }
-        if records
-            .insert(document.id.clone(), LoadedRecordsDefinition { document })
+        if entities
+            .insert(document.id.clone(), LoadedEntityDefinition { document })
             .is_some()
         {
-            bail!("one records entity cannot be declared by multiple services");
+            bail!("one entity cannot be declared more than once");
         }
     }
     let mut integrations = BTreeMap::new();
@@ -52,8 +45,9 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
                 .ok_or_else(|| anyhow!("integration path is not Unicode"))?,
             &bytes,
         );
-        let document: IntegrationDocument =
+        let authored: AuthoredIntegrationDocument =
             parse_yaml(&bytes, &reference.file.display().to_string())?;
+        let document = lower_project_integration(&authored, &entities)?;
         validate_integration(alias, &document).with_context(|| {
             format!("invalid authored integration {}", reference.file.display())
         })?;
@@ -83,17 +77,43 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
                 ))
             })
             .transpose()?;
+        let mut script_modules = Vec::new();
+        if let CapabilityDeclaration::Script { script } = &document.capability {
+            let mut resolved_modules = BTreeSet::new();
+            for module in &script.modules {
+                if module.extension().and_then(std::ffi::OsStr::to_str) != Some("rhai") {
+                    bail!("script modules must use the .rhai extension");
+                }
+                let module_path = resolve_relative_to_file(&root, &path, module)?;
+                if !resolved_modules.insert(module_path.clone()) {
+                    bail!("script modules must resolve to unique authored files");
+                }
+                let module_bytes = read_authored_file(&root, &module_path)?;
+                let relative = module_path
+                    .strip_prefix(&root)
+                    .map_err(|_| anyhow!("script module path escapes project root"))?;
+                hash_authored_file(
+                    &mut hasher,
+                    relative
+                        .to_str()
+                        .ok_or_else(|| anyhow!("script module path is not Unicode"))?,
+                    &module_bytes,
+                );
+                script_modules.push((module_path, module_bytes.into_boxed_slice()));
+            }
+        }
         integrations.insert(
             alias.clone(),
             LoadedIntegration {
                 document,
                 fixtures,
                 script,
+                script_modules,
             },
         );
     }
     validate_service_integration_links(&project, &integrations)?;
-    validate_project_records_links(&integrations, &records)?;
+    validate_project_entity_links(&project, &integrations, &entities)?;
 
     let (environment_name, environment) = match environment {
         Some(name) => {
@@ -110,52 +130,297 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
             );
             let document: EnvironmentDocument =
                 parse_yaml(&bytes, &relative.display().to_string())?;
-            validate_environment(&project, &integrations, &records, &document)?;
+            validate_environment(&project, &integrations, &entities, &document)?;
             (Some(name.to_owned()), Some(document))
         }
         None => (None, None),
     };
     let semantic_digests =
-        semantic_digests(&project, &integrations, &records, environment.as_ref())?;
+        semantic_digests(&project, &integrations, &entities, environment.as_ref())?;
     Ok(LoadedRegistryProject {
         root,
         project,
         environment_name,
         environment,
         integrations,
-        records,
+        entities,
         authored_hash: format!("sha256:{}", hex::encode(hasher.finalize())),
         semantic_digests,
     })
 }
 
+fn lower_project_integration(
+    authored: &AuthoredIntegrationDocument,
+    entities: &BTreeMap<String, LoadedEntityDefinition>,
+) -> Result<IntegrationDocument> {
+    let AuthoredCapabilityDeclaration::Snapshot { snapshot } = &authored.capability else {
+        return lower_authored_integration(authored);
+    };
+    validate_authored_integration_contract(authored)?;
+    let AuthoredOutputsDeclaration::EntityFields(output_names) = &authored.outputs else {
+        bail!("snapshot outputs must be a non-empty list of entity fields");
+    };
+    if output_names.is_empty() || output_names.len() > MAX_OUTPUTS {
+        bail!("snapshot outputs must contain between one and {MAX_OUTPUTS} entity fields");
+    }
+    let entity = &entities
+        .get(&snapshot.entity)
+        .ok_or_else(|| anyhow!("snapshot references unknown entity {}", snapshot.entity))?
+        .document;
+    let mut unique_outputs = BTreeSet::new();
+    let outputs = output_names
+        .iter()
+        .map(|name| {
+            validate_input_name(name).with_context(|| format!("snapshot output {name}"))?;
+            if !unique_outputs.insert(name) {
+                bail!("snapshot outputs must be unique");
+            }
+            let field = entity
+                .schema
+                .properties
+                .get(name)
+                .ok_or_else(|| anyhow!("snapshot output {name} is not an entity property"))?;
+            let (output_type, nullable, max_bytes) = entity_output_contract(name, field)?;
+            if max_bytes.is_some_and(|bytes| bytes > 64 * 1024) {
+                bail!("snapshot output {name} exceeds the 64KiB scalar release ceiling");
+            }
+            Ok((
+                name.clone(),
+                OutputDeclaration {
+                    output_type,
+                    nullable,
+                    max_bytes,
+                    minimum: field.minimum,
+                    maximum: field.maximum,
+                    from: Some(format!("snapshot.record.{name}")),
+                    source_pointer: None,
+                },
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    if snapshot.exact.is_empty() || snapshot.exact.len() > 8 {
+        bail!("snapshot exact must contain between one and eight entity selectors");
+    }
+    let exact = snapshot
+        .exact
+        .iter()
+        .map(|(field, reference)| {
+            let entity_field =
+                entity.schema.properties.get(field).ok_or_else(|| {
+                    anyhow!("snapshot exact field {field} is not an entity property")
+                })?;
+            if entity_field_nullable(entity_field)? {
+                bail!("snapshot exact fields cannot be nullable");
+            }
+            let input = authored.input.get(&reference.input).ok_or_else(|| {
+                anyhow!(
+                    "snapshot exact references unknown input {}",
+                    reference.input
+                )
+            })?;
+            if input.role != AuthoredInputRole::Selector {
+                bail!("snapshot exact may reference only selector inputs");
+            }
+            Ok((field.clone(), reference.input.clone()))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    if exact.values().collect::<BTreeSet<_>>() != authored.input.keys().collect::<BTreeSet<_>>() {
+        bail!("snapshot exact must bind every integration input exactly once");
+    }
+    parse_duration_ms_with_max(
+        &snapshot.freshness,
+        31 * 24 * 60 * 60 * 1_000,
+        "snapshot freshness",
+    )?;
+    let input = authored
+        .input
+        .iter()
+        .map(|(name, declaration)| {
+            let schema = lower_input_schema(name, declaration)?;
+            Ok((
+                name.clone(),
+                InputDeclaration {
+                    role: declaration.role,
+                    input_type: schema.input_type,
+                    nullable: schema.nullable,
+                    max_length: schema.max_length,
+                    min_length: schema.min_length,
+                    bytes: schema.max_bytes,
+                    pattern: schema.pattern,
+                    enum_values: schema.enum_values,
+                    const_value: schema.const_value,
+                    canonicalization: declaration
+                        .canonicalization
+                        .clone()
+                        .unwrap_or(Canonicalization::Identity),
+                    minimum: schema.minimum,
+                    maximum: schema.maximum,
+                },
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    Ok(IntegrationDocument {
+        version: authored.version,
+        id: authored.id.clone(),
+        revision: authored.revision,
+        source: SourceDeclaration {
+            product: None,
+            versions: SourceVersions::default(),
+        },
+        input,
+        capability: CapabilityDeclaration::Snapshot {
+            snapshot: SnapshotDeclaration {
+                entity: snapshot.entity.clone(),
+                exact,
+                cardinality: CardinalityMode::ProbeTwo,
+                freshness: snapshot.freshness.clone(),
+                materialization: SnapshotFootprint {
+                    max_source_records: entity.materialization.max_records,
+                    max_source_bytes: entity
+                        .materialization
+                        .max_bytes
+                        .bytes("entity.materialization.max_bytes")?,
+                },
+            },
+        },
+        outputs,
+        bounds: BoundsDeclaration {
+            calls: 0,
+            source_bytes: 1024 * 1024,
+            request_bytes: 64 * 1024,
+            deadline: "15s".to_string(),
+            concurrency: 8,
+        },
+        fixtures: PathBuf::from("fixtures"),
+    })
+}
+
+fn entity_output_contract(
+    name: &str,
+    field: &EntityFieldSchema,
+) -> Result<(FactType, bool, Option<u32>)> {
+    let (scalar, nullable) = schema_type_parts(&field.field_type)?;
+    let (output_type, max_bytes) = match (scalar, field.format) {
+        (AuthoredScalarType::String, Some(AuthoredStringFormat::Date)) => {
+            if field.max_length != Some(10) {
+                bail!("entity field {name} date format requires maxLength: 10");
+            }
+            (FactType::Date, Some(40))
+        }
+        (AuthoredScalarType::String, None) => {
+            let max_length = field
+                .max_length
+                .ok_or_else(|| anyhow!("entity String field {name} requires maxLength"))?;
+            if field.min_length.is_some_and(|minimum| minimum > max_length)
+                || field
+                    .pattern
+                    .as_ref()
+                    .is_some_and(|pattern| pattern.is_empty() || pattern.len() > 16_384)
+                || field.minimum.is_some()
+                || field.maximum.is_some()
+            {
+                bail!("entity String field {name} has incompatible constraints");
+            }
+            (
+                FactType::String,
+                Some(
+                    max_length
+                        .checked_mul(4)
+                        .ok_or_else(|| anyhow!("entity field {name} UTF-8 byte bound overflows"))?,
+                ),
+            )
+        }
+        (AuthoredScalarType::Boolean, None) => {
+            if field.max_length.is_some()
+                || field.min_length.is_some()
+                || field.pattern.is_some()
+                || field.minimum.is_some()
+                || field.maximum.is_some()
+            {
+                bail!("entity Boolean field {name} has incompatible constraints");
+            }
+            (FactType::Boolean, None)
+        }
+        (AuthoredScalarType::Integer, None) => {
+            let minimum = field
+                .minimum
+                .ok_or_else(|| anyhow!("entity Integer field {name} requires minimum"))?;
+            let maximum = field
+                .maximum
+                .ok_or_else(|| anyhow!("entity Integer field {name} requires maximum"))?;
+            const JSON_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+            if minimum > maximum
+                || minimum < -JSON_SAFE_INTEGER
+                || maximum > JSON_SAFE_INTEGER
+                || field.max_length.is_some()
+                || field.min_length.is_some()
+                || field.pattern.is_some()
+            {
+                bail!("entity Integer field {name} has incompatible constraints");
+            }
+            (FactType::Integer, None)
+        }
+        (AuthoredScalarType::Null, _) => bail!("entity field {name} cannot have only null type"),
+        (_, Some(_)) => bail!("entity field {name} format is valid only for String"),
+    };
+    for value in field
+        .enum_values
+        .iter()
+        .flatten()
+        .chain(field.const_value.iter())
+    {
+        let matches = value.is_null() && nullable
+            || matches!(
+                scalar,
+                AuthoredScalarType::String if value.is_string()
+            )
+            || matches!(scalar, AuthoredScalarType::Boolean if value.is_boolean())
+            || matches!(scalar, AuthoredScalarType::Integer if value.as_i64().is_some());
+        if !matches {
+            bail!("entity field {name} enum/const value violates its scalar type");
+        }
+    }
+    Ok((output_type, nullable, max_bytes))
+}
+
+fn entity_field_nullable(field: &EntityFieldSchema) -> Result<bool> {
+    Ok(schema_type_parts(&field.field_type)?.1)
+}
+
 fn semantic_digests(
     project: &RegistryProject,
     integrations: &BTreeMap<String, LoadedIntegration>,
-    records: &BTreeMap<String, LoadedRecordsDefinition>,
+    entities: &BTreeMap<String, LoadedEntityDefinition>,
     environment: Option<&EnvironmentDocument>,
 ) -> Result<SemanticDigests> {
     let claims = project
         .services
         .iter()
         .map(|(id, service)| {
-            (
-                id,
-                json!({
-                    "variables": service.variables,
-                    "claims": service.claims.iter().map(|(claim_id, claim)| (
+            let service_claims = service
+                .claims
+                .iter()
+                .map(|(claim_id, claim)| {
+                    Ok((
                         claim_id,
                         json!({
-                            "evidence": claim.evidence,
+                            "evidence": inferred_claim_evidence(service, claim)?,
                             "output": claim.output,
                             "cel": claim.cel,
                             "value": claim.value,
                         }),
-                    )).collect::<BTreeMap<_, _>>(),
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            Ok((
+                id,
+                json!({
+                    "variables": service.variables,
+                    "claims": service_claims,
                 }),
-            )
+            ))
         })
-        .collect::<BTreeMap<_, _>>();
+        .collect::<Result<BTreeMap<_, _>>>()?;
     let policy = project
         .services
         .iter()
@@ -167,25 +432,33 @@ fn semantic_digests(
                     "legal_basis": service.legal_basis,
                     "consent": service.consent,
                     "access": service.access,
-                    "credentials": service.credentials,
+                    "credential_profiles": service.credential_profiles,
                 }),
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let records_policy = records
+    let records_policy = project
+        .services
         .iter()
-        .map(|(id, loaded)| {
+        .filter(|(_, service)| service.kind == ServiceKind::RecordsApi)
+        .map(|(id, service)| {
             (
                 id,
                 json!({
-                    "scopes": loaded.document.api.scopes,
-                    "purposes": loaded.document.api.purposes,
-                    "required_principal_filters": loaded.document.api.required_principal_filters,
+                    "entity": service.entity,
+                    "title": service.title,
+                    "description": service.description,
+                    "owner": service.owner,
+                    "sensitivity": service.sensitivity,
+                    "access_rights": service.access_rights,
+                    "update_frequency": service.update_frequency,
+                    "conforms_to": service.conforms_to,
+                    "api": service.api,
                 }),
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let records_model = records
+    let entity_model = entities
         .iter()
         .map(|(id, loaded)| {
             let definition = &loaded.document;
@@ -194,20 +467,10 @@ fn semantic_digests(
                 json!({
                     "version": definition.version,
                     "id": definition.id,
-                    "title": definition.title,
-                    "description": definition.description,
-                    "owner": definition.owner,
-                    "sensitivity": definition.sensitivity,
-                    "access_rights": definition.access_rights,
-                    "update_frequency": definition.update_frequency,
-                    "conforms_to": definition.conforms_to,
+                    "revision": definition.revision,
                     "primary_key": definition.primary_key,
-                    "fields": definition.fields,
-                    "pagination": definition.api.pagination,
-                    "filters": definition.api.filters,
-                    "relationships": definition.api.relationships,
-                    "aggregates": definition.api.aggregates,
-                    "standards": definition.api.standards,
+                    "schema": definition.schema,
+                    "materialization": definition.materialization,
                 }),
             )
         })
@@ -227,15 +490,11 @@ fn semantic_digests(
                 })
                 .collect::<Result<BTreeMap<_, _>>>()?;
             let script_digest = loaded.script.as_ref().map(|(_, script)| sha256_uri(script));
-            let source_version = environment
-                .and_then(|environment| environment.integrations.get(alias))
-                .map(|binding| binding.source_version.as_str());
             let snapshot_mapping = match &loaded.document.capability {
                 CapabilityDeclaration::Snapshot { snapshot } => environment
                     .and_then(|environment| environment.entities.get(&snapshot.entity))
                     .map(|binding| json!({ "columns": binding.columns })),
-                CapabilityDeclaration::Http { .. }
-                | CapabilityDeclaration::Script { .. } => None,
+                CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Script { .. } => None,
             };
             Ok((
                 alias,
@@ -243,7 +502,6 @@ fn semantic_digests(
                     "document": loaded.document,
                     "fixtures": fixture_digests,
                     "script_digest": script_digest,
-                    "source_version": source_version,
                     "snapshot_mapping": snapshot_mapping,
                 }),
             ))
@@ -269,10 +527,7 @@ fn semantic_digests(
                 (
                     alias,
                     json!({
-                        "data_destination": binding.data_destination,
-                        "credential_destination": binding.credential_destination,
-                        "credential": binding.credential,
-                        "advanced_capabilities": binding.advanced_capabilities,
+                        "source": binding.source,
                     }),
                 )
             })
@@ -297,7 +552,7 @@ fn semantic_digests(
         integration: digest_json(&json!({
             "integrations": integration,
             "service_consultations": service_consultations,
-            "records": records_model,
+            "entities": entity_model,
         }))?,
         service_policy: digest_json(
             &json!({ "services": policy, "records": records_policy, "callers": callers }),
@@ -320,14 +575,30 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
     if project.integrations.len() > 16 {
         bail!("project must declare no more than 16 integrations");
     }
-    if project.services.is_empty() || project.services.len() > 32 {
-        bail!("project must declare between one and 32 services");
+    if project.entities.len() > 32 {
+        bail!("project must declare no more than 32 entities");
+    }
+    if project.integrations.is_empty() && project.entities.is_empty() && project.services.is_empty()
+    {
+        bail!("project must declare at least one integration, entity, or service");
+    }
+    if project.services.len() > 32 {
+        bail!("project must declare no more than 32 services");
     }
     for (alias, reference) in &project.integrations {
         validate_stable_id(alias, "integration alias")?;
         validate_relative_authored_path(&reference.file)?;
     }
+    for (alias, reference) in &project.entities {
+        validate_stable_id(alias, "entity alias")?;
+        validate_relative_authored_path(&reference.file)?;
+        let expected = PathBuf::from("entities").join(format!("{alias}.yaml"));
+        if reference.file != expected {
+            bail!("entity {alias} must reference entities/{alias}.yaml");
+        }
+    }
     let mut project_claim_ids = BTreeSet::new();
+    let mut published_entities = BTreeSet::new();
     for (service_id, service) in &project.services {
         validate_stable_id(service_id, "service id")?;
         match service.kind {
@@ -339,26 +610,37 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                     || !service.variables.is_empty()
                     || !service.consultations.is_empty()
                     || !service.claims.is_empty()
-                    || !service.credentials.is_empty()
+                    || !service.credential_profiles.is_empty()
                 {
-                    bail!("records_api service may declare only kind, definition, and entity");
+                    bail!("records_api service cannot declare evidence-service fields");
                 }
-                let definition = service
-                    .definition
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("records_api service requires a definition"))?;
-                validate_relative_authored_path(definition)?;
-                validate_stable_id(
-                    service
-                        .entity
-                        .as_deref()
-                        .ok_or_else(|| anyhow!("records_api service requires an entity"))?,
-                    "records_api entity",
-                )?;
+                let entity = service
+                    .entity
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("records_api service requires an entity"))?;
+                validate_stable_id(entity, "records_api entity")?;
+                if !project.entities.contains_key(entity) {
+                    bail!("records_api service references an unknown entity");
+                }
+                if !published_entities.insert(entity) {
+                    bail!("one entity cannot be published by multiple records_api services");
+                }
+                if service.api.is_none() {
+                    bail!("records_api service requires api publication policy");
+                }
                 continue;
             }
             ServiceKind::Evidence => {
-                if service.definition.is_some() || service.entity.is_some() {
+                if service.entity.is_some()
+                    || service.title.is_some()
+                    || service.description.is_some()
+                    || service.owner.is_some()
+                    || service.sensitivity.is_some()
+                    || service.access_rights.is_some()
+                    || service.update_frequency.is_some()
+                    || !service.conforms_to.is_empty()
+                    || service.api.is_some()
+                {
                     bail!("evidence services cannot declare records_api fields");
                 }
             }
@@ -383,9 +665,9 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
             if !project.integrations.contains_key(&consultation.integration) {
                 bail!("consultation references an unknown integration");
             }
-            if !(1..=4).contains(&consultation.input.len()) {
+            if !(1..=16).contains(&consultation.input.len()) {
                 bail!(
-                    "consultation input must contain between one and four typed subject mappings"
+                    "consultation input must contain between one and sixteen typed input mappings"
                 );
             }
             for mapping in consultation.input.values() {
@@ -408,7 +690,7 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
             if claim.output.is_some() == claim.cel.is_some() {
                 bail!("each claim must declare exactly one of output or cel");
             }
-            match claim.evidence {
+            match inferred_claim_evidence(service, claim)? {
                 ClaimEvidence::RegistryBacked => {
                     if service.consultations.is_empty() {
                         bail!("registry-backed claims require a Relay consultation");
@@ -422,7 +704,10 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                         bail!("self-attested claims require an explicit value contract");
                     }
                     let roots = cel_member_roots(
-                        claim.cel.as_deref().expect("claim source shape was checked"),
+                        claim
+                            .cel
+                            .as_deref()
+                            .expect("claim source shape was checked"),
                     )?;
                     if service
                         .consultations
@@ -443,7 +728,7 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
             }
             validate_disclosure(&claim.disclosure)?;
         }
-        for credential in service.credentials.values() {
+        for credential in service.credential_profiles.values() {
             if credential.claims.is_empty() {
                 bail!("credential claim allow-list must not be empty");
             }
@@ -457,64 +742,162 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
     Ok(())
 }
 
-fn validate_records_definition(records: &RecordsDefinition) -> Result<()> {
-    if records.version != 1 {
-        bail!("records definition version must be 1");
+fn inferred_claim_evidence(
+    service: &ServiceDeclaration,
+    claim: &ClaimDeclaration,
+) -> Result<ClaimEvidence> {
+    if claim.output.is_some() {
+        return Ok(ClaimEvidence::RegistryBacked);
     }
-    validate_stable_id(&records.id, "records id")?;
-    if records.id.len() > 45 || !is_lower_snake_id(&records.id) {
-        bail!("records id exceeds the shared materialization provider bound");
+    let roots = claim
+        .cel
+        .as_deref()
+        .map(cel_member_roots)
+        .transpose()?
+        .unwrap_or_default();
+    Ok(
+        if service
+            .consultations
+            .keys()
+            .any(|name| roots.contains(name.as_str()))
+        {
+            ClaimEvidence::RegistryBacked
+        } else {
+            ClaimEvidence::SelfAttested
+        },
+    )
+}
+
+fn validate_entity_definition(entity: &EntityDefinition) -> Result<()> {
+    if entity.version != 1 || entity.revision == 0 {
+        bail!("entity version must be 1 and revision must be positive");
     }
-    validate_stable_id(&records.primary_key, "records primary_key")?;
-    if records.fields.is_empty() || records.fields.len() > 256 {
-        bail!("records fields must contain between one and 256 entries");
+    validate_stable_id(&entity.id, "entity id")?;
+    if entity.id.len() > 45 || !is_lower_snake_id(&entity.id) {
+        bail!("entity id exceeds the shared materialization provider bound");
     }
-    if !records.fields.contains_key(&records.primary_key) {
-        bail!("records primary_key must reference a declared logical field");
+    validate_stable_id(&entity.primary_key, "entity primary_key")?;
+    if entity.schema.additional_properties {
+        bail!("entity schema must set additionalProperties: false");
     }
-    for (name, field) in &records.fields {
-        validate_stable_id(name, "records field")?;
+    if entity.schema.properties.is_empty() || entity.schema.properties.len() > 256 {
+        bail!("entity schema properties must contain between one and 256 entries");
+    }
+    let properties = entity.schema.properties.keys().collect::<BTreeSet<_>>();
+    let required = entity.schema.required.iter().collect::<BTreeSet<_>>();
+    if required.len() != entity.schema.required.len() || required != properties {
+        bail!("entity schema must require every declared property exactly once");
+    }
+    if !entity.schema.properties.contains_key(&entity.primary_key) {
+        bail!("entity primary_key must reference a declared property");
+    }
+    for (name, field) in &entity.schema.properties {
+        validate_stable_id(name, "entity property")?;
         if !is_lower_snake_id(name) {
-            bail!("records fields must use Relay lower-snake ids");
+            bail!("entity properties must use Relay lower-snake ids");
         }
-        if name == &records.primary_key && field.nullable {
-            bail!("records primary_key must be non-nullable");
+        let (_, nullable, _) = entity_output_contract(name, field)?;
+        if name == &entity.primary_key && nullable {
+            bail!("entity primary_key must be non-nullable");
         }
     }
-    validate_scopes(&[
-        records.api.scopes.metadata.clone(),
-        records.api.scopes.rows.clone(),
-    ])?;
+    if entity.materialization.max_records == 0
+        || entity.materialization.max_records > 100_000_000
+        || entity
+            .materialization
+            .max_bytes
+            .bytes("entity.materialization.max_bytes")?
+            > 1024 * 1024 * 1024
+        || !(1..=16).contains(&entity.materialization.retain_generations)
+    {
+        bail!("entity materialization exceeds the v1 bounds");
+    }
+    if entity.materialization.refresh != "manual" {
+        parse_duration_ms(&entity.materialization.refresh)
+            .context("entity materialization refresh is invalid")?;
+    }
+    Ok(())
+}
+
+fn validate_records_service(service: &ServiceDeclaration, entity: &EntityDefinition) -> Result<()> {
+    let api = service
+        .api
+        .as_ref()
+        .ok_or_else(|| anyhow!("records_api service requires api publication policy"))?;
+    for (label, value) in [
+        ("records title", service.title.as_deref()),
+        ("records description", service.description.as_deref()),
+        ("records owner", service.owner.as_deref()),
+    ] {
+        if let Some(value) = value {
+            validate_authored_text(value, label)?;
+        }
+    }
+    if service.conforms_to.len() > 32
+        || service.conforms_to.iter().collect::<BTreeSet<_>>().len() != service.conforms_to.len()
+    {
+        bail!("records conforms_to must contain at most 32 unique entries");
+    }
+    for value in &service.conforms_to {
+        validate_authored_text(value, "records conforms_to")?;
+    }
+    validate_scopes(&[api.scopes.metadata.clone(), api.scopes.rows.clone()])?;
     for scope in [
-        Some(&records.api.scopes.metadata),
-        Some(&records.api.scopes.rows),
-        records.api.scopes.aggregate.as_ref(),
-        records.api.scopes.evidence_verification.as_ref(),
+        Some(&api.scopes.metadata),
+        Some(&api.scopes.rows),
+        api.scopes.aggregate.as_ref(),
+        api.scopes.evidence_verification.as_ref(),
     ]
     .into_iter()
     .flatten()
     {
         validate_token(scope, "records scope", 128)?;
-        if scope.split_once(':').map(|(dataset, _)| dataset) != Some(records.id.as_str()) {
-            bail!("records scopes must use their records id namespace");
+        if scope.split_once(':').map(|(dataset, _)| dataset) != Some(entity.id.as_str()) {
+            bail!("records scopes must use their entity id namespace");
         }
     }
-    if records.api.pagination.default_limit == 0
-        || records.api.pagination.max_limit == 0
-        || records.api.pagination.default_limit > records.api.pagination.max_limit
-        || records.api.pagination.max_limit > 10_000
+    if api.pagination.default_limit == 0
+        || api.pagination.max_limit == 0
+        || api.pagination.default_limit > api.pagination.max_limit
+        || api.pagination.max_limit > 10_000
     {
         bail!("records pagination limits are invalid");
     }
-    for purpose in &records.api.purposes {
+    if api.purposes.len() > 32
+        || api.purposes.iter().collect::<BTreeSet<_>>().len() != api.purposes.len()
+        || api.filters.len() > 256
+        || api.relationships.len() > 64
+        || api.aggregates.len() > 64
+    {
+        bail!("records publication policy exceeds the v1 collection bounds");
+    }
+    for purpose in &api.purposes {
         validate_token(purpose, "records purpose", 256)?;
     }
-    let field_names = records
-        .fields
+    let field_names = entity
+        .schema
+        .properties
         .keys()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    for (field, operators) in &records.api.filters {
+    if api.projection.is_empty()
+        || api.projection.len() > 256
+        || api.projection.iter().collect::<BTreeSet<_>>().len() != api.projection.len()
+        || api.required_principal_filters.len() > 16
+        || api
+            .required_principal_filters
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != api.required_principal_filters.len()
+        || api
+            .projection
+            .iter()
+            .any(|field| !field_names.contains(field.as_str()))
+    {
+        bail!("records projection must be a non-empty unique entity field subset");
+    }
+    for (field, operators) in &api.filters {
         if !field_names.contains(field.as_str()) || operators.is_empty() {
             bail!("records filters must name declared fields and at least one operator");
         }
@@ -522,12 +905,12 @@ fn validate_records_definition(records: &RecordsDefinition) -> Result<()> {
             bail!("records filter operators must be unique");
         }
     }
-    for field in &records.api.required_principal_filters {
-        if !field_names.contains(field.as_str()) || !records.api.filters.contains_key(field) {
+    for field in &api.required_principal_filters {
+        if !field_names.contains(field.as_str()) || !api.filters.contains_key(field) {
             bail!("required principal filters must be allow-listed records fields");
         }
     }
-    for (name, relationship) in &records.api.relationships {
+    for (name, relationship) in &api.relationships {
         validate_stable_id(name, "records relationship")?;
         if !is_lower_snake_id(name) {
             bail!("records relationships must use Relay lower-snake ids");
@@ -537,7 +920,7 @@ fn validate_records_definition(records: &RecordsDefinition) -> Result<()> {
             bail!("records relationship foreign_key must be a declared field");
         }
     }
-    for (id, aggregate) in &records.api.aggregates {
+    for (id, aggregate) in &api.aggregates {
         validate_stable_id(id, "records aggregate")?;
         if !is_lower_snake_id(id) {
             bail!("records aggregates must use Relay lower-snake ids");
@@ -599,12 +982,23 @@ fn validate_records_definition(records: &RecordsDefinition) -> Result<()> {
         if aggregate
             .joins
             .iter()
-            .any(|join| !records.api.relationships.contains_key(join))
+            .any(|join| !api.relationships.contains_key(join))
         {
             bail!("records aggregate joins must name declared relationships");
         }
     }
-    validate_record_standards(records, &field_names)?;
+    validate_record_standards(api, &field_names)?;
+    Ok(())
+}
+
+fn validate_authored_text(value: &str, label: &str) -> Result<()> {
+    if value.is_empty()
+        || value.len() > 2048
+        || value.trim() != value
+        || value.chars().any(char::is_control)
+    {
+        bail!("{label} must be non-empty, bounded, trimmed text without control characters");
+    }
     Ok(())
 }
 
@@ -614,8 +1008,13 @@ fn is_lower_snake_id(value: &str) -> bool {
         && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
 }
 
-fn validate_record_standards(records: &RecordsDefinition, fields: &BTreeSet<&str>) -> Result<()> {
-    match &records.api.standards.ogc_features {
+fn validate_record_standards(api: &RecordsApiDeclaration, fields: &BTreeSet<&str>) -> Result<()> {
+    let projected = api
+        .projection
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    match &api.standards.ogc_features {
         RecordStandard::Disabled(false) => {}
         RecordStandard::Disabled(true) => {
             bail!("ogc_features: true requires an explicit spatial configuration")
@@ -643,12 +1042,15 @@ fn validate_record_standards(records: &RecordsDefinition, fields: &BTreeSet<&str
             if let Some(datetime) = &spatial.datetime_field {
                 referenced.push(datetime);
             }
-            if referenced.into_iter().any(|field| !fields.contains(field)) {
+            if referenced.iter().any(|field| !fields.contains(*field)) {
                 bail!("OGC spatial configuration must use declared logical fields");
+            }
+            if referenced.iter().any(|field| !projected.contains(*field)) {
+                bail!("OGC spatial configuration fields must be explicitly projected");
             }
         }
     }
-    match &records.api.standards.sp_dci {
+    match &api.standards.sp_dci {
         RecordStandard::Disabled(false) => {}
         RecordStandard::Disabled(true) => {
             bail!("sp_dci: true requires an explicit registry mapping")
@@ -664,30 +1066,60 @@ fn validate_record_standards(records: &RecordsDefinition, fields: &BTreeSet<&str
             {
                 bail!("SP DCI mapping must use declared logical fields");
             }
+            if spdci
+                .identifiers
+                .values()
+                .chain(spdci.expression_fields.values())
+                .chain(spdci.response_fields.values())
+                .any(|field| !projected.contains(field.as_str()))
+            {
+                bail!("SP DCI mapping fields must be explicitly projected");
+            }
+            if spdci
+                .identifiers
+                .values()
+                .chain(spdci.expression_fields.values())
+                .any(|field| !api.filters.contains_key(field.as_str()))
+            {
+                bail!("SP DCI identifier and expression fields must be explicitly filterable");
+            }
         }
     }
     Ok(())
 }
 
-fn validate_project_records_links(
+fn validate_project_entity_links(
+    project: &RegistryProject,
     integrations: &BTreeMap<String, LoadedIntegration>,
-    records: &BTreeMap<String, LoadedRecordsDefinition>,
+    entities: &BTreeMap<String, LoadedEntityDefinition>,
 ) -> Result<()> {
+    for service in project
+        .services
+        .values()
+        .filter(|service| service.kind == ServiceKind::RecordsApi)
+    {
+        let entity_id = service
+            .entity
+            .as_deref()
+            .ok_or_else(|| anyhow!("records_api service entity is absent"))?;
+        let entity = &entities
+            .get(entity_id)
+            .ok_or_else(|| anyhow!("records_api service references an unknown entity"))?
+            .document;
+        validate_records_service(service, entity)?;
+    }
     for loaded in integrations.values() {
-        let CapabilityDeclaration::Snapshot { snapshot } = &loaded.document.capability
-        else {
+        let CapabilityDeclaration::Snapshot { snapshot } = &loaded.document.capability else {
             continue;
         };
-        let definition = records.get(&snapshot.entity).ok_or_else(|| {
-            anyhow!("snapshot references an unknown governed records entity")
-        })?;
-        if loaded
-            .document
-            .input
-            .keys()
-            .any(|input| !definition.document.fields.contains_key(input))
-        {
-            bail!("snapshot inputs must name declared logical records fields");
+        let definition = entities
+            .get(&snapshot.entity)
+            .ok_or_else(|| anyhow!("snapshot references an unknown entity"))?;
+        if snapshot.exact.iter().any(|(field, input)| {
+            !definition.document.schema.properties.contains_key(field)
+                || !loaded.document.input.contains_key(input)
+        }) {
+            bail!("snapshot exact mappings must bind entity properties to integration inputs");
         }
         let projected = loaded
             .document
@@ -698,35 +1130,36 @@ fn validate_project_records_links(
         if projected.is_empty()
             || projected
                 .iter()
-                .any(|field| loaded.document.input.contains_key(*field))
-            || projected
-                .iter()
-                .any(|field| !definition.document.fields.contains_key(*field))
+                .any(|field| !definition.document.schema.properties.contains_key(*field))
         {
-            bail!("snapshot projection must be a non-empty logical records subset distinct from its selector key");
+            bail!("snapshot projection must be a non-empty entity property subset");
         }
         for name in projected {
-            let field = &definition.document.fields[name];
+            let field = &definition.document.schema.properties[name];
             let output = loaded
                 .document
                 .outputs
                 .get(name)
                 .ok_or_else(|| anyhow!("snapshot logical field is absent"))?;
-            let compatible = matches!(
-                (field.field_type, output.output_type),
-                (RecordFieldType::String, FactType::String)
-                    | (RecordFieldType::Integer, FactType::Integer)
-                    | (RecordFieldType::Boolean, FactType::Boolean)
-                    | (RecordFieldType::Date, FactType::Date)
-            );
-            if !compatible || field.nullable != output.nullable {
-                bail!("snapshot outputs must preserve records field type and nullability");
+            let (expected_type, expected_nullable, _) = entity_output_contract(name, field)?;
+            if expected_type != output.output_type || expected_nullable != output.nullable {
+                bail!("snapshot outputs must preserve entity field type and nullability");
             }
         }
     }
-    for definition in records.values() {
-        for relationship in definition.document.api.relationships.values() {
-            if !records.contains_key(&relationship.target) {
+    for service in project
+        .services
+        .values()
+        .filter(|service| service.kind == ServiceKind::RecordsApi)
+    {
+        for relationship in service
+            .api
+            .as_ref()
+            .expect("records service shape was validated")
+            .relationships
+            .values()
+        {
+            if !entities.contains_key(&relationship.target) {
                 bail!("records relationship references an unknown entity");
             }
         }
@@ -738,21 +1171,10 @@ fn validate_service_integration_links(
     project: &RegistryProject,
     integrations: &BTreeMap<String, LoadedIntegration>,
 ) -> Result<()> {
-    if integrations
-        .values()
-        .map(|integration| integration.document.source.product.as_str())
-        .collect::<BTreeSet<_>>()
-        .len()
-        > 1
-    {
-        bail!("all project integrations must describe the same logical source");
-    }
     for service in project
         .services
         .values()
-        .filter(|service| {
-            service.kind == ServiceKind::Evidence
-        })
+        .filter(|service| service.kind == ServiceKind::Evidence)
     {
         for consultation in service.consultations.values() {
             let integration = &integrations[&consultation.integration].document;
@@ -774,7 +1196,26 @@ fn validate_fixture_inputs(
     integration: &IntegrationDocument,
     fixtures: &[(PathBuf, FixtureDocument)],
 ) -> Result<()> {
+    let mut fixture_names = BTreeSet::new();
     for (_, fixture) in fixtures {
+        if !fixture_names.insert(fixture.name.as_str()) {
+            bail!("fixture names must be unique within an integration");
+        }
+        if fixture.name.is_empty() || fixture.name.len() > 256 {
+            bail!("fixture name must contain between one and 256 bytes");
+        }
+        if fixture.classification != AuthoredFixtureClassification::Synthetic {
+            bail!(
+                "fixture {} must declare classification: synthetic",
+                fixture.name
+            );
+        }
+        if fixture.interactions.is_empty() || fixture.interactions.len() > 16 {
+            bail!(
+                "fixture {} must contain between one and sixteen interactions",
+                fixture.name
+            );
+        }
         if fixture.input.keys().ne(integration.input.keys()) {
             bail!(
                 "fixture {} must bind every {alias} input exactly once",
@@ -782,17 +1223,213 @@ fn validate_fixture_inputs(
             );
         }
         for (name, declaration) in &integration.input {
-            let value = fixture.input[name]
+            validate_fixture_input_value(name, declaration, &fixture.input[name])?;
+        }
+        for (index, interaction) in fixture.interactions.iter().enumerate() {
+            validate_fixture_request_expectation(&fixture.name, index, &interaction.expect)?;
+            match &interaction.respond {
+                FixtureSourceResponse::Http {
+                    status,
+                    headers,
+                    body,
+                } => {
+                    if !(100..=599).contains(status) {
+                        bail!(
+                            "fixture {} interaction {} has an invalid response status",
+                            fixture.name,
+                            index + 1
+                        );
+                    }
+                    validate_fixture_headers(headers, "response")?;
+                    if serde_json::to_vec(body)?.len() > 8 * 1024 * 1024 {
+                        bail!(
+                            "fixture {} interaction {} response body exceeds 8 MiB",
+                            fixture.name,
+                            index + 1
+                        );
+                    }
+                }
+                FixtureSourceResponse::Timeout { timeout } => {
+                    if parse_duration_ms(timeout)? == 0 {
+                        bail!("fixture timeout must be positive");
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_fixture_request_expectation(
+    fixture_name: &str,
+    index: usize,
+    request: &FixtureRequestExpectation,
+) -> Result<()> {
+    if request.path.is_empty()
+        || request.path.len() > 4096
+        || !request.path.starts_with('/')
+        || request.path.contains(['?', '#', '\\'])
+        || request
+            .path
+            .split('/')
+            .any(|segment| matches!(segment, "." | ".."))
+    {
+        bail!(
+            "fixture {fixture_name} interaction {} has a non-canonical request path",
+            index + 1
+        );
+    }
+    if request.method == ReadMethod::Get && request.body.is_some() {
+        bail!("fixture GET request expectations cannot contain a body");
+    }
+    if request.query.len() > 64 || request.headers.len() > 32 {
+        bail!("fixture request expectation exceeds its component bound");
+    }
+    validate_fixture_headers(&request.headers, "request")?;
+    for (name, value) in &request.query {
+        if name.is_empty() || name.len() > 256 || !fixture_query_value_is_bounded(value) {
+            bail!("fixture request query contains an invalid bounded value");
+        }
+    }
+    if let Some(body) = &request.body {
+        validate_generated_fixture_matchers(body, false)?;
+        if serde_json::to_vec(body)?.len() > 1024 * 1024 {
+            bail!("fixture request expectation body exceeds 1 MiB");
+        }
+    }
+    Ok(())
+}
+
+fn validate_fixture_headers(headers: &BTreeMap<String, String>, field: &str) -> Result<()> {
+    let mut folded = BTreeSet::new();
+    for (name, value) in headers {
+        if name.is_empty()
+            || name.len() > 64
+            || !name.bytes().enumerate().all(|(index, byte)| {
+                if index == 0 {
+                    byte.is_ascii_alphabetic()
+                } else {
+                    byte.is_ascii_alphanumeric() || byte == b'-'
+                }
+            })
+            || value.len() > 8192
+            || !folded.insert(name.to_ascii_lowercase())
+        {
+            bail!("fixture {field} headers violate the closed bounded contract");
+        }
+    }
+    Ok(())
+}
+
+fn fixture_query_value_is_bounded(value: &Value) -> bool {
+    match value {
+        Value::Null | Value::Bool(_) | Value::Number(_) => true,
+        Value::String(value) => value.len() <= 8192,
+        Value::Array(values) => {
+            values.len() <= 64 && values.iter().all(fixture_query_value_is_bounded)
+        }
+        Value::Object(_) => false,
+    }
+}
+
+fn validate_generated_fixture_matchers(value: &Value, inside_matcher: bool) -> Result<()> {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                validate_generated_fixture_matchers(value, false)?;
+            }
+        }
+        Value::Object(object) => {
+            if let Some(generated) = object.get("generated") {
+                if inside_matcher
+                    || object.len() != 1
+                    || !matches!(
+                        generated.as_str(),
+                        Some("dci-correlation" | "rfc3339-timestamp")
+                    )
+                {
+                    bail!("fixture generated matcher must be one confined supported leaf");
+                }
+                return Ok(());
+            }
+            for value in object.values() {
+                validate_generated_fixture_matchers(value, false)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_fixture_input_value(
+    name: &str,
+    declaration: &InputDeclaration,
+    value: &Value,
+) -> Result<()> {
+    if declaration
+        .enum_values
+        .as_ref()
+        .is_some_and(|values| !values.contains(value))
+        || declaration
+            .const_value
+            .as_ref()
+            .is_some_and(|constant| constant != value)
+    {
+        bail!("fixture input {name} violates its enum/const contract");
+    }
+    if value.is_null() {
+        if declaration.role == AuthoredInputRole::Parameter && declaration.nullable {
+            return Ok(());
+        }
+        bail!("fixture input {name} cannot be null");
+    }
+    match declaration.input_type {
+        InputType::String | InputType::FullDate => {
+            let value = value
                 .as_str()
-                .ok_or_else(|| anyhow!("fixture input must be a string"))?;
+                .ok_or_else(|| anyhow!("fixture input {name} must be a String"))?;
+            if value.len() > usize::from(declaration.bytes)
+                || declaration
+                    .max_length
+                    .is_some_and(|maximum| value.chars().count() > usize::from(maximum))
+                || declaration
+                    .min_length
+                    .is_some_and(|minimum| value.chars().count() < usize::from(minimum))
+            {
+                bail!("fixture input {name} violates its String bounds");
+            }
+            let canonical = match declaration.canonicalization {
+                Canonicalization::Identity => std::borrow::Cow::Borrowed(value),
+                Canonicalization::AsciiLowercase => {
+                    std::borrow::Cow::Owned(value.to_ascii_lowercase())
+                }
+            };
+            if declaration.pattern.as_ref().is_some_and(|pattern| {
+                regex::Regex::new(pattern).map_or(true, |compiled| !compiled.is_match(&canonical))
+            }) {
+                bail!("fixture input {name} violates its pattern");
+            }
             if declaration.input_type == InputType::FullDate
                 && time::Date::parse(
-                    value,
+                    &canonical,
                     &time::macros::format_description!("[year]-[month]-[day]"),
                 )
                 .is_err()
             {
-                bail!("fixture full_date input is not canonical");
+                bail!("fixture full-date input {name} is not canonical");
+            }
+        }
+        InputType::Boolean if !value.is_boolean() => {
+            bail!("fixture input {name} must be a Boolean");
+        }
+        InputType::Boolean => {}
+        InputType::Integer => {
+            let value = value
+                .as_i64()
+                .ok_or_else(|| anyhow!("fixture input {name} must be an exact Integer"))?;
+            if !matches!((declaration.minimum, declaration.maximum), (Some(minimum), Some(maximum)) if (minimum..=maximum).contains(&value))
+            {
+                bail!("fixture input {name} violates its Integer range");
             }
         }
     }
@@ -800,7 +1437,7 @@ fn validate_fixture_inputs(
 }
 
 fn snapshot_output_field(output: &OutputDeclaration) -> Option<&str> {
-    let (_, path) = output.from.split_once('.')?;
+    let (_, path) = output.from.as_deref()?.split_once('.')?;
     let field = path.strip_prefix("record.").unwrap_or(path);
     (field != "presence").then_some(field)
 }
@@ -810,13 +1447,14 @@ fn validate_integration(alias: &str, integration: &IntegrationDocument) -> Resul
         bail!("integration {alias} version must be 1");
     }
     validate_stable_id(&integration.id, "integration id")?;
-    validate_stable_id(&integration.source.product, "source.product")?;
+    if let Some(product) = &integration.source.product {
+        validate_stable_id(product, "source.product")?;
+    }
     let versions = integration
         .source
         .versions
         .tested
         .iter()
-        .chain(&integration.source.versions.supported)
         .chain(&integration.source.versions.unverified);
     let mut unique_versions = BTreeSet::new();
     for version in versions {
@@ -825,26 +1463,56 @@ fn validate_integration(alias: &str, integration: &IntegrationDocument) -> Resul
             bail!("source version evidence classes contain a duplicate");
         }
     }
-    if unique_versions.is_empty() || unique_versions.len() > 32 {
-        bail!("source versions must contain between one and 32 unique entries");
+    if unique_versions.len() > 32 {
+        bail!("source versions must contain at most 32 unique entries");
     }
-    if !(1..=4).contains(&integration.input.len()) {
-        bail!("integration {alias} must declare between one and four typed subject inputs");
+    if integration.source.product.is_some() && unique_versions.is_empty() {
+        bail!("source.versions must classify at least one product version label");
+    }
+    if !(1..=16).contains(&integration.input.len()) {
+        bail!("integration {alias} must declare between one and sixteen typed inputs");
+    }
+    let selector_count = integration
+        .input
+        .values()
+        .filter(|input| input.role == AuthoredInputRole::Selector)
+        .count();
+    if !(1..=8).contains(&selector_count) {
+        bail!("integration {alias} must declare between one and eight selector inputs");
+    }
+    let selector_bytes = integration
+        .input
+        .values()
+        .filter(|input| input.role == AuthoredInputRole::Selector)
+        .try_fold(0_u32, |total, input| {
+            total.checked_add(u32::from(input.bytes))
+        })
+        .ok_or_else(|| anyhow!("canonical selector input bound overflow"))?;
+    if selector_bytes > 4096 {
+        bail!("canonical selector inputs exceed the fixed 4096-byte aggregate ceiling");
     }
     for (name, input) in &integration.input {
         validate_input_name(name).with_context(|| format!("input.{name}.name"))?;
-        if input.bytes == 0 || input.bytes > MAX_BOUNDED_INPUT_BYTES {
-            bail!("input.{name}.bytes must be between 1 and {MAX_BOUNDED_INPUT_BYTES}");
+        if input.bytes == 0 || input.bytes > 4096 {
+            bail!("input.{name} worst-case canonical value must be between 1 and 4096 bytes");
         }
-        if input.pattern.is_empty() || input.pattern.len() > 1024 {
-            bail!("input.{name}.pattern must be between 1 and 1024 bytes");
+        if input
+            .pattern
+            .as_ref()
+            .is_some_and(|pattern| pattern.is_empty() || pattern.len() > 16_384)
+        {
+            bail!("input.{name}.pattern must be between 1 and 1024 bytes when present");
         }
         if input.input_type == InputType::FullDate
             && (input.bytes != 10
-                || input.pattern != "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                || input.max_length != Some(10)
+                || input.pattern.is_some()
                 || !matches!(input.canonicalization, Canonicalization::Identity))
         {
             bail!("full_date input requires the exact RFC 3339 full-date contract");
+        }
+        if input.role == AuthoredInputRole::Selector && input.nullable {
+            bail!("selector inputs cannot be nullable");
         }
     }
     validate_credential_interface(integration)?;
@@ -856,18 +1524,18 @@ fn validate_integration(alias: &str, integration: &IntegrationDocument) -> Resul
         integration.capability,
         CapabilityDeclaration::Snapshot { .. }
     );
-    if (!snapshot && operations.is_empty()) || operations.len() > MAX_OPERATIONS {
-        bail!("bounded integration must contain between one and five operations");
+    if (!snapshot && operations.is_empty()) || operations.len() > MAX_OPERATIONS + 2 {
+        bail!("compiled source plan exceeds the v1 operation bound");
     }
-    if usize::from(integration.bounds.calls) != operations.len()
-        || (!snapshot && integration.bounds.calls == 0)
+    if (!snapshot && !(1..=16).contains(&integration.bounds.calls))
         || integration.bounds.source_bytes == 0
-        || integration.bounds.source_bytes > 1024 * 1024
+        || integration.bounds.source_bytes > 16 * 1024 * 1024
         || integration.bounds.request_bytes == 0
+        || integration.bounds.request_bytes > 1024 * 1024
         || integration.bounds.concurrency == 0
-        || integration.bounds.concurrency > 16
+        || integration.bounds.concurrency > 64
     {
-        bail!("integration bounds are inconsistent with its fixed operation graph");
+        bail!("integration bounds are inconsistent with its compiled source plan");
     }
     parse_duration_ms(&integration.bounds.deadline)?;
     let ordered = ordered_operations(operations)?;
@@ -892,80 +1560,57 @@ fn validate_integration(alias: &str, integration: &IntegrationDocument) -> Resul
 fn validate_environment(
     project: &RegistryProject,
     integrations: &BTreeMap<String, LoadedIntegration>,
-    records: &BTreeMap<String, LoadedRecordsDefinition>,
+    entities: &BTreeMap<String, LoadedEntityDefinition>,
     environment: &EnvironmentDocument,
 ) -> Result<()> {
     let (requires_relay, requires_notary) = project_product_topology(project);
+    let requires_issuance = project_issues_credentials(project);
+    let requires_notary_relay = project_requires_notary_relay(project);
     if environment.deployment.relay.is_some() != requires_relay
         || environment.relay.is_some() != requires_relay
     {
         bail!("environment Relay bindings must exactly match the project topology");
     }
-    if environment.deployment.notary.is_some() != requires_notary
-        || environment.issuance.is_some() != requires_notary
-    {
+    if environment.deployment.notary.is_some() != requires_notary {
         bail!("environment Notary bindings must exactly match the project topology");
     }
-    if environment.notary_relay.is_some() != (requires_relay && requires_notary) {
-        bail!("the Notary-to-Relay connection is required exactly for combined deployments");
+    if environment.issuance.is_some() != requires_issuance {
+        bail!("environment issuance binding is required exactly when credential profiles exist");
     }
-    if environment.version != 1 || environment.integrations.len() != integrations.len() {
-        bail!("environment must bind every integration exactly once");
+    if environment.notary_relay.is_some() != requires_notary_relay {
+        bail!("the Notary-to-Relay connection is required exactly for Relay consultations");
+    }
+    let remote_integrations = integrations
+        .values()
+        .filter(|loaded| {
+            matches!(
+                loaded.document.capability,
+                CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Script { .. }
+            )
+        })
+        .count();
+    if environment.version != 1 || environment.integrations.len() != remote_integrations {
+        bail!("environment must bind every remote-source integration exactly once");
     }
     for (alias, loaded) in integrations {
-        let binding = environment
-            .integrations
-            .get(alias)
-            .ok_or_else(|| anyhow!("environment is missing integration binding {alias}"))?;
-        if !loaded
-            .document
-            .source
-            .versions
-            .tested
-            .contains(&binding.source_version)
-            && !loaded
-                .document
-                .source
-                .versions
-                .supported
-                .contains(&binding.source_version)
-            && !loaded
-                .document
-                .source
-                .versions
-                .unverified
-                .contains(&binding.source_version)
-        {
-            bail!("environment source_version is not declared by the integration");
-        }
         match &loaded.document.capability {
             CapabilityDeclaration::Snapshot { .. } => {
-                if binding.data_destination.is_some() || binding.credential_destination.is_some() {
-                    bail!("snapshot uses only its governed records entity binding");
+                if environment.integrations.contains_key(alias) {
+                    bail!("snapshot uses only its entity binding and has no integration binding");
                 }
             }
-            CapabilityDeclaration::Http { .. }
-            | CapabilityDeclaration::Script { .. } => {
-                if binding.data_destination.is_none() {
-                    bail!("HTTP integrations require a fixed data destination");
-                }
-                validate_https_origin(
-                    &binding
-                        .data_destination
-                        .as_ref()
-                        .expect("presence was checked")
-                        .origin,
-                    "data destination",
-                )?;
+            CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Script { .. } => {
+                let binding = environment.integrations.get(alias).ok_or_else(|| {
+                    anyhow!("environment is missing remote integration binding {alias}")
+                })?;
+                validate_source_binding(alias, &loaded.document, &binding.source)?;
             }
         }
-        validate_environment_credential(credential_interface(&loaded.document), binding)?;
     }
     if environment
         .integrations
         .values()
-        .filter_map(|binding| binding.data_destination.as_ref())
-        .map(|destination| destination.origin.as_str())
+        .map(|binding| binding.source.origin.as_str())
         .collect::<BTreeSet<_>>()
         .len()
         > 1
@@ -979,22 +1624,22 @@ fn validate_environment(
     {
         bail!("environment contains an unknown integration binding");
     }
-    if environment.entities.len() != records.len() {
-        bail!("environment must bind every governed records entity exactly once");
+    if environment.entities.len() != entities.len() {
+        bail!("environment must bind every project entity exactly once");
     }
-    for (id, loaded) in records {
+    for (id, loaded) in entities {
         let binding = environment
             .entities
             .get(id)
-            .ok_or_else(|| anyhow!("environment is missing governed records entity {id}"))?;
+            .ok_or_else(|| anyhow!("environment is missing project entity {id}"))?;
         validate_environment_entity(&loaded.document, binding)?;
     }
     if environment
         .entities
         .keys()
-        .any(|entity| !records.contains_key(entity))
+        .any(|entity| !entities.contains_key(entity))
     {
-        bail!("environment contains an unknown governed records entity");
+        bail!("environment contains an unknown project entity");
     }
     if requires_notary && environment.callers.is_empty() {
         bail!("a Notary environment must bind at least one authenticated caller");
@@ -1020,15 +1665,30 @@ fn validate_environment(
     }
     if let Some(relay) = &environment.relay {
         validate_https_origin(&relay.origin, "Relay origin")?;
-        validate_https_origin(&relay.issuer, "Relay workload issuer")?;
-        validate_token(&relay.audience, "Relay workload audience", 256)?;
-        validate_token(
-            &relay.workload_client_id,
-            "Relay workload client id",
-            256,
-        )?;
-        let jwks = url::Url::parse(&relay.jwks_url)
-            .context("Relay workload JWKS URL is invalid")?;
+        validate_https_origin(&relay.issuer, "Relay OIDC issuer")?;
+        validate_token(&relay.audience, "Relay OIDC audience", 256)?;
+        if relay.allowed_clients.len() > 64 {
+            bail!("Relay allowed_clients exceeds the supported bound");
+        }
+        let mut allowed_clients = BTreeSet::new();
+        for client in &relay.allowed_clients {
+            validate_token(client, "Relay allowed client id", 256)?;
+            if !allowed_clients.insert(client) {
+                bail!("Relay allowed_clients must not contain duplicates");
+            }
+        }
+        let publishes_records = project
+            .services
+            .values()
+            .any(|service| service.kind == ServiceKind::RecordsApi);
+        if publishes_records && relay.allowed_clients.is_empty() {
+            bail!("a records_api service requires at least one admitted Relay OIDC client");
+        }
+        if relay.allowed_clients.is_empty() && environment.notary_relay.is_none() {
+            bail!("a Relay environment must admit at least one OIDC client");
+        }
+        let jwks =
+            url::Url::parse(&relay.jwks_url).context("Relay OIDC JWKS URL is invalid")?;
         if jwks.scheme() != "https"
             || jwks.host().is_none()
             || !jwks.username().is_empty()
@@ -1037,10 +1697,15 @@ fn validate_environment(
             || jwks.query().is_some()
             || jwks.fragment().is_some()
         {
-            bail!("Relay workload JWKS URL must be one exact HTTPS resource");
+            bail!("Relay OIDC JWKS URL must be one exact HTTPS resource");
         }
     }
     if let Some(connection) = &environment.notary_relay {
+        validate_token(
+            &connection.workload_client_id,
+            "Notary-to-Relay workload client id",
+            256,
+        )?;
         validate_absolute_runtime_path(&connection.token_file, "Relay workload token file")?;
     }
     if let Some(relay) = &environment.deployment.relay {
@@ -1049,22 +1714,13 @@ fn validate_environment(
     if let Some(notary) = &environment.deployment.notary {
         validate_stable_id(&notary.service, "Notary service id")?;
     }
-    for (alias, loaded) in integrations {
-        let enablement = environment.integrations[alias]
-            .advanced_capabilities
-            .as_ref()
-            .map(|advanced| &advanced.script);
-        match (&loaded.document.capability, enablement) {
-            (CapabilityDeclaration::Script { script }, Some(enablement))
-                if enablement.enabled
-                    && enablement.review == ReviewClassInput::OperatorSecurity
-                    && script.runtime == ScriptRuntime::RhaiV1
-                    && is_script_runtime_released(ReleasedScriptRuntime::RhaiV1) => {}
-            (CapabilityDeclaration::Script { .. }, _) => {
-                bail!("script requires a released authoring contract and explicit operator-security enablement")
+    for loaded in integrations.values() {
+        if let CapabilityDeclaration::Script { script } = &loaded.document.capability {
+            if script.runtime != ScriptRuntime::RhaiV1
+                || !is_script_runtime_released(ReleasedScriptRuntime::RhaiV1)
+            {
+                bail!("script requires a released project-authoring runtime");
             }
-            (_, None) => {}
-            (_, Some(_)) => bail!("advanced capability enablement is unused"),
         }
     }
     Ok(())
@@ -1076,10 +1732,24 @@ fn project_product_topology(project: &RegistryProject) -> (bool, bool) {
         .values()
         .any(|service| service.kind == ServiceKind::Evidence);
     let requires_relay = !project.integrations.is_empty()
+        || !project.entities.is_empty()
         || project.services.values().any(|service| {
             service.kind == ServiceKind::RecordsApi || !service.consultations.is_empty()
         });
     (requires_relay, requires_notary)
+}
+
+fn project_issues_credentials(project: &RegistryProject) -> bool {
+    project
+        .services
+        .values()
+        .any(|service| !service.credential_profiles.is_empty())
+}
+
+fn project_requires_notary_relay(project: &RegistryProject) -> bool {
+    project.services.values().any(|service| {
+        service.kind == ServiceKind::Evidence && !service.consultations.is_empty()
+    })
 }
 
 fn is_script_runtime_released(capability: ReleasedScriptRuntime) -> bool {
@@ -1097,6 +1767,14 @@ fn validate_credential_interface(integration: &IntegrationDocument) -> Result<()
     let interface = credential_interface(integration);
     match interface.credential_type {
         CredentialType::ApiKeyHeader | CredentialType::ApiKeyQuery => {
+            if interface.request.is_some()
+                || interface.response_profile.is_some()
+                || interface.scope.is_some()
+                || interface.audience.is_some()
+                || interface.refresh_skew.is_some()
+            {
+                bail!("API-key credential interfaces cannot declare OAuth fields");
+            }
             let name = interface
                 .name
                 .as_deref()
@@ -1149,16 +1827,265 @@ fn validate_credential_interface(integration: &IntegrationDocument) -> Result<()
                 _ => unreachable!(),
             }
         }
-        CredentialType::None
-        | CredentialType::Basic
-        | CredentialType::StaticBearer
-        | CredentialType::Oauth2ClientCredentials => {
+        CredentialType::Oauth2ClientCredentials => {
             if interface.name.is_some() || interface.max_value_bytes.is_some() {
                 bail!("non-API-key credential interfaces cannot declare API-key fields");
+            }
+            if interface.request.is_none()
+                || interface.response_profile != Some(OAuthResponseProfile::Oauth2Bearer)
+            {
+                bail!("OAuth client credentials require request and response_profile");
+            }
+            if let Some(scope) = &interface.scope {
+                let scopes = scope.split_ascii_whitespace().collect::<Vec<_>>();
+                if scopes.is_empty()
+                    || scopes.len() > 32
+                    || scopes.iter().any(|scope| {
+                        scope.is_empty()
+                            || scope.len() > 128
+                            || scope.bytes().any(|byte| byte.is_ascii_control())
+                    })
+                {
+                    bail!("OAuth scope is outside the bounded token grammar");
+                }
+            }
+            if let Some(audience) = &interface.audience {
+                validate_token(audience, "OAuth audience", 2048)?;
+            }
+            if interface
+                .refresh_skew
+                .as_deref()
+                .map(parse_duration_ms)
+                .transpose()?
+                .is_some_and(|skew| skew == 0 || skew >= 3_600_000)
+            {
+                bail!("OAuth refresh_skew must be positive and below one hour");
+            }
+        }
+        CredentialType::None | CredentialType::Basic | CredentialType::StaticBearer => {
+            if interface.name.is_some()
+                || interface.max_value_bytes.is_some()
+                || interface.request.is_some()
+                || interface.response_profile.is_some()
+                || interface.scope.is_some()
+                || interface.audience.is_some()
+                || interface.refresh_skew.is_some()
+            {
+                bail!("non-OAuth credential interfaces cannot declare credential extension fields");
             }
         }
     }
     Ok(())
+}
+
+fn validate_source_binding(
+    alias: &str,
+    integration: &IntegrationDocument,
+    source: &EnvironmentSourceBinding,
+) -> Result<()> {
+    validate_https_origin(
+        &source.origin,
+        &format!("integrations.{alias}.source.origin"),
+    )?;
+    validate_private_cidrs(
+        &source.allowed_private_cidrs,
+        &format!("integrations.{alias}.source.allowed_private_cidrs"),
+    )?;
+    validate_transport_identity(
+        source.ca.as_ref(),
+        source.mtls.as_ref(),
+        &format!("integrations.{alias}.source"),
+    )?;
+    if source
+        .concurrency
+        .is_some_and(|value| value == 0 || value > 64)
+    {
+        bail!("integrations.{alias}.source.concurrency must be between 1 and 64");
+    }
+    if source
+        .timeout
+        .as_deref()
+        .map(parse_duration_ms)
+        .transpose()?
+        .is_some_and(|value| value == 0 || value > 60_000)
+    {
+        bail!("integrations.{alias}.source.timeout must be between 1ms and 60s");
+    }
+    if let Some(rate) = &source.rate {
+        if rate.per_minute == 0
+            || rate.per_minute > 60_000
+            || rate.burst == 0
+            || u32::from(rate.burst) > rate.per_minute
+        {
+            bail!("integrations.{alias}.source.rate is outside the deployment bounds");
+        }
+    }
+    validate_source_credential_binding(alias, credential_interface(integration), source)?;
+    let signed_dci = authored_signed_dci(integration);
+    match (signed_dci, source.jwks.as_ref()) {
+        (Some(_), Some(jwks)) => {
+            validate_private_endpoint(jwks, &format!("integrations.{alias}.source.jwks"))?;
+        }
+        (Some(_), None) => bail!("signed DCI requires one exact private JWKS binding"),
+        (None, Some(_)) => bail!("source.jwks is valid only for a signed-DCI integration"),
+        (None, None) => {}
+    }
+    Ok(())
+}
+
+fn validate_source_credential_binding(
+    alias: &str,
+    interface: &CredentialInterface,
+    source: &EnvironmentSourceBinding,
+) -> Result<()> {
+    let credential = source.credential.as_ref();
+    let exact = match interface.credential_type {
+        CredentialType::None => credential.is_none() && source.oauth.is_none(),
+        CredentialType::Basic => {
+            credential.is_some_and(|credential| {
+                credential.generation > 0
+                    && credential.username.is_some()
+                    && credential.password.is_some()
+                    && credential.token.is_none()
+                    && credential.client_id.is_none()
+                    && credential.client_secret.is_none()
+                    && credential.value.is_none()
+            }) && source.oauth.is_none()
+        }
+        CredentialType::StaticBearer => {
+            credential.is_some_and(|credential| {
+                credential.generation > 0
+                    && credential.username.is_none()
+                    && credential.password.is_none()
+                    && credential.token.is_some()
+                    && credential.client_id.is_none()
+                    && credential.client_secret.is_none()
+                    && credential.value.is_none()
+            }) && source.oauth.is_none()
+        }
+        CredentialType::Oauth2ClientCredentials => {
+            credential.is_some_and(|credential| {
+                credential.generation > 0
+                    && credential.username.is_none()
+                    && credential.password.is_none()
+                    && credential.token.is_none()
+                    && credential.client_id.is_some()
+                    && credential.client_secret.is_some()
+                    && credential.value.is_none()
+            }) && source.oauth.is_some()
+        }
+        CredentialType::ApiKeyHeader | CredentialType::ApiKeyQuery => {
+            credential.is_some_and(|credential| {
+                credential.generation > 0
+                    && credential.username.is_none()
+                    && credential.password.is_none()
+                    && credential.token.is_none()
+                    && credential.client_id.is_none()
+                    && credential.client_secret.is_none()
+                    && credential.value.is_some()
+            }) && source.oauth.is_none()
+        }
+    };
+    if !exact {
+        bail!("integrations.{alias}.source.credential does not match source.auth.type");
+    }
+    if let Some(credential) = credential {
+        for reference in [
+            credential.username.as_ref(),
+            credential.password.as_ref(),
+            credential.token.as_ref(),
+            credential.client_id.as_ref(),
+            credential.client_secret.as_ref(),
+            credential.value.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            validate_secret_reference(reference)?;
+        }
+    }
+    if let Some(oauth) = &source.oauth {
+        validate_private_endpoint(oauth, &format!("integrations.{alias}.source.oauth"))?;
+    }
+    Ok(())
+}
+
+fn validate_private_endpoint(endpoint: &PrivateEndpointBinding, field: &str) -> Result<()> {
+    validate_https_origin(&endpoint.origin, &format!("{field}.origin"))?;
+    validate_exact_private_path(&endpoint.path, &format!("{field}.path"))?;
+    validate_private_cidrs(
+        &endpoint.allowed_private_cidrs,
+        &format!("{field}.allowed_private_cidrs"),
+    )?;
+    validate_transport_identity(endpoint.ca.as_ref(), endpoint.mtls.as_ref(), field)?;
+    if endpoint.generation == 0 {
+        bail!("{field}.generation must be positive");
+    }
+    Ok(())
+}
+
+fn validate_transport_identity(
+    ca: Option<&CertificateAuthorityBinding>,
+    mtls: Option<&MutualTlsBinding>,
+    field: &str,
+) -> Result<()> {
+    if let Some(ca) = ca {
+        validate_absolute_runtime_path(&ca.file, &format!("{field}.ca.file"))?;
+        if ca.generation == 0 {
+            bail!("{field}.ca.generation must be positive");
+        }
+    }
+    if let Some(mtls) = mtls {
+        validate_absolute_runtime_path(
+            &mtls.certificate_file,
+            &format!("{field}.mtls.certificate_file"),
+        )?;
+        validate_secret_reference(&mtls.private_key)?;
+        if mtls.generation == 0 {
+            bail!("{field}.mtls.generation must be positive");
+        }
+    }
+    Ok(())
+}
+
+fn validate_private_cidrs(cidrs: &[String], field: &str) -> Result<()> {
+    if cidrs.len() > 16 {
+        bail!("{field} contains more than sixteen CIDRs");
+    }
+    let mut canonical = BTreeSet::new();
+    for cidr in cidrs {
+        let parsed = cidr
+            .parse::<ipnet::IpNet>()
+            .with_context(|| format!("{field} contains an invalid CIDR"))?;
+        if parsed.trunc().to_string() != *cidr || !canonical.insert(cidr) {
+            bail!("{field} must contain unique canonical CIDRs");
+        }
+    }
+    Ok(())
+}
+
+fn validate_exact_private_path(path: &str, field: &str) -> Result<()> {
+    if path.is_empty()
+        || path.len() > 4096
+        || !path.starts_with('/')
+        || path == "/"
+        || path.contains(['?', '#', '\\'])
+        || path.split('/').skip(1).any(|segment| {
+            segment.is_empty()
+                || matches!(segment, "." | "..")
+                || segment.to_ascii_lowercase().contains("%2f")
+                || segment.to_ascii_lowercase().contains("%5c")
+        })
+    {
+        bail!("{field} must be one exact canonical non-root path");
+    }
+    Ok(())
+}
+
+fn authored_signed_dci(integration: &IntegrationDocument) -> Option<&OperationDeclaration> {
+    integration_operations(integration)
+        .values()
+        .find(|operation| operation.primitive.as_deref() == Some("dci_search_v1"))
 }
 
 fn is_forbidden_api_key_header(name: &str) -> bool {
@@ -1183,11 +2110,12 @@ fn is_forbidden_api_key_header(name: &str) -> bool {
 }
 
 fn validate_environment_entity(
-    records: &RecordsDefinition,
+    entity: &EntityDefinition,
     binding: &EnvironmentEntityBinding,
 ) -> Result<()> {
-    let expected = records
-        .fields
+    let expected = entity
+        .schema
+        .properties
         .keys()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
@@ -1207,16 +2135,51 @@ fn validate_environment_entity(
             bail!("environment entity physical column mapping must be injective");
         }
     }
-    validate_token(&binding.source_revision, "records source revision", 256)?;
-    validate_token(&binding.generation, "records generation", 256)?;
+    validate_token(&binding.source_revision, "entity source revision", 256)?;
+    validate_token(&binding.generation, "entity generation", 256)?;
     let path = match &binding.provider {
         RecordProvider::Csv { path, .. }
         | RecordProvider::Xlsx { path, .. }
-        | RecordProvider::Parquet { path } => path,
+        | RecordProvider::Parquet { path } => Some(path),
+        RecordProvider::Postgres {
+            connection,
+            schema,
+            table,
+        } => {
+            validate_secret_reference(connection)?;
+            if !is_lower_snake_id(schema) || !is_lower_snake_id(table) {
+                bail!("PostgreSQL schema and table must use lower-snake identifiers");
+            }
+            None
+        }
     };
-    validate_absolute_runtime_path(path, "records provider path")?;
+    if let Some(path) = path {
+        validate_absolute_runtime_path(path, "entity provider path")?;
+    }
     if let RecordProvider::Xlsx { sheet, .. } = &binding.provider {
-        validate_token(sheet, "records provider sheet", 256)?;
+        validate_token(sheet, "entity provider sheet", 256)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod fixture_matcher_validation_tests {
+    use super::*;
+
+    #[test]
+    fn generated_matchers_are_confined_to_supported_request_body_leaves() {
+        for valid in [
+            serde_json::json!({"correlation": {"generated": "dci-correlation"}}),
+            serde_json::json!({"timestamp": {"generated": "rfc3339-timestamp"}}),
+        ] {
+            validate_generated_fixture_matchers(&valid, false).expect("supported matcher");
+        }
+        for invalid in [
+            serde_json::json!({"generated": "arbitrary"}),
+            serde_json::json!({"generated": "dci-correlation", "prefix": "chosen"}),
+            serde_json::json!({"generated": {"generated": "dci-correlation"}}),
+        ] {
+            assert!(validate_generated_fixture_matchers(&invalid, false).is_err());
+        }
+    }
 }

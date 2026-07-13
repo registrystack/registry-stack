@@ -44,13 +44,14 @@ output.
 
 ## Declare a fixed header credential
 
-In the integration's `capability.http` block, replace the credential interface:
+In the integration's stable `source.auth` block, declare the credential interface:
 
 ```yaml
-credential:
-  type: api_key_header
-  name: x-project-api-key
-  max_value_bytes: 128
+source:
+  auth:
+    type: api_key_header
+    name: x-project-api-key
+    max_value_bytes: 128
 ```
 
 The compiler rejects authentication, cookie, host, forwarding, proxy, hop-by-hop, and other
@@ -62,10 +63,11 @@ In `environments/<environment>.yaml`, bind the value by secret reference:
 ```yaml
 integrations:
   enrollment:
-    credential:
-      type: api_key_header
-      value: { secret: PROJECT_SOURCE_API_KEY }
-      generation: 1
+    source:
+      origin: https://enrollment-registry.invalid
+      credential:
+        value: { secret: PROJECT_SOURCE_API_KEY }
+        generation: 1
 ```
 
 Increment `generation` when the credential rotates.
@@ -77,22 +79,24 @@ Use this public integration interface only after the operator-security review ap
 placement:
 
 ```yaml
-credential:
-  type: api_key_query
-  name: apiKey
-  max_value_bytes: 128
+source:
+  auth:
+    type: api_key_query
+    name: apiKey
+    max_value_bytes: 128
 ```
 
-Bind the private value and review class in the environment:
+Bind only the private value in the environment. The environment does not repeat
+the stable authentication type:
 
 ```yaml
 integrations:
   enrollment:
-    credential:
-      type: api_key_query
-      value: { secret: PROJECT_SOURCE_API_KEY }
-      generation: 1
-      review: operator_security
+    source:
+      origin: https://enrollment-registry.invalid
+      credential:
+        value: { secret: PROJECT_SOURCE_API_KEY }
+        generation: 1
 ```
 
 The query name cannot collide with an authored request parameter.
@@ -134,7 +138,7 @@ from its logs.
 | --- | --- | --- |
 | The compiler rejects the header name | The name is security-sensitive or outside the fixed grammar. | Use the reviewed upstream API's non-sensitive API-key header. |
 | The compiler reports a query collision | The credential name matches an authored request parameter. | Select the upstream's distinct credential parameter or use header placement. |
-| `operator_security` is missing | The query credential has no explicit review declaration. | Add the review declaration and rerun `check --explain`. |
+| `operator_security` is missing | The generated review record did not classify the query credential authority. | Confirm that `source.auth.type` is `api_key_query` and rerun `check --explain`. |
 | The source returns unauthorized | The secret reference is absent, stale, or bound to the wrong generation. | Correct the runtime secret binding without writing the value into the project. |
 
 ## Next

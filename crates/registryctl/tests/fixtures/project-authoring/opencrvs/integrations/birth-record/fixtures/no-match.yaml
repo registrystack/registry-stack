@@ -1,14 +1,48 @@
 name: birth-record-no-match
+classification: synthetic
 input: { uin: "0000000001" }
 variables: { as_of_date: 2026-01-01 }
-source:
-  oauth: { outcome: credential_success }
-  jwks:
-    status: 200
-    body: {"keys":[{"alg":"RS256","e":"AQAB","kid":"registry-country-opencrvs-signing-2026-07-12","kty":"RSA","n":"mVJZcmmylo1eBjZsjKBa7rJhjHH-ClLZNFeNhbog6PyAuRUGxGj3JrEDsy4z-icnVWXu4AkwCvgAAjx1lCmBBBnwfXvSjab40ejiWan7N4y1ivyESf7JI1mSpHQGkG5csadlYSxT2sZvg7yjkd1-JGG4KEYEyWunKuAD9ITo-ZTcDTqAxlFmfSAI871KT9bKMX55QS_LaMtlsJJMnF5K6MjOt2h0H92jhO1CJ6Kkj8Uj8D7tiSUvfVpjDS5oSZKcqRYghDciFDYagAqZrJeMsKLI_lyFmHX1JY1U0jOEprAEGhN-Wn1a6GNNXydjoI4ltxS-1kIUWm5te0D-BTz6vw","use":"sig"},{"alg":"RSA-OAEP-256","e":"AQAB","kid":"registry-country-opencrvs-encryption-2026-07-12","kty":"RSA","n":"mVJZcmmylo1eBjZsjKBa7rJhjHH-ClLZNFeNhbog6PyAuRUGxGj3JrEDsy4z-icnVWXu4AkwCvgAAjx1lCmBBBnwfXvSjab40ejiWan7N4y1ivyESf7JI1mSpHQGkG5csadlYSxT2sZvg7yjkd1-JGG4KEYEyWunKuAD9ITo-ZTcDTqAxlFmfSAI871KT9bKMX55QS_LaMtlsJJMnF5K6MjOt2h0H92jhO1CJ6Kkj8Uj8D7tiSUvfVpjDS5oSZKcqRYghDciFDYagAqZrJeMsKLI_lyFmHX1JY1U0jOEprAEGhN-Wn1a6GNNXydjoI4ltxS-1kIUWm5te0D-BTz6vw","use":"enc"}]}
-  birth:
-    status: 200
-    raw_body: '{"header":{"action":"on-search","is_msg_encrypted":false,"message_id":"01JZ0000000000000000000000","message_ts":"2026-07-12T08:30:00Z","receiver_id":"fictional-civil-registry","sender_id":"fictional-notary","status":"succ","total_count":0,"version":"1.0.0"},"message":{"correlation_id":"123e4567-e89b-42d3-a456-426614174000","search_response":[{"data":{"reg_record_type":"birth","reg_records":[],"reg_type":"civil-registry","version":"1.0.0"},"locale":"en","pagination":{"page_number":1,"page_size":2,"total_count":0},"reference_id":"01JZ0000000000000000000000","status":"succ","timestamp":"2026-07-12T08:30:00Z"}],"transaction_id":"01JZ0000000000000000000000"},"signature":"eyJhbGciOiJSUzI1NiIsImtpZCI6InJlZ2lzdHJ5LWNvdW50cnktb3BlbmNydnMtc2lnbmluZy0yMDI2LTA3LTEyIn0.eyJoZWFkZXIiOnsiYWN0aW9uIjoib24tc2VhcmNoIiwiaXNfbXNnX2VuY3J5cHRlZCI6ZmFsc2UsIm1lc3NhZ2VfaWQiOiIwMUpaMDAwMDAwMDAwMDAwMDAwMDAwMDAwMCIsIm1lc3NhZ2VfdHMiOiIyMDI2LTA3LTEyVDA4OjMwOjAwWiIsInJlY2VpdmVyX2lkIjoiZmljdGlvbmFsLWNpdmlsLXJlZ2lzdHJ5Iiwic2VuZGVyX2lkIjoiZmljdGlvbmFsLW5vdGFyeSIsInN0YXR1cyI6InN1Y2MiLCJ0b3RhbF9jb3VudCI6MCwidmVyc2lvbiI6IjEuMC4wIn0sIm1lc3NhZ2UiOnsiY29ycmVsYXRpb25faWQiOiIxMjNlNDU2Ny1lODliLTQyZDMtYTQ1Ni00MjY2MTQxNzQwMDAiLCJzZWFyY2hfcmVzcG9uc2UiOlt7ImRhdGEiOnsicmVnX3JlY29yZF90eXBlIjoiYmlydGgiLCJyZWdfcmVjb3JkcyI6W10sInJlZ190eXBlIjoiY2l2aWwtcmVnaXN0cnkiLCJ2ZXJzaW9uIjoiMS4wLjAifSwibG9jYWxlIjoiZW4iLCJwYWdpbmF0aW9uIjp7InBhZ2VfbnVtYmVyIjoxLCJwYWdlX3NpemUiOjIsInRvdGFsX2NvdW50IjowfSwicmVmZXJlbmNlX2lkIjoiMDFKWjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAiLCJzdGF0dXMiOiJzdWNjIiwidGltZXN0YW1wIjoiMjAyNi0wNy0xMlQwODozMDowMFoifV0sInRyYW5zYWN0aW9uX2lkIjoiMDFKWjAwMDAwMDAwMDAwMDAwMDAwMDAwMDAifX0.I35zTD4qS-_ybNII7UAEH4zRC4qokERPMbr5TWfWn-ened8SUyrWGWMnm0FUMXIRcf9zIdcnUsoXBLqQj0-Lbu-UJ5wyfTWB9N5s6_NMpIjxrpyEMZq0NVPTqvBqsCS6xg6XyKAeTVf9fq3892nnYa-fTlFRrS-Ku9V4if5NZs0Jkh-CttMbyhMgukQoM6bFwfszxkUpN4E75Rd9fv9oX9HGPx5l1MuLjl6k7S--ySkLcDOW4PkNKghixnqS3aw7wh8rtaYlWbELEkvj__udTw367Nu7yJLfs5zsZhBvHH8s8Z6tvvlBozUCK_qKm2FdHFMA4YKzV-ztO27BEbSgCw"}'
+interactions:
+  - expect:
+      method: POST
+      path: /oauth/token
+      headers: { Accept: application/json, Content-Type: application/json }
+      body: { grant_type: client_credentials }
+    respond: { status: 200, body: { access_token: SYNTHETIC_FIXTURE_TOKEN, token_type: Bearer, expires_in: 300 } }
+  - expect: { method: GET, path: /.well-known/jwks.json }
+    respond: { status: 200, body: { file: bodies/jwks.json } }
+  - expect:
+      method: POST
+      path: /dci/v1/birth/search
+      headers: { Accept: application/json, Content-Type: application/json }
+      body:
+        header:
+          version: 1.0.0
+          message_id: { generated: dci-correlation }
+          message_ts: { generated: rfc3339-timestamp }
+          action: search
+          sender_id: fictional-notary
+          receiver_id: fictional-civil-registry
+          total_count: 1
+          is_msg_encrypted: false
+        message:
+          transaction_id: { generated: dci-correlation }
+          search_request:
+            - reference_id: { generated: dci-correlation }
+              timestamp: { generated: rfc3339-timestamp }
+              search_criteria:
+                version: 1.0.0
+                reg_type: civil-registry
+                reg_event_type: birth
+                reg_record_type: birth
+                query_type: exact-and
+                query:
+                  operator: and
+                  predicates:
+                    - { field: identifier_value, operator: eq, value: "0000000001" }
+                pagination: { page_size: 2, page_number: 1 }
+    respond: { status: 200, body: { file: bodies/no-match.json } }
 expect:
+  outcome: no_match
   outputs: {}
   claims: { birth-record-exists: false, date-of-birth: null, sex: null, child-given-name: null, child-family-name: null, child-birth-date: null, child-place-of-birth: null, age-band: null }

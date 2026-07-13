@@ -18,23 +18,22 @@ services:
         input:
           registration_number: request.target.identifiers.birth_registration_number
     claims:
-      birth-record-exists: { evidence: registry_backed, output: birth.exists, disclosure: predicate }
-      date-of-birth: { evidence: registry_backed, output: birth.date_of_birth, disclosure: value }
-      sex: { evidence: registry_backed, output: birth.sex, disclosure: value }
-      child-given-name: { evidence: registry_backed, output: birth.child_given_name, disclosure: value }
-      child-family-name: { evidence: registry_backed, output: birth.child_family_name, disclosure: value }
-      child-birth-date: { evidence: registry_backed, output: birth.date_of_birth, disclosure: value }
-      child-place-of-birth: { evidence: registry_backed, output: birth.place_of_birth, disclosure: value }
+      birth-record-exists: { cel: "birth.matched", disclosure: predicate }
+      date-of-birth: { output: birth.date_of_birth, disclosure: value }
+      sex: { output: birth.sex, disclosure: value }
+      child-given-name: { output: birth.child_given_name, disclosure: value }
+      child-family-name: { output: birth.child_family_name, disclosure: value }
+      child-birth-date: { output: birth.date_of_birth, disclosure: value }
+      child-place-of-birth: { output: birth.place_of_birth, disclosure: value }
       age-band:
-        evidence: registry_backed
         cel: >-
-          birth.exists && birth.date_of_birth != null
+          birth.matched && birth.date_of_birth != null
             ? (date.age_on(birth.date_of_birth, as_of_date) < 5
                 ? "0-4"
                 : (date.age_on(birth.date_of_birth, as_of_date) < 18 ? "5-17" : "18+"))
             : null
         disclosure: value
-    credentials:
+    credential_profiles:
       birth-summary:
         format: dc+sd-jwt
         type: https://credentials.invalid/provincial-birth-summary/v1

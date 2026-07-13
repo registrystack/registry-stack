@@ -1,7 +1,4 @@
 version: 1
-integrations:
-  person-snapshot:
-    source_version: fixture-snapshot-v1
 entities:
   people:
     provider:
@@ -32,9 +29,10 @@ relay:
   issuer: https://workload-issuer.internal.invalid
   jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
   audience: registry-relay
-  workload_client_id: population-notary
+  allowed_clients: [population-relay-client]
 
 notary_relay:
+  workload_client_id: population-notary
   token_file: /run/secrets/relay-workload-token
 
 deployment:

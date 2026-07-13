@@ -1,11 +1,12 @@
-name: health-ambiguous-identity
+name: health-ambiguous-identifier
+classification: synthetic
 input: { tracked_entity: A0000000001 }
 variables: { as_of_date: 2026-01-01 }
-source:
-  identity:
-    status: 200
-    body:
-      trackedEntities:
-        - { first_name: Nia, last_name: Example, date_of_birth: 2017-06-15 }
-        - { first_name: Noor, last_name: Example, date_of_birth: 2016-05-14 }
-expect: { outcome: ambiguous, disclosed_claims: [], calls: [identity] }
+interactions:
+  - expect:
+      method: GET
+      path: /api/tracker/trackedEntities/A0000000001
+      query:
+        fields: trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]
+    respond: { status: 409, body: {} }
+expect: { outcome: ambiguous, outputs: {}, claims: {} }

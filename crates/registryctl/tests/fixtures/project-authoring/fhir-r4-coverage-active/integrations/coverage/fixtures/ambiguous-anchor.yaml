@@ -1,13 +1,18 @@
 name: ambiguous-patient
+classification: synthetic
 input: { birthdate: 2018-05-12, family: Example, given: Ada }
-source:
-  patient:
-    status: 200
-    body:
-      resourceType: Bundle
-      type: searchset
-      total: 2
-      entry:
-        - { resource: { resourceType: Patient, id: patient-1 } }
-        - { resource: { resourceType: Patient, id: patient-2 } }
+interactions:
+  - expect:
+      method: GET
+      path: /fhir/Patient
+      query: { _count: 2, birthdate: 2018-05-12, family: Example, given: Ada }
+    respond:
+      status: 200
+      body:
+        resourceType: Bundle
+        type: searchset
+        total: 2
+        entry:
+          - { search: { mode: match }, resource: { resourceType: Patient, id: patient-1 } }
+          - { search: { mode: match }, resource: { resourceType: Patient, id: patient-2 } }
 expect: { outcome: ambiguous, outputs: {}, claims: {} }
