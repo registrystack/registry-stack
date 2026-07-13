@@ -5398,7 +5398,6 @@ dependencies = [
  "jsonwebtoken",
  "registry-notary-client",
  "registry-notary-core",
- "registry-notary-source-adapter-sidecar",
  "registry-notary-worker-harness",
  "registry-platform-audit",
  "registry-platform-authcommon",
@@ -5431,50 +5430,6 @@ dependencies = [
  "utoipa",
  "wiremock",
  "zeroize",
-]
-
-[[package]]
-name = "registry-notary-source-adapter-rhai"
-version = "0.9.0"
-dependencies = [
- "async-trait",
- "crosswalk-functions",
- "rhai",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "registry-notary-source-adapter-sidecar"
-version = "0.9.0"
-dependencies = [
- "async-trait",
- "axum",
- "axum-test",
- "chrono",
- "clap",
- "crosswalk-core",
- "hyper",
- "hyper-util",
- "libc",
- "registry-notary-source-adapter-rhai",
- "registry-platform-audit",
- "registry-platform-authcommon",
- "registry-platform-config",
- "registry-platform-httputil",
- "registry-platform-ops",
- "reqwest",
- "serde",
- "serde_json",
- "serde_norway",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tower",
- "tower-http 0.7.0",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

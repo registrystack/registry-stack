@@ -3,7 +3,7 @@ name = "registry-notary-server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Standalone Registry Notary routes, runtime, auth, audit, and HTTP source connectors."
+description = "Standalone Registry Notary routes, Relay-backed runtime, auth, and audit."
 readme = "README.md"
 repository.workspace = true
 publish = false
@@ -63,7 +63,6 @@ axum-test = { version = "20" }
 chrono = { version = "0.4" }
 registry-notary-client = { workspace = true, features = ["verifier"] }
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
-registry-notary-source-adapter-sidecar = { workspace = true }
 jsonschema.workspace = true
 tempfile = { version = "3" }
 wiremock = { version = "0.6" }

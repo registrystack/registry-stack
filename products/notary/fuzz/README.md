@@ -9,17 +9,6 @@ blocks `cargo check --workspace`.
 
 - `core_request_bodies` — evaluation, credential-issue, and render request
   body parsing (`registry-notary-core`).
-- `rhai_source_adapter` — the sandboxed Rhai source-adapter boundary
-  (`registry-notary-source-adapter-rhai`): the request-path traversal guard
-  (`canonicalize_target_relative_path`), untrusted script compilation
-  (`ScriptEngine::compile`), the depth/size-bounded JSON-to-Dynamic conversion
-  that guards against stack-overflow-via-recursion (`json_to_dynamic` /
-  `dynamic_to_json`), and script-output shape validation (`validate_records`).
-- `sidecar_config_manifest` — the sidecar adapter's governed-config parse
-  boundary (`registry-notary-source-adapter-sidecar`): YAML deserialization of
-  the full `SidecarConfig` surface followed by runtime-target rendering
-  (`render_governed_runtime_target_json`).
-
 Each target fuzzes the crate's real exported entry point directly, never a
 locally re-declared mirror struct that could drift from the product type.
 
