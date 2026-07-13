@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Closed capability consultation executors.
 
-mod opencrvs;
+mod signed_dci;
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -9,21 +9,26 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use datafusion::execution::context::SessionContext;
+use registry_platform_crypto::canonicalize_json;
 use registry_platform_httputil::destination::json::{
-    ClosedJsonDecodeError, ClosedJsonOutcome, ProjectedJsonScalar,
-    MAX_CLOSED_JSON_ENCODED_BODY_BYTES,
+    decode_script_json, decode_script_text, ClosedJsonDecodeError, ClosedJsonOutcome,
+    ProjectedJsonScalar, MAX_CLOSED_JSON_ENCODED_BODY_BYTES,
 };
 use registry_platform_httputil::destination::{
-    DestinationResponseError, MAX_DESTINATION_OPERATION_TIMEOUT,
+    DestinationResponseError, ScriptRequestBodyFormat, MAX_DESTINATION_OPERATION_TIMEOUT,
 };
 use thiserror::Error;
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
 use zeroize::Zeroizing;
 
+use async_trait::async_trait;
+use serde_json::Value as JsonValue;
+
 use crate::rhai_worker::{
-    FactSchema as RhaiFactSchema, FactType as RhaiFactType, TypedValue as RhaiTypedValue,
-    WorkerLimits, WorkerProcess, WorkerRequest,
+    HostFailure, OutputSchema as RhaiOutputSchema, OutputType as RhaiOutputType, ScriptFailure,
+    SourceCall, SourceHost, SourceResponse, TypedValue as RhaiTypedValue, WorkerLimits,
+    WorkerOutcome, WorkerOutput, WorkerProcess, WorkerRequest,
 };
 
 use crate::source_backend::{
@@ -32,9 +37,9 @@ use crate::source_backend::{
 };
 use crate::source_plan::runtime_profile::CompiledConsentProfile;
 use crate::source_plan::{
-    CompiledBasicSourceCredentialProvider, CompiledBodyTemplate,
+    CompiledBasicSourceCredentialProvider, CompiledBodyTemplate, CompiledInputRole,
     CompiledOAuthSourceCredentialProvider, CompiledOperation, CompiledRequestCodec,
-    CompiledRhaiFactType, CompiledScalarShape, CompiledSelectorLocation, CompiledSelectorSource,
+    CompiledResponseFormat, CompiledRhaiFactType, CompiledSelectorLocation, CompiledSelectorSource,
     CompiledSourceAuth, CompiledSourcePlan, CompiledStaticBearerSourceCredentialProvider,
     CompiledStatusOutcome, CompiledStepPredicate, CompiledValueExpression, ParsedOAuth2AccessToken,
     ReadMethod, SourcePlanKind,
@@ -46,14 +51,45 @@ use crate::state_plane::{
 
 use super::audit::PendingPublicationContext;
 use super::commitments::{
-    BoundConsultationExecution, SealedConsultationExecution, TrustedConsultationTime,
+    BoundConsultationExecution, CanonicalDispatchRequestEffect, SealedConsultationExecution,
+    TrustedConsultationTime,
 };
 use super::response::{
-    ConsultationResponseError, PublishableConsultationResponse, ValidatedFactMap,
+    ConsultationResponseError, PublishableConsultationResponse, ValidatedOutputMap,
 };
 use super::ConsultationOutcome;
 
-use opencrvs::{execute_signed_dci_exact_bound, validate_signed_dci_exact_activation};
+use signed_dci::{
+    execute_signed_dci_exact_bound, execute_signed_dci_search_call,
+    validate_signed_dci_exact_activation, validate_signed_dci_script_activation,
+};
+
+const MAX_CONSULTATION_INPUTS: usize = 16;
+const MAX_SELECTOR_INPUTS: usize = 8;
+const MAX_DATA_OPERATIONS: usize = 16;
+
+const fn supported_input_counts(total: usize, selectors: usize) -> bool {
+    total >= 1
+        && total <= MAX_CONSULTATION_INPUTS
+        && selectors >= 1
+        && selectors <= MAX_SELECTOR_INPUTS
+        && selectors <= total
+}
+
+fn supported_input_cardinality(plan: &CompiledSourcePlan) -> bool {
+    let total = plan.inputs().len();
+    let selectors = plan
+        .inputs()
+        .filter(|input| input.role() == CompiledInputRole::Selector)
+        .count();
+    supported_input_counts(total, selectors)
+}
+
+pub(super) fn signed_dci_script_host_required(
+    plan: &CompiledSourcePlan,
+) -> Result<bool, ConcreteExecutorActivationError> {
+    validate_signed_dci_script_activation(plan)
+}
 
 /// Value-free reason an artifact-valid plan cannot be served by a maintained
 /// concrete product journey.
@@ -118,17 +154,14 @@ impl ConcreteExecutorKind {
     ) -> Result<(u8, u8), ConcreteExecutorActivationError> {
         let mut credential = 0_u8;
         let mut data = 0_u8;
-        for (kind, ordinal, allowed) in plan.runtime_profile().permit_bindings() {
-            if allowed.is_empty() {
-                return Err(ConcreteExecutorActivationError::UnsupportedPlan);
-            }
+        for (kind, ordinal) in plan.runtime_profile().permit_bindings() {
             match kind {
                 "credential" if ordinal == credential => credential += 1,
                 "data" if ordinal == data => data += 1,
                 _ => return Err(ConcreteExecutorActivationError::UnsupportedPlan),
             }
         }
-        (credential <= 1 && data <= 5)
+        (credential <= 1 && data <= 16)
             .then_some((credential, data))
             .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)
     }
@@ -152,12 +185,9 @@ impl ConcreteExecutorKind {
 fn validate_sandboxed_rhai_activation(
     plan: &CompiledSourcePlan,
 ) -> Result<(), ConcreteExecutorActivationError> {
-    if !cfg!(target_os = "linux") {
-        return Err(ConcreteExecutorActivationError::UnsupportedPlan);
-    }
     if plan.kind() != SourcePlanKind::SandboxedRhai
-        || plan.inputs().len() != 1
-        || !(1..=5).contains(&plan.operations().len())
+        || !supported_input_cardinality(plan)
+        || !(1..=MAX_DATA_OPERATIONS).contains(&plan.operations().len())
         || plan.steps().len() != 0
         || plan.rhai_program().is_none()
         || plan
@@ -171,7 +201,8 @@ fn validate_sandboxed_rhai_activation(
             CompiledConsentProfile::NotRequired
         )
         || plan.operations().any(|operation| {
-            operation.request_codec() != CompiledRequestCodec::None
+            (operation.request_codec() != CompiledRequestCodec::None
+                && operation.dci_exact().is_none())
                 || operation.request_signer().is_some()
         })
     {
@@ -182,6 +213,7 @@ fn validate_sandboxed_rhai_activation(
         .any(|operation| operation.auth() == CompiledSourceAuth::OAuthClientCredentials);
     if oauth != plan.credential_operation().is_some()
         || oauth != plan.credential_destination().is_some()
+        || validate_signed_dci_script_activation(plan).is_err()
     {
         return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
@@ -199,7 +231,7 @@ pub(crate) fn validate_snapshot_exact_activation(
         .snapshot_binding()
         .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?;
     if plan.kind() != SourcePlanKind::SnapshotExact
-        || !(1..=4).contains(&plan.inputs().len())
+        || !supported_input_cardinality(plan)
         || plan.operations().len() != 0
         || plan.steps().len() != 0
         || plan.compiled_steps().len() != 0
@@ -265,7 +297,8 @@ pub(crate) fn validate_bounded_http_activation(
     plan: &CompiledSourcePlan,
 ) -> Result<(), ConcreteExecutorActivationError> {
     if plan.kind() != SourcePlanKind::BoundedHttp
-        || !(1..=5).contains(&plan.operations().len())
+        || !supported_input_cardinality(plan)
+        || !(1..=MAX_DATA_OPERATIONS).contains(&plan.operations().len())
         || plan.steps().len() != plan.operations().len()
         || plan.compiled_steps().len() != plan.steps().len()
         || plan.data_destination().is_none()
@@ -447,14 +480,21 @@ pub(super) async fn execute_one_step_basic_get(
         .plan()
         .data_destination()
         .ok_or(ConcreteExecutorUnfinished)?;
+    let request_commitment = dispatch
+        .commit_request_effect(
+            CanonicalDispatchRequestEffect::try_from_complete_value(
+                request.noncredential_effect_value(destination.origin_id()),
+            )
+            .map_err(|_| ConcreteExecutorUnfinished)?,
+        )
+        .map_err(|_| ConcreteExecutorUnfinished)?;
     let permit = dispatch
         .next_data_permit_mut()
         .map_err(|_| ConcreteExecutorUnfinished)?
         .ok_or(ConcreteExecutorUnfinished)?;
-
     let profile = bound.plan().runtime_profile();
     let inner = fence
-        .authorize_and_dispatch(permit, operation.id(), |deadline| async move {
+        .authorize_and_dispatch(permit, request_commitment, |deadline| async move {
             let deadline = match operation_deadline(deadline, operation.request_timeout_ms()) {
                 Ok(deadline) => deadline,
                 Err(_) => return InnerDispatchResult::Unfinished,
@@ -548,13 +588,21 @@ async fn execute_oauth_credential(
             })
         })
         .map_err(|_| ConcreteExecutorUnfinished)?;
+    let parser = operation.parser();
+    let request_commitment = dispatch
+        .commit_request_effect(
+            CanonicalDispatchRequestEffect::try_from_complete_value(
+                request.credential_exchange_effect_value(destination.origin_id()),
+            )
+            .map_err(|_| ConcreteExecutorUnfinished)?,
+        )
+        .map_err(|_| ConcreteExecutorUnfinished)?;
     let permit = dispatch
         .credential_permit_mut()
         .map_err(|_| ConcreteExecutorUnfinished)?
         .ok_or(ConcreteExecutorUnfinished)?;
-    let parser = operation.parser();
     fence
-        .authorize_and_dispatch(permit, operation.id(), |deadline| async move {
+        .authorize_and_dispatch(permit, request_commitment, |deadline| async move {
             let deadline = match operation_deadline(deadline, operation.request_timeout_ms()) {
                 Ok(deadline) => deadline,
                 Err(_) => {
@@ -620,11 +668,20 @@ async fn execute_bounded_http(
         .map_err(|_| ConcreteExecutorUnfinished)?;
     let sandboxed_rhai = bound.plan().kind() == SourcePlanKind::SandboxedRhai;
     if sandboxed_rhai {
-        validate_sandboxed_rhai_activation(bound.plan())
-    } else {
-        validate_bounded_http_activation(bound.plan())
+        validate_sandboxed_rhai_activation(bound.plan()).map_err(|_| ConcreteExecutorUnfinished)?;
+        return execute_interactive_rhai(
+            dispatch,
+            bound,
+            publication,
+            quota,
+            fence,
+            basic_credentials,
+            static_bearer_credentials,
+            oauth_credentials,
+        )
+        .await;
     }
-    .map_err(|_| ConcreteExecutorUnfinished)?;
+    validate_bounded_http_activation(bound.plan()).map_err(|_| ConcreteExecutorUnfinished)?;
 
     if !sandboxed_rhai
         && bound
@@ -650,30 +707,13 @@ async fn execute_bounded_http(
         .map(|_| None)
         .collect::<Vec<Option<OperationMemory>>>();
     let mut facts = Vec::<(Box<str>, ProjectedJsonScalar)>::new();
-    let mut execution_order = if sandboxed_rhai {
-        Vec::new()
-    } else {
-        bound
-            .plan()
-            .compiled_steps()
-            .enumerate()
-            .map(|(step_index, step)| (step.operation_index(), Some(step_index)))
-            .collect::<Vec<_>>()
-    };
+    let execution_order = bound
+        .plan()
+        .compiled_steps()
+        .enumerate()
+        .map(|(step_index, step)| (step.operation_index(), Some(step_index)))
+        .collect::<Vec<_>>();
     let mut executed = BTreeSet::new();
-    let mut final_rhai_facts = None;
-    if sandboxed_rhai {
-        match evaluate_rhai_round(&bound, &memory, &executed, &execution_order).await? {
-            RhaiRoundResult::Choices(choices) => {
-                if choices.first() != Some(&0) {
-                    return Err(ConcreteExecutorUnfinished);
-                }
-                execution_order.extend(choices.into_iter().map(|index| (index, None)));
-            }
-            RhaiRoundResult::Final(_) => return Err(ConcreteExecutorUnfinished),
-        }
-    }
-    let mut round_end = execution_order.len();
     let mut step_position = 0_usize;
     while step_position < execution_order.len() {
         let (operation_index, compiled_step_index) = execution_order[step_position];
@@ -799,12 +839,26 @@ async fn execute_bounded_http(
             .plan()
             .data_destination()
             .ok_or(ConcreteExecutorUnfinished)?;
+        let request_commitment = dispatch
+            .commit_request_effect(
+                CanonicalDispatchRequestEffect::try_from_complete_value(match operation.auth() {
+                    CompiledSourceAuth::ApiKeyHeader => {
+                        request.effect_value_without_api_key_header(destination.origin_id())
+                    }
+                    CompiledSourceAuth::ApiKeyQuery => {
+                        request.effect_value_without_api_key_query(destination.origin_id())
+                    }
+                    _ => request.noncredential_effect_value(destination.origin_id()),
+                })
+                .map_err(|_| ConcreteExecutorUnfinished)?,
+            )
+            .map_err(|_| ConcreteExecutorUnfinished)?;
         let permit = dispatch
             .next_data_permit_mut()
             .map_err(|_| ConcreteExecutorUnfinished)?
             .ok_or(ConcreteExecutorUnfinished)?;
         let decoded = fence
-            .authorize_and_dispatch(permit, operation.id(), |deadline| async move {
+            .authorize_and_dispatch(permit, request_commitment, |deadline| async move {
                 let deadline = match operation_deadline(deadline, operation.request_timeout_ms()) {
                     Ok(value) => value,
                     Err(_) => return Err(KnownFailureClass::SourceUnavailable),
@@ -875,12 +929,8 @@ async fn execute_bounded_http(
                 return Ok(ConcreteExecutorProof::known_failure(failure));
             }
         };
-        let anchor_step = is_anchor_execution_step(
-            operation_index,
-            compiled_step_index,
-            step_position,
-            sandboxed_rhai,
-        );
+        let anchor_step =
+            is_anchor_execution_step(operation_index, compiled_step_index, step_position, false);
         match decoded {
             ClosedJsonOutcome::Ambiguous => {
                 drop(quota);
@@ -920,12 +970,6 @@ async fn execute_bounded_http(
                     .map(|field| field.into_parts().1)
                     .collect::<Vec<_>>();
                 facts.extend(projected.into_iter().map(|field| field.into_parts()));
-                facts.extend(
-                    operation
-                        .response()
-                        .presence_outputs()
-                        .map(|field| (field.field().into(), ProjectedJsonScalar::Boolean(true))),
-                );
                 memory[operation_index] = Some(OperationMemory {
                     prior_outputs: prior,
                     present: true,
@@ -933,45 +977,16 @@ async fn execute_bounded_http(
             }
         }
         step_position += 1;
-        if sandboxed_rhai && step_position == round_end {
-            match evaluate_rhai_round(&bound, &memory, &executed, &execution_order).await? {
-                RhaiRoundResult::Choices(choices) => {
-                    if choices.is_empty() {
-                        return Err(ConcreteExecutorUnfinished);
-                    }
-                    execution_order.extend(choices.into_iter().map(|index| (index, None)));
-                    round_end = execution_order.len();
-                }
-                RhaiRoundResult::Final(worker_facts) => {
-                    final_rhai_facts = Some(worker_facts);
-                    break;
-                }
-            }
-        }
     }
     drop(quota);
-    let facts = if sandboxed_rhai {
-        final_rhai_facts
-            .ok_or(ConcreteExecutorUnfinished)?
-            .into_iter()
-            .map(|(name, value)| rhai_fact_value(value).map(|value| (name.into_boxed_str(), value)))
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        facts
-    };
-    let fact_map = ValidatedFactMap::try_new(bound.plan().runtime_profile(), facts)
+    let output_map = ValidatedOutputMap::try_new(bound.plan().runtime_profile(), facts)
         .map_err(|_| ConcreteExecutorUnfinished)?;
     prepare_fact_result(
         publication,
         bound.plan().runtime_profile(),
         ConsultationOutcome::Match,
-        Some(&fact_map),
+        Some(&output_map),
     )
-}
-
-enum RhaiRoundResult {
-    Choices(Vec<usize>),
-    Final(BTreeMap<String, RhaiTypedValue>),
 }
 
 static RHAI_WORKER_LIMITERS: OnceLock<Mutex<BTreeMap<Box<str>, Arc<Semaphore>>>> = OnceLock::new();
@@ -992,12 +1007,9 @@ fn rhai_worker_limiter(
     })))
 }
 
-async fn evaluate_rhai_round(
+fn build_rhai_request(
     bound: &BoundConsultationExecution<'_>,
-    memory: &[Option<OperationMemory>],
-    executed: &BTreeSet<usize>,
-    execution_order: &[(usize, Option<usize>)],
-) -> Result<RhaiRoundResult, ConcreteExecutorUnfinished> {
+) -> Result<WorkerRequest, ConcreteExecutorUnfinished> {
     let plan = bound.plan();
     let (script, entrypoint) = plan.rhai_program().ok_or(ConcreteExecutorUnfinished)?;
     let limits = plan
@@ -1005,6 +1017,27 @@ async fn evaluate_rhai_round(
         .dispatch()
         .sandboxed_rhai_limits()
         .ok_or(ConcreteExecutorUnfinished)?;
+    let largest_response_bytes = plan
+        .operations()
+        .map(|operation| usize::try_from(operation.response_max_bytes()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ConcreteExecutorUnfinished)?
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+    let largest_text_response_bytes = plan
+        .operations()
+        .filter(|operation| operation.response().format() == CompiledResponseFormat::Text)
+        .map(|operation| usize::try_from(operation.response_max_bytes()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ConcreteExecutorUnfinished)?
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+    let ipc_frame_bytes = usize::try_from(limits.ipc_frame_bytes())
+        .map_err(|_| ConcreteExecutorUnfinished)?
+        .max(largest_response_bytes.saturating_add(256 * 1024))
+        .min(9 * 1024 * 1024);
     let mut request = WorkerRequest::v1(
         script,
         entrypoint,
@@ -1013,134 +1046,95 @@ async fn evaluate_rhai_round(
             max_call_levels: usize::from(limits.call_depth()),
             max_expr_depth: usize::from(limits.call_depth()),
             max_string_bytes: usize::try_from(limits.string_bytes())
-                .map_err(|_| ConcreteExecutorUnfinished)?,
+                .map_err(|_| ConcreteExecutorUnfinished)?
+                .max(largest_text_response_bytes),
             max_array_items: usize::try_from(limits.array_items())
                 .map_err(|_| ConcreteExecutorUnfinished)?,
             max_map_entries: usize::try_from(limits.map_entries())
                 .map_err(|_| ConcreteExecutorUnfinished)?,
-            max_output_bytes: usize::try_from(limits.output_bytes())
-                .map_err(|_| ConcreteExecutorUnfinished)?,
-            max_ipc_frame_bytes: usize::try_from(limits.ipc_frame_bytes())
-                .map_err(|_| ConcreteExecutorUnfinished)?,
+            max_output_bytes: 64 * 1024,
+            max_ipc_frame_bytes: ipc_frame_bytes,
             max_memory_bytes: limits.memory_bytes(),
             wall_time_ms: u64::from(limits.cpu_ms()),
+            max_source_calls: u32::from(limits.max_calls()),
         },
     );
     for (index, input) in plan.inputs().enumerate() {
         let value = bound.input(index).ok_or(ConcreteExecutorUnfinished)?;
         request.input.insert(
             input.name().to_owned(),
-            match input.input_type() {
-                crate::source_plan::CompiledInputType::String => RhaiTypedValue::String {
-                    value: Some(value.as_str().to_owned()),
-                },
-                crate::source_plan::CompiledInputType::FullDate => RhaiTypedValue::Date {
-                    value: Some(value.as_str().to_owned()),
-                },
+            match (input.input_type(), value.transient_json_value()) {
+                (crate::source_plan::CompiledInputType::String, JsonValue::String(value)) => {
+                    RhaiTypedValue::String { value: Some(value) }
+                }
+                (crate::source_plan::CompiledInputType::FullDate, JsonValue::String(value)) => {
+                    RhaiTypedValue::Date { value: Some(value) }
+                }
+                (crate::source_plan::CompiledInputType::Boolean, JsonValue::Bool(value)) => {
+                    RhaiTypedValue::Boolean { value: Some(value) }
+                }
+                (crate::source_plan::CompiledInputType::Integer, JsonValue::Number(value)) => {
+                    RhaiTypedValue::Integer {
+                        value: value.as_i64(),
+                    }
+                }
+                (crate::source_plan::CompiledInputType::String, JsonValue::Null) => {
+                    RhaiTypedValue::String { value: None }
+                }
+                (crate::source_plan::CompiledInputType::FullDate, JsonValue::Null) => {
+                    RhaiTypedValue::Date { value: None }
+                }
+                (crate::source_plan::CompiledInputType::Boolean, JsonValue::Null) => {
+                    RhaiTypedValue::Boolean { value: None }
+                }
+                (crate::source_plan::CompiledInputType::Integer, JsonValue::Null) => {
+                    RhaiTypedValue::Integer { value: None }
+                }
+                _ => return Err(ConcreteExecutorUnfinished),
             },
         );
     }
-    for fact in plan.rhai_facts() {
-        request.fact_schema.insert(
-            fact.name().to_owned(),
-            RhaiFactSchema {
-                fact_type: match fact.fact_type() {
-                    CompiledRhaiFactType::String { .. } => RhaiFactType::String,
-                    CompiledRhaiFactType::Boolean => RhaiFactType::Boolean,
-                    CompiledRhaiFactType::Integer { .. } => RhaiFactType::Integer,
-                    CompiledRhaiFactType::Date => RhaiFactType::Date,
-                    CompiledRhaiFactType::Presence => RhaiFactType::Presence,
+    for output in plan.rhai_facts() {
+        request.output_schema.insert(
+            output.name().to_owned(),
+            RhaiOutputSchema {
+                output_type: match output.fact_type() {
+                    CompiledRhaiFactType::String { .. } => RhaiOutputType::String,
+                    CompiledRhaiFactType::Boolean => RhaiOutputType::Boolean,
+                    CompiledRhaiFactType::Integer { .. } => RhaiOutputType::Integer,
+                    CompiledRhaiFactType::Date => RhaiOutputType::Date,
                 },
-                nullable: fact.nullable(),
-                max_bytes: match fact.fact_type() {
+                nullable: output.nullable(),
+                max_bytes: match output.fact_type() {
                     CompiledRhaiFactType::String { max_bytes } => {
                         Some(usize::try_from(max_bytes).map_err(|_| ConcreteExecutorUnfinished)?)
                     }
                     CompiledRhaiFactType::Boolean
                     | CompiledRhaiFactType::Integer { .. }
-                    | CompiledRhaiFactType::Date
-                    | CompiledRhaiFactType::Presence => None,
+                    | CompiledRhaiFactType::Date => None,
                 },
-                minimum: match fact.fact_type() {
+                minimum: match output.fact_type() {
                     CompiledRhaiFactType::Integer { minimum, .. } => Some(minimum),
                     CompiledRhaiFactType::String { .. }
                     | CompiledRhaiFactType::Boolean
-                    | CompiledRhaiFactType::Date
-                    | CompiledRhaiFactType::Presence => None,
+                    | CompiledRhaiFactType::Date => None,
                 },
-                maximum: match fact.fact_type() {
+                maximum: match output.fact_type() {
                     CompiledRhaiFactType::Integer { maximum, .. } => Some(maximum),
                     CompiledRhaiFactType::String { .. }
                     | CompiledRhaiFactType::Boolean
-                    | CompiledRhaiFactType::Date
-                    | CompiledRhaiFactType::Presence => None,
+                    | CompiledRhaiFactType::Date => None,
                 },
             },
         );
     }
-    let planned = execution_order
-        .iter()
-        .map(|(index, _)| *index)
-        .filter(|index| !executed.contains(index))
-        .collect::<BTreeSet<_>>();
-    for (index, operation) in plan.operations().enumerate() {
-        if !executed.contains(&index) && !planned.contains(&index) {
-            request
-                .allowed_operations
-                .insert(operation.id().as_str().to_owned());
-        }
-        let Some(observed) = memory.get(index).and_then(Option::as_ref) else {
-            continue;
-        };
-        let mut prior = BTreeMap::new();
-        prior.insert(
-            "presence".to_owned(),
-            RhaiTypedValue::Presence {
-                value: observed.present,
-            },
-        );
-        for (slot, value) in operation
-            .response()
-            .prior_outputs()
-            .zip(&observed.prior_outputs)
-        {
-            prior.insert(slot.name().to_owned(), rhai_typed_value(slot, value)?);
-        }
-        request
-            .prior_outputs
-            .insert(operation.id().as_str().to_owned(), prior);
+    if signed_dci_script_host_required(plan).map_err(|_| ConcreteExecutorUnfinished)? {
+        request.enable_signed_dci_search();
     }
-    let limiter = rhai_worker_limiter(plan)?;
-    let _permit = limiter
-        .acquire_owned()
-        .await
-        .map_err(|_| ConcreteExecutorUnfinished)?;
-    let worker = WorkerProcess::dedicated_executable().map_err(|_| ConcreteExecutorUnfinished)?;
-    let output = worker
-        .evaluate(&request)
-        .await
-        .map_err(|_| ConcreteExecutorUnfinished)?;
-    if output.operation_choices.is_empty() {
-        return Ok(RhaiRoundResult::Final(output.outputs));
-    }
-    if executed.len() + planned.len() + output.operation_choices.len()
-        > usize::from(limits.max_calls())
-    {
-        return Err(ConcreteExecutorUnfinished);
-    }
-    let mut choices = Vec::with_capacity(output.operation_choices.len());
-    for choice in output.operation_choices {
-        let index = plan
-            .operations()
-            .position(|operation| operation.id().as_str() == choice)
-            .filter(|index| !executed.contains(index) && !planned.contains(index))
-            .ok_or(ConcreteExecutorUnfinished)?;
-        choices.push(index);
-    }
-    Ok(RhaiRoundResult::Choices(choices))
+    Ok(request)
 }
 
-fn rhai_fact_value(
+fn rhai_output_value(
     value: RhaiTypedValue,
 ) -> Result<ProjectedJsonScalar, ConcreteExecutorUnfinished> {
     match value {
@@ -1154,49 +1148,623 @@ fn rhai_fact_value(
         RhaiTypedValue::Integer { value } => {
             Ok(value.map_or(ProjectedJsonScalar::Null, ProjectedJsonScalar::Integer))
         }
-        RhaiTypedValue::Presence { value } => Ok(ProjectedJsonScalar::Boolean(value)),
     }
 }
 
-fn rhai_typed_value(
-    slot: &crate::source_plan::CompiledPriorOutputSlot,
-    value: &ProjectedJsonScalar,
-) -> Result<RhaiTypedValue, ConcreteExecutorUnfinished> {
-    if slot.is_date() {
-        return match value {
-            ProjectedJsonScalar::Null => Ok(RhaiTypedValue::Date { value: None }),
-            ProjectedJsonScalar::String(value) => Ok(RhaiTypedValue::Date {
-                value: Some(value.as_str().to_owned()),
-            }),
-            _ => Err(ConcreteExecutorUnfinished),
+struct PreparedRhaiCall<'a> {
+    operation: &'a CompiledOperation,
+    target: String,
+    headers: Vec<(String, String)>,
+    body_format: Option<ScriptRequestBodyFormat>,
+    body: Option<Zeroizing<Vec<u8>>>,
+}
+
+struct ProductionRhaiHost<'a, 'plan> {
+    dispatch: &'a mut AuditedConsultationDispatch,
+    bound: &'a BoundConsultationExecution<'plan>,
+    fence: &'a PostgresServingFence,
+    basic_credentials: &'a CompiledBasicSourceCredentialProvider,
+    static_bearer_credentials: &'a CompiledStaticBearerSourceCredentialProvider,
+    oauth_credentials: &'a CompiledOAuthSourceCredentialProvider,
+    oauth_token: Option<ParsedOAuth2AccessToken>,
+    request_bytes: u64,
+    source_bytes: u64,
+}
+
+#[async_trait]
+impl SourceHost for ProductionRhaiHost<'_, '_> {
+    async fn call(&mut self, call: SourceCall) -> Result<SourceResponse, HostFailure> {
+        let call = match call {
+            SourceCall::DciSearch { options, .. } => {
+                let operation = self
+                    .bound
+                    .plan()
+                    .operations()
+                    .find(|operation| operation.dci_exact().is_some())
+                    .ok_or(HostFailure::ContractViolation)?;
+                let authored_request =
+                    serde_json::to_value(&options).map_err(|_| HostFailure::ContractViolation)?;
+                let authored_request_bytes = u64::try_from(
+                    canonicalize_json(&authored_request)
+                        .map_err(|_| HostFailure::ContractViolation)?
+                        .len(),
+                )
+                .map_err(|_| HostFailure::BudgetExceeded)?;
+                consume_aggregate_bytes(
+                    &mut self.request_bytes,
+                    authored_request_bytes,
+                    u64::from(operation.request_max_bytes()),
+                )?;
+                let remaining_source_bytes = self
+                    .bound
+                    .plan()
+                    .limits()
+                    .operation()
+                    .max_source_bytes
+                    .checked_sub(self.source_bytes)
+                    .filter(|remaining| *remaining > 0)
+                    .ok_or(HostFailure::BudgetExceeded)?;
+                let verified = execute_signed_dci_search_call(
+                    self.dispatch,
+                    self.bound,
+                    self.fence,
+                    self.oauth_credentials,
+                    options,
+                    remaining_source_bytes,
+                )
+                .await?;
+                consume_aggregate_bytes(
+                    &mut self.source_bytes,
+                    verified.source_bytes,
+                    self.bound.plan().limits().operation().max_source_bytes,
+                )?;
+                return Ok(verified.response);
+            }
+            call => call,
         };
+        let destination = self
+            .bound
+            .plan()
+            .data_destination()
+            .ok_or(HostFailure::ContractViolation)?;
+        let prepared = prepare_rhai_call(self.bound.plan(), destination, call)?;
+        let operation = prepared.operation;
+        consume_aggregate_bytes(
+            &mut self.request_bytes,
+            prepared.author_controlled_bytes()?,
+            u64::from(operation.request_max_bytes()),
+        )?;
+        if operation.auth() == CompiledSourceAuth::OAuthClientCredentials
+            && self.oauth_token.is_none()
+        {
+            self.oauth_token = match execute_oauth_credential(
+                self.dispatch,
+                self.bound,
+                self.fence,
+                self.oauth_credentials,
+            )
+            .await
+            .map_err(|_| HostFailure::SourceUnavailable)?
+            {
+                CredentialDispatchResultV1::Token(token) => Some(token),
+                CredentialDispatchResultV1::KnownFailure(_) => return Err(HostFailure::SourceAuth),
+            };
+        }
+
+        let header_refs = prepared
+            .headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_bytes()))
+            .collect::<Vec<_>>();
+        let request = match operation.auth() {
+            CompiledSourceAuth::None => operation.transport_template().render_script(
+                &prepared.target,
+                &header_refs,
+                None,
+                None,
+                prepared.body_format,
+                prepared.body,
+            ),
+            CompiledSourceAuth::Basic => self
+                .basic_credentials
+                .authorization_for(self.bound.plan(), operation)
+                .map_err(|_| HostFailure::SourceAuth)?
+                .render_script(
+                    &prepared.target,
+                    &header_refs,
+                    prepared.body_format,
+                    prepared.body,
+                ),
+            CompiledSourceAuth::StaticBearer => self
+                .static_bearer_credentials
+                .authorization_for(self.bound.plan(), operation)
+                .map_err(|_| HostFailure::SourceAuth)?
+                .render_script(
+                    &prepared.target,
+                    &header_refs,
+                    prepared.body_format,
+                    prepared.body,
+                ),
+            CompiledSourceAuth::ApiKeyHeader | CompiledSourceAuth::ApiKeyQuery => self
+                .static_bearer_credentials
+                .api_key_for(self.bound.plan(), operation)
+                .map_err(|_| HostFailure::SourceAuth)?
+                .render_script(
+                    &prepared.target,
+                    &header_refs,
+                    prepared.body_format,
+                    prepared.body,
+                ),
+            CompiledSourceAuth::OAuthClientCredentials => {
+                let authorization = self
+                    .oauth_token
+                    .as_ref()
+                    .ok_or(HostFailure::SourceAuth)?
+                    .bearer_authorization()
+                    .map_err(|_| HostFailure::SourceAuth)?;
+                operation.transport_template().render_script(
+                    &prepared.target,
+                    &header_refs,
+                    Some(authorization),
+                    None,
+                    prepared.body_format,
+                    prepared.body,
+                )
+            }
+        }
+        .map_err(|_| HostFailure::ContractViolation)?;
+        let request_commitment = self
+            .dispatch
+            .commit_request_effect(
+                CanonicalDispatchRequestEffect::try_from_complete_value(match operation.auth() {
+                    CompiledSourceAuth::ApiKeyHeader => {
+                        request.effect_value_without_api_key_header(destination.origin_id())
+                    }
+                    CompiledSourceAuth::ApiKeyQuery => {
+                        request.effect_value_without_api_key_query(destination.origin_id())
+                    }
+                    _ => request.noncredential_effect_value(destination.origin_id()),
+                })
+                .map_err(|_| HostFailure::ContractViolation)?,
+            )
+            .map_err(|_| HostFailure::ContractViolation)?;
+        let max_bytes = remaining_response_body_limit(
+            self.source_bytes,
+            self.bound.plan().limits().operation().max_source_bytes,
+            operation.response_max_bytes(),
+        )?;
+        let permit = self
+            .dispatch
+            .next_data_permit_mut()
+            .map_err(|_| HostFailure::ContractViolation)?
+            .ok_or(HostFailure::BudgetExceeded)?;
+        let (response, encoded_bytes) = self
+            .fence
+            .authorize_and_dispatch(permit, request_commitment, |deadline| async move {
+                let deadline = operation_deadline(deadline, operation.request_timeout_ms())
+                    .map_err(|_| HostFailure::SourceUnavailable)?;
+                let response = destination
+                    .send_with_deadline(request, deadline)
+                    .await
+                    .map_err(|_| HostFailure::SourceUnavailable)?;
+                let status = response.status().as_u16();
+                match status {
+                    401 | 403 => return Err(HostFailure::SourceAuth),
+                    429 => return Err(HostFailure::SourceRateLimited),
+                    _ => {}
+                }
+                if operation.response().format() == CompiledResponseFormat::Json
+                    && response.require_json_content_type().is_err()
+                {
+                    return Err(HostFailure::ContractViolation);
+                }
+                let selected_headers = response
+                    .selected_script_response_headers(operation.response().selected_headers())
+                    .map_err(|_| HostFailure::ContractViolation)?;
+                let body = response
+                    .read_bounded(max_bytes)
+                    .await
+                    .map_err(|error| match error {
+                        DestinationResponseError::BodyTooLarge => HostFailure::BudgetExceeded,
+                        _ => HostFailure::SourceUnavailable,
+                    })?;
+                let (body, encoded_bytes) = match operation.response().format() {
+                    CompiledResponseFormat::Json => decode_script_json(body)
+                        .map_err(|_| HostFailure::ContractViolation)?
+                        .into_parts(),
+                    CompiledResponseFormat::Text => {
+                        let (body, encoded_bytes) = decode_script_text(body)
+                            .map_err(|_| HostFailure::ContractViolation)?
+                            .into_parts();
+                        (JsonValue::String(body.to_string()), encoded_bytes)
+                    }
+                };
+                Ok((
+                    SourceResponse {
+                        status,
+                        body,
+                        headers: operation
+                            .response()
+                            .selected_headers()
+                            .zip(selected_headers)
+                            .map(|(name, value)| (name.to_owned(), value))
+                            .collect(),
+                    },
+                    encoded_bytes,
+                ))
+            })
+            .await
+            .map_err(|_| HostFailure::SourceUnavailable)??;
+        consume_aggregate_bytes(
+            &mut self.source_bytes,
+            u64::try_from(encoded_bytes).map_err(|_| HostFailure::BudgetExceeded)?,
+            self.bound.plan().limits().operation().max_source_bytes,
+        )?;
+        Ok(response)
     }
-    match (slot.shape(), value) {
-        (CompiledScalarShape::String { .. }, ProjectedJsonScalar::Null) => {
-            Ok(RhaiTypedValue::String { value: None })
+}
+
+fn consume_aggregate_bytes(
+    consumed: &mut u64,
+    additional: u64,
+    limit: u64,
+) -> Result<(), HostFailure> {
+    *consumed = consumed
+        .checked_add(additional)
+        .filter(|total| *total <= limit)
+        .ok_or(HostFailure::BudgetExceeded)?;
+    Ok(())
+}
+
+fn remaining_response_body_limit(
+    consumed: u64,
+    aggregate_limit: u64,
+    per_response_limit: u32,
+) -> Result<usize, HostFailure> {
+    let remaining = aggregate_limit
+        .checked_sub(consumed)
+        .filter(|remaining| *remaining > 0)
+        .ok_or(HostFailure::BudgetExceeded)?;
+    usize::try_from(u64::from(per_response_limit).min(remaining))
+        .map_err(|_| HostFailure::BudgetExceeded)
+}
+
+impl PreparedRhaiCall<'_> {
+    fn author_controlled_bytes(&self) -> Result<u64, HostFailure> {
+        self.target
+            .len()
+            .checked_add(
+                self.headers
+                    .iter()
+                    .try_fold(0_usize, |total, (name, value)| {
+                        total.checked_add(name.len())?.checked_add(value.len())
+                    })
+                    .ok_or(HostFailure::BudgetExceeded)?,
+            )
+            .and_then(|total| total.checked_add(self.body.as_ref().map_or(0, |body| body.len())))
+            .and_then(|total| u64::try_from(total).ok())
+            .ok_or(HostFailure::BudgetExceeded)
+    }
+}
+
+fn prepare_rhai_call<'plan>(
+    plan: &'plan CompiledSourcePlan,
+    destination: &registry_platform_httputil::destination::DataDestinationPolicy,
+    call: SourceCall,
+) -> Result<PreparedRhaiCall<'plan>, HostFailure> {
+    let (method, target, options, body_format, body) = match call {
+        SourceCall::Get {
+            target, options, ..
+        } => (ReadMethod::Get, target, options, None, None),
+        SourceCall::PostJson {
+            target,
+            body,
+            options,
+            ..
+        } => (
+            ReadMethod::ReadOnlyPost,
+            target,
+            options,
+            Some(ScriptRequestBodyFormat::Json),
+            Some(Zeroizing::new(
+                serde_json::to_vec(&body).map_err(|_| HostFailure::ContractViolation)?,
+            )),
+        ),
+        SourceCall::PostForm {
+            target,
+            fields,
+            options,
+            ..
+        } => {
+            let body = encode_rhai_form(fields)?;
+            (
+                ReadMethod::ReadOnlyPost,
+                target,
+                options,
+                Some(ScriptRequestBodyFormat::Form),
+                Some(Zeroizing::new(body)),
+            )
         }
-        (CompiledScalarShape::String { .. }, ProjectedJsonScalar::String(value)) => {
-            Ok(RhaiTypedValue::String {
-                value: Some(value.as_str().to_owned()),
-            })
+        SourceCall::DciSearch { .. } => return Err(HostFailure::ContractViolation),
+    };
+    let target = destination
+        .canonicalize_same_origin_target(&target)
+        .map_err(|_| HostFailure::ContractViolation)?;
+    let target = canonical_rhai_target(&target, options.query)?;
+    let matches = plan
+        .operations()
+        .filter_map(|operation| {
+            prepare_for_operation(operation, method, &target, &options.headers, body_format)
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [prepared] => Ok(PreparedRhaiCall {
+            operation: prepared.operation,
+            target,
+            headers: prepared.headers.clone(),
+            body_format,
+            body,
+        }),
+        _ => Err(HostFailure::ContractViolation),
+    }
+}
+
+pub(super) fn canonical_rhai_target(
+    target: &str,
+    option_query: BTreeMap<String, JsonValue>,
+) -> Result<String, HostFailure> {
+    let (path, target_query) = split_rhai_target(target)?;
+    let query = merge_rhai_query(target_query, option_query)?;
+    encode_rhai_target(path, &query)
+}
+
+fn prepare_for_operation<'a>(
+    operation: &'a CompiledOperation,
+    method: ReadMethod,
+    target: &str,
+    headers: &BTreeMap<String, String>,
+    body_format: Option<ScriptRequestBodyFormat>,
+) -> Option<PreparedRhaiCall<'a>> {
+    if operation.method() != method {
+        return None;
+    }
+    let header_names = headers.keys().map(String::as_str).collect::<Vec<_>>();
+    operation
+        .transport_template()
+        .validate_script_request_shape(target, &header_names, body_format)
+        .ok()?;
+    Some(PreparedRhaiCall {
+        operation,
+        target: target.to_owned(),
+        headers: headers
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect(),
+        body_format,
+        body: None,
+    })
+}
+
+fn split_rhai_target(target: &str) -> Result<(&str, Vec<(String, String)>), HostFailure> {
+    if !target.starts_with('/')
+        || target.starts_with("//")
+        || target.contains('#')
+        || target.contains(['\r', '\n'])
+    {
+        return Err(HostFailure::ContractViolation);
+    }
+    let (path, raw_query) = target.split_once('?').unwrap_or((target, ""));
+    let mut query = Vec::new();
+    for member in raw_query.split('&').filter(|member| !member.is_empty()) {
+        let (name, value) = member.split_once('=').unwrap_or((member, ""));
+        let name = decode_rhai_component(name)?;
+        let value = decode_rhai_component(value)?;
+        query.push((name, value));
+    }
+    Ok((path, query))
+}
+
+fn merge_rhai_query(
+    mut target: Vec<(String, String)>,
+    options: BTreeMap<String, JsonValue>,
+) -> Result<Vec<(String, String)>, HostFailure> {
+    for (name, value) in options {
+        if target.iter().any(|(target_name, _)| target_name == &name) {
+            return Err(HostFailure::ContractViolation);
         }
-        (CompiledScalarShape::Boolean { .. }, ProjectedJsonScalar::Null) => {
-            Ok(RhaiTypedValue::Boolean { value: None })
+        let values = match value {
+            JsonValue::Null => Vec::new(),
+            JsonValue::Array(values) => values,
+            value => vec![value],
+        };
+        for value in values {
+            let value = match value {
+                JsonValue::Null => continue,
+                JsonValue::Bool(value) => value.to_string(),
+                JsonValue::Number(value) if value.as_i64().is_some() => value.to_string(),
+                JsonValue::String(value) => value,
+                _ => return Err(HostFailure::ContractViolation),
+            };
+            target.push((name.clone(), value));
         }
-        (CompiledScalarShape::Boolean { .. }, ProjectedJsonScalar::Boolean(value)) => {
-            Ok(RhaiTypedValue::Boolean {
-                value: Some(*value),
-            })
+    }
+    Ok(target)
+}
+
+fn encode_rhai_target(path: &str, query: &[(String, String)]) -> Result<String, HostFailure> {
+    let mut target = String::from(path);
+    for (index, (name, value)) in query.iter().enumerate() {
+        target.push(if index == 0 { '?' } else { '&' });
+        target.push_str(&encode_rhai_component(name));
+        target.push('=');
+        target.push_str(&encode_rhai_component(value));
+        if target.len() > registry_platform_httputil::destination::MAX_DESTINATION_TARGET_BYTES {
+            return Err(HostFailure::BudgetExceeded);
         }
-        (CompiledScalarShape::Integer { .. }, ProjectedJsonScalar::Null) => {
-            Ok(RhaiTypedValue::Integer { value: None })
+    }
+    Ok(target)
+}
+
+fn encode_rhai_form(fields: BTreeMap<String, JsonValue>) -> Result<Vec<u8>, HostFailure> {
+    let mut output = String::new();
+    let mut emitted = 0_usize;
+    for (name, value) in fields {
+        let values = match value {
+            JsonValue::Null => Vec::new(),
+            JsonValue::Array(values) => values,
+            value => vec![value],
+        };
+        for value in values {
+            let value = match value {
+                JsonValue::Null => continue,
+                JsonValue::Bool(value) => value.to_string(),
+                JsonValue::Number(value) if value.as_i64().is_some() => value.to_string(),
+                JsonValue::String(value) => value,
+                _ => return Err(HostFailure::ContractViolation),
+            };
+            if emitted > 0 {
+                output.push('&');
+            }
+            output.push_str(&encode_rhai_component(&name));
+            output.push('=');
+            output.push_str(&encode_rhai_component(&value));
+            emitted += 1;
         }
-        (CompiledScalarShape::Integer { .. }, ProjectedJsonScalar::Integer(value)) => {
-            Ok(RhaiTypedValue::Integer {
-                value: Some(*value),
-            })
+    }
+    Ok(output.into_bytes())
+}
+
+fn decode_rhai_path_segment(value: &str) -> Option<String> {
+    let decoded = decode_rhai_component(value).ok()?;
+    (!decoded.is_empty() && !matches!(decoded.as_str(), "." | "..") && !decoded.contains('/'))
+        .then_some(decoded)
+}
+
+fn decode_rhai_component(value: &str) -> Result<String, HostFailure> {
+    let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let high = bytes.get(index + 1).and_then(|value| hex_value(*value));
+            let low = bytes.get(index + 2).and_then(|value| hex_value(*value));
+            output.push(
+                high.zip(low)
+                    .map(|(high, low)| high * 16 + low)
+                    .ok_or(HostFailure::ContractViolation)?,
+            );
+            index += 3;
+        } else {
+            output.push(bytes[index]);
+            index += 1;
         }
-        _ => Err(ConcreteExecutorUnfinished),
+    }
+    String::from_utf8(output).map_err(|_| HostFailure::ContractViolation)
+}
+
+fn encode_rhai_component(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            output.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(output, "%{byte:02X}");
+        }
+    }
+    output
+}
+
+const fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_interactive_rhai(
+    dispatch: &mut AuditedConsultationDispatch,
+    bound: BoundConsultationExecution<'_>,
+    publication: PendingPublicationContext,
+    quota: QuotaGrant,
+    fence: &PostgresServingFence,
+    basic_credentials: &CompiledBasicSourceCredentialProvider,
+    static_bearer_credentials: &CompiledStaticBearerSourceCredentialProvider,
+    oauth_credentials: &CompiledOAuthSourceCredentialProvider,
+) -> Result<ConcreteExecutorProof<PublishableConsultationResponse>, ConcreteExecutorUnfinished> {
+    let request = build_rhai_request(&bound)?;
+    let limiter = rhai_worker_limiter(bound.plan())?;
+    let _worker_permit = limiter
+        .acquire_owned()
+        .await
+        .map_err(|_| ConcreteExecutorUnfinished)?;
+    let mut host = ProductionRhaiHost {
+        dispatch,
+        bound: &bound,
+        fence,
+        basic_credentials,
+        static_bearer_credentials,
+        oauth_credentials,
+        oauth_token: None,
+        request_bytes: 0,
+        source_bytes: 0,
+    };
+    let worker = WorkerProcess::dedicated_executable().map_err(|_| ConcreteExecutorUnfinished)?;
+    let output = worker
+        .evaluate_with_host(&request, &mut host)
+        .await
+        .map_err(|_| ConcreteExecutorUnfinished)?;
+    drop(host);
+    drop(quota);
+    match output {
+        WorkerOutput::Success {
+            outcome: WorkerOutcome::NoMatch,
+            ..
+        } => prepare_fact_result(
+            publication,
+            bound.plan().runtime_profile(),
+            ConsultationOutcome::NoMatch,
+            None,
+        ),
+        WorkerOutput::Success {
+            outcome: WorkerOutcome::Ambiguous,
+            ..
+        } => prepare_fact_result(
+            publication,
+            bound.plan().runtime_profile(),
+            ConsultationOutcome::Ambiguous,
+            None,
+        ),
+        WorkerOutput::Success {
+            outcome: WorkerOutcome::Match,
+            outputs,
+        } => {
+            let outputs = outputs
+                .into_iter()
+                .map(|(name, value)| {
+                    rhai_output_value(value).map(|value| (name.into_boxed_str(), value))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let output_map = ValidatedOutputMap::try_new(bound.plan().runtime_profile(), outputs)
+                .map_err(|_| ConcreteExecutorUnfinished)?;
+            prepare_fact_result(
+                publication,
+                bound.plan().runtime_profile(),
+                ConsultationOutcome::Match,
+                Some(&output_map),
+            )
+        }
+        WorkerOutput::Failure { failure } => {
+            Ok(ConcreteExecutorProof::known_failure(match failure {
+                ScriptFailure::SourceUnavailable => KnownFailureClass::SourceUnavailable,
+                ScriptFailure::SourceRejected | ScriptFailure::SubjectMismatch => {
+                    KnownFailureClass::ResponseContractViolation
+                }
+            }))
+        }
     }
 }
 
@@ -1419,12 +1987,6 @@ fn append_absent_operation_facts(
             .outputs()
             .map(|field| (field.field().into(), ProjectedJsonScalar::Null)),
     );
-    facts.extend(
-        operation
-            .response()
-            .presence_outputs()
-            .map(|field| (field.field().into(), ProjectedJsonScalar::Boolean(false))),
-    );
 }
 
 fn render_text_values<'a>(
@@ -1595,7 +2157,7 @@ fn prepare_fact_result(
     publication: PendingPublicationContext,
     profile: &crate::source_plan::runtime_profile::CompiledRuntimeProfile,
     outcome: ConsultationOutcome,
-    facts: Option<&ValidatedFactMap>,
+    outputs: Option<&ValidatedOutputMap>,
 ) -> Result<ConcreteExecutorProof<PublishableConsultationResponse>, ConcreteExecutorUnfinished> {
     let public_outcome = match outcome {
         ConsultationOutcome::Match => PublicConsultationOutcome::Match,
@@ -1614,7 +2176,7 @@ fn prepare_fact_result(
         publication.notary_evaluation_id(),
         profile,
         outcome,
-        facts,
+        outputs,
         acquired_at_unix_ms,
     )
     .map_err(|_| ConcreteExecutorUnfinished)?;
@@ -1677,7 +2239,7 @@ fn prepare_public_result(
         .unix_ms();
     let facts = record
         .map(|record| {
-            ValidatedFactMap::try_new(
+            ValidatedOutputMap::try_new(
                 profile,
                 record
                     .into_fields()
@@ -1759,6 +2321,61 @@ mod tests {
     };
 
     #[test]
+    fn script_byte_budgets_are_aggregate_and_bound_the_next_raw_stream() {
+        let mut consumed = 0;
+        assert_eq!(consume_aggregate_bytes(&mut consumed, 4, 10), Ok(()));
+        assert_eq!(consume_aggregate_bytes(&mut consumed, 6, 10), Ok(()));
+        assert_eq!(consumed, 10);
+        assert_eq!(
+            consume_aggregate_bytes(&mut consumed, 1, 10),
+            Err(HostFailure::BudgetExceeded)
+        );
+        assert_eq!(consumed, 10, "a rejected call cannot consume budget");
+
+        assert_eq!(remaining_response_body_limit(4, 10, 8), Ok(6));
+        assert_eq!(remaining_response_body_limit(4, 10, 3), Ok(3));
+        assert_eq!(
+            remaining_response_body_limit(10, 10, 8),
+            Err(HostFailure::BudgetExceeded)
+        );
+    }
+
+    #[test]
+    fn rhai_query_serialization_preserves_repeats_and_omits_nulls() {
+        let (path, target) = split_rhai_target("/records?tag=first&tag=second").expect("target");
+        let merged = merge_rhai_query(
+            target,
+            BTreeMap::from([
+                ("active".to_owned(), JsonValue::Bool(true)),
+                (
+                    "page".to_owned(),
+                    JsonValue::Array(vec![
+                        JsonValue::from(1),
+                        JsonValue::Null,
+                        JsonValue::from(2),
+                    ]),
+                ),
+                ("unused".to_owned(), JsonValue::Null),
+            ]),
+        )
+        .expect("bounded scalar query");
+        assert_eq!(
+            encode_rhai_target(path, &merged).expect("canonical target"),
+            "/records?tag=first&tag=second&active=true&page=1&page=2"
+        );
+        assert!(merge_rhai_query(
+            vec![("tag".to_owned(), "one".to_owned())],
+            BTreeMap::from([("tag".to_owned(), JsonValue::String("two".to_owned()))]),
+        )
+        .is_err());
+        assert!(merge_rhai_query(
+            Vec::new(),
+            BTreeMap::from([("nested".to_owned(), serde_json::json!([[1]]))]),
+        )
+        .is_err());
+    }
+
+    #[test]
     fn capability_activation_accepts_reviewed_platform_profiles() {
         let dhis2 = dhis2_runtime_vector_plan_fixture();
         assert_eq!(validate_bounded_http_activation(&dhis2), Ok(()));
@@ -1781,27 +2398,25 @@ mod tests {
             validate_basic_get_activation(&rhai),
             Err(ConcreteExecutorActivationError::UnsupportedPlan)
         );
-        if cfg!(target_os = "linux") {
-            assert_eq!(validate_sandboxed_rhai_activation(&rhai), Ok(()));
-            assert_eq!(
-                ConcreteExecutorKind::activate(&rhai),
-                Ok(ConcreteExecutorKind::SandboxedRhai)
-            );
-        } else {
-            assert_eq!(
-                validate_sandboxed_rhai_activation(&rhai),
-                Err(ConcreteExecutorActivationError::UnsupportedPlan)
-            );
-            assert_eq!(
-                ConcreteExecutorKind::activate(&rhai),
-                Err(ConcreteExecutorActivationError::UnsupportedPlan)
-            );
-        }
+        assert_eq!(validate_sandboxed_rhai_activation(&rhai), Ok(()));
+        assert_eq!(
+            ConcreteExecutorKind::activate(&rhai),
+            Ok(ConcreteExecutorKind::SandboxedRhai)
+        );
         let duplicate_selector = dhis2_duplicate_selector_runtime_vector_plan_fixture();
         assert_eq!(
             validate_bounded_http_activation(&duplicate_selector),
             Ok(())
         );
+    }
+
+    #[test]
+    fn activation_accepts_eight_selectors_and_rejects_nine() {
+        assert!(supported_input_counts(8, 8));
+        assert!(supported_input_counts(16, 8));
+        assert!(!supported_input_counts(9, 9));
+        assert!(!supported_input_counts(17, 8));
+        assert!(!supported_input_counts(8, 0));
     }
 
     #[test]
@@ -1825,7 +2440,7 @@ mod tests {
 
     #[test]
     fn sandboxed_rhai_terminal_outputs_preserve_the_closed_scalar_types() {
-        let string = rhai_fact_value(RhaiTypedValue::String {
+        let string = rhai_output_value(RhaiTypedValue::String {
             value: Some("programme-a".to_owned()),
         })
         .unwrap_or_else(|_| panic!("bounded String fact"));
@@ -1834,7 +2449,7 @@ mod tests {
             ProjectedJsonScalar::String(value) if value.as_str() == "programme-a"
         ));
 
-        let date = rhai_fact_value(RhaiTypedValue::Date {
+        let date = rhai_output_value(RhaiTypedValue::Date {
             value: Some("2020-02-29".to_owned()),
         })
         .unwrap_or_else(|_| panic!("full-date fact"));
@@ -1844,19 +2459,15 @@ mod tests {
         ));
 
         assert!(matches!(
-            rhai_fact_value(RhaiTypedValue::Boolean { value: Some(true) }),
+            rhai_output_value(RhaiTypedValue::Boolean { value: Some(true) }),
             Ok(ProjectedJsonScalar::Boolean(true))
         ));
         assert!(matches!(
-            rhai_fact_value(RhaiTypedValue::Integer { value: Some(7) }),
+            rhai_output_value(RhaiTypedValue::Integer { value: Some(7) }),
             Ok(ProjectedJsonScalar::Integer(7))
         ));
         assert!(matches!(
-            rhai_fact_value(RhaiTypedValue::Presence { value: false }),
-            Ok(ProjectedJsonScalar::Boolean(false))
-        ));
-        assert!(matches!(
-            rhai_fact_value(RhaiTypedValue::Date { value: None }),
+            rhai_output_value(RhaiTypedValue::Date { value: None }),
             Ok(ProjectedJsonScalar::Null)
         ));
     }

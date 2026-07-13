@@ -4,34 +4,40 @@
 //! This surface accepts only caller-owned observations. It has no transport,
 //! credential, policy, filesystem, or configurable callback capability.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::collections::VecDeque;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use async_trait::async_trait;
 use registry_platform_httputil::destination::json::{
     ClosedJsonDecodeError, ClosedJsonOutcome, ProjectedJsonScalar,
 };
-use registry_platform_httputil::destination::opencrvs::{
+use registry_platform_httputil::destination::signed_dci::{
     SignedDciDecodeError, SignedDciDecoder, SignedDciExactComponent, SignedDciExpectation,
 };
+use registry_platform_httputil::destination::ScriptRequestBodyFormat;
 use serde_json::Value;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use crate::rhai_worker::{
-    FactSchema as RhaiFactSchema, FactType as RhaiFactType, TypedValue as RhaiTypedValue,
-    WorkerLimits, WorkerProcess, WorkerRequest,
+    HostFailure, OutputSchema as RhaiOutputSchema, OutputType as RhaiOutputType, ScriptFailure,
+    SourceCall, SourceHost, SourceResponse, TypedValue as RhaiTypedValue, WorkerLimits,
+    WorkerOutcome, WorkerOutput, WorkerProcess, WorkerRequest,
 };
 use crate::source_backend::decode_snapshot_rows;
 use crate::source_plan::{
-    CompiledInputType, CompiledInputValue, CompiledRhaiFactType, CompiledScalarShape,
-    CompiledSourcePlan, CompiledSourcePlanRegistry, CompiledStatusOutcome,
-    SourcePlanArtifactBundle, SourcePlanCompileError, SourcePlanKind,
+    CompiledInputType, CompiledInputValue, CompiledRhaiFactType, CompiledSourcePlan,
+    CompiledSourcePlanRegistry, CompiledStatusOutcome, SourcePlanArtifactBundle,
+    SourcePlanCompileError, SourcePlanKind,
 };
 
 use super::executor::{
     is_anchor_execution_step, validate_bounded_http_activation, validate_snapshot_exact_activation,
 };
-use super::response::ValidatedFactMap;
+use super::response::ValidatedOutputMap;
+use super::types::ParsedConsultationScalar;
 use super::ConsultationOutcome;
 
 const DCI_FIXTURE_MESSAGE_ID: &str = "01JZ0000000000000000000000";
@@ -47,8 +53,15 @@ pub struct OfflineProfilePin {
 /// One caller-owned source observation. No variant can initiate source access.
 #[derive(Clone, PartialEq)]
 pub enum OfflineSourceResponse {
-    Http { status: u16, body: Vec<u8> },
-    DeclaredBodyBytes { status: u16, body_bytes: u64 },
+    Http {
+        status: u16,
+        headers: BTreeMap<String, String>,
+        body: Vec<u8>,
+    },
+    DeclaredBodyBytes {
+        status: u16,
+        body_bytes: u64,
+    },
     Timeout,
     CredentialSuccess,
     NoMatch,
@@ -58,7 +71,7 @@ pub enum OfflineSourceResponse {
 impl fmt::Debug for OfflineSourceResponse {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Http { status, body } => formatter
+            Self::Http { status, body, .. } => formatter
                 .debug_struct("Http")
                 .field("status", status)
                 .field("body_bytes", &body.len())
@@ -76,12 +89,62 @@ impl fmt::Debug for OfflineSourceResponse {
     }
 }
 
+/// Synthetic request expectation paired with one caller-owned response.
+#[derive(Clone, PartialEq)]
+pub struct OfflineInteraction {
+    pub request: OfflineExpectedRequest,
+    pub response: OfflineSourceResponse,
+}
+
+impl fmt::Debug for OfflineInteraction {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OfflineInteraction")
+            .field("method", &self.request.method)
+            .field("path", &"[SYNTHETIC]")
+            .field("query_count", &self.request.query.len())
+            .field("header_count", &self.request.headers.len())
+            .field("has_body", &self.request.body.is_some())
+            .field("response", &self.response)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfflineRequestMethod {
+    Get,
+    Post,
+}
+
+/// Exact synthetic method, relative target components, and body shape.
+#[derive(Clone, PartialEq)]
+pub struct OfflineExpectedRequest {
+    pub method: OfflineRequestMethod,
+    pub path: String,
+    pub query: BTreeMap<String, Value>,
+    pub headers: BTreeMap<String, String>,
+    pub body: Option<Value>,
+}
+
+impl fmt::Debug for OfflineExpectedRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OfflineExpectedRequest")
+            .field("method", &self.method)
+            .field("path", &"[SYNTHETIC]")
+            .field("query_count", &self.query.len())
+            .field("header_count", &self.headers.len())
+            .field("has_body", &self.body.is_some())
+            .finish()
+    }
+}
+
 /// Closed fixture input for one exact compiled profile.
 #[derive(Clone, PartialEq)]
 pub struct OfflineFixtureRequest {
     pub profile: OfflineProfilePin,
     pub input: BTreeMap<String, String>,
-    pub source: BTreeMap<String, OfflineSourceResponse>,
+    pub interactions: Vec<OfflineInteraction>,
 }
 
 impl fmt::Debug for OfflineFixtureRequest {
@@ -90,7 +153,7 @@ impl fmt::Debug for OfflineFixtureRequest {
             .debug_struct("OfflineFixtureRequest")
             .field("profile", &self.profile)
             .field("input_slots", &self.input.keys().collect::<Vec<_>>())
-            .field("source_operations", &self.source.keys().collect::<Vec<_>>())
+            .field("interaction_count", &self.interactions.len())
             .finish()
     }
 }
@@ -107,7 +170,7 @@ pub enum OfflineFixtureOutcome {
 #[derive(Debug, Clone, PartialEq)]
 pub struct OfflineFixtureObservation {
     pub outcome: OfflineFixtureOutcome,
-    pub facts: BTreeMap<String, Value>,
+    pub outputs: BTreeMap<String, Value>,
     pub calls: Vec<String>,
 }
 
@@ -122,6 +185,8 @@ pub enum OfflineFixtureError {
     UnknownSourceOperation,
     #[error("fixture omits an observed source operation")]
     MissingSourceObservation,
+    #[error("fixture expected request does not match the rendered request or call order")]
+    RequestMismatch,
     #[error("fixture source deadline was exceeded")]
     SourceDeadlineExceeded,
     #[error("fixture source is unavailable")]
@@ -141,12 +206,28 @@ pub enum OfflineFixtureError {
 /// Immutable offline harness compiled with the exact runtime source-plan compiler.
 pub struct OfflineRelayFixture {
     plans: CompiledSourcePlanRegistry,
+    rhai_worker_program: Option<PathBuf>,
 }
 
 impl OfflineRelayFixture {
     pub fn compile(bundle: &SourcePlanArtifactBundle<'_>) -> Result<Self, SourcePlanCompileError> {
         Ok(Self {
             plans: CompiledSourcePlanRegistry::compile_for_authoring_validation(bundle)?,
+            rhai_worker_program: None,
+        })
+    }
+
+    /// Compile the fixture closure and launch Rhai through an executable that
+    /// embeds Relay's exact hidden worker mode. Registry project authoring uses
+    /// this to remain self-contained instead of depending on an ambient Relay
+    /// installation.
+    pub fn compile_with_worker_program(
+        bundle: &SourcePlanArtifactBundle<'_>,
+        program: impl Into<PathBuf>,
+    ) -> Result<Self, SourcePlanCompileError> {
+        Ok(Self {
+            plans: CompiledSourcePlanRegistry::compile_for_authoring_validation(bundle)?,
+            rhai_worker_program: Some(program.into()),
         })
     }
 
@@ -165,9 +246,14 @@ impl OfflineRelayFixture {
             .ok_or(OfflineFixtureError::ProfileNotFound)?;
         let inputs = OfflineBoundInputs::try_new(plan, request.input)?;
         match plan.kind() {
-            SourcePlanKind::SnapshotExact => execute_snapshot(plan, &inputs, request.source),
-            SourcePlanKind::BoundedHttp => execute_http(plan, &inputs, request.source),
-            SourcePlanKind::SandboxedRhai => execute_rhai(plan, &inputs, request.source),
+            SourcePlanKind::SnapshotExact => execute_snapshot(plan, &inputs, request.interactions),
+            SourcePlanKind::BoundedHttp => execute_http(plan, &inputs, request.interactions),
+            SourcePlanKind::SandboxedRhai => execute_rhai(
+                plan,
+                &inputs,
+                request.interactions,
+                self.rhai_worker_program.as_deref(),
+            ),
         }
     }
 }
@@ -181,13 +267,155 @@ struct OfflineBoundInputs {
     values: Box<[CompiledInputValue]>,
 }
 
+struct OfflineInteractionQueue {
+    interactions: VecDeque<OfflineInteraction>,
+    calls: Vec<String>,
+}
+
+impl OfflineInteractionQueue {
+    fn new(interactions: Vec<OfflineInteraction>) -> Result<Self, OfflineFixtureError> {
+        if interactions.is_empty() || interactions.len() > 16 {
+            return Err(OfflineFixtureError::RequestMismatch);
+        }
+        Ok(Self {
+            interactions: interactions.into(),
+            calls: Vec::new(),
+        })
+    }
+
+    fn take(
+        &mut self,
+        operation: &str,
+        actual: &OfflineRenderedRequest,
+    ) -> Result<OfflineSourceResponse, OfflineFixtureError> {
+        let interaction = self
+            .interactions
+            .pop_front()
+            .ok_or(OfflineFixtureError::MissingSourceObservation)?;
+        if !offline_request_matches(&interaction.request, actual) {
+            return Err(OfflineFixtureError::RequestMismatch);
+        }
+        self.calls.push(operation.to_owned());
+        Ok(interaction.response)
+    }
+
+    fn finish(self) -> Result<Vec<String>, OfflineFixtureError> {
+        if !self.interactions.is_empty() {
+            return Err(OfflineFixtureError::RequestMismatch);
+        }
+        Ok(self.calls)
+    }
+}
+
+struct OfflineRenderedRequest {
+    method: OfflineRequestMethod,
+    path: String,
+    query: BTreeMap<String, Vec<String>>,
+    headers: BTreeMap<String, String>,
+    body: Option<Value>,
+}
+
+fn offline_request_matches(
+    expected: &OfflineExpectedRequest,
+    actual: &OfflineRenderedRequest,
+) -> bool {
+    if expected.method != actual.method
+        || expected.path != actual.path
+        || expected.headers.len() != actual.headers.len()
+        || expected.headers.iter().any(|(name, value)| {
+            actual
+                .headers
+                .iter()
+                .find(|(actual, _)| actual.eq_ignore_ascii_case(name))
+                .is_none_or(|(_, actual)| actual != value)
+        })
+    {
+        return false;
+    }
+    let expected_query = expected
+        .query
+        .iter()
+        .map(|(name, value)| fixture_query_values(value).map(|values| (name.clone(), values)))
+        .collect::<Option<BTreeMap<_, _>>>();
+    expected_query.as_ref() == Some(&actual.query)
+        && match (&expected.body, &actual.body) {
+            (None, None) => true,
+            (Some(expected), Some(actual)) => fixture_value_matches(expected, actual),
+            _ => false,
+        }
+}
+
+fn fixture_query_values(value: &Value) -> Option<Vec<String>> {
+    match value {
+        Value::Array(values) => values.iter().map(fixture_scalar_text).collect(),
+        _ => fixture_scalar_text(value).map(|value| vec![value]),
+    }
+}
+
+fn fixture_scalar_text(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => Some("null".to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::String(value) => Some(value.clone()),
+        Value::Array(_) | Value::Object(_) => None,
+    }
+}
+
+fn fixture_value_matches(expected: &Value, actual: &Value) -> bool {
+    if let Some(object) = expected
+        .as_object()
+        .filter(|object| object.contains_key("generated"))
+    {
+        let Some(generated) = object
+            .get("generated")
+            .filter(|_| object.len() == 1)
+            .and_then(Value::as_str)
+        else {
+            return false;
+        };
+        return match generated {
+            "dci-correlation" => actual.as_str().is_some_and(|value| {
+                ulid::Ulid::from_string(value).is_ok_and(|parsed| parsed.to_string() == value)
+            }),
+            "rfc3339-timestamp" => actual.as_str().is_some_and(|value| {
+                value.len() <= 64
+                    && time::OffsetDateTime::parse(
+                        value,
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .is_ok()
+            }),
+            _ => false,
+        };
+    }
+    match (expected, actual) {
+        (Value::Array(expected), Value::Array(actual)) => {
+            expected.len() == actual.len()
+                && expected
+                    .iter()
+                    .zip(actual)
+                    .all(|(expected, actual)| fixture_value_matches(expected, actual))
+        }
+        (Value::Object(expected), Value::Object(actual)) => {
+            expected.len() == actual.len()
+                && expected.iter().all(|(name, expected)| {
+                    actual
+                        .get(name)
+                        .is_some_and(|actual| fixture_value_matches(expected, actual))
+                })
+        }
+        _ => expected == actual,
+    }
+}
+
 impl OfflineBoundInputs {
     fn try_new(
         plan: &CompiledSourcePlan,
         mut raw: BTreeMap<String, String>,
     ) -> Result<Self, OfflineFixtureError> {
         let slot_count = plan.inputs().len();
-        if !(1..=4).contains(&slot_count) || raw.len() != slot_count {
+        if !(1..=16).contains(&slot_count) || raw.len() != slot_count {
             return Err(OfflineFixtureError::InvalidInput);
         }
         let slots = plan.inputs().collect::<Vec<_>>();
@@ -204,11 +432,34 @@ impl OfflineBoundInputs {
                 let candidate = raw
                     .remove(slot.name())
                     .ok_or(OfflineFixtureError::InvalidInput)?;
+                let parsed = match slot.input_type() {
+                    CompiledInputType::String | CompiledInputType::FullDate => {
+                        ParsedConsultationScalar::String(Zeroizing::new(candidate))
+                    }
+                    CompiledInputType::Boolean => match candidate.as_str() {
+                        "true" => ParsedConsultationScalar::Boolean(true),
+                        "false" => ParsedConsultationScalar::Boolean(false),
+                        "null" if slot.nullable() => ParsedConsultationScalar::Null,
+                        _ => return Err(OfflineFixtureError::InvalidInput),
+                    },
+                    CompiledInputType::Integer => match candidate.parse::<i64>() {
+                        Ok(value) => ParsedConsultationScalar::Integer(value),
+                        Err(_) if candidate == "null" && slot.nullable() => {
+                            ParsedConsultationScalar::Null
+                        }
+                        Err(_) => return Err(OfflineFixtureError::InvalidInput),
+                    },
+                };
                 let value = slot
-                    .canonicalize_and_validate(&candidate)
+                    .canonicalize_and_validate(&parsed)
                     .ok_or(OfflineFixtureError::InvalidInput)?;
                 value
-                    .binding_matches(plan.profile().contract_hash(), slot.name(), index)
+                    .binding_matches(
+                        plan.profile().contract_hash(),
+                        slot.name(),
+                        index,
+                        slot.input_type(),
+                    )
                     .then_some(value)
                     .ok_or(OfflineFixtureError::InvalidInput)
             })
@@ -233,7 +484,12 @@ impl OfflineBoundInputs {
         self.values.len() == plan.inputs().len()
             && plan.inputs().enumerate().all(|(index, slot)| {
                 self.values.get(index).is_some_and(|value| {
-                    value.binding_matches(plan.profile().contract_hash(), slot.name(), index)
+                    value.binding_matches(
+                        plan.profile().contract_hash(),
+                        slot.name(),
+                        index,
+                        slot.input_type(),
+                    )
                 })
             })
     }
@@ -244,134 +500,509 @@ struct OperationMemory {
     present: bool,
 }
 
-fn execute_rhai(
-    plan: &CompiledSourcePlan,
-    inputs: &OfflineBoundInputs,
-    mut source: BTreeMap<String, OfflineSourceResponse>,
-) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
-    let operations = plan.operations().collect::<Vec<_>>();
-    let allowed = operations
-        .iter()
-        .map(|operation| operation.id().as_str())
-        .chain(plan.credential_operation().map(|value| value.id().as_str()))
-        .collect::<BTreeSet<_>>();
-    if source.keys().any(|name| !allowed.contains(name.as_str())) {
-        return Err(OfflineFixtureError::UnknownSourceOperation);
-    }
-    let mut memory = (0..operations.len()).map(|_| None).collect::<Vec<_>>();
-    let mut executed = BTreeSet::new();
-    let mut calls = Vec::new();
-    let mut credential_used = false;
-    loop {
-        let output = run_rhai_worker(&build_rhai_request(plan, inputs, &memory, &executed)?)?;
-        if output.operation_choices.is_empty() {
-            return finalize_rhai_observation(plan, &memory, output, calls);
-        }
-        let mut selected = Vec::new();
-        for choice in output.operation_choices {
-            let index = operations
-                .iter()
-                .position(|operation| operation.id().as_str() == choice)
-                .filter(|index| !executed.contains(index))
-                .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
-            if selected.contains(&index) {
-                return Err(OfflineFixtureError::ExecutionContractViolation);
-            }
-            selected.push(index);
-        }
-        if executed.is_empty() && selected.first() != Some(&0) {
-            return Err(OfflineFixtureError::ExecutionContractViolation);
-        }
-        let max_calls = plan
-            .runtime_profile()
-            .dispatch()
-            .sandboxed_rhai_limits()
-            .ok_or(OfflineFixtureError::ExecutionContractViolation)?
-            .max_calls();
-        if executed.len() + selected.len() > usize::from(max_calls) {
-            return Err(OfflineFixtureError::ExecutionContractViolation);
-        }
-        for index in selected {
-            let operation = operations[index];
-            if !credential_used {
-                if let Some(credential) = plan.credential_operation() {
-                    calls.push(credential.id().as_str().to_owned());
-                    require_basic_success(
-                        source
-                            .remove(credential.id().as_str())
-                            .ok_or(OfflineFixtureError::MissingSourceObservation)?,
-                        64 * 1024,
-                    )?;
-                    credential_used = true;
+struct OfflineRhaiHost<'a> {
+    plan: &'a CompiledSourcePlan,
+    interactions: OfflineInteractionQueue,
+    credential_used: bool,
+    terminal_error: Option<OfflineFixtureError>,
+}
+
+#[async_trait]
+impl SourceHost for OfflineRhaiHost<'_> {
+    async fn call(&mut self, call: SourceCall) -> Result<SourceResponse, HostFailure> {
+        if let SourceCall::DciSearch { options, .. } = call {
+            return match self.call_dci(options) {
+                Ok(response) => Ok(response),
+                Err(error) => {
+                    self.terminal_error = Some(error);
+                    Err(match error {
+                        OfflineFixtureError::SourceDeadlineExceeded
+                        | OfflineFixtureError::SourceUnavailable
+                        | OfflineFixtureError::SourceStatusRejected => {
+                            HostFailure::SourceUnavailable
+                        }
+                        OfflineFixtureError::SourceResponseTooLarge => HostFailure::BudgetExceeded,
+                        _ => HostFailure::ContractViolation,
+                    })
                 }
+            };
+        }
+        let (method, target, query, headers, body_format, body) = match &call {
+            SourceCall::Get {
+                target, options, ..
+            } => (
+                crate::source_plan::ReadMethod::Get,
+                target.as_str(),
+                &options.query,
+                &options.headers,
+                None,
+                None,
+            ),
+            SourceCall::PostJson {
+                target,
+                body,
+                options,
+                ..
+            } => (
+                crate::source_plan::ReadMethod::ReadOnlyPost,
+                target.as_str(),
+                &options.query,
+                &options.headers,
+                Some(ScriptRequestBodyFormat::Json),
+                Some(body.clone()),
+            ),
+            SourceCall::PostForm {
+                target,
+                fields,
+                options,
+                ..
+            } => (
+                crate::source_plan::ReadMethod::ReadOnlyPost,
+                target.as_str(),
+                &options.query,
+                &options.headers,
+                Some(ScriptRequestBodyFormat::Form),
+                Some(Value::Object(fields.clone().into_iter().collect())),
+            ),
+            SourceCall::DciSearch { .. } => unreachable!("handled above"),
+        };
+        let target = self
+            .plan
+            .data_destination()
+            .ok_or(HostFailure::ContractViolation)?
+            .canonicalize_same_origin_target(target)
+            .map_err(|_| HostFailure::ContractViolation)?;
+        let actual = rendered_script_request(method, &target, query, headers, body)
+            .map_err(|_| HostFailure::ContractViolation)?;
+        let canonical_target = super::executor::canonical_rhai_target(&target, query.clone())?;
+        let header_names = headers.keys().map(String::as_str).collect::<Vec<_>>();
+        let operations = self
+            .plan
+            .operations()
+            .filter(|operation| {
+                operation.method() == method
+                    && operation
+                        .transport_template()
+                        .validate_script_request_shape(
+                            &canonical_target,
+                            &header_names,
+                            body_format,
+                        )
+                        .is_ok()
+            })
+            .collect::<Vec<_>>();
+        let [operation] = operations.as_slice() else {
+            return Err(HostFailure::ContractViolation);
+        };
+        if !self.credential_used {
+            if let Some(credential) = self.plan.credential_operation() {
+                let credential_request = rendered_credential_request_effect(
+                    credential
+                        .render_request(
+                            Zeroizing::new(b"synthetic-client".to_vec()),
+                            Zeroizing::new(b"synthetic-secret".to_vec()),
+                        )
+                        .map_err(|_| HostFailure::ContractViolation)?,
+                )
+                .map_err(|_| HostFailure::ContractViolation)?;
+                let observed = match self
+                    .interactions
+                    .take(credential.id().as_str(), &credential_request)
+                {
+                    Ok(observed) => observed,
+                    Err(error) => {
+                        self.terminal_error = Some(error);
+                        return Err(HostFailure::SourceAuth);
+                    }
+                };
+                require_basic_success(observed, 64 * 1024).map_err(|_| HostFailure::SourceAuth)?;
+                self.credential_used = true;
             }
-            calls.push(operation.id().as_str().to_owned());
-            let decoded = decode_operation(
-                operation,
-                source
-                    .remove(operation.id().as_str())
-                    .ok_or(OfflineFixtureError::MissingSourceObservation)?,
-            )?;
-            memory[index] = Some(match decoded {
-                ClosedJsonOutcome::Ambiguous => {
-                    return Ok(observation(
-                        OfflineFixtureOutcome::Ambiguous,
-                        Vec::new(),
-                        calls,
-                    ))
-                }
-                ClosedJsonOutcome::NoMatch => OperationMemory {
-                    prior_outputs: (0..operation.response().prior_outputs().len())
-                        .map(|_| ProjectedJsonScalar::Null)
+        }
+        let observed = match self.interactions.take(operation.id().as_str(), &actual) {
+            Ok(observed) => observed,
+            Err(error) => {
+                self.terminal_error = Some(error);
+                return Err(HostFailure::ContractViolation);
+            }
+        };
+        match observed {
+            OfflineSourceResponse::Http {
+                status,
+                headers,
+                body,
+            } => {
+                let body = if body.is_empty() {
+                    Value::Null
+                } else {
+                    match serde_json::from_slice(&body) {
+                        Ok(body) => body,
+                        Err(_) => {
+                            self.terminal_error =
+                                Some(OfflineFixtureError::SourceResponseMalformed);
+                            return Err(HostFailure::ContractViolation);
+                        }
+                    }
+                };
+                Ok(SourceResponse {
+                    status,
+                    body,
+                    headers: headers
+                        .into_iter()
+                        .map(|(name, value)| (name, Some(value)))
                         .collect(),
-                    present: false,
-                },
-                ClosedJsonOutcome::One(record) => {
-                    let mut fields = record.into_fields().into_vec();
-                    let outputs = operation.response().outputs().len();
-                    if fields.len() != outputs + operation.response().prior_outputs().len() {
-                        return Err(OfflineFixtureError::ExecutionContractViolation);
-                    }
-                    OperationMemory {
-                        prior_outputs: fields
-                            .drain(outputs..)
-                            .map(|field| field.into_parts().1)
-                            .collect(),
-                        present: true,
-                    }
-                }
-            });
-            executed.insert(index);
+                })
+            }
+            OfflineSourceResponse::NoMatch => Ok(SourceResponse {
+                status: 404,
+                body: Value::Null,
+                headers: BTreeMap::new(),
+            }),
+            OfflineSourceResponse::Timeout => {
+                self.terminal_error = Some(OfflineFixtureError::SourceDeadlineExceeded);
+                Err(HostFailure::SourceUnavailable)
+            }
+            OfflineSourceResponse::Unavailable => Err(HostFailure::SourceUnavailable),
+            OfflineSourceResponse::DeclaredBodyBytes { .. } => {
+                self.terminal_error = Some(OfflineFixtureError::SourceResponseTooLarge);
+                Err(HostFailure::BudgetExceeded)
+            }
+            OfflineSourceResponse::CredentialSuccess => Err(HostFailure::ContractViolation),
         }
     }
 }
 
+impl OfflineRhaiHost<'_> {
+    fn call_dci(
+        &mut self,
+        options: crate::rhai_worker::DciSearchOptions,
+    ) -> Result<SourceResponse, OfflineFixtureError> {
+        if !options.parameters.is_empty() {
+            return Err(OfflineFixtureError::ExecutionContractViolation);
+        }
+        let mut operations = self
+            .plan
+            .operations()
+            .filter(|operation| operation.dci_exact().is_some());
+        let operation = operations
+            .next()
+            .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+        if operations.next().is_some() {
+            return Err(OfflineFixtureError::ExecutionContractViolation);
+        }
+        let dci = operation
+            .dci_exact()
+            .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+        let components = match dci.selector() {
+            crate::source_plan::CompiledDciSelector::ExactAnd { components, .. } => components,
+        };
+        let expected_names = components
+            .iter()
+            .map(|component| {
+                self.plan
+                    .inputs()
+                    .nth(component.input_index())
+                    .map(|input| input.name())
+                    .ok_or(OfflineFixtureError::ExecutionContractViolation)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if options.selectors.len() != expected_names.len()
+            || options
+                .selectors
+                .keys()
+                .map(String::as_str)
+                .ne(expected_names.iter().copied())
+        {
+            return Err(OfflineFixtureError::ExecutionContractViolation);
+        }
+        let component_values = expected_names
+            .iter()
+            .map(|name| {
+                options
+                    .selectors
+                    .get(*name)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .ok_or(OfflineFixtureError::ExecutionContractViolation)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if !self.credential_used {
+            let credential = self
+                .plan
+                .credential_operation()
+                .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+            let credential_request = rendered_credential_request_effect(
+                credential
+                    .render_request(
+                        Zeroizing::new(b"synthetic-client".to_vec()),
+                        Zeroizing::new(b"synthetic-secret".to_vec()),
+                    )
+                    .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
+            )?;
+            require_basic_success(
+                self.interactions
+                    .take(credential.id().as_str(), &credential_request)?,
+                64 * 1024,
+            )?;
+            self.credential_used = true;
+        }
+
+        let verification = dci.verification();
+        let verification_request = verification
+            .transport_template()
+            .render(&[], &[], None, None)
+            .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
+        let verification_request = rendered_request_from_effect(
+            verification_request.noncredential_effect_value("fixture-verification"),
+        )?;
+        let jwks = require_http_body(
+            self.interactions
+                .take(verification.id().as_str(), &verification_request)?,
+            verification.response_max_bytes(),
+        )?;
+        let data_request = rendered_dci_request_values(operation, &component_values)?;
+        let response = require_http_body(
+            self.interactions
+                .take(operation.id().as_str(), &data_request)?,
+            operation.response_max_bytes(),
+        )?;
+        let expectation = offline_dci_expectation(operation, &component_values)?;
+        let payload = SignedDciDecoder::new(expectation, operation.response_decoder())
+            .decode_verified_payload_offline_fixture(&jwks, &response)
+            .map_err(map_dci_decode)?;
+        Ok(SourceResponse {
+            status: 200,
+            body: payload,
+            headers: BTreeMap::new(),
+        })
+    }
+}
+
+fn rendered_script_request(
+    method: crate::source_plan::ReadMethod,
+    target: &str,
+    option_query: &BTreeMap<String, Value>,
+    headers: &BTreeMap<String, String>,
+    body: Option<Value>,
+) -> Result<OfflineRenderedRequest, OfflineFixtureError> {
+    let (path, raw_query) = target
+        .split_once('?')
+        .map_or((target, None), |(path, query)| (path, Some(query)));
+    let mut query = BTreeMap::<String, Vec<String>>::new();
+    if let Some(raw_query) = raw_query {
+        for component in raw_query.split('&') {
+            let (name, value) = component
+                .split_once('=')
+                .ok_or(OfflineFixtureError::RequestMismatch)?;
+            query
+                .entry(percent_decode_fixture_component(name)?)
+                .or_default()
+                .push(percent_decode_fixture_component(value)?);
+        }
+    }
+    for (name, value) in option_query {
+        if query
+            .insert(
+                name.clone(),
+                fixture_query_values(value).ok_or(OfflineFixtureError::RequestMismatch)?,
+            )
+            .is_some()
+        {
+            return Err(OfflineFixtureError::RequestMismatch);
+        }
+    }
+    Ok(OfflineRenderedRequest {
+        method: match method {
+            crate::source_plan::ReadMethod::Get => OfflineRequestMethod::Get,
+            crate::source_plan::ReadMethod::ReadOnlyPost => OfflineRequestMethod::Post,
+        },
+        path: path.to_owned(),
+        query,
+        headers: headers.clone(),
+        body,
+    })
+}
+
+fn rendered_credential_request_effect(
+    request: registry_platform_httputil::destination::CredentialDestinationRequest,
+) -> Result<OfflineRenderedRequest, OfflineFixtureError> {
+    let effect = request.credential_exchange_effect_value("fixture-credential");
+    let mut rendered = rendered_request_from_effect(effect)?;
+    rendered.body = Some(serde_json::json!({"grant_type": "client_credentials"}));
+    Ok(rendered)
+}
+
+fn rendered_request_from_effect(
+    effect: Value,
+) -> Result<OfflineRenderedRequest, OfflineFixtureError> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine as _;
+
+    let object = effect
+        .as_object()
+        .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+    let method = match object.get("method").and_then(Value::as_str) {
+        Some("GET") => OfflineRequestMethod::Get,
+        Some("POST") => OfflineRequestMethod::Post,
+        _ => return Err(OfflineFixtureError::ExecutionContractViolation),
+    };
+    let target = object
+        .get("target")
+        .and_then(Value::as_str)
+        .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+    let (path, raw_query) = target
+        .split_once('?')
+        .map_or((target, None), |(path, query)| (path, Some(query)));
+    let mut query = BTreeMap::<String, Vec<String>>::new();
+    if let Some(raw_query) = raw_query {
+        for component in raw_query.split('&') {
+            let (name, value) = component
+                .split_once('=')
+                .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+            query
+                .entry(percent_decode_fixture_component(name)?)
+                .or_default()
+                .push(percent_decode_fixture_component(value)?);
+        }
+    }
+    let headers = object
+        .get("headers")
+        .and_then(Value::as_array)
+        .ok_or(OfflineFixtureError::ExecutionContractViolation)?
+        .iter()
+        .map(|header| {
+            let name = header
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+            let encoded = header
+                .get("value_base64url")
+                .and_then(Value::as_str)
+                .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+            let bytes = URL_SAFE_NO_PAD
+                .decode(encoded)
+                .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
+            let value = String::from_utf8(bytes)
+                .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
+            Ok((name.to_owned(), value))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let body = object
+        .get("body_base64url")
+        .and_then(Value::as_str)
+        .map(|encoded| {
+            let bytes = URL_SAFE_NO_PAD
+                .decode(encoded)
+                .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
+            serde_json::from_slice(&bytes)
+                .map_err(|_| OfflineFixtureError::ExecutionContractViolation)
+        })
+        .transpose()?;
+    Ok(OfflineRenderedRequest {
+        method,
+        path: path.to_owned(),
+        query,
+        headers,
+        body,
+    })
+}
+
+fn percent_decode_fixture_component(value: &str) -> Result<String, OfflineFixtureError> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            decoded.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        let hex = bytes
+            .get(index + 1..index + 3)
+            .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+        let digit = |byte: u8| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        };
+        decoded.push(
+            digit(hex[0])
+                .zip(digit(hex[1]))
+                .map(|(high, low)| high * 16 + low)
+                .ok_or(OfflineFixtureError::ExecutionContractViolation)?,
+        );
+        index += 3;
+    }
+    String::from_utf8(decoded).map_err(|_| OfflineFixtureError::ExecutionContractViolation)
+}
+
+fn execute_rhai(
+    plan: &CompiledSourcePlan,
+    inputs: &OfflineBoundInputs,
+    interactions: Vec<OfflineInteraction>,
+    worker_program: Option<&Path>,
+) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
+    let request = build_rhai_request(plan, inputs)?;
+    let mut host = OfflineRhaiHost {
+        plan,
+        interactions: OfflineInteractionQueue::new(interactions)?,
+        credential_used: false,
+        terminal_error: None,
+    };
+    let output = run_rhai_worker(&request, &mut host, worker_program);
+    if let Some(error) = host.terminal_error {
+        return Err(error);
+    }
+    let output = output?;
+    let calls = host.interactions.finish()?;
+    finalize_rhai_observation(plan, output, calls)
+}
+
 fn finalize_rhai_observation(
     plan: &CompiledSourcePlan,
-    memory: &[Option<OperationMemory>],
-    output: crate::rhai_worker::WorkerOutput,
+    output: WorkerOutput,
     calls: Vec<String>,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
-    if !memory.iter().flatten().any(|value| value.present) {
-        return Ok(observation(
+    match output {
+        WorkerOutput::Success {
+            outcome: WorkerOutcome::NoMatch,
+            ..
+        } => Ok(observation(
             OfflineFixtureOutcome::NoMatch,
             Vec::new(),
             calls,
-        ));
+        )),
+        WorkerOutput::Success {
+            outcome: WorkerOutcome::Ambiguous,
+            ..
+        } => Ok(observation(
+            OfflineFixtureOutcome::Ambiguous,
+            Vec::new(),
+            calls,
+        )),
+        WorkerOutput::Success {
+            outcome: WorkerOutcome::Match,
+            outputs,
+        } => {
+            let outputs = outputs
+                .into_iter()
+                .map(|(name, value)| rhai_output(value).map(|value| (name.into_boxed_str(), value)))
+                .collect::<Result<Vec<_>, _>>()?;
+            validated_observation(plan, OfflineFixtureOutcome::Match, outputs, calls)
+        }
+        WorkerOutput::Failure { failure } => Err(match failure {
+            ScriptFailure::SourceUnavailable => OfflineFixtureError::SourceUnavailable,
+            ScriptFailure::SourceRejected => OfflineFixtureError::SourceStatusRejected,
+            ScriptFailure::SubjectMismatch => OfflineFixtureError::ExecutionContractViolation,
+        }),
     }
-    let facts = output
-        .outputs
-        .into_iter()
-        .map(|(name, value)| rhai_output(value).map(|value| (name.into_boxed_str(), value)))
-        .collect::<Result<Vec<_>, _>>()?;
-    validated_observation(plan, OfflineFixtureOutcome::Match, facts, calls)
 }
 
 fn build_rhai_request(
     plan: &CompiledSourcePlan,
     inputs: &OfflineBoundInputs,
-    memory: &[Option<OperationMemory>],
-    executed: &BTreeSet<usize>,
 ) -> Result<WorkerRequest, OfflineFixtureError> {
     let (script, entrypoint) = plan
         .rhai_program()
@@ -395,144 +1026,84 @@ fn build_rhai_request(
             max_ipc_frame_bytes: limits.ipc_frame_bytes() as usize,
             max_memory_bytes: limits.memory_bytes(),
             wall_time_ms: u64::from(limits.cpu_ms()),
+            max_source_calls: u32::from(limits.max_calls()),
         },
     );
     for (index, slot) in plan.inputs().enumerate() {
-        let value = inputs.get(index)?.as_str().to_owned();
+        let value = inputs.get(index)?.transient_json_value();
         request.input.insert(
             slot.name().to_owned(),
-            match slot.input_type() {
-                CompiledInputType::String => RhaiTypedValue::String { value: Some(value) },
-                CompiledInputType::FullDate => RhaiTypedValue::Date { value: Some(value) },
+            match (slot.input_type(), value) {
+                (CompiledInputType::String, Value::String(value)) => {
+                    RhaiTypedValue::String { value: Some(value) }
+                }
+                (CompiledInputType::FullDate, Value::String(value)) => {
+                    RhaiTypedValue::Date { value: Some(value) }
+                }
+                (CompiledInputType::Boolean, Value::Bool(value)) => {
+                    RhaiTypedValue::Boolean { value: Some(value) }
+                }
+                (CompiledInputType::Integer, Value::Number(value)) => RhaiTypedValue::Integer {
+                    value: value.as_i64(),
+                },
+                (CompiledInputType::String, Value::Null) => RhaiTypedValue::String { value: None },
+                (CompiledInputType::FullDate, Value::Null) => RhaiTypedValue::Date { value: None },
+                (CompiledInputType::Boolean, Value::Null) => {
+                    RhaiTypedValue::Boolean { value: None }
+                }
+                (CompiledInputType::Integer, Value::Null) => {
+                    RhaiTypedValue::Integer { value: None }
+                }
+                _ => return Err(OfflineFixtureError::ExecutionContractViolation),
             },
         );
     }
-    for fact in plan.rhai_facts() {
-        let (fact_type, max_bytes, minimum, maximum) = match fact.fact_type() {
+    for output in plan.rhai_facts() {
+        let (output_type, max_bytes, minimum, maximum) = match output.fact_type() {
             CompiledRhaiFactType::String { max_bytes } => {
-                (RhaiFactType::String, Some(max_bytes as usize), None, None)
+                (RhaiOutputType::String, Some(max_bytes as usize), None, None)
             }
-            CompiledRhaiFactType::Boolean => (RhaiFactType::Boolean, None, None, None),
+            CompiledRhaiFactType::Boolean => (RhaiOutputType::Boolean, None, None, None),
             CompiledRhaiFactType::Integer { minimum, maximum } => {
-                (RhaiFactType::Integer, None, Some(minimum), Some(maximum))
+                (RhaiOutputType::Integer, None, Some(minimum), Some(maximum))
             }
-            CompiledRhaiFactType::Date => (RhaiFactType::Date, None, None, None),
-            CompiledRhaiFactType::Presence => (RhaiFactType::Presence, None, None, None),
+            CompiledRhaiFactType::Date => (RhaiOutputType::Date, None, None, None),
         };
-        request.fact_schema.insert(
-            fact.name().to_owned(),
-            RhaiFactSchema {
-                fact_type,
-                nullable: fact.nullable(),
+        request.output_schema.insert(
+            output.name().to_owned(),
+            RhaiOutputSchema {
+                output_type,
+                nullable: output.nullable(),
                 max_bytes,
                 minimum,
                 maximum,
             },
         );
     }
-    for (index, operation) in plan.operations().enumerate() {
-        if !executed.contains(&index) {
-            request
-                .allowed_operations
-                .insert(operation.id().as_str().to_owned());
-        }
-        let Some(observed) = memory.get(index).and_then(Option::as_ref) else {
-            continue;
-        };
-        let mut prior = BTreeMap::from([(
-            "presence".to_owned(),
-            RhaiTypedValue::Presence {
-                value: observed.present,
-            },
-        )]);
-        for (slot, value) in operation
-            .response()
-            .prior_outputs()
-            .zip(&observed.prior_outputs)
-        {
-            prior.insert(
-                slot.name().to_owned(),
-                rhai_prior(slot.shape(), slot.is_date(), value)?,
-            );
-        }
-        request
-            .prior_outputs
-            .insert(operation.id().as_str().to_owned(), prior);
+    if super::executor::signed_dci_script_host_required(plan)
+        .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?
+    {
+        request.enable_signed_dci_search();
     }
     Ok(request)
 }
 
 fn run_rhai_worker(
     request: &WorkerRequest,
+    host: &mut OfflineRhaiHost<'_>,
+    worker_program: Option<&Path>,
 ) -> Result<crate::rhai_worker::WorkerOutput, OfflineFixtureError> {
-    let current =
-        std::env::current_exe().map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
-    let directory = if current
-        .parent()
-        .and_then(Path::file_name)
-        .is_some_and(|name| name == "deps")
-    {
-        current.parent().and_then(Path::parent)
-    } else {
-        current.parent()
-    }
-    .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
-    let program = directory.join(format!(
-        "registry-relay-rhai-worker{}",
-        std::env::consts::EXE_SUFFIX
-    ));
-    if !program.is_file() {
-        return Err(OfflineFixtureError::ExecutionContractViolation);
-    }
-    let worker = WorkerProcess::with_program(program);
+    let worker = worker_program
+        .map_or_else(WorkerProcess::dedicated_executable, |program| {
+            Ok(WorkerProcess::with_program(program))
+        })
+        .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?
-        .block_on(worker.evaluate(request))
+        .block_on(worker.evaluate_with_host(request, host))
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)
-}
-
-fn rhai_prior(
-    shape: &CompiledScalarShape,
-    is_date: bool,
-    value: &ProjectedJsonScalar,
-) -> Result<RhaiTypedValue, OfflineFixtureError> {
-    match (shape, value) {
-        (CompiledScalarShape::String { .. }, ProjectedJsonScalar::String(value)) if is_date => {
-            Ok(RhaiTypedValue::Date {
-                value: Some(value.as_str().to_owned()),
-            })
-        }
-        (CompiledScalarShape::String { .. }, ProjectedJsonScalar::String(value)) => {
-            Ok(RhaiTypedValue::String {
-                value: Some(value.as_str().to_owned()),
-            })
-        }
-        (CompiledScalarShape::Boolean { .. }, ProjectedJsonScalar::Boolean(value)) => {
-            Ok(RhaiTypedValue::Boolean {
-                value: Some(*value),
-            })
-        }
-        (CompiledScalarShape::Integer { .. }, ProjectedJsonScalar::Integer(value)) => {
-            Ok(RhaiTypedValue::Integer {
-                value: Some(*value),
-            })
-        }
-        (CompiledScalarShape::String { .. }, ProjectedJsonScalar::Null) if is_date => {
-            Ok(RhaiTypedValue::Date { value: None })
-        }
-        (CompiledScalarShape::String { .. }, ProjectedJsonScalar::Null) => {
-            Ok(RhaiTypedValue::String { value: None })
-        }
-        (CompiledScalarShape::Boolean { .. }, ProjectedJsonScalar::Null) => {
-            Ok(RhaiTypedValue::Boolean { value: None })
-        }
-        (CompiledScalarShape::Integer { .. }, ProjectedJsonScalar::Null) => {
-            Ok(RhaiTypedValue::Integer { value: None })
-        }
-        _ => Err(OfflineFixtureError::ExecutionContractViolation),
-    }
 }
 
 fn rhai_output(value: RhaiTypedValue) -> Result<ProjectedJsonScalar, OfflineFixtureError> {
@@ -547,41 +1118,204 @@ fn rhai_output(value: RhaiTypedValue) -> Result<ProjectedJsonScalar, OfflineFixt
         RhaiTypedValue::Integer { value } => {
             value.map_or(ProjectedJsonScalar::Null, ProjectedJsonScalar::Integer)
         }
-        RhaiTypedValue::Presence { value } => ProjectedJsonScalar::Boolean(value),
+    })
+}
+
+fn rendered_compiled_operation_request(
+    plan: &CompiledSourcePlan,
+    operation: &crate::source_plan::CompiledOperation,
+    inputs: &OfflineBoundInputs,
+    memory: &[Option<OperationMemory>],
+) -> Result<OfflineRenderedRequest, OfflineFixtureError> {
+    use crate::source_plan::CompiledSourceAuth;
+    use registry_platform_httputil::destination::DestinationAuthorizationValue;
+
+    let mut query = operation
+        .query()
+        .map(|entry| render_offline_text(plan, inputs, memory, entry.value()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut headers = operation
+        .headers()
+        .map(|entry| render_offline_text(plan, inputs, memory, entry.value()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let path_segment = operation
+        .path_segment()
+        .map(|expression| render_offline_text(plan, inputs, memory, expression))
+        .transpose()?;
+    let body_value = operation
+        .body()
+        .map(|body| render_offline_body(plan, inputs, memory, body))
+        .transpose()?;
+    let body = body_value
+        .as_ref()
+        .map(|body| serde_json::to_vec(body).map(Zeroizing::new))
+        .transpose()
+        .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
+    match operation.auth() {
+        CompiledSourceAuth::ApiKeyHeader => headers.push("synthetic-api-key".to_string()),
+        CompiledSourceAuth::ApiKeyQuery => query.push("synthetic-api-key".to_string()),
+        _ => {}
+    }
+    let query_refs = query.iter().map(String::as_str).collect::<Vec<_>>();
+    let header_refs = headers
+        .iter()
+        .map(|value| value.as_bytes())
+        .collect::<Vec<_>>();
+    let authorization = match operation.auth() {
+        CompiledSourceAuth::Basic => Some(
+            DestinationAuthorizationValue::basic(b"c3ludGhldGljOnN5bnRoZXRpYw==".to_vec())
+                .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
+        ),
+        CompiledSourceAuth::StaticBearer | CompiledSourceAuth::OAuthClientCredentials => Some(
+            DestinationAuthorizationValue::bearer(b"synthetic-token".to_vec())
+                .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
+        ),
+        CompiledSourceAuth::None
+        | CompiledSourceAuth::ApiKeyHeader
+        | CompiledSourceAuth::ApiKeyQuery => None,
+    };
+    let request = match path_segment.as_deref() {
+        Some(segment) => operation
+            .transport_template()
+            .render_zeroizing_with_path_segment(
+                segment,
+                &query_refs,
+                &header_refs,
+                authorization,
+                body,
+            ),
+        None => operation.transport_template().render_zeroizing(
+            &query_refs,
+            &header_refs,
+            authorization,
+            body,
+        ),
+    }
+    .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
+    let effect = match operation.auth() {
+        CompiledSourceAuth::ApiKeyHeader => {
+            request.effect_value_without_api_key_header("fixture-data")
+        }
+        CompiledSourceAuth::ApiKeyQuery => {
+            request.effect_value_without_api_key_query("fixture-data")
+        }
+        _ => request.noncredential_effect_value("fixture-data"),
+    };
+    rendered_request_from_effect(effect)
+}
+
+fn render_offline_text(
+    plan: &CompiledSourcePlan,
+    inputs: &OfflineBoundInputs,
+    memory: &[Option<OperationMemory>],
+    expression: &crate::source_plan::CompiledValueExpression,
+) -> Result<String, OfflineFixtureError> {
+    use crate::source_plan::CompiledValueExpression;
+    Ok(match expression {
+        CompiledValueExpression::Literal(value) => value.to_string(),
+        CompiledValueExpression::ConsultationInput { input_index } => {
+            inputs.get(*input_index)?.as_str().to_owned()
+        }
+        CompiledValueExpression::DeploymentParameter { parameter_index } => plan
+            .deployment_parameter_value(*parameter_index)
+            .ok_or(OfflineFixtureError::ExecutionContractViolation)?
+            .to_owned(),
+        CompiledValueExpression::PriorStepOutput {
+            operation_index,
+            output_slot_index,
+        } => match memory
+            .get(*operation_index)
+            .and_then(Option::as_ref)
+            .and_then(|memory| memory.prior_outputs.get(*output_slot_index))
+            .ok_or(OfflineFixtureError::ExecutionContractViolation)?
+        {
+            ProjectedJsonScalar::String(value) => value.to_string(),
+            ProjectedJsonScalar::Boolean(value) => value.to_string(),
+            ProjectedJsonScalar::Integer(value) => value.to_string(),
+            ProjectedJsonScalar::Null | ProjectedJsonScalar::Number(_) => {
+                return Err(OfflineFixtureError::ExecutionContractViolation)
+            }
+        },
+    })
+}
+
+fn render_offline_body(
+    plan: &CompiledSourcePlan,
+    inputs: &OfflineBoundInputs,
+    memory: &[Option<OperationMemory>],
+    body: &crate::source_plan::CompiledBodyTemplate,
+) -> Result<Value, OfflineFixtureError> {
+    use crate::source_plan::{CompiledBodyTemplate, CompiledValueExpression};
+    Ok(match body {
+        CompiledBodyTemplate::Null => Value::Null,
+        CompiledBodyTemplate::Boolean(value) => Value::Bool(*value),
+        CompiledBodyTemplate::Integer(value) => Value::from(*value),
+        CompiledBodyTemplate::StringLiteral(value) => Value::String(value.to_string()),
+        CompiledBodyTemplate::Expression(CompiledValueExpression::ConsultationInput {
+            input_index,
+        }) => inputs.get(*input_index)?.transient_json_value(),
+        CompiledBodyTemplate::Expression(CompiledValueExpression::PriorStepOutput {
+            operation_index,
+            output_slot_index,
+        }) => memory
+            .get(*operation_index)
+            .and_then(Option::as_ref)
+            .and_then(|memory| memory.prior_outputs.get(*output_slot_index))
+            .ok_or(OfflineFixtureError::ExecutionContractViolation)
+            .and_then(projected_scalar_json)?,
+        CompiledBodyTemplate::Expression(expression) => {
+            Value::String(render_offline_text(plan, inputs, memory, expression)?)
+        }
+        CompiledBodyTemplate::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| render_offline_body(plan, inputs, memory, item))
+                .collect::<Result<Vec<_>, _>>()?,
+        ),
+        CompiledBodyTemplate::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|field| {
+                    render_offline_body(plan, inputs, memory, field.value())
+                        .map(|value| (field.name().to_owned(), value))
+                })
+                .collect::<Result<serde_json::Map<_, _>, _>>()?,
+        ),
+    })
+}
+
+fn projected_scalar_json(value: &ProjectedJsonScalar) -> Result<Value, OfflineFixtureError> {
+    Ok(match value {
+        ProjectedJsonScalar::Null => Value::Null,
+        ProjectedJsonScalar::String(value) => Value::String(value.to_string()),
+        ProjectedJsonScalar::Boolean(value) => Value::Bool(*value),
+        ProjectedJsonScalar::Integer(value) => Value::from(*value),
+        ProjectedJsonScalar::Number(value) => serde_json::Number::from_f64(*value)
+            .map(Value::Number)
+            .ok_or(OfflineFixtureError::ExecutionContractViolation)?,
     })
 }
 
 fn execute_http(
     plan: &CompiledSourcePlan,
     inputs: &OfflineBoundInputs,
-    mut source: BTreeMap<String, OfflineSourceResponse>,
+    interactions: Vec<OfflineInteraction>,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
     if plan
         .operations()
         .any(|operation| operation.dci_exact().is_some())
     {
-        return execute_dci(plan, inputs, source);
+        return execute_dci(plan, inputs, interactions);
     }
     validate_bounded_http_activation(plan)
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
     if !inputs.is_bound_to(plan) {
         return Err(OfflineFixtureError::ExecutionContractViolation);
     }
-    let allowed = plan
-        .operations()
-        .map(|operation| operation.id().as_str())
-        .chain(
-            plan.credential_operation()
-                .map(|operation| operation.id().as_str()),
-        )
-        .collect::<BTreeSet<_>>();
-    if source.keys().any(|name| !allowed.contains(name.as_str())) {
-        return Err(OfflineFixtureError::UnknownSourceOperation);
-    }
+    let mut interactions = OfflineInteractionQueue::new(interactions)?;
     let operations = plan.operations().collect::<Vec<_>>();
     let mut memory = (0..operations.len()).map(|_| None).collect::<Vec<_>>();
     let mut facts = Vec::new();
-    let mut calls = Vec::new();
     let mut credential_used = false;
     for (step_position, step) in plan.compiled_steps().enumerate() {
         let index = step.operation_index();
@@ -600,27 +1334,30 @@ fn execute_http(
         }
         if !credential_used {
             if let Some(credential) = plan.credential_operation() {
-                calls.push(credential.id().as_str().to_owned());
+                let request = rendered_credential_request_effect(
+                    credential
+                        .render_request(
+                            Zeroizing::new(b"synthetic-client".to_vec()),
+                            Zeroizing::new(b"synthetic-secret".to_vec()),
+                        )
+                        .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
+                )?;
                 require_basic_success(
-                    source
-                        .remove(credential.id().as_str())
-                        .ok_or(OfflineFixtureError::MissingSourceObservation)?,
+                    interactions.take(credential.id().as_str(), &request)?,
                     64 * 1024,
                 )?;
                 credential_used = true;
             }
         }
-        calls.push(operation.id().as_str().to_owned());
-        let response = source
-            .remove(operation.id().as_str())
-            .ok_or(OfflineFixtureError::MissingSourceObservation)?;
+        let request = rendered_compiled_operation_request(plan, operation, inputs, &memory)?;
+        let response = interactions.take(operation.id().as_str(), &request)?;
         let decoded = decode_operation(operation, response)?;
         match decoded {
             ClosedJsonOutcome::Ambiguous => {
                 return Ok(observation(
                     OfflineFixtureOutcome::Ambiguous,
                     Vec::new(),
-                    calls,
+                    interactions.finish()?,
                 ))
             }
             ClosedJsonOutcome::NoMatch
@@ -629,7 +1366,7 @@ fn execute_http(
                 return Ok(observation(
                     OfflineFixtureOutcome::NoMatch,
                     Vec::new(),
-                    calls,
+                    interactions.finish()?,
                 ))
             }
             ClosedJsonOutcome::NoMatch => {
@@ -652,12 +1389,6 @@ fn execute_http(
                     .map(|field| field.into_parts().1)
                     .collect();
                 facts.extend(projected.into_iter().map(|field| field.into_parts()));
-                facts.extend(
-                    operation
-                        .response()
-                        .presence_outputs()
-                        .map(|field| (field.field().into(), ProjectedJsonScalar::Boolean(true))),
-                );
                 memory[index] = Some(OperationMemory {
                     prior_outputs,
                     present: true,
@@ -665,14 +1396,19 @@ fn execute_http(
             }
         }
     }
-    validated_observation(plan, OfflineFixtureOutcome::Match, facts, calls)
+    validated_observation(
+        plan,
+        OfflineFixtureOutcome::Match,
+        facts,
+        interactions.finish()?,
+    )
 }
 
 fn decode_operation(
     operation: &crate::source_plan::CompiledOperation,
     response: OfflineSourceResponse,
 ) -> Result<ClosedJsonOutcome, OfflineFixtureError> {
-    let OfflineSourceResponse::Http { status, body } = response else {
+    let OfflineSourceResponse::Http { status, body, .. } = response else {
         return match response {
             OfflineSourceResponse::DeclaredBodyBytes { status, body_bytes } => {
                 validate_status(operation, status)?;
@@ -729,7 +1465,7 @@ fn decode_operation(
 fn execute_dci(
     plan: &CompiledSourcePlan,
     inputs: &OfflineBoundInputs,
-    mut source: BTreeMap<String, OfflineSourceResponse>,
+    interactions: Vec<OfflineInteraction>,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
     let operation = plan
         .operations()
@@ -742,39 +1478,36 @@ fn execute_dci(
     let credential = plan
         .credential_operation()
         .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
-    let allowed = [
-        credential.id().as_str(),
-        verification.id().as_str(),
-        operation.id().as_str(),
-    ]
-    .into_iter()
-    .collect::<BTreeSet<_>>();
-    if source.keys().any(|name| !allowed.contains(name.as_str())) {
-        return Err(OfflineFixtureError::UnknownSourceOperation);
-    }
-    let calls = vec![
-        credential.id().as_str().to_owned(),
-        verification.id().as_str().to_owned(),
-        operation.id().as_str().to_owned(),
-    ];
+    let mut interactions = OfflineInteractionQueue::new(interactions)?;
+    let credential_request = rendered_credential_request_effect(
+        credential
+            .render_request(
+                Zeroizing::new(b"synthetic-client".to_vec()),
+                Zeroizing::new(b"synthetic-secret".to_vec()),
+            )
+            .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
+    )?;
     require_basic_success(
-        source
-            .remove(credential.id().as_str())
-            .ok_or(OfflineFixtureError::MissingSourceObservation)?,
+        interactions.take(credential.id().as_str(), &credential_request)?,
         64 * 1024,
     )?;
+    let verification_request = verification
+        .transport_template()
+        .render(&[], &[], None, None)
+        .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
+    let verification_request = rendered_request_from_effect(
+        verification_request.noncredential_effect_value("fixture-verification"),
+    )?;
     let jwks = require_http_body(
-        source
-            .remove(verification.id().as_str())
-            .ok_or(OfflineFixtureError::MissingSourceObservation)?,
+        interactions.take(verification.id().as_str(), &verification_request)?,
         verification.response_max_bytes(),
     )?;
+    let data_request = rendered_dci_request(operation, inputs)?;
     let response = require_http_body(
-        source
-            .remove(operation.id().as_str())
-            .ok_or(OfflineFixtureError::MissingSourceObservation)?,
+        interactions.take(operation.id().as_str(), &data_request)?,
         operation.response_max_bytes(),
     )?;
+    let calls = interactions.finish()?;
     let exact_components = match dci.selector() {
         crate::source_plan::CompiledDciSelector::ExactAnd { components, .. } => components
             .iter()
@@ -790,7 +1523,7 @@ fn execute_dci(
         crate::source_plan::CompiledDciSelector::ExactAnd {
             identifier_type: Some(identifier_type),
             ..
-        } => SignedDciExpectation::new_generic(
+        } => SignedDciExpectation::new_idtype_value(
             DCI_FIXTURE_MESSAGE_ID,
             dci.sender_id(),
             dci.receiver_id(),
@@ -810,7 +1543,7 @@ fn execute_dci(
         crate::source_plan::CompiledDciSelector::ExactAnd {
             identifier_type: None,
             ..
-        } => SignedDciExpectation::new_generic_exact_and(
+        } => SignedDciExpectation::new_exact_and(
             DCI_FIXTURE_MESSAGE_ID,
             dci.sender_id(),
             dci.receiver_id(),
@@ -850,22 +1583,192 @@ fn execute_dci(
                 .into_vec()
                 .into_iter()
                 .map(|field| field.into_parts())
-                .chain(
-                    operation
-                        .response()
-                        .presence_outputs()
-                        .map(|field| (field.field().into(), ProjectedJsonScalar::Boolean(true))),
-                )
                 .collect(),
             calls,
         ),
     }
 }
 
+fn rendered_dci_request(
+    operation: &crate::source_plan::CompiledOperation,
+    inputs: &OfflineBoundInputs,
+) -> Result<OfflineRenderedRequest, OfflineFixtureError> {
+    let dci = operation
+        .dci_exact()
+        .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+    let values = match dci.selector() {
+        crate::source_plan::CompiledDciSelector::ExactAnd { components, .. } => components
+            .iter()
+            .map(|component| {
+                inputs
+                    .get(component.input_index())
+                    .map(CompiledInputValue::as_str)
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    rendered_dci_request_values(operation, &values)
+}
+
+fn rendered_dci_request_values(
+    operation: &crate::source_plan::CompiledOperation,
+    component_values: &[&str],
+) -> Result<OfflineRenderedRequest, OfflineFixtureError> {
+    use crate::source_plan::codec::dci::{
+        DciExactAndComponentInput, DciExactAndSearchRequestInput, DciExactSearchRequest,
+        DciExactSearchRequestInput,
+    };
+    use registry_platform_httputil::destination::DestinationAuthorizationValue;
+
+    let dci = operation
+        .dci_exact()
+        .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+    let message_timestamp = time::OffsetDateTime::parse(
+        "2026-01-01T00:00:00Z",
+        &time::format_description::well_known::Rfc3339,
+    )
+    .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
+    let components = match dci.selector() {
+        crate::source_plan::CompiledDciSelector::ExactAnd { components, .. } => components
+            .iter()
+            .zip(component_values)
+            .map(|(component, value)| DciExactAndComponentInput {
+                field: component.field(),
+                value,
+            })
+            .collect::<Vec<_>>(),
+    };
+    if components.len() != component_values.len() {
+        return Err(OfflineFixtureError::ExecutionContractViolation);
+    }
+    let request = match dci.selector() {
+        crate::source_plan::CompiledDciSelector::ExactAnd {
+            identifier_type: Some(identifier_type),
+            ..
+        } => DciExactSearchRequest::try_new(DciExactSearchRequestInput {
+            protocol_version: dci.protocol_version(),
+            message_id: DCI_FIXTURE_MESSAGE_ID,
+            message_timestamp,
+            sender_id: dci.sender_id(),
+            receiver_id: dci.receiver_id(),
+            registry_type: dci.registry_type(),
+            registry_event_type: dci.registry_event_type(),
+            record_type: dci.record_type(),
+            identifier_type,
+            selector: component_values
+                .first()
+                .copied()
+                .ok_or(OfflineFixtureError::ExecutionContractViolation)?,
+            requested_max: operation.max_source_records(),
+            page_number: dci.page_number(),
+            signature: None,
+        }),
+        crate::source_plan::CompiledDciSelector::ExactAnd {
+            identifier_type: None,
+            ..
+        } => DciExactSearchRequest::try_new_exact_and(DciExactAndSearchRequestInput {
+            protocol_version: dci.protocol_version(),
+            message_id: DCI_FIXTURE_MESSAGE_ID,
+            message_timestamp,
+            sender_id: dci.sender_id(),
+            receiver_id: dci.receiver_id(),
+            registry_type: dci.registry_type(),
+            registry_event_type: dci.registry_event_type(),
+            record_type: dci.record_type(),
+            components: &components,
+            requested_max: operation.max_source_records(),
+            page_number: dci.page_number(),
+            signature: None,
+        }),
+    }
+    .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
+    let body = request
+        .to_json_body()
+        .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
+    let authorization = DestinationAuthorizationValue::bearer(b"synthetic-token".to_vec())
+        .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
+    let rendered = operation
+        .transport_template()
+        .render_zeroizing(
+            &[],
+            &[],
+            Some(authorization),
+            Some(body.into_zeroizing_bytes()),
+        )
+        .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
+    rendered_request_from_effect(rendered.noncredential_effect_value("fixture-data"))
+}
+
+fn offline_dci_expectation<'a>(
+    operation: &crate::source_plan::CompiledOperation,
+    component_values: &'a [&'a str],
+) -> Result<SignedDciExpectation, OfflineFixtureError> {
+    let dci = operation
+        .dci_exact()
+        .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+    let components = match dci.selector() {
+        crate::source_plan::CompiledDciSelector::ExactAnd { components, .. } => components
+            .iter()
+            .zip(component_values)
+            .map(|(component, value)| SignedDciExactComponent {
+                response_pointer: component.response_pointer(),
+                expected_value: value,
+            })
+            .collect::<Vec<_>>(),
+    };
+    if components.len() != component_values.len() {
+        return Err(OfflineFixtureError::ExecutionContractViolation);
+    }
+    match dci.selector() {
+        crate::source_plan::CompiledDciSelector::ExactAnd {
+            identifier_type: Some(identifier_type),
+            ..
+        } => SignedDciExpectation::new_idtype_value(
+            DCI_FIXTURE_MESSAGE_ID,
+            dci.sender_id(),
+            dci.receiver_id(),
+            component_values
+                .first()
+                .copied()
+                .ok_or(OfflineFixtureError::ExecutionContractViolation)?,
+            dci.protocol_version(),
+            dci.registry_type()
+                .ok_or(OfflineFixtureError::ExecutionContractViolation)?,
+            dci.record_type()
+                .ok_or(OfflineFixtureError::ExecutionContractViolation)?,
+            identifier_type,
+            dci.locale(),
+            u64::from(dci.page_number()),
+            u64::from(operation.max_source_records()),
+            dci.verification().response_max_bytes() as usize,
+            operation.response_max_bytes() as usize,
+        ),
+        crate::source_plan::CompiledDciSelector::ExactAnd {
+            identifier_type: None,
+            ..
+        } => SignedDciExpectation::new_exact_and(
+            DCI_FIXTURE_MESSAGE_ID,
+            dci.sender_id(),
+            dci.receiver_id(),
+            &components,
+            dci.protocol_version(),
+            dci.registry_type()
+                .ok_or(OfflineFixtureError::ExecutionContractViolation)?,
+            dci.record_type()
+                .ok_or(OfflineFixtureError::ExecutionContractViolation)?,
+            dci.locale(),
+            u64::from(dci.page_number()),
+            u64::from(operation.max_source_records()),
+            dci.verification().response_max_bytes() as usize,
+            operation.response_max_bytes() as usize,
+        ),
+    }
+    .map_err(|_| OfflineFixtureError::ExecutionContractViolation)
+}
+
 fn execute_snapshot(
     plan: &CompiledSourcePlan,
     inputs: &OfflineBoundInputs,
-    mut source: BTreeMap<String, OfflineSourceResponse>,
+    interactions: Vec<OfflineInteraction>,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
     validate_snapshot_exact_activation(plan)
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
@@ -882,12 +1785,18 @@ fn execute_snapshot(
     {
         return Err(OfflineFixtureError::ExecutionContractViolation);
     }
-    if source.keys().any(|name| name != "snapshot") {
-        return Err(OfflineFixtureError::UnknownSourceOperation);
-    }
-    let response = source
-        .remove("snapshot")
-        .ok_or(OfflineFixtureError::MissingSourceObservation)?;
+    let mut interactions = OfflineInteractionQueue::new(interactions)?;
+    let response = interactions.take(
+        "snapshot",
+        &OfflineRenderedRequest {
+            method: OfflineRequestMethod::Get,
+            path: "/snapshot".to_string(),
+            query: BTreeMap::new(),
+            headers: BTreeMap::new(),
+            body: None,
+        },
+    )?;
+    let calls = interactions.finish()?;
     let rows = match response {
         OfflineSourceResponse::NoMatch => Vec::new(),
         OfflineSourceResponse::Unavailable => return Err(OfflineFixtureError::SourceUnavailable),
@@ -898,7 +1807,9 @@ fn execute_snapshot(
         OfflineSourceResponse::DeclaredBodyBytes { .. } => {
             return Err(OfflineFixtureError::SourceResponseTooLarge)
         }
-        OfflineSourceResponse::Http { status: 200, body } => {
+        OfflineSourceResponse::Http {
+            status: 200, body, ..
+        } => {
             let value: Value = registry_platform_crypto::parse_json_strict(&body)
                 .map_err(|_| OfflineFixtureError::SourceResponseMalformed)?;
             match value {
@@ -934,9 +1845,9 @@ fn execute_snapshot(
         None => Vec::new(),
     };
     if public == OfflineFixtureOutcome::Match {
-        validated_observation(plan, public, facts, vec!["snapshot".to_owned()])
+        validated_observation(plan, public, facts, calls)
     } else {
-        Ok(observation(public, Vec::new(), vec!["snapshot".to_owned()]))
+        Ok(observation(public, Vec::new(), calls))
     }
 }
 
@@ -945,12 +1856,7 @@ fn snapshot_projected_value(
     name: &str,
     fields: &serde_json::Map<String, Value>,
 ) -> Result<ProjectedJsonScalar, OfflineFixtureError> {
-    if matches!(
-        shape,
-        crate::source_plan::runtime_profile::CompiledOutputShape::Presence
-    ) {
-        return Ok(ProjectedJsonScalar::Boolean(true));
-    }
+    let _ = shape;
     fields
         .get(name)
         .map(json_scalar)
@@ -972,9 +1878,9 @@ fn require_http_body(
     max_bytes: u32,
 ) -> Result<Vec<u8>, OfflineFixtureError> {
     match response {
-        OfflineSourceResponse::Http { status: 200, body } if body.len() <= max_bytes as usize => {
-            Ok(body)
-        }
+        OfflineSourceResponse::Http {
+            status: 200, body, ..
+        } if body.len() <= max_bytes as usize => Ok(body),
         OfflineSourceResponse::Http { status: 200, .. } => {
             Err(OfflineFixtureError::SourceResponseTooLarge)
         }
@@ -1013,11 +1919,11 @@ fn validated_observation(
     facts: Vec<(Box<str>, ProjectedJsonScalar)>,
     calls: Vec<String>,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
-    let facts = ValidatedFactMap::try_new(plan.runtime_profile(), facts)
+    let outputs = ValidatedOutputMap::try_new(plan.runtime_profile(), facts)
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
     Ok(OfflineFixtureObservation {
         outcome,
-        facts: facts
+        outputs: outputs
             .fields()
             .map(|(name, value)| (name.to_owned(), scalar_value(value)))
             .collect(),
@@ -1027,12 +1933,12 @@ fn validated_observation(
 
 fn observation(
     outcome: OfflineFixtureOutcome,
-    facts: Vec<(String, Value)>,
+    outputs: Vec<(String, Value)>,
     calls: Vec<String>,
 ) -> OfflineFixtureObservation {
     OfflineFixtureObservation {
         outcome,
-        facts: facts.into_iter().collect(),
+        outputs: outputs.into_iter().collect(),
         calls,
     }
 }
@@ -1071,12 +1977,6 @@ fn append_absent(
             .response()
             .outputs()
             .map(|field| (field.field().into(), ProjectedJsonScalar::Null)),
-    );
-    facts.extend(
-        operation
-            .response()
-            .presence_outputs()
-            .map(|field| (field.field().into(), ProjectedJsonScalar::Boolean(false))),
     );
 }
 
@@ -1234,7 +2134,7 @@ mod tests {
     }
 
     fn harness_with_input_count(count: usize) -> (OfflineRelayFixture, OfflineProfilePin) {
-        assert!((1..=4).contains(&count));
+        assert!((1..=16).contains(&count));
         let mut pack: Value = serde_json::from_slice(PACK).expect("pack JSON");
         let mut contract: Value = serde_json::from_slice(CONTRACT).expect("contract JSON");
         let mut binding: Value = serde_json::from_slice(BINDING).expect("binding JSON");
@@ -1243,30 +2143,36 @@ mod tests {
                 "birth_date",
                 "birthDate",
                 serde_json::json!({
-                    "type": "full_date",
-                    "max_bytes": 10,
-                    "pattern": "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$",
-                    "canonicalization": "identity"
+                    "role": "selector",
+                    "type": "string",
+                    "format": "date",
+                    "maxLength": 10,
+                    "x-registry-max-bytes": 10,
+                    "x-registry-canonicalization": "identity"
                 }),
             ),
             (
                 "country_code",
                 "countryCode",
                 serde_json::json!({
+                    "role": "selector",
                     "type": "string",
-                    "max_bytes": 2,
+                    "maxLength": 2,
+                    "x-registry-max-bytes": 8,
                     "pattern": "^[A-Z][A-Z]$",
-                    "canonicalization": "identity"
+                    "x-registry-canonicalization": "identity"
                 }),
             ),
             (
                 "zone",
                 "zone",
                 serde_json::json!({
+                    "role": "selector",
                     "type": "string",
-                    "max_bytes": 5,
+                    "maxLength": 5,
+                    "x-registry-max-bytes": 20,
                     "pattern": "^[a-z][a-z][a-z][a-z][a-z]$",
-                    "canonicalization": "ascii_lowercase"
+                    "x-registry-canonicalization": "ascii_lowercase"
                 }),
             ),
         ];
@@ -1276,6 +2182,26 @@ mod tests {
             pack["spec"]["reviewed_acquisition"]["selector"]["components"][name] =
                 serde_json::json!({"type": "query", "parameter": parameter});
             pack["spec"]["plan"]["operations"][0]["query"][parameter] =
+                serde_json::json!({"source": "consultation_input", "name": name});
+        }
+        for index in 4..count {
+            let name = format!("parameter_{index:02}");
+            let parameter = format!("parameter{index:02}");
+            let schema = serde_json::json!({
+                "role": if index < 8 { "selector" } else { "parameter" },
+                "type": "string",
+                "maxLength": 8,
+                "x-registry-max-bytes": 32,
+                "pattern": "^[a-z0-9]+$",
+                "x-registry-canonicalization": "identity"
+            });
+            pack["spec"]["input_slots"][&name] = schema.clone();
+            contract["spec"]["inputs"][&name] = schema;
+            if index < 8 {
+                pack["spec"]["reviewed_acquisition"]["selector"]["components"][&name] =
+                    serde_json::json!({"type": "query", "parameter": parameter});
+            }
+            pack["spec"]["plan"]["operations"][0]["query"][&parameter] =
                 serde_json::json!({"source": "consultation_input", "name": name});
         }
 
@@ -1338,13 +2264,29 @@ mod tests {
         OfflineFixtureRequest {
             profile,
             input: BTreeMap::from([("tracked_entity".to_owned(), input.to_owned())]),
-            source: BTreeMap::from([(
-                "lookup-enrollment-status".to_owned(),
-                OfflineSourceResponse::Http {
+            interactions: vec![OfflineInteraction {
+                request: OfflineExpectedRequest {
+                    method: OfflineRequestMethod::Get,
+                    path: "/stable-2-41-9/api/tracker/enrollments".to_owned(),
+                    query: BTreeMap::from([
+                        ("fields".to_owned(), Value::String("status".to_owned())),
+                        ("orgUnitMode".to_owned(), Value::String("ALL".to_owned())),
+                        ("pageSize".to_owned(), Value::String("2".to_owned())),
+                        (
+                            "program".to_owned(),
+                            Value::String("IpHINAT79UW".to_owned()),
+                        ),
+                        ("trackedEntity".to_owned(), Value::String(input.to_owned())),
+                    ]),
+                    headers: BTreeMap::new(),
+                    body: None,
+                },
+                response: OfflineSourceResponse::Http {
                     status: 200,
+                    headers: BTreeMap::new(),
                     body: serde_json::to_vec(&body).expect("body"),
                 },
-            )]),
+            }],
         }
     }
 
@@ -1369,7 +2311,7 @@ mod tests {
             .expect("match");
         assert_eq!(matched.outcome, OfflineFixtureOutcome::Match);
         assert_eq!(
-            matched.facts,
+            matched.outputs,
             BTreeMap::from([("status".to_owned(), Value::String("ACTIVE".to_owned()))])
         );
         assert_eq!(matched.calls, ["lookup-enrollment-status"]);
@@ -1378,7 +2320,7 @@ mod tests {
             .execute(request(profile.clone(), "Abc12345678", dhis2_body(&[])))
             .expect("no match");
         assert_eq!(no_match.outcome, OfflineFixtureOutcome::NoMatch);
-        assert!(no_match.facts.is_empty());
+        assert!(no_match.outputs.is_empty());
 
         let ambiguous = harness
             .execute(request(
@@ -1388,7 +2330,7 @@ mod tests {
             ))
             .expect("ambiguity");
         assert_eq!(ambiguous.outcome, OfflineFixtureOutcome::Ambiguous);
-        assert!(ambiguous.facts.is_empty());
+        assert!(ambiguous.outputs.is_empty());
     }
 
     #[test]
@@ -1407,13 +2349,10 @@ mod tests {
             Err(OfflineFixtureError::SourceResponseMalformed)
         );
         let mut oversized = request(profile, "Abc12345678", dhis2_body(&[]));
-        oversized.source.insert(
-            "lookup-enrollment-status".to_owned(),
-            OfflineSourceResponse::DeclaredBodyBytes {
-                status: 200,
-                body_bytes: 8193,
-            },
-        );
+        oversized.interactions[0].response = OfflineSourceResponse::DeclaredBodyBytes {
+            status: 200,
+            body_bytes: 8193,
+        };
         assert_eq!(
             harness.execute(oversized),
             Err(OfflineFixtureError::SourceResponseTooLarge)
@@ -1441,22 +2380,43 @@ mod tests {
     }
 
     #[test]
-    fn one_through_four_exact_inputs_execute_in_compiled_byte_order() {
-        for count in 1..=4 {
+    fn one_through_sixteen_typed_inputs_execute_in_compiled_byte_order() {
+        for count in 1..=16 {
             let (harness, profile) = harness_with_input_count(count);
             let mut fixture = request(profile, "Abc12345678", dhis2_body(&["ACTIVE"]));
             if count >= 2 {
                 fixture
                     .input
                     .insert("birth_date".to_owned(), "2000-02-29".to_owned());
+                fixture.interactions[0].request.query.insert(
+                    "birthDate".to_owned(),
+                    Value::String("2000-02-29".to_owned()),
+                );
             }
             if count >= 3 {
                 fixture
                     .input
                     .insert("country_code".to_owned(), "TH".to_owned());
+                fixture.interactions[0]
+                    .request
+                    .query
+                    .insert("countryCode".to_owned(), Value::String("TH".to_owned()));
             }
             if count >= 4 {
                 fixture.input.insert("zone".to_owned(), "NORTH".to_owned());
+                fixture.interactions[0]
+                    .request
+                    .query
+                    .insert("zone".to_owned(), Value::String("north".to_owned()));
+            }
+            for index in 4..count {
+                fixture
+                    .input
+                    .insert(format!("parameter_{index:02}"), format!("value{index:02}"));
+                fixture.interactions[0].request.query.insert(
+                    format!("parameter{index:02}"),
+                    Value::String(format!("value{index:02}")),
+                );
             }
             let observed = harness.execute(fixture).expect("exact-and execution");
             assert_eq!(observed.outcome, OfflineFixtureOutcome::Match);
@@ -1477,7 +2437,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_profile_pin_and_source_closure_fail_closed() {
+    fn exact_profile_pin_and_rendered_request_fail_closed() {
         let (runner, mut profile) = harness();
         profile.contract_hash = format!("sha256:{}", "0".repeat(64));
         assert_eq!(
@@ -1486,69 +2446,32 @@ mod tests {
         );
         let (runner, profile) = harness();
         let mut unknown = request(profile, "Abc12345678", dhis2_body(&[]));
-        unknown.source.insert(
-            "attacker-selected".to_owned(),
-            OfflineSourceResponse::Unavailable,
-        );
+        unknown.interactions[0].request.path = "/attacker-selected".to_owned();
         assert_eq!(
             runner.execute(unknown),
-            Err(OfflineFixtureError::UnknownSourceOperation)
+            Err(OfflineFixtureError::RequestMismatch)
         );
     }
 
     #[test]
     fn sandboxed_rhai_no_match_discards_the_complete_worker_output_map() {
         let plan = crate::source_plan::rhai_runtime_vector_plan_fixture();
-        let facts = plan
-            .rhai_facts()
-            .map(|fact| {
-                let value = match fact.fact_type() {
-                    CompiledRhaiFactType::String { .. } => RhaiTypedValue::String {
-                        value: (!fact.nullable()).then(|| "absent".to_owned()),
-                    },
-                    CompiledRhaiFactType::Boolean => RhaiTypedValue::Boolean {
-                        value: (!fact.nullable()).then_some(false),
-                    },
-                    CompiledRhaiFactType::Integer { minimum, .. } => RhaiTypedValue::Integer {
-                        value: (!fact.nullable()).then_some(minimum),
-                    },
-                    CompiledRhaiFactType::Date => RhaiTypedValue::Date {
-                        value: (!fact.nullable()).then(|| "2000-01-01".to_owned()),
-                    },
-                    CompiledRhaiFactType::Presence => RhaiTypedValue::Presence { value: false },
-                };
-                (fact.name().to_owned(), value)
-            })
-            .collect::<BTreeMap<_, _>>();
-        assert!(!facts.is_empty());
-        let memory = plan
-            .operations()
-            .map(|operation| {
-                Some(OperationMemory {
-                    prior_outputs: (0..operation.response().prior_outputs().len())
-                        .map(|_| ProjectedJsonScalar::Null)
-                        .collect(),
-                    present: false,
-                })
-            })
-            .collect::<Vec<_>>();
         let result = finalize_rhai_observation(
             &plan,
-            &memory,
-            crate::rhai_worker::WorkerOutput {
-                operation_choices: Vec::new(),
-                outputs: facts,
+            WorkerOutput::Success {
+                outcome: WorkerOutcome::NoMatch,
+                outputs: BTreeMap::new(),
             },
             vec!["lookup".to_owned()],
         )
         .expect("no-match observation");
         assert_eq!(result.outcome, OfflineFixtureOutcome::NoMatch);
-        assert!(result.facts.is_empty());
+        assert!(result.outputs.is_empty());
         assert_eq!(result.calls, ["lookup"]);
     }
 
     #[test]
-    fn snapshot_match_materializes_presence_without_a_physical_presence_field() {
+    fn snapshot_match_projects_only_declared_physical_fields() {
         let fields = serde_json::Map::from_iter([
             (
                 "registration_status".to_owned(),
@@ -1556,14 +2479,6 @@ mod tests {
             ),
             ("eligible".to_owned(), Value::Bool(true)),
         ]);
-        assert!(matches!(
-            snapshot_projected_value(
-                crate::source_plan::runtime_profile::CompiledOutputShape::Presence,
-                "exists",
-                &fields,
-            ),
-            Ok(ProjectedJsonScalar::Boolean(true))
-        ));
         let status = snapshot_projected_value(
             crate::source_plan::runtime_profile::CompiledOutputShape::String {
                 nullable: true,
@@ -1607,10 +2522,42 @@ mod tests {
             "secret-selector",
             serde_json::json!({"secret-body": "secret-source-value"}),
         );
-        let rendered = format!("{request:?} {:?}", request.source.values().next());
+        let rendered = format!("{request:?} {:?}", request.interactions.first());
         assert!(!rendered.contains("secret-selector"));
         assert!(!rendered.contains("secret-body"));
         assert!(!rendered.contains("secret-source-value"));
         drop(harness);
+    }
+
+    #[test]
+    fn generated_matchers_are_narrow_and_do_not_weaken_sibling_fields() {
+        let expected = serde_json::json!({
+            "message_id": {"generated": "dci-correlation"},
+            "timestamp": {"generated": "rfc3339-timestamp"},
+            "selector": "SYNTHETIC-001"
+        });
+        let actual = serde_json::json!({
+            "message_id": DCI_FIXTURE_MESSAGE_ID,
+            "timestamp": "2026-01-01T00:00:00Z",
+            "selector": "SYNTHETIC-001"
+        });
+        assert!(fixture_value_matches(&expected, &actual));
+        let mut wrong = actual;
+        wrong["selector"] = Value::String("SYNTHETIC-002".to_owned());
+        assert!(!fixture_value_matches(&expected, &wrong));
+        assert!(!fixture_value_matches(
+            &serde_json::json!({"generated": "unknown"}),
+            &Value::String(DCI_FIXTURE_MESSAGE_ID.to_owned())
+        ));
+        assert!(!fixture_value_matches(
+            &serde_json::json!({
+                "generated": "dci-correlation",
+                "chosen": "value"
+            }),
+            &serde_json::json!({
+                "generated": "dci-correlation",
+                "chosen": "value"
+            })
+        ));
     }
 }

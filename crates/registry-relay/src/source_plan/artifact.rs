@@ -4,10 +4,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::path::PathBuf;
 
 use registry_platform_crypto::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::destination::input_pattern::{
-    MAX_BOUNDED_INPUT_BYTES as MAX_INPUT_BYTES,
+    MAX_BOUNDED_INPUT_BYTES as MAX_PATTERNED_INPUT_BYTES,
     MAX_BOUNDED_INPUT_PATTERN_BYTES as MAX_PATTERN_BYTES,
 };
 use registry_platform_httputil::destination::validate_fixed_destination_path;
@@ -40,7 +41,7 @@ const REQUEST_TEMPLATE_HASH_DOMAIN: &[u8] = b"registry.relay.request-template.v1
 const MAX_ARTIFACT_BYTES: usize = 256 * 1024;
 const MAX_STABLE_TEXT_BYTES: usize = 512;
 const MAX_PURPOSE_BYTES: usize = 256;
-const MAX_DATA_RESPONSE_BYTES: u32 = 256 * 1024;
+const MAX_DATA_RESPONSE_BYTES: u32 = 8 * 1024 * 1024;
 const MAX_PUBLIC_RESPONSE_BYTES: u32 = 64 * 1024;
 const MAX_IN_FLIGHT: u16 = 16;
 const MAX_QUOTA_PER_MINUTE: u32 = 60;
@@ -48,6 +49,11 @@ const MAX_QUOTA_BURST: u16 = 10;
 pub(super) const MAX_PATH_BYTES: usize = 2_048;
 const MAX_POINTER_BYTES: usize = 512;
 const MAX_STATIC_COMPONENTS: usize = 32;
+const MAX_INPUT_BYTES: u32 = 65_536;
+const MAX_SELECTOR_INPUTS: usize = 8;
+const MAX_TOTAL_INPUTS: usize = 16;
+const MAX_SOURCE_OPERATIONS: usize = 16;
+const MAX_CANONICAL_SELECTOR_BYTES: usize = 4_096;
 pub(super) const MAX_ARTIFACTS_PER_BUNDLE: usize = 256;
 const MAX_ACQUIRED_FIELDS: usize = 64;
 const MAX_PURPOSES: usize = 32;
@@ -69,7 +75,7 @@ const MAX_PARAMETER_VALUES: usize = 32;
 const MAX_SNAPSHOT_AGE_MS: u64 = 31 * 24 * 60 * 60 * 1_000;
 const MAX_RHAI_MEMORY_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_RHAI_CPU_MS: u32 = 1_000;
-const MAX_RHAI_IPC_FRAME_BYTES: u32 = 256 * 1024;
+const MAX_RHAI_IPC_FRAME_BYTES: u32 = 9 * 1024 * 1024;
 const MAX_RHAI_INSTRUCTIONS: u64 = 100_000;
 const MAX_RHAI_SCRIPT_BYTES: usize = 64 * 1024;
 const MAX_RHAI_CALL_DEPTH: u8 = 16;

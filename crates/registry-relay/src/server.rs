@@ -997,7 +997,7 @@ mod tests {
 
     #[tokio::test]
     async fn consultation_routes_mount_only_for_an_enabled_activation() {
-        const PROFILE: &str = "/v1/consultations/example.person-status/versions/1";
+        const PROFILE: &str = "/v1/consultations/example.person-status";
         let disabled = merge_consultation_routes(Router::<()>::new(), false);
         let response = disabled
             .oneshot(
@@ -1476,7 +1476,7 @@ mod tests {
             let response = app
                 .oneshot(
                     Request::builder()
-                        .uri("/v1/consultations/example/versions/1/execute")
+                        .uri("/v1/consultations/example/execute")
                         .header("x-request-id", "fixed-request-id")
                         .body(Body::empty())
                         .expect("request builds"),

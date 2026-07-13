@@ -8,7 +8,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use registry_platform_httputil::destination::{
     DataDestinationRequest, DestinationAuthorizationValue, DestinationRequestError,
-    MAX_DESTINATION_HEADER_VALUE_BYTES,
+    ScriptRequestBodyFormat, MAX_DESTINATION_HEADER_VALUE_BYTES,
 };
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -715,6 +715,23 @@ pub(crate) struct ApiKeyCapability<'operation> {
 }
 
 impl<'operation> BasicAuthorizationCapability<'operation> {
+    pub(crate) fn render_script(
+        self,
+        target: &str,
+        header_values: &[(&str, &[u8])],
+        body_format: Option<ScriptRequestBodyFormat>,
+        body: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<DataDestinationRequest, DestinationRequestError> {
+        self.operation.transport_template().render_script(
+            target,
+            header_values,
+            Some(self.authorization),
+            None,
+            body_format,
+            body,
+        )
+    }
+
     /// Consume the authorization while rendering its exact compiled request.
     ///
     /// V1 Basic operations are reviewed GETs with compiled query expressions,
@@ -755,6 +772,23 @@ impl fmt::Debug for BasicAuthorizationCapability<'_> {
 }
 
 impl StaticBearerAuthorizationCapability<'_> {
+    pub(crate) fn render_script(
+        self,
+        target: &str,
+        header_values: &[(&str, &[u8])],
+        body_format: Option<ScriptRequestBodyFormat>,
+        body: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<DataDestinationRequest, DestinationRequestError> {
+        self.operation.transport_template().render_script(
+            target,
+            header_values,
+            Some(self.authorization),
+            None,
+            body_format,
+            body,
+        )
+    }
+
     pub(crate) fn render(
         self,
         path_segment: Option<&str>,
@@ -790,6 +824,23 @@ impl fmt::Debug for StaticBearerAuthorizationCapability<'_> {
 }
 
 impl ApiKeyCapability<'_> {
+    pub(crate) fn render_script(
+        self,
+        target: &str,
+        header_values: &[(&str, &[u8])],
+        body_format: Option<ScriptRequestBodyFormat>,
+        body: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<DataDestinationRequest, DestinationRequestError> {
+        self.operation.transport_template().render_script(
+            target,
+            header_values,
+            None,
+            Some(self.value),
+            body_format,
+            body,
+        )
+    }
+
     pub(crate) fn render(
         self,
         path_segment: Option<&str>,

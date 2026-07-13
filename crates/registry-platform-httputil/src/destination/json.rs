@@ -13,6 +13,8 @@
 mod contract;
 mod decode;
 mod preflight;
+mod script_response;
+mod typed_envelope;
 
 /// Maximum encoded bytes accepted by the closed JSON decoder.
 pub const MAX_CLOSED_JSON_ENCODED_BODY_BYTES: usize = 256 * 1_024;
@@ -27,6 +29,15 @@ pub use contract::{
 pub use decode::{
     ClosedJsonDecodeError, ClosedJsonOutcome, ProjectedJsonField, ProjectedJsonRecord,
     ProjectedJsonScalar,
+};
+pub use script_response::{
+    decode_script_json, decode_script_text, ScriptJsonResponse, ScriptResponseDecodeError,
+    ScriptTextResponse, MAX_SCRIPT_JSON_ARRAY_ITEMS, MAX_SCRIPT_JSON_DEPTH, MAX_SCRIPT_JSON_NODES,
+    MAX_SCRIPT_JSON_OBJECT_MEMBERS, MAX_SCRIPT_JSON_STRING_BYTES,
+};
+pub use typed_envelope::{
+    decode_typed_hash_envelope, decode_typed_hash_envelope_as, DecodedTypedHashEnvelope,
+    TypedHashEnvelope, TypedHashEnvelopeError,
 };
 
 #[cfg(test)]

@@ -10,10 +10,12 @@
     "logical_operation": "tracker.enrollment-status",
     "input_slots": {
       "tracked_entity": {
+        "role": "selector",
         "type": "string",
-        "max_bytes": 11,
+        "maxLength": 11,
+        "x-registry-max-bytes": 44,
         "pattern": "^[A-Za-z][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]$",
-        "canonicalization": "identity"
+        "x-registry-canonicalization": "identity"
       }
     },
     "acquisition": {

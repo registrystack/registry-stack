@@ -1,6 +1,8 @@
 //! Private-binding validation and runtime capability compilation.
 
 use super::*;
+use crate::source_plan::artifact::SourceCapabilityDocument;
+
 pub(super) fn validate_materialization_binding(
     contract: &PublicContractArtifact,
     pack: &IntegrationPackArtifact,
@@ -394,13 +396,25 @@ pub(super) fn validate_contract_implementation(
         .public_behavior
         .outcomes
         .contains(&OutcomeDocument::Ambiguous);
+    let runtime_matches = matches!(
+        (contract_spec.runtime.source_capability, pack_spec.plan.kind,),
+        (SourceCapabilityDocument::Http, SourcePlanKind::BoundedHttp)
+            | (
+                SourceCapabilityDocument::Script,
+                SourcePlanKind::SandboxedRhai
+            )
+            | (
+                SourceCapabilityDocument::Snapshot,
+                SourcePlanKind::SnapshotExact
+            )
+    );
     let exact = pack_spec.input_slots == contract_spec.inputs
         && pack_spec.acquisition == contract_spec.acquisition
         && pack_spec.source_provenance == contract_spec.source_provenance
-        && pack_spec.output_mode == contract_spec.output_mode
         && pack_spec.output == contract_spec.output
         && pack_spec.bounds == contract_spec.bounds
-        && pack_can_ambiguous == contract_can_ambiguous;
+        && pack_can_ambiguous == contract_can_ambiguous
+        && runtime_matches;
     exact
         .then_some(())
         .ok_or(SourcePlanCompileError::ContractMismatch)
@@ -470,11 +484,22 @@ pub(super) fn validate_credential_shape(
             .plan
             .credential_destination_slot
             .is_some();
+    let verification_destination_matches = binding.document.verification_destination.is_some()
+        == !pack.document.spec.plan.verification_operations.is_empty();
+    let verification_slot_matches = binding.document.verification_destination.is_some()
+        == pack
+            .document
+            .spec
+            .plan
+            .verification_destination_slot
+            .is_some();
     if reviewed == uses_oauth
         && destination == uses_oauth
         && credential == uses_bound_credential
         && data_destination_matches
         && credential_slot_matches
+        && verification_destination_matches
+        && verification_slot_matches
     {
         Ok(())
     } else {
@@ -532,14 +557,19 @@ pub(super) fn compile_data_destination(
         .map(|cidr| cidr.parse())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| SourcePlanCompileError::UnsafeDestination)?;
-    DataDestinationPolicy::new_with_dns_family(
+    let policy = DataDestinationPolicy::new_with_dns_family(
         &destination.id,
         &destination.origin,
         DestinationProfile::ProductionHttps,
         &cidrs,
         compile_destination_dns_family(destination.dns_family),
     )
-    .map_err(|_| SourcePlanCompileError::UnsafeDestination)
+    .map_err(|_| SourcePlanCompileError::UnsafeDestination)?;
+    Ok(if destination.ca.is_some() || destination.mtls.is_some() {
+        policy.require_configured_tls()
+    } else {
+        policy
+    })
 }
 
 pub(super) fn compile_credential_destination(
@@ -551,14 +581,19 @@ pub(super) fn compile_credential_destination(
         .map(|cidr| cidr.parse())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| SourcePlanCompileError::UnsafeDestination)?;
-    CredentialDestinationPolicy::new_with_dns_family(
+    let policy = CredentialDestinationPolicy::new_with_dns_family(
         &destination.id,
         &destination.origin,
         DestinationProfile::ProductionHttps,
         &cidrs,
         compile_destination_dns_family(destination.dns_family),
     )
-    .map_err(|_| SourcePlanCompileError::UnsafeDestination)
+    .map_err(|_| SourcePlanCompileError::UnsafeDestination)?;
+    Ok(if destination.ca.is_some() || destination.mtls.is_some() {
+        policy.require_configured_tls()
+    } else {
+        policy
+    })
 }
 
 const fn compile_destination_dns_family(
@@ -590,7 +625,11 @@ pub(super) fn compile_credential_operation(
             OAuth2ClientCredentialsBodyFormat::FormClientSecretBody,
         ),
     };
-    let fixed_path = destination_fixed_path(application_base_path, &operation.path);
+    let fixed_path = if operation.path == "/" && application_base_path != "/" {
+        application_base_path.into()
+    } else {
+        destination_fixed_path(application_base_path, &operation.path)
+    };
     let transport_template = CredentialDestinationRequestTemplate::oauth2_client_credentials(
         &fixed_path,
         transport_format,
@@ -671,6 +710,32 @@ pub(super) fn reject_destination_overlap(
     pack: &IntegrationPackArtifact,
     binding: &PrivateBindingArtifact,
 ) -> Result<(), SourcePlanCompileError> {
+    let mut ids = [
+        binding
+            .document
+            .data_destination
+            .as_ref()
+            .map(|value| value.id.as_str()),
+        binding
+            .document
+            .credential_destination
+            .as_ref()
+            .map(|value| value.id.as_str()),
+        binding
+            .document
+            .verification_destination
+            .as_ref()
+            .map(|value| value.id.as_str()),
+    ]
+    .into_iter()
+    .flatten();
+    let first = ids.next();
+    let remaining = ids.collect::<Vec<_>>();
+    if first.is_some_and(|first| remaining.contains(&first))
+        || (remaining.len() == 2 && remaining[0] == remaining[1])
+    {
+        return Err(SourcePlanCompileError::UnsafeDestination);
+    }
     let Some(credential) = &binding.document.credential_destination else {
         return Ok(());
     };

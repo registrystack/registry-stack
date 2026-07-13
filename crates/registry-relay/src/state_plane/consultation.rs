@@ -190,7 +190,7 @@ impl ConsultationCompletionSeed {
             .and_then(|bounds| bounds.get("timeout_ms"))
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok())
-            .filter(|value| (1..=20_000).contains(value))
+            .filter(|value| (1..=60_000).contains(value))
             .ok_or(ConsultationPersistenceError::InvalidInput)?;
         let (canonical, digest) = canonical_binding(value)?;
         if canonical.len() > MAX_COMPLETION_SEED_CANONICAL_BYTES_V1 {
@@ -594,7 +594,7 @@ struct CompletionSnapshot {
     bundle: Value,
     permit_kinds: Vec<String>,
     permit_ordinals: Vec<i16>,
-    permit_source_operation_ids: Vec<Option<String>>,
+    permit_request_commitments: Vec<Option<String>>,
     permit_dispatched_at_unix_us: Vec<Option<i64>>,
     dispatched_credentials: i64,
     dispatched_data: i64,
@@ -817,6 +817,7 @@ impl PostgresDurableAuditStatePlane {
                         &snapshot,
                         operation_id,
                         fence,
+                        self.chain_hasher.clone(),
                         local_not_after,
                     );
                 }
@@ -884,7 +885,13 @@ impl PostgresDurableAuditStatePlane {
                     let fence = attempt
                         .take_fence()
                         .ok_or(ConsultationPersistenceError::ProtocolDrift)?;
-                    return dispatch_from_attempt_row(&cas, operation_id, fence, local_not_after);
+                    return dispatch_from_attempt_row(
+                        &cas,
+                        operation_id,
+                        fence,
+                        self.chain_hasher.clone(),
+                        local_not_after,
+                    );
                 }
                 "head_changed" => {
                     // PostgreSQL proved that this CAS advanced no audit head
@@ -1377,6 +1384,7 @@ fn dispatch_from_attempt_row(
     row: &Row,
     operation_id: DispatchOperationId,
     mut fence: FencedConsultationAttemptAuthority,
+    request_effect_hasher: registry_platform_audit::AuditChainHasher,
     local_not_after: Instant,
 ) -> Result<AuditedConsultationDispatch, ConsultationPersistenceError> {
     // An identical snapshot proves that a durable intent already exists, while
@@ -1419,6 +1427,7 @@ fn dispatch_from_attempt_row(
         deadline_unix_ms,
         local_not_after,
         permits,
+        request_effect_hasher,
         lifecycle_seal: fence.lifecycle_seal,
     })
 }
@@ -1434,7 +1443,7 @@ fn completion_write(
         .as_object()
         .ok_or(ConsultationPersistenceError::ProtocolDrift)?;
     if snapshot.permit_kinds.len() != snapshot.permit_ordinals.len()
-        || snapshot.permit_kinds.len() != snapshot.permit_source_operation_ids.len()
+        || snapshot.permit_kinds.len() != snapshot.permit_request_commitments.len()
         || snapshot.permit_kinds.len() != snapshot.permit_dispatched_at_unix_us.len()
     {
         return Err(ConsultationPersistenceError::ProtocolDrift);
@@ -1443,16 +1452,16 @@ fn completion_write(
         .permit_kinds
         .iter()
         .zip(&snapshot.permit_ordinals)
-        .zip(&snapshot.permit_source_operation_ids)
+        .zip(&snapshot.permit_request_commitments)
         .zip(&snapshot.permit_dispatched_at_unix_us)
-        .map(|(((kind, ordinal), source_operation_id), dispatched_at)| {
-            if source_operation_id.is_some() != dispatched_at.is_some() {
+        .map(|(((kind, ordinal), request_commitment), dispatched_at)| {
+            if request_commitment.is_some() != dispatched_at.is_some() {
                 return Err(ConsultationPersistenceError::ProtocolDrift);
             }
             Ok(json!({
                 "kind": kind,
                 "ordinal": ordinal,
-                "operation_id": source_operation_id,
+                "request_commitment": request_commitment,
                 "dispatched_at_unix_us": dispatched_at,
             }))
         })
@@ -1461,20 +1470,20 @@ fn completion_write(
         .permit_kinds
         .iter()
         .zip(&snapshot.permit_ordinals)
-        .zip(&snapshot.permit_source_operation_ids)
+        .zip(&snapshot.permit_request_commitments)
         .zip(&snapshot.permit_dispatched_at_unix_us)
-        .filter_map(|(((kind, ordinal), source_operation_id), dispatched_at)| {
+        .filter_map(|(((kind, ordinal), request_commitment), dispatched_at)| {
             dispatched_at
                 .is_some()
-                .then_some((kind, ordinal, source_operation_id.as_deref()))
+                .then_some((kind, ordinal, request_commitment.as_deref()))
         })
-        .map(|(kind, ordinal, source_operation_id)| {
-            let source_operation_id =
-                source_operation_id.ok_or(ConsultationPersistenceError::ProtocolDrift)?;
+        .map(|(kind, ordinal, request_commitment)| {
+            let request_commitment =
+                request_commitment.ok_or(ConsultationPersistenceError::ProtocolDrift)?;
             Ok(json!({
                 "kind": kind,
                 "ordinal": ordinal,
-                "operation_id": source_operation_id,
+                "request_commitment": request_commitment,
             }))
         })
         .collect::<Result<Vec<_>, ConsultationPersistenceError>>()?;
@@ -1544,8 +1553,8 @@ fn parse_completion_snapshot(
             .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?,
         permit_kinds: required_text_array(row, "permit_kinds")?,
         permit_ordinals: required_i16_array(row, "permit_ordinals")?,
-        permit_source_operation_ids: row
-            .try_get("permit_source_operation_ids")
+        permit_request_commitments: row
+            .try_get("permit_request_commitments")
             .map_err(|_| ConsultationPersistenceError::ProtocolDrift)?,
         permit_dispatched_at_unix_us: row
             .try_get("permit_dispatched_at_unix_us")

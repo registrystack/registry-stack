@@ -10,10 +10,12 @@
     "logical_operation": "snapshot.person-status",
     "input_slots": {
       "person_id": {
+        "role": "selector",
         "type": "string",
-        "max_bytes": 8,
+        "maxLength": 8,
+        "x-registry-max-bytes": 32,
         "pattern": "^per-[0-9][0-9][0-9][0-9]$",
-        "canonicalization": "identity"
+        "x-registry-canonicalization": "identity"
       }
     },
     "acquisition": {

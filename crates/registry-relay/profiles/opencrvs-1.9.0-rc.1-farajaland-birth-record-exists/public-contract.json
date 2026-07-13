@@ -3,22 +3,29 @@
   "id": "opencrvs.dci.farajaland.birth-record-exists.exact",
   "version": "1",
   "spec": {
+    "runtime": {
+      "platform_profile": "registry-stack.consultation.v1",
+      "source_capability": "http",
+      "script_abi": null
+    },
     "subject": {
       "mode": "single_subject",
       "selector_provenance": { "type": "workload_selected" }
     },
     "inputs": {
       "uin": {
+        "role": "selector",
         "type": "string",
-        "max_bytes": 10,
+        "maxLength": 10,
+        "x-registry-max-bytes": 40,
         "pattern": "^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]$",
-        "canonicalization": "identity"
+        "x-registry-canonicalization": "identity"
       }
     },
     "integration_pack": {
       "id": "opencrvs.dci.farajaland.birth-record-exists",
       "version": "1",
-      "hash": "sha256:2217affdb8ea79a7197926800ee5f3eb5a003e9ad3acaaa6dc54c00e2ac06b58"
+      "hash": "sha256:1756f16b1c496e11be1069831ea4f54d8953466ed62bb48efc9f0c7e7def8768"
     },
     "acquisition": {
       "class": "bounded_full_record",
@@ -116,7 +123,6 @@
       "source_observed_at": { "type": "absent" },
       "source_revision": { "type": "absent" }
     },
-    "output_mode": "presence_only",
     "output": {},
     "authorization": {
       "workload": "registry-notary",
@@ -125,7 +131,7 @@
       "legal_basis": "public_task",
       "policy": {
         "id": "relay.opencrvs.dci.farajaland.birth-record-exists.exact",
-        "hash": "sha256:4f55cf5327296565d3f12c318a251dc96477dcb9d8850be9ab0534c3053c790b",
+        "hash": "sha256:d59063f01480bbe00781eacce6e2fea47e27319b8f254315ec796b4295a46507",
         "decision_cache": "disabled",
         "max_decision_age_ms": 1000,
         "unavailable": "deny"

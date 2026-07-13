@@ -26,6 +26,8 @@ pub use aggregates::{
     AggregateQueryEngine, AggregateQueryRequest, AggregateResult,
 };
 
+const MAX_SNAPSHOT_EXACT_PREDICATES: usize = 8;
+
 /// One closed logical field acquired from a fixed physical snapshot column.
 ///
 /// Values are compiler-owned and never derived from a consultation request.
@@ -111,7 +113,7 @@ pub(crate) async fn read_snapshot_exact(
     .await
 }
 
-/// Execute the closed one-to-four component exact-AND snapshot selector.
+/// Execute the closed one-to-eight component exact-AND snapshot selector.
 pub(crate) async fn read_snapshot_exact_and(
     ctx: &SessionContext,
     provider: Arc<dyn TableProvider>,
@@ -120,7 +122,7 @@ pub(crate) async fn read_snapshot_exact_and(
     probe_limit: usize,
     deadline: Instant,
 ) -> Result<SnapshotExactQueryRows, SnapshotExactQueryError> {
-    if !(1..=4).contains(&predicates.len())
+    if !(1..=MAX_SNAPSHOT_EXACT_PREDICATES).contains(&predicates.len())
         || predicates.iter().any(|predicate| {
             predicate.physical_field.is_empty() || predicate.canonical_value.is_empty()
         })
@@ -1624,6 +1626,18 @@ audit:
         )
     }
 
+    fn snapshot_exact_eight_key_table() -> Arc<dyn TableProvider> {
+        let schema = Arc::new(Schema::new(
+            (0..MAX_SNAPSHOT_EXACT_PREDICATES)
+                .map(|index| Field::new(format!("key_{index}"), DataType::Utf8, false))
+                .collect::<Vec<_>>(),
+        ));
+        let columns = (0..MAX_SNAPSHOT_EXACT_PREDICATES)
+            .map(|index| Arc::new(StringArray::from(vec![format!("value_{index}")])) as ArrayRef)
+            .collect();
+        mem_table(schema, columns)
+    }
+
     #[tokio::test]
     async fn snapshot_exact_reads_only_fixed_projection_with_bounded_cardinality_probe() {
         let ctx = SessionContext::new();
@@ -1703,6 +1717,60 @@ audit:
         .expect("case-sensitive lookup succeeds")
         .into_rows();
         assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn snapshot_exact_accepts_eight_predicates_and_rejects_nine() {
+        let ctx = SessionContext::new();
+        let fields = (0..MAX_SNAPSHOT_EXACT_PREDICATES)
+            .map(|index| format!("key_{index}"))
+            .collect::<Vec<_>>();
+        let values = (0..MAX_SNAPSHOT_EXACT_PREDICATES)
+            .map(|index| format!("value_{index}"))
+            .collect::<Vec<_>>();
+        let predicates = fields
+            .iter()
+            .zip(&values)
+            .map(|(field, value)| SnapshotExactPredicate {
+                physical_field: field,
+                canonical_value: value,
+            })
+            .collect::<Vec<_>>();
+        let projection = [SnapshotExactProjection::new("key_0", "subject_id")];
+
+        let rows = read_snapshot_exact_and(
+            &ctx,
+            snapshot_exact_eight_key_table(),
+            &predicates,
+            &projection,
+            1,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .expect("eight-component exact selector succeeds")
+        .into_rows();
+        assert_eq!(rows, vec![json!({ "subject_id": "value_0" })]);
+
+        let ninth_field = "key_8".to_string();
+        let ninth_value = "value_8".to_string();
+        let mut excessive = predicates;
+        excessive.push(SnapshotExactPredicate {
+            physical_field: &ninth_field,
+            canonical_value: &ninth_value,
+        });
+        let result = read_snapshot_exact_and(
+            &ctx,
+            snapshot_exact_eight_key_table(),
+            &excessive,
+            &projection,
+            1,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(SnapshotExactQueryError::InvalidContract)
+        ));
     }
 
     #[tokio::test]

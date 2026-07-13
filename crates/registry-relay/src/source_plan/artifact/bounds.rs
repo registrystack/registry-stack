@@ -11,7 +11,7 @@ pub(in super::super) fn prior_output_expression_bounds(
             let scalar_bytes = match output.output_type {
                 OutputTypeDocument::String => output
                     .max_bytes
-                    .map_or(usize::from(MAX_INPUT_BYTES), usize::from),
+                    .map_or(MAX_INPUT_BYTES as usize, |value| value as usize),
                 OutputTypeDocument::Boolean => 5,
                 OutputTypeDocument::Integer => output
                     .minimum
@@ -19,9 +19,8 @@ pub(in super::super) fn prior_output_expression_bounds(
                     .chain(output.maximum)
                     .map(|value| value.to_string().len())
                     .max()
-                    .unwrap_or(usize::from(MAX_INPUT_BYTES)),
+                    .unwrap_or(MAX_INPUT_BYTES as usize),
                 OutputTypeDocument::Date => 10,
-                OutputTypeDocument::Presence => usize::from(MAX_INPUT_BYTES),
             };
             bounds.insert(
                 (operation.id.clone(), name.clone()),
@@ -33,6 +32,7 @@ pub(in super::super) fn prior_output_expression_bounds(
 }
 pub(in super::super) fn validate_request_shape(
     operation: &HttpOperationDocument,
+    plan_kind: SourcePlanKind,
     inputs: &BTreeMap<String, InputDocument>,
     parameters: &BTreeMap<String, ParameterDeclarationDocument>,
     bounds: LimitsDocument,
@@ -96,6 +96,39 @@ pub(in super::super) fn validate_request_shape(
             (1..=MAX_REQUEST_HEADER_VALUE_BYTES).contains(&auth_bytes)
         }
     };
+    if plan_kind == SourcePlanKind::SandboxedRhai {
+        let generic_script_authority = operation.body.is_none()
+            && operation.request_signer.is_none()
+            && operation.dci.is_none()
+            && operation.fhir.is_none()
+            && codec == RequestCodecDocument::None
+            && matches!(operation.method, ReadMethod::Get | ReadMethod::ReadOnlyPost);
+        let signed_dci_helper = operation.method == ReadMethod::ReadOnlyPost
+            && operation.body.is_none()
+            && operation.request_signer.is_none()
+            && operation.dci.is_some()
+            && operation.fhir.is_none()
+            && codec == RequestCodecDocument::DciExactV1;
+        let script_shape_matches = operation.path_parameters.is_empty()
+            && operation.query.is_empty()
+            && operation.headers.is_empty()
+            && (generic_script_authority || signed_dci_helper);
+        if !script_shape_matches
+            || !auth_shape_matches
+            || limits.max_request_bytes == 0
+            || limits.max_request_bytes > MAX_REQUEST_BYTES
+            || limits.timeout_ms == 0
+            || limits.timeout_ms > bounds.timeout_ms
+            || limits.max_in_flight != 1
+            || registry_platform_httputil::destination::validate_script_destination_path_rule(
+                &operation.path,
+            )
+            .is_err()
+        {
+            return Err(SourcePlanArtifactError::InvalidPlan);
+        }
+        return Ok(());
+    }
     if !shape_matches
         || !auth_shape_matches
         || limits.max_request_bytes == 0
@@ -200,11 +233,13 @@ pub(in super::super) fn expression_max_bytes(
 ) -> usize {
     match expression {
         ValueExpressionDocument::Literal { value } => value.len(),
-        ValueExpressionDocument::ConsultationInput { name } => inputs
-            .get(name)
-            .map_or(usize::from(MAX_INPUT_BYTES), |input| {
-                usize::from(input.max_bytes)
-            }),
+        ValueExpressionDocument::ConsultationInput { name } => {
+            inputs.get(name).map_or(MAX_INPUT_BYTES as usize, |input| {
+                input
+                    .canonical_max_bytes()
+                    .map_or(MAX_INPUT_BYTES as usize, |value| value as usize)
+            })
+        }
         ValueExpressionDocument::DeploymentParameter { name } => parameters
             .get(name)
             .and_then(|declaration| declaration.allowed_values.iter().map(String::len).max())
@@ -212,7 +247,7 @@ pub(in super::super) fn expression_max_bytes(
         ValueExpressionDocument::PriorStepOutput { step, output } => prior_output_bounds
             .get(&(step.clone(), output.clone()))
             .copied()
-            .unwrap_or(usize::from(MAX_INPUT_BYTES)),
+            .unwrap_or(MAX_INPUT_BYTES as usize),
     }
 }
 
@@ -778,12 +813,7 @@ pub(in super::super) fn validate_step_condition(
     let source = completed
         .get(step.as_str())
         .ok_or(SourcePlanArtifactError::InvalidExpression)?;
-    let presence = output == "presence"
-        || source
-            .response
-            .presence_outputs
-            .iter()
-            .any(|candidate| candidate == output);
+    let presence = output == "presence";
     if presence {
         return matches!(
             condition,
@@ -804,7 +834,7 @@ pub(in super::super) fn validate_step_condition(
                 && declaration
                     .max_bytes
                     .is_some_and(|maximum| !value.is_empty() && value.len() <= usize::from(maximum))
-                && validate_bounded_text(value, usize::from(MAX_INPUT_BYTES)).is_ok()
+                && validate_bounded_text(value, MAX_INPUT_BYTES as usize).is_ok()
         }
         StepConditionDocument::BooleanEquals { .. } => {
             declaration.output_type == OutputTypeDocument::Boolean
@@ -906,6 +936,47 @@ pub(in super::super) fn validate_destination_document(
     if destination.allowed_private_cidrs.len() > 16 {
         return Err(SourcePlanArtifactError::InvalidDestination);
     }
+    if let Some(ca) = &destination.ca {
+        validate_private_transport_file(&ca.file)?;
+        if ca.generation == 0 {
+            return Err(SourcePlanArtifactError::InvalidDestination);
+        }
+    }
+    if let Some(mtls) = &destination.mtls {
+        validate_private_transport_file(&mtls.certificate_file)?;
+        validate_private_transport_secret_name(&mtls.private_key.secret)?;
+        if mtls.generation == 0 {
+            return Err(SourcePlanArtifactError::InvalidDestination);
+        }
+    }
+    Ok(())
+}
+
+fn validate_private_transport_file(path: &std::path::Path) -> Result<(), SourcePlanArtifactError> {
+    let value = path
+        .to_str()
+        .ok_or(SourcePlanArtifactError::InvalidDestination)?;
+    if !path.is_absolute()
+        || value.is_empty()
+        || value.len() > 4_096
+        || value.chars().any(char::is_control)
+    {
+        return Err(SourcePlanArtifactError::InvalidDestination);
+    }
+    Ok(())
+}
+
+fn validate_private_transport_secret_name(name: &str) -> Result<(), SourcePlanArtifactError> {
+    let mut bytes = name.bytes();
+    let Some(first) = bytes.next() else {
+        return Err(SourcePlanArtifactError::InvalidDestination);
+    };
+    if name.len() > 128
+        || !matches!(first, b'A'..=b'Z' | b'a'..=b'z' | b'_')
+        || !bytes.all(|byte| matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'_'))
+    {
+        return Err(SourcePlanArtifactError::InvalidDestination);
+    }
     Ok(())
 }
 
@@ -915,7 +986,7 @@ fn validate_application_base_path(path: &str) -> Result<(), SourcePlanArtifactEr
             && !path.ends_with('/')
             && path.len() <= MAX_PATH_BYTES
             && path.is_ascii()
-            && !path.contains(['?', '#', '%', '.', '\\'])
+            && !path.contains(['?', '#', '%', '\\'])
             && !path.chars().any(char::is_control)
             && validate_fixed_destination_path(path).is_ok());
     canonical

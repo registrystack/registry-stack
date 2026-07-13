@@ -64,7 +64,7 @@ const AUTHORIZATION_CONTEXT_DOMAIN_V1: &str = "registry.relay.consultation-autho
 const EXECUTION_PLAN_DOMAIN_V1: &str = "registry.relay.consultation-execution-plan.v1";
 const AUTHORIZED_REQUEST_DOMAIN_V1: &str = "registry.relay.authorized-consultation.v1";
 const EMPTY_OBLIGATIONS_DOMAIN_V1: &str = "registry.relay.consultation-obligations.v1";
-const EXECUTE_ROUTE_V1: &str = "/v1/consultations/{profile_id}/versions/{profile_version}/execute";
+const EXECUTE_ROUTE_V1: &str = crate::api::consultation::EXECUTE_ROUTE;
 const MAX_EXACT_JSON_INTEGER: i64 = 9_007_199_254_740_991;
 const MAX_CONSENT_REFERENCE_BYTES: usize = 4 * 1024;
 
@@ -83,6 +83,118 @@ pub(crate) enum ConsultationCommitmentError {
     InputOutOfBounds,
     #[error("consultation commitment canonicalization failed")]
     Canonicalization,
+}
+
+// Accommodates the 1 MiB aggregate authored request ceiling plus canonical
+// destination, target, query, and header framing.
+const MAX_CANONICAL_DISPATCH_REQUEST_EFFECT_BYTES: usize = 2 * 1024 * 1024;
+
+/// Complete non-credential outbound request effect after parent validation.
+///
+/// The value is canonicalized once, retained only under a zeroizing owner, and
+/// consumed by the audited dispatch. Callers must include destination
+/// identity, method, relative target, query, non-secret headers, and body in
+/// this value. Credentials are deliberately excluded because they are resolved
+/// only inside the permit-owning callback.
+pub(crate) struct CanonicalDispatchRequestEffect(Zeroizing<Vec<u8>>);
+
+impl CanonicalDispatchRequestEffect {
+    pub(crate) fn try_from_complete_value(
+        value: Value,
+    ) -> Result<Self, ConsultationCommitmentError> {
+        let object = value
+            .as_object()
+            .ok_or(ConsultationCommitmentError::AuthorizationMismatch)?;
+        if object.len() != 5
+            || object
+                .get("destination_id")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            || object
+                .get("method")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            || object
+                .get("target")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            || !object.get("headers").is_some_and(Value::is_array)
+            || !object.contains_key("body_base64url")
+        {
+            return Err(ConsultationCommitmentError::AuthorizationMismatch);
+        }
+        if !object["headers"].as_array().is_some_and(|headers| {
+            headers.iter().all(|header| {
+                header.as_object().is_some_and(|header| {
+                    header.len() == 2
+                        && header.get("name").is_some_and(Value::is_string)
+                        && header.get("value_base64url").is_some_and(Value::is_string)
+                })
+            })
+        }) || !(object["body_base64url"].is_null() || object["body_base64url"].is_string())
+        {
+            return Err(ConsultationCommitmentError::AuthorizationMismatch);
+        }
+        let canonical =
+            canonicalize_json(&value).map_err(|_| ConsultationCommitmentError::Canonicalization)?;
+        if canonical.is_empty() || canonical.len() > MAX_CANONICAL_DISPATCH_REQUEST_EFFECT_BYTES {
+            return Err(ConsultationCommitmentError::InputOutOfBounds);
+        }
+        Ok(Self(Zeroizing::new(canonical)))
+    }
+
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
+impl fmt::Debug for CanonicalDispatchRequestEffect {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("CanonicalDispatchRequestEffect(<redacted>)")
+    }
+}
+
+/// Opaque keyed commitment to one complete, parent-canonicalized outbound
+/// request effect.
+///
+/// The state plane persists this value instead of source paths, headers, query
+/// values, or bodies. Construction accepts only the platform's closed HMAC
+/// output and binds it to the same authoritative key epoch as the consultation
+/// attempt. The parent must include every non-credential request component in
+/// the canonical preimage before deriving the commitment. Credentials are
+/// resolved only inside the permit-owning dispatch callback and never enter
+/// this value.
+pub(crate) struct KeyedDispatchRequestCommitment {
+    value: Box<str>,
+}
+
+impl KeyedDispatchRequestCommitment {
+    pub(crate) fn from_digest(digest: [u8; 32]) -> Self {
+        let mut value = String::with_capacity(76);
+        value.push_str("hmac-sha256:");
+        for byte in digest {
+            use std::fmt::Write as _;
+            write!(value, "{byte:02x}").expect("writing to String cannot fail");
+        }
+        Self {
+            value: value.into_boxed_str(),
+        }
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.value
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(label: &str) -> Self {
+        Self::from_digest(Sha256::digest(label.as_bytes()).into())
+    }
+}
+
+impl fmt::Debug for KeyedDispatchRequestCommitment {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("KeyedDispatchRequestCommitment(<redacted>)")
+    }
 }
 
 macro_rules! consultation_digest {
@@ -163,11 +275,12 @@ impl<'profile> CanonicalConsultationInputs<'profile> {
             .purposes()
             .find(|purpose| *purpose == core.purpose().as_str())
             .ok_or(ConsultationCommitmentError::AuthorizationMismatch)?;
-        if plan.inputs().len() != core.parsed_input().values().len() {
+        if plan.inputs().len() != core.parsed_input().len() {
             return Err(ConsultationCommitmentError::CanonicalInputMismatch);
         }
         let raw = core.parsed_input().values().collect::<BTreeMap<_, _>>();
         let mut values = BTreeMap::new();
+        let mut selector_bytes = 0_usize;
         for (index, slot) in plan.inputs().enumerate() {
             let value = slot
                 .canonicalize_and_validate(
@@ -176,10 +289,23 @@ impl<'profile> CanonicalConsultationInputs<'profile> {
                         .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)?,
                 )
                 .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)?;
-            if !value.binding_matches(profile.profile().contract_hash(), slot.name(), index) {
+            if !value.binding_matches(
+                profile.profile().contract_hash(),
+                slot.name(),
+                index,
+                slot.input_type(),
+            ) {
                 return Err(ConsultationCommitmentError::CanonicalInputMismatch);
             }
+            if slot.role() == crate::source_plan::CompiledInputRole::Selector {
+                selector_bytes = selector_bytes
+                    .checked_add(value.as_str().len())
+                    .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)?;
+            }
             values.insert(slot.name().into(), value);
+        }
+        if selector_bytes > 4_096 {
+            return Err(ConsultationCommitmentError::CanonicalInputMismatch);
         }
         Ok(Self {
             plan,
@@ -193,9 +319,20 @@ impl<'profile> CanonicalConsultationInputs<'profile> {
     }
 
     fn transient_value(&self) -> Value {
+        self.transient_value_for_roles(false)
+    }
+
+    fn transient_selector_value(&self) -> Value {
+        self.transient_value_for_roles(true)
+    }
+
+    fn transient_value_for_roles(&self, selectors_only: bool) -> Value {
         let components = self
             .plan
             .inputs()
+            .filter(|slot| {
+                !selectors_only || slot.role() == crate::source_plan::CompiledInputRole::Selector
+            })
             .filter_map(|slot| {
                 self.values.get(slot.name()).map(|value| {
                     (
@@ -204,15 +341,25 @@ impl<'profile> CanonicalConsultationInputs<'profile> {
                             "type": match slot.input_type() {
                                 crate::source_plan::CompiledInputType::String => "string",
                                 crate::source_plan::CompiledInputType::FullDate => "full_date",
+                                crate::source_plan::CompiledInputType::Boolean => "boolean",
+                                crate::source_plan::CompiledInputType::Integer => "integer",
                             },
-                            "value": value.as_str(),
+                            "role": match slot.role() {
+                                crate::source_plan::CompiledInputRole::Selector => "selector",
+                                crate::source_plan::CompiledInputRole::Parameter => "parameter",
+                            },
+                            "value": value.transient_json_value(),
                         }),
                     )
                 })
             })
             .collect();
         json!({
-            "version": "registry.relay.subject_selector_map.v1",
+            "version": if selectors_only {
+                "registry.relay.subject-selector-map.v1"
+            } else {
+                "registry.relay.consultation-inputs.v1"
+            },
             "components": Value::Object(components),
         })
     }
@@ -321,7 +468,7 @@ impl<'profile> SealedConsultationExecution<'profile> {
         plan: &'profile CompiledSourcePlan,
         mut values: BTreeMap<Box<str>, CompiledInputValue>,
     ) -> Result<Self, ConsultationCommitmentError> {
-        if plan.inputs().len() != values.len() || !(1..=4).contains(&values.len()) {
+        if plan.inputs().len() != values.len() || !(1..=16).contains(&values.len()) {
             return Err(ConsultationCommitmentError::CanonicalInputMismatch);
         }
         let inputs = plan
@@ -331,7 +478,12 @@ impl<'profile> SealedConsultationExecution<'profile> {
                 values
                     .remove(slot.name())
                     .filter(|value| {
-                        value.binding_matches(plan.profile().contract_hash(), slot.name(), index)
+                        value.binding_matches(
+                            plan.profile().contract_hash(),
+                            slot.name(),
+                            index,
+                            slot.input_type(),
+                        )
                     })
                     .ok_or(ConsultationCommitmentError::CanonicalInputMismatch)
             })
@@ -615,7 +767,7 @@ fn subject_pseudonym_value(
     json!({
         "tenant": profile.tenant().as_str(),
         "registry_instance": profile.registry_instance().as_str(),
-        "canonical_selector": inputs.transient_value(),
+        "canonical_selector": inputs.transient_selector_value(),
     })
 }
 
@@ -640,7 +792,6 @@ fn predicate_pseudonym_value(
         "exact_predicate": {
             "canonical_inputs": inputs.transient_value(),
             "predicate_plan_digest": profile.predicate_plan_digest().as_str(),
-            "authorized_operation_union": authorized_operation_union_value(profile),
         },
     })
 }
@@ -1180,7 +1331,7 @@ fn execution_plan_value(
     predicate_commitment: &AuditPseudonymCommitment,
 ) -> Result<Value, ConsultationCommitmentError> {
     let bounds = profile.effective_limits().operation();
-    if bounds.timeout_ms == 0 || bounds.timeout_ms > 20_000 {
+    if bounds.timeout_ms == 0 || bounds.timeout_ms > 60_000 {
         return Err(ConsultationCommitmentError::AuthorizationMismatch);
     }
     Ok(json!({
@@ -1327,29 +1478,18 @@ pub(crate) fn empty_obligations_digest(
     EmptyObligationsDigest::derive(EMPTY_OBLIGATIONS_DOMAIN_V1, &json!([]))
 }
 
-pub(super) fn authorized_operation_union_value(profile: &CompiledRuntimeProfile) -> Vec<Value> {
-    profile
-        .authorized_operation_union()
-        .map(|(kind, operation_id)| {
-            json!({
-                "kind": kind,
-                "operation_id": operation_id,
-            })
-        })
-        .collect()
-}
-
 pub(super) fn permit_bindings_value(profile: &CompiledRuntimeProfile) -> Vec<Value> {
-    profile
-        .permit_bindings()
-        .map(|(kind, ordinal, allowed_operation_ids)| {
-            json!({
-                "kind": kind,
-                "ordinal": ordinal,
-                "allowed_operation_ids": allowed_operation_ids,
-            })
-        })
-        .collect()
+    let bounds = profile.effective_limits().operation();
+    let mut permits = Vec::with_capacity(
+        usize::from(bounds.max_credential_exchanges) + usize::from(bounds.max_data_exchanges),
+    );
+    if bounds.max_credential_exchanges == 1 {
+        permits.push(json!({"kind": "credential", "ordinal": 0}));
+    }
+    permits.extend(
+        (0..bounds.max_data_exchanges).map(|ordinal| json!({"kind": "data", "ordinal": ordinal})),
+    );
+    permits
 }
 
 pub(super) fn acquisition_schema_value(profile: &CompiledRuntimeProfile) -> Value {
@@ -1368,7 +1508,12 @@ pub(super) fn acquisition_schema_value(profile: &CompiledRuntimeProfile) -> Valu
 
 fn compiled_response_schema_value(schema: &CompiledResponseSchema) -> Value {
     match schema {
-        CompiledResponseSchema::Object { nullable, fields } => {
+        CompiledResponseSchema::ScriptBody => json!({"type": "script_body"}),
+        CompiledResponseSchema::Object {
+            nullable,
+            reject_unknown_fields,
+            fields,
+        } => {
             let fields = fields
                 .iter()
                 .map(|field| {
@@ -1384,7 +1529,7 @@ fn compiled_response_schema_value(schema: &CompiledResponseSchema) -> Value {
             json!({
                 "type": "object",
                 "nullable": nullable,
-                "reject_unknown_fields": true,
+                "reject_unknown_fields": reject_unknown_fields,
                 "fields": fields,
             })
         }
@@ -1579,7 +1724,7 @@ pub(crate) fn public_outcome_str(outcome: CompiledPublicOutcome) -> &'static str
 mod tests {
     use super::*;
     use crate::consultation::{
-        IntegrationPackHash, OperationId, ParsedPurpose, ParsedSingleStringInput,
+        IntegrationPackHash, OperationId, ParsedConsultationInputs, ParsedPurpose,
     };
     use crate::source_plan::{
         bounded_runtime_vector_plan_fixture, maximum_runtime_profile_fixture,
@@ -1772,7 +1917,7 @@ mod tests {
                 .selector_provenance()
                 .clone(),
             ParsedPurpose::try_parse("benefit-verification").expect("fixture purpose"),
-            ParsedSingleStringInput::try_parse("subject_id", "Person-42")
+            ParsedConsultationInputs::try_parse("subject_id", "Person-42")
                 .expect("fixture selector"),
             plan.footprint().clone(),
         );
@@ -1789,7 +1934,12 @@ mod tests {
         assert!(std::ptr::eq(retained_plan, &plan));
         assert!(!std::ptr::eq(retained_plan, &equivalent_but_distinct_plan));
         assert_eq!(retained_input.as_str(), "Person-42");
-        assert!(retained_input.binding_matches(plan.profile().contract_hash(), "subject_id", 0,));
+        assert!(retained_input.binding_matches(
+            plan.profile().contract_hash(),
+            "subject_id",
+            0,
+            crate::source_plan::CompiledInputType::String,
+        ));
         assert_eq!(
             committed_preimages
                 .input

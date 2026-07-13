@@ -4,8 +4,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use thiserror::Error;
-#[cfg(test)]
-use time::OffsetDateTime;
 use ulid::Ulid;
 use zeroize::Zeroizing;
 
@@ -13,14 +11,14 @@ const MAX_PROFILE_ID_BYTES: usize = 96;
 const MAX_STABLE_ID_BYTES: usize = 96;
 const MAX_PROFILE_VERSION: u64 = 9_999_999_999;
 const MAX_CANONICAL_PURPOSE_BYTES: usize = 256;
-const MAX_CANONICAL_INPUT_BYTES: usize = 256;
-const MAX_SOURCE_BYTES: u64 = 1024 * 1024;
-const MAX_DATA_EXCHANGES: u8 = 5;
+const MAX_CANONICAL_INPUT_BYTES: usize = 4_096;
+const MAX_SOURCE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_DATA_EXCHANGES: u8 = 16;
 const MAX_CREDENTIAL_EXCHANGES: u8 = 1;
 const MAX_DATA_DESTINATIONS: u8 = 1;
 const MAX_SOURCE_MATCHES: u8 = 2;
 const MAX_DISCLOSED_RECORDS: u8 = 1;
-const MAX_TIMEOUT_MS: u32 = 20_000;
+const MAX_TIMEOUT_MS: u32 = 60_000;
 
 /// A safe, value-free reason that a consultation domain value was rejected.
 ///
@@ -46,10 +44,10 @@ pub enum ConsultationValidationError {
     /// A purpose is empty, oversized, or contains whitespace or controls.
     #[error("invalid parsed consultation purpose")]
     InvalidParsedPurpose,
-    /// The input name is outside the generic single-string grammar.
+    /// An input name is outside the generic consultation-input grammar.
     #[error("invalid parsed consultation input name")]
     InvalidParsedInputName,
-    /// The single string input is empty, oversized, or contains controls.
+    /// A string input is oversized or contains controls.
     #[error("invalid parsed consultation input value")]
     InvalidParsedInputValue,
     /// A reviewed operation declares no acquired field.
@@ -64,7 +62,7 @@ pub enum ConsultationValidationError {
     /// A disclosed-record bound is outside the v1 exact profile contract.
     #[error("consultation disclosed-record bound must be one")]
     InvalidDisclosedRecordBound,
-    /// A live bound is outside `1..=5`, or a Snapshot bound is not zero.
+    /// A live bound is outside `1..=16`, or a Snapshot bound is not zero.
     #[error("consultation data-exchange bound is invalid for its acquisition class")]
     InvalidDataExchangeBound,
     /// A live bound is outside `0..=1`, or a Snapshot bound is not zero.
@@ -85,9 +83,6 @@ pub enum ConsultationValidationError {
     /// A snapshot identifier is not a canonical ULID.
     #[error("invalid snapshot generation identifier")]
     InvalidSnapshotGenerationId,
-    /// A snapshot was reported as published after Relay acquired it.
-    #[error("snapshot publication time is later than Relay acquisition time")]
-    SnapshotPublishedAfterAcquisition,
 }
 
 fn is_stable_id(value: &str, max_bytes: usize) -> bool {
@@ -434,49 +429,59 @@ impl ParsedPurpose {
     }
 }
 
-/// One to four generically parsed selector components awaiting profile validation.
+/// One to sixteen generically parsed consultation inputs awaiting profile validation.
 ///
 /// This type intentionally implements neither `Debug` nor serialization. The
-/// value is zeroized when dropped and is visible only inside Relay. This type
-/// does not prove the profile's key, pattern, or canonicalization rule.
+/// string values are zeroized when dropped and visible only inside Relay. This
+/// type does not prove role, nullability, bounds, pattern, or canonicalization.
 #[derive(PartialEq, Eq)]
-pub struct ParsedSelectorInputs {
-    values: BTreeMap<Box<str>, Zeroizing<String>>,
+pub struct ParsedConsultationInputs {
+    values: BTreeMap<Box<str>, ParsedConsultationScalar>,
 }
 
-impl ParsedSelectorInputs {
+/// A JSON-safe scalar accepted before the selected profile applies its type.
+#[derive(PartialEq, Eq)]
+pub enum ParsedConsultationScalar {
+    String(Zeroizing<String>),
+    Boolean(bool),
+    Integer(i64),
+    Null,
+}
+
+impl ParsedConsultationInputs {
     /// Maximum decoded structural input-name bytes accepted by v1.
-    pub(crate) const MAX_NAME_BYTES: usize = crate::source_plan::SELECTOR_INPUT_NAME_MAX_BYTES;
-    /// Maximum decoded subject-value bytes accepted by v1.
+    pub(crate) const MAX_NAME_BYTES: usize = crate::source_plan::CONSULTATION_INPUT_NAME_MAX_BYTES;
+    /// Maximum decoded String-input bytes accepted by v1.
     pub(crate) const MAX_VALUE_BYTES: usize = MAX_CANONICAL_INPUT_BYTES;
 
     /// Apply the generic one-key and bounded-string parsing rules.
     pub fn try_parse(name: &str, value: &str) -> Result<Self, ConsultationValidationError> {
         Self::try_parse_components([(
             Zeroizing::new(name.to_owned()),
-            Zeroizing::new(value.to_owned()),
+            ParsedConsultationScalar::String(Zeroizing::new(value.to_owned())),
         )])
     }
 
     pub(crate) fn try_parse_components(
-        components: impl IntoIterator<Item = (Zeroizing<String>, Zeroizing<String>)>,
+        components: impl IntoIterator<Item = (Zeroizing<String>, ParsedConsultationScalar)>,
     ) -> Result<Self, ConsultationValidationError> {
         let mut values = BTreeMap::new();
         for (name, value) in components {
-            if !crate::source_plan::valid_selector_input_name(&name) {
+            if !crate::source_plan::valid_consultation_input_name(&name) {
                 return Err(ConsultationValidationError::InvalidParsedInputName);
             }
-            let valid_value = !value.is_empty()
-                && value.len() <= MAX_CANONICAL_INPUT_BYTES
-                && value.chars().all(|character| !character.is_control());
-            if !valid_value {
-                return Err(ConsultationValidationError::InvalidParsedInputValue);
+            if let ParsedConsultationScalar::String(value) = &value {
+                let valid_value = value.len() <= MAX_CANONICAL_INPUT_BYTES
+                    && value.chars().all(|character| !character.is_control());
+                if !valid_value {
+                    return Err(ConsultationValidationError::InvalidParsedInputValue);
+                }
             }
             if values.insert(name.as_str().into(), value).is_some() {
                 return Err(ConsultationValidationError::InvalidParsedInputName);
             }
         }
-        if !(1..=4).contains(&values.len()) {
+        if !(1..=16).contains(&values.len()) {
             return Err(ConsultationValidationError::InvalidParsedInputName);
         }
         Ok(Self { values })
@@ -488,20 +493,32 @@ impl ParsedSelectorInputs {
         self.values.first_key_value().map_or("", |(name, _)| name)
     }
 
-    /// Return the subject value only inside Relay's private validation stages.
+    /// Return the first String input only inside Relay's invariant tests.
     ///
     /// This accessor is deliberately crate-private. Public API and backend
     /// types cannot serialize or debug the raw selector.
     #[must_use]
     #[cfg(test)]
     pub(crate) fn value_for_internal_use(&self) -> &str {
-        self.values.first_key_value().map_or("", |(_, value)| value)
+        self.values
+            .first_key_value()
+            .and_then(|(_, value)| match value {
+                ParsedConsultationScalar::String(value) => Some(value.as_str()),
+                _ => None,
+            })
+            .unwrap_or("")
     }
 
-    pub(crate) fn values(&self) -> impl ExactSizeIterator<Item = (&str, &str)> {
+    pub(crate) fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    pub(crate) fn values(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&str, &ParsedConsultationScalar)> {
         self.values
             .iter()
-            .map(|(name, value)| (name.as_ref(), value.as_str()))
+            .map(|(name, value)| (name.as_ref(), value))
     }
 
     #[cfg(test)]
@@ -509,9 +526,6 @@ impl ParsedSelectorInputs {
         self.value_for_internal_use()
     }
 }
-
-/// Backward-compatible internal name for the original one-component constructor.
-pub type ParsedSingleStringInput = ParsedSelectorInputs;
 
 /// The public acquisition meaning of a reviewed source plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -697,111 +711,6 @@ impl TryFrom<&str> for SnapshotGenerationId {
     }
 }
 
-/// Test-only candidate acquisition facts awaiting validated backend provenance.
-#[cfg(test)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ProvenanceAcquisitionCandidate {
-    /// Live source-projected acquisition.
-    SourceProjectedExact,
-    /// Live bounded-full-record acquisition.
-    BoundedFullRecord,
-    /// A separately audited and atomically published immutable snapshot.
-    MaterializedSnapshot {
-        /// The exact immutable generation served.
-        generation_id: SnapshotGenerationId,
-        /// Publication time atomically bound to the generation and digest.
-        published_at: OffsetDateTime,
-    },
-}
-
-#[cfg(test)]
-impl ProvenanceAcquisitionCandidate {
-    /// Return the candidate acquisition class.
-    #[must_use]
-    const fn acquisition_class(&self) -> AcquisitionClass {
-        match self {
-            Self::SourceProjectedExact => AcquisitionClass::SourceProjectedExact,
-            Self::BoundedFullRecord => AcquisitionClass::BoundedFullRecord,
-            Self::MaterializedSnapshot { .. } => AcquisitionClass::MaterializedSnapshot,
-        }
-    }
-}
-
-/// Test-only candidate for eventual public consultation provenance.
-///
-/// No production type or constructor exists in this slice. A later validated
-/// backend and compiled-plan boundary must prove the acquisition class and
-/// observation metadata before it can create a public wire value. This type
-/// intentionally omits source revision until that reviewed extraction boundary
-/// exists.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg(test)]
-struct PublicProvenanceCandidate {
-    relay_acquired_at: OffsetDateTime,
-    source_observed_at: Option<OffsetDateTime>,
-    acquisition: ProvenanceAcquisitionCandidate,
-    integration_pack: IntegrationPackIdentity,
-    policy: PolicyIdentity,
-}
-
-#[cfg(test)]
-impl PublicProvenanceCandidate {
-    fn try_new_for_test(
-        relay_acquired_at: OffsetDateTime,
-        source_observed_at: Option<OffsetDateTime>,
-        acquisition: ProvenanceAcquisitionCandidate,
-        integration_pack: IntegrationPackIdentity,
-        policy: PolicyIdentity,
-    ) -> Result<Self, ConsultationValidationError> {
-        if let ProvenanceAcquisitionCandidate::MaterializedSnapshot { published_at, .. } =
-            acquisition
-        {
-            if published_at > relay_acquired_at {
-                return Err(ConsultationValidationError::SnapshotPublishedAfterAcquisition);
-            }
-        }
-
-        Ok(Self {
-            relay_acquired_at,
-            source_observed_at,
-            acquisition,
-            integration_pack,
-            policy,
-        })
-    }
-
-    /// Return candidate Relay receipt time. This is not source observation
-    /// time and is not proven public provenance.
-    #[must_use]
-    const fn relay_acquired_at(&self) -> OffsetDateTime {
-        self.relay_acquired_at
-    }
-
-    /// Return the candidate source observation time.
-    #[must_use]
-    const fn source_observed_at(&self) -> Option<OffsetDateTime> {
-        self.source_observed_at
-    }
-
-    /// Return the unproven class-specific acquisition candidate.
-    #[must_use]
-    const fn acquisition(&self) -> &ProvenanceAcquisitionCandidate {
-        &self.acquisition
-    }
-
-    /// Return the candidate integration-pack identity.
-    #[must_use]
-    const fn integration_pack(&self) -> &IntegrationPackIdentity {
-        &self.integration_pack
-    }
-
-    /// Return the candidate policy identity.
-    #[must_use]
-    const fn policy(&self) -> &PolicyIdentity {
-        &self.policy
-    }
-}
-
 /// Parsed, declared consultation data produced before profile authorization.
 ///
 /// The type is intentionally not serializable, debuggable, clonable, or
@@ -814,7 +723,7 @@ pub struct PreAuthorizationConsultationCore {
     profile: ProfileIdentity,
     selector_provenance: SelectorProvenance,
     purpose: ParsedPurpose,
-    input: ParsedSelectorInputs,
+    input: ParsedConsultationInputs,
     footprint: DeclaredOperationFootprint,
 }
 
@@ -831,7 +740,7 @@ impl PreAuthorizationConsultationCore {
         resolved: super::ResolvedConsultationProfile,
         plan: &crate::source_plan::CompiledSourcePlan,
         purpose: ParsedPurpose,
-        input: ParsedSelectorInputs,
+        input: ParsedConsultationInputs,
     ) -> Result<Self, ConsultationValidationError> {
         let profile = plan.runtime_profile();
         if !resolved.matches_exact_plan(plan) {
@@ -851,7 +760,7 @@ impl PreAuthorizationConsultationCore {
         profile: ProfileIdentity,
         selector_provenance: SelectorProvenance,
         purpose: ParsedPurpose,
-        input: ParsedSelectorInputs,
+        input: ParsedConsultationInputs,
         footprint: DeclaredOperationFootprint,
     ) -> Self {
         Self {
@@ -884,7 +793,7 @@ impl PreAuthorizationConsultationCore {
 
     /// Return the parsed input container without exposing its value.
     #[must_use]
-    pub const fn parsed_input(&self) -> &ParsedSelectorInputs {
+    pub const fn parsed_input(&self) -> &ParsedConsultationInputs {
         &self.input
     }
 
@@ -938,7 +847,7 @@ mod tests {
                 AssertionContractHash::try_from(HASH).expect("assertion hash"),
             )),
             ParsedPurpose::try_parse("benefit-verification").expect("purpose"),
-            ParsedSingleStringInput::try_parse("subject_id", "12345").expect("input"),
+            ParsedConsultationInputs::try_parse("subject_id", "12345").expect("input"),
             footprint(max_source_matches),
         )
     }
@@ -1039,28 +948,52 @@ mod tests {
     fn parsed_input_rejects_unsafe_shapes_without_implicit_normalization() {
         let name_64 = format!("a{}", "0".repeat(63));
         let name_65 = format!("a{}", "0".repeat(64));
-        assert!(ParsedSingleStringInput::try_parse(&name_64, "12345").is_ok());
+        assert!(ParsedConsultationInputs::try_parse(&name_64, "12345").is_ok());
         assert_eq!(
-            ParsedSingleStringInput::try_parse(&name_65, "12345").err(),
+            ParsedConsultationInputs::try_parse(&name_65, "12345").err(),
             Some(ConsultationValidationError::InvalidParsedInputName)
         );
-        assert!(ParsedSingleStringInput::try_parse("subject_id", " 12345 ").is_ok());
+        assert!(ParsedConsultationInputs::try_parse("subject_id", " 12345 ").is_ok());
         assert_eq!(
-            ParsedSingleStringInput::try_parse("subject-id", "12345").err(),
+            ParsedConsultationInputs::try_parse("subject-id", "12345").err(),
             Some(ConsultationValidationError::InvalidParsedInputName)
         );
+        assert!(ParsedConsultationInputs::try_parse("subject_id", "").is_ok());
         assert_eq!(
-            ParsedSingleStringInput::try_parse("subject_id", "").err(),
-            Some(ConsultationValidationError::InvalidParsedInputValue)
-        );
-        assert_eq!(
-            ParsedSingleStringInput::try_parse("subject_id", "123\n45").err(),
+            ParsedConsultationInputs::try_parse("subject_id", "123\n45").err(),
             Some(ConsultationValidationError::InvalidParsedInputValue)
         );
 
-        let input = ParsedSingleStringInput::try_parse("subject_id", " 12345 ").unwrap();
+        let input = ParsedConsultationInputs::try_parse("subject_id", " 12345 ").unwrap();
         assert_eq!(input.name(), "subject_id");
         assert_eq!(input.expose_value_for_test(), " 12345 ");
+    }
+
+    #[test]
+    fn parsed_inputs_accept_sixteen_json_safe_scalars() {
+        let sixteen = (0..16).map(|index| {
+            (
+                Zeroizing::new(format!("input_{index}")),
+                match index % 4 {
+                    0 => ParsedConsultationScalar::String(Zeroizing::new("x".repeat(512))),
+                    1 => ParsedConsultationScalar::Boolean(true),
+                    2 => ParsedConsultationScalar::Integer(42),
+                    _ => ParsedConsultationScalar::Null,
+                },
+            )
+        });
+        assert!(ParsedConsultationInputs::try_parse_components(sixteen).is_ok());
+
+        let seventeen = (0..17).map(|index| {
+            (
+                Zeroizing::new(format!("input_{index}")),
+                ParsedConsultationScalar::Boolean(true),
+            )
+        });
+        assert_eq!(
+            ParsedConsultationInputs::try_parse_components(seventeen).err(),
+            Some(ConsultationValidationError::InvalidParsedInputName)
+        );
     }
 
     #[test]
@@ -1125,9 +1058,15 @@ mod tests {
             }),
             Err(ConsultationValidationError::InvalidDataExchangeBound)
         );
+        let at_data_exchange_ceiling = invalid(OperationBounds {
+            max_data_exchanges: 16,
+            ..base
+        })
+        .expect("approved data-exchange ceiling");
+        assert_eq!(at_data_exchange_ceiling.bounds().max_data_exchanges, 16);
         assert_eq!(
             invalid(OperationBounds {
-                max_data_exchanges: 6,
+                max_data_exchanges: 17,
                 ..base
             }),
             Err(ConsultationValidationError::InvalidDataExchangeBound)
@@ -1259,36 +1198,6 @@ mod tests {
     }
 
     #[test]
-    fn provenance_candidate_excludes_invalid_snapshot_time_binding() {
-        let acquired_at = OffsetDateTime::from_unix_timestamp(1_720_612_800).unwrap();
-        let generation = SnapshotGenerationId::try_from("01J2D9W2G00000000000000000").unwrap();
-        let pack = IntegrationPackIdentity::new(
-            IntegrationPackId::try_from("example.person-status").unwrap(),
-            ProfileVersion::try_from("1").unwrap(),
-            IntegrationPackHash::try_from(HASH).unwrap(),
-        );
-        let policy = PolicyIdentity::new(
-            PolicyId::try_from("relay.example.person-status.exact").unwrap(),
-            PolicyHash::try_from(HASH).unwrap(),
-        );
-
-        let result = PublicProvenanceCandidate::try_new_for_test(
-            acquired_at,
-            None,
-            ProvenanceAcquisitionCandidate::MaterializedSnapshot {
-                generation_id: generation,
-                published_at: acquired_at + time::Duration::SECOND,
-            },
-            pack,
-            policy,
-        );
-        assert!(matches!(
-            result,
-            Err(ConsultationValidationError::SnapshotPublishedAfterAcquisition)
-        ));
-    }
-
-    #[test]
     fn snapshot_generation_id_requires_canonical_ulid_text() {
         let canonical = "01J2D9W2G00000000000000000";
         assert_eq!(
@@ -1305,70 +1214,6 @@ mod tests {
         assert_eq!(
             SnapshotGenerationId::try_from("1J2D9W2G00000000000000000"),
             Err(ConsultationValidationError::InvalidSnapshotGenerationId)
-        );
-    }
-
-    #[test]
-    fn provenance_candidate_represents_each_declared_acquisition_class() {
-        let acquired_at = OffsetDateTime::from_unix_timestamp(1_720_612_800).unwrap();
-        let pack = || {
-            IntegrationPackIdentity::new(
-                IntegrationPackId::try_from("example.person-status").unwrap(),
-                ProfileVersion::try_from("1").unwrap(),
-                IntegrationPackHash::try_from(HASH).unwrap(),
-            )
-        };
-        let policy = || {
-            PolicyIdentity::new(
-                PolicyId::try_from("relay.example.person-status.exact").unwrap(),
-                PolicyHash::try_from(HASH).unwrap(),
-            )
-        };
-
-        for acquisition in [
-            ProvenanceAcquisitionCandidate::SourceProjectedExact,
-            ProvenanceAcquisitionCandidate::BoundedFullRecord,
-        ] {
-            let expected = acquisition.acquisition_class();
-            let provenance = PublicProvenanceCandidate::try_new_for_test(
-                acquired_at,
-                Some(acquired_at - time::Duration::SECOND),
-                acquisition,
-                pack(),
-                policy(),
-            )
-            .unwrap();
-            assert_eq!(provenance.relay_acquired_at(), acquired_at);
-            assert_eq!(
-                provenance.source_observed_at(),
-                Some(acquired_at - time::Duration::SECOND)
-            );
-            assert_eq!(provenance.acquisition().acquisition_class(), expected);
-            assert_eq!(
-                provenance.integration_pack().id().as_str(),
-                "example.person-status"
-            );
-            assert_eq!(
-                provenance.policy().id().as_str(),
-                "relay.example.person-status.exact"
-            );
-        }
-
-        let generation = SnapshotGenerationId::try_from("01J2D9W2G00000000000000000").unwrap();
-        let snapshot = PublicProvenanceCandidate::try_new_for_test(
-            acquired_at,
-            None,
-            ProvenanceAcquisitionCandidate::MaterializedSnapshot {
-                generation_id: generation,
-                published_at: acquired_at - time::Duration::SECOND,
-            },
-            pack(),
-            policy(),
-        )
-        .unwrap();
-        assert_eq!(
-            snapshot.acquisition().acquisition_class(),
-            AcquisitionClass::MaterializedSnapshot
         );
     }
 
@@ -1392,7 +1237,7 @@ mod tests {
     fn invalid_domain_values_never_reach_counting_backend() {
         let backend = CountingFakeBackend::new(ConsultationOutcome::NoMatch);
 
-        let rejected = ParsedSingleStringInput::try_parse("subject-id", "12345");
+        let rejected = ParsedConsultationInputs::try_parse("subject-id", "12345");
         assert_eq!(
             rejected.err(),
             Some(ConsultationValidationError::InvalidParsedInputName)

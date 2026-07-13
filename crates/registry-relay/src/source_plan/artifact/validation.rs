@@ -35,27 +35,149 @@ pub(super) fn validate_subject(
 pub(super) fn validate_inputs(
     inputs: &BTreeMap<String, InputDocument>,
 ) -> Result<(), SourcePlanArtifactError> {
-    if !(1..=4).contains(&inputs.len()) {
+    if !(1..=MAX_TOTAL_INPUTS).contains(&inputs.len()) {
         return Err(SourcePlanArtifactError::InvalidSet);
     }
+    let selector_count = inputs
+        .values()
+        .filter(|input| input.role == InputRoleDocument::Selector)
+        .count();
+    if !(1..=MAX_SELECTOR_INPUTS).contains(&selector_count) {
+        return Err(SourcePlanArtifactError::InvalidSet);
+    }
+    let mut selector_max_bytes = 0_usize;
     for (name, input) in inputs {
-        if !crate::source_plan::valid_selector_input_name(name) {
+        if !crate::source_plan::valid_consultation_input_name(name) {
             return Err(SourcePlanArtifactError::InvalidIdentity);
         }
-        if input.max_bytes == 0 || input.max_bytes > MAX_INPUT_BYTES {
-            return Err(SourcePlanArtifactError::InvalidLimits);
-        }
-        validate_bounded_text(&input.pattern, MAX_PATTERN_BYTES)?;
-        validate_input_pattern(&input.pattern)?;
-        if input.input_type == InputTypeDocument::FullDate
-            && (input.max_bytes != 10
-                || input.pattern != "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$"
-                || input.canonicalization != CanonicalizationDocument::Identity)
+        let (input_type, nullable) = input
+            .resolved_type()
+            .ok_or(SourcePlanArtifactError::InvalidAcquisition)?;
+        if (input.role == InputRoleDocument::Selector && nullable)
+            || (nullable && input.role != InputRoleDocument::Parameter)
         {
             return Err(SourcePlanArtifactError::InvalidAcquisition);
         }
+        let shape_valid = match input_type {
+            InputTypeDocument::String => {
+                let Some(max_length) = input.max_length else {
+                    return Err(SourcePlanArtifactError::InvalidLimits);
+                };
+                let Some(max_bytes) = input.max_bytes else {
+                    return Err(SourcePlanArtifactError::InvalidLimits);
+                };
+                let expected_bytes = max_length.checked_mul(4);
+                max_length > 0
+                    && input.min_length.is_none_or(|minimum| minimum <= max_length)
+                    && max_bytes > 0
+                    && max_bytes <= MAX_INPUT_BYTES
+                    && expected_bytes == Some(max_bytes)
+                    && input.minimum.is_none()
+                    && input.maximum.is_none()
+                    && input.pattern.as_ref().is_none_or(|pattern| {
+                        max_bytes <= MAX_PATTERNED_INPUT_BYTES
+                            && validate_bounded_text(pattern, MAX_PATTERN_BYTES).is_ok()
+                            && validate_input_pattern(pattern).is_ok()
+                    })
+            }
+            InputTypeDocument::FullDate => {
+                input.max_length == Some(10)
+                    && input.min_length.is_none_or(|minimum| minimum <= 10)
+                    && input.max_bytes == Some(10)
+                    && input.pattern.is_none()
+                    && input.minimum.is_none()
+                    && input.maximum.is_none()
+                    && input.canonicalization == CanonicalizationDocument::Identity
+            }
+            InputTypeDocument::Boolean => {
+                input.max_length.is_none()
+                    && input.min_length.is_none()
+                    && input.max_bytes.is_none()
+                    && input.pattern.is_none()
+                    && input.minimum.is_none()
+                    && input.maximum.is_none()
+                    && input.canonicalization == CanonicalizationDocument::Identity
+            }
+            InputTypeDocument::Integer => {
+                input.max_length.is_none()
+                    && input.min_length.is_none()
+                    && input.max_bytes.is_none()
+                    && input.pattern.is_none()
+                    && input.canonicalization == CanonicalizationDocument::Identity
+                    && matches!((input.minimum, input.maximum), (Some(minimum), Some(maximum))
+                        if minimum <= maximum
+                            && minimum.unsigned_abs() <= MAX_JSON_INTEROPERABLE_INTEGER
+                            && maximum.unsigned_abs() <= MAX_JSON_INTEROPERABLE_INTEGER)
+            }
+        };
+        if !shape_valid {
+            return Err(SourcePlanArtifactError::InvalidLimits);
+        }
+        if input.allowed_values.len() > 64
+            || input
+                .allowed_values
+                .iter()
+                .enumerate()
+                .any(|(index, value)| {
+                    !input_constraint_value_valid(input, input_type, nullable, value)
+                        || input.allowed_values[..index].contains(value)
+                })
+            || input.constant.as_ref().is_some_and(|value| {
+                !input_constraint_value_valid(input, input_type, nullable, value)
+                    || (!input.allowed_values.is_empty() && !input.allowed_values.contains(value))
+            })
+        {
+            return Err(SourcePlanArtifactError::InvalidAcquisition);
+        }
+        if input.role == InputRoleDocument::Selector {
+            selector_max_bytes = selector_max_bytes
+                .checked_add(
+                    input
+                        .canonical_max_bytes()
+                        .ok_or(SourcePlanArtifactError::InvalidLimits)?
+                        as usize,
+                )
+                .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+        }
+    }
+    if selector_max_bytes > MAX_CANONICAL_SELECTOR_BYTES {
+        return Err(SourcePlanArtifactError::InvalidLimits);
     }
     Ok(())
+}
+
+fn input_constraint_value_valid(
+    input: &InputDocument,
+    input_type: InputTypeDocument,
+    nullable: bool,
+    value: &serde_json::Value,
+) -> bool {
+    match (input_type, value) {
+        (_, serde_json::Value::Null) => nullable,
+        (
+            InputTypeDocument::String | InputTypeDocument::FullDate,
+            serde_json::Value::String(value),
+        ) => {
+            let length = value.chars().count();
+            input
+                .min_length
+                .is_none_or(|minimum| length >= minimum as usize)
+                && input
+                    .max_length
+                    .is_some_and(|maximum| length <= maximum as usize)
+                && input
+                    .max_bytes
+                    .is_some_and(|maximum| value.len() <= maximum as usize)
+        }
+        (InputTypeDocument::Boolean, serde_json::Value::Bool(_)) => true,
+        (InputTypeDocument::Integer, serde_json::Value::Number(value)) => {
+            value.as_i64().is_some_and(|value| {
+                input.minimum.is_some_and(|minimum| value >= minimum)
+                    && input.maximum.is_some_and(|maximum| value <= maximum)
+            })
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn validate_acquisition(
@@ -135,6 +257,33 @@ pub(super) fn cardinality_from_bounds(
     }
 }
 
+pub(super) fn validate_runtime_requirements(
+    spec: &PublicContractSpecDocument,
+) -> Result<(), SourcePlanArtifactError> {
+    const PLATFORM_PROFILE: &str = "registry-stack.consultation.v1";
+    let live_acquisition = matches!(
+        spec.acquisition.class,
+        AcquisitionClassDocument::SourceProjectedExact
+            | AcquisitionClassDocument::BoundedFullRecord
+    );
+    let valid = spec.runtime.platform_profile == PLATFORM_PROFILE
+        && match spec.runtime.source_capability {
+            SourceCapabilityDocument::Http => live_acquisition && spec.runtime.script_abi.is_none(),
+            SourceCapabilityDocument::Script => {
+                live_acquisition
+                    && spec.runtime.script_abi.as_deref()
+                        == Some(crate::rhai_worker::xw::XW_ABI_VERSION)
+            }
+            SourceCapabilityDocument::Snapshot => {
+                spec.acquisition.class == AcquisitionClassDocument::MaterializedSnapshot
+                    && spec.runtime.script_abi.is_none()
+            }
+        };
+    valid
+        .then_some(())
+        .ok_or(SourcePlanArtifactError::InvalidPlan)
+}
+
 pub(super) fn validate_materialization_contract(
     spec: &mut PublicContractSpecDocument,
     acquired_fields: &BTreeSet<AcquiredField>,
@@ -169,13 +318,9 @@ pub(super) fn validate_materialization_contract(
         .ok_or(SourcePlanArtifactError::InvalidAcquisition)
 }
 pub(super) fn validate_output(
-    mode: OutputModeDocument,
     output: &BTreeMap<String, OutputFieldDocument>,
     acquired_fields: &BTreeSet<AcquiredField>,
 ) -> Result<(), SourcePlanArtifactError> {
-    if mode.is_projected_fields() && output.is_empty() {
-        return Err(SourcePlanArtifactError::InvalidAcquisition);
-    }
     if output.len() > MAX_ACQUIRED_FIELDS || acquired_fields.len() > MAX_ACQUIRED_FIELDS {
         return Err(SourcePlanArtifactError::InvalidSet);
     }
@@ -202,11 +347,8 @@ pub(super) fn validate_output(
             OutputTypeDocument::Date => {
                 field.max_bytes == Some(10) && field.minimum.is_none() && field.maximum.is_none()
             }
-            OutputTypeDocument::Boolean | OutputTypeDocument::Presence => {
-                field.max_bytes.is_none()
-                    && field.minimum.is_none()
-                    && field.maximum.is_none()
-                    && (field.output_type != OutputTypeDocument::Presence || !field.nullable)
+            OutputTypeDocument::Boolean => {
+                field.max_bytes.is_none() && field.minimum.is_none() && field.maximum.is_none()
             }
         };
         if !valid {
@@ -374,10 +516,22 @@ pub(super) fn validate_plan(
             return Err(SourcePlanArtifactError::InvalidPlan);
         }
     }
+    if let Some(slot) = &plan.verification_destination_slot {
+        validate_stable_text(slot)?;
+        if plan.data_destination_slot.as_ref() == Some(slot)
+            || plan.credential_destination_slot.as_ref() == Some(slot)
+        {
+            return Err(SourcePlanArtifactError::InvalidPlan);
+        }
+    }
     if plan.kind == SourcePlanKind::SnapshotExact {
         return validate_snapshot_plan(spec);
     }
-    if plan.operations.is_empty() || plan.operations.len() > 5 || plan.steps.is_empty() {
+    if plan.operations.is_empty()
+        || plan.operations.len() > MAX_SOURCE_OPERATIONS
+        || (plan.kind == SourcePlanKind::BoundedHttp && plan.operations.len() != 1)
+        || (plan.kind == SourcePlanKind::SandboxedRhai) != plan.steps.is_empty()
+    {
         return Err(SourcePlanArtifactError::InvalidPlan);
     }
 
@@ -386,6 +540,7 @@ pub(super) fn validate_plan(
     let mut mapped_output_fields = BTreeSet::new();
     let mut operation_response_fields = BTreeMap::new();
     let mut auth_modes = BTreeSet::new();
+    let mut script_request_byte_limits = BTreeSet::new();
     let mut response_bytes = 0_u64;
     let mut maximum_data_response_bytes = 0_u64;
     let mut reaches_profile_cardinality = false;
@@ -422,24 +577,35 @@ pub(super) fn validate_plan(
             return Err(SourcePlanArtifactError::InvalidPlan);
         }
         validate_http_operation(operation, &operation_validation)?;
+        if plan.kind == SourcePlanKind::SandboxedRhai {
+            script_request_byte_limits.insert(
+                operation
+                    .step_limits
+                    .ok_or(SourcePlanArtifactError::InvalidPlan)?
+                    .max_request_bytes,
+            );
+        }
         let record_schema = response_record_schema(
             &operation.response.schema,
             &operation.response.normalization,
             operation.response.max_records,
             operation.response.records_field.as_deref(),
         )?;
-        let ResponseSchemaDocument::Object { fields, .. } = record_schema else {
-            return Err(SourcePlanArtifactError::InvalidAcquisition);
-        };
-        for (name, field) in fields {
-            AcquiredField::try_from(name.as_str())
-                .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
-            if operation_response_fields
-                .insert(name.clone(), field.schema.as_ref().clone())
-                .is_some_and(|prior| prior != *field.schema)
-            {
-                return Err(SourcePlanArtifactError::InvalidAcquisition);
+        match record_schema {
+            ResponseSchemaDocument::ScriptBody if plan.kind == SourcePlanKind::SandboxedRhai => {}
+            ResponseSchemaDocument::Object { fields, .. } => {
+                for (name, field) in fields {
+                    AcquiredField::try_from(name.as_str())
+                        .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
+                    if operation_response_fields
+                        .insert(name.clone(), field.schema.as_ref().clone())
+                        .is_some_and(|prior| prior != *field.schema)
+                    {
+                        return Err(SourcePlanArtifactError::InvalidAcquisition);
+                    }
+                }
             }
+            _ => return Err(SourcePlanArtifactError::InvalidAcquisition),
         }
         for field in &operation.control_fields {
             let field = AcquiredField::try_from(field.as_str())
@@ -449,11 +615,6 @@ pub(super) fn validate_plan(
             }
         }
         for field in operation.response.output_mapping.keys() {
-            if !mapped_output_fields.insert(field.clone()) {
-                return Err(SourcePlanArtifactError::InvalidAcquisition);
-            }
-        }
-        for field in &operation.response.presence_outputs {
             if !mapped_output_fields.insert(field.clone()) {
                 return Err(SourcePlanArtifactError::InvalidAcquisition);
             }
@@ -468,7 +629,7 @@ pub(super) fn validate_plan(
             (operation_cardinality, &operation.response.normalization),
             (
                 SourceCardinality::Singleton,
-                ResponseNormalizationDocument::Object
+                ResponseNormalizationDocument::Object | ResponseNormalizationDocument::ScriptBody
             ) | (
                 SourceCardinality::AmbiguityProbe,
                 ResponseNormalizationDocument::ArrayProbeTwo
@@ -491,13 +652,17 @@ pub(super) fn validate_plan(
         maximum_data_response_bytes =
             maximum_data_response_bytes.max(u64::from(operation.response.max_bytes));
     }
+    if plan.kind == SourcePlanKind::SandboxedRhai && script_request_byte_limits.len() != 1 {
+        return Err(SourcePlanArtifactError::InvalidPlan);
+    }
     let mut verification_ids = BTreeSet::new();
     for verification in &mut plan.verification_operations {
         let operation_id = OperationId::try_from(verification.id.as_str())
             .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
         if operation_ids.contains(&operation_id)
             || !verification_ids.insert(operation_id)
-            || plan.data_destination_slot.as_deref() != Some(verification.destination_slot.as_str())
+            || plan.verification_destination_slot.as_deref()
+                != Some(verification.destination_slot.as_str())
             || verification.method != ReadMethod::Get
             || verification.step_limits.max_request_bytes == 0
             || verification.step_limits.timeout_ms == 0
@@ -513,6 +678,9 @@ pub(super) fn validate_plan(
         if verification.accepted_statuses != [200] {
             return Err(SourcePlanArtifactError::InvalidPlan);
         }
+    }
+    if plan.verification_operations.is_empty() != plan.verification_destination_slot.is_none() {
+        return Err(SourcePlanArtifactError::InvalidPlan);
     }
     if !reaches_profile_cardinality {
         return Err(SourcePlanArtifactError::InvalidAcquisition);
@@ -534,8 +702,21 @@ pub(super) fn validate_plan(
     } else {
         mapped_output_fields == declared_disclosed_fields
     };
+    let operation_fields_match_acquisition = match plan.kind {
+        SourcePlanKind::SandboxedRhai => true,
+        SourcePlanKind::BoundedHttp => {
+            operation_response_fields.len() == spec.acquisition.fields.len()
+                && operation_response_fields.iter().all(|(name, raw)| {
+                    spec.acquisition
+                        .fields
+                        .get(name)
+                        .is_some_and(|selected| raw.matches_selected_shape(selected))
+                })
+        }
+        SourcePlanKind::SnapshotExact => unreachable!("snapshot plans return above"),
+    };
     if operation_control_fields != declared_control_fields
-        || operation_response_fields != spec.acquisition.fields
+        || !operation_fields_match_acquisition
         || !mapped_outputs_valid
     {
         return Err(SourcePlanArtifactError::InvalidAcquisition);
@@ -556,7 +737,7 @@ pub(super) fn validate_plan(
         }
     }
     let verification_data_exchanges = plan.verification_operations.len();
-    if used_operations != known_operations
+    if (plan.kind == SourcePlanKind::BoundedHttp && used_operations != known_operations)
         || (plan.kind == SourcePlanKind::BoundedHttp
             && plan.steps.len() + verification_data_exchanges
                 != usize::from(spec.bounds.max_data_exchanges))
@@ -622,8 +803,11 @@ fn validate_dci_exact_plan(
     let Some(dci) = &operation.dci else {
         return Err(SourcePlanArtifactError::InvalidPlan);
     };
-    let exact_and_selector = (1..=4).contains(&dci.exact_and.len())
-        && dci.exact_and.keys().eq(spec.input_slots.keys())
+    let selector_names = spec.input_slots.iter().filter_map(|(name, input)| {
+        (input.role == InputRoleDocument::Selector).then_some(name.as_str())
+    });
+    let exact_and_selector = (1..=MAX_SELECTOR_INPUTS).contains(&dci.exact_and.len())
+        && dci.exact_and.keys().map(String::as_str).eq(selector_names)
         && dci.exact_and.values().all(|component| {
             valid_dci_field_name(&component.field)
                 && decode_pointer_tokens(&component.response_pointer).is_ok()
@@ -660,16 +844,20 @@ fn validate_dci_exact_plan(
     let [verification] = spec.plan.verification_operations.as_slice() else {
         return Err(SourcePlanArtifactError::InvalidPlan);
     };
-    let exact = spec.plan.kind == SourcePlanKind::BoundedHttp
+    let exact_topology = (spec.plan.kind == SourcePlanKind::BoundedHttp
+        && spec.plan.steps == [operation.id.as_str()])
+        || (spec.plan.kind == SourcePlanKind::SandboxedRhai && spec.plan.steps.is_empty());
+    let exact = exact_topology
         && spec.plan.operations.len() == 1
-        && spec.plan.steps == [operation.id.as_str()]
         && dci.jwks_operation == verification.id
         && verification.id != operation.id
         && matches!(
             verification.primitive,
             VerificationPrimitiveDocument::JwksV1
         )
-        && verification.destination_slot == operation.destination_slot
+        && spec.plan.verification_destination_slot.as_deref()
+            == Some(verification.destination_slot.as_str())
+        && verification.destination_slot != operation.destination_slot
         && verification.method == ReadMethod::Get
         && verification.accepted_statuses == [200]
         && verification.max_response_bytes > 0
@@ -765,40 +953,54 @@ pub(super) fn validate_reviewed_acquisition(
     if reviewed_expanded_nodes > MAX_RESPONSE_SCHEMA_EXPANDED_NODES {
         return Err(SourcePlanArtifactError::InvalidLimits);
     }
-    for output in spec.output.values() {
-        if output.output_type == OutputTypeDocument::Presence && output.nullable {
-            return Err(SourcePlanArtifactError::InvalidAcquisition);
-        }
-    }
-
     let input_name = spec
         .input_slots
-        .keys()
-        .next()
+        .iter()
+        .find_map(|(name, input)| (input.role == InputRoleDocument::Selector).then_some(name))
         .ok_or(SourcePlanArtifactError::InvalidAcquisition)?;
-    match &reviewed.selector {
-        ExactSelectorDocument::HttpExactAnd {
+    let selector_names = spec
+        .input_slots
+        .iter()
+        .filter_map(|(name, input)| {
+            (input.role == InputRoleDocument::Selector).then_some(name.as_str())
+        })
+        .collect::<Vec<_>>();
+    match reviewed.selector.as_ref() {
+        Some(ExactSelectorDocument::HttpExactAnd {
             operation,
             components,
-        } if spec.plan.kind != SourcePlanKind::SnapshotExact
-            && (1..=4).contains(&components.len())
-            && components.keys().eq(spec.input_slots.keys())
-            && spec.plan.steps.first() == Some(operation)
+        }) if spec.plan.kind != SourcePlanKind::SnapshotExact
+            && (1..=MAX_SELECTOR_INPUTS).contains(&components.len())
+            && components
+                .keys()
+                .map(String::as_str)
+                .eq(selector_names.iter().copied())
+            && (spec.plan.steps.first() == Some(operation)
+                || (spec.plan.kind == SourcePlanKind::SandboxedRhai
+                    && spec.plan.steps.is_empty()))
             && spec.plan.operations.iter().any(|candidate| {
                 candidate.id == *operation
                     && candidate.relation_selector.is_none()
                     && candidate.input_selector.is_none()
+                    && (spec.plan.kind != SourcePlanKind::SandboxedRhai
+                        || candidate.request_codec == Some(RequestCodecDocument::DciExactV1))
                     && components.iter().all(|(input, location)| {
                         selector_location_matches(candidate, location, SelectorSource::Input(input))
                     })
             }) =>
         {
-            validate_transitively_anchored_steps(&spec.plan, input_name)?;
+            if spec.plan.kind != SourcePlanKind::SandboxedRhai {
+                validate_transitively_anchored_steps(&spec.plan, input_name)?;
+            }
         }
-        ExactSelectorDocument::SnapshotExactAnd { components }
+        Some(ExactSelectorDocument::SnapshotExactAnd { components })
             if spec.plan.kind == SourcePlanKind::SnapshotExact
-                && (1..=4).contains(&components.len())
-                && components.keys().eq(spec.input_slots.keys()) => {}
+                && (1..=MAX_SELECTOR_INPUTS).contains(&components.len())
+                && components
+                    .keys()
+                    .map(String::as_str)
+                    .eq(selector_names.iter().copied()) => {}
+        None if spec.plan.kind == SourcePlanKind::SandboxedRhai => {}
         _ => return Err(SourcePlanArtifactError::InvalidAcquisition),
     }
     Ok(())
@@ -997,6 +1199,8 @@ pub(super) fn validate_snapshot_plan(
         || plan.data_destination_slot.is_some()
         || plan.credential_operation.is_some()
         || plan.credential_destination_slot.is_some()
+        || plan.verification_destination_slot.is_some()
+        || !plan.verification_operations.is_empty()
         || bounds.max_data_exchanges != 0
         || bounds.max_credential_exchanges != 0
         || bounds.max_data_destinations != 0
@@ -1075,7 +1279,59 @@ fn validate_http_operation(
         output,
         prior_output_bounds,
     } = context;
-    operation_path_parts(operation)?;
+    if *plan_kind == SourcePlanKind::SandboxedRhai {
+        registry_platform_httputil::destination::validate_script_destination_path_rule(
+            &operation.path,
+        )
+        .map_err(|_| SourcePlanArtifactError::InvalidPlan)?;
+    } else {
+        operation_path_parts(operation)?;
+    }
+    if operation.response.format == ResponseFormatDocument::Text
+        && context.plan_kind != SourcePlanKind::SandboxedRhai
+    {
+        return Err(SourcePlanArtifactError::InvalidPlan);
+    }
+    if operation.response.selected_headers.len() > MAX_STATIC_COMPONENTS {
+        return Err(SourcePlanArtifactError::InvalidLimits);
+    }
+    let selected_headers = std::mem::take(&mut operation.response.selected_headers);
+    for name in selected_headers {
+        let canonical_name = name.to_ascii_lowercase();
+        if !registry_platform_httputil::destination::is_script_visible_response_header_name(
+            &canonical_name,
+        ) || operation
+            .response
+            .selected_headers
+            .contains(&canonical_name)
+        {
+            return Err(SourcePlanArtifactError::InvalidExpression);
+        }
+        operation.response.selected_headers.push(canonical_name);
+    }
+    operation.response.selected_headers.sort_unstable();
+    if !operation.response.selected_headers.is_empty()
+        && context.plan_kind != SourcePlanKind::SandboxedRhai
+    {
+        return Err(SourcePlanArtifactError::InvalidPlan);
+    }
+    let script_request_headers = std::mem::take(&mut operation.script_request_headers);
+    for name in script_request_headers {
+        let canonical_name = name.to_ascii_lowercase();
+        if *plan_kind != SourcePlanKind::SandboxedRhai
+            || !registry_platform_httputil::destination::is_script_writable_request_header_name(
+                &canonical_name,
+            )
+            || operation.script_request_headers.contains(&canonical_name)
+        {
+            return Err(SourcePlanArtifactError::InvalidExpression);
+        }
+        operation.script_request_headers.push(canonical_name);
+    }
+    operation.script_request_headers.sort_unstable();
+    if operation.script_request_headers.len() > MAX_STATIC_COMPONENTS {
+        return Err(SourcePlanArtifactError::InvalidLimits);
+    }
     if (operation.request_codec == Some(RequestCodecDocument::DciExactV1))
         != operation.dci.is_some()
     {
@@ -1158,6 +1414,7 @@ fn validate_http_operation(
     }
     validate_request_shape(
         operation,
+        *plan_kind,
         inputs,
         parameters,
         *bounds,
@@ -1214,6 +1471,38 @@ fn validate_http_operation(
         return Err(SourcePlanArtifactError::InvalidAcquisition);
     }
     validate_projection(operation, *acquisition_class, evidence)?;
+    let script_body = matches!(
+        operation.response.schema,
+        ResponseSchemaDocument::ScriptBody
+    ) || operation.response.normalization
+        == ResponseNormalizationDocument::ScriptBody
+        || operation.response.cardinality == CardinalityMechanismDocument::ScriptManaged;
+    if script_body
+        && (*plan_kind != SourcePlanKind::SandboxedRhai
+            || !matches!(
+                operation.response.schema,
+                ResponseSchemaDocument::ScriptBody
+            )
+            || operation.response.normalization != ResponseNormalizationDocument::ScriptBody
+            || operation.response.cardinality != CardinalityMechanismDocument::ScriptManaged
+            || !matches!(
+                operation.request_codec,
+                None | Some(RequestCodecDocument::None)
+            )
+            || operation.dci.is_some()
+            || operation.fhir.is_some()
+            || operation.response.max_records != 1
+            || operation.response.records_field.is_some()
+            || !operation.acquisition_fields.is_empty()
+            || !operation.control_fields.is_empty()
+            || !operation.response.output_mapping.is_empty()
+            || !operation.response.prior_outputs.is_empty()
+            || !operation.response.accepted_statuses.is_empty()
+            || !operation.response.status_outcomes.no_match.is_empty()
+            || !operation.response.status_outcomes.ambiguous.is_empty())
+    {
+        return Err(SourcePlanArtifactError::InvalidAcquisition);
+    }
     let operation_cardinality = match operation.response.max_records {
         1 => SourceCardinality::Singleton,
         2 => SourceCardinality::AmbiguityProbe,
@@ -1223,7 +1512,9 @@ fn validate_http_operation(
     if operation.response.max_bytes == 0 || operation.response.max_bytes > MAX_DATA_RESPONSE_BYTES {
         return Err(SourcePlanArtifactError::InvalidLimits);
     }
-    normalize_data_status_set(&mut operation.response.accepted_statuses)?;
+    if !script_body {
+        normalize_data_status_set(&mut operation.response.accepted_statuses)?;
+    }
     for statuses in [
         &mut operation.response.status_outcomes.no_match,
         &mut operation.response.status_outcomes.ambiguous,
@@ -1240,35 +1531,40 @@ fn validate_http_operation(
         .chain(&operation.response.status_outcomes.ambiguous)
         .copied()
         .collect::<BTreeSet<_>>();
-    if outcome_statuses.len()
-        != operation.response.status_outcomes.no_match.len()
-            + operation.response.status_outcomes.ambiguous.len()
-        || outcome_statuses.iter().any(|status| {
-            operation
+    if !script_body
+        && (outcome_statuses.len()
+            != operation.response.status_outcomes.no_match.len()
+                + operation.response.status_outcomes.ambiguous.len()
+            || outcome_statuses.iter().any(|status| {
+                operation
+                    .response
+                    .accepted_statuses
+                    .binary_search(status)
+                    .is_err()
+            })
+            || outcome_statuses
+                .iter()
+                .any(|status| (200..=299).contains(status))
+            || operation
                 .response
                 .accepted_statuses
-                .binary_search(status)
-                .is_err()
-        })
-        || outcome_statuses
-            .iter()
-            .any(|status| (200..=299).contains(status))
-        || operation
-            .response
-            .accepted_statuses
-            .iter()
-            .any(|status| !(200..=299).contains(status) && !outcome_statuses.contains(status))
-        || operation
-            .response
-            .accepted_statuses
-            .iter()
-            .all(|status| outcome_statuses.contains(status))
+                .iter()
+                .any(|status| !(200..=299).contains(status) && !outcome_statuses.contains(status))
+            || operation
+                .response
+                .accepted_statuses
+                .iter()
+                .all(|status| outcome_statuses.contains(status)))
     {
         return Err(SourcePlanArtifactError::InvalidAcquisition);
     }
     let mut schema_nodes = 0_usize;
-    let expanded_nodes =
-        validate_response_schema(&operation.response.schema, 1, &mut schema_nodes)?;
+    let expanded_nodes = validate_operation_response_schema(
+        &operation.response.schema,
+        1,
+        &mut schema_nodes,
+        *plan_kind == SourcePlanKind::BoundedHttp,
+    )?;
     if expanded_nodes > MAX_RESPONSE_SCHEMA_EXPANDED_NODES {
         return Err(SourcePlanArtifactError::InvalidLimits);
     }
@@ -1290,7 +1586,7 @@ fn validate_http_operation(
             OutputTypeDocument::String => {
                 prior_output
                     .max_bytes
-                    .is_some_and(|value| (1..=MAX_INPUT_BYTES).contains(&value))
+                    .is_some_and(|value| (1..=MAX_INPUT_BYTES).contains(&u32::from(value)))
                     && prior_output.minimum.is_none()
                     && prior_output.maximum.is_none()
             }
@@ -1308,7 +1604,6 @@ fn validate_http_operation(
                     && prior_output.minimum.is_none()
                     && prior_output.maximum.is_none()
             }
-            OutputTypeDocument::Presence => false,
         };
         if !bounds_valid
             || !prior_output_matches_schema(prior_output, raw_schema)
@@ -1334,7 +1629,6 @@ fn validate_http_operation(
                 nullable,
                 max_bytes: 10,
             } if !*nullable || declared.nullable),
-            OutputTypeDocument::Presence => false,
             OutputTypeDocument::String => matches!(raw_schema, ResponseSchemaDocument::String {
                 nullable,
                 ..
@@ -1362,18 +1656,6 @@ fn validate_http_operation(
             return Err(SourcePlanArtifactError::InvalidAcquisition);
         }
     }
-    if !operation.response.presence_outputs.is_empty() {
-        normalize_stable_set(&mut operation.response.presence_outputs)?;
-    }
-    for field in &operation.response.presence_outputs {
-        AcquiredField::try_from(field.as_str())
-            .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
-        if output.get(field).is_none_or(|declared| {
-            declared.output_type != OutputTypeDocument::Presence || declared.nullable
-        }) {
-            return Err(SourcePlanArtifactError::InvalidAcquisition);
-        }
-    }
     Ok(())
 }
 
@@ -1391,6 +1673,15 @@ pub(in crate::source_plan) fn validate_response_schema(
     depth: usize,
     nodes: &mut usize,
 ) -> Result<usize, SourcePlanArtifactError> {
+    validate_operation_response_schema(schema, depth, nodes, false)
+}
+
+fn validate_operation_response_schema(
+    schema: &ResponseSchemaDocument,
+    depth: usize,
+    nodes: &mut usize,
+    allow_ignored_unknown_fields: bool,
+) -> Result<usize, SourcePlanArtifactError> {
     *nodes = nodes
         .checked_add(1)
         .ok_or(SourcePlanArtifactError::InvalidLimits)?;
@@ -1398,18 +1689,27 @@ pub(in crate::source_plan) fn validate_response_schema(
         return Err(SourcePlanArtifactError::InvalidLimits);
     }
     match schema {
+        ResponseSchemaDocument::ScriptBody => Ok(1),
         ResponseSchemaDocument::Object {
             reject_unknown_fields,
             fields,
             ..
         } => {
-            if !reject_unknown_fields || fields.is_empty() || fields.len() > MAX_STATIC_COMPONENTS {
+            if (!reject_unknown_fields && !allow_ignored_unknown_fields)
+                || fields.is_empty()
+                || fields.len() > MAX_STATIC_COMPONENTS
+            {
                 return Err(SourcePlanArtifactError::InvalidAcquisition);
             }
             let mut expanded = 1_usize;
             for (name, field) in fields {
                 validate_response_field_name(name)?;
-                let child = validate_response_schema(&field.schema, depth + 1, nodes)?;
+                let child = validate_operation_response_schema(
+                    &field.schema,
+                    depth + 1,
+                    nodes,
+                    allow_ignored_unknown_fields,
+                )?;
                 expanded = expanded
                     .checked_add(child)
                     .ok_or(SourcePlanArtifactError::InvalidLimits)?;
@@ -1422,7 +1722,12 @@ pub(in crate::source_plan) fn validate_response_schema(
             if !(1..=MAX_RESPONSE_ARRAY_ITEMS).contains(max_items) {
                 return Err(SourcePlanArtifactError::InvalidLimits);
             }
-            let child = validate_response_schema(items, depth + 1, nodes)?;
+            let child = validate_operation_response_schema(
+                items,
+                depth + 1,
+                nodes,
+                allow_ignored_unknown_fields,
+            )?;
             usize::from(*max_items)
                 .checked_mul(child)
                 .and_then(|expanded| expanded.checked_add(1))
@@ -1465,6 +1770,11 @@ pub(in super::super) fn response_record_schema<'a>(
     records_field: Option<&str>,
 ) -> Result<&'a ResponseSchemaDocument, SourcePlanArtifactError> {
     match (normalization, schema) {
+        (ResponseNormalizationDocument::ScriptBody, ResponseSchemaDocument::ScriptBody)
+            if max_records == 1 && records_field.is_none() =>
+        {
+            Ok(schema)
+        }
         (
             ResponseNormalizationDocument::Object,
             ResponseSchemaDocument::Object {
@@ -1592,9 +1902,9 @@ pub(super) fn resolve_response_pointer<'a>(
         | ResponseSchemaDocument::Boolean { .. }
         | ResponseSchemaDocument::Integer { .. }
         | ResponseSchemaDocument::Number { .. } => Ok(current),
-        ResponseSchemaDocument::Object { .. } | ResponseSchemaDocument::Array { .. } => {
-            Err(SourcePlanArtifactError::InvalidAcquisition)
-        }
+        ResponseSchemaDocument::ScriptBody
+        | ResponseSchemaDocument::Object { .. }
+        | ResponseSchemaDocument::Array { .. } => Err(SourcePlanArtifactError::InvalidAcquisition),
     }
 }
 
@@ -1646,7 +1956,6 @@ pub(super) fn prior_output_matches_schema(
                 && output.minimum.is_none()
                 && output.maximum.is_none()
         }
-        (OutputTypeDocument::Presence, _) => false,
         _ => false,
     }
 }
@@ -1753,6 +2062,15 @@ pub(super) fn validate_cardinality_mechanism(
     evidence: &EvidenceManifestDocument,
 ) -> Result<(), SourcePlanArtifactError> {
     match (&operation.response.cardinality, cardinality) {
+        (CardinalityMechanismDocument::ScriptManaged, SourceCardinality::Singleton)
+            if matches!(
+                operation.response.schema,
+                ResponseSchemaDocument::ScriptBody
+            ) && operation.response.normalization
+                == ResponseNormalizationDocument::ScriptBody =>
+        {
+            Ok(())
+        }
         (CardinalityMechanismDocument::DciProbeTwo, SourceCardinality::AmbiguityProbe)
             if operation.request_codec == Some(RequestCodecDocument::DciExactV1) =>
         {
@@ -1867,8 +2185,112 @@ pub(super) fn resolve_body_pointer<'a>(
 }
 
 #[cfg(test)]
-mod fhir_tests {
+mod tests {
     use super::*;
+
+    fn string_input(role: InputRoleDocument, max_length: u32) -> InputDocument {
+        InputDocument {
+            role,
+            schema_type: InputSchemaTypeDocument::Scalar(InputScalarTypeDocument::String),
+            format: None,
+            max_length: Some(max_length),
+            min_length: None,
+            max_bytes: max_length.checked_mul(4),
+            pattern: None,
+            canonicalization: CanonicalizationDocument::Identity,
+            minimum: None,
+            maximum: None,
+            allowed_values: Vec::new(),
+            constant: None,
+        }
+    }
+
+    #[test]
+    fn typed_inputs_require_selectors_and_bound_their_canonical_aggregate() {
+        let mut inputs = BTreeMap::from([(
+            "subject_id".to_owned(),
+            string_input(InputRoleDocument::Selector, 64),
+        )]);
+        inputs.insert(
+            "include_history".to_owned(),
+            InputDocument {
+                role: InputRoleDocument::Parameter,
+                schema_type: InputSchemaTypeDocument::Nullable(vec![
+                    InputTypeMemberDocument::Boolean,
+                    InputTypeMemberDocument::Null,
+                ]),
+                format: None,
+                max_length: None,
+                min_length: None,
+                max_bytes: None,
+                pattern: None,
+                canonicalization: CanonicalizationDocument::Identity,
+                minimum: None,
+                maximum: None,
+                allowed_values: Vec::new(),
+                constant: None,
+            },
+        );
+        assert_eq!(validate_inputs(&inputs), Ok(()));
+
+        inputs.get_mut("subject_id").expect("selector").schema_type =
+            InputSchemaTypeDocument::Nullable(vec![
+                InputTypeMemberDocument::String,
+                InputTypeMemberDocument::Null,
+            ]);
+        assert_eq!(
+            validate_inputs(&inputs),
+            Err(SourcePlanArtifactError::InvalidAcquisition)
+        );
+
+        let oversized = BTreeMap::from([
+            (
+                "first".to_owned(),
+                string_input(InputRoleDocument::Selector, 513),
+            ),
+            (
+                "second".to_owned(),
+                string_input(InputRoleDocument::Selector, 512),
+            ),
+        ]);
+        assert_eq!(
+            validate_inputs(&oversized),
+            Err(SourcePlanArtifactError::InvalidLimits)
+        );
+    }
+
+    #[test]
+    fn typed_integer_parameters_require_json_safe_closed_bounds() {
+        let mut inputs = BTreeMap::from([
+            (
+                "subject_id".to_owned(),
+                string_input(InputRoleDocument::Selector, 64),
+            ),
+            (
+                "year".to_owned(),
+                InputDocument {
+                    role: InputRoleDocument::Parameter,
+                    schema_type: InputSchemaTypeDocument::Scalar(InputScalarTypeDocument::Integer),
+                    format: None,
+                    max_length: None,
+                    min_length: None,
+                    max_bytes: None,
+                    pattern: None,
+                    canonicalization: CanonicalizationDocument::Identity,
+                    minimum: Some(1900),
+                    maximum: Some(2100),
+                    allowed_values: Vec::new(),
+                    constant: None,
+                },
+            ),
+        ]);
+        assert_eq!(validate_inputs(&inputs), Ok(()));
+        inputs.get_mut("year").expect("year").maximum = Some(9_007_199_254_740_992);
+        assert_eq!(
+            validate_inputs(&inputs),
+            Err(SourcePlanArtifactError::InvalidLimits)
+        );
+    }
 
     #[test]
     fn fhir_count_is_one_canonical_compiler_owned_literal() {

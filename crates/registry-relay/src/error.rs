@@ -178,6 +178,8 @@ pub enum ConsultationError {
     InvalidRequest,
     #[error("consultation batch child conflicts with durable state")]
     Conflict,
+    #[error("consultation contract does not match the active profile")]
+    ContractMismatch,
     #[error("invalid consultation credentials")]
     InvalidCredentials,
     #[error("consultation denied")]
@@ -803,6 +805,7 @@ impl ConsultationError {
         match self {
             Self::InvalidRequest => "consultation.invalid_request",
             Self::Conflict => "consultation.batch_child_conflict",
+            Self::ContractMismatch => "consultation.contract_mismatch",
             Self::InvalidCredentials => "auth.invalid_credentials",
             Self::Denied => "consultation.denied",
             Self::ProfileNotFound => "consultation.profile_not_found",
@@ -814,7 +817,7 @@ impl ConsultationError {
     fn http_status(&self) -> StatusCode {
         match self {
             Self::InvalidRequest => StatusCode::BAD_REQUEST,
-            Self::Conflict => StatusCode::CONFLICT,
+            Self::Conflict | Self::ContractMismatch => StatusCode::CONFLICT,
             Self::InvalidCredentials => StatusCode::UNAUTHORIZED,
             Self::Denied => StatusCode::FORBIDDEN,
             Self::ProfileNotFound => StatusCode::NOT_FOUND,
@@ -827,6 +830,7 @@ impl ConsultationError {
         match self {
             Self::InvalidRequest => "Invalid consultation request",
             Self::Conflict => "Consultation batch child conflict",
+            Self::ContractMismatch => "Consultation contract mismatch",
             Self::InvalidCredentials => "Invalid credentials",
             Self::Denied => "Consultation denied",
             Self::ProfileNotFound => "Consultation profile not found",
@@ -839,6 +843,7 @@ impl ConsultationError {
         match self {
             Self::InvalidRequest => "the consultation request is invalid",
             Self::Conflict => "the batch child identity conflicts with a prior request",
+            Self::ContractMismatch => "the requested contract is not active for this profile",
             Self::InvalidCredentials => "service authentication failed",
             Self::Denied => "the consultation is not permitted",
             Self::ProfileNotFound => "the requested consultation profile is not available",

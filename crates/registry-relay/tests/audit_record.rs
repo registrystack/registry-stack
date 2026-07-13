@@ -396,7 +396,7 @@ async fn middleware_emits_one_record_per_request_with_response_status() {
 
 #[tokio::test]
 async fn consultation_http_audit_never_retains_untrusted_target_or_purpose() {
-    const PROFILE_ROUTE: &str = "/v1/consultations/{profile_id}/versions/{profile_version}";
+    const PROFILE_ROUTE: &str = "/v1/consultations/{profile_id}";
     const UNMATCHED_ROUTE: &str = "/v1/consultations/{unmatched}";
     let (sink, pipeline) = in_memory_pipeline();
     let app = Router::new()
@@ -411,7 +411,7 @@ async fn consultation_http_audit_never_retains_untrusted_target_or_purpose() {
 
     let matched = Request::builder()
         .method(Method::GET)
-        .uri("/v1/consultations/citizen-path-marker/versions/1?subject=citizen-query-marker")
+        .uri("/v1/consultations/citizen-path-marker?subject=citizen-query-marker")
         .header("data-purpose", "citizen-purpose-marker")
         .header("authorization", "Bearer credential-secret-marker")
         .header("cookie", "session=credential-cookie-marker")

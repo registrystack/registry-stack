@@ -19,7 +19,7 @@ use zeroize::Zeroizing;
 
 const MAX_PROTOCOL_VERSION_BYTES: usize = 16;
 const MAX_PROTOCOL_IDENTIFIER_BYTES: usize = 160;
-const MAX_SELECTOR_BYTES: usize = 256;
+const MAX_SELECTOR_BYTES: usize = 4_096;
 const MAX_SIGNATURE_BYTES: usize = 16 * 1024;
 const MAX_DCI_RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_DCI_RECORD_DEPTH: u8 = 64;
@@ -389,7 +389,7 @@ impl DciExactSearchRequest {
         })
     }
 
-    /// Validate a stable one-to-four-component exact-AND predicate.
+    /// Validate a stable one-to-eight-component exact-AND predicate.
     pub(crate) fn try_new_exact_and(
         input: DciExactAndSearchRequestInput<'_>,
     ) -> Result<Self, DciCodecError> {
@@ -412,7 +412,15 @@ impl DciExactSearchRequest {
             .record_type
             .map(validated_protocol_identifier)
             .transpose()?;
-        if !(1..=4).contains(&input.components.len()) {
+        if !(1..=8).contains(&input.components.len())
+            || input
+                .components
+                .iter()
+                .try_fold(0_usize, |total, component| {
+                    total.checked_add(component.value.len())
+                })
+                .is_none_or(|total| total > MAX_SELECTOR_BYTES)
+        {
             return Err(DciCodecError::InvalidSelector);
         }
         let mut fields = std::collections::BTreeSet::new();

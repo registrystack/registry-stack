@@ -65,9 +65,10 @@ pub use types::{
     AcquiredField, AcquisitionClass, AssertionContractHash, AssertionContractId,
     AssertionContractIdentity, ConsultationOutcome, ConsultationValidationError,
     DeclaredOperationFootprint, IntegrationPackHash, IntegrationPackId, IntegrationPackIdentity,
-    OperationBounds, OperationId, ParsedPurpose, ParsedSingleStringInput, PolicyHash, PolicyId,
-    PolicyIdentity, PreAuthorizationConsultationCore, ProfileContractHash, ProfileId,
-    ProfileIdentity, ProfileVersion, SelectorProvenance, SnapshotGenerationId,
+    OperationBounds, OperationId, ParsedConsultationInputs, ParsedConsultationScalar,
+    ParsedPurpose, PolicyHash, PolicyId, PolicyIdentity, PreAuthorizationConsultationCore,
+    ProfileContractHash, ProfileId, ProfileIdentity, ProfileVersion, SelectorProvenance,
+    SnapshotGenerationId,
 };
 pub use workload::{
     AuthenticatedConsultationWorkload, ClientClaimSelector, ConfiguredAudience,

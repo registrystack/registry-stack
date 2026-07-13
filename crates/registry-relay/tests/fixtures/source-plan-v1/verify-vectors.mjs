@@ -511,7 +511,10 @@ for (const runtimeCase of runtimeVector.cases) {
   } else if (commitments.consent !== null) {
     fail(`${context} unexpectedly includes consent`);
   }
-  if (commitments.subject.value.canonical_subject !== "SYNTHETIC-SUBJECT-0001") {
+  if (
+    commitments.subject.value.canonical_selector?.components?.subject_id?.value !==
+    "SYNTHETIC-SUBJECT-0001"
+  ) {
     fail(`${context} subject is not the reviewed synthetic value`);
   }
 
@@ -570,7 +573,6 @@ for (const runtimeCase of runtimeVector.cases) {
       "acquisition",
       "destinations",
       "credential",
-      "authorized_operation_union",
       "dispatch",
       "bounds",
       "request_digest",
@@ -600,15 +602,11 @@ for (const runtimeCase of runtimeVector.cases) {
   }
 
   if (expectedCase.planKind === "sandboxed_rhai") {
-    const dataUnion = seed.value.authorized_operation_union
-      .filter(({ kind }) => kind === "data")
-      .map(({ operation_id }) => operation_id);
     const dataPermits = seed.value.dispatch.permit_bindings.filter(({ kind }) => kind === "data");
     if (
-      canonicalize(dataPermits.map(({ ordinal }) => ordinal)) !== canonicalize([0, 1]) ||
-      dataPermits.some(({ allowed_operation_ids }) => canonicalize(allowed_operation_ids) !== canonicalize(dataUnion))
+      canonicalize(dataPermits.map(({ ordinal }) => ordinal)) !== canonicalize([0, 1])
     ) {
-      fail(`${context} Rhai permits do not bind every call slot to the reviewed callable union`);
+      fail(`${context} Rhai permits do not preserve the reviewed durable call ordinals`);
     }
   }
 }

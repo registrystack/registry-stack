@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! OpenCRVS DCI v1.9.0-rc.1 signed response decoding.
+//! Product-neutral signed DCI response verification and decoding.
 //!
-//! This is deliberately a product-and-release-specific boundary, not a generic
-//! JWS or DCI extension framework. The pinned OpenCRVS adapter signs an exact
-//! DCI response sibling with a compact RS256 JWS and publishes the fresh key in
-//! a same-origin JWKS response. Keeping those rules closed here prevents Relay
-//! integration packs from weakening key selection, envelope correlation, or
-//! record minimization through configuration.
+//! The caller supplies the reviewed DCI protocol identities, selector binding,
+//! locale, pagination, and byte bounds. This boundary owns the closed compact
+//! RS256 JWS, fresh same-origin JWKS key selection, signed-sibling equality,
+//! envelope correlation, and record-minimization rules. Integrations cannot
+//! weaken those rules through product metadata or source-version labels.
 
 use std::fmt;
 use std::marker::PhantomData;
@@ -26,14 +25,8 @@ use super::json::{ClosedJsonDecoder, ClosedJsonOutcome};
 use super::sensitive_json::SensitiveJsonValue;
 use super::{BoundedDestinationBody, DataDestination, DataDestinationBody};
 
-const OPENCRVS_DCI_VERSION: &str = "1.0.0";
-const OPENCRVS_REGISTRY_TYPE: &str = "ns:org:RegistryType:Civil";
-const OPENCRVS_RECORD_TYPE: &str = "spdci-extensions-dci:Person";
-const OPENCRVS_LOCALE: &str = "eng";
-const OPENCRVS_PAGE_NUMBER: u64 = 1;
-const OPENCRVS_PAGE_SIZE: u64 = 2;
-const MAX_OPENCRVS_JWKS_BYTES: usize = 64 * 1_024;
-const MAX_OPENCRVS_SIGNED_RESPONSE_BYTES: usize = 256 * 1_024;
+const MAX_SIGNED_DCI_JWKS_BYTES: usize = 64 * 1_024;
+const MAX_SIGNED_DCI_RESPONSE_BYTES: usize = 256 * 1_024;
 const MAX_JWS_HEADER_BYTES: usize = 512;
 const MAX_JWS_KID_BYTES: usize = 512;
 const MAX_RSA_SIGNATURE_BYTES: usize = 1_024;
@@ -41,56 +34,70 @@ const MIN_RSA_MODULUS_BITS: usize = 2_048;
 const MAX_RSA_MODULUS_BITS: usize = 8_192;
 const MAX_EXPECTED_IDENTIFIER_BYTES: usize = 160;
 const MAX_EXPECTED_SELECTOR_BYTES: usize = 256;
+const MAX_SIGNED_DCI_EXACT_COMPONENTS: usize = 8;
 
-/// Invalid request-bound values supplied while compiling an OpenCRVS decoder.
+/// Invalid request-bound values supplied while compiling a signed DCI decoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum OpenCrvsDciV190Rc1ExpectationError {
-    #[error("OpenCRVS DCI response expectation is invalid")]
+pub enum SignedDciExpectationError {
+    #[error("signed DCI response expectation is invalid")]
     InvalidExpectation,
 }
 
-/// Value-free OpenCRVS signed-response failures.
+/// Value-free signed DCI response failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum OpenCrvsDciV190Rc1DecodeError {
-    #[error("OpenCRVS JWKS response exceeds its reviewed byte bound")]
+pub enum SignedDciDecodeError {
+    #[error("signed DCI JWKS response exceeds its reviewed byte bound")]
     JwksTooLarge,
-    #[error("OpenCRVS signed response exceeds its reviewed byte bound")]
+    #[error("signed DCI response exceeds its reviewed byte bound")]
     ResponseTooLarge,
-    #[error("OpenCRVS JWKS violates the closed key-set contract")]
+    #[error("signed DCI JWKS violates the closed key-set contract")]
     InvalidJwks,
-    #[error("OpenCRVS response does not contain the required compact JWS")]
+    #[error("signed DCI response does not contain the required compact JWS")]
     InvalidSignedResponse,
-    #[error("OpenCRVS signing key does not satisfy the pinned trust contract")]
+    #[error("signed DCI key does not satisfy the pinned trust contract")]
     SigningKeyRejected,
-    #[error("OpenCRVS response signature verification failed")]
+    #[error("signed DCI response signature verification failed")]
     SignatureVerificationFailed,
-    #[error("OpenCRVS signed payload does not equal its response sibling")]
+    #[error("signed DCI payload does not equal its response sibling")]
     SignedPayloadMismatch,
-    #[error("OpenCRVS response violates the closed DCI envelope")]
+    #[error("signed DCI response violates the closed envelope")]
     EnvelopeContractViolation,
-    #[error("OpenCRVS response correlation does not match its request")]
+    #[error("signed DCI response correlation does not match its request")]
     CorrelationViolation,
-    #[error("OpenCRVS response identity does not match its request")]
+    #[error("signed DCI response identity does not match its request")]
     IdentityViolation,
-    #[error("OpenCRVS record identifier does not match its request selector")]
+    #[error("signed DCI record does not match its request selector")]
     SelectorBindingViolation,
-    #[error("OpenCRVS returned a non-success DCI status")]
+    #[error("signed DCI source returned a non-success status")]
     SourceRejected,
-    #[error("OpenCRVS response pagination is inconsistent")]
+    #[error("signed DCI response pagination is inconsistent")]
     PaginationViolation,
-    #[error("OpenCRVS response exceeds the exact-search cardinality bound")]
+    #[error("signed DCI response exceeds the exact-search cardinality bound")]
     CardinalityViolation,
-    #[error("OpenCRVS record violates its closed acquisition schema")]
+    #[error("signed DCI record violates its closed acquisition schema")]
     RecordContractViolation,
 }
 
-/// Product-neutral name for the reviewed signed DCI response failure set.
-pub type SignedDciDecodeError = OpenCrvsDciV190Rc1DecodeError;
-/// Product-neutral name for the reviewed signed DCI expectation failure.
-pub type SignedDciExpectationError = OpenCrvsDciV190Rc1ExpectationError;
+/// Bound the next signed-DCI response body by the aggregate bytes remaining
+/// after the already-read verification response. Raw response bytes remain
+/// opaque to the caller.
+pub fn remaining_signed_dci_body_limit(
+    verification_body: &DataDestinationBody,
+    aggregate_limit: u64,
+    per_response_limit: u32,
+) -> Result<usize, SignedDciDecodeError> {
+    let verification_bytes = u64::try_from(verification_body.bytes.len())
+        .map_err(|_| SignedDciDecodeError::ResponseTooLarge)?;
+    let remaining = aggregate_limit
+        .checked_sub(verification_bytes)
+        .filter(|remaining| *remaining > 0)
+        .ok_or(SignedDciDecodeError::ResponseTooLarge)?;
+    usize::try_from(u64::from(per_response_limit).min(remaining))
+        .map_err(|_| SignedDciDecodeError::ResponseTooLarge)
+}
 
-/// Request-bound values for one pinned OpenCRVS exact DCI response.
-pub struct OpenCrvsDciV190Rc1Expectation {
+/// Request-bound values for one reviewed signed DCI response.
+pub struct SignedDciExpectation {
     message_id: Box<str>,
     sender_id: Box<str>,
     receiver_id: Option<Box<str>>,
@@ -124,38 +131,11 @@ pub struct SignedDciExactComponent<'a> {
     pub expected_value: &'a str,
 }
 
-/// Product-neutral signed DCI request/response expectation.
-pub type SignedDciExpectation = OpenCrvsDciV190Rc1Expectation;
-
-impl OpenCrvsDciV190Rc1Expectation {
-    /// Compile exact request correlation, identities, and response byte bounds.
-    pub fn new(
-        message_id: &str,
-        sender_id: &str,
-        receiver_id: Option<&str>,
-        expected_uin: &str,
-        max_jwks_bytes: usize,
-        max_response_bytes: usize,
-    ) -> Result<Self, OpenCrvsDciV190Rc1ExpectationError> {
-        Self::new_generic(
-            message_id,
-            sender_id,
-            receiver_id,
-            expected_uin,
-            OPENCRVS_DCI_VERSION,
-            OPENCRVS_REGISTRY_TYPE,
-            OPENCRVS_RECORD_TYPE,
-            "UIN",
-            OPENCRVS_LOCALE,
-            OPENCRVS_PAGE_NUMBER,
-            OPENCRVS_PAGE_SIZE,
-            max_jwks_bytes,
-            max_response_bytes,
-        )
-    }
-
+impl SignedDciExpectation {
+    /// Compile an idtype-value selector plus exact request correlation,
+    /// protocol identities, pagination, and response byte bounds.
     #[allow(clippy::too_many_arguments)]
-    pub fn new_generic(
+    pub fn new_idtype_value(
         message_id: &str,
         sender_id: &str,
         receiver_id: Option<&str>,
@@ -169,7 +149,7 @@ impl OpenCrvsDciV190Rc1Expectation {
         page_size: u64,
         max_jwks_bytes: usize,
         max_response_bytes: usize,
-    ) -> Result<Self, OpenCrvsDciV190Rc1ExpectationError> {
+    ) -> Result<Self, SignedDciExpectationError> {
         if !valid_expected_identifier(message_id)
             || !valid_expected_identifier(sender_id)
             || receiver_id.is_some_and(|value| !valid_expected_identifier(value))
@@ -185,10 +165,10 @@ impl OpenCrvsDciV190Rc1Expectation {
             .any(|value| !valid_expected_identifier(value))
             || page_number == 0
             || !(1..=2).contains(&page_size)
-            || !(1..=MAX_OPENCRVS_JWKS_BYTES).contains(&max_jwks_bytes)
-            || !(1..=MAX_OPENCRVS_SIGNED_RESPONSE_BYTES).contains(&max_response_bytes)
+            || !(1..=MAX_SIGNED_DCI_JWKS_BYTES).contains(&max_jwks_bytes)
+            || !(1..=MAX_SIGNED_DCI_RESPONSE_BYTES).contains(&max_response_bytes)
         {
-            return Err(OpenCrvsDciV190Rc1ExpectationError::InvalidExpectation);
+            return Err(SignedDciExpectationError::InvalidExpectation);
         }
         Ok(Self {
             message_id: message_id.into(),
@@ -209,10 +189,10 @@ impl OpenCrvsDciV190Rc1Expectation {
         })
     }
 
-    /// Compile the same signed envelope with a one-to-four-component exact-AND
-    /// response binding instead of the legacy idtype-value selector.
+    /// Compile an exact-AND selector plus exact request correlation, protocol
+    /// identities, pagination, and response byte bounds.
     #[allow(clippy::too_many_arguments)]
-    pub fn new_generic_exact_and(
+    pub fn new_exact_and(
         message_id: &str,
         sender_id: &str,
         receiver_id: Option<&str>,
@@ -225,20 +205,20 @@ impl OpenCrvsDciV190Rc1Expectation {
         page_size: u64,
         max_jwks_bytes: usize,
         max_response_bytes: usize,
-    ) -> Result<Self, OpenCrvsDciV190Rc1ExpectationError> {
+    ) -> Result<Self, SignedDciExpectationError> {
         if !valid_expected_identifier(message_id)
             || !valid_expected_identifier(sender_id)
             || receiver_id.is_some_and(|value| !valid_expected_identifier(value))
             || [protocol_version, registry_type, record_type, locale]
                 .iter()
                 .any(|value| !valid_expected_identifier(value))
-            || !(1..=4).contains(&components.len())
+            || !(1..=MAX_SIGNED_DCI_EXACT_COMPONENTS).contains(&components.len())
             || page_number == 0
             || !(1..=2).contains(&page_size)
-            || !(1..=MAX_OPENCRVS_JWKS_BYTES).contains(&max_jwks_bytes)
-            || !(1..=MAX_OPENCRVS_SIGNED_RESPONSE_BYTES).contains(&max_response_bytes)
+            || !(1..=MAX_SIGNED_DCI_JWKS_BYTES).contains(&max_jwks_bytes)
+            || !(1..=MAX_SIGNED_DCI_RESPONSE_BYTES).contains(&max_response_bytes)
         {
-            return Err(OpenCrvsDciV190Rc1ExpectationError::InvalidExpectation);
+            return Err(SignedDciExpectationError::InvalidExpectation);
         }
         let mut pointers = std::collections::BTreeSet::new();
         let components = components
@@ -248,7 +228,7 @@ impl OpenCrvsDciV190Rc1Expectation {
                 if !pointers.insert(response_pointer.clone())
                     || !valid_expected_selector(component.expected_value)
                 {
-                    return Err(OpenCrvsDciV190Rc1ExpectationError::InvalidExpectation);
+                    return Err(SignedDciExpectationError::InvalidExpectation);
                 }
                 Ok(SignedDciExpectedComponent {
                     response_pointer,
@@ -273,10 +253,10 @@ impl OpenCrvsDciV190Rc1Expectation {
     }
 }
 
-impl fmt::Debug for OpenCrvsDciV190Rc1Expectation {
+impl fmt::Debug for SignedDciExpectation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("OpenCrvsDciV190Rc1Expectation")
+            .debug_struct("SignedDciExpectation")
             .field("message_id", &"[REDACTED]")
             .field("sender_id", &"[REDACTED]")
             .field(
@@ -290,20 +270,17 @@ impl fmt::Debug for OpenCrvsDciV190Rc1Expectation {
     }
 }
 
-/// Closed decoder for the pinned OpenCRVS DCI response contract.
-pub struct OpenCrvsDciV190Rc1Decoder<'decoder> {
-    expected: OpenCrvsDciV190Rc1Expectation,
+/// Closed verifier and decoder for one reviewed signed DCI response contract.
+pub struct SignedDciDecoder<'decoder> {
+    expected: SignedDciExpectation,
     record_decoder: &'decoder ClosedJsonDecoder,
 }
 
-/// Product-neutral signed DCI and JWKS verifier.
-pub type SignedDciDecoder<'decoder> = OpenCrvsDciV190Rc1Decoder<'decoder>;
-
-impl<'decoder> OpenCrvsDciV190Rc1Decoder<'decoder> {
+impl<'decoder> SignedDciDecoder<'decoder> {
     /// Bind a request expectation to the complete logical-record schema.
     #[must_use]
     pub const fn new(
-        expected: OpenCrvsDciV190Rc1Expectation,
+        expected: SignedDciExpectation,
         record_decoder: &'decoder ClosedJsonDecoder,
     ) -> Self {
         Self {
@@ -318,54 +295,13 @@ impl<'decoder> OpenCrvsDciV190Rc1Decoder<'decoder> {
         &self,
         jwks_body: DataDestinationBody,
         response_body: DataDestinationBody,
-    ) -> Result<ClosedJsonOutcome, OpenCrvsDciV190Rc1DecodeError> {
-        let BoundedDestinationBody {
-            bytes: jwks_bytes,
-            slot: _,
-        } = jwks_body;
-        if jwks_bytes.len() > self.expected.max_jwks_bytes {
-            return Err(OpenCrvsDciV190Rc1DecodeError::JwksTooLarge);
-        }
-        let jwks = parse_json_strict(jwks_bytes.as_slice())
-            .map_err(|_| OpenCrvsDciV190Rc1DecodeError::InvalidJwks)?;
-        drop(jwks_bytes);
-        let jwks = SensitiveJsonValue::new(jwks);
-
-        let BoundedDestinationBody {
-            bytes: response_bytes,
-            slot: _,
-        } = response_body;
-        if response_bytes.len() > self.expected.max_response_bytes {
-            return Err(OpenCrvsDciV190Rc1DecodeError::ResponseTooLarge);
-        }
-        let response = parse_json_strict(response_bytes.as_slice())
-            .map_err(|_| OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?;
-        drop(response_bytes);
-        let mut unsigned_sibling = SensitiveJsonValue::new(response);
-        let compact = take_compact_signature(unsigned_sibling.value_mut())?;
-        let jws = parse_compact_jws(compact.as_bytes(), self.expected.max_response_bytes)?;
-        let public_key = select_signing_key(jwks.value(), jws.kid.as_str())?;
-        verify(
-            jws.signing_input.as_slice(),
-            jws.signature.as_slice(),
-            &public_key,
-        )
-        .map_err(|_| OpenCrvsDciV190Rc1DecodeError::SignatureVerificationFailed)?;
-
-        let payload = parse_json_strict(jws.payload.as_slice())
-            .map_err(|_| OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?;
-        let mut payload = SensitiveJsonValue::new(payload);
-        if payload.value() != unsigned_sibling.value() {
-            return Err(OpenCrvsDciV190Rc1DecodeError::SignedPayloadMismatch);
-        }
-
-        let envelope = validate_envelope(payload.value(), &self.expected)?;
+    ) -> Result<ClosedJsonOutcome, SignedDciDecodeError> {
+        let (mut payload, envelope, _) = self.verify_payload(jwks_body, response_body)?;
         let records = SensitiveJsonValue::new(Value::Array(take_records(payload.value_mut())?));
         let records = records
             .value()
             .as_array()
-            .ok_or(OpenCrvsDciV190Rc1DecodeError::RecordContractViolation)?;
-        validate_record_selector(records, &self.expected.selector)?;
+            .ok_or(SignedDciDecodeError::RecordContractViolation)?;
         let mut bytes = Zeroizing::new(Vec::new());
         bytes.push(b'[');
         for (index, record) in records.iter().enumerate() {
@@ -374,7 +310,7 @@ impl<'decoder> OpenCrvsDciV190Rc1Decoder<'decoder> {
             }
             bytes.extend_from_slice(b"{\"record\":");
             serde_json::to_writer(&mut *bytes, record)
-                .map_err(|_| OpenCrvsDciV190Rc1DecodeError::RecordContractViolation)?;
+                .map_err(|_| SignedDciDecodeError::RecordContractViolation)?;
             bytes.push(b'}');
         }
         bytes.push(b']');
@@ -385,12 +321,118 @@ impl<'decoder> OpenCrvsDciV190Rc1Decoder<'decoder> {
         let decoded = self
             .record_decoder
             .decode(body)
-            .map_err(|_| OpenCrvsDciV190Rc1DecodeError::RecordContractViolation)?;
+            .map_err(|_| SignedDciDecodeError::RecordContractViolation)?;
 
         if envelope.pagination_total_count > 1 {
             return Ok(ClosedJsonOutcome::Ambiguous);
         }
         Ok(decoded)
+    }
+
+    /// Verify and release the complete signed DCI payload for a reviewed
+    /// script protocol helper. This performs the same JWS, JWKS, correlation,
+    /// identity, selector, and cardinality checks as `decode`, but deliberately
+    /// leaves country record traversal and projection to the reviewed adapter.
+    pub fn decode_verified_payload(
+        &self,
+        jwks_body: DataDestinationBody,
+        response_body: DataDestinationBody,
+    ) -> Result<Value, SignedDciDecodeError> {
+        let (payload, envelope, _) = self.verify_payload(jwks_body, response_body)?;
+        let records = records(payload.value())?;
+        if envelope.pagination_total_count != records.len() as u64 {
+            return Err(SignedDciDecodeError::PaginationViolation);
+        }
+        Ok(payload.into_value())
+    }
+
+    /// Verify and release the payload together with the exact aggregate bytes
+    /// consumed from the JWKS and signed-response exchanges.
+    pub fn decode_verified_payload_with_encoded_bytes(
+        &self,
+        jwks_body: DataDestinationBody,
+        response_body: DataDestinationBody,
+    ) -> Result<(Value, usize), SignedDciDecodeError> {
+        let (payload, envelope, encoded_bytes) = self.verify_payload(jwks_body, response_body)?;
+        let records = records(payload.value())?;
+        if envelope.pagination_total_count != records.len() as u64 {
+            return Err(SignedDciDecodeError::PaginationViolation);
+        }
+        Ok((payload.into_value(), encoded_bytes))
+    }
+
+    #[doc(hidden)]
+    pub fn decode_verified_payload_offline_fixture(
+        &self,
+        jwks_bytes: &[u8],
+        response_bytes: &[u8],
+    ) -> Result<Value, SignedDciDecodeError> {
+        self.decode_verified_payload(
+            BoundedDestinationBody {
+                bytes: Zeroizing::new(jwks_bytes.to_vec()),
+                slot: PhantomData,
+            },
+            BoundedDestinationBody {
+                bytes: Zeroizing::new(response_bytes.to_vec()),
+                slot: PhantomData,
+            },
+        )
+    }
+
+    fn verify_payload(
+        &self,
+        jwks_body: DataDestinationBody,
+        response_body: DataDestinationBody,
+    ) -> Result<(SensitiveJsonValue, ValidatedEnvelope, usize), SignedDciDecodeError> {
+        let BoundedDestinationBody {
+            bytes: jwks_bytes,
+            slot: _,
+        } = jwks_body;
+        if jwks_bytes.len() > self.expected.max_jwks_bytes {
+            return Err(SignedDciDecodeError::JwksTooLarge);
+        }
+        let jwks_encoded_bytes = jwks_bytes.len();
+        let jwks = parse_json_strict(jwks_bytes.as_slice())
+            .map_err(|_| SignedDciDecodeError::InvalidJwks)?;
+        drop(jwks_bytes);
+        let jwks = SensitiveJsonValue::new(jwks);
+
+        let BoundedDestinationBody {
+            bytes: response_bytes,
+            slot: _,
+        } = response_body;
+        if response_bytes.len() > self.expected.max_response_bytes {
+            return Err(SignedDciDecodeError::ResponseTooLarge);
+        }
+        let response_encoded_bytes = response_bytes.len();
+        let response = parse_json_strict(response_bytes.as_slice())
+            .map_err(|_| SignedDciDecodeError::InvalidSignedResponse)?;
+        drop(response_bytes);
+        let mut unsigned_sibling = SensitiveJsonValue::new(response);
+        let compact = take_compact_signature(unsigned_sibling.value_mut())?;
+        let jws = parse_compact_jws(compact.as_bytes(), self.expected.max_response_bytes)?;
+        let public_key = select_signing_key(jwks.value(), jws.kid.as_str())?;
+        verify(
+            jws.signing_input.as_slice(),
+            jws.signature.as_slice(),
+            &public_key,
+        )
+        .map_err(|_| SignedDciDecodeError::SignatureVerificationFailed)?;
+
+        let payload = parse_json_strict(jws.payload.as_slice())
+            .map_err(|_| SignedDciDecodeError::InvalidSignedResponse)?;
+        let payload = SensitiveJsonValue::new(payload);
+        if payload.value() != unsigned_sibling.value() {
+            return Err(SignedDciDecodeError::SignedPayloadMismatch);
+        }
+
+        let envelope = validate_envelope(payload.value(), &self.expected)?;
+        let records = records(payload.value())?;
+        validate_record_selector(records, &self.expected.selector)?;
+        let encoded_bytes = jwks_encoded_bytes
+            .checked_add(response_encoded_bytes)
+            .ok_or(SignedDciDecodeError::ResponseTooLarge)?;
+        Ok((payload, envelope, encoded_bytes))
     }
 
     /// Verify caller-owned offline fixture bytes with the exact production
@@ -400,7 +442,7 @@ impl<'decoder> OpenCrvsDciV190Rc1Decoder<'decoder> {
         &self,
         jwks_bytes: &[u8],
         response_bytes: &[u8],
-    ) -> Result<ClosedJsonOutcome, OpenCrvsDciV190Rc1DecodeError> {
+    ) -> Result<ClosedJsonOutcome, SignedDciDecodeError> {
         self.decode(
             BoundedDestinationBody {
                 bytes: Zeroizing::new(jwks_bytes.to_vec()),
@@ -414,10 +456,10 @@ impl<'decoder> OpenCrvsDciV190Rc1Decoder<'decoder> {
     }
 }
 
-impl fmt::Debug for OpenCrvsDciV190Rc1Decoder<'_> {
+impl fmt::Debug for SignedDciDecoder<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("OpenCrvsDciV190Rc1Decoder")
+            .debug_struct("SignedDciDecoder")
             .field("expected", &self.expected)
             .field("record_decoder", &self.record_decoder)
             .finish()
@@ -431,23 +473,21 @@ struct ParsedCompactJws {
     signature: Zeroizing<Vec<u8>>,
 }
 
-fn take_compact_signature(
-    response: &mut Value,
-) -> Result<Zeroizing<String>, OpenCrvsDciV190Rc1DecodeError> {
+fn take_compact_signature(response: &mut Value) -> Result<Zeroizing<String>, SignedDciDecodeError> {
     let object = response
         .as_object_mut()
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?;
+        .ok_or(SignedDciDecodeError::InvalidSignedResponse)?;
     if !object_has_exact_keys(object, &["header", "message", "signature"], &[]) {
-        return Err(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse);
+        return Err(SignedDciDecodeError::InvalidSignedResponse);
     }
     let Value::String(signature) = object
         .remove("signature")
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?
+        .ok_or(SignedDciDecodeError::InvalidSignedResponse)?
     else {
-        return Err(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse);
+        return Err(SignedDciDecodeError::InvalidSignedResponse);
     };
     if signature.is_empty() || !signature.is_ascii() {
-        return Err(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse);
+        return Err(SignedDciDecodeError::InvalidSignedResponse);
     }
     Ok(Zeroizing::new(signature))
 }
@@ -455,59 +495,59 @@ fn take_compact_signature(
 fn parse_compact_jws(
     compact: &[u8],
     max_payload_bytes: usize,
-) -> Result<ParsedCompactJws, OpenCrvsDciV190Rc1DecodeError> {
+) -> Result<ParsedCompactJws, SignedDciDecodeError> {
     let mut segments = compact.split(|byte| *byte == b'.');
     let protected = segments
         .next()
         .filter(|value| !value.is_empty())
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?;
+        .ok_or(SignedDciDecodeError::InvalidSignedResponse)?;
     let payload_segment = segments
         .next()
         .filter(|value| !value.is_empty())
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?;
+        .ok_or(SignedDciDecodeError::InvalidSignedResponse)?;
     let signature_segment = segments
         .next()
         .filter(|value| !value.is_empty())
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?;
+        .ok_or(SignedDciDecodeError::InvalidSignedResponse)?;
     if segments.next().is_some() {
-        return Err(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse);
+        return Err(SignedDciDecodeError::InvalidSignedResponse);
     }
 
     let protected_bytes = decode_base64url(protected, MAX_JWS_HEADER_BYTES)
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?;
+        .ok_or(SignedDciDecodeError::InvalidSignedResponse)?;
     let protected_value = parse_json_strict(protected_bytes.as_slice())
-        .map_err(|_| OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?;
+        .map_err(|_| SignedDciDecodeError::InvalidSignedResponse)?;
     let protected_value = SensitiveJsonValue::new(protected_value);
     let protected_object = protected_value
         .value()
         .as_object()
         .filter(|object| object_has_exact_keys(object, &["alg", "kid"], &[]))
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?;
+        .ok_or(SignedDciDecodeError::InvalidSignedResponse)?;
     if required_string(protected_object, "alg")
-        .map_err(|_| OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?
+        .map_err(|_| SignedDciDecodeError::InvalidSignedResponse)?
         != "RS256"
     {
-        return Err(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse);
+        return Err(SignedDciDecodeError::InvalidSignedResponse);
     }
     let kid = required_string(protected_object, "kid")
-        .map_err(|_| OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?;
+        .map_err(|_| SignedDciDecodeError::InvalidSignedResponse)?;
     if !valid_jwk_kid(kid) {
-        return Err(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse);
+        return Err(SignedDciDecodeError::InvalidSignedResponse);
     }
     let kid = Zeroizing::new(kid.to_owned());
     let payload = decode_base64url(payload_segment, max_payload_bytes)
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?;
+        .ok_or(SignedDciDecodeError::InvalidSignedResponse)?;
     let signature = decode_base64url(signature_segment, MAX_RSA_SIGNATURE_BYTES)
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?;
+        .ok_or(SignedDciDecodeError::InvalidSignedResponse)?;
 
     let second_dot = protected
         .len()
         .checked_add(1)
         .and_then(|value| value.checked_add(payload_segment.len()))
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?;
+        .ok_or(SignedDciDecodeError::InvalidSignedResponse)?;
     let signing_input = compact
         .get(..second_dot)
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)?
+        .ok_or(SignedDciDecodeError::InvalidSignedResponse)?
         .to_vec();
     Ok(ParsedCompactJws {
         kid,
@@ -537,68 +577,42 @@ fn decode_base64url(encoded: &[u8], max_decoded_bytes: usize) -> Option<Zeroizin
     Some(decoded)
 }
 
-fn select_signing_key(
-    jwks: &Value,
-    expected_kid: &str,
-) -> Result<PublicJwk, OpenCrvsDciV190Rc1DecodeError> {
-    let object = jwks
-        .as_object()
-        .filter(|object| object_has_exact_keys(object, &["keys"], &[]))
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidJwks)?;
+fn select_signing_key(jwks: &Value, expected_kid: &str) -> Result<PublicJwk, SignedDciDecodeError> {
+    let object = jwks.as_object().ok_or(SignedDciDecodeError::InvalidJwks)?;
     let keys = object
         .get("keys")
         .and_then(Value::as_array)
-        .filter(|keys| keys.len() == 2)
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidJwks)?;
+        .filter(|keys| (1..=16).contains(&keys.len()))
+        .ok_or(SignedDciDecodeError::InvalidJwks)?;
 
     let mut selected = None;
-    let mut signing_key_count = 0_usize;
-    let mut encryption_key_count = 0_usize;
-    let mut signing_kid = None;
-    let mut encryption_kid = None;
     for value in keys {
-        let key = value
-            .as_object()
-            .filter(|key| object_has_exact_keys(key, &["kty", "kid", "use", "alg", "n", "e"], &[]))
-            .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidJwks)?;
-        let kty =
-            required_string(key, "kty").map_err(|_| OpenCrvsDciV190Rc1DecodeError::InvalidJwks)?;
-        let kid =
-            required_string(key, "kid").map_err(|_| OpenCrvsDciV190Rc1DecodeError::InvalidJwks)?;
-        let key_use =
-            required_string(key, "use").map_err(|_| OpenCrvsDciV190Rc1DecodeError::InvalidJwks)?;
-        let alg =
-            required_string(key, "alg").map_err(|_| OpenCrvsDciV190Rc1DecodeError::InvalidJwks)?;
-        let n =
-            required_string(key, "n").map_err(|_| OpenCrvsDciV190Rc1DecodeError::InvalidJwks)?;
-        let e =
-            required_string(key, "e").map_err(|_| OpenCrvsDciV190Rc1DecodeError::InvalidJwks)?;
-        if kty != "RSA" || !valid_jwk_kid(kid) {
-            return Err(OpenCrvsDciV190Rc1DecodeError::InvalidJwks);
+        let key = value.as_object().ok_or(SignedDciDecodeError::InvalidJwks)?;
+        let kid = required_string(key, "kid").map_err(|_| SignedDciDecodeError::InvalidJwks)?;
+        if !valid_jwk_kid(kid) {
+            return Err(SignedDciDecodeError::InvalidJwks);
+        }
+        if kid != expected_kid {
+            continue;
+        }
+        if selected.is_some() {
+            return Err(SignedDciDecodeError::SigningKeyRejected);
+        }
+        if !object_has_exact_keys(key, &["kty", "kid", "use", "alg", "n", "e"], &[]) {
+            return Err(SignedDciDecodeError::InvalidJwks);
+        }
+        let kty = required_string(key, "kty").map_err(|_| SignedDciDecodeError::InvalidJwks)?;
+        let key_use = required_string(key, "use").map_err(|_| SignedDciDecodeError::InvalidJwks)?;
+        let alg = required_string(key, "alg").map_err(|_| SignedDciDecodeError::InvalidJwks)?;
+        let n = required_string(key, "n").map_err(|_| SignedDciDecodeError::InvalidJwks)?;
+        let e = required_string(key, "e").map_err(|_| SignedDciDecodeError::InvalidJwks)?;
+        if kty != "RSA" || key_use != "sig" || alg != "RS256" {
+            return Err(SignedDciDecodeError::SigningKeyRejected);
         }
         validate_rsa_public_members(n, e)?;
-
-        if key_use == "sig" && alg == "RS256" {
-            signing_key_count = signing_key_count
-                .checked_add(1)
-                .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidJwks)?;
-            if kid == expected_kid && selected.replace((kid, n, e)).is_some() {
-                return Err(OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected);
-            }
-            signing_kid = Some(kid);
-        } else if key_use == "enc" && alg == "RSA-OAEP-256" {
-            encryption_key_count = encryption_key_count
-                .checked_add(1)
-                .ok_or(OpenCrvsDciV190Rc1DecodeError::InvalidJwks)?;
-            encryption_kid = Some(kid);
-        } else {
-            return Err(OpenCrvsDciV190Rc1DecodeError::InvalidJwks);
-        }
+        selected = Some((kid, n, e));
     }
-    if signing_key_count != 1 || encryption_key_count != 1 || signing_kid == encryption_kid {
-        return Err(OpenCrvsDciV190Rc1DecodeError::InvalidJwks);
-    }
-    let (kid, n, e) = selected.ok_or(OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected)?;
+    let (kid, n, e) = selected.ok_or(SignedDciDecodeError::SigningKeyRejected)?;
     Ok(PublicJwk {
         kty: "RSA".to_owned(),
         kid: Some(kid.to_owned()),
@@ -611,38 +625,38 @@ fn select_signing_key(
     })
 }
 
-fn validate_rsa_public_members(n: &str, e: &str) -> Result<(), OpenCrvsDciV190Rc1DecodeError> {
+fn validate_rsa_public_members(n: &str, e: &str) -> Result<(), SignedDciDecodeError> {
     let modulus = decode_base64url(n.as_bytes(), MAX_RSA_MODULUS_BITS.div_ceil(8))
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected)?;
+        .ok_or(SignedDciDecodeError::SigningKeyRejected)?;
     let first = *modulus
         .first()
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected)?;
+        .ok_or(SignedDciDecodeError::SigningKeyRejected)?;
     if first == 0 {
-        return Err(OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected);
+        return Err(SignedDciDecodeError::SigningKeyRejected);
     }
     let modulus_bits = modulus
         .len()
         .checked_sub(1)
         .and_then(|bytes| bytes.checked_mul(8))
         .and_then(|bits| bits.checked_add((u8::BITS - first.leading_zeros()) as usize))
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected)?;
+        .ok_or(SignedDciDecodeError::SigningKeyRejected)?;
     if !(MIN_RSA_MODULUS_BITS..=MAX_RSA_MODULUS_BITS).contains(&modulus_bits) {
-        return Err(OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected);
+        return Err(SignedDciDecodeError::SigningKeyRejected);
     }
 
-    let exponent = decode_base64url(e.as_bytes(), 8)
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected)?;
+    let exponent =
+        decode_base64url(e.as_bytes(), 8).ok_or(SignedDciDecodeError::SigningKeyRejected)?;
     if exponent.first() == Some(&0) {
-        return Err(OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected);
+        return Err(SignedDciDecodeError::SigningKeyRejected);
     }
     let exponent = exponent
         .iter()
         .try_fold(0_u64, |value, byte| {
             value.checked_mul(256)?.checked_add(u64::from(*byte))
         })
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected)?;
+        .ok_or(SignedDciDecodeError::SigningKeyRejected)?;
     if exponent < 3 || exponent.is_multiple_of(2) {
-        return Err(OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected);
+        return Err(SignedDciDecodeError::SigningKeyRejected);
     }
     Ok(())
 }
@@ -653,13 +667,13 @@ struct ValidatedEnvelope {
 
 fn validate_envelope(
     response: &Value,
-    expected: &OpenCrvsDciV190Rc1Expectation,
-) -> Result<ValidatedEnvelope, OpenCrvsDciV190Rc1DecodeError> {
+    expected: &SignedDciExpectation,
+) -> Result<ValidatedEnvelope, SignedDciDecodeError> {
     let outer = exact_object(response, &["header", "message"], &[])?;
     let header = exact_object(
         outer
             .get("header")
-            .ok_or(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)?,
+            .ok_or(SignedDciDecodeError::EnvelopeContractViolation)?,
         &[
             "version",
             "message_id",
@@ -677,42 +691,42 @@ fn validate_envelope(
         || required_bool(header, "is_msg_encrypted")?
         || parse_rfc3339(required_string(header, "message_ts")?).is_err()
     {
-        return Err(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation);
+        return Err(SignedDciDecodeError::EnvelopeContractViolation);
     }
     if required_string(header, "status")? != "succ" {
-        return Err(OpenCrvsDciV190Rc1DecodeError::SourceRejected);
+        return Err(SignedDciDecodeError::SourceRejected);
     }
     if required_string(header, "message_id")? != expected.message_id.as_ref() {
-        return Err(OpenCrvsDciV190Rc1DecodeError::CorrelationViolation);
+        return Err(SignedDciDecodeError::CorrelationViolation);
     }
     if required_string(header, "sender_id")? != expected.sender_id.as_ref()
         || optional_string(header, "receiver_id")? != expected.receiver_id.as_deref()
     {
-        return Err(OpenCrvsDciV190Rc1DecodeError::IdentityViolation);
+        return Err(SignedDciDecodeError::IdentityViolation);
     }
 
     let message = exact_object(
         outer
             .get("message")
-            .ok_or(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)?,
+            .ok_or(SignedDciDecodeError::EnvelopeContractViolation)?,
         &["transaction_id", "correlation_id", "search_response"],
         &[],
     )?;
     if required_string(message, "transaction_id")? != expected.message_id.as_ref() {
-        return Err(OpenCrvsDciV190Rc1DecodeError::CorrelationViolation);
+        return Err(SignedDciDecodeError::CorrelationViolation);
     }
     if !is_canonical_uuid(required_string(message, "correlation_id")?) {
-        return Err(OpenCrvsDciV190Rc1DecodeError::CorrelationViolation);
+        return Err(SignedDciDecodeError::CorrelationViolation);
     }
     let responses = message
         .get("search_response")
         .and_then(Value::as_array)
         .filter(|responses| responses.len() == 1)
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::CardinalityViolation)?;
+        .ok_or(SignedDciDecodeError::CardinalityViolation)?;
     let response = exact_object(
         responses
             .first()
-            .ok_or(OpenCrvsDciV190Rc1DecodeError::CardinalityViolation)?,
+            .ok_or(SignedDciDecodeError::CardinalityViolation)?,
         &[
             "reference_id",
             "timestamp",
@@ -724,19 +738,19 @@ fn validate_envelope(
         &[],
     )?;
     if required_string(response, "reference_id")? != expected.message_id.as_ref() {
-        return Err(OpenCrvsDciV190Rc1DecodeError::CorrelationViolation);
+        return Err(SignedDciDecodeError::CorrelationViolation);
     }
     if parse_rfc3339(required_string(response, "timestamp")?).is_err() {
-        return Err(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation);
+        return Err(SignedDciDecodeError::EnvelopeContractViolation);
     }
     if required_string(response, "status")? != "succ" {
-        return Err(OpenCrvsDciV190Rc1DecodeError::SourceRejected);
+        return Err(SignedDciDecodeError::SourceRejected);
     }
 
     let data = exact_object(
         response
             .get("data")
-            .ok_or(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)?,
+            .ok_or(SignedDciDecodeError::EnvelopeContractViolation)?,
         &["version", "reg_type", "reg_record_type", "reg_records"],
         &[],
     )?;
@@ -745,48 +759,48 @@ fn validate_envelope(
         || required_string(data, "reg_record_type")? != expected.record_type.as_ref()
         || required_string(response, "locale")? != expected.locale.as_ref()
     {
-        return Err(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation);
+        return Err(SignedDciDecodeError::EnvelopeContractViolation);
     }
     let records = data
         .get("reg_records")
         .and_then(Value::as_array)
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)?;
+        .ok_or(SignedDciDecodeError::EnvelopeContractViolation)?;
     if records.len() > expected.page_size as usize
         || records.iter().any(|record| !record.is_object())
     {
-        return Err(OpenCrvsDciV190Rc1DecodeError::CardinalityViolation);
+        return Err(SignedDciDecodeError::CardinalityViolation);
     }
     if required_u64(header, "total_count")? != records.len() as u64 {
-        return Err(OpenCrvsDciV190Rc1DecodeError::CardinalityViolation);
+        return Err(SignedDciDecodeError::CardinalityViolation);
     }
 
     let pagination = exact_object(
         response
             .get("pagination")
-            .ok_or(OpenCrvsDciV190Rc1DecodeError::PaginationViolation)?,
+            .ok_or(SignedDciDecodeError::PaginationViolation)?,
         &["page_number", "page_size", "total_count"],
         &[],
     )
-    .map_err(|_| OpenCrvsDciV190Rc1DecodeError::PaginationViolation)?;
+    .map_err(|_| SignedDciDecodeError::PaginationViolation)?;
     let pagination_total_count = required_u64(pagination, "total_count")
-        .map_err(|_| OpenCrvsDciV190Rc1DecodeError::PaginationViolation)?;
+        .map_err(|_| SignedDciDecodeError::PaginationViolation)?;
     if required_u64(pagination, "page_number")
-        .map_err(|_| OpenCrvsDciV190Rc1DecodeError::PaginationViolation)?
+        .map_err(|_| SignedDciDecodeError::PaginationViolation)?
         != expected.page_number
         || required_u64(pagination, "page_size")
-            .map_err(|_| OpenCrvsDciV190Rc1DecodeError::PaginationViolation)?
+            .map_err(|_| SignedDciDecodeError::PaginationViolation)?
             != expected.page_size
         || pagination_total_count < records.len() as u64
         || (pagination_total_count == 0) != records.is_empty()
     {
-        return Err(OpenCrvsDciV190Rc1DecodeError::PaginationViolation);
+        return Err(SignedDciDecodeError::PaginationViolation);
     }
     Ok(ValidatedEnvelope {
         pagination_total_count,
     })
 }
 
-fn take_records(response: &mut Value) -> Result<Vec<Value>, OpenCrvsDciV190Rc1DecodeError> {
+fn take_records(response: &mut Value) -> Result<Vec<Value>, SignedDciDecodeError> {
     response
         .get_mut("message")
         .and_then(Value::as_object_mut)
@@ -799,13 +813,29 @@ fn take_records(response: &mut Value) -> Result<Vec<Value>, OpenCrvsDciV190Rc1De
         .and_then(|data| data.get_mut("reg_records"))
         .and_then(Value::as_array_mut)
         .map(std::mem::take)
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)
+        .ok_or(SignedDciDecodeError::EnvelopeContractViolation)
+}
+
+fn records(response: &Value) -> Result<&[Value], SignedDciDecodeError> {
+    response
+        .get("message")
+        .and_then(Value::as_object)
+        .and_then(|message| message.get("search_response"))
+        .and_then(Value::as_array)
+        .and_then(|responses| responses.first())
+        .and_then(Value::as_object)
+        .and_then(|response| response.get("data"))
+        .and_then(Value::as_object)
+        .and_then(|data| data.get("reg_records"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .ok_or(SignedDciDecodeError::EnvelopeContractViolation)
 }
 
 fn validate_record_selector(
     records: &[Value],
     expected: &SignedDciSelectorExpectation,
-) -> Result<(), OpenCrvsDciV190Rc1DecodeError> {
+) -> Result<(), SignedDciDecodeError> {
     for record in records {
         match expected {
             SignedDciSelectorExpectation::IdtypeValue {
@@ -818,7 +848,7 @@ fn validate_record_selector(
                     .and_then(Value::as_array)
                     .and_then(|identifiers| identifiers.first())
                     .and_then(Value::as_object)
-                    .ok_or(OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation)?;
+                    .ok_or(SignedDciDecodeError::SelectorBindingViolation)?;
                 if first_identifier
                     .get("identifier_type")
                     .and_then(Value::as_str)
@@ -828,7 +858,7 @@ fn validate_record_selector(
                         .and_then(Value::as_str)
                         != Some(value.as_str())
                 {
-                    return Err(OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation);
+                    return Err(SignedDciDecodeError::SelectorBindingViolation);
                 }
             }
             SignedDciSelectorExpectation::ExactAnd(components) => {
@@ -836,7 +866,7 @@ fn validate_record_selector(
                     if resolve_pointer(record, &component.response_pointer).and_then(Value::as_str)
                         != Some(component.value.as_str())
                     {
-                        return Err(OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation);
+                        return Err(SignedDciDecodeError::SelectorBindingViolation);
                     }
                 }
             }
@@ -845,9 +875,9 @@ fn validate_record_selector(
     Ok(())
 }
 
-fn decode_pointer(pointer: &str) -> Result<Box<[Box<str>]>, OpenCrvsDciV190Rc1ExpectationError> {
+fn decode_pointer(pointer: &str) -> Result<Box<[Box<str>]>, SignedDciExpectationError> {
     if !pointer.starts_with('/') || pointer.len() > 512 {
-        return Err(OpenCrvsDciV190Rc1ExpectationError::InvalidExpectation);
+        return Err(SignedDciExpectationError::InvalidExpectation);
     }
     pointer[1..]
         .split('/')
@@ -859,17 +889,17 @@ fn decode_pointer(pointer: &str) -> Result<Box<[Box<str>]>, OpenCrvsDciV190Rc1Ex
                     decoded.push(match chars.next() {
                         Some('0') => '~',
                         Some('1') => '/',
-                        _ => return Err(OpenCrvsDciV190Rc1ExpectationError::InvalidExpectation),
+                        _ => return Err(SignedDciExpectationError::InvalidExpectation),
                     });
                 } else if character.is_control() {
-                    return Err(OpenCrvsDciV190Rc1ExpectationError::InvalidExpectation);
+                    return Err(SignedDciExpectationError::InvalidExpectation);
                 } else {
                     decoded.push(character);
                 }
             }
             (!decoded.is_empty())
                 .then(|| decoded.into_boxed_str())
-                .ok_or(OpenCrvsDciV190Rc1ExpectationError::InvalidExpectation)
+                .ok_or(SignedDciExpectationError::InvalidExpectation)
         })
         .collect()
 }
@@ -895,11 +925,11 @@ fn exact_object<'a>(
     value: &'a Value,
     required: &[&str],
     optional: &[&str],
-) -> Result<&'a Map<String, Value>, OpenCrvsDciV190Rc1DecodeError> {
+) -> Result<&'a Map<String, Value>, SignedDciDecodeError> {
     value
         .as_object()
         .filter(|object| object_has_exact_keys(object, required, optional))
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)
+        .ok_or(SignedDciDecodeError::EnvelopeContractViolation)
 }
 
 fn object_has_exact_keys(
@@ -916,42 +946,36 @@ fn object_has_exact_keys(
 fn required_string<'a>(
     object: &'a Map<String, Value>,
     field: &str,
-) -> Result<&'a str, OpenCrvsDciV190Rc1DecodeError> {
+) -> Result<&'a str, SignedDciDecodeError> {
     object
         .get(field)
         .and_then(Value::as_str)
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)
+        .ok_or(SignedDciDecodeError::EnvelopeContractViolation)
 }
 
 fn optional_string<'a>(
     object: &'a Map<String, Value>,
     field: &str,
-) -> Result<Option<&'a str>, OpenCrvsDciV190Rc1DecodeError> {
+) -> Result<Option<&'a str>, SignedDciDecodeError> {
     match object.get(field) {
         Some(Value::String(value)) => Ok(Some(value)),
-        Some(_) => Err(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation),
+        Some(_) => Err(SignedDciDecodeError::EnvelopeContractViolation),
         None => Ok(None),
     }
 }
 
-fn required_u64(
-    object: &Map<String, Value>,
-    field: &str,
-) -> Result<u64, OpenCrvsDciV190Rc1DecodeError> {
+fn required_u64(object: &Map<String, Value>, field: &str) -> Result<u64, SignedDciDecodeError> {
     object
         .get(field)
         .and_then(Value::as_u64)
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)
+        .ok_or(SignedDciDecodeError::EnvelopeContractViolation)
 }
 
-fn required_bool(
-    object: &Map<String, Value>,
-    field: &str,
-) -> Result<bool, OpenCrvsDciV190Rc1DecodeError> {
+fn required_bool(object: &Map<String, Value>, field: &str) -> Result<bool, SignedDciDecodeError> {
     object
         .get(field)
         .and_then(Value::as_bool)
-        .ok_or(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)
+        .ok_or(SignedDciDecodeError::EnvelopeContractViolation)
 }
 
 fn parse_rfc3339(value: &str) -> Result<OffsetDateTime, time::error::Parse> {

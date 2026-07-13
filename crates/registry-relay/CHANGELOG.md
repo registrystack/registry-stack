@@ -27,15 +27,18 @@
   SnapshotExact, and SandboxedRhai paths while accepting only bounded source
   observations. Match results release only validated outputs; no-match and
   ambiguity release no output map.
-- BREAKING: Relay now exposes a restart-only, OIDC-protected
-  `/v1/consultations/{profile_id}/versions/{profile_version}` API for the exact
-  configured authorized OIDC workload. The first concrete journey executes one
-  hash-pinned, Basic-authenticated, minimized DHIS2 GET behind PostgreSQL quota,
-  audit, dispatch-fence, and publication guarantees. Requests use one to four
-  required exact selector components with 64-character ASCII names and a
+- BREAKING: Relay now exposes restart-only, OIDC-protected
+  `/v1/consultations/{profile_id}` and
+  `/v1/consultations/{profile_id}/execute` APIs for the exact configured
+  authorized OIDC workload. Every request binds the active generated
+  `contract_hash` before source access. Generic HTTP, script, signed-DCI,
+  FHIR, and snapshot journeys execute behind PostgreSQL quota, audit,
+  dispatch-fence, and publication guarantees without selecting behavior from
+  a source product or version. Requests use one to eight required exact
+  selector components, up to sixteen typed inputs in total, and a
   contract-enforced `Data-Purpose`; this remains one subject, not a subject
   batch. Public results use the closed `match`, `no_match`, or `ambiguous`
-  envelope and a seven-code failure taxonomy, including
+  envelope and the stable failure taxonomy, including
   `409 consultation.batch_child_conflict` for conflicting durable batch-child
   replay. The child identity stays private to Notary and Relay and is omitted
   from the public OpenAPI contract. Configuration and artifacts are

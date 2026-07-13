@@ -1,0 +1,436 @@
+{
+  "schema_version": 1,
+  "abi_version": "xw.v1",
+  "functions": [
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.text",
+      "name": "trim",
+      "signature": "xw.text.trim(value: string) -> string",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.text.trim(\"  Ada  \")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.text",
+      "name": "lower_ascii",
+      "signature": "xw.text.lower_ascii(value: string) -> string",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.text.lower_ascii(\"ABC-123\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.text",
+      "name": "upper_ascii",
+      "signature": "xw.text.upper_ascii(value: string) -> string",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.text.upper_ascii(\"abc-123\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.text",
+      "name": "title_simple",
+      "signature": "xw.text.title_simple(value: string) -> string",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.text.title_simple(\"ada lovelace\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.text",
+      "name": "normalize_space",
+      "signature": "xw.text.normalize_space(value: string) -> string",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.text.normalize_space(\"  Ada   Lovelace  \")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.text",
+      "name": "remove_accents",
+      "signature": "xw.text.remove_accents(value: string) -> string",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.text.remove_accents(\"Crème Brûlée\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.text",
+      "name": "slug",
+      "signature": "xw.text.slug(value: string) -> string",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.text.slug(\"Hello, WORLD!\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.date",
+      "name": "parse_date",
+      "signature": "xw.date.parse_date(value: string) -> string",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "Invalid, unsupported, or out-of-range dates reject the evaluation with a value-free contract violation.",
+      "example": "xw.date.parse_date(\"2024-02-29\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.date",
+      "name": "parse_date",
+      "signature": "xw.date.parse_date(value: string, pattern: string) -> string",
+      "accepted_types": [
+        "string",
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "Invalid, unsupported, or out-of-range dates reject the evaluation with a value-free contract violation.",
+      "example": "xw.date.parse_date(\"29/02/2024\", \"%d/%m/%Y\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.date",
+      "name": "format_date_or_datetime",
+      "signature": "xw.date.format_date_or_datetime(value: string, pattern: string) -> string",
+      "accepted_types": [
+        "string",
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "Invalid, unsupported, or out-of-range dates reject the evaluation with a value-free contract violation.",
+      "example": "xw.date.format_date_or_datetime(\"2024-02-29\", \"%d/%m/%Y\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.date",
+      "name": "age_on",
+      "signature": "xw.date.age_on(birth_date: string, reference_date: string) -> int",
+      "accepted_types": [
+        "string",
+        "string"
+      ],
+      "return_type": "int",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "Invalid, unsupported, or out-of-range dates reject the evaluation with a value-free contract violation.",
+      "example": "xw.date.age_on(\"2000-05-27\", \"2026-05-26\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.date",
+      "name": "years_between",
+      "signature": "xw.date.years_between(start: string, end: string) -> int",
+      "accepted_types": [
+        "string",
+        "string"
+      ],
+      "return_type": "int",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "Invalid, unsupported, or out-of-range dates reject the evaluation with a value-free contract violation.",
+      "example": "xw.date.years_between(\"2020-01-01\", \"2024-01-01\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.date",
+      "name": "days_between",
+      "signature": "xw.date.days_between(start: string, end: string) -> int",
+      "accepted_types": [
+        "string",
+        "string"
+      ],
+      "return_type": "int",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "Invalid, unsupported, or out-of-range dates reject the evaluation with a value-free contract violation.",
+      "example": "xw.date.days_between(\"2024-01-01\", \"2024-01-03\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.date",
+      "name": "add_days",
+      "signature": "xw.date.add_days(value: string, days: int) -> string",
+      "accepted_types": [
+        "string",
+        "int"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "Invalid, unsupported, or out-of-range dates reject the evaluation with a value-free contract violation.",
+      "example": "xw.date.add_days(\"2024-01-01\", 2)"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.date",
+      "name": "add_months",
+      "signature": "xw.date.add_months(value: string, months: int) -> string",
+      "accepted_types": [
+        "string",
+        "int"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "Invalid, unsupported, or out-of-range dates reject the evaluation with a value-free contract violation.",
+      "example": "xw.date.add_months(\"2024-01-31\", 1)"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.date",
+      "name": "start_of_month",
+      "signature": "xw.date.start_of_month(value: string) -> string",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "Invalid, unsupported, or out-of-range dates reject the evaluation with a value-free contract violation.",
+      "example": "xw.date.start_of_month(\"2024-02-15\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.date",
+      "name": "end_of_month",
+      "signature": "xw.date.end_of_month(value: string) -> string",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "Invalid, unsupported, or out-of-range dates reject the evaluation with a value-free contract violation.",
+      "example": "xw.date.end_of_month(\"2024-02-15\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.date",
+      "name": "min_date",
+      "signature": "xw.date.min_date(left: string, right: string) -> string",
+      "accepted_types": [
+        "string",
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "Invalid, unsupported, or out-of-range dates reject the evaluation with a value-free contract violation.",
+      "example": "xw.date.min_date(\"2024-01-01\", \"2024-02-01\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.date",
+      "name": "max_date",
+      "signature": "xw.date.max_date(left: string, right: string) -> string",
+      "accepted_types": [
+        "string",
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "Invalid, unsupported, or out-of-range dates reject the evaluation with a value-free contract violation.",
+      "example": "xw.date.max_date(\"2024-01-01\", \"2024-02-01\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.ids",
+      "name": "stable_hash_sha256",
+      "signature": "xw.ids.stable_hash_sha256(value: string) -> string",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.ids.stable_hash_sha256(\"subject-123\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.ids",
+      "name": "stable_hash_sha256",
+      "signature": "xw.ids.stable_hash_sha256(value: string, non_secret_salt: string) -> string",
+      "accepted_types": [
+        "string",
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.ids.stable_hash_sha256(\"subject-123\", \"project-v1\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.ids",
+      "name": "prefixed_slug",
+      "signature": "xw.ids.prefixed_slug(prefix: string, value: string) -> string",
+      "accepted_types": [
+        "string",
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.ids.prefixed_slug(\"person\", \"Ada Lovelace\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.ids",
+      "name": "clean_id",
+      "signature": "xw.ids.clean_id(value: string) -> string",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.ids.clean_id(\"a b_c-d!\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.json",
+      "name": "parse_json",
+      "signature": "xw.json.parse_json(value: string) -> any",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "any JSON value",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Uses the worker's string, array, map, expression-depth, node-count, and frame-oriented data limits.",
+      "failure_behavior": "Invalid JSON, unsupported values, non-interoperable numbers, or exceeded bounds reject the evaluation with a value-free contract violation or budget failure.",
+      "example": "xw.json.parse_json(\"{\\\"active\\\":true}\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.json",
+      "name": "stringify_json",
+      "signature": "xw.json.stringify_json(value: any) -> string",
+      "accepted_types": [
+        "any JSON value"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Uses the worker's string, array, map, expression-depth, node-count, and frame-oriented data limits.",
+      "failure_behavior": "Invalid JSON, unsupported values, non-interoperable numbers, or exceeded bounds reject the evaluation with a value-free contract violation or budget failure.",
+      "example": "xw.json.stringify_json(#{ active: true })"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.email",
+      "name": "normalize_email",
+      "signature": "xw.email.normalize_email(value: string) -> string",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.email.normalize_email(\" USER@Example.ORG \")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.email",
+      "name": "email_domain",
+      "signature": "xw.email.email_domain(value: string) -> string?",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "string or null",
+      "null_behavior": "Returns null when the requested value is absent; arguments do not accept null.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.email.email_domain(\"user@example.org\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.email",
+      "name": "is_valid_email",
+      "signature": "xw.email.is_valid_email(value: string) -> bool",
+      "accepted_types": [
+        "string"
+      ],
+      "return_type": "bool",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.email.is_valid_email(\"user@example.org\")"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.redaction",
+      "name": "mask",
+      "signature": "xw.redaction.mask(value: string, visible_last: int) -> string",
+      "accepted_types": [
+        "string",
+        "int"
+      ],
+      "return_type": "string",
+      "null_behavior": "Null is not accepted for any argument.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.redaction.mask(\"123456789\", 4)"
+    },
+    {
+      "abi_version": "xw.v1",
+      "namespace": "xw.redaction",
+      "name": "redact",
+      "signature": "xw.redaction.redact() -> string",
+      "accepted_types": [],
+      "return_type": "string",
+      "null_behavior": "No arguments or null behavior.",
+      "bounds": "Every input and returned string is bounded by worker.limits.max_string_bytes.",
+      "failure_behavior": "No helper-defined failure for values within worker bounds.",
+      "example": "xw.redaction.redact()"
+    }
+  ]
+}

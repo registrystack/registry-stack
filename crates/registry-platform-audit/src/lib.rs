@@ -32,6 +32,7 @@ const MIN_AUDIT_SECRET_BYTES: usize = 32;
 const KEYED_HASH_PREFIX: &str = "hmac-sha256:";
 const UNKEYED_HASH_PREFIX: &str = "sha256:";
 const CHAIN_HMAC_CONTEXT: &[u8] = b"registry-platform-audit-chain-v1";
+const RELAY_REQUEST_EFFECT_HMAC_CONTEXT: &[u8] = b"registry.relay.dispatch-request-effect.v1";
 const AUDIT_REFERENCE_HASH_CONTEXT: &str = "registry-platform:audit-reference:v1";
 
 /// Stable schema identifier for sink-built durable phase records.
@@ -980,6 +981,8 @@ pub enum AuditError {
     NonTailableSink,
     #[error("audit chain hash mismatch")]
     HashMismatch,
+    #[error("Relay request-effect commitments require a keyed audit chain hasher")]
+    UnkeyedRequestEffectCommitment,
     #[error("audit chain verification failed: {0}")]
     ChainVerification(#[source] ChainVerificationError),
     /// The single-writer advisory lock on the audit sink is already held by
@@ -1503,6 +1506,26 @@ impl AuditChainHasher {
         match self {
             Self::Keyed(secret) => hmac_sha256_bytes(secret.as_bytes(), CHAIN_HMAC_CONTEXT, bytes),
             Self::UnkeyedDevOnly => sha256_bytes(bytes),
+        }
+    }
+
+    /// Commit one already canonicalized Relay request effect under the active
+    /// deployment audit key without exposing that key to Relay execution code.
+    ///
+    /// The HMAC preimage is the fixed v1 domain, one NUL separator, then the
+    /// caller's canonical non-credential request bytes. Production refuses the
+    /// explicit unkeyed development hasher.
+    pub fn relay_request_effect_commitment(
+        &self,
+        canonical_request_effect: &[u8],
+    ) -> Result<[u8; 32], AuditError> {
+        match self {
+            Self::Keyed(secret) => Ok(hmac_sha256_bytes(
+                secret.as_bytes(),
+                RELAY_REQUEST_EFFECT_HMAC_CONTEXT,
+                canonical_request_effect,
+            )),
+            Self::UnkeyedDevOnly => Err(AuditError::UnkeyedRequestEffectCommitment),
         }
     }
 }
@@ -4024,6 +4047,30 @@ mod tests {
         assert!(matches!(
             AuditHashSecret::new(b"too-short".to_vec()),
             Err(AuditError::WeakSecret { .. })
+        ));
+    }
+
+    #[test]
+    fn relay_request_effect_commitments_are_keyed_and_domain_separated() {
+        let secret = AuditHashSecret::new(b"0123456789abcdef0123456789abcdef".to_vec())
+            .expect("strong test key");
+        let hasher = AuditChainHasher::keyed(secret.clone());
+        let canonical = br#"{"method":"GET","target":"/records/one"}"#;
+        let commitment = hasher
+            .relay_request_effect_commitment(canonical)
+            .expect("keyed request commitment");
+        assert_eq!(
+            commitment,
+            hmac_sha256_bytes(
+                secret.as_bytes(),
+                RELAY_REQUEST_EFFECT_HMAC_CONTEXT,
+                canonical
+            )
+        );
+        assert_ne!(commitment, hasher.hash_record(canonical));
+        assert!(matches!(
+            AuditChainHasher::unkeyed_dev_only().relay_request_effect_commitment(canonical),
+            Err(AuditError::UnkeyedRequestEffectCommitment)
         ));
     }
 

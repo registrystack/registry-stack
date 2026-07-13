@@ -17,6 +17,31 @@ const EXPECTED_UIN: &str = "1234567890";
 const SIGNING_KID: &str = "opencrvs-signing-key";
 const CORRELATION_ID: &str = "123e4567-e89b-42d3-a456-426614174000";
 
+fn opencrvs_expectation(
+    message_id: &str,
+    sender_id: &str,
+    receiver_id: Option<&str>,
+    expected_uin: &str,
+    max_jwks_bytes: usize,
+    max_response_bytes: usize,
+) -> Result<SignedDciExpectation, SignedDciExpectationError> {
+    SignedDciExpectation::new_idtype_value(
+        message_id,
+        sender_id,
+        receiver_id,
+        expected_uin,
+        "1.0.0",
+        "ns:org:RegistryType:Civil",
+        "spdci-extensions-dci:Person",
+        "UIN",
+        "eng",
+        1,
+        2,
+        max_jwks_bytes,
+        max_response_bytes,
+    )
+}
+
 // Test-only 2048-bit RSA private JWK copied from the platform crypto RS256
 // vectors. It was generated solely for deterministic offline tests.
 const RSA_JWK: &str = r#"{"kty":"RSA","kid":"registry-notary-rs256-test","alg":"RS256","n":"yIgEn3IXWI3CRyUY0gvZ-kJ55EC36MRFvj-ICsitN1-50phRS4CKMBRwbHwjgeTkbMDndOCmVfIbyKhJjOMIPxAzIHeMn9oWj5i-s8nlSgjHZpvCTnRbwZhbq6mEVoHJliX36IfV_iUopcwSL5lPd2wZmJ-msUmZFs6CTRExu0JGUJScOwFO5dqxBwiKyh7yGEPXI3u4tc3_47SZYxyde7fb-o3wl2RBJ28upa2jVRP9r-WjOGjE6tbZ35HnVUY4ECdYWzsiotg_XA9QVWa-pAKXV2Flr-gocCQ9E2qrSYjEbNXuFjPtMnuL6AHi0o5PiwT1dllcl925hpKd7Xt60w","e":"AQAB","d":"ATDtMhpe_z1-GTUV7NLO3V_Z0kb8W1YXkC7JbJTAdcE-FdKJrtu84Q87WpxG0tPcutFPLqW12QAQp2fbmxhZ6VrfVYneeOlEjO14ukqM_g35Z-eRDmYhwoFYrEWGqlH9XrZysHhKFZyKHW_G0lJV-Ks8Na_RFNNIXeVedVMQiytAFXibTHvdAdIrBGtt0M4tlQOCeRwnuoAQU-a5VB7rKGpxnJtUA7F_jjeX6jQPnUhkOXs20pPRey-i-jxwBbsF4XijHgTnGwAo5uOoY9b0kOmOb3Hs5TVqZCb3a4JoYAqZBbWrkKxccJTGMqLHCe0MBgQzKqP5KyrHRgQdzlmTnQ","p":"5xhkHe5lD7tUYJAFffHiRpy4unHfKDvTEASu8RBgWvHP2Hu5XLQU5n6DvI47LsW42swTcT6Ce1pWB2LK3SjKcw9FPEEGg8m5-tmfixaRq4DBaK0hj17763HmnYR0eQC0n_5y-My8WSC1y80T-AhKHJ_3xTtLXQd5Z9bf9MEiKS8","q":"3iRoiwbnn8oRJMjZUZhqKB-GVa7AJV0SUqXiUsBAJnqtbhuIESbkJKpt5eULeUQgdNkoG65KD-jXFUipWX1zlentc1FliCaB46jntqtxUsui8LNwKw_eb3nujQO7H1He4NJ5pfaLfRcmBOLwB-u2Z1cxrRDWhIgiHtGaAdQ7F50","dp":"j4h9vn1wNbozaRpq3tPap-L1dY_-e93UdPGDuuRiBHqGjr4h3itXg-X2aqmopp9V9kekl8SshHMSVdoNiBmqzJYieY8lvbsQkXaTem8VIQGCn0JRQtxK-eyvwQwgz3sZtPn0bQW0wmLnp2KD0Z1McsUEvnLalzhqNo2mYj2Guy8","dq":"0T6ySuLCIz2PUHrwWW-b7xdizirBS3CT5c3jldcJljVQT7sXPDDKDc-LnVVWrW-Csw4qPYi6sqm8j4vWGTmWOswSouE1Jj4_c1aSjPqI0FiIrvoW2jkkaRUNoz60cBgKPPOFKtNFKRs48LljJ9LcChOT81U8-7HPkgAVdUuYLfE","qi":"PnMeCE0dvWDLp2Dn1wsxtl-a0qjpkT9cp8EkvHYjCvVqqWqrVv84CoEo-1wA9j_VDvCG6T4n0UO9K0jfBf5yvPnahSQCLJk2nw-2uZ9YzBZKwkm21wU6hTknPst5Vk5ZbYJmzqXsCqEB5T2Bn5vqeXMe3SOB5hD2CbTFFfp3TC4"}"#;
@@ -31,6 +56,17 @@ fn body(raw: impl AsRef<[u8]>) -> DataDestinationBody {
 }
 
 #[test]
+fn verification_body_reduces_the_next_aggregate_stream_limit() {
+    let verification = body(b"1234");
+    assert_eq!(remaining_signed_dci_body_limit(&verification, 10, 8), Ok(6));
+    assert_eq!(remaining_signed_dci_body_limit(&verification, 10, 3), Ok(3));
+    assert_eq!(
+        remaining_signed_dci_body_limit(&verification, 4, 8),
+        Err(SignedDciDecodeError::ResponseTooLarge)
+    );
+}
+
+#[test]
 fn structured_exact_and_binds_every_signed_record_component() {
     let components = [
         SignedDciExactComponent {
@@ -42,7 +78,7 @@ fn structured_exact_and_binds_every_signed_record_component() {
             expected_value: "N'Dour",
         },
     ];
-    let expectation = SignedDciExpectation::new_generic_exact_and(
+    let expectation = SignedDciExpectation::new_exact_and(
         MESSAGE_ID,
         SENDER_ID,
         Some(RECEIVER_ID),
@@ -74,6 +110,43 @@ fn structured_exact_and_binds_every_signed_record_component() {
     let diagnostic = format!("{expectation:?}");
     assert!(!diagnostic.contains("2001-02-03"));
     assert!(!diagnostic.contains("N'Dour"));
+}
+
+#[test]
+fn signed_dci_exact_and_accepts_eight_components_and_rejects_nine() {
+    let pointers = (0..9)
+        .map(|index| format!("/person/key{index}"))
+        .collect::<Vec<_>>();
+    let values = (0..9)
+        .map(|index| format!("value-{index}"))
+        .collect::<Vec<_>>();
+    let components = pointers
+        .iter()
+        .zip(&values)
+        .map(|(pointer, value)| SignedDciExactComponent {
+            response_pointer: pointer,
+            expected_value: value,
+        })
+        .collect::<Vec<_>>();
+    let compile = |components: &[SignedDciExactComponent<'_>]| {
+        SignedDciExpectation::new_exact_and(
+            MESSAGE_ID,
+            SENDER_ID,
+            Some(RECEIVER_ID),
+            components,
+            "1.0.0",
+            "ns:org:RegistryType:Civil",
+            "spdci-extensions-dci:Person",
+            "eng",
+            1,
+            2,
+            1024,
+            4096,
+        )
+    };
+
+    assert!(compile(&components[..8]).is_ok());
+    assert!(compile(&components).is_err());
 }
 
 fn private_key() -> PrivateJwk {
@@ -168,8 +241,8 @@ fn decode_bodies_with_bounds(
     response: DataDestinationBody,
     max_jwks_bytes: usize,
     max_response_bytes: usize,
-) -> Result<ClosedJsonOutcome, OpenCrvsDciV190Rc1DecodeError> {
-    let expectation = OpenCrvsDciV190Rc1Expectation::new(
+) -> Result<ClosedJsonOutcome, SignedDciDecodeError> {
+    let expectation = opencrvs_expectation(
         MESSAGE_ID,
         SENDER_ID,
         Some(RECEIVER_ID),
@@ -179,13 +252,13 @@ fn decode_bodies_with_bounds(
     )
     .expect("response expectation");
     let record_decoder = record_schema();
-    OpenCrvsDciV190Rc1Decoder::new(expectation, &record_decoder).decode(jwks, response)
+    SignedDciDecoder::new(expectation, &record_decoder).decode(jwks, response)
 }
 
 fn decode_bodies(
     jwks: DataDestinationBody,
     response: DataDestinationBody,
-) -> Result<ClosedJsonOutcome, OpenCrvsDciV190Rc1DecodeError> {
+) -> Result<ClosedJsonOutcome, SignedDciDecodeError> {
     decode_bodies_with_bounds(jwks, response, 32 * 1_024, 128 * 1_024)
 }
 
@@ -266,7 +339,7 @@ fn signed_bytes(unsigned: &Value) -> Vec<u8> {
     serde_json::to_vec(&outer).expect("signed response serializes")
 }
 
-fn decode(unsigned: &Value) -> Result<ClosedJsonOutcome, OpenCrvsDciV190Rc1DecodeError> {
+fn decode(unsigned: &Value) -> Result<ClosedJsonOutcome, SignedDciDecodeError> {
     decode_bodies(jwks_body(), signed_body(unsigned))
 }
 
@@ -313,10 +386,7 @@ fn binds_every_returned_record_to_the_requested_uin() {
     wrong["message"]["search_response"][0]["data"]["reg_records"][0]["identifier"][0]
         ["identifier_value"] = json!("0987654321");
     let error = decode(&wrong).expect_err("wrong UIN is rejected");
-    assert_eq!(
-        error,
-        OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation
-    );
+    assert_eq!(error, SignedDciDecodeError::SelectorBindingViolation);
     let diagnostic = format!("{error:?} {error}");
     assert!(!diagnostic.contains("record-secret"));
     assert!(!diagnostic.contains(EXPECTED_UIN));
@@ -326,7 +396,7 @@ fn binds_every_returned_record_to_the_requested_uin() {
         ["identifier_type"] = json!("BRN");
     assert_eq!(
         decode(&wrong_type).err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::SelectorBindingViolation)
+        Some(SignedDciDecodeError::SelectorBindingViolation)
     );
 }
 
@@ -335,7 +405,7 @@ fn rejects_duplicate_json_jws_and_jwks_members() {
     let duplicate_outer = br#"{"header":{},"header":{},"message":{},"signature":"a.b.c"}"#;
     assert_eq!(
         decode_bodies(jwks_body(), body(duplicate_outer)).err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)
+        Some(SignedDciDecodeError::InvalidSignedResponse)
     );
 
     let unsigned = unsigned_response(vec![], 0);
@@ -347,7 +417,7 @@ fn rejects_duplicate_json_jws_and_jwks_members() {
     outer["signature"] = Value::String(duplicate_header);
     assert_eq!(
         decode_bodies(jwks_body(), body(serde_json::to_vec(&outer).unwrap())).err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)
+        Some(SignedDciDecodeError::InvalidSignedResponse)
     );
 
     let (n, e) = public_members();
@@ -356,12 +426,12 @@ fn rejects_duplicate_json_jws_and_jwks_members() {
     );
     assert_eq!(
         decode_bodies(body(duplicate_jwk), signed_body(&unsigned)).err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::InvalidJwks)
+        Some(SignedDciDecodeError::InvalidJwks)
     );
 }
 
 #[test]
-fn rejects_private_remote_embedded_unknown_weak_duplicate_and_wrong_keys() {
+fn rejects_unsafe_selected_keys_and_accepts_unrelated_rotation_keys() {
     let unsigned = unsigned_response(vec![], 0);
     for field in [
         ("d", json!("private-key-material")),
@@ -377,7 +447,7 @@ fn rejects_private_remote_embedded_unknown_weak_duplicate_and_wrong_keys() {
                 signed_body(&unsigned),
             )
             .err(),
-            Some(OpenCrvsDciV190Rc1DecodeError::InvalidJwks)
+            Some(SignedDciDecodeError::InvalidJwks)
         );
     }
 
@@ -389,7 +459,7 @@ fn rejects_private_remote_embedded_unknown_weak_duplicate_and_wrong_keys() {
             signed_body(&unsigned),
         )
         .err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected)
+        Some(SignedDciDecodeError::SigningKeyRejected)
     );
 
     let mut duplicate = jwks_value();
@@ -401,7 +471,7 @@ fn rejects_private_remote_embedded_unknown_weak_duplicate_and_wrong_keys() {
             signed_body(&unsigned),
         )
         .err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::InvalidJwks)
+        Some(SignedDciDecodeError::SigningKeyRejected)
     );
 
     let mut wrong = jwks_value();
@@ -412,22 +482,31 @@ fn rejects_private_remote_embedded_unknown_weak_duplicate_and_wrong_keys() {
             signed_body(&unsigned),
         )
         .err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::SigningKeyRejected)
+        Some(SignedDciDecodeError::SigningKeyRejected)
     );
 
-    for (key_use, alg) in [("sig", "RS512"), ("other", "RS256"), ("enc", "RSA1_5")] {
-        let mut wrong_shape = jwks_value();
-        wrong_shape["keys"][1]["use"] = json!(key_use);
-        wrong_shape["keys"][1]["alg"] = json!(alg);
-        assert_eq!(
-            decode_bodies(
-                body(serde_json::to_vec(&wrong_shape).unwrap()),
-                signed_body(&unsigned),
-            )
-            .err(),
-            Some(OpenCrvsDciV190Rc1DecodeError::InvalidJwks)
-        );
-    }
+    let mut signing_only = jwks_value();
+    signing_only["keys"].as_array_mut().unwrap().truncate(1);
+    assert!(decode_bodies(
+        body(serde_json::to_vec(&signing_only).unwrap()),
+        signed_body(&unsigned),
+    )
+    .is_ok());
+
+    let mut rotation = jwks_value();
+    rotation["keys"][1] = json!({
+        "kty": "EC",
+        "kid": "future-rotation-key",
+        "use": "sig",
+        "alg": "ES256",
+        "x": "ignored",
+        "y": "ignored"
+    });
+    assert!(decode_bodies(
+        body(serde_json::to_vec(&rotation).unwrap()),
+        signed_body(&unsigned),
+    )
+    .is_ok());
 }
 
 #[test]
@@ -441,7 +520,7 @@ fn rejects_header_extras_tampering_and_signed_sibling_mismatch() {
     outer["signature"] = Value::String(header_extra);
     assert_eq!(
         decode_bodies(jwks_body(), body(serde_json::to_vec(&outer).unwrap())).err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::InvalidSignedResponse)
+        Some(SignedDciDecodeError::InvalidSignedResponse)
     );
 
     let mut tampered = unsigned.clone();
@@ -455,7 +534,7 @@ fn rejects_header_extras_tampering_and_signed_sibling_mismatch() {
     tampered["signature"] = Value::String(String::from_utf8(compact).unwrap());
     assert_eq!(
         decode_bodies(jwks_body(), body(serde_json::to_vec(&tampered).unwrap())).err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::SignatureVerificationFailed)
+        Some(SignedDciDecodeError::SignatureVerificationFailed)
     );
 
     let mut sibling = unsigned.clone();
@@ -463,7 +542,7 @@ fn rejects_header_extras_tampering_and_signed_sibling_mismatch() {
     sibling["signature"] = Value::String(compact_jws(&unsigned));
     assert_eq!(
         decode_bodies(jwks_body(), body(serde_json::to_vec(&sibling).unwrap())).err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::SignedPayloadMismatch)
+        Some(SignedDciDecodeError::SignedPayloadMismatch)
     );
 }
 
@@ -473,67 +552,67 @@ fn rejects_correlation_identity_status_and_envelope_failures_after_verification(
         (
             "/header/message_id",
             json!("01JZ0000000000000000000001"),
-            OpenCrvsDciV190Rc1DecodeError::CorrelationViolation,
+            SignedDciDecodeError::CorrelationViolation,
         ),
         (
             "/message/transaction_id",
             json!("01JZ0000000000000000000001"),
-            OpenCrvsDciV190Rc1DecodeError::CorrelationViolation,
+            SignedDciDecodeError::CorrelationViolation,
         ),
         (
             "/message/correlation_id",
             json!("123E4567-E89B-42D3-A456-426614174000"),
-            OpenCrvsDciV190Rc1DecodeError::CorrelationViolation,
+            SignedDciDecodeError::CorrelationViolation,
         ),
         (
             "/message/search_response/0/reference_id",
             json!("01JZ0000000000000000000001"),
-            OpenCrvsDciV190Rc1DecodeError::CorrelationViolation,
+            SignedDciDecodeError::CorrelationViolation,
         ),
         (
             "/header/sender_id",
             json!("wrong-sender"),
-            OpenCrvsDciV190Rc1DecodeError::IdentityViolation,
+            SignedDciDecodeError::IdentityViolation,
         ),
         (
             "/header/receiver_id",
             json!("wrong-receiver"),
-            OpenCrvsDciV190Rc1DecodeError::IdentityViolation,
+            SignedDciDecodeError::IdentityViolation,
         ),
         (
             "/header/status",
             json!("fail"),
-            OpenCrvsDciV190Rc1DecodeError::SourceRejected,
+            SignedDciDecodeError::SourceRejected,
         ),
         (
             "/message/search_response/0/status",
             json!("fail"),
-            OpenCrvsDciV190Rc1DecodeError::SourceRejected,
+            SignedDciDecodeError::SourceRejected,
         ),
         (
             "/header/action",
             json!("search"),
-            OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation,
+            SignedDciDecodeError::EnvelopeContractViolation,
         ),
         (
             "/header/message_ts",
             json!("not-rfc3339"),
-            OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation,
+            SignedDciDecodeError::EnvelopeContractViolation,
         ),
         (
             "/header/is_msg_encrypted",
             json!(true),
-            OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation,
+            SignedDciDecodeError::EnvelopeContractViolation,
         ),
         (
             "/message/search_response/0/data/reg_type",
             json!("ns:org:RegistryType:Other"),
-            OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation,
+            SignedDciDecodeError::EnvelopeContractViolation,
         ),
         (
             "/message/search_response/0/locale",
             json!("fra"),
-            OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation,
+            SignedDciDecodeError::EnvelopeContractViolation,
         ),
     ];
     for (pointer, value, expected) in cases {
@@ -546,7 +625,7 @@ fn rejects_correlation_identity_status_and_envelope_failures_after_verification(
     unknown["header"]["unreviewed"] = json!("response-secret");
     assert_eq!(
         decode(&unknown).err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)
+        Some(SignedDciDecodeError::EnvelopeContractViolation)
     );
 
     let mut misplaced = unsigned_response(vec![], 0);
@@ -563,7 +642,7 @@ fn rejects_correlation_identity_status_and_envelope_failures_after_verification(
     data.insert("locale".to_owned(), locale);
     assert_eq!(
         decode(&misplaced).err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::EnvelopeContractViolation)
+        Some(SignedDciDecodeError::EnvelopeContractViolation)
     );
 }
 
@@ -584,7 +663,7 @@ fn rejects_pagination_and_cardinality_inconsistency() {
         *unsigned.pointer_mut(pointer).expect("fixture pointer") = value;
         assert_eq!(
             decode(&unsigned).err(),
-            Some(OpenCrvsDciV190Rc1DecodeError::PaginationViolation)
+            Some(SignedDciDecodeError::PaginationViolation)
         );
     }
 
@@ -598,14 +677,14 @@ fn rejects_pagination_and_cardinality_inconsistency() {
     );
     assert_eq!(
         decode(&three).err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::CardinalityViolation)
+        Some(SignedDciDecodeError::CardinalityViolation)
     );
 
     let mut wrong_header_count = unsigned_response(vec![json!({"secret": "record-secret"})], 1);
     wrong_header_count["header"]["total_count"] = json!(0);
     assert_eq!(
         decode(&wrong_header_count).err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::CardinalityViolation)
+        Some(SignedDciDecodeError::CardinalityViolation)
     );
 
     for count in [0, 2] {
@@ -618,7 +697,7 @@ fn rejects_pagination_and_cardinality_inconsistency() {
         };
         assert_eq!(
             decode(&unsigned).err(),
-            Some(OpenCrvsDciV190Rc1DecodeError::CardinalityViolation)
+            Some(SignedDciDecodeError::CardinalityViolation)
         );
     }
 }
@@ -632,7 +711,7 @@ fn validates_every_record_against_the_complete_logical_schema() {
     ] {
         assert_eq!(
             decode(&unsigned_response(vec![record], 1)).err(),
-            Some(OpenCrvsDciV190Rc1DecodeError::RecordContractViolation)
+            Some(SignedDciDecodeError::RecordContractViolation)
         );
     }
     assert_eq!(
@@ -641,61 +720,31 @@ fn validates_every_record_against_the_complete_logical_schema() {
             2,
         ))
         .err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::RecordContractViolation)
+        Some(SignedDciDecodeError::RecordContractViolation)
     );
 }
 
 #[test]
 fn byte_bounds_expectation_debug_and_errors_never_expose_values() {
-    assert!(OpenCrvsDciV190Rc1Expectation::new("", SENDER_ID, None, EXPECTED_UIN, 1, 1).is_err());
-    assert!(OpenCrvsDciV190Rc1Expectation::new(MESSAGE_ID, SENDER_ID, None, "", 1, 1).is_err());
-    assert!(OpenCrvsDciV190Rc1Expectation::new(
-        MESSAGE_ID,
-        SENDER_ID,
-        None,
-        "selector\nvalue",
-        1,
-        1,
-    )
-    .is_err());
-    assert!(OpenCrvsDciV190Rc1Expectation::new(
-        MESSAGE_ID,
-        SENDER_ID,
-        None,
-        &"s".repeat(257),
-        1,
-        1,
-    )
-    .is_err());
-    assert!(OpenCrvsDciV190Rc1Expectation::new(
-        MESSAGE_ID,
-        SENDER_ID,
-        None,
-        "country-UIN-01",
-        1,
-        1,
-    )
-    .is_ok());
-    assert!(
-        OpenCrvsDciV190Rc1Expectation::new(MESSAGE_ID, SENDER_ID, None, EXPECTED_UIN, 0, 1,)
-            .is_err()
-    );
-    assert!(
-        OpenCrvsDciV190Rc1Expectation::new(MESSAGE_ID, SENDER_ID, None, EXPECTED_UIN, 1, 0,)
-            .is_err()
-    );
+    assert!(opencrvs_expectation("", SENDER_ID, None, EXPECTED_UIN, 1, 1).is_err());
+    assert!(opencrvs_expectation(MESSAGE_ID, SENDER_ID, None, "", 1, 1).is_err());
+    assert!(opencrvs_expectation(MESSAGE_ID, SENDER_ID, None, "selector\nvalue", 1, 1,).is_err());
+    assert!(opencrvs_expectation(MESSAGE_ID, SENDER_ID, None, &"s".repeat(257), 1, 1,).is_err());
+    assert!(opencrvs_expectation(MESSAGE_ID, SENDER_ID, None, "country-UIN-01", 1, 1,).is_ok());
+    assert!(opencrvs_expectation(MESSAGE_ID, SENDER_ID, None, EXPECTED_UIN, 0, 1,).is_err());
+    assert!(opencrvs_expectation(MESSAGE_ID, SENDER_ID, None, EXPECTED_UIN, 1, 0,).is_err());
 
     let unsigned = unsigned_response(vec![], 0);
     assert_eq!(
         decode_bodies_with_bounds(jwks_body(), signed_body(&unsigned), 1, 128 * 1_024).err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::JwksTooLarge)
+        Some(SignedDciDecodeError::JwksTooLarge)
     );
     assert_eq!(
         decode_bodies_with_bounds(jwks_body(), signed_body(&unsigned), 32 * 1_024, 1).err(),
-        Some(OpenCrvsDciV190Rc1DecodeError::ResponseTooLarge)
+        Some(SignedDciDecodeError::ResponseTooLarge)
     );
 
-    let expectation = OpenCrvsDciV190Rc1Expectation::new(
+    let expectation = opencrvs_expectation(
         "message-secret",
         "sender-secret",
         Some("receiver-secret"),

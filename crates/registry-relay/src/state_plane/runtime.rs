@@ -611,8 +611,9 @@ const fn map_fence_initialization_error(
         | ServingFenceError::AdmissionClosed
         | ServingFenceError::OwnershipLost
         | ServingFenceError::PermitConflict
-        | ServingFenceError::SourceOperationNotAuthorized
-        | ServingFenceError::SourceOperationAlreadyUsed
+        | ServingFenceError::RequestCommitmentMismatch
+        | ServingFenceError::RequestCommitmentUnavailable
+        | ServingFenceError::PermitCompletionConflict
         | ServingFenceError::PermitUnknown
         | ServingFenceError::PermitExpired
         | ServingFenceError::PermitCompleted

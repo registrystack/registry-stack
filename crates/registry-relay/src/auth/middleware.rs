@@ -532,12 +532,12 @@ mod tests {
         let routes = [
             (
                 crate::api::consultation::PROFILE_ROUTE,
-                "/v1/consultations/example/versions/1",
+                "/v1/consultations/example",
                 Method::GET,
             ),
             (
                 crate::api::consultation::EXECUTE_ROUTE,
-                "/v1/consultations/example/versions/1/execute",
+                "/v1/consultations/example/execute",
                 Method::POST,
             ),
         ];
@@ -605,7 +605,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/v1/consultations/example/versions/1")
+                    .uri("/v1/consultations/example")
                     .body(Body::empty())
                     .expect("consultation request builds"),
             )
@@ -675,7 +675,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/v1/consultations/example/versions/1")
+                    .uri("/v1/consultations/example")
                     .body(Body::empty())
                     .expect("consultation request builds"),
             )

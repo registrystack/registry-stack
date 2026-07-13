@@ -12,10 +12,12 @@
     "logical_operation": "civil.birth-record-exists",
     "input_slots": {
       "uin": {
+        "role": "selector",
         "type": "string",
-        "max_bytes": 10,
+        "maxLength": 10,
+        "x-registry-max-bytes": 40,
         "pattern": "^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]$",
-        "canonicalization": "identity"
+        "x-registry-canonicalization": "identity"
       }
     },
     "acquisition": {
@@ -291,12 +293,12 @@
       "cardinality": "probe_two",
       "reject_unknown_fields": true
     },
-    "output_mode": "presence_only",
     "output": {},
     "plan": {
       "kind": "bounded_http",
       "data_destination_slot": "opencrvs-data",
       "credential_destination_slot": "opencrvs-oauth",
+      "verification_destination_slot": "opencrvs-verification",
       "operations": [
         {
           "id": "lookup-birth-record",
@@ -450,7 +452,7 @@
         {
           "id": "fetch-signing-keys",
           "primitive": "jwks_v1",
-          "destination_slot": "opencrvs-data",
+          "destination_slot": "opencrvs-verification",
           "method": "GET",
           "path": "/.well-known/jwks.json",
           "step_limits": {

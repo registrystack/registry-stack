@@ -1410,7 +1410,7 @@ fn consultation_profile_path_item() -> Value {
         "get": {
             "operationId": "get_consultation_profile",
             "summary": "Get a consultation profile contract",
-            "description": "Returns the hash-pinned public contract for one exact consultation profile. The response is protected and visible only to the configured authorized OIDC workload with the profile's exact required scope. `contract_json` is the canonical profile contract itself; this generic operation deliberately does not generate a separate OpenAPI schema for every profile.",
+            "description": "Returns the complete hash-pinned public contract for the one active contract behind this profile id. The response is protected and visible only to the configured authorized OIDC workload with the profile's exact required scope.",
             "tags": [TAG_CONSULTATIONS],
             "security": [{ "consultationOidc": [] }],
             "parameters": consultation_path_parameters(),
@@ -1435,8 +1435,8 @@ fn consultation_execute_path_item() -> Value {
     parameters.push(json!({
         "name": "Registry-Notary-Evaluation-Id",
         "in": "header",
-        "required": false,
-        "description": "Optional canonical uppercase ULID supplied by the authenticated Registry Notary workload to correlate this consultation with its evaluation.",
+        "required": true,
+        "description": "Canonical uppercase ULID supplied by the authenticated Registry Notary workload to correlate this consultation with its evaluation.",
         "schema": {
             "type": "string",
             "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
@@ -1447,7 +1447,7 @@ fn consultation_execute_path_item() -> Value {
         "post": {
             "operationId": "execute_consultation",
             "summary": "Execute a governed consultation",
-            "description": "Executes one exact, purpose-bound, single-subject consultation for the configured authorized OIDC workload with the profile's exact required scope. The request supplies the profile's one to four required typed selector components, and Relay returns only the profile-approved result envelope and provenance. This route does not accept a subject batch.",
+            "description": "Executes one exact, purpose-bound, single-subject consultation for the configured authorized OIDC workload with the profile's exact required scope. The request pins the active contract hash and supplies up to eight typed selector components. Relay returns only the profile-approved outcome, outputs on match, and closed provenance. This route does not accept a subject batch.",
             "tags": [TAG_CONSULTATIONS],
             "security": [{ "consultationOidc": [] }],
             "parameters": parameters,
@@ -1457,6 +1457,7 @@ fn consultation_execute_path_item() -> Value {
                     "application/json": {
                         "schema": { "$ref": "#/components/schemas/ConsultationExecuteRequest" },
                         "example": {
+                            "contract_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                             "inputs": {
                                 "given_name": "Amina",
                                 "family_name": "Diallo",
@@ -1475,30 +1476,18 @@ fn consultation_execute_path_item() -> Value {
 }
 
 fn consultation_path_parameters() -> Vec<Value> {
-    vec![
-        json!({
-            "name": "profile_id",
-            "in": "path",
-            "required": true,
-            "description": "Exact consultation profile identifier from the protected contract catalog.",
-            "schema": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 96,
-                "pattern": "^[a-z][a-z0-9._-]{0,95}$"
-            }
-        }),
-        json!({
-            "name": "profile_version",
-            "in": "path",
-            "required": true,
-            "description": "Canonical positive decimal profile version.",
-            "schema": {
-                "type": "string",
-                "pattern": "^[1-9][0-9]{0,9}$"
-            }
-        }),
-    ]
+    vec![json!({
+        "name": "profile_id",
+        "in": "path",
+        "required": true,
+        "description": "Exact consultation profile identifier from the protected contract catalog.",
+        "schema": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 96,
+            "pattern": "^[a-z][a-z0-9._-]{0,95}$"
+        }
+    })]
 }
 
 fn consultation_profile_responses() -> Value {
@@ -1520,7 +1509,7 @@ fn consultation_profile_responses() -> Value {
         "404": consultation_problem_response(
             404,
             "consultation.profile_not_found",
-            "The exact profile id and version are not visible to this workload."
+            "The profile id is not visible to this workload."
         ),
         "503": consultation_problem_response(
             503,
@@ -1551,19 +1540,53 @@ fn consultation_execute_responses(success_description: &str, success_schema: &st
         "404": consultation_problem_response(
             404,
             "consultation.profile_not_found",
-            "The exact profile id and version are not visible to this workload."
+            "The profile id is not visible to this workload."
         ),
-        "409": consultation_problem_response(
-            409,
-            "consultation.batch_child_conflict",
-            "The authenticated Notary batch child identity conflicts with prior durable state."
-        ),
+        "409": consultation_conflict_response(),
         "429": consultation_rate_limited_response(),
         "503": consultation_problem_response(
             503,
             "consultation.unavailable",
             "The consultation cannot be completed safely."
         )
+    })
+}
+
+fn consultation_conflict_response() -> Value {
+    json!({
+        "description": "The pinned contract hash is not active for this profile, or the authenticated Notary batch child identity conflicts with prior durable state.",
+        "content": {
+            "application/problem+json": {
+                "schema": {
+                    "oneOf": [
+                        {
+                            "allOf": [
+                                { "$ref": "#/components/schemas/ProblemDetails" },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "status": { "const": 409 },
+                                        "code": { "const": "consultation.contract_mismatch" }
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "allOf": [
+                                { "$ref": "#/components/schemas/ProblemDetails" },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "status": { "const": 409 },
+                                        "code": { "const": "consultation.batch_child_conflict" }
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
     })
 }
 
@@ -2935,19 +2958,17 @@ fn problem_details_schema() -> Value {
 fn consultation_profile_metadata_schema() -> Value {
     json!({
         "type": "object",
-        "description": "Protected metadata for one exact consultation profile. The canonical public contract remains generic here so one operation supports OpenCRVS, DHIS2, OpenSPP, and other reviewed integration packs without generating per-profile OpenAPI schemas.",
-        "required": ["contract_hash", "contract_json"],
+        "description": "Protected metadata containing the complete public contract for the one active contract behind this profile id.",
+        "required": ["contract_hash", "contract"],
         "properties": {
             "contract_hash": {
                 "type": "string",
                 "pattern": "^sha256:[0-9a-f]{64}$",
                 "description": "SHA-256 identity of the canonical public contract."
             },
-            "contract_json": {
-                "type": "string",
-                "maxLength": registry_platform_httputil::destination::json::MAX_CLOSED_JSON_STRING_BYTES,
-                "contentMediaType": "application/json",
-                "description": "Exact RFC 8785 canonical JSON for the public consultation contract selected by the path id and version. Clients strict-parse and re-hash this bounded value before activation."
+            "contract": {
+                "type": "object",
+                "description": "Complete public consultation contract. Clients strict-parse and recompute its domain-separated contract hash before activation."
             }
         },
         "additionalProperties": false
@@ -2957,22 +2978,33 @@ fn consultation_profile_metadata_schema() -> Value {
 fn consultation_execute_request_schema() -> Value {
     json!({
         "type": "object",
-        "description": "The exact consultation-v1 request envelope. The selected profile contract names one to four required typed components of one exact subject selector. The complete encoded request body is limited to 8 KiB.",
-        "required": ["inputs"],
+        "description": "The exact consultation-v1 request envelope. Contract mismatch fails before source access. The complete encoded request body is limited to 8 KiB.",
+        "required": ["contract_hash", "inputs"],
         "properties": {
+            "contract_hash": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+            },
             "inputs": {
                 "type": "object",
-                "description": "One to four profile-defined component names mapped to string values. Names are ASCII and limited to 64 bytes. Each value is limited to 256 UTF-8 bytes and is validated and canonicalized under its profile-declared string or full-date contract. Every declared component is required; unknown, missing, or duplicate components fail before source access.",
+                "description": "Up to sixteen profile-defined scalar inputs, including one to eight selector-role inputs plus parameter-role inputs. Values are strings, booleans, safe JSON integers, or null where the selected profile permits null. Selector inputs have a 4096-byte aggregate canonical ceiling after profile validation. Every declared input property is required; a nullable parameter is represented by explicit JSON null. Unknown, missing, duplicate, type-mismatched, or non-nullable null inputs fail before source access.",
                 "minProperties": 1,
-                "maxProperties": 4,
+                "maxProperties": 16,
                 "propertyNames": {
                     "maxLength": 64,
                     "pattern": "^[a-z][a-z0-9_]{0,63}$"
                 },
                 "additionalProperties": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 256
+                    "oneOf": [
+                        { "type": "string", "maxLength": 4096 },
+                        { "type": "boolean" },
+                        {
+                            "type": "integer",
+                            "minimum": -9007199254740991_i64,
+                            "maximum": 9007199254740991_i64
+                        },
+                        { "type": "null" }
+                    ]
                 }
             }
         },
@@ -2982,202 +3014,152 @@ fn consultation_execute_request_schema() -> Value {
 
 fn consultation_result_schema() -> Value {
     json!({
-        "type": "object",
-        "description": "Closed consultation-v1 result. Relay publishes it only after durable completion succeeds.",
-        "required": [
-            "schema",
-            "consultation_id",
-            "profile",
-            "outcome",
-            "data",
-            "provenance"
-        ],
-        "properties": {
-            "schema": {
-                "const": "registry.relay.consultation-result.v1"
-            },
-            "consultation_id": {
-                "type": "string",
-                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
-                "description": "Relay-generated canonical ULID for this attempt."
-            },
-            "notary_evaluation_id": {
-                "type": "string",
-                "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
-                "description": "Registry Notary evaluation id when supplied on the request."
-            },
-            "profile": {
+        "description": "Closed consultation-v1 result union. Outputs exist only for match.",
+        "oneOf": [
+            consultation_result_variant("match", true),
+            consultation_result_variant("no_match", false),
+            consultation_result_variant("ambiguous", false)
+        ]
+    })
+}
+
+fn consultation_result_variant(outcome: &str, with_outputs: bool) -> Value {
+    let mut required = vec![
+        "schema",
+        "consultation_id",
+        "notary_evaluation_id",
+        "profile",
+        "outcome",
+        "provenance",
+    ];
+    let mut properties = Map::from_iter([
+        (
+            "schema".to_string(),
+            json!({ "const": "registry.relay.consultation-result.v1" }),
+        ),
+        ("consultation_id".to_string(), consultation_ulid_schema()),
+        (
+            "notary_evaluation_id".to_string(),
+            consultation_ulid_schema(),
+        ),
+        ("profile".to_string(), consultation_profile_ref_schema()),
+        ("outcome".to_string(), json!({ "const": outcome })),
+        ("provenance".to_string(), consultation_provenance_schema()),
+    ]);
+    if with_outputs {
+        required.push("outputs");
+        properties.insert(
+            "outputs".to_string(),
+            json!({
                 "type": "object",
-                "required": ["id", "version", "contract_hash"],
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "pattern": "^[a-z][a-z0-9._-]{0,95}$"
-                    },
-                    "version": {
-                        "type": "string",
-                        "pattern": "^[1-9][0-9]{0,9}$"
-                    },
-                    "contract_hash": {
-                        "type": "string",
-                        "pattern": "^sha256:[0-9a-f]{64}$"
-                    }
-                },
+                "minProperties": 1,
+                "additionalProperties": { "type": ["string", "integer", "boolean", "null"] }
+            }),
+        );
+    }
+    json!({
+        "type": "object",
+        "required": required,
+        "properties": properties,
+        "additionalProperties": false
+    })
+}
+
+fn consultation_ulid_schema() -> Value {
+    json!({ "type": "string", "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$" })
+}
+
+fn consultation_profile_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["id", "contract_hash"],
+        "properties": {
+            "id": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
+            "contract_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn consultation_provenance_schema() -> Value {
+    let common_required = [
+        "acquired_at",
+        "source_observed_at",
+        "source_revision",
+        "acquisition_class",
+        "integration",
+        "consent",
+    ];
+    let common_properties = json!({
+        "acquired_at": { "type": "string", "format": "date-time" },
+        "source_observed_at": { "type": ["string", "null"], "format": "date-time" },
+        "source_revision": { "type": ["string", "null"], "maxLength": 128 },
+        "integration": {
+            "type": "object",
+            "required": ["id", "revision"],
+            "properties": {
+                "id": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
+                "revision": { "type": "integer", "minimum": 1 }
+            },
+            "additionalProperties": false
+        },
+        "consent": {
+            "type": "object",
+            "required": ["outcome", "verifier_id", "verifier_revision", "checked_at", "expires_at", "revocation_status"],
+            "properties": {
+                "outcome": { "const": "not_required" },
+                "verifier_id": { "type": ["string", "null"], "maxLength": 128 },
+                "verifier_revision": { "type": ["string", "null"], "maxLength": 128 },
+                "checked_at": { "type": ["string", "null"], "format": "date-time" },
+                "expires_at": { "type": ["string", "null"], "format": "date-time" },
+                "revocation_status": { "const": "not_applicable" }
+            },
+            "additionalProperties": false
+        }
+    });
+    let mut live_properties = common_properties.as_object().cloned().expect("object");
+    live_properties.insert(
+        "acquisition_class".to_string(),
+        json!({
+            "enum": ["source_projected_exact", "bounded_full_record"]
+        }),
+    );
+    let mut snapshot_properties = common_properties.as_object().cloned().expect("object");
+    snapshot_properties.insert(
+        "acquisition_class".to_string(),
+        json!({
+            "const": "materialized_snapshot"
+        }),
+    );
+    snapshot_properties.insert(
+        "snapshot".to_string(),
+        json!({
+            "type": "object",
+            "required": ["generation_id", "published_at"],
+            "properties": {
+                "generation_id": consultation_ulid_schema(),
+                "published_at": { "type": "string", "format": "date-time" }
+            },
+            "additionalProperties": false
+        }),
+    );
+    let mut snapshot_required = common_required.to_vec();
+    snapshot_required.push("snapshot");
+    json!({
+        "oneOf": [
+            {
+                "type": "object",
+                "required": common_required,
+                "properties": live_properties,
                 "additionalProperties": false
             },
-            "outcome": {
-                "type": "string",
-                "enum": ["match", "no_match", "ambiguous"]
-            },
-            "data": {
-                "description": "For `match`, the exact profile-approved fact fields, or an empty object for a presence-only result. For `no_match` and `ambiguous`, null. Public facts are bounded strings or full dates, JSON-safe integers, booleans, presence booleans, and explicitly nullable variants; floating-point values are not part of consultation v1.",
-                "anyOf": [
-                    {
-                        "type": "object",
-                        "additionalProperties": {
-                            "type": ["string", "integer", "boolean", "null"]
-                        }
-                    },
-                    { "type": "null" }
-                ]
-            },
-            "provenance": {
+            {
                 "type": "object",
-                "required": [
-                    "relay_acquired_at",
-                    "source_observed_at",
-                    "source_revision",
-                    "acquisition_class",
-                    "integration_pack",
-                    "policy_id",
-                    "policy_hash",
-                    "consent"
-                ],
-                "properties": {
-                    "relay_acquired_at": {
-                        "type": "string",
-                        "format": "date-time"
-                    },
-                    "source_observed_at": {
-                        "type": ["string", "null"],
-                        "format": "date-time"
-                    },
-                    "source_revision": {
-                        "type": ["string", "null"]
-                    },
-                    "acquisition_class": {
-                        "type": "string",
-                        "enum": [
-                            "source_projected_exact",
-                            "bounded_full_record",
-                            "materialized_snapshot"
-                        ]
-                    },
-                    "integration_pack": {
-                        "type": "object",
-                        "required": ["id", "version", "hash"],
-                        "properties": {
-                            "id": {
-                                "type": "string",
-                                "pattern": "^[a-z][a-z0-9._-]{0,95}$"
-                            },
-                            "version": {
-                                "type": "string",
-                                "pattern": "^[1-9][0-9]{0,9}$"
-                            },
-                            "hash": {
-                                "type": "string",
-                                "pattern": "^sha256:[0-9a-f]{64}$"
-                            }
-                        },
-                        "additionalProperties": false
-                    },
-                    "policy_id": {
-                        "type": "string",
-                        "pattern": "^[a-z][a-z0-9._-]{0,95}$"
-                    },
-                    "policy_hash": {
-                        "type": "string",
-                        "pattern": "^sha256:[0-9a-f]{64}$"
-                    },
-                    "consent": {
-                        "type": "object",
-                        "required": [
-                            "outcome",
-                            "verifier_id",
-                            "verifier_revision",
-                            "checked_at",
-                            "expires_at",
-                            "revocation_status"
-                        ],
-                        "properties": {
-                            "outcome": {
-                                "type": "string",
-                                "enum": ["not_required"]
-                            },
-                            "verifier_id": {
-                                "type": ["string", "null"]
-                            },
-                            "verifier_revision": {
-                                "type": ["string", "null"]
-                            },
-                            "checked_at": {
-                                "type": ["string", "null"],
-                                "format": "date-time"
-                            },
-                            "expires_at": {
-                                "type": ["string", "null"],
-                                "format": "date-time"
-                            },
-                            "revocation_status": {
-                                "type": "string",
-                                "enum": ["not_applicable"]
-                            }
-                        },
-                        "additionalProperties": false
-                    },
-                    "snapshot_generation_id": {
-                        "type": "string",
-                        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
-                        "description": "Server-generated immutable snapshot generation. Required only for `materialized_snapshot` results and omitted for live acquisition."
-                    },
-                    "snapshot_published_at": {
-                        "type": "string",
-                        "format": "date-time",
-                        "description": "Server-owned snapshot publication time bound to the immutable generation. Required only for `materialized_snapshot` results and omitted for live acquisition."
-                    }
-                },
+                "required": snapshot_required,
+                "properties": snapshot_properties,
                 "additionalProperties": false
             }
-        },
-        "additionalProperties": false,
-        "allOf": [{
-            "oneOf": [
-                {
-                    "properties": {
-                        "outcome": { "const": "match" },
-                        "data": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": ["string", "integer", "boolean", "null"]
-                            }
-                        }
-                    }
-                },
-                {
-                    "properties": {
-                        "outcome": { "const": "no_match" },
-                        "data": { "type": "null" }
-                    }
-                },
-                {
-                    "properties": {
-                        "outcome": { "const": "ambiguous" },
-                        "data": { "type": "null" }
-                    }
-                }
-            ]
-        }]
+        ]
     })
 }
 
@@ -5877,6 +5859,13 @@ mod tests {
         let doc = openapi_document(&catalog_with_individual(), &config);
         let profile = &doc["paths"][crate::api::consultation::PROFILE_ROUTE];
         let execute = &doc["paths"][crate::api::consultation::EXECUTE_ROUTE];
+        assert!(
+            doc["paths"]["/v1/consultations/{profile_id}/versions/{profile_version}"].is_null()
+        );
+        assert!(
+            doc["paths"]["/v1/consultations/{profile_id}/versions/{profile_version}/execute"]
+                .is_null()
+        );
 
         assert!(profile["get"].is_object());
         assert!(profile["head"].is_null(), "HEAD must not be advertised");
@@ -5899,13 +5888,14 @@ mod tests {
 
         for operation in [&profile["get"], &execute["post"]] {
             let parameters = operation["parameters"].as_array().expect("parameters");
-            for name in ["profile_id", "profile_version"] {
-                assert!(parameters.iter().any(|parameter| {
-                    parameter["name"] == name
-                        && parameter["in"] == "path"
-                        && parameter["required"] == true
-                }));
-            }
+            assert!(parameters.iter().any(|parameter| {
+                parameter["name"] == "profile_id"
+                    && parameter["in"] == "path"
+                    && parameter["required"] == true
+            }));
+            assert!(parameters
+                .iter()
+                .all(|parameter| parameter["name"] != "profile_version"));
         }
         assert_eq!(
             profile["get"]["responses"]
@@ -5940,7 +5930,7 @@ mod tests {
         assert!(headers.iter().any(|parameter| {
             parameter["name"] == "Registry-Notary-Evaluation-Id"
                 && parameter["in"] == "header"
-                && parameter["required"] == false
+                && parameter["required"] == true
         }));
         assert!(headers.iter().all(|parameter| {
             parameter["name"] != "Registry-Notary-Batch-Child-Id"
@@ -5952,7 +5942,6 @@ mod tests {
             ("401", "auth.invalid_credentials"),
             ("403", "consultation.denied"),
             ("404", "consultation.profile_not_found"),
-            ("409", "consultation.batch_child_conflict"),
             ("429", "consultation.rate_limited"),
             ("503", "consultation.unavailable"),
         ];
@@ -5963,6 +5952,16 @@ mod tests {
                 code
             );
         }
+        assert_eq!(
+            execute_op["responses"]["409"]["content"]["application/problem+json"]["schema"]
+                ["oneOf"][0]["allOf"][1]["properties"]["code"]["const"],
+            "consultation.contract_mismatch"
+        );
+        assert_eq!(
+            execute_op["responses"]["409"]["content"]["application/problem+json"]["schema"]
+                ["oneOf"][1]["allOf"][1]["properties"]["code"]["const"],
+            "consultation.batch_child_conflict"
+        );
         let retry_after = &execute_op["responses"]["429"]["headers"]["Retry-After"]["schema"];
         assert_eq!(retry_after["type"], "integer");
         assert_eq!(retry_after["minimum"], 1);
@@ -5971,11 +5970,16 @@ mod tests {
         let schemas = &doc["components"]["schemas"];
         assert_eq!(
             schemas["ConsultationProfileMetadata"]["required"],
-            json!(["contract_hash", "contract_json"])
+            json!(["contract_hash", "contract"])
         );
         assert_eq!(
-            schemas["ConsultationProfileMetadata"]["properties"]["contract_json"]["maxLength"],
-            65_536
+            schemas["ConsultationProfileMetadata"]["properties"]["contract"]["type"],
+            "object"
+        );
+        assert!(schemas["ConsultationProfileMetadata"]["properties"]["contract_json"].is_null());
+        assert_eq!(
+            schemas["ConsultationExecuteRequest"]["required"],
+            json!(["contract_hash", "inputs"])
         );
         assert_eq!(
             schemas["ConsultationExecuteRequest"]["properties"]["inputs"]["minProperties"],
@@ -5983,7 +5987,7 @@ mod tests {
         );
         assert_eq!(
             schemas["ConsultationExecuteRequest"]["properties"]["inputs"]["maxProperties"],
-            4
+            16
         );
         assert_eq!(
             schemas["ConsultationExecuteRequest"]["properties"]["inputs"]["propertyNames"]
@@ -5995,30 +5999,44 @@ mod tests {
                 ["pattern"],
             "^[a-z][a-z0-9_]{0,63}$"
         );
+        let scalar_variants = schemas["ConsultationExecuteRequest"]["properties"]["inputs"]
+            ["additionalProperties"]["oneOf"]
+            .as_array()
+            .expect("closed scalar variants");
+        assert_eq!(scalar_variants.len(), 4);
+        assert_eq!(scalar_variants[0]["type"], "string");
+        assert_eq!(scalar_variants[1]["type"], "boolean");
+        assert_eq!(scalar_variants[2]["type"], "integer");
+        assert_eq!(scalar_variants[3]["type"], "null");
         assert_eq!(
-            schemas["ConsultationResult"]["properties"]["outcome"]["enum"],
-            json!(["match", "no_match", "ambiguous"])
+            schemas["ConsultationResult"]["oneOf"]
+                .as_array()
+                .unwrap()
+                .len(),
+            3
         );
-        for field in ["integration_pack", "policy_id", "policy_hash", "consent"] {
-            assert!(
-                schemas["ConsultationResult"]["properties"]["provenance"]["properties"][field]
-                    .is_object()
+        let variants = schemas["ConsultationResult"]["oneOf"].as_array().unwrap();
+        assert_eq!(variants[0]["properties"]["outcome"]["const"], "match");
+        assert!(variants[0]["properties"]["outputs"].is_object());
+        assert!(variants[1]["properties"]["outputs"].is_null());
+        assert!(variants[2]["properties"]["outputs"].is_null());
+        for variant in variants {
+            assert_eq!(
+                variant["properties"]["profile"]["required"],
+                json!(["id", "contract_hash"])
+            );
+            assert!(variant["properties"]["profile"]["properties"]["version"].is_null());
+            assert_eq!(
+                variant["properties"]["provenance"]["oneOf"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
             );
         }
         assert_eq!(
-            schemas["ConsultationResult"]["properties"]["data"]["anyOf"][0]["additionalProperties"]
-                ["type"],
+            variants[0]["properties"]["outputs"]["additionalProperties"]["type"],
             json!(["string", "integer", "boolean", "null"])
-        );
-        assert!(
-            schemas["ConsultationResult"]["properties"]["provenance"]["properties"]
-                ["snapshot_generation_id"]
-                .is_object()
-        );
-        assert!(
-            schemas["ConsultationResult"]["properties"]["provenance"]["properties"]
-                ["snapshot_published_at"]
-                .is_object()
         );
     }
 

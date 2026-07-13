@@ -8,6 +8,7 @@
 
 use std::{future::Future, time::Duration};
 
+use registry_platform_audit::AuditChainHasher;
 use thiserror::Error;
 use tokio::{
     sync::{mpsc, oneshot, watch, Mutex},
@@ -17,7 +18,9 @@ use tokio::{
 use tokio_postgres::{Client, Error as PostgresError, Row};
 use ulid::Ulid;
 
-use crate::consultation::OperationId;
+use crate::consultation::commitments::{
+    CanonicalDispatchRequestEffect, KeyedDispatchRequestCommitment,
+};
 
 use super::migration::{
     validate_runtime_capability_v1, AuditChainKeyEpochId, RuntimeCapabilityError,
@@ -42,11 +45,13 @@ SELECT permit_check.*,
            - 1 AS remaining_ms
 FROM permit_check
 "#;
+const PERMIT_COMPLETE_SQL: &str =
+    "SELECT * FROM relay_state_api.dispatch_permit_complete_v1($1, $2, $3, $4, $5, $6, $7)";
 const FENCE_OPEN_AFTER_RECOVERY_SQL: &str =
     "SELECT * FROM relay_state_api.serving_fence_open_after_recovery_v1($1, $2, $3)";
 
 const DATABASE_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
-const HARD_SOURCE_DEADLINE: Duration = Duration::from_secs(20);
+const HARD_SOURCE_DEADLINE: Duration = Duration::from_secs(60);
 const CANCELLATION_GRACE: Duration = Duration::from_secs(1);
 const LOCAL_TAKEOVER_WAIT: Duration = HARD_SOURCE_DEADLINE.saturating_add(CANCELLATION_GRACE);
 const MAX_POST_LOCAL_BARRIER_WAIT: Duration = Duration::from_secs(15);
@@ -150,7 +155,7 @@ impl ConsultationPermitSet {
         credential_count: u8,
         data_count: u8,
     ) -> Result<Self, ServingFenceError> {
-        if credential_count > 1 || data_count > 5 {
+        if credential_count > 1 || data_count > 16 {
             return Err(ServingFenceError::InvalidPermitManifest);
         }
         let mut permits = Vec::with_capacity(usize::from(credential_count + data_count));
@@ -211,7 +216,7 @@ pub(crate) struct ConsultationDispatchPermit {
 pub(super) enum DispatchPermitState {
     Ready,
     Dispatching,
-    Dispatched,
+    Completed,
     Uncertain,
 }
 
@@ -262,10 +267,24 @@ pub(crate) struct AuditedConsultationDispatch {
     pub(super) deadline_unix_ms: i64,
     pub(super) local_not_after: Instant,
     pub(super) permits: Vec<ConsultationDispatchPermit>,
+    pub(super) request_effect_hasher: AuditChainHasher,
     pub(super) lifecycle_seal: ConsultationLifecycleSeal,
 }
 
 impl AuditedConsultationDispatch {
+    /// Consume one complete canonical request effect into an opaque keyed
+    /// commitment. The deployment key remains inside the audited dispatch and
+    /// the clear request effect is zeroized when this call returns.
+    pub(crate) fn commit_request_effect(
+        &self,
+        effect: CanonicalDispatchRequestEffect,
+    ) -> Result<KeyedDispatchRequestCommitment, ServingFenceError> {
+        let digest = self
+            .request_effect_hasher
+            .relay_request_effect_commitment(effect.as_bytes())
+            .map_err(|_| ServingFenceError::RequestCommitmentUnavailable)?;
+        Ok(KeyedDispatchRequestCommitment::from_digest(digest))
+    }
     /// Return the optional credential permit before any data exchange starts.
     ///
     /// A cached credential legitimately leaves this permit unused. Once a data
@@ -305,13 +324,13 @@ impl AuditedConsultationDispatch {
         }
         let Some(index) = self.permits.iter().position(|permit| {
             permit.kind == DispatchPermitKind::Data
-                && permit.state != DispatchPermitState::Dispatched
+                && permit.state != DispatchPermitState::Completed
         }) else {
             return Ok(None);
         };
         if self.permits[index + 1..].iter().any(|permit| {
             permit.kind == DispatchPermitKind::Data
-                && permit.state == DispatchPermitState::Dispatched
+                && permit.state == DispatchPermitState::Completed
         }) {
             return Err(ServingFenceError::PermitOrderViolation);
         }
@@ -414,10 +433,12 @@ pub(crate) enum ServingFenceError {
     OwnershipLost,
     #[error("Relay dispatch permit conflicts with a durable operation")]
     PermitConflict,
-    #[error("Relay source operation is outside the compiled permit capability")]
-    SourceOperationNotAuthorized,
-    #[error("Relay bounded source operation was already used by this consultation")]
-    SourceOperationAlreadyUsed,
+    #[error("Relay dispatch request commitment does not match the consultation key epoch")]
+    RequestCommitmentMismatch,
+    #[error("Relay keyed dispatch request commitment is unavailable")]
+    RequestCommitmentUnavailable,
+    #[error("Relay dispatch permit completion could not be acknowledged")]
+    PermitCompletionConflict,
     #[error("Relay dispatch permit is unknown")]
     PermitUnknown,
     #[error("Relay dispatch permit has expired")]
@@ -578,7 +599,7 @@ impl<'a> PermitDispatchGuard<'a> {
     }
 
     fn finish(mut self) {
-        *self.state = DispatchPermitState::Dispatched;
+        *self.state = DispatchPermitState::Completed;
         self.finished = true;
     }
 }
@@ -604,9 +625,17 @@ enum FenceCommand {
         operation_id: String,
         kind: &'static str,
         ordinal: i16,
-        source_operation_id: String,
+        request_commitment: String,
         expected_deadline_unix_ms: i64,
         reply: oneshot::Sender<Result<AuthorizationWindow, ServingFenceError>>,
+    },
+    CompletePermit {
+        operation_id: String,
+        kind: &'static str,
+        ordinal: i16,
+        request_commitment: String,
+        expected_deadline_unix_ms: i64,
+        reply: oneshot::Sender<Result<(), ServingFenceError>>,
     },
     OpenAfterRecovery {
         reply: oneshot::Sender<Result<(), ServingFenceError>>,
@@ -784,7 +813,7 @@ impl PostgresServingFence {
     pub(crate) async fn authorize_and_dispatch<T, F, Fut>(
         &self,
         permit: &mut ConsultationDispatchPermit,
-        source_operation: &OperationId,
+        request_commitment: KeyedDispatchRequestCommitment,
         dispatch: F,
     ) -> Result<T, ServingFenceError>
     where
@@ -797,7 +826,7 @@ impl PostgresServingFence {
         }
         match permit.state {
             DispatchPermitState::Ready => {}
-            DispatchPermitState::Dispatched => {
+            DispatchPermitState::Completed => {
                 return Err(ServingFenceError::PermitAlreadyDispatched)
             }
             DispatchPermitState::Dispatching | DispatchPermitState::Uncertain => {
@@ -813,7 +842,7 @@ impl PostgresServingFence {
                 operation_id: permit.operation_id.as_str().to_owned(),
                 kind: permit.kind.as_str(),
                 ordinal: i16::from(permit.ordinal),
-                source_operation_id: source_operation.as_str().to_owned(),
+                request_commitment: request_commitment.as_str().to_owned(),
                 expected_deadline_unix_ms: permit.deadline_unix_ms,
                 reply,
             })
@@ -841,7 +870,7 @@ impl PostgresServingFence {
             // response transit exhausts the local window, this permit can
             // never become reusable. Recovery must conservatively record an
             // outcome-unknown completion.
-            permit.state = DispatchPermitState::Dispatched;
+            permit.state = DispatchPermitState::Uncertain;
             uncertainty.confirm();
             return Err(ServingFenceError::PermitExpired);
         };
@@ -853,11 +882,29 @@ impl PostgresServingFence {
         // after this point can make only this permit uncertain; connection
         // driver loss is independently propagated by the actor watch signal.
         uncertainty.confirm();
+        let operation_id = permit.operation_id.as_str().to_owned();
+        let kind = permit.kind.as_str();
+        let ordinal = i16::from(permit.ordinal);
+        let expected_deadline_unix_ms = permit.deadline_unix_ms;
         let dispatch_guard = PermitDispatchGuard::new(&mut permit.state);
         let result =
             run_guarded_dispatch(local_deadline, self.admission.subscribe(), dispatch).await;
         match result {
             Ok(output) => {
+                let (reply, response) = oneshot::channel();
+                self.commands
+                    .send(FenceCommand::CompletePermit {
+                        operation_id,
+                        kind,
+                        ordinal,
+                        request_commitment: request_commitment.as_str().to_owned(),
+                        expected_deadline_unix_ms,
+                        reply,
+                    })
+                    .map_err(|_| ServingFenceError::Unavailable)?;
+                response
+                    .await
+                    .map_err(|_| ServingFenceError::Unavailable)??;
                 dispatch_guard.finish();
                 Ok(output)
             }
@@ -873,7 +920,7 @@ impl PostgresServingFence {
         operation_id: &DispatchOperationId,
         kind: DispatchPermitKind,
         ordinal: u8,
-        source_operation: &OperationId,
+        request_commitment: KeyedDispatchRequestCommitment,
         expected_deadline_unix_ms: i64,
     ) -> Result<(), ServingFenceError> {
         self.require_open()?;
@@ -884,7 +931,7 @@ impl PostgresServingFence {
                 operation_id: operation_id.as_str().to_owned(),
                 kind: kind.as_str(),
                 ordinal: i16::from(ordinal),
-                source_operation_id: source_operation.as_str().to_owned(),
+                request_commitment: request_commitment.as_str().to_owned(),
                 expected_deadline_unix_ms,
                 reply,
             })
@@ -941,11 +988,10 @@ const fn permit_state_after_known_rejection(
     match error {
         ServingFenceError::PermitExpired
         | ServingFenceError::PermitOrderViolation
-        | ServingFenceError::SourceOperationNotAuthorized
-        | ServingFenceError::SourceOperationAlreadyUsed => Some(DispatchPermitState::Ready),
+        | ServingFenceError::RequestCommitmentMismatch => Some(DispatchPermitState::Ready),
         ServingFenceError::PermitCompleted
         | ServingFenceError::PermitAlreadyDispatched
-        | ServingFenceError::PermitConflict => Some(DispatchPermitState::Dispatched),
+        | ServingFenceError::PermitConflict => Some(DispatchPermitState::Completed),
         _ => None,
     }
 }
@@ -1012,7 +1058,7 @@ async fn handle_fence_command(
             operation_id,
             kind,
             ordinal,
-            source_operation_id,
+            request_commitment,
             expected_deadline_unix_ms,
             reply,
         } => {
@@ -1024,7 +1070,7 @@ async fn handle_fence_command(
                 &operation_id,
                 kind,
                 ordinal,
-                &source_operation_id,
+                &request_commitment,
                 expected_deadline_unix_ms,
             )
             .await;
@@ -1036,8 +1082,38 @@ async fn handle_fence_command(
                         | ServingFenceError::PermitAlreadyDispatched
                         | ServingFenceError::PermitOrderViolation
                         | ServingFenceError::PermitConflict
-                        | ServingFenceError::SourceOperationNotAuthorized
-                        | ServingFenceError::SourceOperationAlreadyUsed)
+                        | ServingFenceError::RequestCommitmentMismatch)
+            );
+            if fatal {
+                admission.send_replace(false);
+            }
+            fatal || reply.send(result).is_err()
+        }
+        FenceCommand::CompletePermit {
+            operation_id,
+            kind,
+            ordinal,
+            request_commitment,
+            expected_deadline_unix_ms,
+            reply,
+        } => {
+            let result = actor_complete_permit(
+                client,
+                lock_key,
+                holder_id,
+                generation,
+                &operation_id,
+                kind,
+                ordinal,
+                &request_commitment,
+                expected_deadline_unix_ms,
+            )
+            .await;
+            let fatal = !matches!(
+                result,
+                Ok(())
+                    | Err(ServingFenceError::PermitCompleted
+                        | ServingFenceError::PermitCompletionConflict)
             );
             if fatal {
                 admission.send_replace(false);
@@ -1091,7 +1167,7 @@ async fn actor_authorize_permit(
     operation_id: &str,
     kind: &str,
     ordinal: i16,
-    source_operation_id: &str,
+    request_commitment: &str,
     expected_deadline_unix_ms: i64,
 ) -> Result<AuthorizationWindow, ServingFenceError> {
     let row = database_timeout(client.query_one(
@@ -1103,7 +1179,7 @@ async fn actor_authorize_permit(
             &operation_id,
             &kind,
             &ordinal,
-            &source_operation_id,
+            &request_commitment,
             &expected_deadline_unix_ms,
         ],
     ))
@@ -1116,8 +1192,7 @@ async fn actor_authorize_permit(
         "already_dispatched" => return Err(ServingFenceError::PermitAlreadyDispatched),
         "permit_order_violation" => return Err(ServingFenceError::PermitOrderViolation),
         "operation_conflict" => return Err(ServingFenceError::PermitConflict),
-        "operation_reuse_rejected" => return Err(ServingFenceError::SourceOperationAlreadyUsed),
-        "source_operation_rejected" => return Err(ServingFenceError::SourceOperationNotAuthorized),
+        "request_commitment_mismatch" => return Err(ServingFenceError::RequestCommitmentMismatch),
         "permit_mismatch" => return Err(ServingFenceError::ProtocolDrift),
         "abandoned" => return Err(ServingFenceError::PermitAbandoned),
         "stale_generation" => return Err(ServingFenceError::StaleGeneration),
@@ -1131,6 +1206,47 @@ async fn actor_authorize_permit(
     Ok(AuthorizationWindow {
         remaining_ms: try_i64(&row, "remaining_ms")?,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn actor_complete_permit(
+    client: &Client,
+    lock_key: ServingFenceLockKey,
+    holder_id: &str,
+    generation: i64,
+    operation_id: &str,
+    kind: &str,
+    ordinal: i16,
+    request_commitment: &str,
+    expected_deadline_unix_ms: i64,
+) -> Result<(), ServingFenceError> {
+    let row = database_timeout(client.query_one(
+        PERMIT_COMPLETE_SQL,
+        &[
+            &lock_key.as_i64(),
+            &holder_id,
+            &generation,
+            &operation_id,
+            &kind,
+            &ordinal,
+            &request_commitment,
+        ],
+    ))
+    .await?;
+    match try_str(&row, "outcome")? {
+        "completed" | "already_completed" => {}
+        "completion_conflict" => return Err(ServingFenceError::PermitCompletionConflict),
+        "unknown" => return Err(ServingFenceError::PermitUnknown),
+        "abandoned" => return Err(ServingFenceError::PermitAbandoned),
+        "stale_generation" => return Err(ServingFenceError::StaleGeneration),
+        "admission_closed" => return Err(ServingFenceError::AdmissionClosed),
+        "ownership_lost" => return Err(ServingFenceError::OwnershipLost),
+        _ => return Err(ServingFenceError::ProtocolDrift),
+    }
+    if try_i64(&row, "deadline_unix_ms")? != expected_deadline_unix_ms {
+        return Err(ServingFenceError::ProtocolDrift);
+    }
+    Ok(())
 }
 
 async fn actor_open_after_recovery(
@@ -1312,6 +1428,10 @@ fn try_str<'a>(row: &'a Row, column: &str) -> Result<&'a str, ServingFenceError>
 mod tests {
     use std::sync::Arc;
 
+    use registry_platform_audit::AuditHashSecret;
+
+    use crate::consultation::commitments::ConsultationCommitmentError;
+
     use super::*;
 
     fn test_dispatch(
@@ -1352,6 +1472,9 @@ mod tests {
                 deadline_unix_ms,
                 local_not_after,
                 permits,
+                request_effect_hasher: AuditChainHasher::keyed(
+                    AuditHashSecret::new(vec![0x42; 32]).expect("strong test key"),
+                ),
                 lifecycle_seal: ConsultationLifecycleSeal::unarmed(
                     &admission,
                     &actor.abort_handle(),
@@ -1452,19 +1575,19 @@ mod tests {
             DispatchPermitBudget::new(HARD_SOURCE_DEADLINE)
                 .expect("hard deadline is allowed")
                 .as_milliseconds(),
-            20_000
+            60_000
         );
     }
 
     #[test]
     fn nonmutating_permit_rejections_keep_current_permit_ready() {
         assert_eq!(
-            permit_state_after_known_rejection(ServingFenceError::SourceOperationAlreadyUsed),
+            permit_state_after_known_rejection(ServingFenceError::RequestCommitmentMismatch),
             Some(DispatchPermitState::Ready)
         );
         assert_eq!(
             permit_state_after_known_rejection(ServingFenceError::PermitConflict),
-            Some(DispatchPermitState::Dispatched),
+            Some(DispatchPermitState::Completed),
             "a durable operation conflict remains fail-closed"
         );
         assert_eq!(
@@ -1480,6 +1603,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn audited_dispatch_commits_complete_effect_canonically_and_allows_repeats() {
+        let (dispatch, actor) = test_dispatch(0, 2);
+        let first = CanonicalDispatchRequestEffect::try_from_complete_value(serde_json::json!({
+            "destination_id": "registry-source",
+            "method": "POST",
+            "target": "/records?active=true",
+            "headers": [{
+                "name": "content-type",
+                "value_base64url": "YXBwbGljYXRpb24vanNvbg",
+            }],
+            "body_base64url": "eyJzdWJqZWN0IjoiUGVyc29uLTQyIn0",
+        }))
+        .expect("complete effect");
+        let repeated = CanonicalDispatchRequestEffect::try_from_complete_value(serde_json::json!({
+            "body_base64url": "eyJzdWJqZWN0IjoiUGVyc29uLTQyIn0",
+            "headers": [{
+                "value_base64url": "YXBwbGljYXRpb24vanNvbg",
+                "name": "content-type",
+            }],
+            "target": "/records?active=true",
+            "method": "POST",
+            "destination_id": "registry-source",
+        }))
+        .expect("same complete effect in different key order");
+        let first = dispatch
+            .commit_request_effect(first)
+            .expect("keyed request commitment");
+        let repeated = dispatch
+            .commit_request_effect(repeated)
+            .expect("repeated keyed request commitment");
+        assert_eq!(first.as_str(), repeated.as_str());
+        assert!(first.as_str().starts_with("hmac-sha256:"));
+        assert_eq!(first.as_str().len(), 76);
+        assert!(!format!("{first:?}").contains("Person-42"));
+        actor.abort();
+    }
+
+    #[test]
+    fn dispatch_effect_rejects_incomplete_or_credential_bearing_shapes() {
+        for value in [
+            serde_json::json!({
+                "destination_id": "registry-source",
+                "method": "GET",
+                "target": "/records",
+                "headers": [],
+            }),
+            serde_json::json!({
+                "destination_id": "registry-source",
+                "method": "GET",
+                "target": "/records",
+                "headers": [],
+                "body_base64url": null,
+                "authorization": "Bearer secret",
+            }),
+        ] {
+            assert_eq!(
+                CanonicalDispatchRequestEffect::try_from_complete_value(value).err(),
+                Some(ConsultationCommitmentError::AuthorizationMismatch)
+            );
+        }
+    }
+
+    #[test]
+    fn dynamic_data_permit_budget_is_bounded_at_sixteen_ordinals() {
+        let maximum = ConsultationPermitSet::from_counts(1, 16).expect("maximum manifest");
+        let data_ordinals = maximum
+            .permits()
+            .iter()
+            .filter_map(|(kind, ordinal)| (*kind == DispatchPermitKind::Data).then_some(*ordinal))
+            .collect::<Vec<_>>();
+        assert_eq!(data_ordinals, (0..16).collect::<Vec<_>>());
+        assert!(matches!(
+            ConsultationPermitSet::from_counts(0, 17),
+            Err(ServingFenceError::InvalidPermitManifest)
+        ));
+    }
+
+    #[tokio::test]
     async fn dispatch_exposes_only_the_next_data_ordinal() {
         let (mut dispatch, actor) = test_dispatch(1, 3);
         assert!(dispatch
@@ -1492,7 +1693,7 @@ mod tests {
             .expect("first lookup")
             .expect("first permit");
         assert_eq!(first.ordinal, 0);
-        first.state = DispatchPermitState::Dispatched;
+        first.state = DispatchPermitState::Completed;
         assert_eq!(
             dispatch.credential_permit_mut().unwrap_err(),
             ServingFenceError::PermitOrderViolation
@@ -1503,13 +1704,13 @@ mod tests {
             .expect("second lookup")
             .expect("second permit");
         assert_eq!(second.ordinal, 1);
-        second.state = DispatchPermitState::Dispatched;
+        second.state = DispatchPermitState::Completed;
         let third = dispatch
             .next_data_permit_mut()
             .expect("third lookup")
             .expect("third permit");
         assert_eq!(third.ordinal, 2);
-        third.state = DispatchPermitState::Dispatched;
+        third.state = DispatchPermitState::Completed;
         assert!(dispatch
             .next_data_permit_mut()
             .expect("exhausted lookup")
@@ -1526,7 +1727,7 @@ mod tests {
             ServingFenceError::PermitUncertain
         );
         dispatch.permits[0].state = DispatchPermitState::Ready;
-        dispatch.permits[2].state = DispatchPermitState::Dispatched;
+        dispatch.permits[2].state = DispatchPermitState::Completed;
         assert_eq!(
             dispatch.next_data_permit_mut().unwrap_err(),
             ServingFenceError::PermitOrderViolation

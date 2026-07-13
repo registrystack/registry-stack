@@ -81,7 +81,11 @@ impl fmt::Debug for ClosedJsonField {
     }
 }
 
-/// Opaque recursive schema for a completely closed JSON response.
+/// Opaque recursive schema for a bounded JSON response.
+///
+/// Object nodes are closed by default. A projection decoder may explicitly
+/// ignore undeclared members while still validating every declared member and
+/// enforcing the decoder-wide byte, depth, node, and collection bounds.
 pub struct ClosedJsonSchema {
     pub(super) node: ClosedJsonSchemaNode,
 }
@@ -89,6 +93,7 @@ pub struct ClosedJsonSchema {
 pub(super) enum ClosedJsonSchemaNode {
     Object {
         nullable: bool,
+        reject_unknown_fields: bool,
         fields: Box<[ClosedJsonField]>,
     },
     Array {
@@ -121,6 +126,18 @@ impl ClosedJsonSchema {
         nullable: bool,
         fields: Vec<ClosedJsonField>,
     ) -> Result<Self, ClosedJsonDecoderBuildError> {
+        Self::object_with_unknown_field_policy(nullable, true, fields)
+    }
+
+    /// Compile a non-empty object with an explicit unknown-member policy.
+    ///
+    /// When `reject_unknown_fields` is false, undeclared members are validated
+    /// only by the decoder-wide structural bounds and are never projected.
+    pub fn object_with_unknown_field_policy(
+        nullable: bool,
+        reject_unknown_fields: bool,
+        fields: Vec<ClosedJsonField>,
+    ) -> Result<Self, ClosedJsonDecoderBuildError> {
         if fields.is_empty() || fields.len() > MAX_CLOSED_JSON_OBJECT_FIELDS {
             return Err(ClosedJsonDecoderBuildError::InvalidSchema);
         }
@@ -134,6 +151,7 @@ impl ClosedJsonSchema {
         Ok(Self {
             node: ClosedJsonSchemaNode::Object {
                 nullable,
+                reject_unknown_fields,
                 fields: fields.into_boxed_slice(),
             },
         })
@@ -350,10 +368,21 @@ impl ClosedJsonDecoder {
         {
             return Err(ClosedJsonDecoderBuildError::InvalidProjection);
         }
-        let preflight_token_limit = maximum_runtime_tokens(&schema)?
-            .checked_mul(PREFLIGHT_TOKEN_HEADROOM_MULTIPLIER)
-            .ok_or(ClosedJsonDecoderBuildError::InvalidSchema)?;
-        let preflight_depth_limit = maximum_runtime_depth(&schema);
+        let projection_tolerates_unknown_fields = schema_tolerates_unknown_fields(&schema);
+        let preflight_token_limit = if projection_tolerates_unknown_fields {
+            MAX_CLOSED_JSON_EXPANDED_NODES
+                .checked_mul(PREFLIGHT_TOKEN_HEADROOM_MULTIPLIER)
+                .ok_or(ClosedJsonDecoderBuildError::InvalidSchema)?
+        } else {
+            maximum_runtime_tokens(&schema)?
+                .checked_mul(PREFLIGHT_TOKEN_HEADROOM_MULTIPLIER)
+                .ok_or(ClosedJsonDecoderBuildError::InvalidSchema)?
+        };
+        let preflight_depth_limit = if projection_tolerates_unknown_fields {
+            MAX_CLOSED_JSON_SCHEMA_DEPTH
+        } else {
+            maximum_runtime_depth(&schema)
+        };
         let compiled_root = compile_record_root(&schema, root)?;
         let record_schema = normalized_record_schema(&schema, root)?;
         let mut names = BTreeSet::new();
@@ -661,6 +690,26 @@ fn maximum_runtime_depth(schema: &ClosedJsonSchema) -> usize {
     }
 }
 
+fn schema_tolerates_unknown_fields(schema: &ClosedJsonSchema) -> bool {
+    match &schema.node {
+        ClosedJsonSchemaNode::Object {
+            reject_unknown_fields,
+            fields,
+            ..
+        } => {
+            !reject_unknown_fields
+                || fields
+                    .iter()
+                    .any(|field| schema_tolerates_unknown_fields(&field.schema))
+        }
+        ClosedJsonSchemaNode::Array { items, .. } => schema_tolerates_unknown_fields(items),
+        ClosedJsonSchemaNode::String { .. }
+        | ClosedJsonSchemaNode::Boolean { .. }
+        | ClosedJsonSchemaNode::Integer { .. }
+        | ClosedJsonSchemaNode::Number { .. } => false,
+    }
+}
+
 fn normalized_record_schema(
     schema: &ClosedJsonSchema,
     root: ClosedJsonRecordRoot,
@@ -685,6 +734,7 @@ fn normalized_record_schema(
             ClosedJsonSchemaNode::Object {
                 nullable: false,
                 fields,
+                ..
             },
         ) => {
             let field = fields

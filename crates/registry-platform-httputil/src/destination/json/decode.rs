@@ -215,22 +215,28 @@ fn validate_response_value(
             .ok_or(ClosedJsonDecodeError::ResponseContractViolation);
     }
     match (&schema.node, value) {
-        (ClosedJsonSchemaNode::Object { fields, .. }, Value::Object(object)) => {
-            if object
-                .keys()
-                .any(|name| !fields.iter().any(|field| field.name.as_ref() == name))
+        (
+            ClosedJsonSchemaNode::Object {
+                reject_unknown_fields,
+                fields,
+                ..
+            },
+            Value::Object(object),
+        ) => {
+            if (*reject_unknown_fields
+                && object
+                    .keys()
+                    .any(|name| !fields.iter().any(|field| field.name.as_ref() == name)))
                 || fields
                     .iter()
                     .any(|field| field.required && !object.contains_key(field.name.as_ref()))
             {
                 return Err(ClosedJsonDecodeError::ResponseContractViolation);
             }
-            for (name, member) in object {
-                let field = fields
-                    .iter()
-                    .find(|field| field.name.as_ref() == name)
-                    .ok_or(ClosedJsonDecodeError::ResponseContractViolation)?;
-                validate_response_value(member, &field.schema)?;
+            for field in fields {
+                if let Some(member) = object.get(field.name.as_ref()) {
+                    validate_response_value(member, &field.schema)?;
+                }
             }
             Ok(())
         }

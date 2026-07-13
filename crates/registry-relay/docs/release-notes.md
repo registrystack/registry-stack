@@ -2,17 +2,27 @@
 
 ## Unreleased
 
-- Relay consultation artifacts are now product-neutral: project tooling can
-  author closed bounded HTTP, signed DCI, immutable snapshot, and explicitly
-  release-gated SandboxedRhai plans without adding product-specific Relay
-  branches. Private bindings are independently pinned by raw and typed hashes,
-  and snapshot physical mappings no longer appear in public artifacts.
-- Compatible snapshot profiles reuse one immutable materialization slot with
-  per-profile readiness. SandboxedRhai uses a fresh scrubbed process, typed
-  prior outputs, reviewed named operations, a closed final output map, and fixed
-  compute and IPC limits; source credentials and authorization context never
-  cross the worker boundary.
-- Production SandboxedRhai activation is Linux-only because Relay requires the
+- Registry Stack project authoring now compiles product-neutral `http`, `script`, and `snapshot`
+  integrations. Source product and version labels are interoperability evidence only. They never
+  select a Relay executor or enable Rhai. The unreleased country-named authoring API and its
+  compatibility aliases are removed.
+- The `http` capability performs one bounded request and projects a closed typed output map while
+  ignoring unselected upstream fields. The `script` capability runs one reviewed Rhai adapter with
+  the interactive `source.path`, `source.get`, `source.post_json`, and `source.post_form` host API.
+  Every source request is checked against the same-origin method and path authority before Relay
+  resolves credentials or dispatches it.
+- Rhai source responses expose bounded JSON or text plus explicitly selected safe headers.
+  Returned absolute links can be followed only after same-origin canonicalization and the ordinary
+  path, method, header, request, response, call, and deadline checks. Scripts use
+  `result.match`, `result.no_match`, `result.ambiguous`, or a fixed failure constructor rather than
+  selecting named declarative operations.
+- Script consultations default to five source calls and cannot exceed sixteen. Relay commits each
+  complete credential-free request effect before dispatch and consumes a durable ordinal permit.
+  A crash, cancellation, takeover, or lost acknowledgement cannot replay a dispatched ordinal.
+- Snapshot integrations perform exact lookups against an entity-owned immutable materialization.
+  The same entity may be exposed through a records service, but records publication is optional and
+  keeps its own access, purpose, projection, filter, and pagination policy.
+- Production Rhai activation is Linux-only because Relay requires the
   Linux process memory, process-count, and no-new-privileges sandbox in addition
   to engine and IPC limits. Offline script compilation and fixture conformance
   remain available on other platforms without source or credential authority.
@@ -21,26 +31,21 @@
   deployments must install both release assets in the same directory under
   those canonical executable names.
 - Project fixture runs now compile and execute through Relay-owned closed
-  decoders for bounded HTTP, signed DCI, SnapshotExact, and SandboxedRhai.
+  decoders for HTTP, script, and exact snapshot integrations.
   Fixtures cannot supply a destination, credential, callback, or worker
   command, and no-match or ambiguous outcomes disclose no output map.
-- Relay adds the authenticated, purpose-aware native consultation surface and
-  the maintained DHIS2 2.41.9 enrollment-status profile. The profile performs
-  one retry-free bounded source exchange, returns only a closed minimized
-  outcome, and keeps source credentials in Relay.
-- A consultation request now carries one to four required exact selector
-  components for one subject. Component names use at most 64 ASCII characters.
+- A consultation request carries one to sixteen typed scalar inputs, including
+  one to eight non-null selectors for one subject. The route exposes one active
+  contract per profile id and every execution pins its exact `contract_hash`.
   `match` returns only the profile's closed typed output map, while `no_match`
-  and `ambiguous` return `data: null`. Registry-backed batch retries use a
+  and `ambiguous` omit `outputs`. Registry-backed batch retries use a
   private Notary-to-Relay child identity; that header is not part of the public
   OpenAPI contract, and conflicting durable reuse returns
   `409 consultation.batch_child_conflict`.
-- The DHIS2 source deadline is fixed at 10 seconds. Notary wraps the complete
-  service hop in 25 seconds; consultation-enabled Relay requires
-  `server.request_timeout` greater than 25 seconds, while Registry-backed
-  Notary requires at least 30 seconds. The OpenCRVS profile shares one
-  retry-free 20-second source fence across OAuth, JWKS, and signed DCI search;
-  each individual destination call remains capped at 10 seconds.
+- `contract_hash` is the single public content identity for one active profile contract. Lower-level
+  build and binding digests remain internal. Product Config Bundle input directories remain
+  separate; a signed project-level deployment root that binds Relay and Notary submanifests is
+  future work.
 
 ## 0.9.0
 

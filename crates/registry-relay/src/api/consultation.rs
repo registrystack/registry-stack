@@ -18,9 +18,10 @@ use zeroize::Zeroizing;
 
 use crate::auth::AuthenticationResult;
 use crate::consultation::{
-    AuthenticatedConsultationWorkload, ConsultationExecutionError, ConsultationKey,
-    ConsultationServiceError, NotaryBatchChildIdentity, NotaryEvaluationId, ParsedPurpose,
-    ParsedSingleStringInput, ResolvedConsultationProfile,
+    AuthenticatedConsultationWorkload, ConsultationExecutionError, ConsultationServiceError,
+    NotaryBatchChildIdentity, NotaryEvaluationId, ParsedConsultationInputs,
+    ParsedConsultationScalar, ParsedPurpose, ProfileContractHash, ProfileId,
+    ResolvedConsultationProfile,
 };
 use crate::error::{ConsultationError, Error};
 use crate::runtime_config::RuntimeSnapshot;
@@ -34,11 +35,9 @@ const NOTARY_BATCH_CHILD_ID_HEADER: &str = "registry-notary-batch-child-id";
 const JSON_MEDIA_TYPE: &str = "application/json";
 const MIN_RETRY_AFTER_SECONDS: u64 = 1;
 const MAX_RETRY_AFTER_SECONDS: u64 = 60;
-pub(crate) const PROFILE_ROUTE: &str = "/v1/consultations/{profile_id}/versions/{profile_version}";
-pub(crate) const EXECUTE_ROUTE: &str =
-    "/v1/consultations/{profile_id}/versions/{profile_version}/execute";
+pub(crate) const PROFILE_ROUTE: &str = "/v1/consultations/{profile_id}";
+pub(crate) const EXECUTE_ROUTE: &str = "/v1/consultations/{profile_id}/execute";
 const CONSULTATION_ROUTE_PREFIX: &str = "/v1/consultations/";
-const CONSULTATION_VERSION_SEPARATOR: &str = "/versions/";
 const EXECUTE_SUFFIX: &str = "/execute";
 
 /// Mount only the two frozen consultation-v1 operations.
@@ -82,14 +81,14 @@ async fn profile_metadata(
     Extension(authentication): Extension<AuthenticationResult>,
     OriginalUri(original_uri): OriginalUri,
 ) -> Response {
-    let key = match parse_routed_consultation_key(&original_uri, false) {
-        Ok(key) => key,
+    let profile_id = match parse_routed_profile_id(&original_uri, false) {
+        Ok(profile_id) => profile_id,
         Err(error) => return wire_error_response(error),
     };
     let Some(service) = runtime.consultation() else {
         return consultation_error_response(ConsultationError::Unavailable, None);
     };
-    let context = match service.resolve(&authentication, &key) {
+    let context = match service.resolve(&authentication, &profile_id) {
         Ok(context) => context,
         Err(error) => return service_error_response(error),
     };
@@ -103,14 +102,14 @@ async fn execute(
     headers: HeaderMap,
     body: Body,
 ) -> Response {
-    let key = match parse_routed_consultation_key(&original_uri, true) {
-        Ok(key) => key,
+    let profile_id = match parse_routed_profile_id(&original_uri, true) {
+        Ok(profile_id) => profile_id,
         Err(error) => return wire_error_response(error),
     };
     let Some(service) = runtime.consultation() else {
         return consultation_error_response(ConsultationError::Unavailable, None);
     };
-    let context = match service.resolve(&authentication, &key) {
+    let context = match service.resolve(&authentication, &profile_id) {
         Ok(context) => context,
         Err(error) => return service_error_response(error),
     };
@@ -164,10 +163,10 @@ fn wire_error_response(error: ConsultationWireError) -> Response {
     consultation_error_response(error.public_error(), None)
 }
 
-fn parse_routed_consultation_key(
+fn parse_routed_profile_id(
     original_uri: &axum::http::Uri,
     execute: bool,
-) -> Result<ConsultationKey, ConsultationWireError> {
+) -> Result<ProfileId, ConsultationWireError> {
     let raw = original_uri
         .path_and_query()
         .map(|value| value.as_str())
@@ -185,10 +184,10 @@ fn parse_routed_consultation_key(
     } else {
         route
     };
-    let (profile_id, profile_version) = route
-        .split_once(CONSULTATION_VERSION_SEPARATOR)
-        .ok_or(ConsultationWireError::InvalidProfilePath)?;
-    parse_consultation_key(profile_id, profile_version)
+    if route.is_empty() || route.contains('/') {
+        return Err(ConsultationWireError::InvalidProfilePath);
+    }
+    parse_profile_id(route)
 }
 
 fn service_error_response(error: ConsultationServiceError) -> Response {
@@ -299,6 +298,10 @@ pub(crate) enum ConsultationWireError {
     BodyTooLarge,
     #[error("consultation request body is malformed")]
     InvalidBody,
+    #[error("consultation contract hash does not match the active profile")]
+    ContractHashMismatch,
+    #[error("Notary evaluation id header is missing")]
+    MissingNotaryEvaluationId,
     #[error("Notary evaluation id header is repeated")]
     DuplicateNotaryEvaluationId,
     #[error("Notary evaluation id header is malformed")]
@@ -315,6 +318,7 @@ impl ConsultationWireError {
     pub(crate) const fn public_error(self) -> ConsultationError {
         match self {
             Self::InvalidProfilePath => ConsultationError::ProfileNotFound,
+            Self::ContractHashMismatch => ConsultationError::ContractMismatch,
             Self::MissingPurpose
             | Self::DuplicatePurpose
             | Self::InvalidPurpose
@@ -323,6 +327,7 @@ impl ConsultationWireError {
             | Self::UnsupportedContentType
             | Self::BodyTooLarge
             | Self::InvalidBody
+            | Self::MissingNotaryEvaluationId
             | Self::DuplicateNotaryEvaluationId
             | Self::InvalidNotaryEvaluationId
             | Self::DuplicateNotaryBatchChildId
@@ -338,7 +343,7 @@ impl ConsultationWireError {
 /// subject input in its zeroizing domain container.
 pub(crate) struct ParsedConsultationEnvelope {
     purpose: ParsedPurpose,
-    input: ParsedSingleStringInput,
+    input: ParsedConsultationInputs,
     notary_evaluation_id: Option<NotaryEvaluationId>,
     batch_child_identity: Option<NotaryBatchChildIdentity>,
 }
@@ -358,7 +363,7 @@ impl ParsedConsultationEnvelope {
 
     #[cfg(test)]
     #[must_use]
-    pub(crate) const fn input(&self) -> &ParsedSingleStringInput {
+    pub(crate) const fn input(&self) -> &ParsedConsultationInputs {
         &self.input
     }
 
@@ -372,7 +377,7 @@ impl ParsedConsultationEnvelope {
         self,
     ) -> (
         ParsedPurpose,
-        ParsedSingleStringInput,
+        ParsedConsultationInputs,
         Option<NotaryEvaluationId>,
         Option<NotaryBatchChildIdentity>,
     ) {
@@ -399,28 +404,61 @@ impl<'a> ClosedConsultationJson<'a> {
         Self { bytes, position: 0 }
     }
 
-    fn parse(mut self) -> Result<ParsedSingleStringInput, ConsultationWireError> {
+    fn parse(
+        mut self,
+    ) -> Result<(ProfileContractHash, ParsedConsultationInputs), ConsultationWireError> {
         self.whitespace();
         self.byte(b'{')?;
         self.whitespace();
-        let root_key = self.string("inputs".len())?;
-        if root_key.as_str() != "inputs" {
-            return Err(ConsultationWireError::InvalidBody);
-        }
-        self.whitespace();
-        self.byte(b':')?;
-        self.whitespace();
-        self.byte(b'{')?;
-        self.whitespace();
-        let mut components = Vec::with_capacity(4);
-        loop {
-            let input_name = self.string(ParsedSingleStringInput::MAX_NAME_BYTES)?;
+        let mut contract_hash = None;
+        let mut inputs = None;
+        for member in 0..2 {
+            let root_key = self.string("contract_hash".len())?;
             self.whitespace();
             self.byte(b':')?;
             self.whitespace();
-            let input_value = self.string(ParsedSingleStringInput::MAX_VALUE_BYTES)?;
+            match root_key.as_str() {
+                "contract_hash" if contract_hash.is_none() => {
+                    let value = self.string("sha256:".len() + 64)?;
+                    contract_hash = Some(
+                        ProfileContractHash::try_from(value.as_str())
+                            .map_err(|_| ConsultationWireError::InvalidBody)?,
+                    );
+                }
+                "inputs" if inputs.is_none() => {
+                    inputs = Some(self.inputs()?);
+                }
+                _ => return Err(ConsultationWireError::InvalidBody),
+            }
+            self.whitespace();
+            if member == 0 {
+                self.byte(b',')?;
+                self.whitespace();
+            }
+        }
+        self.byte(b'}')?;
+        self.whitespace();
+        if self.position != self.bytes.len() {
+            return Err(ConsultationWireError::InvalidBody);
+        }
+        Ok((
+            contract_hash.ok_or(ConsultationWireError::InvalidBody)?,
+            inputs.ok_or(ConsultationWireError::InvalidBody)?,
+        ))
+    }
+
+    fn inputs(&mut self) -> Result<ParsedConsultationInputs, ConsultationWireError> {
+        self.byte(b'{')?;
+        self.whitespace();
+        let mut components = Vec::with_capacity(16);
+        loop {
+            let input_name = self.string(ParsedConsultationInputs::MAX_NAME_BYTES)?;
+            self.whitespace();
+            self.byte(b':')?;
+            self.whitespace();
+            let input_value = self.scalar()?;
             components.push((input_name, input_value));
-            if components.len() > 4 {
+            if components.len() > 16 {
                 return Err(ConsultationWireError::InvalidBody);
             }
             self.whitespace();
@@ -431,15 +469,76 @@ impl<'a> ClosedConsultationJson<'a> {
             self.whitespace();
         }
         self.byte(b'}')?;
-        self.whitespace();
-        self.byte(b'}')?;
-        self.whitespace();
-        if self.position != self.bytes.len() {
+        ParsedConsultationInputs::try_parse_components(components)
+            .map_err(|_| ConsultationWireError::InvalidBody)
+    }
+
+    fn scalar(&mut self) -> Result<ParsedConsultationScalar, ConsultationWireError> {
+        match self.bytes.get(self.position).copied() {
+            Some(b'"') => self
+                .string(ParsedConsultationInputs::MAX_VALUE_BYTES)
+                .map(ParsedConsultationScalar::String),
+            Some(b't') => {
+                self.literal(b"true")?;
+                Ok(ParsedConsultationScalar::Boolean(true))
+            }
+            Some(b'f') => {
+                self.literal(b"false")?;
+                Ok(ParsedConsultationScalar::Boolean(false))
+            }
+            Some(b'n') => {
+                self.literal(b"null")?;
+                Ok(ParsedConsultationScalar::Null)
+            }
+            Some(b'-' | b'0'..=b'9') => self.integer().map(ParsedConsultationScalar::Integer),
+            _ => Err(ConsultationWireError::InvalidBody),
+        }
+    }
+
+    fn literal(&mut self, expected: &[u8]) -> Result<(), ConsultationWireError> {
+        let end = self
+            .position
+            .checked_add(expected.len())
+            .filter(|end| *end <= self.bytes.len())
+            .ok_or(ConsultationWireError::InvalidBody)?;
+        if &self.bytes[self.position..end] != expected {
             return Err(ConsultationWireError::InvalidBody);
         }
+        self.position = end;
+        Ok(())
+    }
 
-        ParsedSingleStringInput::try_parse_components(components)
-            .map_err(|_| ConsultationWireError::InvalidBody)
+    fn integer(&mut self) -> Result<i64, ConsultationWireError> {
+        const MAX_JSON_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+        let start = self.position;
+        if self.bytes.get(self.position) == Some(&b'-') {
+            self.position += 1;
+        }
+        let digits_start = self.position;
+        while self
+            .bytes
+            .get(self.position)
+            .is_some_and(u8::is_ascii_digit)
+        {
+            self.position += 1;
+        }
+        let digits = &self.bytes[digits_start..self.position];
+        if digits.is_empty() || (digits.len() > 1 && digits[0] == b'0') {
+            return Err(ConsultationWireError::InvalidBody);
+        }
+        if self
+            .bytes
+            .get(self.position)
+            .is_some_and(|byte| !matches!(byte, b',' | b'}' | b' ' | b'\t' | b'\n' | b'\r'))
+        {
+            return Err(ConsultationWireError::InvalidBody);
+        }
+        let value = std::str::from_utf8(&self.bytes[start..self.position])
+            .ok()
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|value| (-MAX_JSON_SAFE_INTEGER..=MAX_JSON_SAFE_INTEGER).contains(value))
+            .ok_or(ConsultationWireError::InvalidBody)?;
+        Ok(value)
     }
 
     fn whitespace(&mut self) {
@@ -597,22 +696,18 @@ impl<'a> ClosedConsultationJson<'a> {
 
 fn parse_consultation_body_strict(
     body: &[u8],
-) -> Result<ParsedSingleStringInput, ConsultationWireError> {
+) -> Result<(ProfileContractHash, ParsedConsultationInputs), ConsultationWireError> {
     ClosedConsultationJson::new(body).parse()
 }
 
 /// Parse only the fixed route key. The service must authenticate first and
 /// resolve this key against the workload-visible registry before parsing a
 /// subject-bearing body.
-pub(crate) fn parse_consultation_key(
-    profile_id: &str,
-    profile_version: &str,
-) -> Result<ConsultationKey, ConsultationWireError> {
-    ConsultationKey::try_parse(profile_id, profile_version)
-        .map_err(|_| ConsultationWireError::InvalidProfilePath)
+pub(crate) fn parse_profile_id(profile_id: &str) -> Result<ProfileId, ConsultationWireError> {
+    ProfileId::try_from(profile_id).map_err(|_| ConsultationWireError::InvalidProfilePath)
 }
 
-/// Strictly parse and retain only the three declared execute headers after
+/// Strictly parse and retain only the four declared execute headers after
 /// exact Notary authentication and workload-visible profile resolution. The
 /// ambient header map can then be dropped before any body or backend await.
 fn parse_execute_headers(
@@ -639,16 +734,15 @@ fn parse_execute_headers(
     let purpose =
         ParsedPurpose::try_parse(purpose).map_err(|_| ConsultationWireError::InvalidPurpose)?;
 
-    let notary_evaluation_id = optional_header(
-        headers,
-        NOTARY_EVALUATION_ID_HEADER,
-        ConsultationWireError::DuplicateNotaryEvaluationId,
-    )?
-    .map(|value| {
-        NotaryEvaluationId::try_parse(value)
-            .map_err(|_| ConsultationWireError::InvalidNotaryEvaluationId)
-    })
-    .transpose()?;
+    let notary_evaluation_id = Some(
+        NotaryEvaluationId::try_parse(exactly_one_header(
+            headers,
+            NOTARY_EVALUATION_ID_HEADER,
+            ConsultationWireError::MissingNotaryEvaluationId,
+            ConsultationWireError::DuplicateNotaryEvaluationId,
+        )?)
+        .map_err(|_| ConsultationWireError::InvalidNotaryEvaluationId)?,
+    );
     let batch_child_identity = optional_header(
         headers,
         NOTARY_BATCH_CHILD_ID_HEADER,
@@ -685,7 +779,10 @@ fn parse_execute_body(
         batch_child_identity,
     } = headers;
 
-    let input = parse_consultation_body_strict(body.as_slice())?;
+    let (contract_hash, input) = parse_consultation_body_strict(body.as_slice())?;
+    if &contract_hash != _resolved_profile.contract_hash() {
+        return Err(ConsultationWireError::ContractHashMismatch);
+    }
 
     Ok(ParsedConsultationEnvelope {
         purpose,
@@ -762,6 +859,10 @@ mod tests {
                 header::HeaderName::from_static(DATA_PURPOSE_HEADER),
                 HeaderValue::from_static("benefit-verification"),
             ),
+            (
+                header::HeaderName::from_static(NOTARY_EVALUATION_ID_HEADER),
+                HeaderValue::from_static(EVALUATION_ID),
+            ),
         ])
     }
 
@@ -818,7 +919,22 @@ mod tests {
         let resolved = resolved_profile();
         let workload = authorized_workload();
         let headers = parse_execute_headers(&resolved, &workload, headers)?;
-        let body = ConsultationRequestBody::try_from_owned(body.to_vec())?;
+        let body = if body.starts_with(b"{")
+            && !body.windows(15).any(|bytes| bytes == b"\"contract_hash\"")
+        {
+            let contract_hash = resolved.contract_hash().as_str();
+            let mut closed = format!(r#"{{"contract_hash":"{contract_hash}""#).into_bytes();
+            if body != b"{}" {
+                closed.push(b',');
+                closed.extend_from_slice(&body[1..]);
+            } else {
+                closed.push(b'}');
+            }
+            closed
+        } else {
+            body.to_vec()
+        };
+        let body = ConsultationRequestBody::try_from_owned(body)?;
         parse_execute_body(&resolved, &workload, headers, body)
     }
 
@@ -886,8 +1002,8 @@ mod tests {
 
     #[tokio::test]
     async fn router_exposes_only_the_exact_get_and_post_paths() {
-        const PROFILE: &str = "/v1/consultations/synthetic.person-status.exact/versions/1";
-        const EXECUTE: &str = "/v1/consultations/synthetic.person-status.exact/versions/1/execute";
+        const PROFILE: &str = "/v1/consultations/synthetic.person-status.exact";
+        const EXECUTE: &str = "/v1/consultations/synthetic.person-status.exact/execute";
 
         // The handlers are reached for exactly the contracted operations. This
         // test router deliberately has no service runtime, so both fail closed.
@@ -916,9 +1032,10 @@ mod tests {
         }
         for uri in [
             "/v1/consultations",
-            "/v1/consultations/synthetic.person-status.exact/versions/1/status",
-            "/v1/consultations/synthetic.person-status.exact/execute",
-            "/v1/consultations/synthetic.person-status.exact/versions/1/",
+            "/v1/consultations/synthetic.person-status.exact/status",
+            "/v1/consultations/synthetic.person-status.exact/",
+            "/v1/consultations/synthetic.person-status.exact/versions/1",
+            "/v1/consultations/synthetic.person-status.exact/versions/1/execute",
         ] {
             assert_eq!(
                 route_request(Method::GET, uri, Body::empty())
@@ -928,10 +1045,10 @@ mod tests {
             );
         }
         for uri in [
-            "/v1/consultations/%73ynthetic.person-status.exact/versions/1",
-            "/v1/consultations/synthetic%2Fperson-status.exact/versions/1",
-            "/v1/consultations/%FF/versions/1",
-            "/v1/consultations/synthetic.person-status.exact/versions/1?view=summary",
+            "/v1/consultations/%73ynthetic.person-status.exact",
+            "/v1/consultations/synthetic%2Fperson-status.exact",
+            "/v1/consultations/%FF",
+            "/v1/consultations/synthetic.person-status.exact?view=summary",
         ] {
             let response = route_request(Method::GET, uri, Body::empty()).await;
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -952,7 +1069,7 @@ mod tests {
         }));
         let response = route_request(
             Method::POST,
-            "/v1/consultations/Invalid.Profile/versions/01/execute",
+            "/v1/consultations/Invalid.Profile/execute",
             body,
         )
         .await;
@@ -974,7 +1091,7 @@ mod tests {
         }));
         let response = route_request(
             Method::POST,
-            "/v1/consultations/synthetic.person-status.exact/versions/1/execute",
+            "/v1/consultations/synthetic.person-status.exact/execute",
             body,
         )
         .await;
@@ -1042,11 +1159,10 @@ mod tests {
 
     #[test]
     fn route_key_parser_does_not_normalize_or_echo_invalid_paths() {
-        let key = parse_consultation_key("example.person-status.exact", "1").unwrap();
-        assert_eq!(key.id().as_str(), "example.person-status.exact");
-        assert_eq!(key.version().get(), 1);
+        let profile_id = parse_profile_id("example.person-status.exact").unwrap();
+        assert_eq!(profile_id.as_str(), "example.person-status.exact");
         assert_eq!(
-            parse_consultation_key("Example.person-status", "01"),
+            parse_profile_id("Example.person-status"),
             Err(ConsultationWireError::InvalidProfilePath)
         );
         assert_eq!(
@@ -1056,12 +1172,18 @@ mod tests {
     }
 
     #[test]
-    fn envelope_accepts_only_one_to_four_closed_string_components() {
+    fn envelope_accepts_up_to_sixteen_closed_typed_scalars() {
         let parsed = parse_envelope(&headers(), body()).unwrap();
         assert_eq!(parsed.purpose().as_str(), "benefit-verification");
         assert_eq!(parsed.input().name(), "subject_id");
         assert_eq!(parsed.input().value_for_internal_use(), "12345");
-        assert_eq!(parsed.notary_evaluation_id(), None);
+        assert_eq!(
+            parsed
+                .notary_evaluation_id()
+                .expect("required evaluation id")
+                .to_canonical_string(),
+            EVALUATION_ID
+        );
 
         let escaped = parse_envelope(
             &headers(),
@@ -1080,28 +1202,52 @@ mod tests {
 
         let composite = parse_envelope(
             &headers(),
-            br#"{"inputs":{"birth_date":"2001-02-03","family_name":"N'Dour","given_name":"Awa","local_id":"42"}}"#,
+            br#"{"inputs":{"birth_date":"2001-02-03","eligible":true,"family_name":"N'Dour","member_count":4,"optional_code":null}}"#,
         )
         .unwrap();
-        assert_eq!(composite.input().values().len(), 4);
+        assert_eq!(composite.input().values().len(), 5);
         assert_eq!(
             composite
                 .input()
                 .values()
                 .find(|(name, _)| *name == "birth_date")
-                .map(|(_, value)| value),
+                .and_then(|(_, value)| match value {
+                    ParsedConsultationScalar::String(value) => Some(value.as_str()),
+                    _ => None,
+                }),
             Some("2001-02-03")
         );
+        assert!(matches!(
+            composite
+                .input()
+                .values()
+                .find(|(name, _)| *name == "eligible")
+                .map(|(_, value)| value),
+            Some(ParsedConsultationScalar::Boolean(true))
+        ));
+        assert!(matches!(
+            composite
+                .input()
+                .values()
+                .find(|(name, _)| *name == "member_count")
+                .map(|(_, value)| value),
+            Some(ParsedConsultationScalar::Integer(4))
+        ));
+        assert!(matches!(
+            composite
+                .input()
+                .values()
+                .find(|(name, _)| *name == "optional_code")
+                .map(|(_, value)| value),
+            Some(ParsedConsultationScalar::Null)
+        ));
 
         for invalid in [
             br#"{}"#.as_slice(),
             br#"[]"#,
             br#"{"inputs":{}}"#,
-            br#"{"inputs":{"subject_id":null}}"#,
-            br#"{"inputs":{"subject_id":12345}}"#,
             br#"{"inputs":{"subject_id":["12345"]}}"#,
             br#"{"inputs":{"subject_id":{"value":"12345"}}}"#,
-            br#"{"inputs":{"subject_id":""}}"#,
             br#"{"inputs":{"subject_id":"123\u000045"}}"#,
             br#"{"inputs":{"subject_id":"\uD83D"}}"#,
             br#"{"inputs":{"subject_id":"\uDE00"}}"#,
@@ -1109,11 +1255,36 @@ mod tests {
             br#"{"inputs":{"subject_id":"\uZZZZ"}}"#,
             br#"{"inputs":{"subject_id":"\x41"}}"#,
             br#"{"inputs":{"subject-id":"12345"}}"#,
-            br#"{"inputs":{"a":"1","b":"2","c":"3","d":"4","e":"5"}}"#,
+            br#"{"inputs":{"a":"1","b":"2","c":"3","d":"4","e":"5","f":"6","g":"7","h":"8","i":"9","j":"10","k":"11","l":"12","m":"13","n":"14","o":"15","p":"16","q":"17"}}"#,
+            br#"{"inputs":{"subject_id":1.5}}"#,
+            br#"{"inputs":{"subject_id":9007199254740992}}"#,
             br#"{"inputs":{"subject_id":"12345"},"other":true}"#,
         ] {
             assert_eq!(
                 parse_envelope(&headers(), invalid).err(),
+                Some(ConsultationWireError::InvalidBody)
+            );
+        }
+    }
+
+    #[test]
+    fn execute_body_requires_the_exact_active_contract_hash() {
+        let mismatch = br#"{"contract_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","inputs":{"subject_id":"12345"}}"#;
+        assert_eq!(
+            parse_envelope(&headers(), mismatch).err(),
+            Some(ConsultationWireError::ContractHashMismatch)
+        );
+        for invalid in [
+            br#"{"inputs":{"subject_id":"12345"}}"#.as_slice(),
+            br#"{"contract_hash":"SHA256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","inputs":{"subject_id":"12345"}}"#,
+            br#"{"contract_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","contract_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","inputs":{"subject_id":"12345"}}"#,
+        ] {
+            let resolved = resolved_profile();
+            let workload = authorized_workload();
+            let parsed_headers = parse_execute_headers(&resolved, &workload, &headers()).unwrap();
+            let body = ConsultationRequestBody::try_from_owned(invalid.to_vec()).unwrap();
+            assert_eq!(
+                parse_execute_body(&resolved, &workload, parsed_headers, body).err(),
                 Some(ConsultationWireError::InvalidBody)
             );
         }
@@ -1143,21 +1314,21 @@ mod tests {
             Some(ConsultationWireError::BodyTooLarge)
         );
 
-        let max_subject = "x".repeat(256);
+        let max_subject = "x".repeat(ParsedConsultationInputs::MAX_VALUE_BYTES);
         let accepted = serde_json::to_vec(&json!({"inputs": {"subject_id": max_subject}})).unwrap();
         assert!(parse_envelope(&headers(), &accepted).is_ok());
 
-        let too_long = "x".repeat(257);
+        let too_long = "x".repeat(ParsedConsultationInputs::MAX_VALUE_BYTES + 1);
         let rejected = serde_json::to_vec(&json!({"inputs": {"subject_id": too_long}})).unwrap();
         assert_eq!(
             parse_envelope(&headers(), &rejected).err(),
             Some(ConsultationWireError::InvalidBody)
         );
 
-        let unicode_max = "é".repeat(128);
+        let unicode_max = "é".repeat(ParsedConsultationInputs::MAX_VALUE_BYTES / 2);
         let accepted = serde_json::to_vec(&json!({"inputs": {"subject_id": unicode_max}})).unwrap();
         assert!(parse_envelope(&headers(), &accepted).is_ok());
-        let unicode_too_long = "é".repeat(129);
+        let unicode_too_long = "é".repeat(ParsedConsultationInputs::MAX_VALUE_BYTES / 2 + 1);
         let rejected =
             serde_json::to_vec(&json!({"inputs": {"subject_id": unicode_too_long}})).unwrap();
         assert_eq!(
@@ -1165,23 +1336,19 @@ mod tests {
             Some(ConsultationWireError::InvalidBody)
         );
 
-        let mut exact_body = body().to_vec();
+        let contract_hash = resolved_profile().contract_hash().as_str().to_owned();
+        let mut exact_body =
+            format!(r#"{{"contract_hash":"{contract_hash}","inputs":{{"subject_id":"12345"}}}}"#)
+                .into_bytes();
         exact_body.resize(MAX_CONSULTATION_REQUEST_BYTES, b' ');
         assert!(parse_envelope(&headers(), &exact_body).is_ok());
 
-        let escaped_max = "\\u0078".repeat(ParsedSingleStringInput::MAX_VALUE_BYTES);
-        let encoded = format!(r#"{{"inputs":{{"subject_id":"{escaped_max}"}}}}"#);
-        let parsed = parse_envelope(&headers(), encoded.as_bytes()).unwrap();
-        assert_eq!(
-            parsed.input().value_for_internal_use().len(),
-            ParsedSingleStringInput::MAX_VALUE_BYTES
-        );
-        let escaped_too_long = "\\u0078".repeat(ParsedSingleStringInput::MAX_VALUE_BYTES + 1);
-        let encoded = format!(r#"{{"inputs":{{"subject_id":"{escaped_too_long}"}}}}"#);
-        assert_eq!(
-            parse_envelope(&headers(), encoded.as_bytes()).err(),
-            Some(ConsultationWireError::InvalidBody)
-        );
+        let two_parameter_values = "x".repeat(2_048);
+        let accepted = serde_json::to_vec(&json!({
+            "inputs": {"first": two_parameter_values, "second": "y".repeat(2_049)}
+        }))
+        .unwrap();
+        assert!(parse_envelope(&headers(), &accepted).is_ok());
     }
 
     #[test]
@@ -1269,7 +1436,7 @@ mod tests {
     }
 
     #[test]
-    fn authenticated_notary_evaluation_id_is_optional_exactly_once_and_canonical() {
+    fn authenticated_notary_evaluation_id_is_required_exactly_once_and_canonical() {
         let mut candidate = headers();
         candidate.insert(
             header::HeaderName::from_static(NOTARY_EVALUATION_ID_HEADER),
@@ -1301,6 +1468,13 @@ mod tests {
         assert_eq!(
             parse_envelope(&malformed, body()).err(),
             Some(ConsultationWireError::InvalidNotaryEvaluationId)
+        );
+
+        let mut missing = headers();
+        missing.remove(NOTARY_EVALUATION_ID_HEADER);
+        assert_eq!(
+            parse_envelope(&missing, body()).err(),
+            Some(ConsultationWireError::MissingNotaryEvaluationId)
         );
     }
 
@@ -1342,13 +1516,14 @@ mod tests {
         );
 
         let mut missing_evaluation = headers();
+        missing_evaluation.remove(NOTARY_EVALUATION_ID_HEADER);
         missing_evaluation.insert(
             header::HeaderName::from_static(NOTARY_BATCH_CHILD_ID_HEADER),
             HeaderValue::from_static("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
         );
         assert_eq!(
             parse_envelope(&missing_evaluation, body()).err(),
-            Some(ConsultationWireError::InvalidNotaryBatchChildId)
+            Some(ConsultationWireError::MissingNotaryEvaluationId)
         );
     }
 
@@ -1364,16 +1539,18 @@ mod tests {
             ConsultationWireError::UnsupportedContentType,
             ConsultationWireError::BodyTooLarge,
             ConsultationWireError::InvalidBody,
+            ConsultationWireError::ContractHashMismatch,
+            ConsultationWireError::MissingNotaryEvaluationId,
             ConsultationWireError::DuplicateNotaryEvaluationId,
             ConsultationWireError::InvalidNotaryEvaluationId,
             ConsultationWireError::DuplicateNotaryBatchChildId,
             ConsultationWireError::InvalidNotaryBatchChildId,
         ];
         for error in cases {
-            let expected = if error == ConsultationWireError::InvalidProfilePath {
-                ConsultationError::ProfileNotFound
-            } else {
-                ConsultationError::InvalidRequest
+            let expected = match error {
+                ConsultationWireError::InvalidProfilePath => ConsultationError::ProfileNotFound,
+                ConsultationWireError::ContractHashMismatch => ConsultationError::ContractMismatch,
+                _ => ConsultationError::InvalidRequest,
             };
             assert_eq!(error.public_error(), expected);
         }
@@ -1396,6 +1573,11 @@ mod tests {
                 ConsultationError::Conflict,
                 StatusCode::CONFLICT,
                 "consultation.batch_child_conflict",
+            ),
+            (
+                ConsultationError::ContractMismatch,
+                StatusCode::CONFLICT,
+                "consultation.contract_mismatch",
             ),
             (
                 ConsultationError::Denied,
@@ -1435,6 +1617,7 @@ mod tests {
             ConsultationError::InvalidRequest,
             ConsultationError::InvalidCredentials,
             ConsultationError::Conflict,
+            ConsultationError::ContractMismatch,
             ConsultationError::Denied,
             ConsultationError::ProfileNotFound,
             ConsultationError::RateLimited,
@@ -1471,7 +1654,7 @@ mod tests {
             value in proptest::collection::vec(any::<char>(), 1..65)
                 .prop_map(String::from_iter)
                 .prop_filter("bounded non-control subject", |value| {
-                    value.len() <= ParsedSingleStringInput::MAX_VALUE_BYTES
+                    value.len() <= ParsedConsultationInputs::MAX_VALUE_BYTES
                         && value.chars().all(|character| !character.is_control())
                 })
         ) {

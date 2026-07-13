@@ -114,7 +114,7 @@ hyper = { version = "1", features = ["http1", "http2", "server"] }
 hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
 insta = { version = "1", features = ["json"] }
 ipnet = { version = "2" }
-jsonschema = { version = "0.18" }
+jsonschema = { version = "0.18", features = ["draft202012"] }
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 native-tls = { version = "0.2" }
 ogcapi-types = { version = "0.3.0", features = ["features"] }

@@ -10,10 +10,12 @@
     "logical_operation": "person.status",
     "input_slots": {
       "subject_id": {
+        "role": "selector",
         "type": "string",
-        "max_bytes": 256,
+        "maxLength": 64,
+        "x-registry-max-bytes": 256,
         "pattern": "^[A-Za-z0-9._:-]+$",
-        "canonicalization": "identity"
+        "x-registry-canonicalization": "identity"
       }
     },
     "acquisition": {

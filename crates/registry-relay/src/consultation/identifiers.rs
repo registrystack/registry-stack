@@ -27,7 +27,11 @@ pub enum ConsultationIdentifierError {
     InvalidNotaryBatchChildId,
 }
 
-/// The public profile id and version selected by the fixed v1 route.
+/// Internal key for the one activated contract behind a public profile id.
+///
+/// The version remains an implementation detail while the source-plan compiler
+/// is converged. It is never accepted from or emitted on the consultation HTTP
+/// boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ConsultationKey {
     id: ProfileId,
@@ -82,6 +86,12 @@ impl ResolvedConsultationProfile {
         &self.key
     }
 
+    /// Return the exact active public contract hash proven by registry lookup.
+    #[must_use]
+    pub(crate) const fn contract_hash(&self) -> &ProfileContractHash {
+        &self.public_contract_hash
+    }
+
     pub(super) fn matches_exact_plan(&self, plan: &CompiledSourcePlan) -> bool {
         self.key.id() == plan.profile().id()
             && self.key.version() == plan.profile().version()
@@ -97,7 +107,7 @@ impl ResolvedConsultationProfile {
 }
 
 impl ConsultationKey {
-    /// Strictly parse the two path segments without normalization.
+    /// Strictly parse the internal profile identity without normalization.
     pub fn try_parse(id: &str, version: &str) -> Result<Self, ConsultationIdentifierError> {
         let id =
             ProfileId::try_from(id).map_err(|_| ConsultationIdentifierError::InvalidProfileKey)?;

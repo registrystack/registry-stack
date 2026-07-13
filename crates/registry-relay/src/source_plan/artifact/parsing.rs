@@ -42,11 +42,8 @@ fn parse_public_contract_inner(
         .spec
         .bounds
         .validate_for_acquisition(document.spec.acquisition.class)?;
-    validate_output(
-        document.spec.output_mode,
-        &document.spec.output,
-        &acquired_fields,
-    )?;
+    validate_runtime_requirements(&document.spec)?;
+    validate_output(&document.spec.output, &acquired_fields)?;
     let mut authorization = validate_authorization(&mut document.spec.authorization)?;
     let cardinality = cardinality_from_bounds(document.spec.bounds)?;
     validate_public_behavior(&mut document.spec.public_behavior, cardinality)?;
@@ -119,11 +116,15 @@ fn parse_integration_pack_inner(
         .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
     let version = ProfileVersion::try_from(document.version.as_str())
         .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
-    validate_bounded_text(&document.spec.product_family, MAX_STABLE_TEXT_BYTES)?;
-    normalize_bounded_set(
-        &mut document.spec.supported_version_evidence,
-        MAX_STABLE_TEXT_BYTES,
-    )?;
+    if let Some(product_family) = &document.spec.product_family {
+        validate_bounded_text(product_family, MAX_STABLE_TEXT_BYTES)?;
+    }
+    if !document.spec.supported_version_evidence.is_empty() {
+        normalize_bounded_set(
+            &mut document.spec.supported_version_evidence,
+            MAX_STABLE_TEXT_BYTES,
+        )?;
+    }
     if document.spec.supported_version_evidence.len() > MAX_SUPPORTED_VERSIONS {
         return Err(SourcePlanArtifactError::InvalidSet);
     }
@@ -136,11 +137,7 @@ fn parse_integration_pack_inner(
         document.spec.acquisition.class,
         &document.spec.acquisition.fields,
     )?;
-    validate_output(
-        document.spec.output_mode,
-        &document.spec.output,
-        &acquired_fields,
-    )?;
+    validate_output(&document.spec.output, &acquired_fields)?;
     validate_parameter_declarations(&mut document.spec.deployment_parameters)?;
     validate_evidence_manifest(&mut document.spec.evidence)?;
     validate_plan(&mut document.spec, &acquired_fields)?;
@@ -227,6 +224,17 @@ pub(in super::super) fn parse_private_binding(
     if let Some(destination) = &mut document.credential_destination {
         validate_destination_document(destination)?;
     }
+    let verification_destination_id = document
+        .verification_destination
+        .as_ref()
+        .map(|destination| {
+            SourceDestinationId::try_from(destination.id.as_str())
+                .map_err(|_| SourcePlanArtifactError::InvalidIdentity)
+        })
+        .transpose()?;
+    if let Some(destination) = &mut document.verification_destination {
+        validate_destination_document(destination)?;
+    }
     let credential_reference = if let Some(credential) = &document.credential {
         let reference = CredentialReferenceId::try_from(credential.reference.as_str())
             .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
@@ -249,7 +257,7 @@ pub(in super::super) fn parse_private_binding(
             .map(|key| (key.input.as_str(), key))
             .chain(mapping.keys.iter().map(|(name, key)| (name.as_str(), key)))
             .collect::<Vec<_>>();
-        if !(1..=4).contains(&keys.len()) {
+        if !(1..=MAX_SELECTOR_INPUTS).contains(&keys.len()) {
             return Err(SourcePlanArtifactError::InvalidAcquisition);
         }
         let mut physical_fields = BTreeSet::new();
@@ -298,6 +306,7 @@ pub(in super::super) fn parse_private_binding(
         registry_instance,
         data_destination_id,
         credential_destination_id,
+        verification_destination_id,
         credential_reference,
         hash: PrivateBindingHash::from_digest(digest),
     })

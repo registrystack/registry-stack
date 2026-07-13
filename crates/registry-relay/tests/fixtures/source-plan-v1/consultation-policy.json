@@ -12,7 +12,7 @@
     "integration_pack": {
       "id": "synthetic.person-status",
       "version": "1",
-      "hash": "sha256:e31ef30d326046840f0594e1fbcc934653552e902bf0caf6d383bd5507e4281c"
+      "hash": "sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9"
     }
   },
   "authorization": {

@@ -195,16 +195,16 @@ impl JourneyProfile {
     fn pack_hash(self) -> &'static str {
         match self {
             Self::Dhis2 => {
-                "sha256:c3965741e1d2da615a82a6ede91d0477c8c29204c675e043169bcc654915597f"
+                "sha256:3ebf1e17fba13e4071101a162ad53311e1a7404bea8e2624ec8621aa9d0ac997"
             }
             Self::Dhis2SandboxedRhai => {
                 "sha256:8732042fbe873ef34d86658197673b70eab8e6e52897093d355937ef1bf51165"
             }
             Self::OpenCrvs => {
-                "sha256:2217affdb8ea79a7197926800ee5f3eb5a003e9ad3acaaa6dc54c00e2ac06b58"
+                "sha256:1756f16b1c496e11be1069831ea4f54d8953466ed62bb48efc9f0c7e7def8768"
             }
             Self::SyntheticSnapshot => {
-                "sha256:0825769c7a1d88ffae41a012963ebc81e1147eb6fed425e7aa69fa7b8ccc3523"
+                "sha256:c332a961e43cb1f758fd2341924f142a544b62bf569f22f475be8cae011692ee"
             }
         }
     }

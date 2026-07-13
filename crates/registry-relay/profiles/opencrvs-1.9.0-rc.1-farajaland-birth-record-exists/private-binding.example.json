@@ -6,7 +6,7 @@
   "integration_pack": {
     "id": "opencrvs.dci.farajaland.birth-record-exists",
     "version": "1",
-    "hash": "sha256:2217affdb8ea79a7197926800ee5f3eb5a003e9ad3acaaa6dc54c00e2ac06b58"
+    "hash": "sha256:1756f16b1c496e11be1069831ea4f54d8953466ed62bb48efc9f0c7e7def8768"
   },
   "tenant": "example-government",
   "registry_instance": "opencrvs-primary",
@@ -18,6 +18,11 @@
   },
   "credential_destination": {
     "id": "opencrvs-oauth-private",
+    "origin": "https://opencrvs.example.gov/",
+    "allowed_private_cidrs": []
+  },
+  "verification_destination": {
+    "id": "opencrvs-verification-private",
     "origin": "https://opencrvs.example.gov/",
     "allowed_private_cidrs": []
   },

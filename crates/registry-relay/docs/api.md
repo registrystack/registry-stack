@@ -15,7 +15,7 @@ The admin listener is optional and only exists when `server.admin_bind` is confi
 The public URL space is structured as follows:
 
 - `/v1/datasets/{dataset_id}/entities/{entity}/...` and related aggregate, measure, and dimension routes are the entity-oriented data-plane surface.
-- `/v1/consultations/{profile_id}/versions/{profile_version}` and its `/execute` subresource expose fixed, purpose-aware consultation profiles to the configured authorized workload.
+- `/v1/consultations/{profile_id}` and its `/execute` subresource expose one active, purpose-aware consultation contract to the configured authorized workload. Callers pin the exact `contract_hash`; route versions are not part of the contract.
 - `/v1/attribute-releases` and `/v1/attribute-releases/{profile_id}/versions/{version}/resolve` (feature: `attribute-release`, off by default for 1.0) resolve governed identity attribute-release profiles to minimized claim bundles.
 - `/metadata/*` is the standards-facing metadata surface: catalog, DCAT, SHACL, policies, evidence offerings, and dataset/entity descriptors.
 - `/.well-known/api-catalog` is the public well-known discovery entry point.
@@ -116,25 +116,46 @@ Native consultation routes are active only when the complete `consultation` bloc
 Fetch the protected contract metadata before execution:
 
 ```http
-GET /v1/consultations/dhis2.tracker.enrollment-status.exact/versions/1
+GET /v1/consultations/person-status
 Authorization: Bearer <notary-jwt>
 ```
 
-Execute the same exact profile and version:
+The metadata response contains exactly the active `contract_hash` and its complete public
+`contract`. There is no profile-listing route or route version. Execute only after Registry Notary
+has validated and pinned that contract:
 
 ```http
-POST /v1/consultations/dhis2.tracker.enrollment-status.exact/versions/1/execute
+POST /v1/consultations/person-status/execute
 Authorization: Bearer <notary-jwt>
 Content-Type: application/json
 Data-Purpose: program-enrollment-verification
 Registry-Notary-Evaluation-Id: 01JYZZZZZZZZZZZZZZZZZZZZZZ
 
-{"inputs":{"tracked_entity":"Abcdef12345"}}
+{
+  "contract_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "inputs": {
+    "person_id": "SYNTHETIC_PERSON_001",
+    "reference_date": "2026-07-13"
+  }
+}
 ```
 
-`Registry-Notary-Evaluation-Id` is optional, but when supplied it must be one canonical uppercase ULID. The request body is limited to 8 KiB and contains exactly one profile-declared string input. Unknown members, query parameters, repeated headers, unsupported media types, and invalid input or purpose values are rejected. The profile contract, not free-form runtime configuration, fixes the accepted input name, validation, scope, purposes, policy, source plan, cardinality, disclosure, timeout, and quota bounds.
+`Registry-Notary-Evaluation-Id` is required and must be one canonical uppercase ULID. The request
+body is limited to 8 KiB and contains the exact active `contract_hash` plus the profile's closed
+typed input map. A profile accepts one to eight non-null selector inputs and at most sixteen total
+inputs. Strings, Booleans, JSON-safe Integers, RFC 3339 full dates, and explicitly nullable
+parameters are validated under the generated contract. Every declared input is present, with null
+used explicitly where a parameter permits it. Unknown members, missing inputs, query parameters,
+repeated headers, unsupported media types, and invalid purpose values are rejected. A hash mismatch
+returns `409 consultation.contract_mismatch` before source access.
 
-A successful response has the frozen `registry.relay.consultation-result.v1` envelope. It returns only `match`, `no_match`, or `ambiguous`; `data` is populated only for a validated singleton match. Relay includes its generated consultation id, the exact profile and integration-pack identities, acquisition time and class, policy identity, consent result, and the optional Notary evaluation id. Raw selectors, source credentials, source URLs, and source diagnostics are never returned.
+A successful response has the closed `registry.relay.consultation-result.v1` envelope. It returns
+only `match`, `no_match`, or `ambiguous`. A `match` includes every declared typed output.
+`no_match` and `ambiguous` omit `outputs`. Every outcome includes the generated consultation id,
+required Notary evaluation id, exact profile id and `contract_hash`, acquisition time and class,
+integration id and revision, snapshot evidence when applicable, and the closed consent result.
+Raw inputs, source credentials, source URLs, static policy digests, and source diagnostics are never
+returned.
 
 The public failure taxonomy is deliberately small:
 
@@ -144,6 +165,7 @@ The public failure taxonomy is deliberately small:
 | `401` | `auth.invalid_credentials` |
 | `403` | `consultation.denied` |
 | `404` | `consultation.profile_not_found` |
+| `409` | `consultation.contract_mismatch` or `consultation.batch_child_conflict` |
 | `429` | `consultation.rate_limited` |
 | `503` | `consultation.unavailable` |
 

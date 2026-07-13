@@ -1017,6 +1017,13 @@ pub async fn audit_layer(
     }
     let duration_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let status_code = response.status().as_u16();
+    // A successful execute response can only be assembled after the
+    // consultation state plane has durably completed the exact attempt. The
+    // generic HTTP audit pipeline is an operational export at that point. Its
+    // failure must not replace the authoritative result with a retryable 503
+    // that could repeat a protected source effect.
+    let authoritative_consultation_completion =
+        preserves_authoritative_consultation_completion(consultation_route, response.status());
     let error_code = response
         .extensions()
         .get::<ErrorCodeExt>()
@@ -1160,12 +1167,21 @@ pub async fn audit_layer(
         // unchanged. Under the default `fail_closed`, the request fails with a
         // stable error code so no outcome is returned without a durable audit
         // record.
-        if settings.write_policy == AuditWritePolicy::FailClosed {
+        if settings.write_policy == AuditWritePolicy::FailClosed
+            && !authoritative_consultation_completion
+        {
             return audit_failure_response(consultation_service.is_some());
         }
     }
 
     response
+}
+
+fn preserves_authoritative_consultation_completion(
+    route: Option<ConsultationDenialRoute>,
+    status: StatusCode,
+) -> bool {
+    route == Some(ConsultationDenialRoute::Execute) && status.is_success()
 }
 
 fn pending_consultation_denial(response: &Response) -> Option<ConsultationDenialReason> {
@@ -1837,6 +1853,34 @@ mod tests {
                 .map(|code| code.0.as_str()),
             Some(AUDIT_WRITE_FAILED_CODE)
         );
+    }
+
+    #[test]
+    fn operational_export_cannot_replace_an_authoritative_consultation_completion() {
+        for status in [StatusCode::OK, StatusCode::CREATED, StatusCode::NO_CONTENT] {
+            assert!(preserves_authoritative_consultation_completion(
+                Some(ConsultationDenialRoute::Execute),
+                status,
+            ));
+        }
+        for status in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::FORBIDDEN,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            assert!(!preserves_authoritative_consultation_completion(
+                Some(ConsultationDenialRoute::Execute),
+                status,
+            ));
+        }
+        assert!(!preserves_authoritative_consultation_completion(
+            Some(ConsultationDenialRoute::Profile),
+            StatusCode::OK,
+        ));
+        assert!(!preserves_authoritative_consultation_completion(
+            None,
+            StatusCode::OK,
+        ));
     }
 
     #[test]

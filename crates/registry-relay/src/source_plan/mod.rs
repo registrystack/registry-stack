@@ -15,6 +15,7 @@ mod compiler;
 mod completion_seed;
 mod credentials;
 mod identifiers;
+mod private_transport;
 mod registry;
 #[allow(
     dead_code,
@@ -30,12 +31,12 @@ pub use artifact::{
 };
 pub use compiler::{
     CompiledBodyTemplate, CompiledCardinalityMechanism, CompiledInputCanonicalization,
-    CompiledInputMatcher, CompiledInputSlot, CompiledInputType, CompiledInputValue,
-    CompiledJsonPointer, CompiledNamedBodyField, CompiledNamedExpression, CompiledOperation,
-    CompiledOutputMapping, CompiledPriorOutputSlot, CompiledProjectionMechanism,
+    CompiledInputMatcher, CompiledInputRole, CompiledInputSlot, CompiledInputType,
+    CompiledInputValue, CompiledJsonPointer, CompiledNamedBodyField, CompiledNamedExpression,
+    CompiledOperation, CompiledOutputMapping, CompiledPriorOutputSlot, CompiledProjectionMechanism,
     CompiledRequestCodec, CompiledRequestSigner, CompiledResponse, CompiledResponseField,
-    CompiledResponseNormalization, CompiledResponseSchema, CompiledScalarShape,
-    CompiledSelectorBinding, CompiledSelectorLocation, CompiledSelectorSource,
+    CompiledResponseFormat, CompiledResponseNormalization, CompiledResponseSchema,
+    CompiledScalarShape, CompiledSelectorBinding, CompiledSelectorLocation, CompiledSelectorSource,
     CompiledSnapshotBinding, CompiledSnapshotRefreshClass, CompiledSourceAuth, CompiledSourcePlan,
     CompiledSourcePlanRegistry, CompiledStatusOutcome, CompiledStep, CompiledStepPredicate,
     CompiledValueExpression, PinnedEvidenceArtifact, PinnedSourcePlanArtifact,
@@ -58,12 +59,12 @@ pub use registry::{
     InitializedConsentVerifierRegistry,
 };
 
-pub(crate) const SELECTOR_INPUT_NAME_MAX_BYTES: usize = 64;
+pub(crate) const CONSULTATION_INPUT_NAME_MAX_BYTES: usize = 64;
 
-pub(crate) fn valid_selector_input_name(name: &str) -> bool {
+pub(crate) fn valid_consultation_input_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     matches!(bytes.next(), Some(b'a'..=b'z'))
-        && name.len() <= SELECTOR_INPUT_NAME_MAX_BYTES
+        && name.len() <= CONSULTATION_INPUT_NAME_MAX_BYTES
         && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
 }
 

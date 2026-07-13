@@ -37,16 +37,16 @@ consultation:
   artifacts:
     public_contracts:
       - path: public-contract.json
-        hash: sha256:d44a58740cf51b68d9a011380814568e6c569e35057d4350a4fb429b24289ea7
-        sha256: sha256:37a6469544e4ffed5c217ef7fc438098969e31a9dd7e16bea3fd8d60a7a1b39b
+        hash: sha256:5204b26c004cdeb7530012ee00877e184854ed223cfdaa27fd82925117512a32
+        sha256: sha256:18c859bdaf75bb41159c1789549d5a3170ea797518483197d63ace811b467892
     integration_packs:
       - path: integration-pack.json
-        hash: sha256:c3965741e1d2da615a82a6ede91d0477c8c29204c675e043169bcc654915597f
-        sha256: sha256:076c1e2ff3946c24c06fa93fd06aebed3be7bf40b99b787c582029df53770441
+        hash: sha256:3ebf1e17fba13e4071101a162ad53311e1a7404bea8e2624ec8621aa9d0ac997
+        sha256: sha256:e8aac496fd789342359bdd8c67319e46c12b9e14498db056587bc6af9c9e312c
     private_bindings:
       - path: private-binding.example.json
-        hash: sha256:dc19787f51f4997175726c804fc5822485f2ed5b4d9ca7a007bcebb2adcd42c0
-        sha256: sha256:087e9e8f4a27db6384334621d7e10952c8ac9238c960c7983442c6c16cbcf69b
+        hash: sha256:656a826f13a01b6cc7cbab3001678c6ce5269eb9806ee8034a7a43b4353a0da6
+        sha256: sha256:0a1ad2eb131a610f4144533084c241167cca3ff0e58fd566ec4a4f723eacd508
     evidence:
       - class: conformance
         path: evidence/conformance.json

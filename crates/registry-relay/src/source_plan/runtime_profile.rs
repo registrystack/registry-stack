@@ -20,10 +20,10 @@ use super::artifact::{
     SourceRevisionDocument,
 };
 use super::compiler::{
-    compile_runtime_response_schema, CompiledInputCanonicalization, CompiledOperation,
-    CompiledResponse, CompiledResponseNormalization, CompiledResponseSchema, CompiledScalarShape,
-    CompiledSnapshotBinding, CompiledSourceAuth, CompiledStep, RhaiWorkerLimits,
-    SourcePlanCompileError,
+    compile_runtime_response_schema, CompiledInputCanonicalization, CompiledInputRole,
+    CompiledInputType, CompiledOperation, CompiledResponse, CompiledResponseNormalization,
+    CompiledResponseSchema, CompiledScalarShape, CompiledSnapshotBinding, CompiledSourceAuth,
+    CompiledStep, RhaiWorkerLimits, SourcePlanCompileError,
 };
 use super::completion_seed::{compile_runtime_commitment_digests, CompiledCompletionSeedTemplate};
 use super::identifiers::{CanonicalPurpose, LegalBasisId, SourceDestinationId};
@@ -72,10 +72,13 @@ fn resolve_compiled_output_pointer<'a>(
     tokens: impl Iterator<Item = &'a str>,
 ) -> Option<&'a CompiledScalarShape> {
     let mut schema = match response.normalization() {
+        CompiledResponseNormalization::ScriptBody => return None,
         CompiledResponseNormalization::Object => response.schema(),
         CompiledResponseNormalization::ArrayProbeTwo => match response.schema() {
             CompiledResponseSchema::Array { items, .. } => items,
-            CompiledResponseSchema::Object { .. } | CompiledResponseSchema::Scalar(_) => {
+            CompiledResponseSchema::ScriptBody
+            | CompiledResponseSchema::Object { .. }
+            | CompiledResponseSchema::Scalar(_) => {
                 return None;
             }
         },
@@ -85,12 +88,14 @@ fn resolve_compiled_output_pointer<'a>(
             CompiledResponseSchema::Object { fields, .. } => {
                 match fields.get(records_field_index)?.schema() {
                     CompiledResponseSchema::Array { items, .. } => items,
-                    CompiledResponseSchema::Object { .. } | CompiledResponseSchema::Scalar(_) => {
-                        return None
-                    }
+                    CompiledResponseSchema::ScriptBody
+                    | CompiledResponseSchema::Object { .. }
+                    | CompiledResponseSchema::Scalar(_) => return None,
                 }
             }
-            CompiledResponseSchema::Array { .. } | CompiledResponseSchema::Scalar(_) => {
+            CompiledResponseSchema::ScriptBody
+            | CompiledResponseSchema::Array { .. }
+            | CompiledResponseSchema::Scalar(_) => {
                 return None;
             }
         },
@@ -109,12 +114,14 @@ fn resolve_compiled_output_pointer<'a>(
                 }
                 items
             }
-            CompiledResponseSchema::Scalar(_) => return None,
+            CompiledResponseSchema::ScriptBody | CompiledResponseSchema::Scalar(_) => return None,
         };
     }
     match schema {
         CompiledResponseSchema::Scalar(shape) => Some(shape),
-        CompiledResponseSchema::Object { .. } | CompiledResponseSchema::Array { .. } => None,
+        CompiledResponseSchema::ScriptBody
+        | CompiledResponseSchema::Object { .. }
+        | CompiledResponseSchema::Array { .. } => None,
     }
 }
 compiled_digest!(
@@ -231,7 +238,7 @@ impl CompiledRuntimeProfile {
         completion_seed_template: CompiledCompletionSeedTemplate,
         completion_seed_canonical_bytes_max: usize,
         completion_audit_canonical_bytes_max: usize,
-        product_family: &str,
+        product_family: Option<&str>,
         supported_version_evidence: &[String],
         logical_operation: OperationId,
         kind: SourcePlanKind,
@@ -276,19 +283,39 @@ impl CompiledRuntimeProfile {
             .spec
             .inputs
             .iter()
-            .map(|(name, input)| CompiledRuntimeInputDescriptor {
-                name: name.as_str().into(),
-                max_bytes: input.max_bytes,
-                canonicalization: match input.canonicalization {
-                    super::artifact::CanonicalizationDocument::Identity => {
-                        CompiledInputCanonicalization::Identity
-                    }
-                    super::artifact::CanonicalizationDocument::AsciiLowercase => {
-                        CompiledInputCanonicalization::AsciiLowercase
-                    }
-                },
+            .map(|(name, input)| {
+                let (document_type, nullable) = input
+                    .resolved_type()
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+                Ok(CompiledRuntimeInputDescriptor {
+                    name: name.as_str().into(),
+                    max_bytes: input
+                        .canonical_max_bytes()
+                        .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+                    input_type: match document_type {
+                        super::artifact::InputTypeDocument::String => CompiledInputType::String,
+                        super::artifact::InputTypeDocument::FullDate => CompiledInputType::FullDate,
+                        super::artifact::InputTypeDocument::Boolean => CompiledInputType::Boolean,
+                        super::artifact::InputTypeDocument::Integer => CompiledInputType::Integer,
+                    },
+                    role: match input.role {
+                        super::artifact::InputRoleDocument::Selector => CompiledInputRole::Selector,
+                        super::artifact::InputRoleDocument::Parameter => {
+                            CompiledInputRole::Parameter
+                        }
+                    },
+                    nullable,
+                    canonicalization: match input.canonicalization {
+                        super::artifact::CanonicalizationDocument::Identity => {
+                            CompiledInputCanonicalization::Identity
+                        }
+                        super::artifact::CanonicalizationDocument::AsciiLowercase => {
+                            CompiledInputCanonicalization::AsciiLowercase
+                        }
+                    },
+                })
             })
-            .collect();
+            .collect::<Result<_, SourcePlanCompileError>>()?;
         let acquisition = CompiledAcquisitionSchema {
             fields: contract
                 .document
@@ -336,7 +363,6 @@ impl CompiledRuntimeProfile {
                         OutputTypeDocument::Date => CompiledOutputShape::Date {
                             nullable: field.nullable,
                         },
-                        OutputTypeDocument::Presence => CompiledOutputShape::Presence,
                     },
                 })
             })
@@ -483,7 +509,7 @@ impl CompiledRuntimeProfile {
             output,
             outcomes,
             provenance: CompiledSourceProvenance {
-                product_family: product_family.into(),
+                product_family: product_family.map(Into::into),
                 supported_version_evidence: supported_version_evidence
                     .iter()
                     .map(|value| value.as_str().into())
@@ -631,26 +657,10 @@ impl CompiledRuntimeProfile {
         &self.physical_projection_digest
     }
 
-    pub(crate) fn authorized_operation_union(
-        &self,
-    ) -> impl ExactSizeIterator<Item = (&'static str, &str)> {
-        self.completion_seed_template
-            .authorized_operation_union()
-            .map(|operation| (operation.kind().as_str(), operation.operation_id()))
-    }
-
-    pub(crate) fn permit_bindings(
-        &self,
-    ) -> impl ExactSizeIterator<Item = (&'static str, u8, Vec<&str>)> {
+    pub(crate) fn permit_bindings(&self) -> impl ExactSizeIterator<Item = (&'static str, u8)> + '_ {
         self.completion_seed_template
             .permit_bindings()
-            .map(|binding| {
-                (
-                    binding.kind().as_str(),
-                    binding.ordinal(),
-                    binding.allowed_operation_ids().collect(),
-                )
-            })
+            .map(|binding| (binding.kind().as_str(), binding.ordinal()))
     }
 
     pub(crate) fn credential_destination_id(&self) -> Option<&str> {
@@ -659,6 +669,10 @@ impl CompiledRuntimeProfile {
 
     pub(crate) fn data_destination_id(&self) -> Option<&str> {
         self.completion_seed_template.data_destination_id()
+    }
+
+    pub(crate) fn verification_destination_id(&self) -> Option<&str> {
+        self.completion_seed_template.verification_destination_id()
     }
 
     pub(crate) fn credential_reference(&self) -> Option<&str> {
@@ -764,7 +778,10 @@ pub(crate) enum CompiledSubjectMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CompiledRuntimeInputDescriptor {
     name: Box<str>,
-    max_bytes: u16,
+    max_bytes: u32,
+    input_type: CompiledInputType,
+    role: CompiledInputRole,
+    nullable: bool,
     canonicalization: CompiledInputCanonicalization,
 }
 
@@ -773,8 +790,20 @@ impl CompiledRuntimeInputDescriptor {
         &self.name
     }
 
-    pub(crate) const fn max_bytes(&self) -> u16 {
+    pub(crate) const fn max_bytes(&self) -> u32 {
         self.max_bytes
+    }
+
+    pub(crate) const fn input_type(&self) -> CompiledInputType {
+        self.input_type
+    }
+
+    pub(crate) const fn role(&self) -> CompiledInputRole {
+        self.role
+    }
+
+    pub(crate) const fn nullable(&self) -> bool {
+        self.nullable
     }
 
     pub(crate) const fn canonicalization(&self) -> CompiledInputCanonicalization {
@@ -952,7 +981,6 @@ pub(crate) enum CompiledOutputShape {
     Date {
         nullable: bool,
     },
-    Presence,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -964,14 +992,14 @@ pub(crate) enum CompiledPublicOutcome {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CompiledSourceProvenance {
-    product_family: Box<str>,
+    product_family: Option<Box<str>>,
     supported_version_evidence: Box<[Box<str>]>,
     logical_operation: OperationId,
 }
 
 impl CompiledSourceProvenance {
-    pub(crate) fn product_family(&self) -> &str {
-        &self.product_family
+    pub(crate) fn product_family(&self) -> Option<&str> {
+        self.product_family.as_deref()
     }
 
     pub(crate) fn supported_version_evidence(&self) -> impl ExactSizeIterator<Item = &str> {

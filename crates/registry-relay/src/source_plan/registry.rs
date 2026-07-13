@@ -20,6 +20,7 @@ use super::compiler::{
     PinnedSourcePlanArtifact, RhaiWorkerCapability, SourcePlanArtifactBundle,
     SourcePlanCompileError,
 };
+use super::private_transport::PrivateTransportActivationError;
 use super::runtime_profile::CompiledConsentProfile;
 
 type ProfileKey = (ProfileId, ProfileVersion);
@@ -271,6 +272,14 @@ impl CompiledConsultationRegistry {
         self.source_plans.iter()
     }
 
+    /// Load every hash-covered private CA and mTLS reference before this
+    /// registry can be exposed to request handling.
+    pub(crate) fn activate_private_transports(
+        &mut self,
+    ) -> Result<(), PrivateTransportActivationError> {
+        self.source_plans.activate_private_transports()
+    }
+
     fn get_for_workload_id(
         &self,
         key: &ConsultationKey,
@@ -346,6 +355,7 @@ pub(crate) fn initialize_rhai_worker_capabilities(
                 .map_err(|_| CompiledConsultationRegistryError::RhaiWorkerClosureMismatch)?,
             max_memory_bytes: limits.memory_bytes,
             wall_time_ms: u64::from(limits.cpu_ms),
+            max_source_calls: u32::from(limits.max_calls),
         };
         crate::rhai_worker::probe_script(&reviewed.script, &reviewed.entrypoint, worker_limits)
             .map_err(|_| CompiledConsultationRegistryError::RhaiWorkerClosureMismatch)?;
@@ -437,7 +447,7 @@ mod tests {
     const CONFORMANCE: &[u8] = b"synthetic registry conformance evidence v1\n";
     const NEGATIVE_SECURITY: &[u8] = b"synthetic registry negative security evidence v1\n";
     const MINIMIZATION: &[u8] = b"synthetic registry minimization proof v1\n";
-    const RHAI_SCRIPT: &str = "fn consult(input, prior) { #{ operations: [], outputs: #{} } }";
+    const RHAI_SCRIPT: &str = "fn consult(ctx) { result.no_match() }";
 
     fn raw_hash(bytes: &[u8]) -> String {
         let mut encoded = String::from("sha256:");
@@ -538,7 +548,35 @@ mod tests {
     fn rhai_pack(id: &str) -> (Vec<u8>, String) {
         let mut pack = parse_json_strict(PACK).unwrap();
         pack["id"] = json!(id);
+        pack["spec"]["bounds"]["max_source_matches"] = json!(1);
+        pack["spec"]["acquisition"]["class"] = json!("bounded_full_record");
+        pack["spec"]["reviewed_acquisition"]["class"] = json!("bounded_full_record");
+        pack["spec"]["reviewed_acquisition"]["selector"] = Value::Null;
+        pack["spec"]["reviewed_acquisition"]["cardinality"] = json!("source_enforced_singleton");
         pack["spec"]["plan"]["kind"] = json!("sandboxed_rhai");
+        pack["spec"]["plan"]["steps"] = json!([]);
+        pack["spec"]["plan"]
+            .as_object_mut()
+            .expect("Rhai plan")
+            .remove("step_conditions");
+        let operation = &mut pack["spec"]["plan"]["operations"][0];
+        operation["query"] = json!({});
+        operation["headers"] = json!({});
+        let operation_object = operation.as_object_mut().expect("Rhai operation");
+        operation_object.remove("path_parameters");
+        operation_object.remove("relation_selector");
+        operation_object.remove("input_selector");
+        operation["acquisition_fields"] = json!([]);
+        operation["control_fields"] = json!([]);
+        operation["projection"] = json!({"mechanism": "bounded_full_record"});
+        operation["response"] = json!({
+            "max_bytes": 65536,
+            "max_records": 1,
+            "normalization": "script_body",
+            "cardinality": {"mechanism": "script_managed"},
+            "schema": {"type": "script_body"},
+            "output_mapping": {}
+        });
         pack["spec"]["plan"]["rhai"] = json!({
             "script": RHAI_SCRIPT,
             "script_hash": raw_hash(RHAI_SCRIPT.as_bytes()),
@@ -563,6 +601,14 @@ mod tests {
         let (pack, pack_hash) = rhai_pack("synthetic.person-status");
         let mut contract = parse_json_strict(CONTRACT).unwrap();
         contract["spec"]["integration_pack"]["hash"] = json!(pack_hash);
+        contract["spec"]["runtime"] = json!({
+            "platform_profile": "registry-stack.consultation.v1",
+            "source_capability": "script",
+            "script_abi": crate::rhai_worker::xw::XW_ABI_VERSION
+        });
+        contract["spec"]["bounds"]["max_source_matches"] = json!(1);
+        contract["spec"]["acquisition"]["class"] = json!("bounded_full_record");
+        contract["spec"]["public_behavior"]["outcomes"] = json!(["match", "no_match"]);
         let policy_bytes = serde_json::to_vec(&policy_preimage(&contract)).unwrap();
         contract["spec"]["authorization"]["policy"]["hash"] =
             json!(typed_hash(POLICY_DOMAIN, &policy_bytes));
@@ -653,7 +699,8 @@ mod tests {
             resolved,
             plan,
             crate::consultation::ParsedPurpose::try_parse("benefit-verification").unwrap(),
-            crate::consultation::ParsedSingleStringInput::try_parse("subject_id", "12345").unwrap(),
+            crate::consultation::ParsedConsultationInputs::try_parse("subject_id", "12345")
+                .unwrap(),
         )
         .expect("resolved proof binds the exact plan");
         assert_eq!(core.profile(), plan.profile());
@@ -917,12 +964,12 @@ mod tests {
         );
 
         let (rhai, pack_hash) = rhai_closure();
-        assert!(CompiledConsultationRegistry::compile(
+        CompiledConsultationRegistry::compile(
             rhai,
             &[rhai_worker(&pack_hash)],
             &InitializedConsentVerifierRegistry::empty(),
         )
-        .is_ok());
+        .expect("exact reviewed Rhai worker closes activation");
     }
 
     #[test]
@@ -931,12 +978,12 @@ mod tests {
         let workers = initialize_rhai_worker_capabilities(&artifacts)
             .expect("reviewed script probes under the production worker surface");
         assert_eq!(workers.len(), 1);
-        assert!(CompiledConsultationRegistry::compile(
+        CompiledConsultationRegistry::compile(
             artifacts,
             &workers,
             &InitializedConsentVerifierRegistry::empty(),
         )
-        .is_ok());
+        .expect("initialized exact Rhai closure activates");
     }
 
     #[test]

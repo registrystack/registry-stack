@@ -45,11 +45,49 @@ pub(in super::super) struct SubjectDocument {
     pub(in super::super) selector_provenance: SelectorProvenanceDocument,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub(in super::super) enum InputRoleDocument {
+    Selector,
+    Parameter,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum InputScalarTypeDocument {
+    String,
+    Boolean,
+    Integer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum InputTypeMemberDocument {
+    String,
+    Boolean,
+    Integer,
+    Null,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(in super::super) enum InputSchemaTypeDocument {
+    Scalar(InputScalarTypeDocument),
+    Nullable(Vec<InputTypeMemberDocument>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum InputStringFormatDocument {
+    Date,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in super::super) enum InputTypeDocument {
     String,
     FullDate,
+    Boolean,
+    Integer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,11 +100,87 @@ pub(in super::super) enum CanonicalizationDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in super::super) struct InputDocument {
+    pub(in super::super) role: InputRoleDocument,
     #[serde(rename = "type")]
-    pub(in super::super) input_type: InputTypeDocument,
-    pub(in super::super) max_bytes: u16,
-    pub(in super::super) pattern: String,
+    pub(in super::super) schema_type: InputSchemaTypeDocument,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) format: Option<InputStringFormatDocument>,
+    #[serde(rename = "maxLength", default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) max_length: Option<u32>,
+    #[serde(rename = "minLength", default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) min_length: Option<u32>,
+    #[serde(
+        rename = "x-registry-max-bytes",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(in super::super) max_bytes: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) pattern: Option<String>,
+    #[serde(rename = "x-registry-canonicalization")]
     pub(in super::super) canonicalization: CanonicalizationDocument,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) minimum: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) maximum: Option<i64>,
+    #[serde(rename = "enum", default, skip_serializing_if = "Vec::is_empty")]
+    pub(in super::super) allowed_values: Vec<serde_json::Value>,
+    #[serde(rename = "const", default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) constant: Option<serde_json::Value>,
+}
+
+impl InputDocument {
+    pub(in crate::source_plan) fn resolved_type(&self) -> Option<(InputTypeDocument, bool)> {
+        let (scalar, nullable) = match &self.schema_type {
+            InputSchemaTypeDocument::Scalar(scalar) => (*scalar, false),
+            InputSchemaTypeDocument::Nullable(members) => {
+                if members.len() != 2
+                    || members
+                        .iter()
+                        .filter(|member| **member == InputTypeMemberDocument::Null)
+                        .count()
+                        != 1
+                {
+                    return None;
+                }
+                let scalar = members.iter().find_map(|member| match member {
+                    InputTypeMemberDocument::String => Some(InputScalarTypeDocument::String),
+                    InputTypeMemberDocument::Boolean => Some(InputScalarTypeDocument::Boolean),
+                    InputTypeMemberDocument::Integer => Some(InputScalarTypeDocument::Integer),
+                    InputTypeMemberDocument::Null => None,
+                })?;
+                (scalar, true)
+            }
+        };
+        let input_type = match (scalar, self.format) {
+            (InputScalarTypeDocument::String, None) => InputTypeDocument::String,
+            (InputScalarTypeDocument::String, Some(InputStringFormatDocument::Date)) => {
+                InputTypeDocument::FullDate
+            }
+            (InputScalarTypeDocument::Boolean, None) => InputTypeDocument::Boolean,
+            (InputScalarTypeDocument::Integer, None) => InputTypeDocument::Integer,
+            (InputScalarTypeDocument::Boolean | InputScalarTypeDocument::Integer, Some(_)) => {
+                return None;
+            }
+        };
+        Some((input_type, nullable))
+    }
+
+    pub(in crate::source_plan) fn canonical_max_bytes(&self) -> Option<u32> {
+        let (input_type, nullable) = self.resolved_type()?;
+        let scalar = match input_type {
+            InputTypeDocument::String | InputTypeDocument::FullDate => self.max_bytes?,
+            InputTypeDocument::Boolean => 5,
+            InputTypeDocument::Integer => self
+                .minimum
+                .into_iter()
+                .chain(self.maximum)
+                .map(|value| value.to_string().len())
+                .max()
+                .and_then(|bytes| u32::try_from(bytes).ok())?,
+        };
+        Some(if nullable { scalar.max(4) } else { scalar })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,7 +237,6 @@ pub(in super::super) enum OutputTypeDocument {
     Boolean,
     Integer,
     Date,
-    Presence,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,20 +251,6 @@ pub(in super::super) struct OutputFieldDocument {
     pub(in super::super) minimum: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) maximum: Option<i64>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(in super::super) enum OutputModeDocument {
-    #[default]
-    ProjectedFields,
-    PresenceOnly,
-}
-
-impl OutputModeDocument {
-    pub(super) const fn is_projected_fields(&self) -> bool {
-        matches!(self, Self::ProjectedFields)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,6 +305,10 @@ pub(in super::super) enum ReviewedCardinalityDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(in super::super) enum ResponseSchemaDocument {
+    /// A script-visible response body constrained by the response byte limit
+    /// and the host's recursive JSON/text decoder limits, but not by a
+    /// product-shaped closed schema.
+    ScriptBody,
     Object {
         nullable: bool,
         reject_unknown_fields: bool,
@@ -246,13 +349,58 @@ impl ResponseSchemaDocument {
             | (Self::Integer { nullable, .. }, OutputTypeDocument::Integer) => {
                 *nullable == output.nullable
             }
-            (_, OutputTypeDocument::Presence) => !output.nullable,
             _ => false,
         }
     }
 
     pub(super) fn matches_response_schema(&self, schema: &Self) -> bool {
         self == schema
+    }
+
+    /// Compares the selected field shape while deliberately ignoring whether
+    /// the raw source object permits additional, unselected members. Retained
+    /// acquisition schemas are validated separately as closed objects.
+    pub(super) fn matches_selected_shape(&self, selected: &Self) -> bool {
+        match (self, selected) {
+            (
+                Self::Object {
+                    nullable: raw_nullable,
+                    fields: raw_fields,
+                    ..
+                },
+                Self::Object {
+                    nullable: selected_nullable,
+                    fields: selected_fields,
+                    ..
+                },
+            ) => {
+                raw_nullable == selected_nullable
+                    && raw_fields.len() == selected_fields.len()
+                    && raw_fields.iter().all(|(name, raw)| {
+                        selected_fields.get(name).is_some_and(|selected| {
+                            raw.required == selected.required
+                                && raw.schema.matches_selected_shape(&selected.schema)
+                        })
+                    })
+            }
+            (
+                Self::Array {
+                    nullable: raw_nullable,
+                    max_items: raw_max_items,
+                    items: raw_items,
+                },
+                Self::Array {
+                    nullable: selected_nullable,
+                    max_items: selected_max_items,
+                    items: selected_items,
+                },
+            ) => {
+                raw_nullable == selected_nullable
+                    && raw_max_items == selected_max_items
+                    && raw_items.matches_selected_shape(selected_items)
+            }
+            _ => self == selected,
+        }
     }
 }
 
@@ -278,7 +426,7 @@ pub(in super::super) struct PackAcquisitionDocument {
     pub(in super::super) class: AcquisitionClassDocument,
     pub(in super::super) fields: BTreeMap<String, ResponseSchemaDocument>,
     pub(in super::super) control_fields: BTreeMap<String, ResponseSchemaDocument>,
-    pub(in super::super) selector: ExactSelectorDocument,
+    pub(in super::super) selector: Option<ExactSelectorDocument>,
     pub(in super::super) cardinality: ReviewedCardinalityDocument,
     pub(in super::super) reject_unknown_fields: bool,
 }
@@ -325,7 +473,7 @@ impl LimitsDocument {
         let transport_bounds_valid = match acquisition {
             AcquisitionClassDocument::SourceProjectedExact
             | AcquisitionClassDocument::BoundedFullRecord => {
-                (1..=5).contains(&self.max_data_exchanges)
+                (1..=16).contains(&self.max_data_exchanges)
                     && self.max_credential_exchanges <= 1
                     && self.max_data_destinations == 1
             }
@@ -338,8 +486,8 @@ impl LimitsDocument {
         let valid = (1..=2).contains(&self.max_source_matches)
             && self.max_disclosed_records == 1
             && transport_bounds_valid
-            && (1..=1024 * 1024).contains(&self.max_source_bytes)
-            && (1..=20_000).contains(&self.timeout_ms)
+            && (1..=16 * 1024 * 1024).contains(&self.max_source_bytes)
+            && (1..=60_000).contains(&self.timeout_ms)
             && (1..=MAX_IN_FLIGHT).contains(&self.max_in_flight)
             && (1..=MAX_QUOTA_PER_MINUTE).contains(&self.quota_per_minute)
             && (1..=MAX_QUOTA_BURST).contains(&self.quota_burst)
@@ -477,19 +625,31 @@ pub(in super::super) struct MaterializationContractDocument {
     pub(in super::super) digest_bound_active_pointer: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum SourceCapabilityDocument {
+    Http,
+    Script,
+    Snapshot,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct RuntimeRequirementsDocument {
+    pub(in super::super) platform_profile: String,
+    pub(in super::super) source_capability: SourceCapabilityDocument,
+    pub(in super::super) script_abi: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in super::super) struct PublicContractSpecDocument {
+    pub(in super::super) runtime: RuntimeRequirementsDocument,
     pub(in super::super) subject: SubjectDocument,
     pub(in super::super) inputs: BTreeMap<String, InputDocument>,
     pub(in super::super) integration_pack: ArtifactReferenceDocument,
     pub(in super::super) acquisition: PublicAcquisitionDocument,
     pub(in super::super) source_provenance: SourceProvenanceDocument,
-    #[serde(
-        default,
-        skip_serializing_if = "OutputModeDocument::is_projected_fields"
-    )]
-    pub(in super::super) output_mode: OutputModeDocument,
     pub(in super::super) output: BTreeMap<String, OutputFieldDocument>,
     pub(in super::super) authorization: AuthorizationDocument,
     pub(in super::super) bounds: LimitsDocument,
@@ -598,6 +758,7 @@ pub(in super::super) enum BodyTemplateDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(in super::super) enum ResponseNormalizationDocument {
+    ScriptBody,
     #[serde(rename = "json_object")]
     Object,
     #[serde(rename = "json_array_probe_two")]
@@ -761,6 +922,7 @@ pub(in super::super) enum ProjectionMechanismDocument {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mechanism", rename_all = "snake_case", deny_unknown_fields)]
 pub(in super::super) enum CardinalityMechanismDocument {
+    ScriptManaged,
     DciProbeTwo,
     ProbeQueryParameter {
         parameter: String,
@@ -780,6 +942,10 @@ pub(in super::super) enum CardinalityMechanismDocument {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in super::super) struct ResponseDocument {
+    #[serde(default, skip_serializing_if = "ResponseFormatDocument::is_json")]
+    pub(in super::super) format: ResponseFormatDocument,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in super::super) selected_headers: Vec<String>,
     pub(in super::super) max_bytes: u32,
     pub(in super::super) max_records: u8,
     pub(in super::super) normalization: ResponseNormalizationDocument,
@@ -788,14 +954,26 @@ pub(in super::super) struct ResponseDocument {
     pub(in super::super) cardinality: CardinalityMechanismDocument,
     pub(in super::super) schema: ResponseSchemaDocument,
     pub(in super::super) output_mapping: BTreeMap<String, String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(in super::super) presence_outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(in super::super) prior_outputs: BTreeMap<String, PriorOutputBindingDocument>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in super::super) accepted_statuses: Vec<u16>,
     #[serde(default, skip_serializing_if = "StatusOutcomesDocument::is_empty")]
     pub(in super::super) status_outcomes: StatusOutcomesDocument,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum ResponseFormatDocument {
+    #[default]
+    Json,
+    Text,
+}
+
+impl ResponseFormatDocument {
+    const fn is_json(&self) -> bool {
+        matches!(self, Self::Json)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -824,6 +1002,8 @@ pub(in super::super) struct HttpOperationDocument {
     pub(in super::super) path_parameters: BTreeMap<String, ValueExpressionDocument>,
     pub(in super::super) query: BTreeMap<String, ValueExpressionDocument>,
     pub(in super::super) headers: BTreeMap<String, ValueExpressionDocument>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in super::super) script_request_headers: Vec<String>,
     pub(in super::super) body: Option<BodyTemplateDocument>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) input_selector: Option<RequestSelectorLocationDocument>,
@@ -1040,6 +1220,8 @@ pub(in super::super) struct PlanTemplateDocument {
     pub(in super::super) kind: SourcePlanKind,
     pub(in super::super) data_destination_slot: Option<String>,
     pub(in super::super) credential_destination_slot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) verification_destination_slot: Option<String>,
     pub(in super::super) operations: Vec<HttpOperationDocument>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in super::super) verification_operations: Vec<VerificationOperationDocument>,
@@ -1083,7 +1265,9 @@ impl EvidenceManifestDocument {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in super::super) struct IntegrationPackSpecDocument {
-    pub(in super::super) product_family: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) product_family: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in super::super) supported_version_evidence: Vec<String>,
     pub(in super::super) logical_operation: String,
     pub(in super::super) input_slots: BTreeMap<String, InputDocument>,
@@ -1091,11 +1275,6 @@ pub(in super::super) struct IntegrationPackSpecDocument {
     pub(in super::super) source_provenance: SourceProvenanceDocument,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) reviewed_acquisition: Option<PackAcquisitionDocument>,
-    #[serde(
-        default,
-        skip_serializing_if = "OutputModeDocument::is_projected_fields"
-    )]
-    pub(in super::super) output_mode: OutputModeDocument,
     pub(in super::super) output: BTreeMap<String, OutputFieldDocument>,
     pub(in super::super) plan: PlanTemplateDocument,
     pub(in super::super) bounds: LimitsDocument,
@@ -1160,6 +1339,31 @@ pub(in super::super) struct DestinationDocument {
     )]
     pub(in super::super) dns_family: DestinationDnsFamilyDocument,
     pub(in super::super) allowed_private_cidrs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) ca: Option<DestinationCaDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) mtls: Option<DestinationMtlsDocument>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct DestinationCaDocument {
+    pub(in super::super) file: PathBuf,
+    pub(in super::super) generation: u64,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct DestinationMtlsDocument {
+    pub(in super::super) certificate_file: PathBuf,
+    pub(in super::super) private_key: DestinationSecretReferenceDocument,
+    pub(in super::super) generation: u64,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct DestinationSecretReferenceDocument {
+    pub(in super::super) secret: String,
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1234,6 +1438,8 @@ pub(in super::super) struct PrivateBindingDocument {
     pub(in super::super) source_instance: String,
     pub(in super::super) data_destination: Option<DestinationDocument>,
     pub(in super::super) credential_destination: Option<DestinationDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) verification_destination: Option<DestinationDocument>,
     pub(in super::super) credential: Option<CredentialBindingDocument>,
     pub(in super::super) deployment_parameters: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1278,6 +1484,7 @@ pub struct PrivateBindingArtifact {
     pub(in super::super) registry_instance: RegistryInstanceId,
     pub(in super::super) data_destination_id: Option<SourceDestinationId>,
     pub(in super::super) credential_destination_id: Option<SourceDestinationId>,
+    pub(in super::super) verification_destination_id: Option<SourceDestinationId>,
     pub(in super::super) credential_reference: Option<CredentialReferenceId>,
     pub(super) hash: PrivateBindingHash,
 }

@@ -31,6 +31,19 @@ use thiserror::Error;
 use url::{Host, Url};
 use zeroize::{Zeroize, Zeroizing};
 
+/// Compute a SHA-256 digest with an explicit, caller-owned domain prefix.
+///
+/// Domains must be fixed protocol constants. This helper exists so product
+/// consumers can verify canonical public-contract identities without gaining
+/// access to opaque transport bodies.
+#[must_use]
+pub fn domain_separated_sha256(domain: &[u8], canonical_payload: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    hasher.update(canonical_payload);
+    hasher.finalize().into()
+}
+
 /// Maximum raw JSON bytes accepted by the JWK parsing boundaries.
 pub const MAX_JWK_JSON_BYTES: usize = 64 * 1024;
 const MAX_DID_JWK_IDENTIFIER_BYTES: usize = MAX_JWK_JSON_BYTES.div_ceil(3) * 4;

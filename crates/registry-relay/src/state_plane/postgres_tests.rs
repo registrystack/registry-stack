@@ -40,6 +40,7 @@ use crate::consultation::{
         PreparedAtomicConsultationAttempt, PreparedAuditedConsultationDispatch,
         TerminalCompletionTestPoint, ValidatedConsultationBackendResult,
     },
+    commitments::KeyedDispatchRequestCommitment,
     response::PublishableConsultationResponse,
     ConsultationId, ConsultationOutcome, NotaryEvaluationId, OperationId,
 };
@@ -248,36 +249,21 @@ fn canonical_test_binding(value: &Value) -> (String, [u8; 32]) {
 fn completion_seed_value(
     plan_kind: &str,
     credential_operation: Option<&str>,
-    data_operations: &[&str],
+    _data_operations: &[&str],
     data_slot_allowed_operations: &[Vec<&str>],
 ) -> Value {
-    let mut authorized_operation_union = Vec::new();
-    if let Some(operation_id) = credential_operation {
-        authorized_operation_union.push(json!({
-            "kind": "credential",
-            "operation_id": operation_id,
-        }));
-    }
-    authorized_operation_union.extend(data_operations.iter().map(|operation_id| {
-        json!({
-            "kind": "data",
-            "operation_id": operation_id,
-        })
-    }));
     let mut permit_bindings = Vec::new();
-    if let Some(operation_id) = credential_operation {
+    if credential_operation.is_some() {
         permit_bindings.push(json!({
             "kind": "credential",
             "ordinal": 0,
-            "allowed_operation_ids": [operation_id],
         }));
     }
     permit_bindings.extend(data_slot_allowed_operations.iter().enumerate().map(
-        |(ordinal, allowed)| {
+        |(ordinal, _allowed)| {
             json!({
                 "kind": "data",
                 "ordinal": ordinal,
-                "allowed_operation_ids": allowed,
             })
         },
     ));
@@ -381,7 +367,6 @@ fn completion_seed_value(
             "reference": credential_operation.map(|_| "test-credential"),
             "generation": credential_operation.map(|_| 1),
         },
-        "authorized_operation_union": authorized_operation_union,
         "dispatch": {
             "plan_kind": plan_kind,
             "permit_bindings": permit_bindings,
@@ -1865,16 +1850,14 @@ async fn exercise_batch_child_replay_reservation_contract(
         "schema": "registry.relay.batch-terminal/v1",
         "consultation_id": Ulid::new().to_string(),
         "outcome": "no_match",
-        "data": null,
-        "profile": {"id": "synthetic.profile", "version": "1", "contract_hash": format!("sha256:{}", "a".repeat(64))},
+        "outputs": null,
+        "profile": {"id": "synthetic.profile", "contract_hash": format!("sha256:{}", "a".repeat(64))},
         "provenance": {
-            "relay_acquired_at": "2026-07-12T12:00:00.000Z",
+            "acquired_at": "2026-07-12T12:00:00.000Z",
             "source_observed_at": null,
             "source_revision": null,
             "acquisition_class": "source_projected_exact",
-            "integration_pack": {"id": "synthetic.pack", "version": "1", "hash": format!("sha256:{}", "b".repeat(64))},
-            "policy_id": "synthetic.policy",
-            "policy_hash": format!("sha256:{}", "c".repeat(64)),
+            "integration": {"id": "synthetic.pack", "revision": 1},
             "consent": {"outcome": "not_required", "verifier_id": null, "verifier_revision": null, "checked_at": null, "expires_at": null, "revocation_status": "not_applicable"}
         }
     }))?;
@@ -1952,7 +1935,7 @@ async fn exercise_batch_terminal_publication_contract(
     fence
         .authorize_and_dispatch(
             permit,
-            &OperationId::try_from("lookup-registration")?,
+            KeyedDispatchRequestCommitment::for_test("lookup-registration"),
             |_deadline| async {},
         )
         .await?;
@@ -3494,27 +3477,22 @@ WHERE metadata.singleton = true
         )
         .await?
         .try_get(0)?;
-    let mut authored_verification_name = compiler_open_crvs_seed.clone();
-    authored_verification_name["authorized_operation_union"][1]["operation_id"] =
-        json!("inspect-signing-keys");
-    authored_verification_name["dispatch"]["permit_bindings"][1]["allowed_operation_ids"] =
-        json!(["inspect-signing-keys"]);
-    let authored_verification_name_valid: bool = admin
+    let mut obsolete_operation_union = compiler_open_crvs_seed.clone();
+    obsolete_operation_union["authorized_operation_union"] = json!([]);
+    let obsolete_operation_union_valid: bool = admin
         .query_one(
             "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
-            &[&serde_json::to_string(&authored_verification_name)?],
+            &[&serde_json::to_string(&obsolete_operation_union)?],
         )
         .await?
         .try_get(0)?;
-    let mut authored_verification_order = compiler_open_crvs_seed.clone();
-    authored_verification_order["dispatch"]["permit_bindings"][1]["allowed_operation_ids"] =
-        json!(["opencrvs-search"]);
-    authored_verification_order["dispatch"]["permit_bindings"][2]["allowed_operation_ids"] =
-        json!(["fetch-signing-keys"]);
-    let authored_verification_order_valid: bool = admin
+    let mut out_of_order_ordinal = compiler_open_crvs_seed.clone();
+    out_of_order_ordinal["dispatch"]["permit_bindings"][1]["ordinal"] = json!(1);
+    out_of_order_ordinal["dispatch"]["permit_bindings"][2]["ordinal"] = json!(0);
+    let out_of_order_ordinal_valid: bool = admin
         .query_one(
             "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
-            &[&serde_json::to_string(&authored_verification_order)?],
+            &[&serde_json::to_string(&out_of_order_ordinal)?],
         )
         .await?
         .try_get(0)?;
@@ -3611,12 +3589,12 @@ WHERE metadata.singleton = true
         "presence-only OAuth must use null, never an expiry-bound lifetime"
     );
     assert!(
-        authored_verification_name_valid,
-        "presence-only OAuth must accept an explicitly authored verification operation identity"
+        !obsolete_operation_union_valid,
+        "the dynamic-ordinal seed must reject obsolete predeclared operation unions"
     );
     assert!(
-        authored_verification_order_valid,
-        "the seed validator must not infer verification order from operation names"
+        !out_of_order_ordinal_valid,
+        "the seed validator must enforce exact monotonic dynamic ordinals"
     );
     assert!(
         compiler_semantic_alias_seed_valid,
@@ -4928,55 +4906,39 @@ WHERE metadata.singleton = true
         .expect("bounded data permit")
         .operation_id()
         .clone();
-    let rejected_dispatches = Arc::new(AtomicUsize::new(0));
+    let dispatched = Arc::new(AtomicUsize::new(0));
+    let request_commitment = KeyedDispatchRequestCommitment::for_test("lookup-registration");
+    let expected_commitment = request_commitment.as_str().to_owned();
     {
-        let rejected_dispatches = Arc::clone(&rejected_dispatches);
+        let dispatched = Arc::clone(&dispatched);
         let permit = bounded_dispatch
             .next_data_permit_mut()?
             .expect("bounded data permit remains ready");
-        assert_eq!(
-            fence_one
-                .authorize_and_dispatch(
-                    permit,
-                    &OperationId::try_from("undeclared-operation")?,
-                    move |_deadline| async move {
-                        rejected_dispatches.fetch_add(1, Ordering::SeqCst);
-                    },
-                )
-                .await
-                .err(),
-            Some(ServingFenceError::SourceOperationNotAuthorized)
-        );
+        fence_one
+            .authorize_and_dispatch(permit, request_commitment, move |_deadline| async move {
+                dispatched.fetch_add(1, Ordering::SeqCst);
+            })
+            .await?;
     }
-    assert_eq!(rejected_dispatches.load(Ordering::SeqCst), 0);
-    let operation_after_rejection: Option<String> = admin
+    assert_eq!(dispatched.load(Ordering::SeqCst), 1);
+    let persisted_commitment: String = admin
         .query_one(
-            "SELECT source_operation_id FROM relay_state_private.dispatch_permit \
+            "SELECT request_commitment FROM relay_state_private.dispatch_permit \
              WHERE operation_id=$1 AND kind='data' AND ordinal=0",
             &[&bounded_operation_id.as_str()],
         )
         .await?
         .try_get(0)?;
-    assert_eq!(operation_after_rejection, None);
-    let permit = bounded_dispatch
-        .next_data_permit_mut()?
-        .expect("bounded data permit remains ready after rejection");
-    fence_one
-        .authorize_and_dispatch(
-            permit,
-            &OperationId::try_from("lookup-registration")?,
-            |_deadline| async {},
-        )
-        .await?;
-    let persisted_operation: String = admin
+    assert_eq!(persisted_commitment, expected_commitment);
+    let dispatch_acknowledged: bool = admin
         .query_one(
-            "SELECT source_operation_id FROM relay_state_private.dispatch_permit \
+            "SELECT dispatch_completed_at IS NOT NULL FROM relay_state_private.dispatch_permit \
              WHERE operation_id=$1 AND kind='data' AND ordinal=0",
             &[&bounded_operation_id.as_str()],
         )
         .await?
         .try_get(0)?;
-    assert_eq!(persisted_operation, "lookup-registration");
+    assert!(dispatch_acknowledged);
     let unfinished_receipt = plane_one
         .close_unfinished_consultation_for_test(
             bounded_dispatch,
@@ -5016,7 +4978,7 @@ WHERE metadata.singleton = true
     fence_one
         .authorize_and_dispatch(
             credential_permit,
-            &OperationId::try_from("fetch-credential")?,
+            KeyedDispatchRequestCommitment::for_test("fetch-credential"),
             |_deadline| async {},
         )
         .await?;
@@ -5076,19 +5038,22 @@ WHERE metadata.singleton = true
         fence_one
             .authorize_and_dispatch(
                 permit,
-                &OperationId::try_from(selected_operation)?,
+                KeyedDispatchRequestCommitment::for_test(selected_operation),
                 |_deadline| async {},
             )
             .await?;
-        let selected_operation_stored: String = admin
+        let request_commitment_stored: String = admin
             .query_one(
-                "SELECT source_operation_id FROM relay_state_private.dispatch_permit \
+                "SELECT request_commitment FROM relay_state_private.dispatch_permit \
                  WHERE operation_id=$1 AND kind='data' AND ordinal=0",
                 &[&operation_id.as_str()],
             )
             .await?
             .try_get(0)?;
-        assert_eq!(selected_operation_stored, selected_operation);
+        assert_eq!(
+            request_commitment_stored,
+            KeyedDispatchRequestCommitment::for_test(selected_operation).as_str()
+        );
         let receipt = plane_one
             .close_unfinished_consultation_for_test(
                 rhai_dispatch,
@@ -5135,7 +5100,7 @@ WHERE metadata.singleton = true
                 &ordered_operation_id,
                 DispatchPermitKind::Data,
                 1,
-                &OperationId::try_from("lookup-b")?,
+                KeyedDispatchRequestCommitment::for_test("lookup-b"),
                 ordered_deadline,
             )
             .await
@@ -5144,7 +5109,7 @@ WHERE metadata.singleton = true
     );
     let markers_after_gap: Vec<(i16, Option<String>, bool)> = admin
         .query(
-            "SELECT ordinal, source_operation_id, dispatched_at IS NOT NULL \
+            "SELECT ordinal, request_commitment, dispatched_at IS NOT NULL \
              FROM relay_state_private.dispatch_permit \
              WHERE operation_id=$1 AND kind='data' ORDER BY ordinal",
             &[&ordered_operation_id.as_str()],
@@ -5163,7 +5128,7 @@ WHERE metadata.singleton = true
             &ordered_operation_id,
             DispatchPermitKind::Data,
             0,
-            &OperationId::try_from("lookup-a")?,
+            KeyedDispatchRequestCommitment::for_test("lookup-a"),
             ordered_deadline,
         )
         .await?;
@@ -5172,7 +5137,7 @@ WHERE metadata.singleton = true
             &ordered_operation_id,
             DispatchPermitKind::Data,
             1,
-            &OperationId::try_from("lookup-b")?,
+            KeyedDispatchRequestCommitment::for_test("lookup-b"),
             ordered_deadline,
         )
         .await?;
@@ -5221,7 +5186,7 @@ WHERE metadata.singleton = true
             &bounded_reuse_operation,
             DispatchPermitKind::Data,
             0,
-            &OperationId::try_from("lookup-a")?,
+            KeyedDispatchRequestCommitment::for_test("lookup-a"),
             bounded_reuse_deadline,
         )
         .await?;
@@ -5230,33 +5195,40 @@ WHERE metadata.singleton = true
             &bounded_reuse_operation,
             DispatchPermitKind::Data,
             1,
-            &OperationId::try_from("lookup-c")?,
+            KeyedDispatchRequestCommitment::for_test("lookup-c"),
             bounded_reuse_deadline,
         )
         .await?;
-    assert_eq!(
-        fence_one
-            .authorize_permit_position_for_test(
-                &bounded_reuse_operation,
-                DispatchPermitKind::Data,
-                2,
-                &OperationId::try_from("lookup-c")?,
-                bounded_reuse_deadline,
-            )
-            .await
-            .err(),
-        Some(ServingFenceError::SourceOperationAlreadyUsed)
-    );
+    fence_one
+        .authorize_permit_position_for_test(
+            &bounded_reuse_operation,
+            DispatchPermitKind::Data,
+            2,
+            KeyedDispatchRequestCommitment::for_test("lookup-c"),
+            bounded_reuse_deadline,
+        )
+        .await?;
     let bounded_reuse_marker: (Option<String>, bool) = admin
         .query_one(
-            "SELECT source_operation_id, dispatched_at IS NOT NULL \
+            "SELECT request_commitment, dispatched_at IS NOT NULL \
              FROM relay_state_private.dispatch_permit \
              WHERE operation_id=$1 AND kind='data' AND ordinal=2",
             &[&bounded_reuse_operation.as_str()],
         )
         .await
         .and_then(|row| Ok((row.try_get(0)?, row.try_get(1)?)))?;
-    assert_eq!(bounded_reuse_marker, (None, false));
+    assert_eq!(
+        bounded_reuse_marker,
+        (
+            Some(
+                KeyedDispatchRequestCommitment::for_test("lookup-c")
+                    .as_str()
+                    .to_owned()
+            ),
+            true,
+        ),
+        "repeated complete effects remain valid at later monotonic ordinals"
+    );
     plane_one
         .close_unfinished_consultation_for_test(
             bounded_reuse_dispatch,
@@ -5296,7 +5268,7 @@ WHERE metadata.singleton = true
             &credential_order_operation,
             DispatchPermitKind::Data,
             0,
-            &OperationId::try_from("lookup-registration")?,
+            KeyedDispatchRequestCommitment::for_test("lookup-registration"),
             credential_order_deadline,
         )
         .await?;
@@ -5306,7 +5278,7 @@ WHERE metadata.singleton = true
                 &credential_order_operation,
                 DispatchPermitKind::Credential,
                 0,
-                &OperationId::try_from("fetch-credential")?,
+                KeyedDispatchRequestCommitment::for_test("fetch-credential"),
                 credential_order_deadline,
             )
             .await
@@ -5315,7 +5287,7 @@ WHERE metadata.singleton = true
     );
     let credential_marker: (Option<String>, bool) = admin
         .query_one(
-            "SELECT source_operation_id, dispatched_at IS NOT NULL \
+            "SELECT request_commitment, dispatched_at IS NOT NULL \
              FROM relay_state_private.dispatch_permit \
              WHERE operation_id=$1 AND kind='credential' AND ordinal=0",
             &[&credential_order_operation.as_str()],
@@ -5439,7 +5411,7 @@ WHERE metadata.singleton = true
         orphan_fence
             .authorize_and_dispatch(
                 orphan_permit,
-                &OperationId::try_from("lookup-registration")?,
+                KeyedDispatchRequestCommitment::for_test("lookup-registration"),
                 move |_deadline| async move {
                     let _ = orphan_dispatch_started.send(());
                     std::future::pending::<()>().await;
@@ -5504,7 +5476,7 @@ WHERE metadata.singleton = true
             takeover_fence
                 .authorize_and_dispatch(
                     orphan_permit,
-                    &OperationId::try_from("lookup-registration")?,
+                    KeyedDispatchRequestCommitment::for_test("lookup-registration"),
                     |_deadline| async { panic!("a stale-generation permit must never dispatch") },
                 )
                 .await
@@ -5873,7 +5845,7 @@ WHERE metadata.singleton = true
         marker_task_fence
             .authorize_and_dispatch(
                 permit,
-                &marker_source_operation,
+                KeyedDispatchRequestCommitment::for_test(marker_source_operation.as_str()),
                 move |_deadline| async move {
                     let _ = marker_visible.send(());
                     std::future::pending::<()>().await;
@@ -5887,13 +5859,16 @@ WHERE metadata.singleton = true
         .expect("marker dispatch start signal must be delivered");
     let visible_marker: Option<String> = admin
         .query_one(
-            "SELECT source_operation_id FROM relay_state_private.dispatch_permit \
+            "SELECT request_commitment FROM relay_state_private.dispatch_permit \
              WHERE operation_id=$1 AND kind='data' AND ordinal=0",
             &[&marker_operation_text],
         )
         .await?
         .try_get(0)?;
-    assert_eq!(visible_marker.as_deref(), Some("lookup-registration"));
+    assert_eq!(
+        visible_marker.as_deref(),
+        Some(KeyedDispatchRequestCommitment::for_test("lookup-registration").as_str())
+    );
     marker_task.abort();
     assert!(marker_task
         .await

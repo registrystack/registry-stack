@@ -25,8 +25,8 @@ use hickory_resolver::proto::rr::{Name, RData};
 use hickory_resolver::TokioResolver;
 use http::header::{
     HeaderName, HeaderValue, ACCEPT_ENCODING, AUTHORIZATION, CONNECTION, CONTENT_LENGTH,
-    CONTENT_TYPE, COOKIE, FORWARDED, HOST, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, TE, TRAILER,
-    TRANSFER_ENCODING, UPGRADE,
+    CONTENT_TYPE, COOKIE, FORWARDED, HOST, PROXY_AUTHENTICATE, PROXY_AUTHORIZATION, SET_COOKIE, TE,
+    TRAILER, TRANSFER_ENCODING, UPGRADE, VIA, WWW_AUTHENTICATE,
 };
 use http::uri::PathAndQuery;
 use http::{HeaderMap, StatusCode};
@@ -43,7 +43,7 @@ pub mod fhir;
 pub mod input_pattern;
 pub mod json;
 pub mod oauth;
-pub mod opencrvs;
+pub mod signed_dci;
 
 mod sensitive_json;
 
@@ -75,6 +75,12 @@ pub const MAX_DESTINATION_RESPONSE_BODY_BYTES: usize = 16_777_216;
 pub const MAX_DESTINATION_RESPONSE_HEADERS: usize = 64;
 /// Maximum aggregate parsed upstream response-header name and value bytes.
 pub const MAX_DESTINATION_RESPONSE_HEADER_BYTES: usize = 65_536;
+/// Maximum configured private CA bundle bytes retained during TLS activation.
+pub const MAX_DESTINATION_CA_BUNDLE_BYTES: usize = 1_048_576;
+/// Maximum certificates accepted from one configured private CA bundle.
+pub const MAX_DESTINATION_CA_CERTIFICATES: usize = 32;
+/// Maximum combined client certificate-chain and private-key PEM bytes.
+pub const MAX_DESTINATION_CLIENT_IDENTITY_BYTES: usize = 524_288;
 /// Frozen hard maximum for DNS, connect, send, and response body read together.
 pub const MAX_DESTINATION_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 /// Fixed hard maximum for a data request made across one internal service hop.
@@ -221,7 +227,99 @@ pub struct FixedDestinationPolicy<S: DestinationSlot> {
     profile: DestinationProfile,
     allowed_private_cidrs: Vec<IpNet>,
     dns_family: DestinationDnsFamily,
+    tls: DestinationTlsState,
     slot: PhantomData<fn() -> S>,
+}
+
+/// Parsed TLS material for one exact fixed destination.
+///
+/// Callers load referenced files and secret values through their guarded
+/// deployment boundary before constructing this value. `Debug` reports only
+/// the non-secret material shape.
+pub struct DestinationTlsMaterial {
+    roots: Vec<reqwest::Certificate>,
+    identity: Option<reqwest::Identity>,
+}
+
+impl DestinationTlsMaterial {
+    /// Parse an optional private CA bundle and optional mTLS identity.
+    ///
+    /// The mTLS PEM is the client certificate chain followed by exactly one
+    /// private key. System roots remain enabled when private roots are added.
+    pub fn from_pem(
+        ca_bundle: Option<&[u8]>,
+        client_identity: Option<&[u8]>,
+    ) -> Result<Self, DestinationTlsMaterialError> {
+        if ca_bundle.is_none() && client_identity.is_none() {
+            return Err(DestinationTlsMaterialError::Empty);
+        }
+        let roots = match ca_bundle {
+            Some(bytes) => {
+                if bytes.is_empty() || bytes.len() > MAX_DESTINATION_CA_BUNDLE_BYTES {
+                    return Err(DestinationTlsMaterialError::InvalidCaBundle);
+                }
+                let roots = reqwest::Certificate::from_pem_bundle(bytes)
+                    .map_err(|_| DestinationTlsMaterialError::InvalidCaBundle)?;
+                if roots.is_empty() || roots.len() > MAX_DESTINATION_CA_CERTIFICATES {
+                    return Err(DestinationTlsMaterialError::InvalidCaBundle);
+                }
+                roots
+            }
+            None => Vec::new(),
+        };
+        let identity = match client_identity {
+            Some(bytes) => {
+                if bytes.is_empty() || bytes.len() > MAX_DESTINATION_CLIENT_IDENTITY_BYTES {
+                    return Err(DestinationTlsMaterialError::InvalidClientIdentity);
+                }
+                Some(
+                    reqwest::Identity::from_pem(bytes)
+                        .map_err(|_| DestinationTlsMaterialError::InvalidClientIdentity)?,
+                )
+            }
+            None => None,
+        };
+        Ok(Self { roots, identity })
+    }
+}
+
+impl fmt::Debug for DestinationTlsMaterial {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DestinationTlsMaterial")
+            .field("configured_root_count", &self.roots.len())
+            .field("client_identity", &self.identity.is_some())
+            .finish()
+    }
+}
+
+enum DestinationTlsState {
+    System,
+    ConfiguredRequired,
+    Configured(DestinationTlsMaterial),
+}
+
+impl fmt::Debug for DestinationTlsState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::System => "system",
+            Self::ConfiguredRequired => "configured-required",
+            Self::Configured(_) => "configured",
+        })
+    }
+}
+
+/// Value-free configured TLS material failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum DestinationTlsMaterialError {
+    #[error("configured destination TLS material is empty")]
+    Empty,
+    #[error("configured destination CA bundle is invalid")]
+    InvalidCaBundle,
+    #[error("configured destination client identity is invalid")]
+    InvalidClientIdentity,
+    #[error("destination does not require configured TLS material")]
+    NotRequired,
 }
 
 /// Registry-data fixed destination policy.
@@ -315,7 +413,7 @@ impl ServiceHopDataDestinationPolicy {
                 deadline,
                 MAX_SERVICE_HOP_OPERATION_TIMEOUT,
                 &SystemResolver,
-                TransportTrust::System,
+                TransportTrust::Policy,
             )
             .await
     }
@@ -331,6 +429,7 @@ impl<S: DestinationSlot> fmt::Debug for FixedDestinationPolicy<S> {
             .field("profile", &self.profile)
             .field("private_cidr_count", &self.allowed_private_cidrs.len())
             .field("dns_family", &self.dns_family)
+            .field("tls", &self.tls)
             .finish()
     }
 }
@@ -452,14 +551,76 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             profile,
             allowed_private_cidrs: retained,
             dns_family,
+            tls: DestinationTlsState::System,
             slot: PhantomData,
         })
+    }
+
+    /// Mark this fixed destination as fail-closed until configured TLS
+    /// material has been loaded by the deployment runtime.
+    #[must_use]
+    pub fn require_configured_tls(mut self) -> Self {
+        self.tls = DestinationTlsState::ConfiguredRequired;
+        self
+    }
+
+    /// Install already parsed configured TLS material for this destination.
+    pub fn install_configured_tls(
+        &mut self,
+        material: DestinationTlsMaterial,
+    ) -> Result<(), DestinationTlsMaterialError> {
+        if !matches!(self.tls, DestinationTlsState::ConfiguredRequired) {
+            return Err(DestinationTlsMaterialError::NotRequired);
+        }
+        self.tls = DestinationTlsState::Configured(material);
+        Ok(())
     }
 
     /// Stable non-secret identifier suitable for restricted audit metadata.
     #[must_use]
     pub fn origin_id(&self) -> &str {
         &self.origin_id
+    }
+
+    /// Convert a relative reference or an exact same-origin absolute URL into
+    /// the canonical relative target accepted by bounded destination requests.
+    ///
+    /// This deliberately reveals no configured origin. Absolute pagination
+    /// links are admitted only when their URL origin exactly matches the frozen
+    /// destination, and the returned target still passes the ordinary target,
+    /// path-authority, request-size, and dispatch checks.
+    pub fn canonicalize_same_origin_target(
+        &self,
+        target: &str,
+    ) -> Result<String, DestinationTargetCanonicalizationError> {
+        if target.starts_with('/') {
+            validate_destination_target(target)
+                .map_err(|_| DestinationTargetCanonicalizationError::InvalidTarget)?;
+            return Ok(target.to_owned());
+        }
+        if target.len()
+            > MAX_DESTINATION_ORIGIN_URL_BYTES.saturating_add(MAX_DESTINATION_TARGET_BYTES)
+        {
+            return Err(DestinationTargetCanonicalizationError::InvalidTarget);
+        }
+        let parsed = Url::parse(target)
+            .map_err(|_| DestinationTargetCanonicalizationError::InvalidTarget)?;
+        if !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || parsed.fragment().is_some()
+            || parsed.origin() != self.origin.origin()
+            || absolute_reference_contains_dot_segment(target)
+        {
+            return Err(DestinationTargetCanonicalizationError::AuthorityDenied);
+        }
+        let mut relative = parsed.path().to_owned();
+        if let Some(query) = parsed.query() {
+            relative.push('?');
+            relative.push_str(query);
+        }
+        validate_destination_target(&relative)
+            .map_err(|_| DestinationTargetCanonicalizationError::InvalidTarget)?;
+        Ok(relative)
     }
 
     /// Frozen non-secret DNS address-family policy.
@@ -499,7 +660,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             deadline,
             MAX_DESTINATION_OPERATION_TIMEOUT,
             &SystemResolver,
-            TransportTrust::System,
+            TransportTrust::Policy,
         )
         .await
     }
@@ -589,6 +750,23 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             .no_deflate()
             .resolve_to_addrs(host, pinned.as_slice());
         let client_builder = match trust {
+            TransportTrust::Policy => match &self.tls {
+                DestinationTlsState::System => client_builder,
+                DestinationTlsState::ConfiguredRequired => {
+                    return Err(DestinationSendError::TlsMaterialUnavailable);
+                }
+                DestinationTlsState::Configured(material) => {
+                    let mut builder = client_builder;
+                    for root in &material.roots {
+                        builder = builder.add_root_certificate(root.clone());
+                    }
+                    if let Some(identity) = &material.identity {
+                        builder = builder.identity(identity.clone());
+                    }
+                    builder
+                }
+            },
+            #[cfg(test)]
             TransportTrust::System => client_builder,
             #[cfg(test)]
             TransportTrust::TestRoot(root) => client_builder.add_root_certificate(root),
@@ -1043,7 +1221,43 @@ pub struct BoundedDestinationRequestTemplate<S: DestinationSlot> {
     body: DestinationBodyTemplate,
     max_target_bytes: usize,
     max_request_bytes: usize,
+    script_policy: Option<ScriptRequestPolicy>,
     slot: PhantomData<fn() -> S>,
+}
+
+struct ScriptRequestPolicy {
+    path_rule: ScriptPathRule,
+    request_headers: Vec<HeaderName>,
+    api_key: Option<ScriptApiKeyPolicy>,
+}
+
+enum ScriptPathRule {
+    Exact(Vec<String>),
+    Segments(Vec<ScriptPathSegment>),
+}
+
+enum ScriptPathSegment {
+    Exact(String),
+    One,
+    Descendants,
+}
+
+enum ScriptApiKeyPolicy {
+    Header {
+        name: HeaderName,
+        max_value_bytes: usize,
+    },
+    Query {
+        name: String,
+        max_value_bytes: usize,
+    },
+}
+
+/// Host-owned body encoding for one reviewed script source call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptRequestBodyFormat {
+    Json,
+    Form,
 }
 
 /// Reviewed data-destination request template.
@@ -1115,6 +1329,296 @@ impl BoundedDestinationRequestTemplate<CredentialDestination> {
     }
 }
 
+impl BoundedDestinationRequestTemplate<DataDestination> {
+    /// Compile the maximum request authority available to one reviewed script allow rule.
+    ///
+    /// Query names and values remain script-authored and are bounded at render time. Header
+    /// names and path shape are frozen here. Authentication material remains host-owned.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_script(
+        method: DestinationMethod,
+        path_rule: &str,
+        request_headers: &[&str],
+        authorization: DestinationAuthorizationTemplate,
+        api_key_header: Option<(&str, usize)>,
+        api_key_query: Option<(&str, usize)>,
+        max_request_bytes: usize,
+    ) -> Result<Self, DestinationRequestError> {
+        if api_key_header.is_some() && api_key_query.is_some() {
+            return Err(DestinationRequestError::InvalidAuthorization);
+        }
+        let path_rule = compile_script_path_rule(path_rule)?;
+        let mut retained_headers = Vec::with_capacity(request_headers.len());
+        for raw_name in request_headers {
+            let name = HeaderName::from_str(raw_name)
+                .map_err(|_| DestinationRequestError::ForbiddenHeader)?;
+            if is_forbidden_static_request_header(&name)
+                || name == CONTENT_TYPE
+                || retained_headers.contains(&name)
+            {
+                return Err(DestinationRequestError::ForbiddenHeader);
+            }
+            retained_headers.push(name);
+        }
+        let api_key = match (api_key_header, api_key_query) {
+            (Some((raw_name, max_value_bytes)), None) => {
+                let name = HeaderName::from_str(raw_name)
+                    .map_err(|_| DestinationRequestError::ForbiddenHeader)?;
+                if is_forbidden_static_request_header(&name)
+                    || retained_headers.contains(&name)
+                    || !(1..=MAX_DESTINATION_HEADER_VALUE_BYTES).contains(&max_value_bytes)
+                {
+                    return Err(DestinationRequestError::InvalidAuthorization);
+                }
+                Some(ScriptApiKeyPolicy::Header {
+                    name,
+                    max_value_bytes,
+                })
+            }
+            (None, Some((name, max_value_bytes))) => {
+                validate_script_query_name(name)?;
+                if !(1..=MAX_DESTINATION_HEADER_VALUE_BYTES).contains(&max_value_bytes) {
+                    return Err(DestinationRequestError::InvalidAuthorization);
+                }
+                Some(ScriptApiKeyPolicy::Query {
+                    name: name.to_owned(),
+                    max_value_bytes,
+                })
+            }
+            (None, None) => None,
+            (Some(_), Some(_)) => unreachable!("both API-key placements rejected above"),
+        };
+        let header_count = retained_headers.len()
+            + usize::from(matches!(api_key, Some(ScriptApiKeyPolicy::Header { .. })))
+            + usize::from(authorization != DestinationAuthorizationTemplate::Forbidden)
+            + usize::from(method == DestinationMethod::ReviewedReadOnlyPost);
+        if header_count > MAX_DESTINATION_REQUEST_HEADERS
+            || max_request_bytes == 0
+            || max_request_bytes
+                > MAX_DESTINATION_TARGET_BYTES
+                    + MAX_DESTINATION_REQUEST_HEADER_BYTES
+                    + MAX_DESTINATION_REQUEST_BODY_BYTES
+        {
+            return Err(DestinationRequestError::TemplateBoundsExceeded);
+        }
+        if method == DestinationMethod::OAuth2ClientCredentialsPost {
+            return Err(DestinationRequestError::MethodSlotMismatch);
+        }
+        Ok(Self {
+            method,
+            fixed_path: path_rule_display(&path_rule),
+            path_segment_max_bytes: None,
+            query: Vec::new(),
+            headers: Vec::new(),
+            authorization,
+            body: match method {
+                DestinationMethod::Get => DestinationBodyTemplate::Forbidden,
+                DestinationMethod::ReviewedReadOnlyPost => DestinationBodyTemplate::Required {
+                    max_bytes: MAX_DESTINATION_REQUEST_BODY_BYTES,
+                },
+                DestinationMethod::OAuth2ClientCredentialsPost => unreachable!(),
+            },
+            max_target_bytes: MAX_DESTINATION_TARGET_BYTES,
+            max_request_bytes,
+            script_policy: Some(ScriptRequestPolicy {
+                path_rule,
+                request_headers: retained_headers,
+                api_key,
+            }),
+            slot: PhantomData,
+        })
+    }
+
+    /// Render one canonical script-selected target under its compiled authority.
+    pub fn validate_script_request_shape(
+        &self,
+        target: &str,
+        header_names: &[&str],
+        body_format: Option<ScriptRequestBodyFormat>,
+    ) -> Result<(), DestinationRequestError> {
+        let policy = self
+            .script_policy
+            .as_ref()
+            .ok_or(DestinationRequestError::TemplateValueCountMismatch)?;
+        validate_destination_target(target)?;
+        let (path, query) = target.split_once('?').unwrap_or((target, ""));
+        if !script_path_matches(&policy.path_rule, path)? {
+            return Err(DestinationRequestError::InvalidTarget);
+        }
+        let mut query_count = 0_usize;
+        for member in query.split('&').filter(|member| !member.is_empty()) {
+            let (name, _) = member.split_once('=').unwrap_or((member, ""));
+            let name = decode_script_component(name)?;
+            validate_script_query_name(&name)?;
+            if matches!(&policy.api_key, Some(ScriptApiKeyPolicy::Query { name: key, .. }) if key == &name)
+            {
+                return Err(DestinationRequestError::InvalidTarget);
+            }
+            query_count += 1;
+        }
+        if query_count
+            + usize::from(matches!(
+                &policy.api_key,
+                Some(ScriptApiKeyPolicy::Query { .. })
+            ))
+            > MAX_DESTINATION_REQUEST_QUERY_COMPONENTS
+        {
+            return Err(DestinationRequestError::TooManyQueryComponents);
+        }
+        let mut retained = Vec::with_capacity(header_names.len());
+        for raw_name in header_names {
+            let name = HeaderName::from_str(raw_name)
+                .map_err(|_| DestinationRequestError::ForbiddenHeader)?;
+            if !policy.request_headers.contains(&name) || retained.contains(&name) {
+                return Err(DestinationRequestError::ForbiddenHeader);
+            }
+            retained.push(name);
+        }
+        match (self.method, body_format) {
+            (DestinationMethod::Get, None) | (DestinationMethod::ReviewedReadOnlyPost, Some(_)) => {
+                Ok(())
+            }
+            _ => Err(DestinationRequestError::BodyPresenceMismatch),
+        }
+    }
+
+    /// Render one canonical script-selected target under its compiled authority.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_script(
+        &self,
+        target: &str,
+        header_values: &[(&str, &[u8])],
+        authorization: Option<DestinationAuthorizationValue>,
+        api_key: Option<Zeroizing<Vec<u8>>>,
+        body_format: Option<ScriptRequestBodyFormat>,
+        body: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<DataDestinationRequest, DestinationRequestError> {
+        let policy = self
+            .script_policy
+            .as_ref()
+            .ok_or(DestinationRequestError::TemplateValueCountMismatch)?;
+        self.validate_script_request_shape(
+            target,
+            &header_values
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>(),
+            body_format,
+        )?;
+        let (path, query) = target.split_once('?').unwrap_or((target, ""));
+        let _ = path;
+        let mut query_count = 0_usize;
+        for member in query.split('&').filter(|member| !member.is_empty()) {
+            let (name, _) = member.split_once('=').unwrap_or((member, ""));
+            let name = decode_script_component(name)?;
+            validate_script_query_name(&name)?;
+            if matches!(&policy.api_key, Some(ScriptApiKeyPolicy::Query { name: key, .. }) if key == &name)
+            {
+                return Err(DestinationRequestError::InvalidTarget);
+            }
+            query_count += 1;
+        }
+        let api_key_query = matches!(policy.api_key, Some(ScriptApiKeyPolicy::Query { .. }));
+        if query_count + usize::from(api_key_query) > MAX_DESTINATION_REQUEST_QUERY_COMPONENTS {
+            return Err(DestinationRequestError::TooManyQueryComponents);
+        }
+        let authorization_kind_valid = matches!(
+            (
+                self.authorization,
+                authorization.as_ref().map(|value| value.kind)
+            ),
+            (DestinationAuthorizationTemplate::Forbidden, None)
+                | (
+                    DestinationAuthorizationTemplate::Basic { .. },
+                    Some(DestinationAuthorizationKind::Basic)
+                )
+                | (
+                    DestinationAuthorizationTemplate::Bearer { .. },
+                    Some(DestinationAuthorizationKind::Bearer)
+                )
+        );
+        if !authorization_kind_valid
+            || authorization
+                .as_ref()
+                .is_some_and(|value| value.value.len() > self.authorization.max_value_bytes())
+        {
+            return Err(DestinationRequestError::InvalidAuthorization);
+        }
+        let mut headers = Vec::with_capacity(header_values.len() + 2);
+        for (raw_name, value) in header_values {
+            let name = HeaderName::from_str(raw_name)
+                .map_err(|_| DestinationRequestError::ForbiddenHeader)?;
+            if !policy.request_headers.contains(&name)
+                || headers.iter().any(|(prior, _)| prior == &name)
+            {
+                return Err(DestinationRequestError::ForbiddenHeader);
+            }
+            headers.push((name, Zeroizing::new((*value).to_vec())));
+        }
+        match (self.method, body_format, body.as_ref()) {
+            (DestinationMethod::Get, None, None) => {}
+            (DestinationMethod::ReviewedReadOnlyPost, Some(format), Some(value))
+                if !value.is_empty() =>
+            {
+                let value: &[u8] = match format {
+                    ScriptRequestBodyFormat::Json => b"application/json",
+                    ScriptRequestBodyFormat::Form => b"application/x-www-form-urlencoded",
+                };
+                headers.push((CONTENT_TYPE, Zeroizing::new(value.to_vec())));
+            }
+            _ => return Err(DestinationRequestError::BodyPresenceMismatch),
+        }
+        let mut target = Zeroizing::new(target.as_bytes().to_vec());
+        match (&policy.api_key, api_key) {
+            (None, None) => {}
+            (
+                Some(ScriptApiKeyPolicy::Header {
+                    name,
+                    max_value_bytes,
+                }),
+                Some(value),
+            ) if !value.is_empty() && value.len() <= *max_value_bytes => {
+                headers.push((name.clone(), value));
+            }
+            (
+                Some(ScriptApiKeyPolicy::Query {
+                    name,
+                    max_value_bytes,
+                }),
+                Some(value),
+            ) if !value.is_empty() && value.len() <= *max_value_bytes => {
+                target.push(if query.is_empty() { b'?' } else { b'&' });
+                append_rfc3986_component(&mut target, name.as_bytes())?;
+                target.push(b'=');
+                append_rfc3986_component(&mut target, value.as_slice())?;
+            }
+            _ => return Err(DestinationRequestError::InvalidAuthorization),
+        }
+        if target.len() > self.max_target_bytes {
+            return Err(DestinationRequestError::TargetTooLong);
+        }
+        let actual_bytes = target.len()
+            + headers
+                .iter()
+                .map(|(name, value)| name.as_str().len() + value.len())
+                .sum::<usize>()
+            + authorization
+                .as_ref()
+                .map_or(0, |value| AUTHORIZATION.as_str().len() + value.value.len())
+            + body.as_ref().map_or(0, |value| value.len());
+        if actual_bytes > self.max_request_bytes {
+            return Err(DestinationRequestError::TemplateBoundsExceeded);
+        }
+        BoundedDestinationRequest::new_sensitive(
+            self.method,
+            target,
+            headers,
+            authorization.map(|value| DestinationAuthorization { value: value.value }),
+            body,
+        )
+    }
+}
+
 impl<S: DestinationSlot> fmt::Debug for BoundedDestinationRequestTemplate<S> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1128,6 +1632,7 @@ impl<S: DestinationSlot> fmt::Debug for BoundedDestinationRequestTemplate<S> {
             .field("authorization", &self.authorization)
             .field("body", &self.body)
             .field("max_request_bytes", &self.max_request_bytes)
+            .field("script_policy", &self.script_policy.is_some())
             .finish()
     }
 }
@@ -1417,6 +1922,7 @@ impl<S: DestinationSlot> BoundedDestinationRequestTemplate<S> {
             body,
             max_target_bytes: target_bytes,
             max_request_bytes,
+            script_policy: None,
             slot: PhantomData,
         })
     }
@@ -1691,6 +2197,186 @@ fn append_form_component(
     Ok(())
 }
 
+fn append_rfc3986_component(
+    output: &mut Zeroizing<Vec<u8>>,
+    value: &[u8],
+) -> Result<(), DestinationRequestError> {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for byte in value {
+        let additional = if matches!(byte, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~')
+        {
+            1
+        } else {
+            3
+        };
+        if output.len() + additional > MAX_DESTINATION_TARGET_BYTES {
+            return Err(DestinationRequestError::TargetTooLong);
+        }
+        if additional == 1 {
+            output.push(*byte);
+        } else {
+            output.push(b'%');
+            output.push(HEX[usize::from(*byte >> 4)]);
+            output.push(HEX[usize::from(*byte & 0x0f)]);
+        }
+    }
+    Ok(())
+}
+
+fn compile_script_path_rule(path: &str) -> Result<ScriptPathRule, DestinationRequestError> {
+    if !path.starts_with('/')
+        || path.starts_with("//")
+        || path.len() > MAX_DESTINATION_TARGET_BYTES
+        || !path.is_ascii()
+        || path.contains(['?', '#', '\\', '%'])
+        || path.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err(DestinationRequestError::InvalidTarget);
+    }
+    let trailing_slash = path.len() > 1 && path.ends_with('/');
+    let raw = path.strip_prefix('/').unwrap_or(path);
+    if raw.contains("//") {
+        return Err(DestinationRequestError::NonCanonicalTarget);
+    }
+    let mut segments = Vec::new();
+    let mut wildcard = false;
+    for (index, segment) in raw.split('/').enumerate() {
+        if segment.is_empty() {
+            continue;
+        }
+        match segment {
+            "." | ".." => return Err(DestinationRequestError::NonCanonicalTarget),
+            "*" => {
+                wildcard = true;
+                segments.push(ScriptPathSegment::One);
+            }
+            "**" if index + 1 == raw.split('/').count() => {
+                wildcard = true;
+                segments.push(ScriptPathSegment::Descendants);
+            }
+            "**" => return Err(DestinationRequestError::InvalidTarget),
+            _ if segment.contains('*') => return Err(DestinationRequestError::InvalidTarget),
+            _ => segments.push(ScriptPathSegment::Exact(segment.to_owned())),
+        }
+    }
+    if wildcard {
+        if trailing_slash {
+            return Err(DestinationRequestError::InvalidTarget);
+        }
+        Ok(ScriptPathRule::Segments(segments))
+    } else {
+        Ok(ScriptPathRule::Exact(
+            path.split('/').map(str::to_owned).collect(),
+        ))
+    }
+}
+
+/// Validate one exact, single-segment-wildcard, or terminal-descendants script path rule.
+pub fn validate_script_destination_path_rule(path: &str) -> Result<(), DestinationRequestError> {
+    compile_script_path_rule(path).map(drop)
+}
+
+/// Whether a reviewed script may set this ordinary request header name.
+pub fn is_script_writable_request_header_name(name: &str) -> bool {
+    HeaderName::from_str(name)
+        .is_ok_and(|name| name != CONTENT_TYPE && !is_forbidden_static_request_header(&name))
+}
+
+fn path_rule_display(rule: &ScriptPathRule) -> String {
+    match rule {
+        ScriptPathRule::Exact(parts) => parts.join("/"),
+        ScriptPathRule::Segments(segments) => format!(
+            "/{}",
+            segments
+                .iter()
+                .map(|segment| match segment {
+                    ScriptPathSegment::Exact(value) => value.as_str(),
+                    ScriptPathSegment::One => "*",
+                    ScriptPathSegment::Descendants => "**",
+                })
+                .collect::<Vec<_>>()
+                .join("/")
+        ),
+    }
+}
+
+fn script_path_matches(rule: &ScriptPathRule, path: &str) -> Result<bool, DestinationRequestError> {
+    let decoded = path
+        .split('/')
+        .map(decode_script_component)
+        .collect::<Result<Vec<_>, _>>()?;
+    match rule {
+        ScriptPathRule::Exact(expected) => Ok(&decoded == expected),
+        ScriptPathRule::Segments(expected) => {
+            let actual = decoded
+                .iter()
+                .skip(1)
+                .filter(|segment| !segment.is_empty())
+                .collect::<Vec<_>>();
+            if path
+                .strip_prefix('/')
+                .is_some_and(|path| path.contains("//"))
+            {
+                return Ok(false);
+            }
+            let descendants = matches!(expected.last(), Some(ScriptPathSegment::Descendants));
+            let fixed_len = expected.len() - usize::from(descendants);
+            if actual.len() < fixed_len || (!descendants && actual.len() != fixed_len) {
+                return Ok(false);
+            }
+            Ok(expected[..fixed_len]
+                .iter()
+                .zip(actual)
+                .all(|(rule, value)| match rule {
+                    ScriptPathSegment::Exact(expected) => expected.as_str() == value.as_str(),
+                    ScriptPathSegment::One => !value.is_empty(),
+                    ScriptPathSegment::Descendants => false,
+                }))
+        }
+    }
+}
+
+fn validate_script_query_name(name: &str) -> Result<(), DestinationRequestError> {
+    if name.is_empty() || name.len() > 128 || name.chars().any(|character| character.is_control()) {
+        return Err(DestinationRequestError::InvalidTarget);
+    }
+    Ok(())
+}
+
+fn decode_script_component(value: &str) -> Result<String, DestinationRequestError> {
+    let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            output.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        let high = bytes
+            .get(index + 1)
+            .copied()
+            .and_then(|byte| byte.is_ascii_hexdigit().then_some(byte));
+        let low = bytes
+            .get(index + 2)
+            .copied()
+            .and_then(|byte| byte.is_ascii_hexdigit().then_some(byte));
+        let decode = |byte: u8| match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'A'..=b'F' => byte - b'A' + 10,
+            b'a'..=b'f' => byte - b'a' + 10,
+            _ => 0,
+        };
+        output.push(
+            high.zip(low)
+                .map(|(high, low)| decode(high) * 16 + decode(low))
+                .ok_or(DestinationRequestError::InvalidTarget)?,
+        );
+        index += 3;
+    }
+    String::from_utf8(output).map_err(|_| DestinationRequestError::InvalidTarget)
+}
+
 fn valid_dynamic_path_segment(segment: &str) -> bool {
     !matches!(segment, "." | "..")
         && !segment.chars().any(disallowed_path_scalar)
@@ -1792,6 +2478,82 @@ impl<S: DestinationSlot> fmt::Debug for BoundedDestinationRequest<S> {
 }
 
 impl<S: DestinationSlot> BoundedDestinationRequest<S> {
+    /// Return the complete non-credential request effect for Relay's keyed
+    /// pre-dispatch commitment.
+    ///
+    /// Header and body octets are encoded losslessly. The separately retained
+    /// authorization capability is deliberately absent, so callers cannot
+    /// accidentally persist a credential in an audit commitment.
+    #[must_use]
+    pub fn noncredential_effect_value(&self, destination_id: &str) -> serde_json::Value {
+        self.effect_value(destination_id, false, false, false)
+    }
+
+    /// Build an effect while excluding the final reviewed header slot, which
+    /// is reserved for an API-key credential by Relay's compiler.
+    #[must_use]
+    pub fn effect_value_without_api_key_header(&self, destination_id: &str) -> serde_json::Value {
+        self.effect_value(destination_id, true, false, false)
+    }
+
+    /// Build an effect while excluding the final reviewed query slot, which
+    /// is reserved for an API-key credential by Relay's compiler.
+    #[must_use]
+    pub fn effect_value_without_api_key_query(&self, destination_id: &str) -> serde_json::Value {
+        self.effect_value(destination_id, false, true, false)
+    }
+
+    /// Build the non-secret shape of a credential exchange. OAuth request
+    /// bodies are intentionally omitted because they contain credentials.
+    #[must_use]
+    pub fn credential_exchange_effect_value(&self, destination_id: &str) -> serde_json::Value {
+        self.effect_value(destination_id, false, false, true)
+    }
+
+    fn effect_value(
+        &self,
+        destination_id: &str,
+        exclude_last_header: bool,
+        exclude_last_query: bool,
+        exclude_body: bool,
+    ) -> serde_json::Value {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine as _;
+
+        let method = match self.method {
+            DestinationMethod::Get => "GET",
+            DestinationMethod::ReviewedReadOnlyPost
+            | DestinationMethod::OAuth2ClientCredentialsPost => "POST",
+        };
+        let target = std::str::from_utf8(&self.target)
+            .expect("bounded destination targets are validated UTF-8");
+        let target = if exclude_last_query {
+            target
+                .rsplit_once('&')
+                .map(|(prefix, _)| prefix)
+                .or_else(|| target.rsplit_once('?').map(|(prefix, _)| prefix))
+                .unwrap_or(target)
+        } else {
+            target
+        };
+        let header_count = self
+            .headers
+            .len()
+            .saturating_sub(usize::from(exclude_last_header));
+        serde_json::json!({
+            "destination_id": destination_id,
+            "method": method,
+            "target": target,
+            "headers": self.headers.iter().take(header_count).map(|header| serde_json::json!({
+                "name": header.name.as_str(),
+                "value_base64url": URL_SAFE_NO_PAD.encode(header.value.as_slice()),
+            })).collect::<Vec<_>>(),
+            "body_base64url": (!exclude_body).then(|| self.body.as_ref())
+                .flatten()
+                .map(|body| URL_SAFE_NO_PAD.encode(body.as_slice())),
+        })
+    }
+
     /// Validate and consume a bounded operation shape.
     ///
     /// Static headers cannot set authority, framing, proxy, forwarding,
@@ -1962,6 +2724,8 @@ pub enum DestinationSendError {
     NonGlobalAddressDenied,
     #[error("development destination is not loopback")]
     DevelopmentAddressDenied,
+    #[error("configured destination TLS material is unavailable")]
+    TlsMaterialUnavailable,
     #[error("destination client construction failed")]
     ClientBuildFailed,
     #[error("destination operation deadline was exceeded")]
@@ -2008,6 +2772,43 @@ impl<S: DestinationSlot> BoundedDestinationResponse<S> {
     #[must_use]
     pub fn status(&self) -> StatusCode {
         self.response.status()
+    }
+
+    /// Select only explicitly reviewed, non-sensitive UTF-8 response headers.
+    ///
+    /// Names are returned in caller order. A missing selected header is `None`;
+    /// duplicate upstream fields and the code-owned sensitive/infrastructure
+    /// deny-list fail closed without exposing the upstream value.
+    pub fn selected_script_response_headers<'a>(
+        &self,
+        names: impl ExactSizeIterator<Item = &'a str>,
+    ) -> Result<Vec<Option<String>>, DestinationResponseHeaderError> {
+        if names.len() > MAX_DESTINATION_REQUEST_HEADERS {
+            return Err(DestinationResponseHeaderError::TooManySelectedHeaders);
+        }
+        let mut selected = Vec::with_capacity(names.len());
+        let mut prior = Vec::<HeaderName>::with_capacity(names.len());
+        for name in names {
+            let name = HeaderName::from_str(name)
+                .map_err(|_| DestinationResponseHeaderError::HeaderDenied)?;
+            if is_forbidden_script_response_header(&name) || prior.contains(&name) {
+                return Err(DestinationResponseHeaderError::HeaderDenied);
+            }
+            prior.push(name.clone());
+            let mut values = self.response.headers().get_all(&name).iter();
+            let value = match (values.next(), values.next()) {
+                (None, None) => None,
+                (Some(value), None) => Some(
+                    value
+                        .to_str()
+                        .map_err(|_| DestinationResponseHeaderError::InvalidHeaderValue)?
+                        .to_owned(),
+                ),
+                _ => return Err(DestinationResponseHeaderError::DuplicateHeader),
+            };
+            selected.push(value);
+        }
+        Ok(selected)
     }
 
     /// Require exactly one response media type with the exact JSON value.
@@ -2134,6 +2935,28 @@ pub enum DestinationResponseMediaTypeError {
     NotExactFhirJson,
 }
 
+/// Value-free failure selecting script-visible response headers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum DestinationResponseHeaderError {
+    #[error("too many response headers were selected")]
+    TooManySelectedHeaders,
+    #[error("a selected response header is denied")]
+    HeaderDenied,
+    #[error("a selected response header is duplicated upstream")]
+    DuplicateHeader,
+    #[error("a selected response header is not bounded UTF-8 text")]
+    InvalidHeaderValue,
+}
+
+/// Value-free failure canonicalizing a script-owned source target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum DestinationTargetCanonicalizationError {
+    #[error("source target is invalid or non-canonical")]
+    InvalidTarget,
+    #[error("source target authority is outside the frozen destination")]
+    AuthorityDenied,
+}
+
 /// Value-free bounded response-read failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DestinationResponseError {
@@ -2216,6 +3039,8 @@ trait Resolver {
 }
 
 enum TransportTrust {
+    Policy,
+    #[cfg(test)]
     System,
     #[cfg(test)]
     TestRoot(reqwest::Certificate),
@@ -2617,6 +3442,66 @@ fn is_forbidden_static_request_header(name: &HeaderName) -> bool {
         || name.as_str().starts_with("x-forwarded-")
 }
 
+/// Whether a response header name is eligible for explicit script exposure.
+///
+/// This is public so the Relay artifact compiler can reject an unsafe authored
+/// selection before activation. Runtime selection repeats the same check.
+pub fn is_script_visible_response_header_name(name: &str) -> bool {
+    HeaderName::from_str(name).is_ok_and(|name| !is_forbidden_script_response_header(&name))
+}
+
+fn is_forbidden_script_response_header(name: &HeaderName) -> bool {
+    name == AUTHORIZATION
+        || name == COOKIE
+        || name == SET_COOKIE
+        || name == WWW_AUTHENTICATE
+        || name == PROXY_AUTHENTICATE
+        || name == PROXY_AUTHORIZATION
+        || name == HOST
+        || name == CONNECTION
+        || name == CONTENT_LENGTH
+        || name == FORWARDED
+        || name == VIA
+        || name == TE
+        || name == TRAILER
+        || name == TRANSFER_ENCODING
+        || name == UPGRADE
+        || matches!(
+            name.as_str(),
+            "keep-alive"
+                | "proxy-connection"
+                | "server"
+                | "x-api-key"
+                | "api-key"
+                | "x-auth-token"
+                | "x-access-token"
+                | "x-real-ip"
+                | "true-client-ip"
+                | "traceparent"
+                | "tracestate"
+        )
+        || name.as_str().starts_with("x-forwarded-")
+        || name.as_str().starts_with("x-envoy-")
+        || name.as_str().starts_with("x-amzn-")
+        || name.as_str().starts_with("x-b3-")
+        || name.as_str().starts_with("cf-")
+}
+
+fn absolute_reference_contains_dot_segment(target: &str) -> bool {
+    let Some(authority_start) = target.find("://").map(|index| index + 3) else {
+        return true;
+    };
+    let resource_start = target[authority_start..]
+        .find(['/', '?', '#'])
+        .map_or(target.len(), |index| authority_start + index);
+    let raw_path = target[resource_start..]
+        .split_once(['?', '#'])
+        .map_or(&target[resource_start..], |(path, _)| path);
+    raw_path
+        .split('/')
+        .any(|segment| matches!(segment, "." | ".."))
+}
+
 fn is_valid_header_value(value: &[u8]) -> bool {
     value
         .iter()
@@ -2856,6 +3741,107 @@ mod tests {
         .expect("production policy validates")
     }
 
+    fn pem(label: &str, der: &[u8]) -> String {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine as _;
+
+        let encoded = STANDARD.encode(der);
+        let body = encoded
+            .as_bytes()
+            .chunks(64)
+            .map(|line| std::str::from_utf8(line).expect("base64 is UTF-8"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
+    }
+
+    #[test]
+    fn configured_tls_material_accepts_private_roots_and_client_identity_without_debug_leakage() {
+        let CertifiedKey { cert, key_pair } =
+            generate_simple_self_signed(vec!["registry.example.test".to_owned()])
+                .expect("generate TLS fixture");
+        let certificate_pem = pem("CERTIFICATE", cert.der().as_ref());
+        let identity_pem = format!(
+            "{}{}",
+            certificate_pem,
+            pem("PRIVATE KEY", &key_pair.serialize_der())
+        );
+        let material = DestinationTlsMaterial::from_pem(
+            Some(certificate_pem.as_bytes()),
+            Some(identity_pem.as_bytes()),
+        )
+        .expect("valid private CA and mTLS identity");
+        let diagnostic = format!("{material:?}");
+        assert!(diagnostic.contains("configured_root_count: 1"));
+        assert!(diagnostic.contains("client_identity: true"));
+        assert!(!diagnostic.contains("BEGIN CERTIFICATE"));
+        assert!(!diagnostic.contains("PRIVATE KEY"));
+
+        let mut policy = production(&[]).require_configured_tls();
+        policy
+            .install_configured_tls(material)
+            .expect("required material installs once");
+        assert!(format!("{policy:?}").contains("tls: configured"));
+    }
+
+    #[test]
+    fn configured_tls_material_rejects_empty_malformed_and_unrequested_material() {
+        assert_eq!(
+            DestinationTlsMaterial::from_pem(None, None).unwrap_err(),
+            DestinationTlsMaterialError::Empty
+        );
+        assert_eq!(
+            DestinationTlsMaterial::from_pem(Some(b"not a certificate"), None).unwrap_err(),
+            DestinationTlsMaterialError::InvalidCaBundle
+        );
+        assert_eq!(
+            DestinationTlsMaterial::from_pem(None, Some(b"not an identity")).unwrap_err(),
+            DestinationTlsMaterialError::InvalidClientIdentity
+        );
+
+        let CertifiedKey { cert, .. } =
+            generate_simple_self_signed(vec!["registry.example.test".to_owned()])
+                .expect("generate TLS fixture");
+        let certificate_pem = pem("CERTIFICATE", cert.der().as_ref());
+        let material = DestinationTlsMaterial::from_pem(Some(certificate_pem.as_bytes()), None)
+            .expect("valid private root");
+        assert_eq!(
+            production(&[]).install_configured_tls(material),
+            Err(DestinationTlsMaterialError::NotRequired)
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_tls_destination_fails_closed_before_network_when_material_is_absent() {
+        let policy = DataDestinationPolicy::new(
+            "private-data",
+            "http://127.0.0.1:9443/",
+            DestinationProfile::LoopbackDevelopmentHttp,
+            &[],
+        )
+        .expect("loopback policy")
+        .require_configured_tls();
+        let request =
+            DataDestinationRequest::new(DestinationMethod::Get, "/record", vec![], None, None)
+                .expect("request");
+        let resolver = FakeResolver {
+            answers: vec!["127.0.0.1:9443".parse().expect("test address")],
+            calls: AtomicUsize::new(0),
+        };
+        assert_eq!(
+            policy
+                .send_with_resolver(
+                    request,
+                    Duration::from_secs(1),
+                    &resolver,
+                    TransportTrust::Policy,
+                )
+                .await
+                .unwrap_err(),
+            DestinationSendError::TlsMaterialUnavailable
+        );
+    }
+
     #[test]
     fn response_bodies_remain_opaque_and_redacted() {
         let data = BoundedDestinationBody::<DataDestination> {
@@ -2930,6 +3916,59 @@ mod tests {
         assert!(!closed_json_content_type(&headers));
     }
 
+    #[test]
+    fn same_origin_target_canonicalization_never_reveals_or_widens_authority() {
+        let policy = production(&[]);
+        assert_eq!(
+            policy.canonicalize_same_origin_target("/Patient?_count=2&_page=1"),
+            Ok("/Patient?_count=2&_page=1".to_owned())
+        );
+        assert_eq!(
+            policy.canonicalize_same_origin_target(
+                "https://registry.example.test/Patient?_count=2&_page=1"
+            ),
+            Ok("/Patient?_count=2&_page=1".to_owned())
+        );
+        for denied in [
+            "https://other.example.test/Patient",
+            "https://user@registry.example.test/Patient",
+            "https://registry.example.test/Patient#fragment",
+            "https://registry.example.test/a/../Patient",
+            "//registry.example.test/Patient",
+            "/Patient/%2f/admin",
+        ] {
+            assert!(
+                policy.canonicalize_same_origin_target(denied).is_err(),
+                "{denied}"
+            );
+        }
+    }
+
+    #[test]
+    fn script_visible_response_header_deny_list_is_code_owned() {
+        for allowed in ["location", "link", "etag", "x-next-page"] {
+            assert!(is_script_visible_response_header_name(allowed), "{allowed}");
+        }
+        for denied in [
+            "set-cookie",
+            "www-authenticate",
+            "proxy-authenticate",
+            "authorization",
+            "x-api-key",
+            "forwarded",
+            "x-forwarded-host",
+            "connection",
+            "content-length",
+            "transfer-encoding",
+            "server",
+            "x-envoy-upstream-service-time",
+            "x-amzn-trace-id",
+            "cf-ray",
+        ] {
+            assert!(!is_script_visible_response_header_name(denied), "{denied}");
+        }
+    }
+
     fn classify(
         policy: &DataDestinationPolicy,
         addresses: &[&str],
@@ -2944,13 +3983,19 @@ mod tests {
 
     async fn spawn_tls_server(
         subject_alt_name: &str,
-    ) -> (SocketAddr, reqwest::Certificate, JoinHandle<Result<(), ()>>) {
+    ) -> (
+        SocketAddr,
+        reqwest::Certificate,
+        String,
+        JoinHandle<Result<(), ()>>,
+    ) {
         let CertifiedKey { cert, key_pair } =
             generate_simple_self_signed(vec![subject_alt_name.to_owned()])
                 .expect("generate test certificate");
         let certificate_der = cert.der().clone();
         let request_certificate = reqwest::Certificate::from_der(certificate_der.as_ref())
             .expect("parse test root certificate");
+        let certificate_pem = pem("CERTIFICATE", certificate_der.as_ref());
         let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
         let server_config = ServerConfig::builder()
             .with_no_client_auth()
@@ -2988,7 +4033,7 @@ mod tests {
             stream.shutdown().await.map_err(|_| ())?;
             Ok(())
         });
-        (address, request_certificate, handle)
+        (address, request_certificate, certificate_pem, handle)
     }
 
     #[test]
@@ -4043,6 +5088,134 @@ mod tests {
     }
 
     #[test]
+    fn request_effect_excludes_credential_exchange_body() {
+        let template = CredentialDestinationRequestTemplate::oauth2_client_credentials(
+            "/oauth/token",
+            OAuth2ClientCredentialsBodyFormat::JsonClientSecretBody,
+            1_024,
+            2_048,
+        )
+        .expect("closed OAuth template");
+        let request = template
+            .render(
+                &[],
+                &[],
+                None,
+                Some(br#"{"client_secret":"fixture-secret"}"#.to_vec()),
+            )
+            .expect("credential request");
+        let effect = request.credential_exchange_effect_value("credential-origin");
+        assert_eq!(effect["destination_id"], "credential-origin");
+        assert_eq!(effect["target"], "/oauth/token");
+        assert!(effect["body_base64url"].is_null());
+        assert!(!effect.to_string().contains("fixture-secret"));
+    }
+
+    #[test]
+    fn request_effect_excludes_api_key_header_but_commits_other_fields() {
+        let request = DataDestinationRequest::new(
+            DestinationMethod::ReviewedReadOnlyPost,
+            "/records?selector=person-7",
+            vec![
+                (
+                    HeaderName::from_static("x-profile"),
+                    b"reviewed-profile".to_vec(),
+                ),
+                (
+                    HeaderName::from_static("x-api-key"),
+                    b"api-header-secret".to_vec(),
+                ),
+            ],
+            None,
+            Some(b"noncredential-body".to_vec()),
+        )
+        .expect("bounded API-key-header request");
+        let effect = request.effect_value_without_api_key_header("data-origin");
+        let rendered = effect.to_string();
+        assert_eq!(effect["destination_id"], "data-origin");
+        assert_eq!(effect["method"], "POST");
+        assert_eq!(effect["target"], "/records?selector=person-7");
+        assert_eq!(effect["headers"].as_array().map(Vec::len), Some(1));
+        assert!(rendered.contains("x-profile"));
+        assert!(effect["body_base64url"].is_string());
+        assert!(!rendered.contains("api-header-secret"));
+        assert!(!rendered.contains("x-api-key"));
+    }
+
+    #[test]
+    fn request_effect_excludes_api_key_query_but_commits_other_fields() {
+        let request = DataDestinationRequest::new(
+            DestinationMethod::Get,
+            "/records?selector=person-7&api_key=api-query-secret",
+            vec![(
+                HeaderName::from_static("x-profile"),
+                b"reviewed-profile".to_vec(),
+            )],
+            None,
+            None,
+        )
+        .expect("bounded API-key-query request");
+        let effect = request.effect_value_without_api_key_query("data-origin");
+        let rendered = effect.to_string();
+        assert_eq!(effect["destination_id"], "data-origin");
+        assert_eq!(effect["method"], "GET");
+        assert_eq!(effect["target"], "/records?selector=person-7");
+        assert!(rendered.contains("x-profile"));
+        assert!(effect["body_base64url"].is_null());
+        assert!(!rendered.contains("api-query-secret"));
+        assert!(!rendered.contains("api_key"));
+    }
+
+    #[test]
+    fn script_transport_enforces_path_header_query_and_api_key_authority() {
+        let template = DataDestinationRequestTemplate::new_script(
+            DestinationMethod::Get,
+            "/api/*/records/**",
+            &["x-country-variant"],
+            DestinationAuthorizationTemplate::Forbidden,
+            None,
+            Some(("api_key", 64)),
+            16 * 1024,
+        )
+        .expect("script authority compiles");
+        let request = template
+            .render_script(
+                "/api/v1/records/one/two?tag=a&tag=b",
+                &[("x-country-variant", b"north")],
+                None,
+                Some(Zeroizing::new(b"secret-key".to_vec())),
+                None,
+                None,
+            )
+            .expect("admitted script request");
+        let effect = request.effect_value_without_api_key_query("registry");
+        let rendered = serde_json::to_string(&effect).expect("effect renders");
+        assert!(rendered.contains("tag=a&tag=b"));
+        assert!(rendered.contains("x-country-variant"));
+        assert!(!rendered.contains("secret-key"));
+
+        for denied in [
+            "/api/v1/other",
+            "/api/v1/records/%2E%2E/private",
+            "/api/v1/records/one?api_key=caller-controlled",
+        ] {
+            assert!(template
+                .render_script(
+                    denied,
+                    &[("x-country-variant", b"north")],
+                    None,
+                    Some(Zeroizing::new(b"secret-key".to_vec())),
+                    None,
+                    None,
+                )
+                .is_err());
+        }
+        assert!(template
+            .validate_script_request_shape("/api/v1/records", &["authorization"], None,)
+            .is_err());
+    }
+
+    #[test]
     fn sensitive_body_adapter_retains_the_zeroizing_owner_without_a_plain_vec_copy() {
         let body = sensitive_reqwest_body(Zeroizing::new(b"client-secret-body".to_vec()));
         assert_eq!(body.as_bytes(), Some(b"client-secret-body".as_slice()));
@@ -4407,7 +5580,7 @@ mod tests {
 
     #[tokio::test]
     async fn pinned_domain_preserves_tls_san_identity() {
-        let (address, root, server) = spawn_tls_server("registry.test").await;
+        let (address, root, _, server) = spawn_tls_server("registry.test").await;
         let policy = DataDestinationPolicy::new(
             "tls-data",
             &format!("https://registry.test:{}/", address.port()),
@@ -4443,8 +5616,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_private_ca_is_added_to_system_trust_for_the_exact_destination() {
+        let (address, _, root_pem, server) = spawn_tls_server("registry.test").await;
+        let mut policy = DataDestinationPolicy::new(
+            "tls-data",
+            &format!("https://registry.test:{}/", address.port()),
+            DestinationProfile::PinnedLoopbackHttpsTest,
+            &[],
+        )
+        .expect("test TLS policy validates")
+        .require_configured_tls();
+        policy
+            .install_configured_tls(
+                DestinationTlsMaterial::from_pem(Some(root_pem.as_bytes()), None)
+                    .expect("private root parses"),
+            )
+            .expect("private root installs");
+        let request =
+            DataDestinationRequest::new(DestinationMethod::Get, "/record", vec![], None, None)
+                .expect("request validates");
+        let resolver = FakeResolver {
+            answers: vec![address],
+            calls: AtomicUsize::new(0),
+        };
+
+        let response = policy
+            .send_with_resolver(
+                request,
+                Duration::from_secs(8),
+                &resolver,
+                TransportTrust::Policy,
+            )
+            .await
+            .expect("configured private root is active");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.read_bounded(32).await.expect("bounded TLS body");
+        assert_eq!(body.as_bytes(), b"tls-pinned");
+        server
+            .await
+            .expect("TLS server task completed")
+            .expect("TLS server completed");
+    }
+
+    #[tokio::test]
     async fn ip_literal_preserves_tls_ip_san_and_bypasses_dns() {
-        let (address, root, server) = spawn_tls_server("127.0.0.1").await;
+        let (address, root, _, server) = spawn_tls_server("127.0.0.1").await;
         let policy = DataDestinationPolicy::new(
             "tls-literal",
             &format!("https://127.0.0.1:{}/", address.port()),
@@ -4481,7 +5697,7 @@ mod tests {
 
     #[tokio::test]
     async fn pinned_domain_rejects_a_mismatched_tls_san() {
-        let (address, wrong_root, server) = spawn_tls_server("other.test").await;
+        let (address, wrong_root, _, server) = spawn_tls_server("other.test").await;
         let policy = DataDestinationPolicy::new(
             "tls-data",
             &format!("https://registry.test:{}/", address.port()),

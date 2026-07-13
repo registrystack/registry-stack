@@ -58,7 +58,7 @@ use super::{
     AuthenticatedConsultationWorkload, ClientClaimSelector, ConfiguredAudience,
     ConfiguredClientBinding, ConfiguredIssuer, ConfiguredOidcWorkloadProof, ConfiguredPrincipalId,
     ConsultationId, ConsultationKey, ConsultationWorkloadBinding, ConsultationWorkloadRole,
-    ExpectedClientValue, PreAuthorizationConsultationCore, ResolvedConsultationProfile,
+    ExpectedClientValue, PreAuthorizationConsultationCore, ProfileId, ResolvedConsultationProfile,
 };
 
 const MAX_PROTECTED_CONTRACT_JSON_BYTES: usize = MAX_CLOSED_JSON_STRING_BYTES as usize;
@@ -471,7 +471,7 @@ impl ConsultationService {
     pub(crate) fn resolve(
         &self,
         authentication: &AuthenticationResult,
-        key: &ConsultationKey,
+        profile_id: &ProfileId,
     ) -> Result<ResolvedConsultationContext, ConsultationServiceError> {
         if !self.admission_open.load(Ordering::Acquire)
             || !self.audit_healthy.load(Ordering::Acquire)
@@ -481,9 +481,10 @@ impl ConsultationService {
         self.fixed_workload_identity
             .precheck_authentication(authentication)
             .map_err(|_| ConsultationServiceError::InvalidCredentials)?;
-        let activated = self
+        let (key, activated) = self
             .profiles
-            .get(key)
+            .iter()
+            .find(|(key, _)| key.id() == profile_id)
             .ok_or(ConsultationServiceError::ProfileNotFound)?;
         let workload = AuthenticatedConsultationWorkload::try_bind(
             authentication,
@@ -1041,7 +1042,7 @@ fn compile_service_activation(
     let fixed_workload_identity = compile_fixed_workload_identity(config, consultation)?;
     let rhai_workers = initialize_rhai_worker_capabilities(&artifacts)
         .map_err(|_| ConsultationServiceActivationError::RegistryActivation)?;
-    let registry = CompiledConsultationRegistry::compile(
+    let mut registry = CompiledConsultationRegistry::compile(
         artifacts,
         &rhai_workers,
         &InitializedConsentVerifierRegistry::empty(),
@@ -1049,14 +1050,15 @@ fn compile_service_activation(
     .map_err(|_| ConsultationServiceActivationError::RegistryActivation)?;
     if production {
         validate_production_rhai_worker_platform(&registry)?;
+        registry
+            .activate_private_transports()
+            .map_err(|_| ConsultationServiceActivationError::RegistryActivation)?;
     }
     validate_snapshot_config_bindings(config, &registry)?;
     let mut profiles = BTreeMap::new();
     for plan in registry.plans_for_concrete_activation() {
         let (key, activated) = compile_profile_activation(plan, &fixed_workload_identity)?;
-        if profiles.insert(key, activated).is_some() {
-            return Err(ConsultationServiceActivationError::RegistryActivation);
-        }
+        insert_activated_profile(&mut profiles, key, activated)?;
     }
     let (basic_credentials, static_bearer_credentials, oauth_credentials) = if production {
         (
@@ -1111,6 +1113,21 @@ fn compile_service_activation(
         pseudonym_materials,
         snapshots,
     })
+}
+
+fn insert_activated_profile(
+    profiles: &mut BTreeMap<ConsultationKey, ActivatedProfile>,
+    key: ConsultationKey,
+    activated: ActivatedProfile,
+) -> Result<(), ConsultationServiceActivationError> {
+    if profiles
+        .keys()
+        .any(|active: &ConsultationKey| active.id() == key.id())
+    {
+        return Err(ConsultationServiceActivationError::RegistryActivation);
+    }
+    profiles.insert(key, activated);
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -1385,11 +1402,11 @@ fn encode_protected_metadata(
     if contract.len() > MAX_PROTECTED_CONTRACT_JSON_BYTES {
         return Err(ConsultationServiceActivationError::InvalidMetadata);
     }
-    let contract_json = std::str::from_utf8(contract)
+    let contract = registry_platform_crypto::parse_json_strict(contract)
         .map_err(|_| ConsultationServiceActivationError::InvalidMetadata)?;
     let metadata = serde_json::to_vec(&json!({
         "contract_hash": contract_hash,
-        "contract_json": contract_json,
+        "contract": contract,
     }))
     .map_err(|_| ConsultationServiceActivationError::InvalidMetadata)?;
     if metadata.len() > MAX_PROTECTED_PROFILE_METADATA_BYTES {
@@ -1464,24 +1481,42 @@ mod tests {
             Some(plan.profile().contract_hash().as_str())
         );
         assert_eq!(
-            metadata["contract_json"].as_str(),
-            std::str::from_utf8(plan.canonical_public_contract()).ok()
-        );
-        assert_eq!(
-            parse_json_strict(metadata["contract_json"].as_str().unwrap().as_bytes()).unwrap(),
+            metadata["contract"],
             parse_json_strict(plan.canonical_public_contract()).unwrap()
         );
         assert!(!metadata
             .as_object()
             .unwrap()
             .contains_key("private_binding"));
-        assert!(!metadata.as_object().unwrap().contains_key("contract"));
+        assert!(!metadata.as_object().unwrap().contains_key("contract_json"));
         assert_eq!(metadata.as_object().unwrap().len(), 2);
 
         let bounded = bounded_runtime_vector_plan_fixture();
         let (_, activated) = compile_profile_activation(&bounded, &fixed_identity())
             .expect("bounded HTTP capability activates");
         assert_eq!(activated.executor, ConcreteExecutorKind::BoundedHttp);
+    }
+
+    #[test]
+    fn activation_rejects_two_internal_versions_for_one_public_profile_id() {
+        let plan = dhis2_runtime_vector_plan_fixture();
+        let (_, first) = compile_profile_activation(&plan, &fixed_identity()).unwrap();
+        let (_, second) = compile_profile_activation(&plan, &fixed_identity()).unwrap();
+        let mut profiles = BTreeMap::new();
+        insert_activated_profile(
+            &mut profiles,
+            ConsultationKey::try_parse(plan.profile().id().as_str(), "1").unwrap(),
+            first,
+        )
+        .unwrap();
+        assert_eq!(
+            insert_activated_profile(
+                &mut profiles,
+                ConsultationKey::try_parse(plan.profile().id().as_str(), "2").unwrap(),
+                second,
+            ),
+            Err(ConsultationServiceActivationError::RegistryActivation)
+        );
     }
 
     #[test]
@@ -1511,14 +1546,14 @@ mod tests {
     }
 
     #[test]
-    fn protected_metadata_keeps_the_canonical_contract_bounded_and_string_typed() {
+    fn protected_metadata_embeds_the_complete_bounded_contract_object() {
         let hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let encoded = encode_protected_metadata(hash, br#"{"value":"line\nquote\""}"#)
             .expect("bounded canonical contract");
         let metadata = parse_json_strict(&encoded).expect("strict metadata");
         assert_eq!(metadata["contract_hash"], hash);
-        assert_eq!(metadata["contract_json"], r#"{"value":"line\nquote\""}"#);
-        assert!(metadata["contract_json"].is_string());
+        assert_eq!(metadata["contract"], json!({"value": "line\nquote\""}));
+        assert!(metadata["contract"].is_object());
 
         assert_eq!(
             encode_protected_metadata(hash, &[0xff]),

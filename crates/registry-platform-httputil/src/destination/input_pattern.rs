@@ -6,7 +6,7 @@ use thiserror::Error;
 /// Maximum encoded pattern size accepted by consultation v1.
 pub const MAX_BOUNDED_INPUT_PATTERN_BYTES: usize = 1_024;
 /// Maximum input size accepted by consultation v1.
-pub const MAX_BOUNDED_INPUT_BYTES: u16 = 256;
+pub const MAX_BOUNDED_INPUT_BYTES: u32 = 65_536;
 const MAX_INPUT_PATTERN_ATOMS: usize = 128;
 const MAX_INPUT_CLASS_RANGES: usize = 64;
 
@@ -145,7 +145,7 @@ impl BoundedInputPattern {
     /// Match one complete ASCII input without backtracking.
     #[must_use]
     pub fn is_match(&self, value: &str) -> bool {
-        if !value.is_ascii() || value.len() > usize::from(MAX_BOUNDED_INPUT_BYTES) {
+        if !value.is_ascii() || value.len() > MAX_BOUNDED_INPUT_BYTES as usize {
             return false;
         }
         let bytes = value.as_bytes();
@@ -327,5 +327,12 @@ mod tests {
             BoundedInputPattern::compile(&format!("^{}$", "a".repeat(129))).err(),
             Some(BoundedInputPatternError::LimitExceeded)
         );
+    }
+
+    #[test]
+    fn patterned_input_accepts_the_authored_max_length_ceiling() {
+        let pattern = BoundedInputPattern::compile("^a+$").expect("bounded pattern compiles");
+        assert!(pattern.is_match(&"a".repeat(16_384)));
+        assert!(!pattern.is_match(&"a".repeat(MAX_BOUNDED_INPUT_BYTES as usize + 1)));
     }
 }

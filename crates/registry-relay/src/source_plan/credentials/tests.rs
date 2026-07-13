@@ -456,7 +456,6 @@ fn api_key_query_sentinel_stays_out_of_relay_retained_urls_logs_metrics_audit_an
         "data_destination_id": runtime.data_destination_id(),
         "credential_reference": runtime.credential_reference(),
         "credential_generation": runtime.credential_generation(),
-        "authorized_operation_union": runtime.authorized_operation_union().collect::<Vec<_>>(),
         "permit_bindings": runtime.permit_bindings().collect::<Vec<_>>(),
     }))
     .expect("retained completion/audit context renders");

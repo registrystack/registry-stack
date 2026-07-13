@@ -11,13 +11,14 @@ use registry_platform_httputil::destination::{
     DestinationDnsFamily, DestinationMethod, DestinationProfile, OAuth2ClientCredentialsBodyFormat,
 };
 use reqwest::Url;
+use serde_json::Value;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
 use crate::consultation::{
     AcquiredField, AcquisitionClass, DeclaredOperationFootprint, IntegrationPackId,
-    IntegrationPackIdentity, OperationId, ProfileContractHash, ProfileId, ProfileIdentity,
-    ProfileVersion,
+    IntegrationPackIdentity, OperationId, ParsedConsultationScalar, ProfileContractHash, ProfileId,
+    ProfileIdentity, ProfileVersion,
 };
 
 use super::artifact::{
@@ -27,20 +28,21 @@ use super::artifact::{
     BoundedInputPattern, CanonicalizationDocument, CardinalityMechanismDocument,
     CodecSelectorRoleDocument, CredentialFailurePolicyDocument, DestinationDnsFamilyDocument,
     DestinationDocument, EvidenceClass, ExactSelectorDocument, HttpOperationDocument,
-    InputTypeDocument, IntegrationPackArtifact, MaterializationRefreshClassDocument,
-    OAuth2ClientCredentialsRequestFormatDocument, OAuth2TokenCacheModeDocument,
-    OAuth2TokenResponseSchemaDocument, OAuth2TokenTypeDocument, OutcomeDocument,
-    OutputTypeDocument, PriorOutputBindingDocument, PrivateBindingArtifact,
+    InputRoleDocument, InputTypeDocument, IntegrationPackArtifact,
+    MaterializationRefreshClassDocument, OAuth2ClientCredentialsRequestFormatDocument,
+    OAuth2TokenCacheModeDocument, OAuth2TokenResponseSchemaDocument, OAuth2TokenTypeDocument,
+    OutcomeDocument, OutputTypeDocument, PriorOutputBindingDocument, PrivateBindingArtifact,
     ProjectionMechanismDocument, PublicContractArtifact, ReadMethod, RequestCodecDocument,
-    RequestSelectorLocationDocument, RequestSignerDocument, ResponseNormalizationDocument,
-    ResponseSchemaDocument, SourceAuthDocument, SourceCardinality, SourceObservedAtDocument,
-    SourcePlanArtifactError, SourcePlanKind, SourcePlanLimits, SourceRevisionDocument,
-    StepConditionDocument, ValueExpressionDocument, MAX_ARTIFACTS_PER_BUNDLE,
-    MAX_DCI_EXACT_REQUEST_BODY_BYTES, MAX_EVIDENCE_CLASS_BYTES, MAX_EVIDENCE_FILES_PER_CLASS,
-    MAX_EVIDENCE_FILE_BYTES,
+    RequestSelectorLocationDocument, RequestSignerDocument, ResponseFormatDocument,
+    ResponseNormalizationDocument, ResponseSchemaDocument, SourceAuthDocument, SourceCardinality,
+    SourceObservedAtDocument, SourcePlanArtifactError, SourcePlanKind, SourcePlanLimits,
+    SourceRevisionDocument, StepConditionDocument, ValueExpressionDocument,
+    MAX_ARTIFACTS_PER_BUNDLE, MAX_DCI_EXACT_REQUEST_BODY_BYTES, MAX_EVIDENCE_CLASS_BYTES,
+    MAX_EVIDENCE_FILES_PER_CLASS, MAX_EVIDENCE_FILE_BYTES,
 };
 use super::completion_seed::{measure_completion_seed, MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1};
 use super::identifiers::{CredentialReferenceId, SourceDestinationId};
+use super::private_transport::{CompiledDestinationTransport, PrivateTransportActivationError};
 use super::runtime_profile::{
     CompiledRuntimeProfile, RhaiPredicateIdentity, MAX_COMPLETION_SEED_CANONICAL_BYTES_V1,
 };
@@ -291,6 +293,15 @@ pub enum CompiledInputCanonicalization {
 pub enum CompiledInputType {
     String,
     FullDate,
+    Boolean,
+    Integer,
+}
+
+/// Authorization role retained from the hash-covered integration contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompiledInputRole {
+    Selector,
+    Parameter,
 }
 
 /// A bounded matcher compiled from the restricted anchored input grammar.
@@ -323,10 +334,18 @@ pub struct CompiledInputSlot {
     name: Box<str>,
     profile_contract_hash: ProfileContractHash,
     slot_index: u16,
-    max_bytes: u16,
+    max_bytes: u32,
+    min_length: Option<u32>,
+    max_length: Option<u32>,
     input_type: CompiledInputType,
+    role: CompiledInputRole,
+    nullable: bool,
     canonicalization: CompiledInputCanonicalization,
-    matcher: CompiledInputMatcher,
+    matcher: Option<CompiledInputMatcher>,
+    minimum: Option<i64>,
+    maximum: Option<i64>,
+    allowed_values: Box<[Value]>,
+    constant: Option<Value>,
 }
 
 /// Opaque canonical selector retained in zeroizing storage.
@@ -346,6 +365,8 @@ pub struct CompiledInputValue {
     profile_contract_hash: ProfileContractHash,
     slot_name: Box<str>,
     slot_index: u16,
+    input_type: CompiledInputType,
+    null: bool,
 }
 
 impl fmt::Debug for CompiledInputValue {
@@ -359,14 +380,41 @@ impl CompiledInputValue {
         &self.value
     }
 
+    pub(crate) const fn input_type(&self) -> CompiledInputType {
+        self.input_type
+    }
+
+    pub(crate) const fn is_null(&self) -> bool {
+        self.null
+    }
+
+    pub(crate) fn transient_json_value(&self) -> Value {
+        if self.null {
+            return Value::Null;
+        }
+        match self.input_type {
+            CompiledInputType::String | CompiledInputType::FullDate => {
+                Value::String(self.value.to_string())
+            }
+            CompiledInputType::Boolean => Value::Bool(self.value.as_str() == "true"),
+            CompiledInputType::Integer => Value::from(
+                self.value
+                    .parse::<i64>()
+                    .expect("compiled integer canonical form remains valid"),
+            ),
+        }
+    }
+
     pub(crate) fn binding_matches(
         &self,
         profile_contract_hash: &ProfileContractHash,
         slot_name: &str,
         slot_index: usize,
+        input_type: CompiledInputType,
     ) -> bool {
         usize::from(self.slot_index) == slot_index
             && self.slot_name.as_ref() == slot_name
+            && self.input_type == input_type
             && &self.profile_contract_hash == profile_contract_hash
     }
 }
@@ -377,8 +425,11 @@ impl fmt::Debug for CompiledInputSlot {
             .debug_struct("CompiledInputSlot")
             .field("name", &self.name)
             .field("max_bytes", &self.max_bytes)
+            .field("input_type", &self.input_type)
+            .field("role", &self.role)
+            .field("nullable", &self.nullable)
             .field("canonicalization", &self.canonicalization)
-            .field("matcher", &self.matcher)
+            .field("patterned", &self.matcher.is_some())
             .finish()
     }
 }
@@ -392,7 +443,7 @@ impl CompiledInputSlot {
 
     /// Return the input allocation ceiling.
     #[must_use]
-    pub const fn max_bytes(&self) -> u16 {
+    pub const fn max_bytes(&self) -> u32 {
         self.max_bytes
     }
 
@@ -401,32 +452,103 @@ impl CompiledInputSlot {
         self.input_type
     }
 
+    #[must_use]
+    pub const fn role(&self) -> CompiledInputRole {
+        self.role
+    }
+
+    #[must_use]
+    pub const fn nullable(&self) -> bool {
+        self.nullable
+    }
+
     /// Canonicalize and validate a candidate, returning no value on mismatch.
     #[must_use]
-    pub fn canonicalize_and_validate(&self, value: &str) -> Option<CompiledInputValue> {
-        if value.len() > usize::from(self.max_bytes) {
-            return None;
-        }
-        let canonical = match self.canonicalization {
-            CompiledInputCanonicalization::Identity => value.to_owned(),
-            CompiledInputCanonicalization::AsciiLowercase => value.to_ascii_lowercase(),
+    pub fn canonicalize_and_validate(
+        &self,
+        value: &ParsedConsultationScalar,
+    ) -> Option<CompiledInputValue> {
+        let (canonical, null) = match (self.input_type, value) {
+            (
+                CompiledInputType::String | CompiledInputType::FullDate,
+                ParsedConsultationScalar::String(value),
+            ) => {
+                if value.len() > self.max_bytes as usize
+                    || self
+                        .min_length
+                        .is_some_and(|minimum| value.chars().count() < minimum as usize)
+                    || self
+                        .max_length
+                        .is_none_or(|maximum| value.chars().count() > maximum as usize)
+                {
+                    return None;
+                }
+                let canonical = match self.canonicalization {
+                    CompiledInputCanonicalization::Identity => value.to_string(),
+                    CompiledInputCanonicalization::AsciiLowercase => value.to_ascii_lowercase(),
+                };
+                if canonical.len() > self.max_bytes as usize
+                    || self
+                        .min_length
+                        .is_some_and(|minimum| canonical.chars().count() < minimum as usize)
+                    || self
+                        .max_length
+                        .is_none_or(|maximum| canonical.chars().count() > maximum as usize)
+                    || self
+                        .matcher
+                        .as_ref()
+                        .is_some_and(|matcher| !matcher.is_match(&canonical))
+                    || (self.input_type == CompiledInputType::FullDate
+                        && (canonical.len() != 10
+                            || time::Date::parse(
+                                &canonical,
+                                &time::macros::format_description!("[year]-[month]-[day]"),
+                            )
+                            .is_err()))
+                {
+                    return None;
+                }
+                (canonical, false)
+            }
+            (CompiledInputType::Boolean, ParsedConsultationScalar::Boolean(value)) => {
+                (value.to_string(), false)
+            }
+            (CompiledInputType::Integer, ParsedConsultationScalar::Integer(value)) if matches!((self.minimum, self.maximum), (Some(minimum), Some(maximum)) if (minimum..=maximum).contains(value)) => {
+                (value.to_string(), false)
+            }
+            (_, ParsedConsultationScalar::Null)
+                if self.role == CompiledInputRole::Parameter && self.nullable =>
+            {
+                ("null".to_owned(), true)
+            }
+            _ => return None,
         };
-        let type_valid = match self.input_type {
-            CompiledInputType::String => true,
-            CompiledInputType::FullDate => {
-                canonical.len() == 10
-                    && time::Date::parse(
-                        &canonical,
-                        &time::macros::format_description!("[year]-[month]-[day]"),
-                    )
-                    .is_ok()
+        let candidate = if null {
+            Value::Null
+        } else {
+            match self.input_type {
+                CompiledInputType::String | CompiledInputType::FullDate => {
+                    Value::String(canonical.clone())
+                }
+                CompiledInputType::Boolean => Value::Bool(canonical == "true"),
+                CompiledInputType::Integer => Value::from(canonical.parse::<i64>().ok()?),
             }
         };
-        (type_valid && self.matcher.is_match(&canonical)).then(|| CompiledInputValue {
+        if self
+            .constant
+            .as_ref()
+            .is_some_and(|constant| constant != &candidate)
+            || (!self.allowed_values.is_empty() && !self.allowed_values.contains(&candidate))
+        {
+            return None;
+        }
+        Some(CompiledInputValue {
             value: Zeroizing::new(canonical),
             profile_contract_hash: self.profile_contract_hash.clone(),
             slot_name: self.name.clone(),
             slot_index: self.slot_index,
+            input_type: self.input_type,
+            null,
         })
     }
 }
@@ -536,6 +658,7 @@ pub enum CompiledSelectorLocation {
     Body { pointer: CompiledJsonPointer },
     DciIdtypeValue,
     DciExactPredicate,
+    ScriptContext,
 }
 
 /// Non-decorative selector binding consumed by the request renderer or codec.
@@ -657,6 +780,7 @@ impl CompiledScalarShape {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CompiledResponseSchemaKind {
+    ScriptBody,
     Object,
     Array,
     String,
@@ -668,8 +792,10 @@ pub(crate) enum CompiledResponseSchemaKind {
 /// Closed recursive raw response schema.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompiledResponseSchema {
+    ScriptBody,
     Object {
         nullable: bool,
+        reject_unknown_fields: bool,
         fields: Box<[CompiledResponseField]>,
     },
     Array {
@@ -683,6 +809,7 @@ pub enum CompiledResponseSchema {
 impl CompiledResponseSchema {
     pub(crate) const fn kind(&self) -> CompiledResponseSchemaKind {
         match self {
+            Self::ScriptBody => CompiledResponseSchemaKind::ScriptBody,
             Self::Object { .. } => CompiledResponseSchemaKind::Object,
             Self::Array { .. } => CompiledResponseSchemaKind::Array,
             Self::Scalar(CompiledScalarShape::String { .. }) => CompiledResponseSchemaKind::String,
@@ -698,6 +825,7 @@ impl CompiledResponseSchema {
 
     pub(crate) const fn nullable(&self) -> bool {
         match self {
+            Self::ScriptBody => false,
             Self::Object { nullable, .. } | Self::Array { nullable, .. } => *nullable,
             Self::Scalar(shape) => shape.nullable(),
         }
@@ -706,7 +834,7 @@ impl CompiledResponseSchema {
     pub(crate) fn object_fields(&self) -> Option<&[CompiledResponseField]> {
         match self {
             Self::Object { fields, .. } => Some(fields),
-            Self::Array { .. } | Self::Scalar(_) => None,
+            Self::ScriptBody | Self::Array { .. } | Self::Scalar(_) => None,
         }
     }
 
@@ -715,14 +843,14 @@ impl CompiledResponseSchema {
             Self::Array {
                 max_items, items, ..
             } => Some((*max_items, items)),
-            Self::Object { .. } | Self::Scalar(_) => None,
+            Self::ScriptBody | Self::Object { .. } | Self::Scalar(_) => None,
         }
     }
 
     pub(crate) const fn scalar(&self) -> Option<&CompiledScalarShape> {
         match self {
             Self::Scalar(shape) => Some(shape),
-            Self::Object { .. } | Self::Array { .. } => None,
+            Self::ScriptBody | Self::Object { .. } | Self::Array { .. } => None,
         }
     }
 }
@@ -790,19 +918,6 @@ pub struct CompiledOutputMapping {
     pointer: CompiledJsonPointer,
 }
 
-/// One explicit fact derived only from the normalized operation outcome.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CompiledPresenceOutput {
-    field: AcquiredField,
-}
-
-impl CompiledPresenceOutput {
-    #[must_use]
-    pub fn field(&self) -> &str {
-        self.field.as_str()
-    }
-}
-
 impl CompiledOutputMapping {
     #[must_use]
     pub fn field(&self) -> &str {
@@ -817,6 +932,7 @@ impl CompiledOutputMapping {
 /// Concrete response-cardinality enforcement compiled from request-linked proof.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompiledCardinalityMechanism {
+    ScriptManaged,
     DciProbeTwo,
     ProbeQueryParameter { query_index: usize },
     ProbeBodyInteger { pointer: CompiledJsonPointer },
@@ -835,14 +951,24 @@ pub enum CompiledProjectionMechanism {
 /// Root response shape selected by the reviewed normalizer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompiledResponseNormalization {
+    ScriptBody,
     Object,
     ArrayProbeTwo,
     ObjectArrayProbeTwo { records_field_index: usize },
 }
 
+/// Script-visible decoding selected by the reviewed integration pack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompiledResponseFormat {
+    Json,
+    Text,
+}
+
 /// Immutable compiled response parser and extraction contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledResponse {
+    format: CompiledResponseFormat,
+    selected_headers: Box<[Box<str>]>,
     max_bytes: u32,
     max_records: u8,
     accepted_statuses: Box<[u16]>,
@@ -851,12 +977,20 @@ pub struct CompiledResponse {
     normalization: CompiledResponseNormalization,
     schema: CompiledResponseSchema,
     outputs: Box<[CompiledOutputMapping]>,
-    presence_outputs: Box<[CompiledPresenceOutput]>,
     prior_outputs: Box<[CompiledPriorOutputSlot]>,
     cardinality: CompiledCardinalityMechanism,
 }
 
 impl CompiledResponse {
+    #[must_use]
+    pub const fn format(&self) -> CompiledResponseFormat {
+        self.format
+    }
+
+    pub fn selected_headers(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.selected_headers.iter().map(AsRef::as_ref)
+    }
+
     #[must_use]
     pub const fn max_bytes(&self) -> u32 {
         self.max_bytes
@@ -896,10 +1030,6 @@ impl CompiledResponse {
         self.outputs.iter()
     }
 
-    pub fn presence_outputs(&self) -> impl ExactSizeIterator<Item = &CompiledPresenceOutput> {
-        self.presence_outputs.iter()
-    }
-
     pub fn prior_outputs(&self) -> impl ExactSizeIterator<Item = &CompiledPriorOutputSlot> {
         self.prior_outputs.iter()
     }
@@ -936,7 +1066,7 @@ pub struct CompiledOperation {
     projection: CompiledProjectionMechanism,
     transport_template: DataDestinationRequestTemplate,
     response: CompiledResponse,
-    response_decoder: ClosedJsonDecoder,
+    response_decoder: Option<ClosedJsonDecoder>,
     acquisition_class: AcquisitionClass,
     cardinality: SourceCardinality,
     total_deadline_ms: u32,
@@ -1300,8 +1430,10 @@ impl CompiledOperation {
         &self.response
     }
 
-    pub(crate) const fn response_decoder(&self) -> &ClosedJsonDecoder {
-        &self.response_decoder
+    pub(crate) fn response_decoder(&self) -> &ClosedJsonDecoder {
+        self.response_decoder
+            .as_ref()
+            .expect("validated closed-response operation has a decoder")
     }
 
     pub(crate) const fn transport_template(&self) -> &DataDestinationRequestTemplate {
@@ -1474,6 +1606,10 @@ impl CompiledSnapshotBinding {
 struct RuntimePrivateBinding {
     data_destination: Option<DataDestinationPolicy>,
     credential_destination: Option<CredentialDestinationPolicy>,
+    verification_destination: Option<DataDestinationPolicy>,
+    data_transport: Option<CompiledDestinationTransport>,
+    credential_transport: Option<CompiledDestinationTransport>,
+    verification_transport: Option<CompiledDestinationTransport>,
     credential_reference: Option<CredentialReferenceId>,
     credential_generation: Option<u64>,
     deployment_parameters: Box<[Box<str>]>,
@@ -1622,7 +1758,6 @@ pub(crate) enum CompiledRhaiFactType {
     Boolean,
     Integer { minimum: i64, maximum: i64 },
     Date,
-    Presence,
 }
 
 pub(crate) struct CompiledRhaiFact {
@@ -1772,6 +1907,40 @@ impl CompiledSourcePlan {
         self.runtime_binding.credential_destination.as_ref()
     }
 
+    pub(crate) const fn verification_destination(&self) -> Option<&DataDestinationPolicy> {
+        self.runtime_binding.verification_destination.as_ref()
+    }
+
+    pub(super) fn activate_private_transports(
+        &mut self,
+    ) -> Result<(), PrivateTransportActivationError> {
+        if let Some(transport) = &self.runtime_binding.data_transport {
+            transport.activate_data(
+                self.runtime_binding
+                    .data_destination
+                    .as_mut()
+                    .ok_or(PrivateTransportActivationError::BindingFailed)?,
+            )?;
+        }
+        if let Some(transport) = &self.runtime_binding.credential_transport {
+            transport.activate_credential(
+                self.runtime_binding
+                    .credential_destination
+                    .as_mut()
+                    .ok_or(PrivateTransportActivationError::BindingFailed)?,
+            )?;
+        }
+        if let Some(transport) = &self.runtime_binding.verification_transport {
+            transport.activate_data(
+                self.runtime_binding
+                    .verification_destination
+                    .as_mut()
+                    .ok_or(PrivateTransportActivationError::BindingFailed)?,
+            )?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn credential_reference(&self) -> Option<(&str, u64)> {
         self.runtime_binding
             .credential_reference
@@ -1874,6 +2043,7 @@ impl CompiledSourcePlanRegistry {
                     .map_err(|_| SourcePlanCompileError::RhaiWorkerMismatch)?,
                 max_memory_bytes: limits.memory_bytes,
                 wall_time_ms: u64::from(limits.cpu_ms),
+                max_source_calls: u32::from(limits.max_calls),
             };
             crate::rhai_worker::probe_script(&reviewed.script, &reviewed.entrypoint, worker_limits)
                 .map_err(|_| SourcePlanCompileError::RhaiWorkerMismatch)?;
@@ -1973,6 +2143,15 @@ impl CompiledSourcePlanRegistry {
     /// Iterate compiled plans in stable profile-id and version order.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &CompiledSourcePlan> {
         self.plans.values()
+    }
+
+    pub(super) fn activate_private_transports(
+        &mut self,
+    ) -> Result<(), PrivateTransportActivationError> {
+        for plan in self.plans.values_mut() {
+            plan.activate_private_transports()?;
+        }
+        Ok(())
     }
 }
 
@@ -2141,6 +2320,27 @@ fn compile_one(
         .as_ref()
         .map(compile_credential_destination)
         .transpose()?;
+    let verification_destination = binding
+        .document
+        .verification_destination
+        .as_ref()
+        .map(compile_data_destination)
+        .transpose()?;
+    let data_transport = binding
+        .document
+        .data_destination
+        .as_ref()
+        .and_then(CompiledDestinationTransport::from_document);
+    let credential_transport = binding
+        .document
+        .credential_destination
+        .as_ref()
+        .and_then(CompiledDestinationTransport::from_document);
+    let verification_transport = binding
+        .document
+        .verification_destination
+        .as_ref()
+        .and_then(CompiledDestinationTransport::from_document);
     reject_destination_overlap(pack, &binding)?;
 
     let footprint = DeclaredOperationFootprint::try_new(
@@ -2213,6 +2413,13 @@ fn compile_one(
         contract.cardinality,
         limits.operation().timeout_ms,
         data_application_base_path,
+        binding
+            .document
+            .verification_destination
+            .as_ref()
+            .map_or("/", |destination| {
+                destination.application_base_path.as_str()
+            }),
         &compilation_indexes,
     )?;
     let credential_application_base_path = binding
@@ -2327,7 +2534,7 @@ fn compile_one(
         completion_seed_sizing.template,
         completion_seed_sizing.canonical_bytes_max,
         completion_seed_sizing.completion_audit_canonical_bytes_max,
-        &pack.document.spec.product_family,
+        pack.document.spec.product_family.as_deref(),
         &pack.document.spec.supported_version_evidence,
         pack.logical_operation.clone(),
         pack.document.spec.plan.kind,
@@ -2336,6 +2543,10 @@ fn compile_one(
     let runtime_binding = RuntimePrivateBinding {
         data_destination,
         credential_destination,
+        verification_destination,
+        data_transport,
+        credential_transport,
+        verification_transport,
         credential_reference,
         credential_generation,
         deployment_parameters,
@@ -2372,16 +2583,12 @@ fn compile_one(
                     super::runtime_profile::CompiledOutputShape::Date { .. } => {
                         CompiledRhaiFactType::Date
                     }
-                    super::runtime_profile::CompiledOutputShape::Presence => {
-                        CompiledRhaiFactType::Presence
-                    }
                 },
                 nullable: match field.shape() {
                     super::runtime_profile::CompiledOutputShape::String { nullable, .. }
                     | super::runtime_profile::CompiledOutputShape::Boolean { nullable }
                     | super::runtime_profile::CompiledOutputShape::Integer { nullable, .. }
                     | super::runtime_profile::CompiledOutputShape::Date { nullable } => nullable,
-                    super::runtime_profile::CompiledOutputShape::Presence => false,
                 },
             })
             .collect::<Box<[_]>>()
@@ -2493,17 +2700,7 @@ fn compile_steps(
                         .get(source.as_str())
                         .copied()
                         .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-                    let source_operation = plan
-                        .operations
-                        .iter()
-                        .find(|operation| operation.id == *source)
-                        .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-                    let presence = output == "presence"
-                        || source_operation
-                            .response
-                            .presence_outputs
-                            .iter()
-                            .any(|candidate| candidate == output);
+                    let presence = output == "presence";
                     let output_slot_index = if presence {
                         None
                     } else {

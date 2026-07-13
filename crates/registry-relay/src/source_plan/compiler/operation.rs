@@ -24,7 +24,24 @@ fn compile_selector_binding(
         .reviewed_acquisition
         .as_ref()
         .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-    let (source, location) = match &reviewed.selector {
+    if reviewed.selector.is_none() && pack.document.spec.plan.kind == SourcePlanKind::SandboxedRhai
+    {
+        let input_index = indexes
+            .inputs
+            .values()
+            .copied()
+            .next()
+            .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+        return Ok(CompiledSelectorBinding {
+            source: CompiledSelectorSource::ConsultationInput { input_index },
+            location: CompiledSelectorLocation::ScriptContext,
+        });
+    }
+    let (source, location) = match reviewed
+        .selector
+        .as_ref()
+        .ok_or(SourcePlanCompileError::CompilerInvariant)?
+    {
         ExactSelectorDocument::HttpExactAnd {
             operation: root_operation,
             components,
@@ -125,6 +142,7 @@ pub(super) fn compile_operation_descriptors(
     _cardinality: SourceCardinality,
     total_deadline_ms: u32,
     application_base_path: &str,
+    verification_application_base_path: &str,
     indexes: &OperationCompilationIndexes<'_, '_>,
 ) -> Result<Vec<CompiledOperation>, SourcePlanCompileError> {
     let input_indexes = indexes.inputs;
@@ -145,7 +163,6 @@ pub(super) fn compile_operation_descriptors(
                 .response
                 .output_mapping
                 .keys()
-                .chain(operation.response.presence_outputs.iter())
                 .map(|field| {
                     AcquiredField::try_from(field.as_str())
                         .map_err(|_| SourcePlanCompileError::CompilerInvariant)
@@ -159,6 +176,11 @@ pub(super) fn compile_operation_descriptors(
             )
             .map_err(|_| SourcePlanCompileError::CompilerInvariant)?
             {
+                ResponseSchemaDocument::ScriptBody
+                    if pack.document.spec.plan.kind == SourcePlanKind::SandboxedRhai =>
+                {
+                    BTreeSet::new()
+                }
                 ResponseSchemaDocument::Object { fields, .. } => fields
                     .keys()
                     .map(|field| {
@@ -329,8 +351,13 @@ pub(super) fn compile_operation_descriptors(
                     )
                 }
             };
-            let (operation_fixed_path, path_parameter) = operation_path_parts(operation)
-                .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+            let script_operation = pack.document.spec.plan.kind == SourcePlanKind::SandboxedRhai;
+            let (operation_fixed_path, path_parameter) = if script_operation {
+                (operation.path.as_str(), None)
+            } else {
+                operation_path_parts(operation)
+                    .map_err(|_| SourcePlanCompileError::CompilerInvariant)?
+            };
             let fixed_path = destination_fixed_path(application_base_path, operation_fixed_path);
             let path_segment = path_parameter
                 .map(|(_, expression)| {
@@ -362,6 +389,31 @@ pub(super) fn compile_operation_descriptors(
                     ],
                     authorization_template,
                     body_template,
+                    step_limits.max_request_bytes as usize,
+                )
+            } else if script_operation {
+                let (api_key_header, api_key_query) = match &api_key {
+                    Some(super::CompiledApiKeyPlacement::Header {
+                        name,
+                        max_value_bytes,
+                    }) => (Some((name.as_ref(), usize::from(*max_value_bytes))), None),
+                    Some(super::CompiledApiKeyPlacement::Query {
+                        name,
+                        max_value_bytes,
+                    }) => (None, Some((name.as_ref(), usize::from(*max_value_bytes)))),
+                    None => (None, None),
+                };
+                DataDestinationRequestTemplate::new_script(
+                    destination_method,
+                    &fixed_path,
+                    &operation
+                        .script_request_headers
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                    authorization_template,
+                    api_key_header,
+                    api_key_query,
                     step_limits.max_request_bytes as usize,
                 )
             } else if request_codec == CompiledRequestCodec::FhirR4Search {
@@ -410,7 +462,10 @@ pub(super) fn compile_operation_descriptors(
             })?;
             let projection = compile_projection(operation)?;
             let response = compile_response(operation)?;
-            let response_decoder = compile_closed_json_decoder(&response)?;
+            let response_decoder = (response.normalization()
+                != CompiledResponseNormalization::ScriptBody)
+                .then(|| compile_closed_json_decoder(&response))
+                .transpose()?;
             let cardinality = match operation.response.max_records {
                 1 => SourceCardinality::Singleton,
                 2 => SourceCardinality::AmbiguityProbe,
@@ -432,7 +487,14 @@ pub(super) fn compile_operation_descriptors(
                 let verification_id = OperationId::try_from(verification.id.as_str())
                     .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
                 let fixed_path: Box<str> =
-                    destination_fixed_path(application_base_path, verification.path.as_str());
+                    if verification.path == "/" && verification_application_base_path != "/" {
+                        verification_application_base_path.into()
+                    } else {
+                        destination_fixed_path(
+                            verification_application_base_path,
+                            verification.path.as_str(),
+                        )
+                    };
                 let transport_template = DataDestinationRequestTemplate::new(
                     DestinationMethod::Get,
                     &fixed_path,
@@ -533,30 +595,74 @@ pub(super) fn compile_input_slots(
         .iter()
         .enumerate()
         .map(|(slot_index, (name, input))| {
-            let pattern = parse_input_pattern(&input.pattern)
-                .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+            let matcher = input
+                .pattern
+                .as_deref()
+                .map(parse_input_pattern)
+                .transpose()
+                .map_err(|_| SourcePlanCompileError::CompilerInvariant)?
+                .map(|pattern| CompiledInputMatcher { pattern });
             let canonicalization = match input.canonicalization {
                 CanonicalizationDocument::Identity => CompiledInputCanonicalization::Identity,
                 CanonicalizationDocument::AsciiLowercase => {
                     CompiledInputCanonicalization::AsciiLowercase
                 }
             };
-            let input_type = match input.input_type {
+            let (document_type, nullable) = input
+                .resolved_type()
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+            let input_type = match document_type {
                 InputTypeDocument::String => CompiledInputType::String,
                 InputTypeDocument::FullDate => CompiledInputType::FullDate,
+                InputTypeDocument::Boolean => CompiledInputType::Boolean,
+                InputTypeDocument::Integer => CompiledInputType::Integer,
+            };
+            let role = match input.role {
+                InputRoleDocument::Selector => CompiledInputRole::Selector,
+                InputRoleDocument::Parameter => CompiledInputRole::Parameter,
             };
             Ok(CompiledInputSlot {
                 name: name.as_str().into(),
                 profile_contract_hash: profile_contract_hash.clone(),
                 slot_index: u16::try_from(slot_index)
                     .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
-                max_bytes: input.max_bytes,
+                max_bytes: input
+                    .canonical_max_bytes()
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+                min_length: input.min_length,
+                max_length: input.max_length,
                 input_type,
+                role,
+                nullable,
                 canonicalization,
-                matcher: CompiledInputMatcher { pattern },
+                matcher,
+                minimum: input.minimum,
+                maximum: input.maximum,
+                allowed_values: input
+                    .allowed_values
+                    .iter()
+                    .cloned()
+                    .map(|value| canonicalize_input_constraint(value, canonicalization))
+                    .collect(),
+                constant: input
+                    .constant
+                    .clone()
+                    .map(|value| canonicalize_input_constraint(value, canonicalization)),
             })
         })
         .collect()
+}
+
+fn canonicalize_input_constraint(
+    value: serde_json::Value,
+    canonicalization: CompiledInputCanonicalization,
+) -> serde_json::Value {
+    match (canonicalization, value) {
+        (CompiledInputCanonicalization::AsciiLowercase, serde_json::Value::String(value)) => {
+            serde_json::Value::String(value.to_ascii_lowercase())
+        }
+        (_, value) => value,
+    }
 }
 
 fn compile_named_expressions(
@@ -714,17 +820,6 @@ fn compile_response(
             })
         })
         .collect::<Result<Box<[_]>, _>>()?;
-    let presence_outputs = operation
-        .response
-        .presence_outputs
-        .iter()
-        .map(|field| {
-            Ok::<_, SourcePlanCompileError>(CompiledPresenceOutput {
-                field: AcquiredField::try_from(field.as_str())
-                    .map_err(|_| SourcePlanCompileError::CompilerInvariant)?,
-            })
-        })
-        .collect::<Result<Box<[_]>, _>>()?;
     let prior_outputs = operation
         .response
         .prior_outputs
@@ -739,6 +834,7 @@ fn compile_response(
         })
         .collect::<Result<Box<[_]>, _>>()?;
     let cardinality = match &operation.response.cardinality {
+        CardinalityMechanismDocument::ScriptManaged => CompiledCardinalityMechanism::ScriptManaged,
         CardinalityMechanismDocument::DciProbeTwo => CompiledCardinalityMechanism::DciProbeTwo,
         CardinalityMechanismDocument::ProbeQueryParameter { parameter } => operation
             .query
@@ -764,6 +860,7 @@ fn compile_response(
         },
     };
     let normalization = match operation.response.normalization {
+        ResponseNormalizationDocument::ScriptBody => CompiledResponseNormalization::ScriptBody,
         ResponseNormalizationDocument::Object => CompiledResponseNormalization::Object,
         ResponseNormalizationDocument::ArrayProbeTwo => {
             CompiledResponseNormalization::ArrayProbeTwo
@@ -787,6 +884,16 @@ fn compile_response(
         }
     };
     Ok(CompiledResponse {
+        format: match operation.response.format {
+            ResponseFormatDocument::Json => CompiledResponseFormat::Json,
+            ResponseFormatDocument::Text => CompiledResponseFormat::Text,
+        },
+        selected_headers: operation
+            .response
+            .selected_headers
+            .iter()
+            .map(|name| name.as_str().into())
+            .collect(),
         max_bytes: operation.response.max_bytes,
         max_records: operation.response.max_records,
         accepted_statuses: operation
@@ -809,7 +916,6 @@ fn compile_response(
         normalization,
         schema: compile_response_schema(&operation.response.schema),
         outputs,
-        presence_outputs,
         prior_outputs,
         cardinality,
     })
@@ -826,6 +932,9 @@ pub(super) fn compile_closed_json_decoder(
 
     let schema = compile_closed_json_schema(&response.schema)?;
     let root = match response.normalization {
+        CompiledResponseNormalization::ScriptBody => {
+            return Err(SourcePlanCompileError::CompilerInvariant)
+        }
         CompiledResponseNormalization::Object => ClosedJsonRecordRoot::Object,
         CompiledResponseNormalization::ArrayProbeTwo => ClosedJsonRecordRoot::ArrayProbeTwo,
         CompiledResponseNormalization::ObjectArrayProbeTwo {
@@ -865,7 +974,12 @@ fn compile_closed_json_schema(
     schema: &CompiledResponseSchema,
 ) -> Result<ClosedJsonSchema, SourcePlanCompileError> {
     match schema {
-        CompiledResponseSchema::Object { nullable, fields } => {
+        CompiledResponseSchema::ScriptBody => Err(SourcePlanCompileError::CompilerInvariant),
+        CompiledResponseSchema::Object {
+            nullable,
+            reject_unknown_fields,
+            fields,
+        } => {
             let fields = fields
                 .iter()
                 .map(|field| {
@@ -874,8 +988,12 @@ fn compile_closed_json_schema(
                         .map_err(|_| SourcePlanCompileError::CompilerInvariant)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            ClosedJsonSchema::object(*nullable, fields)
-                .map_err(|_| SourcePlanCompileError::CompilerInvariant)
+            ClosedJsonSchema::object_with_unknown_field_policy(
+                *nullable,
+                *reject_unknown_fields,
+                fields,
+            )
+            .map_err(|_| SourcePlanCompileError::CompilerInvariant)
         }
         CompiledResponseSchema::Array {
             nullable,
@@ -943,7 +1061,6 @@ fn compile_prior_scalar_shape(
             nullable: output.nullable,
             max_bytes: 10,
         }),
-        OutputTypeDocument::Presence => Err(SourcePlanCompileError::CompilerInvariant),
     }
 }
 
@@ -951,10 +1068,14 @@ pub(in crate::source_plan) fn compile_response_schema(
     schema: &ResponseSchemaDocument,
 ) -> CompiledResponseSchema {
     match schema {
+        ResponseSchemaDocument::ScriptBody => CompiledResponseSchema::ScriptBody,
         ResponseSchemaDocument::Object {
-            nullable, fields, ..
+            nullable,
+            reject_unknown_fields,
+            fields,
         } => CompiledResponseSchema::Object {
             nullable: *nullable,
+            reject_unknown_fields: *reject_unknown_fields,
             fields: fields
                 .iter()
                 .map(|(name, field)| CompiledResponseField {

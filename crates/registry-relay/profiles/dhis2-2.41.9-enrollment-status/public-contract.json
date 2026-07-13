@@ -3,6 +3,11 @@
   "id": "dhis2.tracker.enrollment-status.exact",
   "version": "1",
   "spec": {
+    "runtime": {
+      "platform_profile": "registry-stack.consultation.v1",
+      "source_capability": "http",
+      "script_abi": null
+    },
     "subject": {
       "mode": "single_subject",
       "selector_provenance": {
@@ -11,16 +16,18 @@
     },
     "inputs": {
       "tracked_entity": {
+        "role": "selector",
         "type": "string",
-        "max_bytes": 11,
+        "maxLength": 11,
+        "x-registry-max-bytes": 44,
         "pattern": "^[A-Za-z][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]$",
-        "canonicalization": "identity"
+        "x-registry-canonicalization": "identity"
       }
     },
     "integration_pack": {
       "id": "dhis2.tracker.enrollment-status",
       "version": "1",
-      "hash": "sha256:c3965741e1d2da615a82a6ede91d0477c8c29204c675e043169bcc654915597f"
+      "hash": "sha256:3ebf1e17fba13e4071101a162ad53311e1a7404bea8e2624ec8621aa9d0ac997"
     },
     "acquisition": {
       "class": "source_projected_exact",
@@ -56,7 +63,7 @@
       "legal_basis": "public_task",
       "policy": {
         "id": "relay.dhis2.tracker.enrollment-status.exact",
-        "hash": "sha256:807d95f054244dc6e881672324d7e2468fe179af312f67f2bd162d523743bed9",
+        "hash": "sha256:d9a93a8723464f8223db688ec7b9029a546b095687357344c5cc79cb9e8a1afe",
         "decision_cache": "disabled",
         "max_decision_age_ms": 1000,
         "unavailable": "deny"

@@ -3,6 +3,11 @@
   "id": "synthetic.person-status.exact",
   "version": "1",
   "spec": {
+    "runtime": {
+      "platform_profile": "registry-stack.consultation.v1",
+      "source_capability": "http",
+      "script_abi": null
+    },
     "subject": {
       "mode": "single_subject",
       "selector_provenance": {
@@ -15,16 +20,18 @@
     },
     "inputs": {
       "subject_id": {
+        "role": "selector",
         "type": "string",
-        "max_bytes": 256,
+        "maxLength": 64,
+        "x-registry-max-bytes": 256,
         "pattern": "^[A-Za-z0-9._:-]+$",
-        "canonicalization": "identity"
+        "x-registry-canonicalization": "identity"
       }
     },
     "integration_pack": {
       "id": "synthetic.person-status",
       "version": "1",
-        "hash": "sha256:e31ef30d326046840f0594e1fbcc934653552e902bf0caf6d383bd5507e4281c"
+        "hash": "sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9"
     },
     "acquisition": {
       "class": "source_projected_exact",
@@ -60,7 +67,7 @@
       "legal_basis": "public_task",
       "policy": {
         "id": "relay.synthetic.person-status.exact",
-          "hash": "sha256:709e7ca0f319cfe957f72c3d6241f983dcf5fbb9ba4c511699bfc71df71bc544",
+        "hash": "sha256:4b216acf0cc94efe9fd24f72998191e4d2394d69cb1de23124874a256940b6e6",
         "decision_cache": "disabled",
         "max_decision_age_ms": 1000,
         "unavailable": "deny"

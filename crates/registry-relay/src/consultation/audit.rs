@@ -39,11 +39,10 @@ use crate::state_plane::{
 };
 
 use super::commitments::{
-    acquisition_schema_value, authorized_operation_union_value, consent_seed_value,
-    empty_obligations_digest, permit_bindings_value, public_outcome_str,
-    AuthorizedConsultationAttempt, ConsultationCommitmentError, ConsultationDigests,
-    PendingConsultationDispatchFreshness, PendingConsultationPersistenceFreshness,
-    SealedConsultationExecution, VerifiedConsentDecision,
+    acquisition_schema_value, consent_seed_value, empty_obligations_digest, permit_bindings_value,
+    public_outcome_str, AuthorizedConsultationAttempt, ConsultationCommitmentError,
+    ConsultationDigests, PendingConsultationDispatchFreshness,
+    PendingConsultationPersistenceFreshness, SealedConsultationExecution, VerifiedConsentDecision,
 };
 use super::executor::{
     execute_concrete_consultation, ConcreteExecutorKind, ConcreteExecutorProof,
@@ -237,7 +236,7 @@ impl RuntimeConsultationCompletionSeed {
         });
         let bounds = profile.effective_limits();
         let operation_bounds = bounds.operation();
-        if operation_bounds.timeout_ms == 0 || operation_bounds.timeout_ms > 20_000 {
+        if operation_bounds.timeout_ms == 0 || operation_bounds.timeout_ms > 60_000 {
             return Err(ConsultationAuditBuildError::ProfileMismatch);
         }
         let value = json!({
@@ -283,12 +282,12 @@ impl RuntimeConsultationCompletionSeed {
             "destinations": {
                 "credential_destination_id": profile.credential_destination_id(),
                 "data_destination_id": profile.data_destination_id(),
+                "verification_destination_id": profile.verification_destination_id(),
             },
             "credential": {
                 "reference": profile.credential_reference(),
                 "generation": profile.credential_generation(),
             },
-            "authorized_operation_union": authorized_operation_union_value(profile),
             "dispatch": {
                 "plan_kind": source_plan_kind_str(profile.kind()),
                 "permit_bindings": permit_bindings_value(profile),
@@ -439,7 +438,7 @@ impl PreparedAtomicConsultationAttempt<'static> {
             .and_then(|bounds| bounds.get("timeout_ms"))
             .and_then(Value::as_u64)
             .and_then(|value| u32::try_from(value).ok())
-            .filter(|value| (1..=20_000).contains(value))
+            .filter(|value| (1..=60_000).contains(value))
             .ok_or(ConsultationAuditBuildError::StateBinding)?;
         let pseudonym_bundle = CanonicalPseudonymBundle {
             key_id: key_id.as_str().to_owned(),
@@ -1153,7 +1152,7 @@ mod tests {
         RuntimeDigestChainForTest, RuntimePseudonymPreimagesForTest, VerifiedConsentAuthority,
     };
     use crate::consultation::{
-        AuthenticatedConsultationWorkload, ParsedPurpose, ParsedSingleStringInput,
+        AuthenticatedConsultationWorkload, ParsedConsultationInputs, ParsedPurpose,
         PreAuthorizationConsultationCore,
     };
     use crate::source_plan::runtime_profile::CompiledConsentProfile;
@@ -1175,7 +1174,7 @@ mod tests {
     const AUTHENTICATION_EXPIRES_AT_UNIX_MS: i64 = 1_700_000_002_000;
 
     #[test]
-    fn production_seed_uses_the_exact_seventeen_member_state_shape() {
+    fn production_seed_uses_the_exact_sixteen_member_state_shape() {
         let profile = maximum_runtime_profile_fixture();
         let purpose = profile.purposes().next().expect("fixture purpose");
         let digests = ConsultationDigests::from_labels_for_test(DIGEST);
@@ -1188,7 +1187,7 @@ mod tests {
         )
         .expect("typed production seed");
         let object = seed.safe_value().as_object().expect("seed object");
-        assert_eq!(object.len(), 17);
+        assert_eq!(object.len(), 16);
         assert_eq!(
             object.get("schema").and_then(Value::as_str),
             Some("registry.relay.consultation-completion-seed/v1")
@@ -1381,7 +1380,7 @@ mod tests {
             plan.profile().clone(),
             profile.subject().selector_provenance().clone(),
             ParsedPurpose::try_parse("benefit-verification").expect("synthetic purpose"),
-            ParsedSingleStringInput::try_parse("subject_id", SYNTHETIC_SUBJECT)
+            ParsedConsultationInputs::try_parse("subject_id", SYNTHETIC_SUBJECT)
                 .expect("synthetic subject"),
             plan.footprint().clone(),
         );

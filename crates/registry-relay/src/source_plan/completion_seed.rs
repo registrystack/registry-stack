@@ -52,9 +52,9 @@ pub(super) struct CompletionSeedSizing {
 pub(super) struct CompiledCompletionSeedTemplate {
     credential_destination_id: Option<Box<str>>,
     data_destination_id: Option<Box<str>>,
+    verification_destination_id: Option<Box<str>>,
     credential_reference: Option<Box<str>>,
     credential_generation: Option<u64>,
-    authorized_operation_union: Box<[CompiledAuthorizedOperation]>,
     permit_bindings: Box<[CompiledPermitBinding]>,
     credential_token_lifetime_ms: Option<u32>,
 }
@@ -74,25 +74,9 @@ impl CompiledOperationKind {
     }
 }
 
-pub(super) struct CompiledAuthorizedOperation {
-    kind: CompiledOperationKind,
-    operation_id: Box<str>,
-}
-
-impl CompiledAuthorizedOperation {
-    pub(super) const fn kind(&self) -> CompiledOperationKind {
-        self.kind
-    }
-
-    pub(super) fn operation_id(&self) -> &str {
-        &self.operation_id
-    }
-}
-
 pub(super) struct CompiledPermitBinding {
     kind: CompiledOperationKind,
     ordinal: u8,
-    allowed_operation_ids: Box<[Box<str>]>,
 }
 
 impl CompiledPermitBinding {
@@ -102,10 +86,6 @@ impl CompiledPermitBinding {
 
     pub(super) const fn ordinal(&self) -> u8 {
         self.ordinal
-    }
-
-    pub(super) fn allowed_operation_ids(&self) -> impl ExactSizeIterator<Item = &str> {
-        self.allowed_operation_ids.iter().map(AsRef::as_ref)
     }
 }
 
@@ -118,18 +98,16 @@ impl CompiledCompletionSeedTemplate {
         self.data_destination_id.as_deref()
     }
 
+    pub(super) fn verification_destination_id(&self) -> Option<&str> {
+        self.verification_destination_id.as_deref()
+    }
+
     pub(super) fn credential_reference(&self) -> Option<&str> {
         self.credential_reference.as_deref()
     }
 
     pub(super) const fn credential_generation(&self) -> Option<u64> {
         self.credential_generation
-    }
-
-    pub(super) fn authorized_operation_union(
-        &self,
-    ) -> impl ExactSizeIterator<Item = &CompiledAuthorizedOperation> {
-        self.authorized_operation_union.iter()
     }
 
     pub(super) fn permit_bindings(&self) -> impl ExactSizeIterator<Item = &CompiledPermitBinding> {
@@ -439,6 +417,9 @@ fn selector_location_preimage(
             "kind": "codec",
             "role": "dci_exact_predicate",
         })),
+        CompiledSelectorLocation::ScriptContext => Ok(json!({
+            "kind": "script_context",
+        })),
         // A future closed path-segment selector must commit only its compiled
         // fixed segment ordinal/role here. It must never place a rendered path
         // or raw selector value in this preimage.
@@ -590,6 +571,7 @@ fn projection_preimage(operation: &CompiledOperation) -> Result<Value, SourcePla
 
 fn cardinality_preimage(operation: &CompiledOperation) -> Result<Value, SourcePlanCompileError> {
     match operation.response().cardinality() {
+        CompiledCardinalityMechanism::ScriptManaged => Ok(json!({"kind": "script_managed"})),
         CompiledCardinalityMechanism::DciProbeTwo => Ok(json!({"kind": "dci_probe_two"})),
         CompiledCardinalityMechanism::ProbeQueryParameter { query_index } => Ok(json!({
             "kind": "probe_query_parameter",
@@ -740,41 +722,6 @@ pub(super) fn measure_completion_seed(
     let operations = &pack.document.spec.plan.operations;
     let credential_operation = pack.document.spec.plan.credential_operation.as_ref();
     let verification_operations = &pack.document.spec.plan.verification_operations;
-    let mut authorized_operation_union = credential_operation
-        .iter()
-        .map(|operation| ("credential", operation.id.as_str()))
-        .chain(
-            operations
-                .iter()
-                .map(|operation| ("data", operation.id.as_str())),
-        )
-        .chain(
-            verification_operations
-                .iter()
-                .map(|operation| ("data", operation.id.as_str())),
-        )
-        .collect::<Vec<_>>();
-    authorized_operation_union.sort_unstable();
-    let compiled_authorized_operation_union = authorized_operation_union
-        .iter()
-        .map(|(kind, operation_id)| CompiledAuthorizedOperation {
-            kind: match *kind {
-                "credential" => CompiledOperationKind::Credential,
-                "data" => CompiledOperationKind::Data,
-                _ => unreachable!("closed operation kind"),
-            },
-            operation_id: (*operation_id).into(),
-        })
-        .collect::<Box<[_]>>();
-    let authorized_operation_union = authorized_operation_union
-        .into_iter()
-        .map(|(kind, operation_id)| {
-            json!({
-                "kind": kind,
-                "operation_id": operation_id,
-            })
-        })
-        .collect::<Vec<_>>();
     let data_permit_operations = match pack.document.spec.plan.kind {
         SourcePlanKind::SnapshotExact => Vec::new(),
         SourcePlanKind::BoundedHttp => {
@@ -820,33 +767,26 @@ pub(super) fn measure_completion_seed(
     };
     let mut compiled_permit_bindings = Vec::new();
     let mut permit_bindings = Vec::new();
-    if let Some(operation) = credential_operation {
+    if credential_operation.is_some() {
         compiled_permit_bindings.push(CompiledPermitBinding {
             kind: CompiledOperationKind::Credential,
             ordinal: 0,
-            allowed_operation_ids: vec![Box::<str>::from(operation.id.as_str())].into_boxed_slice(),
         });
         permit_bindings.push(json!({
             "kind": "credential",
             "ordinal": 0,
-            "allowed_operation_ids": [operation.id.as_str()],
         }));
     }
-    for (ordinal, allowed) in data_permit_operations.iter().enumerate() {
+    for (ordinal, _) in data_permit_operations.iter().enumerate() {
         let ordinal =
             u8::try_from(ordinal).map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
         compiled_permit_bindings.push(CompiledPermitBinding {
             kind: CompiledOperationKind::Data,
             ordinal,
-            allowed_operation_ids: allowed
-                .iter()
-                .map(|operation_id| Box::<str>::from(*operation_id))
-                .collect(),
         });
         permit_bindings.push(json!({
             "kind": "data",
             "ordinal": ordinal,
-            "allowed_operation_ids": allowed,
         }));
     }
     let consent = &contract.document.spec.authorization.consent;
@@ -880,6 +820,10 @@ pub(super) fn measure_completion_seed(
         .credential_destination_id
         .as_ref()
         .map(super::identifiers::SourceDestinationId::as_str);
+    let verification_destination_id = binding
+        .verification_destination_id
+        .as_ref()
+        .map(super::identifiers::SourceDestinationId::as_str);
     let credential_reference = binding
         .credential_reference
         .as_ref()
@@ -892,9 +836,9 @@ pub(super) fn measure_completion_seed(
     let template = CompiledCompletionSeedTemplate {
         credential_destination_id: credential_destination_id.map(Into::into),
         data_destination_id: data_destination_id.map(Into::into),
+        verification_destination_id: verification_destination_id.map(Into::into),
         credential_reference: credential_reference.map(Into::into),
         credential_generation,
-        authorized_operation_union: compiled_authorized_operation_union,
         permit_bindings: compiled_permit_bindings.into_boxed_slice(),
         credential_token_lifetime_ms: effective_token_lifetime_ms,
     };
@@ -987,12 +931,12 @@ pub(super) fn measure_completion_seed(
         "destinations": {
             "credential_destination_id": credential_destination_id,
             "data_destination_id": data_destination_id,
+            "verification_destination_id": verification_destination_id,
         },
         "credential": {
             "reference": credential_reference,
             "generation": credential_generation,
         },
-        "authorized_operation_union": authorized_operation_union,
         "dispatch": {
             "plan_kind": kind,
             "permit_bindings": permit_bindings,

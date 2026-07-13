@@ -218,6 +218,41 @@ fn entire_tree_is_closed_and_recursively_bounded() {
 }
 
 #[test]
+fn projection_objects_ignore_unselected_members_but_validate_selected_members() {
+    let decoder = ClosedJsonDecoder::new(
+        ClosedJsonSchema::object_with_unknown_field_policy(
+            false,
+            false,
+            vec![field("status", true, string(false, 8))],
+        )
+        .unwrap(),
+        ClosedJsonRecordRoot::Object,
+        vec![projection("status", &["status"])],
+    )
+    .unwrap();
+
+    let ClosedJsonOutcome::One(record) = decoder
+        .decode(body(br#"{"status":"ACTIVE","vendor":{"future":[1,2,3]}}"#))
+        .unwrap()
+    else {
+        panic!("one projected record");
+    };
+    let mut fields = record.fields();
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields.next().expect("status projection").name(), "status");
+
+    for invalid in [
+        br#"{"vendor":true}"#.as_slice(),
+        br#"{"status":"TOO-LONG!","vendor":true}"#.as_slice(),
+    ] {
+        assert_eq!(
+            decoder.decode(body(invalid)).unwrap_err(),
+            ClosedJsonDecodeError::ResponseContractViolation
+        );
+    }
+}
+
+#[test]
 fn nullable_projection_maps_missing_member_and_index_to_null_only_when_allowed() {
     let decoder = ClosedJsonDecoder::new(
         object(vec![
