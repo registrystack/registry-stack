@@ -255,16 +255,13 @@ pub struct GateInput {
     /// every other observation (stale, missing, invalid) and when no cursor is
     /// configured: the shipping-stale gate fails closed on anything but `ok`.
     pub audit_ack_health_ok: bool,
-    pub source_insecure_url: bool,
-    pub source_private_network_escape: bool,
-    pub source_adapter_sidecar_without_expected_sidecar: bool,
+    pub relay_insecure_url: bool,
     pub admin_shared_exposure: bool,
     pub openapi_public: bool,
     pub config_unsigned: bool,
     pub self_attestation_enabled: bool,
     pub transaction_token_anchor_configured: bool,
     pub transaction_token_sender_constrained: bool,
-    pub source_binding_without_matching_policy: bool,
     pub signer_without_custody_approval: bool,
 }
 
@@ -309,9 +306,7 @@ pub const FINDING_AUDIT_SINK_MISSING: &str = "notary.audit.sink_missing";
 pub const FINDING_AUDIT_RETENTION_LOCAL_ONLY: &str = "notary.audit.retention_local_only";
 pub const FINDING_AUDIT_SHIPPING_UNVERIFIED: &str = "notary.audit.shipping_unverified";
 pub const FINDING_AUDIT_SHIPPING_STALE: &str = "notary.audit.shipping_stale";
-pub const FINDING_SOURCE_INSECURE_URL: &str = "notary.source.insecure_url";
-pub const FINDING_SOURCE_PRIVATE_NETWORK_ESCAPE: &str = "notary.source.private_network_escape";
-pub const FINDING_SIDECAR_EXPECTED_MISSING: &str = "notary.sidecar.expected_sidecar_missing";
+pub const FINDING_RELAY_INSECURE_URL: &str = "notary.relay.insecure_url";
 pub const FINDING_ADMIN_SHARED_EXPOSURE: &str = "notary.admin.shared_exposure";
 pub const FINDING_OPENAPI_PUBLIC: &str = "notary.openapi.public";
 pub const FINDING_CONFIG_UNSIGNED: &str = "notary.config.unsigned";
@@ -319,8 +314,6 @@ pub const FINDING_ASSISTED_ACCESS_TRANSACTION_TOKEN_ANCHOR_MISSING: &str =
     "notary.assisted_access.transaction_token_anchor_missing";
 pub const FINDING_ASSISTED_ACCESS_SENDER_CONSTRAINT_MISSING: &str =
     "notary.assisted_access.sender_constraint_missing";
-pub const FINDING_SOURCE_BINDING_NO_MATCHING_POLICY: &str =
-    "notary.source_binding.no_matching_policy";
 pub const FINDING_SIGNER_CUSTODY_UNAPPROVED: &str = "notary.signer_custody.unapproved";
 
 // Diagnostic finding ids emitted by the framework itself.
@@ -405,25 +398,11 @@ fn gate_catalog() -> &'static [Gate] {
         },
         // Risky-but-legal defaults, surfaced as profile-bound findings. (#208)
         Gate {
-            id: FINDING_SOURCE_INSECURE_URL,
+            id: FINDING_RELAY_INSECURE_URL,
             hosted_lab: Some(FindingError),
             production: Some(ReadinessFail),
             evidence_grade: Some(StartupFail),
-            condition: |input| input.source_insecure_url,
-        },
-        Gate {
-            id: FINDING_SOURCE_PRIVATE_NETWORK_ESCAPE,
-            hosted_lab: Some(FindingWarn),
-            production: Some(FindingError),
-            evidence_grade: Some(FindingError),
-            condition: |input| input.source_private_network_escape,
-        },
-        Gate {
-            id: FINDING_SIDECAR_EXPECTED_MISSING,
-            hosted_lab: Some(FindingWarn),
-            production: Some(FindingError),
-            evidence_grade: Some(ReadinessFail),
-            condition: |input| input.source_adapter_sidecar_without_expected_sidecar,
+            condition: |input| input.relay_insecure_url,
         },
         Gate {
             id: FINDING_ADMIN_SHARED_EXPOSURE,
@@ -464,21 +443,6 @@ fn gate_catalog() -> &'static [Gate] {
                 input.transaction_token_anchor_configured
                     && !input.transaction_token_sender_constrained
             },
-        },
-        // notary.source_binding.no_matching_policy: a claim source binding
-        // declares no matching policy_id and no context-constraint gates, so
-        // resolution falls back to unrestricted, identifier-only matching
-        // (spec RS-DM-CLAIM). Resolution behavior is unchanged and
-        // spec-conformant, so local/hosted_lab stay quiet; production nags,
-        // evidence_grade treats it as an error. Both bound tiers are
-        // waivable: a waiver is the sanctioned way to accept the fallback
-        // deliberately. (#171)
-        Gate {
-            id: FINDING_SOURCE_BINDING_NO_MATCHING_POLICY,
-            hosted_lab: None,
-            production: Some(FindingWarn),
-            evidence_grade: Some(FindingError),
-            condition: |input| input.source_binding_without_matching_policy,
         },
         // notary.signer_custody.unapproved: provider kind cannot prove custody
         // because PKCS#11 can be hardware- or software-backed. Production and
@@ -1337,46 +1301,18 @@ mod tests {
     fn gate_cases() -> Vec<GateCase> {
         vec![
             GateCase {
-                id: FINDING_SOURCE_INSECURE_URL,
+                id: FINDING_RELAY_INSECURE_URL,
                 triggering: GateInput {
-                    source_insecure_url: true,
+                    relay_insecure_url: true,
                     ..GateInput::default()
                 },
                 non_triggering: GateInput {
-                    source_insecure_url: false,
+                    relay_insecure_url: false,
                     ..GateInput::default()
                 },
                 hosted_lab: GateSeverity::FindingError,
                 production: GateSeverity::ReadinessFail,
                 evidence_grade: GateSeverity::StartupFail,
-            },
-            GateCase {
-                id: FINDING_SOURCE_PRIVATE_NETWORK_ESCAPE,
-                triggering: GateInput {
-                    source_private_network_escape: true,
-                    ..GateInput::default()
-                },
-                non_triggering: GateInput {
-                    source_private_network_escape: false,
-                    ..GateInput::default()
-                },
-                hosted_lab: GateSeverity::FindingWarn,
-                production: GateSeverity::FindingError,
-                evidence_grade: GateSeverity::FindingError,
-            },
-            GateCase {
-                id: FINDING_SIDECAR_EXPECTED_MISSING,
-                triggering: GateInput {
-                    source_adapter_sidecar_without_expected_sidecar: true,
-                    ..GateInput::default()
-                },
-                non_triggering: GateInput {
-                    source_adapter_sidecar_without_expected_sidecar: false,
-                    ..GateInput::default()
-                },
-                hosted_lab: GateSeverity::FindingWarn,
-                production: GateSeverity::FindingError,
-                evidence_grade: GateSeverity::ReadinessFail,
             },
             GateCase {
                 id: FINDING_ADMIN_SHARED_EXPOSURE,
@@ -1545,70 +1481,6 @@ mod tests {
                     profile.as_str()
                 );
             }
-        }
-    }
-
-    // Gate-binding table for #171: a source binding without a matching
-    // policy is quiet under local/hosted_lab, a warn under production, and an
-    // error under evidence_grade.
-    #[test]
-    fn source_binding_no_matching_policy_binds_correct_severity_per_profile() {
-        let triggering = GateInput {
-            source_binding_without_matching_policy: true,
-            ..GateInput::default()
-        };
-        let non_triggering = GateInput {
-            source_binding_without_matching_policy: false,
-            ..GateInput::default()
-        };
-        let cases = [
-            (DeploymentProfile::Local, None),
-            (DeploymentProfile::HostedLab, None),
-            (
-                DeploymentProfile::Production,
-                Some(GateSeverity::FindingWarn),
-            ),
-            (
-                DeploymentProfile::EvidenceGrade,
-                Some(GateSeverity::FindingError),
-            ),
-        ];
-        for (profile, expected_severity) in cases {
-            let evaluation = evaluate_gates(Some(profile), &triggering, &[], "2026-06-13");
-            let found = evaluation
-                .findings
-                .iter()
-                .find(|finding| finding.id == FINDING_SOURCE_BINDING_NO_MATCHING_POLICY);
-            match expected_severity {
-                Some(severity) => {
-                    let finding = found.unwrap_or_else(|| {
-                        panic!(
-                            "expected finding '{}' under profile '{}'",
-                            FINDING_SOURCE_BINDING_NO_MATCHING_POLICY,
-                            profile.as_str()
-                        )
-                    });
-                    assert_eq!(finding.severity, severity);
-                }
-                None => assert!(
-                    found.is_none(),
-                    "finding '{}' must be unbound under profile '{}'",
-                    FINDING_SOURCE_BINDING_NO_MATCHING_POLICY,
-                    profile.as_str()
-                ),
-            }
-
-            let clear_evaluation =
-                evaluate_gates(Some(profile), &non_triggering, &[], "2026-06-13");
-            assert!(
-                !clear_evaluation
-                    .findings
-                    .iter()
-                    .any(|finding| finding.id == FINDING_SOURCE_BINDING_NO_MATCHING_POLICY),
-                "finding '{}' must be absent under profile '{}' with non-triggering input",
-                FINDING_SOURCE_BINDING_NO_MATCHING_POLICY,
-                profile.as_str()
-            );
         }
     }
 

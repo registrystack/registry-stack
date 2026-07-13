@@ -1,7 +1,7 @@
 use super::support::*;
 use super::*;
 #[allow(unused_imports)]
-use super::{auth::*, credentials::*, infrastructure::*, issuance::*, root::*, sources::*};
+use super::{auth::*, credentials::*, infrastructure::*, issuance::*, root::*};
 
 #[test]
 pub(super) fn pre_auth_and_access_token_signing_are_disabled_by_default() {

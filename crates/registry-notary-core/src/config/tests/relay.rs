@@ -46,7 +46,6 @@ fn registry_mode(consultation_name: &str) -> ClaimEvidenceMode {
 
 fn make_registry_backed(claim: &mut ClaimDefinition, consultation_name: &str) {
     claim.evidence_mode = registry_mode(consultation_name);
-    claim.source_bindings.clear();
     claim.purpose = Some("benefit-verification".to_string());
     claim.required_scopes = vec!["registry:consult:person-status".to_string()];
     claim.value.value_type = "string".to_string();
@@ -145,22 +144,6 @@ rule:
 "#,
     )
     .expect_err("mode-specific fields cannot be mixed");
-
-    serde_norway::from_str::<ClaimDefinition>(
-        r#"
-id: mixed-transition
-title: Mixed transition
-version: "1"
-subject_type: person
-evidence_mode:
-  type: transitional_direct
-  consultations: {}
-rule:
-  type: cel
-  expression: "true"
-"#,
-    )
-    .expect_err("transitional direct cannot configure consultations");
 }
 
 #[test]
@@ -482,28 +465,10 @@ fn registry_backed_consultation_accepts_one_to_sixteen_injective_inputs() {
 }
 
 #[test]
-fn registry_backed_claim_rejects_missing_or_mixed_sources() {
+fn registry_backed_claim_requires_relay_connection() {
     let mut config = valid_registry_backed_config();
     config.evidence.relay = None;
     expect_mode_error(&config, "requires evidence.relay");
-
-    let mut config = valid_registry_backed_config();
-    config.evidence.claims[0].source_bindings.insert(
-        "person_status".to_string(),
-        serde_norway::from_str(
-            r#"
-connector: registry_data_api
-connection: old-source
-dataset: people
-entity: person
-lookup:
-  input: target.id
-  field: id
-"#,
-        )
-        .expect("legacy source binding parses"),
-    );
-    expect_mode_error(&config, "cannot declare source_bindings");
 }
 
 #[test]
@@ -788,7 +753,7 @@ fn relay_connection_requires_https_origin_or_explicit_loopback() {
     config
         .validate()
         .expect("explicit HTTP loopback is permitted for local development");
-    assert!(config.gate_input().source_insecure_url);
+    assert!(config.gate_input().relay_insecure_url);
 
     let mut config = valid_registry_backed_config();
     let mut relay = relay_connection();
@@ -857,34 +822,9 @@ fn self_attested_claims_are_source_free_across_dependencies() {
     };
     expect_mode_error(&plugin_rule, "supports only CEL");
 
-    let mut source_binding = config.clone();
-    source_binding.evidence.claims[0].source_bindings.insert(
-        "implicit-source".to_string(),
-        serde_norway::from_str(
-            r#"
-connector: registry_data_api
-dataset: people
-entity: person
-lookup:
-  input: target.id
-  field: id
-"#,
-        )
-        .expect("legacy source binding parses"),
-    );
-    expect_mode_error(&source_binding, "cannot declare source_bindings");
-
     let mut config = config.clone();
     config.evidence.claims[0].required_scopes = vec!["self:read".to_string(); 2];
     expect_mode_error(&config, "duplicate");
-
-    let mut config = minimal_config();
-    let dependency = minimal_claim("legacy-source");
-    let mut claim = minimal_claim("source-free");
-    claim.evidence_mode = ClaimEvidenceMode::SelfAttested;
-    claim.depends_on.push(dependency.id.clone());
-    config.evidence.claims = vec![dependency, claim];
-    expect_mode_error(&config, "dependency closure");
 }
 
 #[test]
@@ -893,12 +833,6 @@ fn self_attestation_allowed_claim_closures_reject_registry_backed_modes() {
     config.evidence.relay = Some(relay_connection());
     make_registry_backed(&mut config.evidence.claims[0], "civil_status");
     expect_self_attestation_closure_error(&config);
-
-    let mut config = valid_self_attestation_config();
-    config.evidence.claims[0].evidence_mode = ClaimEvidenceMode::TransitionalDirect;
-    config
-        .validate()
-        .expect("transitional direct preserves the governed legacy self-service path");
 
     let mut config = valid_self_attestation_config();
     config.evidence.relay = Some(relay_connection());
@@ -914,31 +848,12 @@ fn self_attestation_allowed_claim_closures_reject_registry_backed_modes() {
 #[test]
 fn registry_backed_v1_rejects_all_claim_dependencies() {
     let mut config = valid_registry_backed_config();
-    let dependency = minimal_claim("legacy-dependency");
+    let dependency = minimal_claim("self-attested-dependency");
     config.evidence.claims[0]
         .depends_on
         .push(dependency.id.clone());
     config.evidence.claims.push(dependency);
     expect_mode_error(&config, "cannot declare depends_on");
-
-    let mut config = valid_registry_backed_config();
-    let mut dependency = minimal_claim("source-free-dependency");
-    dependency.evidence_mode = ClaimEvidenceMode::SelfAttested;
-    config.evidence.claims[0]
-        .depends_on
-        .push(dependency.id.clone());
-    config.evidence.claims.push(dependency);
-    expect_mode_error(&config, "cannot declare depends_on");
-
-    let mut config = valid_registry_backed_config();
-    let registry_id = config.evidence.claims[0].id.clone();
-    let mut transitional = minimal_claim("legacy-derived-claim");
-    transitional.depends_on.push(registry_id);
-    config.evidence.claims.push(transitional);
-    expect_mode_error(
-        &config,
-        "transitional_direct dependency closure cannot contain registry_backed",
-    );
 }
 
 #[test]
@@ -1057,23 +972,6 @@ fn delegated_proof_consultation_mut(
     consultations
         .get_mut("guardian_link")
         .expect("delegated proof consultation")
-}
-
-#[test]
-fn transitional_direct_preserves_rule_source_validation() {
-    let mut config = minimal_config();
-    let mut claim = minimal_claim("legacy-claim");
-    claim.rule = RuleConfig::Exists {
-        source: "missing-direct-binding".to_string(),
-    };
-    config.evidence.claims.push(claim);
-    let error = config
-        .validate()
-        .expect_err("legacy direct rule must still name its source binding");
-    assert!(matches!(
-        error,
-        EvidenceConfigError::UnknownRuleSourceBinding { .. }
-    ));
 }
 
 #[test]

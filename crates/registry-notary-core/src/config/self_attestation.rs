@@ -214,7 +214,7 @@ impl SelfAttestationConfig {
 
         validate_self_attestation_allow_lists_are_supported(self, evidence)?;
         if self.scope_policy != SelfAttestationScopePolicy::Disabled {
-            validate_required_scopes_do_not_grant_source_access(self, oidc, evidence)?;
+            validate_required_scope_mappings(self, oidc)?;
         }
         Ok(())
     }
@@ -1148,21 +1148,13 @@ pub(super) fn validate_delegated_attestation_allow_lists_are_supported(
     Ok(())
 }
 
-pub(super) fn validate_required_scopes_do_not_grant_source_access(
+pub(super) fn validate_required_scope_mappings(
     config: &SelfAttestationConfig,
     oidc: &EvidenceOidcAuthConfig,
-    evidence: &EvidenceConfig,
 ) -> Result<(), EvidenceConfigError> {
     let required_scopes: HashSet<&str> =
         config.required_scopes.iter().map(String::as_str).collect();
-    let source_scopes = source_required_scopes(evidence);
-
     for scope in &required_scopes {
-        if source_scopes.contains(*scope) {
-            return invalid_self_attestation(format!(
-                "required scope '{scope}' conflicts with a source required scope"
-            ));
-        }
         if !oidc
             .scope_map
             .values()
@@ -1174,38 +1166,7 @@ pub(super) fn validate_required_scopes_do_not_grant_source_access(
         }
     }
 
-    for (token_scope, mapped_scopes) in &oidc.scope_map {
-        let citizen_mapping = required_scopes.contains(token_scope.as_str())
-            || mapped_scopes
-                .iter()
-                .any(|mapped| required_scopes.contains(mapped.as_str()));
-        if !citizen_mapping {
-            continue;
-        }
-        for mapped_scope in mapped_scopes {
-            if source_scopes.contains(mapped_scope.as_str()) {
-                return invalid_self_attestation(format!(
-                    "citizen scope_map entry '{token_scope}' must not grant source scope '{mapped_scope}'"
-                ));
-            }
-        }
-    }
-
     Ok(())
-}
-
-pub(super) fn source_required_scopes(evidence: &EvidenceConfig) -> HashSet<String> {
-    let mut scopes = HashSet::new();
-    for claim in &evidence.claims {
-        for binding in claim.source_bindings.values() {
-            if let Some(scope) = binding.required_scope.as_deref() {
-                scopes.insert(scope.to_string());
-            } else {
-                scopes.insert(format!("{}:evidence_verification", binding.dataset));
-            }
-        }
-    }
-    scopes
 }
 
 pub(super) fn invalid_self_attestation<T>(

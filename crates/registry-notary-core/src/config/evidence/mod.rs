@@ -5,17 +5,15 @@ use super::*;
 
 mod claims;
 mod disclosure;
-mod matching;
+mod limits;
 mod relay;
 mod signing;
-mod sources;
 
 pub use claims::*;
 pub use disclosure::*;
-pub use matching::*;
+pub use limits::*;
 pub use relay::*;
 pub use signing::*;
-pub use sources::*;
 
 /// Registry Notary configuration. Disabled by default so existing
 /// Registry Relay deployments load unchanged.
@@ -49,17 +47,12 @@ pub struct EvidenceConfig {
     pub signing_keys: BTreeMap<String, SigningKeyConfig>,
     #[serde(default)]
     pub credential_profiles: BTreeMap<String, CredentialProfileConfig>,
-    #[serde(default)]
-    pub ecosystem_bindings: BTreeMap<String, EvidenceEcosystemBindingConfig>,
     /// The one Registry Relay connection available to registry-backed claims.
     /// Authentication remains a reloadable local file reference; core never
     /// loads the bearer token value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay: Option<RelayConnectionConfig>,
-    #[serde(default)]
-    pub source_connections: BTreeMap<String, SourceConnectionConfig>,
-    /// Per-request fan-out caps. Setting both `subjects=1` and `bindings=1`
-    /// reproduces today's strictly-sequential behavior (Stage 1 kill switch).
+    /// Per-request cap for concurrently evaluated subjects.
     #[serde(default)]
     pub concurrency: ConcurrencyConfig,
     /// Per-principal budget for machine `evaluate`/`batch_evaluate` traffic,

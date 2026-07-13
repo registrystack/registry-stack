@@ -41,10 +41,6 @@ pub enum EvidenceConfigError {
         "deployment.evidence.audit_ack_cursor_path is set with a local file audit sink but deployment.evidence.audit_offhost_shipping is false; an ack cursor asserts observed off-host shipping that has not been declared. Set audit_offhost_shipping: true once shipping is in place, or remove audit_ack_cursor_path"
     )]
     AuditAckCursorWithoutShippingDeclared,
-    #[error("source_connection '{connection}': invalid source_auth config: {reason}")]
-    InvalidSourceAuthConfig { connection: String, reason: String },
-    #[error("source_connection '{connection}': invalid expected_sidecar config: {reason}")]
-    InvalidExpectedSidecarConfig { connection: String, reason: String },
     #[error("invalid evidence.relay config: {reason}")]
     InvalidRelayConfig { reason: String },
     #[error("invalid evidence.variables config: {reason}")]
@@ -83,45 +79,7 @@ pub enum EvidenceConfigError {
     },
     #[error("allowed purpose must not be empty")]
     InvalidPurpose,
-    #[error("claim '{claim}' binding '{binding}' has invalid matching config: {reason}")]
-    InvalidMatchingConfig {
-        claim: String,
-        binding: String,
-        reason: String,
-    },
-    #[error(
-        "claim '{claim}' binding '{binding}' source lookup input '{input}' references unknown source binding '{unknown}'"
-    )]
-    UnknownSourceLookupBinding {
-        claim: String,
-        binding: String,
-        input: String,
-        unknown: String,
-    },
-    /// REQ-DM-CLAIM-006 requires an `extract`/`exists` rule's `source` to name
-    /// a binding declared under the claim's `source_bindings`; RS-DM-CLAIM
-    /// Section 10 previously documented this as unchecked at load, surfacing
-    /// only when the source was read at evaluation.
-    #[error(
-        "claim '{claim}' rule.source '{rule_source}' does not name a declared source binding; \
-         declare it under source_bindings or fix the rule's source"
-    )]
-    UnknownRuleSourceBinding { claim: String, rule_source: String },
-    #[error(
-        "claim '{claim}' source lookup dependencies contain a cycle: {bindings}",
-        bindings = bindings.join(", ")
-    )]
-    SourceLookupDependencyCycle {
-        claim: String,
-        /// Sorted binding ids participating in or blocked by the cycle.
-        bindings: Vec<String>,
-    },
-    #[error("each standalone source binding must reference a configured source connection")]
-    MissingSourceConnection,
-    #[error(
-        "concurrency.subjects, concurrency.bindings, and source_connection.max_in_flight \
-         must all be >= 1"
-    )]
+    #[error("concurrency.subjects must be >= 1")]
     InvalidConcurrency,
     #[error("invalid evidence.machine_quota config: {reason}")]
     InvalidMachineQuotaConfig { reason: String },
@@ -181,83 +139,5 @@ pub enum EvidenceConfigError {
         profile: String,
         key: String,
         reason: String,
-    },
-    /// `rda_in_filter` requires the operator to attest that lookup values are
-    /// unique per subject. Without this we cannot disambiguate per-subject
-    /// rows from a single collection response.
-    #[error(
-        "source_connection '{connection}': bulk_mode = rda_in_filter requires \
-         bulk_mode_lookup_unique = true (operator attestation that each \
-         subject's lookup value yields at most one upstream row)"
-    )]
-    BulkModeRequiresUniqueLookup { connection: String },
-    /// `rda_in_filter` requires every binding pointing at this connection to
-    /// have `lookup.cardinality = one`. Bindings expecting many rows per
-    /// subject cannot be batched into a single collection response.
-    #[error(
-        "source_connection '{connection}': bulk_mode = rda_in_filter requires \
-         every binding (claim '{claim}', binding '{binding}') to set \
-         lookup.cardinality = one"
-    )]
-    BulkModeRequiresCardinalityOne {
-        connection: String,
-        claim: String,
-        binding: String,
-    },
-    /// `dci_batched_search` is DCI-specific. Bindings using the RDA connector
-    /// against the same connection cannot be batched through the DCI search
-    /// envelope.
-    #[error(
-        "source_connection '{connection}': bulk_mode = dci_batched_search \
-         requires all bindings to use connector = dci (binding '{binding}' \
-         in claim '{claim}' uses a different connector)"
-    )]
-    BulkModeRequiresDciConnector {
-        connection: String,
-        claim: String,
-        binding: String,
-    },
-    #[error(
-        "source_connection '{connection}': bulk_mode = source_adapter_sidecar_batch \
-         requires all bindings to use connector = source_adapter_sidecar (binding \
-         '{binding}' in claim '{claim}' uses a different connector)"
-    )]
-    BulkModeRequiresSourceAdapterSidecarConnector {
-        connection: String,
-        claim: String,
-        binding: String,
-    },
-    #[error(
-        "source_connection '{connection}': connector = source_adapter_sidecar requires retry_on_5xx = false"
-    )]
-    SourceAdapterSidecarRequiresNoRetry { connection: String },
-    #[error(
-        "claim '{claim}', binding '{binding}': connector = source_adapter_sidecar only supports lookup operator 'eq' (found '{op}')"
-    )]
-    SourceAdapterSidecarUnsupportedOperator {
-        claim: String,
-        binding: String,
-        op: String,
-    },
-    #[error(
-        "source_connection '{connection}': bulk_mode = {bulk_mode} cannot be used with \
-         query_fields (binding '{binding}' in claim '{claim}'); bulk reads currently support \
-         lookup only"
-    )]
-    QueryFieldsIncompatibleWithBulkMode {
-        connection: String,
-        claim: String,
-        binding: String,
-        bulk_mode: String,
-    },
-    #[error(
-        "claim '{claim}' binding '{binding}' uses query_fields with DCI query_type = idtype-value \
-         on source_connection '{connection}'; use lookup for idtype-value or set DCI \
-         query_type to expression or predicate"
-    )]
-    QueryFieldsIncompatibleWithDciIdTypeValue {
-        connection: String,
-        claim: String,
-        binding: String,
     },
 }

@@ -30,8 +30,6 @@ pub struct ClaimDefinition {
     /// Caller scopes checked before any registry consultation is dispatched.
     #[serde(default)]
     pub required_scopes: Vec<String>,
-    #[serde(default)]
-    pub source_bindings: BTreeMap<String, SourceBindingConfig>,
     pub rule: RuleConfig,
     #[serde(default)]
     pub operations: ClaimOperationsConfig,
@@ -54,9 +52,6 @@ pub enum ClaimEvidenceMode {
         consultations: BTreeMap<String, RelayConsultationConfig>,
     },
     SelfAttested,
-    /// Temporary migration mode for the pre-convergence direct-source model.
-    /// It has no default or aliases, keeping its eventual removal mechanical.
-    TransitionalDirect,
 }
 
 impl<'de> Deserialize<'de> for ClaimEvidenceMode {
@@ -71,7 +66,6 @@ impl<'de> Deserialize<'de> for ClaimEvidenceMode {
                 consultations: BTreeMap<String, RelayConsultationConfig>,
             },
             SelfAttested {},
-            TransitionalDirect {},
         }
 
         match SealedClaimEvidenceMode::deserialize(deserializer)? {
@@ -79,7 +73,6 @@ impl<'de> Deserialize<'de> for ClaimEvidenceMode {
                 Ok(Self::RegistryBacked { consultations })
             }
             SealedClaimEvidenceMode::SelfAttested {} => Ok(Self::SelfAttested),
-            SealedClaimEvidenceMode::TransitionalDirect {} => Ok(Self::TransitionalDirect),
         }
     }
 }
@@ -90,7 +83,6 @@ impl ClaimEvidenceMode {
         match self {
             Self::RegistryBacked { .. } => "registry_backed",
             Self::SelfAttested => "self_attested",
-            Self::TransitionalDirect => "transitional_direct",
         }
     }
 
@@ -102,11 +94,6 @@ impl ClaimEvidenceMode {
     #[must_use]
     pub const fn is_self_attested(&self) -> bool {
         matches!(self, Self::SelfAttested)
-    }
-
-    #[must_use]
-    pub const fn is_transitional_direct(&self) -> bool {
-        matches!(self, Self::TransitionalDirect)
     }
 }
 
@@ -277,12 +264,6 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                     "registry_backed requires evidence.relay",
                 );
             }
-            if !claim.source_bindings.is_empty() {
-                return invalid_claim_evidence_mode(
-                    claim,
-                    "registry_backed cannot declare source_bindings",
-                );
-            }
             if claim.purpose.as_deref().is_none_or(|purpose| {
                 purpose.is_empty()
                     || purpose.len() > 256
@@ -392,30 +373,21 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                 }
             }
         }
-        ClaimEvidenceMode::SelfAttested => {
-            if !claim.source_bindings.is_empty() {
+        ClaimEvidenceMode::SelfAttested => match &claim.rule {
+            RuleConfig::Cel { .. } => {}
+            RuleConfig::Extract { .. } | RuleConfig::Exists { .. } => {
                 return invalid_claim_evidence_mode(
                     claim,
-                    "self_attested cannot declare source_bindings",
+                    "self_attested rules cannot name an evidence source",
                 );
             }
-            match &claim.rule {
-                RuleConfig::Cel { .. } => {}
-                RuleConfig::Extract { .. } | RuleConfig::Exists { .. } => {
-                    return invalid_claim_evidence_mode(
-                        claim,
-                        "self_attested rules cannot name an evidence source",
-                    );
-                }
-                RuleConfig::Plugin { .. } => {
-                    return invalid_claim_evidence_mode(
-                        claim,
-                        "self_attested supports only CEL rules in v1",
-                    );
-                }
+            RuleConfig::Plugin { .. } => {
+                return invalid_claim_evidence_mode(
+                    claim,
+                    "self_attested supports only CEL rules in v1",
+                );
             }
-        }
-        ClaimEvidenceMode::TransitionalDirect => {}
+        },
     }
     Ok(())
 }
@@ -479,31 +451,6 @@ pub(in crate::config) fn validate_registry_backed_dependency_modes(
                 claim,
                 "the initial registry_backed journey cannot declare depends_on; one claim maps only its pinned Relay consultation",
             );
-        }
-    }
-    for claim in claims
-        .iter()
-        .filter(|claim| claim.evidence_mode.is_transitional_direct())
-    {
-        let mut pending: Vec<&str> = claim.depends_on.iter().map(String::as_str).collect();
-        let mut visited = HashSet::new();
-        while let Some(dependency_id) = pending.pop() {
-            if !visited.insert(dependency_id) {
-                continue;
-            }
-            let Some(dependency) = claims
-                .iter()
-                .find(|candidate| candidate.id == dependency_id)
-            else {
-                continue;
-            };
-            if dependency.evidence_mode.is_registry_backed() {
-                return invalid_claim_evidence_mode(
-                    claim,
-                    "transitional_direct dependency closure cannot contain registry_backed claims",
-                );
-            }
-            pending.extend(dependency.depends_on.iter().map(String::as_str));
         }
     }
     Ok(())
@@ -639,6 +586,22 @@ fn validate_claim_required_scopes(claim: &ClaimDefinition) -> Result<(), Evidenc
                 "required_scopes must not contain duplicate entries",
             );
         }
+    }
+    Ok(())
+}
+
+fn validate_sha256_uri(value: &str) -> Result<(), &'static str> {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return Err("must start with sha256:");
+    };
+    if hex.len() != 64 {
+        return Err("must contain 64 lowercase hex characters");
+    }
+    if !hex
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("must contain only lowercase hex characters");
     }
     Ok(())
 }
@@ -854,39 +817,6 @@ pub(in crate::config) fn validate_claim_semantics(
         return invalid_claim_semantics(
             &claim.id,
             "property and predicate are mutually exclusive; use derived_from for predicate inputs",
-        );
-    }
-    if let RuleConfig::Extract { source, field } = &claim.rule {
-        validate_extract_semantics(claim, semantics, source, field)?;
-    }
-    Ok(())
-}
-
-pub(in crate::config) fn validate_extract_semantics(
-    claim: &ClaimDefinition,
-    semantics: &ClaimSemanticConfig,
-    source: &str,
-    field: &str,
-) -> Result<(), EvidenceConfigError> {
-    let Some(property) = semantics.property.as_deref() else {
-        return Ok(());
-    };
-    let Some(binding) = claim.source_bindings.get(source) else {
-        return Ok(());
-    };
-    let Some(source_field) = binding.fields.get(field) else {
-        return Ok(());
-    };
-    let Some(field_term) = source_field.semantic_term.as_deref().map(str::trim) else {
-        return Ok(());
-    };
-    let property = property.trim();
-    if field_term != property {
-        return invalid_claim_semantics(
-            &claim.id,
-            format!(
-                "property '{property}' conflicts with source field '{source}.{field}' semantic_term '{field_term}'"
-            ),
         );
     }
     Ok(())

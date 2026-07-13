@@ -1025,7 +1025,6 @@ mod tests {
                 crate::model::ProvenanceUsed {
                     source_count: 0,
                     source_versions: BTreeMap::new(),
-                    source_runtimes: Vec::new(),
                 },
             ),
         }

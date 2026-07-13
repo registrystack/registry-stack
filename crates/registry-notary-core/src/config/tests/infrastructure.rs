@@ -1,7 +1,7 @@
 use super::support::*;
 use super::*;
 #[allow(unused_imports)]
-use super::{auth::*, credentials::*, issuance::*, preauth::*, root::*, sources::*};
+use super::{auth::*, credentials::*, issuance::*, preauth::*, root::*};
 
 #[test]
 pub(super) fn replay_config_validates_redis_backend_shape() {

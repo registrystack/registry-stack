@@ -221,107 +221,6 @@ impl StandaloneRegistryNotaryConfig {
             }
         }
         self.credential_status.validate()?;
-        for (connection_id, connection) in &self.evidence.source_connections {
-            if connection.max_in_flight < 1 {
-                return Err(EvidenceConfigError::InvalidConcurrency);
-            }
-            connection.validate_auth(connection_id)?;
-            connection.validate_expected_sidecar(connection_id)?;
-            connection.effective_dci()?;
-        }
-        // bulk_mode preconditions are enforced at config load so the runtime
-        // never observes a misconfigured combination. rda_in_filter requires
-        // operator attestation + cardinality=one on every binding pointing
-        // at this connection. dci_batched_search requires the dci connector.
-        // Bindings with query_fields are excluded from bulk paths until those
-        // implementations understand multi-field grouping.
-        for (connection_id, connection) in &self.evidence.source_connections {
-            match connection.bulk_mode {
-                BulkMode::None => {}
-                BulkMode::RdaInFilter => {
-                    if !connection.bulk_mode_lookup_unique {
-                        return Err(EvidenceConfigError::BulkModeRequiresUniqueLookup {
-                            connection: connection_id.clone(),
-                        });
-                    }
-                    for claim in &self.evidence.claims {
-                        for (binding_id, binding) in &claim.source_bindings {
-                            if binding.connection.as_deref() != Some(connection_id.as_str()) {
-                                continue;
-                            }
-                            if !binding.query_fields.is_empty() {
-                                return Err(
-                                    EvidenceConfigError::QueryFieldsIncompatibleWithBulkMode {
-                                        connection: connection_id.clone(),
-                                        claim: claim.id.clone(),
-                                        binding: binding_id.clone(),
-                                        bulk_mode: "rda_in_filter".to_string(),
-                                    },
-                                );
-                            }
-                            if binding.lookup.cardinality != "one" {
-                                return Err(EvidenceConfigError::BulkModeRequiresCardinalityOne {
-                                    connection: connection_id.clone(),
-                                    claim: claim.id.clone(),
-                                    binding: binding_id.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-                BulkMode::DciBatchedSearch => {
-                    for claim in &self.evidence.claims {
-                        for (binding_id, binding) in &claim.source_bindings {
-                            if binding.connection.as_deref() != Some(connection_id.as_str()) {
-                                continue;
-                            }
-                            if !binding.query_fields.is_empty() {
-                                return Err(
-                                    EvidenceConfigError::QueryFieldsIncompatibleWithBulkMode {
-                                        connection: connection_id.clone(),
-                                        claim: claim.id.clone(),
-                                        binding: binding_id.clone(),
-                                        bulk_mode: "dci_batched_search".to_string(),
-                                    },
-                                );
-                            }
-                            if binding.connector != SourceConnectorKind::Dci {
-                                return Err(EvidenceConfigError::BulkModeRequiresDciConnector {
-                                    connection: connection_id.clone(),
-                                    claim: claim.id.clone(),
-                                    binding: binding_id.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-                BulkMode::SourceAdapterSidecarBatch => {
-                    for claim in &self.evidence.claims {
-                        for (binding_id, binding) in &claim.source_bindings {
-                            if binding.connection.as_deref() != Some(connection_id.as_str()) {
-                                continue;
-                            }
-                            if binding.connector != SourceConnectorKind::SourceAdapterSidecar {
-                                return Err(
-                                    EvidenceConfigError::BulkModeRequiresSourceAdapterSidecarConnector {
-                                        connection: connection_id.clone(),
-                                        claim: claim.id.clone(),
-                                        binding: binding_id.clone(),
-                                    },
-                                );
-                            }
-                            if binding.lookup.cardinality != "one" {
-                                return Err(EvidenceConfigError::BulkModeRequiresCardinalityOne {
-                                    connection: connection_id.clone(),
-                                    claim: claim.id.clone(),
-                                    binding: binding_id.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
         validate_claim_dependency_bounds(&self.evidence.claims)?;
         let mut seen_claim_ids: HashSet<&str> = HashSet::new();
         for claim in &self.evidence.claims {
@@ -354,119 +253,6 @@ impl StandaloneRegistryNotaryConfig {
                     allowed: claim.disclosure.allowed.clone(),
                 });
             }
-            // Preserve the existing direct-source rule/binding invariant only
-            // behind the explicit migration mode. Registry-backed rules are
-            // checked against their one consultation above, while
-            // self-attested rules cannot name a source at all.
-            if matches!(&claim.evidence_mode, ClaimEvidenceMode::TransitionalDirect) {
-                let rule_source = match &claim.rule {
-                    RuleConfig::Extract { source, .. } => Some(source.as_str()),
-                    RuleConfig::Exists { source } => Some(source.as_str()),
-                    RuleConfig::Cel { .. } | RuleConfig::Plugin { .. } => None,
-                };
-                if let Some(source) = rule_source {
-                    if !claim.source_bindings.contains_key(source) {
-                        return Err(EvidenceConfigError::UnknownRuleSourceBinding {
-                            claim: claim.id.clone(),
-                            rule_source: source.to_string(),
-                        });
-                    }
-                }
-            }
-            let mut source_lookup_dependencies_by_binding = BTreeMap::new();
-            for (binding_id, binding) in &claim.source_bindings {
-                if binding.connection.is_none() {
-                    return Err(EvidenceConfigError::MissingSourceConnection);
-                }
-                if !self
-                    .evidence
-                    .source_connections
-                    .contains_key(binding.connection.as_deref().unwrap_or_default())
-                {
-                    return Err(EvidenceConfigError::MissingSourceConnection);
-                }
-                let connection = self
-                    .evidence
-                    .source_connections
-                    .get(binding.connection.as_deref().unwrap_or_default())
-                    .expect("source connection exists after contains_key check");
-                if !binding.query_fields.is_empty()
-                    && binding.connector == SourceConnectorKind::Dci
-                    && connection.dci.query_type == "idtype-value"
-                {
-                    return Err(
-                        EvidenceConfigError::QueryFieldsIncompatibleWithDciIdTypeValue {
-                            connection: binding.connection.clone().unwrap_or_default(),
-                            claim: claim.id.clone(),
-                            binding: binding_id.clone(),
-                        },
-                    );
-                }
-                let dependencies = source_lookup_dependencies(
-                    &claim.id,
-                    binding_id,
-                    binding,
-                    &claim.source_bindings,
-                )?;
-                source_lookup_dependencies_by_binding.insert(binding_id.clone(), dependencies);
-                if binding.connector == SourceConnectorKind::SourceAdapterSidecar {
-                    let has_static_token = !connection.token_env.trim().is_empty();
-                    if !has_static_token || connection.source_auth.is_some() {
-                        return Err(EvidenceConfigError::InvalidSourceAuthConfig {
-                            connection: binding.connection.clone().unwrap_or_default(),
-                            reason:
-                                "source_adapter_sidecar requires static bearer token auth through token_env"
-                                    .to_string(),
-                        });
-                    }
-                    if connection.retry_on_5xx {
-                        return Err(EvidenceConfigError::SourceAdapterSidecarRequiresNoRetry {
-                            connection: binding.connection.clone().unwrap_or_default(),
-                        });
-                    }
-                    if binding.lookup.op != "eq" {
-                        return Err(
-                            EvidenceConfigError::SourceAdapterSidecarUnsupportedOperator {
-                                claim: claim.id.clone(),
-                                binding: binding_id.clone(),
-                                op: binding.lookup.op.clone(),
-                            },
-                        );
-                    }
-                    for query_field in &binding.query_fields {
-                        if query_field.op != "eq" {
-                            return Err(
-                                EvidenceConfigError::SourceAdapterSidecarUnsupportedOperator {
-                                    claim: claim.id.clone(),
-                                    binding: binding_id.clone(),
-                                    op: query_field.op.clone(),
-                                },
-                            );
-                        }
-                    }
-                }
-                validate_source_matching_config(
-                    &claim.id,
-                    binding_id,
-                    &binding.matching,
-                    &self.evidence.ecosystem_bindings,
-                )?;
-                for (field_id, field) in &binding.fields {
-                    if let Some(semantic_term) = field.semantic_term.as_deref() {
-                        validate_semantic_reference(
-                            &claim.id,
-                            &format!(
-                                "source_bindings.{binding_id}.fields.{field_id}.semantic_term"
-                            ),
-                            semantic_term,
-                        )?;
-                    }
-                }
-            }
-            validate_source_lookup_dependency_graph(
-                &claim.id,
-                &source_lookup_dependencies_by_binding,
-            )?;
         }
         // Registry Notary currently resolves holder material only from
         // did:jwk. Reject any other configured method so discovery metadata
@@ -675,29 +461,11 @@ impl StandaloneRegistryNotaryConfig {
                 .audit_offhost_shipping),
             audit_ack_cursor_configured: self.deployment.evidence.audit_ack_cursor_path().is_some(),
             audit_ack_health_ok: ack_observation.health == registry_platform_ops::AckHealth::Ok,
-            source_insecure_url: self
+            relay_insecure_url: self
                 .evidence
-                .source_connections
-                .values()
-                .any(source_connection_uses_insecure_url)
-                || self
-                    .evidence
-                    .relay
-                    .as_ref()
-                    .is_some_and(RelayConnectionConfig::uses_insecure_url),
-            source_private_network_escape: self
-                .evidence
-                .source_connections
-                .values()
-                .any(|connection| connection.allow_insecure_private_network),
-            source_adapter_sidecar_without_expected_sidecar: self
-                .evidence
-                .source_connections
-                .values()
-                .any(|connection| {
-                    connection.bulk_mode == BulkMode::SourceAdapterSidecarBatch
-                        && connection.expected_sidecar.is_none()
-                }),
+                .relay
+                .as_ref()
+                .is_some_and(RelayConnectionConfig::uses_insecure_url),
             admin_shared_exposure: self.server.admin_listener.mode
                 == RegistryNotaryAdminListenerMode::SharedWithPublic,
             openapi_public: !self.server.openapi_requires_auth,
@@ -708,12 +476,6 @@ impl StandaloneRegistryNotaryConfig {
             // implemented. Keep this explicit so production/evidence profiles
             // surface the missing sender-constraint assurance.
             transaction_token_sender_constrained: false,
-            source_binding_without_matching_policy: self.evidence.claims.iter().any(|claim| {
-                claim
-                    .source_bindings
-                    .values()
-                    .any(|binding| binding.matching.lacks_matching_policy())
-            }),
             signer_without_custody_approval: !self.deployment.evidence.signer_custody_approved
                 && self.custody_scoped_signing_key_ids().iter().any(|key_id| {
                     self.evidence

@@ -1,7 +1,7 @@
 use super::support::*;
 use super::*;
 #[allow(unused_imports)]
-use super::{credentials::*, infrastructure::*, issuance::*, preauth::*, root::*, sources::*};
+use super::{credentials::*, infrastructure::*, issuance::*, preauth::*, root::*};
 
 #[test]
 pub(super) fn oidc_auth_mode_requires_oidc_block() {

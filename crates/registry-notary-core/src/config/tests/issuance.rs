@@ -1,7 +1,7 @@
 use super::support::*;
 use super::*;
 #[allow(unused_imports)]
-use super::{auth::*, credentials::*, infrastructure::*, preauth::*, root::*, sources::*};
+use super::{auth::*, credentials::*, infrastructure::*, preauth::*, root::*};
 
 #[test]
 pub(super) fn self_attestation_is_disabled_by_default() {
@@ -259,122 +259,6 @@ pub(super) fn oid4vci_projection_rejects_non_value_default_disclosure() {
     assert!(
         reason.contains("must use value as the default disclosure"),
         "unexpected: {reason}"
-    );
-}
-
-#[test]
-pub(super) fn claim_semantics_accepts_publicschema_property_mapping() {
-    let mut config = minimal_config();
-    config.evidence.source_connections.insert(
-        "civil_registry".to_string(),
-        serde_norway::from_str(
-            r#"
-base_url: https://registry.example.gov
-token_env: CIVIL_REGISTRY_TOKEN
-"#,
-        )
-        .expect("source connection parses"),
-    );
-    config.evidence.claims.push(
-        serde_norway::from_str(
-            r#"
-id: date-of-birth
-title: Date of birth
-version: "2026-06"
-subject_type: person
-evidence_mode:
-  type: transitional_direct
-value:
-  type: date
-semantics:
-  concept: https://publicschema.org/Person
-  property: " https://publicschema.org/date_of_birth "
-  value_mapping: publicschema
-source_bindings:
-  civil:
-    connector: registry_data_api
-    connection: civil_registry
-    dataset: civil_registry
-    entity: person
-    lookup:
-      input: target.identifiers.national_id
-      field: national_id
-      cardinality: one
-    fields:
-      birth_date:
-        field: birth_date
-        type: date
-        required: true
-        semantic_term: " https://publicschema.org/date_of_birth "
-rule:
-  type: extract
-  source: civil
-  field: birth_date
-"#,
-        )
-        .expect("claim parses"),
-    );
-
-    config
-        .validate()
-        .expect("matching PublicSchema semantics validate");
-}
-
-#[test]
-pub(super) fn claim_semantics_rejects_conflicting_extract_field_mapping() {
-    let mut config = minimal_config();
-    config.evidence.source_connections.insert(
-        "civil_registry".to_string(),
-        serde_norway::from_str(
-            r#"
-base_url: https://registry.example.gov
-token_env: CIVIL_REGISTRY_TOKEN
-"#,
-        )
-        .expect("source connection parses"),
-    );
-    config.evidence.claims.push(
-        serde_norway::from_str(
-            r#"
-id: date-of-birth
-title: Date of birth
-version: "2026-06"
-subject_type: person
-evidence_mode:
-  type: transitional_direct
-semantics:
-  property: https://publicschema.org/date_of_birth
-source_bindings:
-  civil:
-    connector: registry_data_api
-    connection: civil_registry
-    dataset: civil_registry
-    entity: person
-    lookup:
-      input: target.identifiers.national_id
-      field: national_id
-      cardinality: one
-    fields:
-      birth_date:
-        field: birth_date
-        type: date
-        required: true
-        semantic_term: https://publicschema.org/date_of_death
-rule:
-  type: extract
-  source: civil
-  field: birth_date
-"#,
-        )
-        .expect("claim parses"),
-    );
-
-    let error = config
-        .validate()
-        .expect_err("conflicting semantic terms must fail validation");
-    assert!(
-        matches!(error, EvidenceConfigError::InvalidClaimSemantics { ref reason, .. } if reason.contains("conflicts with source field")),
-        "unexpected error: {error:?}"
     );
 }
 
@@ -886,41 +770,6 @@ pub(super) fn self_attestation_disabled_scope_policy_rejects_required_scopes() {
     let reason = expect_self_attestation_error(&config);
     assert!(
         reason.contains("scope_policy = disabled"),
-        "unexpected: {reason}"
-    );
-}
-
-#[test]
-pub(super) fn self_attestation_rejects_citizen_scope_map_granting_source_scope() {
-    let mut config = valid_self_attestation_config();
-    let mut machine_claim = minimal_claim("machine-only");
-    config.evidence.source_connections.insert(
-        "civil-registry".to_string(),
-        serde_norway::from_str(
-            r#"
-base_url: https://registry.example
-token_env: CIVIL_REGISTRY_TOKEN
-"#,
-        )
-        .expect("direct source connection parses"),
-    );
-    let mut binding = rda_binding("civil-registry", "one");
-    binding.required_scope = Some("civil_registry:evidence_verification".to_string());
-    machine_claim
-        .source_bindings
-        .insert("civil-record".to_string(), binding);
-    config.evidence.claims.push(machine_claim);
-    config.auth.oidc.as_mut().unwrap().scope_map.insert(
-        "citizen_self_attestation".to_string(),
-        vec![
-            "self_attestation".to_string(),
-            "civil_registry:evidence_verification".to_string(),
-        ],
-    );
-
-    let reason = expect_self_attestation_error(&config);
-    assert!(
-        reason.contains("must not grant source scope"),
         "unexpected: {reason}"
     );
 }

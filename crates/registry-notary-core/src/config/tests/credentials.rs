@@ -1,7 +1,7 @@
 use super::support::*;
 use super::*;
 #[allow(unused_imports)]
-use super::{auth::*, infrastructure::*, issuance::*, preauth::*, root::*, sources::*};
+use super::{auth::*, infrastructure::*, issuance::*, preauth::*, root::*};
 
 #[test]
 pub(super) fn proof_of_possession_required_with_only_did_jwk_is_valid() {
@@ -839,70 +839,6 @@ pub(super) fn disclosure_default_outside_allowed_is_rejected() {
 }
 
 #[test]
-pub(super) fn rule_source_referencing_unknown_binding_is_rejected() {
-    // REQ-DM-CLAIM-006: a rule whose source doesn't name a declared
-    // source binding previously surfaced only when the source was read
-    // at evaluation; the loader must now reject it.
-    let mut config = minimal_config();
-    let mut claim = minimal_claim("farmer-registered");
-    claim.rule = RuleConfig::Exists {
-        source: "nonexistent".to_string(),
-    };
-    config.evidence.claims = vec![claim];
-
-    let err = config
-        .validate()
-        .expect_err("rule source naming an undeclared binding must fail validation");
-    match &err {
-        EvidenceConfigError::UnknownRuleSourceBinding { claim, rule_source } => {
-            assert_eq!(claim, "farmer-registered");
-            assert_eq!(rule_source, "nonexistent");
-        }
-        other => panic!("unexpected error variant: {other}"),
-    }
-    let message = err.to_string();
-    assert!(
-        message.contains("farmer-registered") && message.contains("nonexistent"),
-        "error must name the offending claim id and field: {message}"
-    );
-}
-
-#[test]
-pub(super) fn claim_config_with_consistent_id_disclosure_and_rule_source_still_loads() {
-    // Sanity check: a claim configuration that satisfies all three
-    // Section 10 invariants (unique id, disclosure default in allowed,
-    // rule source naming a declared binding) still loads.
-    let mut config = minimal_config();
-    config.evidence.source_connections.insert(
-        "registry".to_string(),
-        serde_norway::from_str(
-            r#"
-base_url: https://registry.example
-token_env: SOURCE_TOKEN
-"#,
-        )
-        .expect("source connection parses"),
-    );
-    let mut claim = minimal_claim("residency-status");
-    claim.rule = RuleConfig::Exists {
-        source: "registry".to_string(),
-    };
-    claim.disclosure = DisclosureConfig {
-        default: "redacted".to_string(),
-        allowed: vec!["redacted".to_string(), "value".to_string()],
-        downgrade: "deny".to_string(),
-    };
-    claim
-        .source_bindings
-        .insert("registry".to_string(), rda_binding("registry", "one"));
-    config.evidence.claims = vec![claim];
-
-    config
-        .validate()
-        .expect("consistent claim configuration must still load");
-}
-
-#[test]
 pub(super) fn empty_allowed_claims_is_rejected() {
     // A credential profile with an empty allowed_claims would silently
     // accept every claim at issue time (see api.rs `is_empty()` short
@@ -941,17 +877,13 @@ vct: https://vct.example/test
 pub(super) fn default_concurrency_has_documented_defaults() {
     let cfg = ConcurrencyConfig::default();
     assert_eq!(cfg.subjects, 16);
-    assert_eq!(cfg.bindings, 8);
     assert!(cfg.validate().is_ok());
 }
 
 #[test]
 pub(super) fn concurrency_zero_subjects_is_rejected() {
     let mut config = minimal_config();
-    config.evidence.concurrency = ConcurrencyConfig {
-        subjects: 0,
-        bindings: 1,
-    };
+    config.evidence.concurrency = ConcurrencyConfig { subjects: 0 };
     let err = config
         .validate()
         .expect_err("subjects=0 must fail validation");
@@ -959,28 +891,9 @@ pub(super) fn concurrency_zero_subjects_is_rejected() {
 }
 
 #[test]
-pub(super) fn concurrency_zero_bindings_is_rejected() {
+pub(super) fn concurrency_subjects_one_validates() {
     let mut config = minimal_config();
-    config.evidence.concurrency = ConcurrencyConfig {
-        subjects: 1,
-        bindings: 0,
-    };
-    let err = config
-        .validate()
-        .expect_err("bindings=0 must fail validation");
-    assert!(matches!(err, EvidenceConfigError::InvalidConcurrency));
-}
-
-#[test]
-pub(super) fn kill_switch_subjects_one_bindings_one_validates() {
-    // The documented kill switch: concurrency.subjects=1 and
-    // concurrency.bindings=1 reproduces today's strictly-sequential
-    // behavior. Must validate successfully.
-    let mut config = minimal_config();
-    config.evidence.concurrency = ConcurrencyConfig {
-        subjects: 1,
-        bindings: 1,
-    };
+    config.evidence.concurrency = ConcurrencyConfig { subjects: 1 };
     assert!(config.validate().is_ok());
 }
 

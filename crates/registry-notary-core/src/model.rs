@@ -1207,8 +1207,6 @@ pub struct BatchItemResponse {
     pub target_ref: TargetRefView,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_ref: Option<EvidenceEntityRef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching: Option<MatchingMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evaluation_id: Option<String>,
     pub status: BatchItemStatus,
@@ -1339,8 +1337,6 @@ pub struct ClaimResultView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requester_ref: Option<EvidenceEntityRef>,
     pub target_ref: TargetRefView,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub matching: Option<MatchingMetadata>,
     pub value: Option<Value>,
     pub satisfied: Option<bool>,
     pub disclosure: String,
@@ -1374,37 +1370,12 @@ pub struct EvidenceEntityRef {
     pub profile: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MatchingMetadata {
-    pub policy_id: String,
-    pub method: String,
-    pub confidence: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub score: Option<f64>,
-    #[serde(default, skip)]
-    pub policy_hash: Option<String>,
-    #[serde(default, skip)]
-    pub evaluated_rule_ids: Vec<String>,
-    #[serde(default, skip)]
-    pub ecosystem_binding_id: Option<String>,
-    #[serde(default, skip)]
-    pub ecosystem_binding_version: Option<String>,
-    #[serde(default, skip)]
-    pub pack_id: Option<String>,
-    #[serde(default, skip)]
-    pub pack_version: Option<String>,
-}
-
 /// `schema_version` value carried by every [`ClaimProvenance`]. Frozen at beta
 /// per the 2026-06-11 evidence-contracts decision record (D3).
 pub const CLAIM_PROVENANCE_SCHEMA_VERSION: &str = "registry-notary-claim-provenance/v1";
 
 /// The `type` value for a claim-evaluation provenance record.
 pub const PROVENANCE_GENERATED_BY_CLAIM_EVALUATION: &str = "claim_evaluation";
-
-/// The `kind` of a source runtime that crosses an external execution boundary
-/// via the governed source-adapter sidecar.
-pub const SOURCE_RUNTIME_KIND_SOURCE_ADAPTER_SIDECAR: &str = "source_adapter_sidecar";
 
 /// Versioned claim provenance attached to every public claim result.
 ///
@@ -1458,10 +1429,7 @@ impl ClaimProvenance {
 /// The producing side of a claim provenance record.
 ///
 /// `policy_id` here names the *evaluation* policy under which the result was
-/// produced. This is distinct from [`MatchingMetadata::policy_id`], which names
-/// the *target-matching* policy for a source binding. The two share the
-/// `policy_id` name by D7 vocabulary; the OpenAPI descriptions disambiguate
-/// them.
+/// produced.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProvenanceGeneratedBy {
     #[serde(rename = "type")]
@@ -1491,37 +1459,13 @@ pub struct ProvenanceGeneratedBy {
     pub pack_version: Option<String>,
 }
 
-/// The consumed side of a claim provenance record: how many registry sources
-/// were read, their versions, and any source runtimes that crossed an external
-/// execution boundary.
+/// The consumed side of a claim provenance record: how many upstream registry
+/// consultations contributed to the claim and the source versions Relay
+/// reported for them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProvenanceUsed {
     pub source_count: usize,
     pub source_versions: BTreeMap<String, String>,
-    /// Minimized summaries for connectors that cross an external execution
-    /// boundary (the source-adapter sidecar). The full assurance document stays in
-    /// restricted audit.
-    pub source_runtimes: Vec<SourceRuntimeSummary>,
-}
-
-/// Minimized public summary of a source runtime that crossed an external
-/// execution boundary. The full assurance document (bundle id, sequence,
-/// signer kids, config hash, and TTLs) stays in restricted audit.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceRuntimeSummary {
-    pub kind: String,
-    /// `sha256:<hex>` digest of the runtime configuration.
-    pub config_hash: String,
-    pub assurance: SourceRuntimeAssurance,
-}
-
-/// Verification booleans for a source runtime summary.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SourceRuntimeAssurance {
-    pub pinned: bool,
-    pub expression_hashes_verified: bool,
-    pub runtime_verified: bool,
-    pub smoke_verified: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1808,8 +1752,6 @@ pub struct EvidenceAuditEvent {
     pub redacted_fields: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_items: Option<Vec<EvidenceBatchItemAuditEvent>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_sidecar_config_hashes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<ConfigAuditEvent>,
 }
@@ -2192,7 +2134,6 @@ mod tests {
                 ProvenanceUsed {
                     source_count: 1,
                     source_versions: BTreeMap::new(),
-                    source_runtimes: Vec::new(),
                 },
             ),
         };
@@ -2215,16 +2156,6 @@ mod tests {
             ProvenanceUsed {
                 source_count: 1,
                 source_versions,
-                source_runtimes: vec![SourceRuntimeSummary {
-                    kind: SOURCE_RUNTIME_KIND_SOURCE_ADAPTER_SIDECAR.to_string(),
-                    config_hash: "sha256:abc123".to_string(),
-                    assurance: SourceRuntimeAssurance {
-                        pinned: true,
-                        expression_hashes_verified: true,
-                        runtime_verified: true,
-                        smoke_verified: true,
-                    },
-                }],
             },
         );
         provenance.generated_by.policy_id = Some("self-attestation".to_string());
@@ -2250,17 +2181,6 @@ mod tests {
         let used = &value["used"];
         assert_eq!(used["source_count"], json!(1));
         assert_eq!(used["source_versions"]["civil_registry"], json!("2026-05"));
-        let runtime = &used["source_runtimes"][0];
-        assert_eq!(runtime["kind"], json!("source_adapter_sidecar"));
-        assert_eq!(runtime["config_hash"], json!("sha256:abc123"));
-        assert_eq!(runtime["assurance"]["pinned"], json!(true));
-        assert_eq!(
-            runtime["assurance"]["expression_hashes_verified"],
-            json!(true)
-        );
-        assert_eq!(runtime["assurance"]["runtime_verified"], json!(true));
-        assert_eq!(runtime["assurance"]["smoke_verified"], json!(true));
-
         assert_eq!(value["derived_from"], json!([]));
     }
 
@@ -2274,7 +2194,6 @@ mod tests {
             ProvenanceUsed {
                 source_count: 2,
                 source_versions: BTreeMap::new(),
-                source_runtimes: Vec::new(),
             },
         );
         let value = serde_json::to_value(&provenance).expect("serializes");
@@ -2295,7 +2214,6 @@ mod tests {
             ProvenanceUsed {
                 source_count: 0,
                 source_versions: BTreeMap::new(),
-                source_runtimes: Vec::new(),
             },
         );
         let value = serde_json::to_value(&provenance).expect("serializes");
@@ -2549,10 +2467,6 @@ mod tests {
                 matching_outcome: Some("matched".to_string()),
                 matching_error_code: None,
             }]),
-            source_sidecar_config_hashes: Some(vec![
-                "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-                    .to_string(),
-            ]),
             config: None,
         };
 
@@ -2579,10 +2493,6 @@ mod tests {
         );
         assert_eq!(value["principal_id_hash"], json!("hmac-sha256:principal"));
         assert_eq!(value["scopes_used"], json!(["self_attestation"]));
-        assert_eq!(
-            value["source_sidecar_config_hashes"],
-            json!(["sha256:2222222222222222222222222222222222222222222222222222222222222222"])
-        );
         assert!(value.get("principal_id").is_none());
         assert!(value.get("subject_binding_value").is_none());
         assert_eq!(value["target_type"], json!("person"));
