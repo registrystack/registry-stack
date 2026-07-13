@@ -10,5 +10,5 @@ pub mod tokens;
 
 pub use config::*;
 pub use deployment::*;
-pub use error::{missing_context_error, EvidenceError};
+pub use error::EvidenceError;
 pub use model::*;

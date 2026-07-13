@@ -544,7 +544,7 @@ impl BoundedVerifiedClaims {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
-pub enum SourceCapability {
+pub enum EvaluationCapability {
     Machine {
         #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
         scopes: BTreeSet<String>,
@@ -566,7 +566,7 @@ pub enum SourceCapability {
     },
 }
 
-impl SourceCapability {
+impl EvaluationCapability {
     #[must_use]
     pub fn access_mode(&self) -> AccessMode {
         match self {
@@ -2330,15 +2330,15 @@ mod tests {
     }
 
     #[test]
-    fn source_capability_separates_machine_scopes_from_self_attestation_claims() {
-        let machine = SourceCapability::Machine {
+    fn evaluation_capability_separates_machine_scopes_from_self_attestation_claims() {
+        let machine = EvaluationCapability::Machine {
             scopes: BTreeSet::from(["civil_registry:evidence_verification".to_string()]),
         };
         assert_eq!(machine.access_mode(), AccessMode::MachineClient);
         assert!(machine.allows_scope("civil_registry:evidence_verification"));
         assert!(!machine.allows_self_attestation_claim("person-is-alive"));
 
-        let citizen = SourceCapability::SelfAttestation {
+        let citizen = EvaluationCapability::SelfAttestation {
             claim_id: Some(bounded("person-is-alive")),
             allowed_claim_ids: BTreeSet::new(),
             subject_binding_hash: Hashed::from_hash("sha256:test"),

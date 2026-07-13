@@ -22,42 +22,6 @@ pub enum EvidenceError {
     ConsultationInvalidRequest,
     #[error("requested disclosure is not allowed")]
     DisclosureNotAllowed,
-    #[error("source record was not found")]
-    SourceNotFound,
-    #[error("source lookup returned more than one record")]
-    SourceAmbiguous,
-    #[error("target identifier is missing")]
-    TargetIdentifierMissing,
-    #[error("target attributes are insufficient for matching")]
-    TargetAttributesInsufficient,
-    #[error("target matching policy rejected the request")]
-    TargetMatchingPolicyRejected,
-    #[error("target is not in a valid state")]
-    TargetNotInValidState,
-    #[error("target match confidence is too low")]
-    TargetMatchLowConfidence,
-    #[error("requester identifier is missing")]
-    RequesterIdentifierMissing,
-    #[error("requester attributes are insufficient for matching")]
-    RequesterAttributesInsufficient,
-    #[error("requester matching policy rejected the request")]
-    RequesterMatchingPolicyRejected,
-    #[error("requester record was not found")]
-    RequesterNotFound,
-    #[error("requester lookup returned more than one record")]
-    RequesterMatchAmbiguous,
-    #[error("requester must reauthenticate")]
-    RequesterReauthenticationRequired,
-    #[error("relationship was not established")]
-    RelationshipNotEstablished,
-    #[error("relationship match is ambiguous")]
-    RelationshipMatchAmbiguous,
-    #[error("relationship attributes are insufficient for matching")]
-    RelationshipAttributesInsufficient,
-    #[error("relationship policy rejected the request")]
-    RelationshipPolicyRejected,
-    #[error("relationship is not allowed for the requested purpose")]
-    RelationshipPurposeNotAllowed,
     #[error("purpose is not allowed")]
     PurposeNotAllowed,
     #[error("policy decision denied the request: {code}")]
@@ -71,9 +35,7 @@ pub enum EvidenceError {
     ProfileUnsupported,
     #[error("evidence is not available")]
     EvidenceNotAvailable,
-    #[error("evidence is not available")]
-    MatchingEvidenceNotAvailable { audit_code: &'static str },
-    #[error("source is unavailable")]
+    #[error("upstream source is unavailable")]
     SourceUnavailable,
     #[error("batch request is too large")]
     BatchTooLarge,
@@ -126,30 +88,10 @@ impl EvidenceError {
             Self::InvalidRequest => "request.invalid",
             Self::ConsultationInvalidRequest => "consultation.invalid_request",
             Self::DisclosureNotAllowed => "claim.disclosure_not_allowed",
-            Self::SourceNotFound => "target.not_found",
-            Self::SourceAmbiguous => "target.match_ambiguous",
-            Self::TargetIdentifierMissing => "target.identifier_missing",
-            Self::TargetAttributesInsufficient => "target.attributes_insufficient",
-            Self::TargetMatchingPolicyRejected => "target.matching_policy_rejected",
-            Self::TargetNotInValidState => "target.not_in_valid_state",
-            Self::TargetMatchLowConfidence => "target.match_low_confidence",
-            Self::RequesterNotFound => "requester.not_found",
-            Self::RequesterMatchAmbiguous => "requester.match_ambiguous",
-            Self::RequesterIdentifierMissing => "requester.identifier_missing",
-            Self::RequesterAttributesInsufficient => "requester.attributes_insufficient",
-            Self::RequesterMatchingPolicyRejected => "requester.matching_policy_rejected",
-            Self::RequesterReauthenticationRequired => "requester.reauthentication_required",
-            Self::RelationshipNotEstablished => "relationship.not_established",
-            Self::RelationshipMatchAmbiguous => "relationship.match_ambiguous",
-            Self::RelationshipAttributesInsufficient => "relationship.attributes_insufficient",
-            Self::RelationshipPolicyRejected => "relationship.policy_rejected",
-            Self::RelationshipPurposeNotAllowed => "relationship.purpose_not_allowed",
             Self::PurposeNotAllowed => "purpose.not_allowed",
             Self::PolicyDenied { code, .. } => code,
             Self::ProfileUnsupported => "profile.unsupported",
-            Self::EvidenceNotAvailable | Self::MatchingEvidenceNotAvailable { .. } => {
-                "evidence.not_available"
-            }
+            Self::EvidenceNotAvailable => "evidence.not_available",
             Self::SourceUnavailable => "source.unavailable",
             Self::BatchTooLarge => "batch.too_large",
             Self::EvaluationNotFound => "evaluation.not_found",
@@ -183,24 +125,8 @@ impl EvidenceError {
                 SelfAttestationDenialCode::AssuranceDenied.as_str()
             }
             Self::PolicyDenied { code, .. } => code,
-            Self::MatchingEvidenceNotAvailable { audit_code } => audit_code,
             _ => self.code(),
         }
-    }
-}
-
-#[must_use]
-pub fn missing_context_error(path: &str) -> EvidenceError {
-    if path.starts_with("target.identifiers.") {
-        EvidenceError::TargetIdentifierMissing
-    } else if path.starts_with("requester.identifiers.") {
-        EvidenceError::RequesterIdentifierMissing
-    } else if path.starts_with("requester.attributes.") {
-        EvidenceError::RequesterAttributesInsufficient
-    } else if path.starts_with("relationship.attributes.") {
-        EvidenceError::RelationshipAttributesInsufficient
-    } else {
-        EvidenceError::TargetAttributesInsufficient
     }
 }
 
@@ -240,48 +166,6 @@ mod tests {
             EvidenceError::SelfAttestationAssuranceDenied.audit_code(),
             "self_attestation.assurance_denied"
         );
-    }
-
-    #[test]
-    fn source_matching_errors_use_public_target_codes() {
-        assert_eq!(EvidenceError::SourceNotFound.code(), "target.not_found");
-        assert_eq!(
-            EvidenceError::SourceAmbiguous.code(),
-            "target.match_ambiguous"
-        );
-        assert_eq!(
-            EvidenceError::TargetAttributesInsufficient.code(),
-            "target.attributes_insufficient"
-        );
-        assert_eq!(
-            EvidenceError::TargetIdentifierMissing.code(),
-            "target.identifier_missing"
-        );
-        assert_eq!(
-            EvidenceError::TargetMatchingPolicyRejected.code(),
-            "target.matching_policy_rejected"
-        );
-        assert_eq!(
-            EvidenceError::RequesterMatchingPolicyRejected.code(),
-            "requester.matching_policy_rejected"
-        );
-        assert_eq!(
-            EvidenceError::RelationshipNotEstablished.code(),
-            "relationship.not_established"
-        );
-        assert_eq!(
-            EvidenceError::RelationshipPolicyRejected.code(),
-            "relationship.policy_rejected"
-        );
-        assert_eq!(
-            EvidenceError::RelationshipPurposeNotAllowed.code(),
-            "relationship.purpose_not_allowed"
-        );
-        let collapsed = EvidenceError::MatchingEvidenceNotAvailable {
-            audit_code: EvidenceError::SourceAmbiguous.audit_code(),
-        };
-        assert_eq!(collapsed.code(), "evidence.not_available");
-        assert_eq!(collapsed.audit_code(), "target.match_ambiguous");
     }
 
     #[test]
