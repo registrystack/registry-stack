@@ -1,0 +1,13 @@
+version: 1
+issuance:
+  issuer: did:web:declaration-notary.invalid
+  signing_kid: project-issuer-key
+  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
+  generation: 1
+callers:
+  application-service:
+    api_key_fingerprint: { secret: APPLICATION_SERVICE_TOKEN_HASH }
+    scopes: ["evidence:declaration:read"]
+deployment:
+  profile: local
+  notary: { service: declaration-notary }

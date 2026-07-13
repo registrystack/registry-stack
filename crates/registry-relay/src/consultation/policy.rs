@@ -88,7 +88,7 @@ fn compiled_policy_window(
     let exact_scope = workload
         .checked_scopes()
         .eq(std::iter::once(profile.required_scope().as_str()));
-    if workload.role() != ConsultationWorkloadRole::Notary
+    if workload.role() != ConsultationWorkloadRole::Authorized
         || workload.workload_id() != profile.workload_id()
         || workload.tenant() != profile.tenant()
         || workload.registry_instance() != profile.registry_instance()

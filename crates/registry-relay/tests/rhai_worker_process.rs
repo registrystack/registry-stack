@@ -32,7 +32,7 @@ fn request(script: impl Into<String>) -> WorkerRequest {
 
 const DETERMINISTIC_SCRIPT: &str = r#"
     fn consult(input, prior) {
-        #{ operations: [], facts: #{
+        #{ operations: [], outputs: #{
             active: #{ type: "boolean", value: true }
         }}
     }
@@ -51,13 +51,13 @@ async fn fresh_workers_return_the_same_closed_result() {
 }
 
 #[tokio::test]
-async fn iterative_fresh_workers_choose_a_named_operation_then_return_exact_facts() {
+async fn iterative_fresh_workers_choose_a_named_operation_then_return_exact_outputs() {
     let script = r#"
         fn consult(input, prior) {
             if !prior.contains("lookup") {
-                return #{ operations: ["lookup"], facts: #{} };
+                return #{ operations: ["lookup"], outputs: #{} };
             }
-            #{ operations: [], facts: #{
+            #{ operations: [], outputs: #{
                 active: #{ type: "boolean", value: prior.lookup.active },
                 birth_date: #{ type: "date", value: prior.lookup.birth_date },
                 exists: #{ type: "presence", value: prior.lookup.presence }
@@ -88,7 +88,7 @@ async fn iterative_fresh_workers_choose_a_named_operation_then_return_exact_fact
     );
     let selected = worker.evaluate(&first).await.expect("selection round");
     assert_eq!(selected.operation_choices, ["lookup"]);
-    assert!(selected.facts.is_empty());
+    assert!(selected.outputs.is_empty());
 
     first.allowed_operations.clear();
     first.prior_outputs.insert(
@@ -109,20 +109,23 @@ async fn iterative_fresh_workers_choose_a_named_operation_then_return_exact_fact
         .into_iter()
         .collect(),
     );
-    let terminal = worker.evaluate(&first).await.expect("terminal fact round");
+    let terminal = worker
+        .evaluate(&first)
+        .await
+        .expect("terminal output round");
     assert!(terminal.operation_choices.is_empty());
     assert_eq!(
-        terminal.facts.get("active"),
+        terminal.outputs.get("active"),
         Some(&TypedValue::Boolean { value: Some(true) })
     );
     assert_eq!(
-        terminal.facts.get("birth_date"),
+        terminal.outputs.get("birth_date"),
         Some(&TypedValue::Date {
             value: Some("2020-02-29".to_string())
         })
     );
     assert_eq!(
-        terminal.facts.get("exists"),
+        terminal.outputs.get("exists"),
         Some(&TypedValue::Presence { value: true })
     );
 }
@@ -162,7 +165,7 @@ async fn process_denies_instruction_depth_output_and_wall_time_overruns() {
     let payload = "x".repeat(400);
     let mut output = WorkerRequest::v1(
         format!(
-            r#"fn consult(input, prior) {{ #{{ operations: [], facts: #{{ payload:
+            r#"fn consult(input, prior) {{ #{{ operations: [], outputs: #{{ payload:
                 #{{ type: "string", value: "{payload}" }}
             }} }} }}"#
         ),
@@ -218,7 +221,7 @@ async fn dedicated_process_enforces_runtime_string_and_collection_bounds() {
             fn consult(input, prior) {
                 let value = input.seed;
                 value += "5";
-                #{ operations: [], facts: #{
+                #{ operations: [], outputs: #{
                     active: #{ type: "boolean", value: true }
                 }}
             }
@@ -245,7 +248,7 @@ async fn dedicated_process_enforces_runtime_string_and_collection_bounds() {
             fn consult(input, prior) {
                 let values = [1, 2];
                 values.push(3);
-                #{ operations: [], facts: #{
+                #{ operations: [], outputs: #{
                     active: #{ type: "boolean", value: true }
                 }}
             }
@@ -269,7 +272,7 @@ async fn dedicated_process_enforces_runtime_string_and_collection_bounds() {
             fn consult(input, prior) {
                 let values = #{ first: 1, second: 2 };
                 values.third = 3;
-                #{ operations: [], facts: #{
+                #{ operations: [], outputs: #{
                     active: #{ type: "boolean", value: true }
                 }}
             }
@@ -332,7 +335,7 @@ async fn linux_worker_memory_exhaustion_is_contained_by_the_128_mib_process_ceil
                     values.push(payload + index);
                     index += 1;
                 }}
-                #{{ operations: [], facts: #{{
+                #{{ operations: [], outputs: #{{
                     active: #{{ type: "boolean", value: true }}
                 }} }}
             }}

@@ -1,0 +1,34 @@
+version: 1
+integrations:
+  birth-record:
+    source_version: provincial-fixture-v2
+    data_destination: { origin: https://provincial-civil-registry.invalid }
+    credential_destination: { origin: https://provincial-civil-registry.invalid }
+    credential:
+      type: oauth2_client_credentials
+      client_id: { secret: PROVINCIAL_CIVIL_CLIENT_ID }
+      client_secret: { secret: PROVINCIAL_CIVIL_CLIENT_SECRET }
+      generation: 1
+issuance:
+  issuer: did:web:provincial-civil-notary.invalid
+  signing_kid: project-issuer-key
+  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
+  generation: 1
+callers:
+  provincial-verifier:
+    api_key_fingerprint: { secret: PROVINCIAL_VERIFIER_TOKEN_HASH }
+    scopes: ["evidence:provincial-birth:read"]
+relay:
+  origin: https://provincial-relay.internal.invalid
+  issuer: https://workload-issuer.internal.invalid
+  jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
+  audience: registry-relay
+  workload_client_id: provincial-civil-notary
+
+notary_relay:
+  token_file: /run/secrets/relay-workload-token
+
+deployment:
+  profile: local
+  relay: { service: provincial-civil-relay }
+  notary: { service: provincial-civil-notary }

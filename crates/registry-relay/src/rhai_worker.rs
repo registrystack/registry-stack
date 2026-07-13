@@ -225,7 +225,7 @@ impl WorkerRequest {
 pub struct WorkerOutput {
     #[serde(rename = "operations")]
     pub operation_choices: Vec<String>,
-    pub facts: BTreeMap<String, TypedValue>,
+    pub outputs: BTreeMap<String, TypedValue>,
 }
 
 /// Non-sensitive failure classes. Script source, typed inputs, prior outputs,
@@ -611,15 +611,15 @@ fn validate_output(request: &WorkerRequest, output: &WorkerOutput) -> Result<(),
         }
     }
     if !output.operation_choices.is_empty() {
-        if !output.facts.is_empty() {
+        if !output.outputs.is_empty() {
             return Err(WorkerError::ContractViolation);
         }
         return validate_output_size(request, output);
     }
-    if output.facts.keys().ne(request.fact_schema.keys()) {
+    if output.outputs.keys().ne(request.fact_schema.keys()) {
         return Err(WorkerError::ContractViolation);
     }
-    for (name, value) in &output.facts {
+    for (name, value) in &output.outputs {
         let schema = request
             .fact_schema
             .get(name)
@@ -847,7 +847,7 @@ mod tests {
         let request = request(
             r#"
                 fn consult(input, prior) {
-                    #{ operations: [], facts: #{
+                    #{ operations: [], outputs: #{
                         active: #{ type: "boolean", value: true }
                     }}
                 }
@@ -860,22 +860,22 @@ mod tests {
     }
 
     #[test]
-    fn iterative_choice_has_no_facts_and_final_result_has_exact_facts() {
+    fn iterative_choice_has_no_outputs_and_final_result_has_exact_outputs() {
         let script = r#"
             fn consult(input, prior) {
                 if prior.contains("lookup") {
-                    #{ operations: [], facts: #{
+                    #{ operations: [], outputs: #{
                         active: #{ type: "boolean", value: prior.lookup.active }
                     }}
                 } else {
-                    #{ operations: ["lookup"], facts: #{} }
+                    #{ operations: ["lookup"], outputs: #{} }
                 }
             }
         "#;
         let mut request = request(script);
         let choice = evaluate_in_process(&request).expect("operation choice");
         assert_eq!(choice.operation_choices, ["lookup"]);
-        assert!(choice.facts.is_empty());
+        assert!(choice.outputs.is_empty());
 
         request.prior_outputs.insert(
             "lookup".to_string(),
@@ -884,18 +884,36 @@ mod tests {
                 TypedValue::Boolean { value: Some(true) },
             )]),
         );
-        let final_output = evaluate_in_process(&request).expect("final typed facts");
+        let final_output = evaluate_in_process(&request).expect("final typed outputs");
         assert!(final_output.operation_choices.is_empty());
         assert_eq!(
-            final_output.facts.get("active"),
+            final_output.outputs.get("active"),
             Some(&TypedValue::Boolean { value: Some(true) })
         );
     }
 
     #[test]
-    fn terminal_facts_cannot_exceed_their_compiled_string_or_integer_bounds() {
+    fn legacy_facts_result_key_is_rejected_without_an_alias() {
+        let request = request(
+            r#"
+                fn consult(input, prior) {
+                    #{ operations: [], facts: #{
+                        active: #{ type: "boolean", value: true }
+                    }}
+                }
+            "#,
+        );
+
+        assert_eq!(
+            evaluate_in_process(&request),
+            Err(WorkerError::ContractViolation)
+        );
+    }
+
+    #[test]
+    fn terminal_outputs_cannot_exceed_their_compiled_string_or_integer_bounds() {
         let mut string_request = WorkerRequest::v1(
-            r#"fn consult(input, prior) { #{ operations: [], facts: #{ value: #{ type: "string", value: "12345" } } } }"#,
+            r#"fn consult(input, prior) { #{ operations: [], outputs: #{ value: #{ type: "string", value: "12345" } } } }"#,
             "consult",
             WorkerLimits::default(),
         );
@@ -915,7 +933,7 @@ mod tests {
         );
 
         let mut integer_request = WorkerRequest::v1(
-            r#"fn consult(input, prior) { #{ operations: [], facts: #{ value: #{ type: "integer", value: 3 } } } }"#,
+            r#"fn consult(input, prior) { #{ operations: [], outputs: #{ value: #{ type: "integer", value: 3 } } } }"#,
             "consult",
             WorkerLimits::default(),
         );
@@ -959,7 +977,7 @@ mod tests {
         let mut output_request = WorkerRequest::v1(
             format!(
                 r#"fn consult(input, prior) {{
-                    #{{ operations: [], facts: #{{ payload:
+                    #{{ operations: [], outputs: #{{ payload:
                         #{{ type: "string", value: "{payload}" }}
                     }} }}
                 }}"#

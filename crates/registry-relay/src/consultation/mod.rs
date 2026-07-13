@@ -70,9 +70,9 @@ pub use types::{
     ProfileIdentity, ProfileVersion, SelectorProvenance, SnapshotGenerationId,
 };
 pub use workload::{
-    AuthenticatedConsultationWorkload, AuthenticatedNotaryWorkload, ClientClaimSelector,
-    ConfiguredAudience, ConfiguredClientBinding, ConfiguredIssuer, ConfiguredOidcWorkloadProof,
-    ConfiguredPrincipalId, ConsultationAuthMode, ConsultationWorkloadBinding,
-    ConsultationWorkloadRole, ExpectedClientValue, RegistryInstanceId, RequiredConsultationScope,
-    TenantId, WorkloadBindingError, WorkloadId,
+    AuthenticatedConsultationWorkload, ClientClaimSelector, ConfiguredAudience,
+    ConfiguredClientBinding, ConfiguredIssuer, ConfiguredOidcWorkloadProof, ConfiguredPrincipalId,
+    ConsultationAuthMode, ConsultationWorkloadBinding, ConsultationWorkloadRole,
+    ExpectedClientValue, RegistryInstanceId, RequiredConsultationScope, TenantId,
+    WorkloadBindingError, WorkloadId,
 };

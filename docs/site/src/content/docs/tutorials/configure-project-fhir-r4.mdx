@@ -1,0 +1,180 @@
+---
+title: Configure a FHIR R4 integration
+description: Define a fixed Patient anchor and Coverage relation with bounded FHIR R4 request and response primitives in a Registry Stack project.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-07-12"
+doc_type: how-to
+locale: en
+standards_referenced:
+  - fhir-r4
+---
+
+Use this guide when a reviewed source exposes the fixed Fast Healthcare Interoperability
+Resources Release 4 (FHIR R4) search journey supported by Registry Stack.
+You will declare one exact Patient anchor, one Coverage relation, bounded search-set Bundles, and
+a closed output projection.
+
+{/* Evidence: crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active/ and
+    crates/registryctl/tests/project_authoring.rs,
+    fhir_r4_coverage_active_passes_the_closed_bundle_matrix. */}
+
+## When to use this
+
+Use the FHIR R4 primitives for the maintained `fhir-r4-coverage-active` contract shape:
+
+1. Search `Patient` with exact reviewed parameters and `_count=2`.
+2. Use the matched Patient id in one fixed `Coverage` relation search.
+3. Project presence and bounded Coverage status outputs for a closed claim rule.
+
+This is not a generic FHIR proxy or a claim of interoperability with an untested deployment.
+Registry Relay does not follow Bundle pagination links or accept caller-selected FHIR resources,
+parameters, paths, projections, FHIRPath, `_include`, `_revinclude`, chained search, `_has`,
+transactions, subscriptions, GraphQL, or writes.
+
+## Before you start
+
+You need:
+
+- A Registry Stack project that uses the bounded HTTP authoring schema.
+- A reviewed FHIR R4 endpoint and credential interface.
+- Exact Patient selector parameters and one reviewed Coverage relation.
+- Synthetic search-set Bundle fixtures for match, no match, ambiguity, and denial cases.
+
+Keep resource types, search parameter names, relation bindings, and projections fixed in the
+integration.
+
+## Declare the Patient anchor
+
+Add the anchor operation under `capability.http.operations`:
+
+```yaml
+patient:
+  primitive: fhir_r4_search_get
+  request:
+    method: GET
+    destination: data
+    path: /fhir/Patient
+    codec: fhir_r4_search_get
+    query:
+      _count: { value: "2" }
+      birthdate: { input: birthdate }
+      family: { input: family }
+      given: { input: given }
+  response:
+    statuses: [200]
+    codec: fhir_r4_searchset
+    max_bytes: 32768
+    schema:
+      type: object
+      additional_fields: reject
+      fields:
+        id: { required: true, type: string, max_bytes: 64 }
+    cardinality: { mode: probe_two }
+```
+
+Declare `birthdate`, `family`, and `given` as required typed consultation inputs.
+The complete exact selector is one subject predicate.
+Two Patient matches produce `ambiguous`; Registry Relay does not choose one.
+
+## Declare the Coverage relation
+
+Add one dependent relation operation:
+
+```yaml
+coverage:
+  depends_on: [patient]
+  primitive: fhir_r4_search_get
+  request:
+    method: GET
+    destination: data
+    path: /fhir/Coverage
+    codec: fhir_r4_search_get
+    query:
+      _count: { value: "2" }
+      beneficiary: { prior: patient.id }
+  response:
+    statuses: [200]
+    codec: fhir_r4_searchset
+    max_bytes: 32768
+    schema:
+      type: object
+      additional_fields: reject
+      fields:
+        status: { required: true, type: string, max_bytes: 16 }
+    cardinality: { mode: probe_two }
+```
+
+The prior Patient id can populate only the declared `beneficiary` value.
+It cannot select a resource, path, operation, credential, projection, or new relation.
+
+Map the relation result to a closed output:
+
+```yaml
+outputs:
+  patient_exists: { type: presence, from: patient.presence }
+  coverage_status:
+    type: string
+    nullable: true
+    max_bytes: 16
+    from: coverage.status
+```
+
+Map a claim from the bounded status output in `registry-stack.yaml` while preserving the closed
+output contract. The claim declaration selects it with `output`, for example
+`output: coverage.status`.
+
+## Add the Bundle denial matrix
+
+Add synthetic fixtures that cover:
+
+- Patient and Coverage match.
+- No Patient match.
+- Ambiguous Patient anchor.
+- Ambiguous Coverage relation.
+- Malformed or oversized Bundle.
+- Wrong resource type.
+- `OperationOutcome` instead of the declared search-set Bundle.
+- A pagination link that Registry Relay does not follow.
+- Wrong caller or scope and wrong purpose before source access.
+
+Fixtures contain bounded source observations, not a destination, credential, or real health
+record.
+
+## Verify the fixed journey
+
+Run the offline fixtures and production compiler checks:
+
+```sh
+registryctl test --project-dir <project>
+registryctl check \
+  --project-dir <project> \
+  --environment <environment> \
+  --explain
+```
+
+The reports contain `"status": "passed"` and `"status": "valid"`.
+In the explanation, confirm the two fixed resource paths, exact parameters, `_count=2`, response
+byte ceilings, probe-two cardinality, and closed presence and Coverage status outputs.
+
+Fixture success proves the compiled contract and decoder behavior.
+It does not prove interoperability, legal suitability, or source semantics for a deployment that
+has not passed the separate integration review.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The compiler rejects a search parameter | The parameter is not declared by the fixed request codec. | Remove caller-selected search or add a separately reviewed reusable primitive. |
+| A Bundle fails as ambiguous | More than one anchor or relation matched the exact query. | Correct the source data or use a reviewed selector that proves uniqueness. |
+| A Bundle fails on an unknown field or type | The observed resource shape is outside the closed schema. | Update the reviewed integration and fixtures, then repeat integration review. |
+| A response with `link.next` does not continue | Pagination following is outside the contract. | Use a source query whose fixed cardinality fits the bounded journey. |
+
+## Next
+
+- Return to [Author an HTTP Registry Stack project](../author-registry-project/) to review
+  and build the project.
+- Use [Configure API-key source authentication](../configure-project-api-key-authentication/) if
+  the FHIR endpoint requires a fixed API key.

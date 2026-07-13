@@ -398,7 +398,7 @@ impl AssertionContractIdentity {
 /// The only selector provenance classes accepted by consultation v1.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelectorProvenance {
-    /// The configured Notary workload derives or verifies the subject under a
+    /// The configured consultation workload derives or verifies the subject under a
     /// hash-pinned assertion contract.
     TrustedNotaryAssertion(AssertionContractIdentity),
     /// The configured workload selects an exact lookup key under a reviewed

@@ -1,6 +1,6 @@
 # registryctl
 
-`registryctl` is the local adopter CLI for Registry Commons.
+`registryctl` is the local adopter CLI for Registry Stack.
 
 Install a pinned release without cloning this repo:
 
@@ -38,31 +38,31 @@ For the full walkthroughs, use the Registry Docs tutorials:
 - [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
 - [Connect Notary to a Registry Data API source](https://docs.registrystack.org/tutorials/run-notary-standalone-for-api/)
 
-## Country integration authoring
+## Registry Stack project authoring
 
 Start from the declarative bounded-HTTP workspace, run its closed offline
 fixtures, inspect the redacted generated plan, and build deterministic Relay
 and Notary inputs:
 
 ```sh
-registryctl init --from bounded-http --country-dir country
-registryctl test --project country
-registryctl check --project country --environment local --explain
-registryctl build --project country --environment local
+registryctl init --from http --project-dir registry-project
+registryctl test --project-dir registry-project
+registryctl check --project-dir registry-project --environment local --explain
+registryctl build --project-dir registry-project --environment local
 ```
 
 The authoring contract accepts one to four exact subject inputs. Input names
 match `[a-z][a-z0-9_]{0,63}`, values are bounded to 256 bytes, and patterns are
 bounded to 1024 bytes. Credentials are fixed interfaces whose values remain
 environment-only secret references. `check` and `build` compile the generated
-closure with the product-owned Relay and Notary validators. `test` additionally
+closure with the validators for the selected Relay, Notary, or combined deployment. `test` additionally
 executes deterministic source fixtures without granting fixture YAML network,
 credential, filesystem, or worker authority.
 
-Sandboxed Rhai is an advanced, release-gated integration mode. Its offline
+`script` with `runtime: rhai_v1` is an advanced, release-gated integration mode. Its offline
 conformance fixtures use the isolated implementation-owned worker harness;
 ordinary startup remains unavailable unless the release includes the reviewed
-Sandboxed Rhai authoring and worker contract and the country environment has
+Rhai runtime and worker contract and the project environment has
 explicit operator-security enablement. Source product and version remain review
 and provenance metadata; they do not select the Rhai runtime or executor.
 `test --live` requires an explicit non-production environment and uses only the

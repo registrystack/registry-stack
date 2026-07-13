@@ -437,7 +437,7 @@ mod tests {
     const CONFORMANCE: &[u8] = b"synthetic registry conformance evidence v1\n";
     const NEGATIVE_SECURITY: &[u8] = b"synthetic registry negative security evidence v1\n";
     const MINIMIZATION: &[u8] = b"synthetic registry minimization proof v1\n";
-    const RHAI_SCRIPT: &str = "fn consult(input, prior) { #{ operations: [], facts: #{} } }";
+    const RHAI_SCRIPT: &str = "fn consult(input, prior) { #{ operations: [], outputs: #{} } }";
 
     fn raw_hash(bytes: &[u8]) -> String {
         let mut encoded = String::from("sha256:");

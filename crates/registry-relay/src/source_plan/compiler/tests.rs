@@ -3769,7 +3769,7 @@ fn rhai_uses_five_reviewed_callables_but_two_effective_exchange_slots() {
 #[test]
 fn authoring_validation_initializes_reviewed_rhai_capabilities_without_bypassing_compilation() {
     let mut fixture = rhai_five_operation_fixture();
-    let script = "fn consult(input, prior) { #{ operations: [], facts: #{} } }";
+    let script = "fn consult(input, prior) { #{ operations: [], outputs: #{} } }";
     fixture.pack_value["spec"]["plan"]["rhai"]["script"] = json!(script);
     fixture.pack_value["spec"]["plan"]["rhai"]["script_hash"] = json!(raw_hash(script.as_bytes()));
     fixture.refresh_all();

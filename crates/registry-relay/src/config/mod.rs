@@ -630,7 +630,7 @@ fn default_oidc_token_types() -> Vec<String> {
 /// Restart-only activation configuration for governed consultations.
 ///
 /// The block is all-or-nothing: validation requires OIDC authentication, the
-/// exact Notary workload, PostgreSQL state-plane identity, an artifact closure,
+/// exact authorized consultation workload, PostgreSQL state-plane identity, an artifact closure,
 /// and immutable, versioned secret references. PostgreSQL intentionally stores
 /// no secret-derived verifier, so replacing audit-pseudonym material behind an
 /// existing reference requires a new key id.
@@ -641,7 +641,7 @@ pub struct ConsultationConfig {
     /// consultation profiles. The issuer is inherited from `auth.oidc`; the
     /// workload, scope, tenant, and registry bindings come from each compiled
     /// profile.
-    pub notary_workload: ConsultationNotaryWorkloadConfig,
+    pub authorized_workload: ConsultationWorkloadConfig,
     /// Dedicated PostgreSQL control-plane connection and deployment identity.
     pub state_plane: ConsultationStatePlaneConfig,
     pub audit_pseudonym_materials: AuditPseudonymMaterialCatalogConfig,
@@ -684,14 +684,14 @@ impl ConsultationConfig {
     }
 }
 
-/// Exact fixed OIDC binding for Registry Notary.
+/// Exact fixed OIDC binding for one authorized consultation workload.
 ///
 /// There is deliberately no automatic client-claim selection. Deployments
 /// must name exactly one verified claim, and later runtime compilation binds
 /// this configuration to the issuer from `auth.oidc`.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ConsultationNotaryWorkloadConfig {
+pub struct ConsultationWorkloadConfig {
     pub audience: String,
     pub client_claim_selector: ConsultationClientClaimSelectorConfig,
     pub client_value: String,
@@ -2237,7 +2237,7 @@ mod tests {
     fn consultation_runtime_fields() -> String {
         format!(
             r#"
-notary_workload:
+authorized_workload:
   audience: relay-consultation
   client_claim_selector: azp
   client_value: registry-notary
@@ -2626,7 +2626,7 @@ audit_pseudonym_materials:
                 consultation_runtime_fields().replace("client_claim_selector: azp", &format!("client_claim_selector: {spelling}"))
             );
             let config: ConsultationConfig = serde_saphyr::from_str(&yaml).unwrap();
-            assert_eq!(config.notary_workload.client_claim_selector, expected);
+            assert_eq!(config.authorized_workload.client_claim_selector, expected);
             assert_eq!(expected.as_str(), spelling);
         }
 

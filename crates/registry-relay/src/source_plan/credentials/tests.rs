@@ -379,7 +379,7 @@ fn api_key_runtime_capabilities_keep_sentinel_material_out_of_diagnostics() {
     const SENTINEL: &str = "relay-api-key-secret-sentinel-4c5f73b2";
 
     for (kind, mode, name) in [
-        ("api_key_header", "api_key_header", "x-country-api-key"),
+        ("api_key_header", "api_key_header", "x-project-api-key"),
         ("api_key_query", "api_key_query", "apiKey"),
     ] {
         let value_env = unique_env_name(kind);

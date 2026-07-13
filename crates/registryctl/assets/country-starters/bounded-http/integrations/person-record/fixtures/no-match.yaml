@@ -1,9 +1,0 @@
-name: no-person
-input: { person_id: AB-123456 }
-source:
-  person:
-    status: 200
-    body: { records: [] }
-expect:
-  facts: {}
-  claims: { person-record-exists: false, person-status: null, person-active: false }

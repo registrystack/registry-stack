@@ -26,7 +26,7 @@ audit:
   hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
 
 consultation:
-  notary_workload:
+  authorized_workload:
     audience: relay-consultation
     client_claim_selector: azp
     client_value: registry-notary

@@ -134,7 +134,7 @@ the values stable across releases so the operator's audit trail stays
 queryable.
 
 The native `/v1/consultations/.../execute` route has a separate, closed
-contract. It accepts only a configured Registry Notary OIDC workload and
+contract. It accepts only the configured authorized OIDC workload and
 validates `Data-Purpose` against the selected hash-pinned consultation profile.
 Use the purpose and input name from the protected profile metadata instead of
 reusing assumptions from entity reads. See

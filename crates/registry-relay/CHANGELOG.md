@@ -7,14 +7,14 @@
 - Relay's restart-only consultation compiler now accepts generic, fully
   authored bounded HTTP plans, exact signed DCI searches, immutable snapshot
   plans, and release-gated SandboxedRhai orchestration. Every plan retains
-  fixed destinations, closed schemas, typed facts, bounded operation unions,
+  fixed destinations, closed schemas, typed outputs, bounded operation unions,
   parent-owned credentials, and the existing authorization and audit gates.
 - Immutable snapshot profiles now keep physical provider, table, key, and
   projection mappings in private bindings. Compatible profiles share one
   immutable materialization slot while readiness remains isolated per profile.
 - SandboxedRhai executes in fresh, environment-scrubbed child processes. The
   worker receives only typed inputs and prior outputs, chooses only reviewed
-  named operations, and returns a closed typed fact map under fixed resource
+  named operations, and returns a closed typed output map under fixed resource
   limits. Production activation is Linux-only and caps the worker address space
   at 128 MiB so the configured memory and process isolation are enforced by the
   operating system; non-Linux hosts retain only offline, authority-free
@@ -22,14 +22,14 @@
   `registry-relay-rhai-worker` beside `registry-relay`. Standalone deployments
   must install both release assets in the same directory under those canonical
   executable names.
-- Relay now owns the authority-free country fixture decoder. It compiles exact
+- Relay now owns the authority-free project fixture decoder. It compiles exact
   pinned profiles and reuses the production closed JSON, signed DCI,
   SnapshotExact, and SandboxedRhai paths while accepting only bounded source
-  observations. Match results release only validated facts; no-match and
-  ambiguity release no fact map.
+  observations. Match results release only validated outputs; no-match and
+  ambiguity release no output map.
 - BREAKING: Relay now exposes a restart-only, OIDC-protected
   `/v1/consultations/{profile_id}/versions/{profile_version}` API for the exact
-  configured Registry Notary workload. The first concrete journey executes one
+  configured authorized OIDC workload. The first concrete journey executes one
   hash-pinned, Basic-authenticated, minimized DHIS2 GET behind PostgreSQL quota,
   audit, dispatch-fence, and publication guarantees. Requests use one to four
   required exact selector components with 64-character ASCII names and a

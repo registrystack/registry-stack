@@ -360,7 +360,7 @@ fn finalize_rhai_observation(
         ));
     }
     let facts = output
-        .facts
+        .outputs
         .into_iter()
         .map(|(name, value)| rhai_output(value).map(|value| (name.into_boxed_str(), value)))
         .collect::<Result<Vec<_>, _>>()?;
@@ -1497,7 +1497,7 @@ mod tests {
     }
 
     #[test]
-    fn sandboxed_rhai_no_match_discards_the_complete_worker_fact_map() {
+    fn sandboxed_rhai_no_match_discards_the_complete_worker_output_map() {
         let plan = crate::source_plan::rhai_runtime_vector_plan_fixture();
         let facts = plan
             .rhai_facts()
@@ -1537,7 +1537,7 @@ mod tests {
             &memory,
             crate::rhai_worker::WorkerOutput {
                 operation_choices: Vec::new(),
-                facts,
+                outputs: facts,
             },
             vec!["lookup".to_owned()],
         )

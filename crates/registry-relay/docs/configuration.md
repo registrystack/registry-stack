@@ -107,8 +107,8 @@ See [config/example.yaml](../config/example.yaml) for a larger working starting 
 
 ## Purpose-aware consultations
 
-`consultation` activates Relay's restart-only native API for the exact Registry
-Notary workload and the exact profiles in one hash-pinned artifact closure. It
+`consultation` activates Relay's restart-only native API for one exact authorized
+workload and the exact profiles in one hash-pinned artifact closure. It
 is all-or-nothing: Relay refuses startup when OIDC, workload identity, artifact
 closure, state-plane identity, pseudonym material references, source credential
 references, or compiled plan support are incomplete or inconsistent.
@@ -119,7 +119,7 @@ Use that file as the canonical shape instead of copying a partial block from
 this guide. It keeps the exact typed artifact hashes and raw file digests next
 to the maintained profile that owns them.
 
-`notary_workload` fixes one OIDC client identity. The issuer comes from
+`authorized_workload` fixes one OIDC client identity. The issuer comes from
 `auth.oidc`; the audience and selected `azp` or `client_id` must agree with the
 OIDC client allowlist. Each compiled public contract adds its own exact scope,
 purpose, tenant, registry, and source-plan binding.

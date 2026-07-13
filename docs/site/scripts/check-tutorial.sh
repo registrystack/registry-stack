@@ -165,6 +165,7 @@ done
 # inside `sh` fences. Bump the expected count when you intentionally add or
 # remove a documented command.
 REGISTRYCTL_TUTORIALS=(
+	"author-registry-project:10"
 	"publish-spreadsheet-secured-registry-api:39"
 	"verify-claim-registry-api:71"
 )
@@ -200,6 +201,31 @@ for entry in "${REGISTRYCTL_TUTORIALS[@]}"; do
 	printf 'registryctl tutorial %s: %s sh command lines (expected %s)\n' \
 		"$name" "$actual" "$expected"
 done
+
+# Keep the unreleased project-authoring examples aligned with their public CLI and schema names.
+require_literal() {
+	local page="$1"
+	local literal="$2"
+	if ! rg -Fq -- "$literal" "$page"; then
+		printf 'project-authoring tutorial drift: %s is missing %s\n' "$page" "$literal" >&2
+		exit 1
+	fi
+}
+
+require_literal "$REPO_ROOT/src/content/docs/tutorials/author-registry-project.mdx" \
+	'registryctl init --from http --project-dir registry-project'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-fhir-r4.mdx" \
+	'outputs:'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-fhir-r4.mdx" \
+	'output: coverage.status'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-sandboxed-rhai.mdx" \
+	'runtime: rhai_v1'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-sandboxed-rhai.mdx" \
+	'outputs: #{}'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-snapshot-materialization.mdx" \
+	'kind: records_api'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-snapshot-materialization.mdx" \
+	'outputs:'
 
 if ((DRY_RUN)); then
 	printf 'dry-run: extraction and drift checks passed; Solmara execution skipped\n'

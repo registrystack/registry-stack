@@ -179,8 +179,8 @@ jobs:
         working-directory: crates/registry-relay
         run: just exposure-check
 
-  country-authoring-determinism:
-    name: Country authoring determinism (${{ matrix.arch }})
+  project-authoring-determinism:
+    name: Project authoring determinism (${{ matrix.arch }})
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.runner }}
@@ -210,11 +210,11 @@ jobs:
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          key: country-authoring-${{ matrix.arch }}
+          key: project-authoring-${{ matrix.arch }}
 
-      - name: Verify cross-machine country product inputs
+      - name: Verify cross-machine project inputs
         run: >-
-          cargo test --locked -p registryctl --test country_authoring
+          cargo test --locked -p registryctl --test project_authoring
           check_and_build_produce_deterministic_product_inputs -- --exact
 
   release-tool:

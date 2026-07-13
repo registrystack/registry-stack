@@ -1,0 +1,13 @@
+name: coverage-active
+input: { birthdate: 2018-05-12, family: Example, given: Ada }
+source:
+  patient:
+    status: 200
+    body: { resourceType: Bundle, type: searchset, total: 1, entry: [{ resource: { resourceType: Patient, id: patient-1 } }] }
+  coverage:
+    status: 200
+    body: { resourceType: Bundle, type: searchset, total: 1, entry: [{ resource: { resourceType: Coverage, status: active } }] }
+expect:
+  outcome: match
+  outputs: { patient_exists: true, coverage_status: active }
+  claims: { patient-record-exists: true, coverage-active: true }

@@ -38,12 +38,12 @@ For how the registry family relates to the wider ecosystem, see the
 ## Country evidence mesh
 
 At country scale, the same pattern can sit next to several domain platforms.
-Clinical health systems can expose bounded facts through a reviewed FHIR integration, public-health
+Clinical health systems can expose bounded outputs through a reviewed FHIR integration, public-health
 program systems such as DHIS2 are reached through Relay's authored bounded HTTP capability, and
 social protection, agriculture, education, and civil
 registration systems can keep their own authoritative stores.
-Relay keeps source credentials and returns only reviewed typed facts. Registry Notary instances
-turn those facts into configured claims for consuming systems such as a social-protection
+Relay keeps source credentials and returns only reviewed typed outputs. Registry Notary instances
+turn those outputs into configured claims for consuming systems such as a social-protection
 management information system without turning those consumers into raw-record readers.
 
 {/* SVG diagram. Essential labels are restated in the paragraph before the figure. */}
@@ -67,22 +67,22 @@ These platforms own storage, business rules, correction workflows, user interfac
 API for their domain.
 Registry Stack adds standardized metadata description, scoped read-only routes over source data,
 configured evidence responses, and hash-chained audit records.
-The [country integration authoring guide](../../tutorials/author-country-integration/) shows how
+The [Registry Stack project authoring guide](../../tutorials/author-registry-project/) shows how
 to define a bounded source recipe and the authorized Notary claims without adding product-specific
 runtime dispatch.
 
-One country integration can serve two different governed needs without creating two source
-definitions.
+One integration in a Registry Stack project can serve two different governed needs without
+creating two source definitions.
 A local materialization can back Relay's records API, including configured filters, projection,
 cursor pagination, relationships, aggregates, and enabled standards adapters.
 SnapshotExact consultations can use that same immutable published materialization for exact
 evidence lookup.
-The logical records definition stays in the country project; provider paths, worksheets, tables,
+The logical records definition stays in the project workspace; provider paths, worksheets, tables,
 and physical columns stay in the private environment binding.
 
-{/* Evidence: crates/registryctl/src/country_authoring.rs and
-    crates/registryctl/tests/country_authoring.rs,
-    records_and_snapshot_exact_share_one_generated_materialization. */}
+{/* Evidence: crates/registryctl/src/project_authoring.rs and
+    crates/registryctl/tests/project_authoring.rs,
+    records_and_snapshot_share_one_generated_materialization. */}
 
 Wire Registry Stack in alongside a domain platform when:
 
@@ -124,7 +124,7 @@ One plan has at most five fixed read operations with fixed methods, paths, param
 response schemas, projections, and bounds.
 Validated consultation inputs and bounded earlier outputs may fill declared value slots, but they
 cannot choose a destination, operation, credential, or projection.
-OpenCRVS, DHIS2, OpenSPP, and country-specific systems remain authored integrations rather than
+OpenCRVS, DHIS2, OpenSPP, and jurisdiction-specific systems remain authored integrations rather than
 runtime executor types.
 
 The Digital Convergence Initiative (DCI) exact-search primitive follows the same rule.
@@ -168,7 +168,7 @@ source tables, raw SQL, or full records.
 
 Wire Registry Stack in alongside a workflow engine when:
 
-- A workflow step needs an authoritative registry fact (status, predicate, selected value).
+- A workflow step needs an authoritative registry output (status, predicate, selected value).
 - A workflow step needs an evidence artifact or credential rather than an internal service result.
 - Generated workflow connectors must not depend on source schema details.
 

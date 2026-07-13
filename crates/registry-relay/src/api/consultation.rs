@@ -18,7 +18,7 @@ use zeroize::Zeroizing;
 
 use crate::auth::AuthenticationResult;
 use crate::consultation::{
-    AuthenticatedNotaryWorkload, ConsultationExecutionError, ConsultationKey,
+    AuthenticatedConsultationWorkload, ConsultationExecutionError, ConsultationKey,
     ConsultationServiceError, NotaryBatchChildIdentity, NotaryEvaluationId, ParsedPurpose,
     ParsedSingleStringInput, ResolvedConsultationProfile,
 };
@@ -117,9 +117,9 @@ async fn execute(
 
     // Do not poll the subject-bearing body until authentication and exact
     // workload-visible profile resolution have both produced their proofs.
-    let notary_workload = context.notary_workload();
+    let authorized_workload = context.authorized_workload();
     let parsed_headers =
-        match parse_execute_headers(context.resolved_profile(), &notary_workload, &headers) {
+        match parse_execute_headers(context.resolved_profile(), authorized_workload, &headers) {
             Ok(parsed) => parsed,
             Err(error) => return wire_error_response(error),
         };
@@ -128,7 +128,7 @@ async fn execute(
     drop(headers);
     let body = match ConsultationRequestBody::read_from(
         context.resolved_profile(),
-        &notary_workload,
+        authorized_workload,
         body,
     )
     .await
@@ -138,7 +138,7 @@ async fn execute(
     };
     let envelope = match parse_execute_body(
         context.resolved_profile(),
-        &notary_workload,
+        authorized_workload,
         parsed_headers,
         body,
     ) {
@@ -258,7 +258,7 @@ impl ConsultationRequestBody {
     /// acquire any subject-bearing bytes.
     pub(crate) async fn read_from(
         _resolved_profile: &ResolvedConsultationProfile,
-        _notary_workload: &AuthenticatedNotaryWorkload<'_>,
+        _authorized_workload: &AuthenticatedConsultationWorkload,
         body: Body,
     ) -> Result<Self, ConsultationWireError> {
         let mut retained = Zeroizing::new(Vec::with_capacity(MAX_CONSULTATION_REQUEST_BYTES));
@@ -617,7 +617,7 @@ pub(crate) fn parse_consultation_key(
 /// ambient header map can then be dropped before any body or backend await.
 fn parse_execute_headers(
     _resolved_profile: &ResolvedConsultationProfile,
-    _notary_workload: &AuthenticatedNotaryWorkload<'_>,
+    _authorized_workload: &AuthenticatedConsultationWorkload,
     headers: &HeaderMap,
 ) -> Result<ParsedConsultationHeaders, ConsultationWireError> {
     let content_type = exactly_one_header(
@@ -675,7 +675,7 @@ fn parse_execute_headers(
 /// required at this second boundary.
 fn parse_execute_body(
     _resolved_profile: &ResolvedConsultationProfile,
-    _notary_workload: &AuthenticatedNotaryWorkload<'_>,
+    _authorized_workload: &AuthenticatedConsultationWorkload,
     headers: ParsedConsultationHeaders,
     body: ConsultationRequestBody,
 ) -> Result<ParsedConsultationEnvelope, ConsultationWireError> {
@@ -774,8 +774,8 @@ mod tests {
         ResolvedConsultationProfile::for_wire_test(&plan)
     }
 
-    fn notary_workload() -> AuthenticatedNotaryWorkload<'static> {
-        AuthenticatedNotaryWorkload::for_wire_test()
+    fn authorized_workload() -> AuthenticatedConsultationWorkload {
+        AuthenticatedConsultationWorkload::for_runtime_vector_test(i64::MAX)
     }
 
     fn route_app() -> Router {
@@ -816,7 +816,7 @@ mod tests {
         body: &[u8],
     ) -> Result<ParsedConsultationEnvelope, ConsultationWireError> {
         let resolved = resolved_profile();
-        let workload = notary_workload();
+        let workload = authorized_workload();
         let headers = parse_execute_headers(&resolved, &workload, headers)?;
         let body = ConsultationRequestBody::try_from_owned(body.to_vec())?;
         parse_execute_body(&resolved, &workload, headers, body)
@@ -825,7 +825,7 @@ mod tests {
     #[tokio::test]
     async fn request_body_streams_chunks_into_one_bounded_zeroizing_owner() {
         let resolved = resolved_profile();
-        let workload = notary_workload();
+        let workload = authorized_workload();
         let streamed = Body::from_stream(stream::iter([
             Ok::<_, Infallible>(Bytes::from_static(br#"{"inputs":{"subject_"#)),
             Ok(Bytes::from_static(br#"id":"12345"}}"#)),
@@ -840,7 +840,7 @@ mod tests {
     #[tokio::test]
     async fn request_body_accepts_exactly_eight_kib_without_growing_storage() {
         let resolved = resolved_profile();
-        let workload = notary_workload();
+        let workload = authorized_workload();
         let retained = ConsultationRequestBody::read_from(
             &resolved,
             &workload,
@@ -855,7 +855,7 @@ mod tests {
     #[tokio::test]
     async fn request_body_rejects_chunk_overflow_before_storage_growth() {
         let resolved = resolved_profile();
-        let workload = notary_workload();
+        let workload = authorized_workload();
         let oversized = Body::from_stream(stream::iter([
             Ok::<_, Infallible>(Bytes::from(vec![b'x'; MAX_CONSULTATION_REQUEST_BYTES])),
             Ok(Bytes::from_static(b"x")),
@@ -871,7 +871,7 @@ mod tests {
     #[tokio::test]
     async fn request_body_collapses_transport_errors_without_retaining_values() {
         let resolved = resolved_profile();
-        let workload = notary_workload();
+        let workload = authorized_workload();
         let failed = Body::from_stream(stream::iter([
             Ok::<_, std::io::Error>(Bytes::from_static(b"partial-subject")),
             Err(std::io::Error::other("transport detail must not escape")),

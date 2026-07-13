@@ -1,0 +1,145 @@
+---
+title: Configure API-key source authentication
+description: Bind a fixed API-key header or query credential to a bounded HTTP integration without placing its value in authored or generated files.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-07-12"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+Use this guide when a reviewed source API requires a fixed API key for one bounded HTTP
+integration.
+You will declare the credential name in the public integration and bind its value through a
+private environment secret reference.
+
+{/* Evidence: crates/registryctl/src/project_authoring.rs,
+    crates/registryctl/tests/project_authoring.rs, and
+    crates/registry-relay/src/source_plan/credentials/tests.rs. */}
+
+## When to use this
+
+Prefer a fixed header credential when the upstream supports one.
+Use a query credential only when the upstream has no safer authentication mechanism and the
+operator-security review accepts the upstream URL-retention risk.
+
+Registry Stack fixes the credential name during compilation.
+The consultation caller cannot select the name or value.
+
+## Before you start
+
+You need:
+
+- A Registry Stack project that passes the ordinary
+  [bounded HTTP authoring journey](../author-registry-project/).
+- The exact header or query parameter name from the reviewed source contract.
+- An environment secret name for the credential value.
+- An operator-security reviewer for a query credential.
+
+Do not paste the API-key value into the integration, environment file, fixture, command, or test
+output.
+
+## Declare a fixed header credential
+
+In the integration's `capability.http` block, replace the credential interface:
+
+```yaml
+credential:
+  type: api_key_header
+  name: x-project-api-key
+  max_value_bytes: 128
+```
+
+The compiler rejects authentication, cookie, host, forwarding, proxy, hop-by-hop, and other
+security-sensitive header names.
+The declared maximum bounds the secret after Registry Relay loads it.
+
+In `environments/<environment>.yaml`, bind the value by secret reference:
+
+```yaml
+integrations:
+  enrollment:
+    credential:
+      type: api_key_header
+      value: { secret: PROJECT_SOURCE_API_KEY }
+      generation: 1
+```
+
+Increment `generation` when the credential rotates.
+The generated private binding records the reference and generation, not the secret value.
+
+## Declare a fixed query credential
+
+Use this public integration interface only after the operator-security review approves query
+placement:
+
+```yaml
+credential:
+  type: api_key_query
+  name: apiKey
+  max_value_bytes: 128
+```
+
+Bind the private value and review class in the environment:
+
+```yaml
+integrations:
+  enrollment:
+    credential:
+      type: api_key_query
+      value: { secret: PROJECT_SOURCE_API_KEY }
+      generation: 1
+      review: operator_security
+```
+
+The query name cannot collide with an authored request parameter.
+Outside loopback tests, the destination must use verified HTTPS.
+Redirects remain disabled.
+
+Registry Stack keeps the value out of authored and generated files, diagnostics, retained URLs,
+metrics, audit, and evidence that Registry Stack owns.
+The upstream server, reverse proxy, web application firewall, and network appliances can still
+retain complete URLs.
+Record that residual risk in the operator-security review.
+
+## Verify the credential boundary
+
+Run the offline fixtures and semantic check:
+
+```sh
+registryctl test --project-dir <project>
+registryctl check \
+  --project-dir <project> \
+  --environment <environment> \
+  --explain
+```
+
+The first report contains `"status": "passed"`.
+The second contains `"status": "valid"` and lists `operator_security` among the required reviews
+for a query credential.
+The redacted explanation names the credential type, reference, and generation without the secret
+value.
+
+Before approval, inspect authored files, generated inputs, diagnostics, and retained test
+artifacts for the secret sentinel used by your test procedure.
+A passing compiler alone does not prove that an upstream proxy or appliance omits query strings
+from its logs.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The compiler rejects the header name | The name is security-sensitive or outside the fixed grammar. | Use the reviewed upstream API's non-sensitive API-key header. |
+| The compiler reports a query collision | The credential name matches an authored request parameter. | Select the upstream's distinct credential parameter or use header placement. |
+| `operator_security` is missing | The query credential has no explicit review declaration. | Add the review declaration and rerun `check --explain`. |
+| The source returns unauthorized | The secret reference is absent, stale, or bound to the wrong generation. | Correct the runtime secret binding without writing the value into the project. |
+
+## Next
+
+- Return to [Author an HTTP Registry Stack project](../author-registry-project/) to finish
+  fixture, review, and build steps.
+- Use [Configure a FHIR R4 integration](../configure-project-fhir-r4/) for a fixed FHIR search
+  journey over the same credential boundary.

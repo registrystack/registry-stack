@@ -4,10 +4,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 use registryctl::{
-    BundleSignOptions, CountryBuildOptions, CountryCheckOptions, CountryInitOptions,
-    CountryStarter, CountryTestOptions, DeploymentProfile, DoctorFormat, NotaryInitOptions,
-    NotaryInitSourceKind, NotarySource, OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions,
-    Sample,
+    BundleSignOptions, DeploymentProfile, DoctorFormat, NotaryInitOptions, NotaryInitSourceKind,
+    NotarySource, OpenFnBatchMode, OpenFnConvertOptions, OpenFnImportOptions, ProjectBuildOptions,
+    ProjectCheckOptions, ProjectInitOptions, ProjectStarter, ProjectTestOptions, Sample,
 };
 
 fn main() -> Result<()> {
@@ -32,13 +31,13 @@ fn main() -> Result<()> {
         Commands::UpdateCheckRefresh => registryctl::refresh_update_check_cache()?,
         Commands::Init {
             from,
-            country_dir,
+            project_dir,
             command,
         } => match (from, command) {
             (Some(starter), None) => {
-                print_json(&registryctl::init_country_project(&CountryInitOptions {
+                print_json(&registryctl::init_registry_project(&ProjectInitOptions {
                     starter,
-                    directory: country_dir,
+                    directory: project_dir,
                 })?)?
             }
             (None, Some(command)) => {
@@ -105,38 +104,42 @@ fn main() -> Result<()> {
             }
         },
         Commands::Test {
-            project,
+            project_dir,
             environment,
             live,
-        } => print_json(&registryctl::test_country_project(&CountryTestOptions {
-            project_directory: project,
+        } => print_json(&registryctl::test_registry_project(&ProjectTestOptions {
+            project_directory: project_dir,
             environment,
             live,
         })?)?,
         Commands::Check {
-            project,
+            project_dir,
             environment,
             explain,
             against,
             anchor,
-        } => print_json(&registryctl::check_country_project(&CountryCheckOptions {
-            project_directory: project,
-            environment,
-            explain,
-            against,
-            anchor,
-        })?)?,
+        } => print_json(&registryctl::check_registry_project(
+            &ProjectCheckOptions {
+                project_directory: project_dir,
+                environment,
+                explain,
+                against,
+                anchor,
+            },
+        )?)?,
         Commands::Build {
-            project,
+            project_dir,
             environment,
             against,
             anchor,
-        } => print_json(&registryctl::build_country_project(&CountryBuildOptions {
-            project_directory: project,
-            environment,
-            against,
-            anchor,
-        })?)?,
+        } => print_json(&registryctl::build_registry_project(
+            &ProjectBuildOptions {
+                project_directory: project_dir,
+                environment,
+                against,
+                anchor,
+            },
+        )?)?,
         Commands::Add { command } => {
             let image_lock = registryctl::load_registryctl_image_lock()?;
             match command {
@@ -400,7 +403,7 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
 #[derive(Debug, Parser)]
 #[command(name = "registryctl")]
 #[command(version)]
-#[command(about = "Create and run local Registry Commons projects")]
+#[command(about = "Create and run local Registry Stack projects")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -413,22 +416,22 @@ enum Commands {
     /// Refresh the update-check cache in a detached child process.
     #[command(name = "__update-check-refresh", hide = true)]
     UpdateCheckRefresh,
-    /// Create a local Registry Commons project.
+    /// Create a local Registry Stack project.
     Init {
-        /// Copy a tested country integration starter into a local workspace.
+        /// Copy a tested project integration starter into a local workspace.
         #[arg(long, value_enum)]
-        from: Option<CountryStarter>,
-        /// Destination for a country workspace initialized with --from.
+        from: Option<ProjectStarter>,
+        /// Destination for a project workspace initialized with --from.
         #[arg(long, default_value = ".")]
-        country_dir: PathBuf,
+        project_dir: PathBuf,
         #[command(subcommand)]
         command: Option<Box<InitCommand>>,
     },
-    /// Run every country integration fixture offline.
+    /// Run every project integration fixture offline.
     Test {
-        /// Country workspace root.
+        /// Project workspace root.
         #[arg(long, default_value = ".")]
-        project: PathBuf,
+        project_dir: PathBuf,
         /// Optional environment for environment-sensitive validation.
         #[arg(long)]
         environment: Option<String>,
@@ -438,9 +441,9 @@ enum Commands {
     },
     /// Validate and explain generated Relay and Notary configuration.
     Check {
-        /// Country workspace root.
+        /// Project workspace root.
         #[arg(long, default_value = ".")]
-        project: PathBuf,
+        project_dir: PathBuf,
         /// Explicit environment binding.
         #[arg(long)]
         environment: String,
@@ -456,9 +459,9 @@ enum Commands {
     },
     /// Emit deterministic unsigned Relay and Notary Config Bundle inputs.
     Build {
-        /// Country workspace root.
+        /// Project workspace root.
         #[arg(long, default_value = ".")]
-        project: PathBuf,
+        project_dir: PathBuf,
         /// Explicit environment binding.
         #[arg(long)]
         environment: String,
@@ -469,16 +472,16 @@ enum Commands {
         #[arg(long)]
         anchor: Option<PathBuf>,
     },
-    /// Add a Registry Commons product to the current project.
+    /// Add a Registry Stack product to the current project.
     Add {
         #[command(subcommand)]
         command: AddCommand,
     },
-    /// Start the local Registry Commons project.
+    /// Start the local Registry Stack project.
     Start,
-    /// Stop the local Registry Commons project.
+    /// Stop the local Registry Stack project.
     Stop,
-    /// Restart the local Registry Commons project so config edits take effect.
+    /// Restart the local Registry Stack project so config edits take effect.
     Restart,
     /// Print local runtime status.
     Status,
@@ -544,30 +547,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn country_authoring_cli_accepts_the_documented_commands() {
+    fn project_authoring_cli_accepts_the_documented_commands() {
         let init = Cli::try_parse_from([
             "registryctl",
             "init",
             "--from",
-            "bounded-http",
-            "--country-dir",
-            "country",
+            "http",
+            "--project-dir",
+            "registry-project",
         ])
         .unwrap();
         assert!(matches!(
             init.command,
             Commands::Init {
-                from: Some(CountryStarter::BoundedHttp),
-                country_dir,
+                from: Some(ProjectStarter::Http),
+                project_dir,
                 command: None,
-            } if country_dir == std::path::Path::new("country")
+            } if project_dir == std::path::Path::new("registry-project")
         ));
 
         let test = Cli::try_parse_from([
             "registryctl",
             "test",
-            "--project",
-            "country",
+            "--project-dir",
+            "registry-project",
             "--environment",
             "staging",
             "--live",
@@ -576,17 +579,17 @@ mod tests {
         assert!(matches!(
             test.command,
             Commands::Test {
-                project,
+                project_dir,
                 environment: Some(environment),
                 live: true,
-            } if project == std::path::Path::new("country") && environment == "staging"
+            } if project_dir == std::path::Path::new("registry-project") && environment == "staging"
         ));
 
         let check = Cli::try_parse_from([
             "registryctl",
             "check",
-            "--project",
-            "country",
+            "--project-dir",
+            "registry-project",
             "--environment",
             "staging",
             "--explain",
@@ -599,12 +602,12 @@ mod tests {
         assert!(matches!(
             check.command,
             Commands::Check {
-                project,
+                project_dir,
                 environment,
                 explain: true,
                 against: Some(against),
                 anchor: Some(anchor),
-            } if project == std::path::Path::new("country")
+            } if project_dir == std::path::Path::new("registry-project")
                 && environment == "staging"
                 && against == std::path::Path::new("baseline")
                 && anchor == std::path::Path::new("anchor.json")
@@ -613,8 +616,8 @@ mod tests {
         let build = Cli::try_parse_from([
             "registryctl",
             "build",
-            "--project",
-            "country",
+            "--project-dir",
+            "registry-project",
             "--environment",
             "staging",
         ])
@@ -622,16 +625,36 @@ mod tests {
         assert!(matches!(
             build.command,
             Commands::Build {
-                project,
+                project_dir,
                 environment,
                 against: None,
                 anchor: None,
-            } if project == std::path::Path::new("country") && environment == "staging"
+            } if project_dir == std::path::Path::new("registry-project") && environment == "staging"
         ));
     }
 
     #[test]
-    fn country_init_rejects_mixed_or_missing_modes_at_dispatch_boundary() {
+    fn project_authoring_cli_has_no_country_compatibility_alias() {
+        assert!(Cli::try_parse_from([
+            "registryctl",
+            "init",
+            "--from",
+            "http",
+            "--country-dir",
+            "registry-project",
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn project_authoring_cli_has_no_pre_freeze_project_path_alias() {
+        assert!(
+            Cli::try_parse_from(["registryctl", "test", "--project", "registry-project",]).is_err()
+        );
+    }
+
+    #[test]
+    fn project_init_rejects_mixed_or_missing_modes_at_dispatch_boundary() {
         let mixed = Cli::try_parse_from([
             "registryctl",
             "init",

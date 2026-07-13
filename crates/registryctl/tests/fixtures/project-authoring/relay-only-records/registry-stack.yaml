@@ -1,0 +1,7 @@
+version: 1
+registry: { id: fictional-records-registry }
+services:
+  people-records:
+    kind: records_api
+    definition: records/people.yaml
+    entity: people

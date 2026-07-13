@@ -140,7 +140,7 @@ impl JourneyProfile {
         match self {
             Self::Dhis2 => "profiles/dhis2-2.41.9-enrollment-status",
             Self::Dhis2SandboxedRhai => {
-                "../registryctl/tests/fixtures/country-authoring/dhis2-sandboxed-rhai"
+                "../registryctl/tests/fixtures/project-authoring/dhis2-sandboxed-rhai"
             }
             Self::OpenCrvs => "profiles/opencrvs-1.9.0-rc.1-farajaland-birth-record-exists",
             Self::SyntheticSnapshot => "profiles/synthetic-snapshot-exact-person-status",
@@ -244,9 +244,9 @@ enum LiveJourneyError {
     PseudonymInitialization,
     #[error("the maintained consultation artifacts could not be staged")]
     ArtifactStaging,
-    #[error("the governed country-authored Rhai closure could not be built")]
+    #[error("the governed project-authored Rhai closure could not be built")]
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    CountryBuild,
+    ProjectBuild,
     #[error("the governed Rhai source fixture failed")]
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     SourceFixture,
@@ -321,7 +321,7 @@ async fn live_dhis2_consultation_lifecycle() {
     }
 }
 
-/// Run via `scripts/run-live-consultation-journey.sh rhai`. The country-authored
+/// Run via `scripts/run-live-consultation-journey.sh rhai`. The project-authored
 /// closure, loopback source, real Relay executable, isolated one-shot workers,
 /// Notary, and PostgreSQL state plane all run inside the governed Linux runner.
 #[cfg(target_os = "linux")]
@@ -782,7 +782,7 @@ fn live_issuer_jwk() -> Result<Zeroizing<String>, LiveJourneyError> {
         "kty": "OKP",
         "crv": "Ed25519",
         "alg": "EdDSA",
-        "kid": "country-issuer-key",
+        "kid": "project-issuer-key",
         "d": URL_SAFE_NO_PAD.encode(signing.to_bytes()),
         "x": URL_SAFE_NO_PAD.encode(verifying.as_bytes()),
     }))
@@ -1760,11 +1760,11 @@ impl GeneratedRhaiProfile {
         let directory = tempfile::tempdir().map_err(|_| LiveJourneyError::ArtifactStaging)?;
         let source = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(JourneyProfile::Dhis2SandboxedRhai.directory());
-        let project = directory.path().join("country");
+        let project = directory.path().join("project");
         copy_tree_closed(&source, &project)?;
         let status = Command::new(registryctl)
             .arg("build")
-            .arg("--project")
+            .arg("--project-dir")
             .arg(&project)
             .arg("--environment")
             .arg("local")
@@ -1773,9 +1773,9 @@ impl GeneratedRhaiProfile {
             .stderr(Stdio::null())
             .status()
             .await
-            .map_err(|_| LiveJourneyError::CountryBuild)?;
+            .map_err(|_| LiveJourneyError::ProjectBuild)?;
         if !status.success() {
-            return Err(LiveJourneyError::CountryBuild);
+            return Err(LiveJourneyError::ProjectBuild);
         }
         let build = project.join(".registry-stack/build/local/private");
         let relay_config = build.join("relay/config/relay.yaml");

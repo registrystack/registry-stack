@@ -34,12 +34,12 @@ use serde_json::Value;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use zeroize::Zeroizing;
 
-mod country_authoring;
+mod project_authoring;
 
-pub use country_authoring::{
-    build_country_project, check_country_project, init_country_project, test_country_project,
-    CountryBuildOptions, CountryCheckOptions, CountryCommandReport, CountryInitOptions,
-    CountryStarter, CountryTestOptions, ReviewClass, SemanticChange,
+pub use project_authoring::{
+    build_registry_project, check_registry_project, init_registry_project, test_registry_project,
+    ProjectBuildOptions, ProjectCheckOptions, ProjectCommandReport, ProjectInitOptions,
+    ProjectStarter, ProjectTestOptions, ReviewClass, SemanticChange,
 };
 
 pub use crate::sample::Sample;
@@ -3673,7 +3673,7 @@ fn bruno_files(project: &Project, secrets: &LocalEnv) -> Result<Vec<GeneratedFil
         ),
         generated_file(
             "collection.bru",
-            "docs {\nGenerated local Registry Commons API collection.\n}\n",
+            "docs {\nGenerated local Registry Stack API collection.\n}\n",
         ),
     ];
 

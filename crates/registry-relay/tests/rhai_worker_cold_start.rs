@@ -10,7 +10,7 @@ async fn first_product_worker_invocation_keeps_cold_start_outside_script_budget(
     let mut request = WorkerRequest::v1(
         r#"
             fn consult(input, prior) {
-                #{ operations: [], facts: #{
+                #{ operations: [], outputs: #{
                     exists: #{ type: "presence", value: false }
                 }}
             }
@@ -36,7 +36,7 @@ async fn first_product_worker_invocation_keeps_cold_start_outside_script_budget(
         .await
         .expect("first cold worker invocation");
     assert_eq!(
-        output.facts.get("exists"),
+        output.outputs.get("exists"),
         Some(&TypedValue::Presence { value: false })
     );
 }

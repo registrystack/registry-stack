@@ -355,7 +355,7 @@ pub enum OfflineNotaryHarnessError {
     RandomUnavailable,
 }
 
-/// Environment-free production Notary evaluation harness for country authoring.
+/// Environment-free production Notary evaluation harness for project authoring.
 #[doc(hidden)]
 pub struct OfflineNotaryHarness {
     evidence: Arc<EvidenceConfig>,

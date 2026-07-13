@@ -1,0 +1,33 @@
+version: 1
+integrations:
+  eligibility:
+    source_version: fixture-contract-v2
+    data_destination: { origin: https://household-authority.invalid }
+    credential:
+      type: basic
+      username: { secret: HOUSEHOLD_USERNAME }
+      password: { secret: HOUSEHOLD_PASSWORD }
+      generation: 1
+issuance:
+  issuer: did:web:household-notary.invalid
+  signing_kid: project-issuer-key
+  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
+  generation: 1
+callers:
+  benefits-service:
+    api_key_fingerprint: { secret: BENEFITS_CLIENT_TOKEN_HASH }
+    scopes: ["evidence:household:read"]
+relay:
+  origin: https://household-relay.internal.invalid
+  issuer: https://workload-issuer.internal.invalid
+  jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
+  audience: registry-relay
+  workload_client_id: household-notary
+
+notary_relay:
+  token_file: /run/secrets/relay-workload-token
+
+deployment:
+  profile: local
+  relay: { service: household-relay }
+  notary: { service: household-notary }

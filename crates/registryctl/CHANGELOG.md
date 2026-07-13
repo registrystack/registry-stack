@@ -9,29 +9,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - `registryctl init --from`, `test`, `check`, and `build` provide a strict
-  country-owned authoring workflow for bounded HTTP, DHIS2 Tracker, OpenCRVS,
+  project-owned authoring workflow for bounded HTTP, DHIS2 Tracker, OpenCRVS,
   and fixture-backed OpenSPP integrations. The compiler produces deterministic,
   closed Relay and Notary Config Bundle v1 inputs, verifies them with the exact
   product startup compilers, and supports explicitly verified signed baselines
-  for independent claim, integration, country-policy, and operator-security
+  for independent claim, integration, service-policy, and operator-security
   review classification.
-- Advanced `sandboxed_rhai` authoring is available only through explicit
+- Advanced `script` authoring is available only through explicit
   operator-security enablement and the release-gated isolated worker. Ordinary
   starters remain declarative and do not depend on Rhai.
-- Generated country inputs include exact signed-DCI, immutable snapshot, and
+- Generated project inputs include exact signed-DCI, immutable snapshot, and
   multi-profile/multi-purpose journeys, plus deterministic operational and
   redacted secret-consumer descriptors for Relay and Notary. Snapshot physical
   mappings remain private and shared compatible profiles reuse one immutable
   materialization slot.
 - Tagged `records_api` services compile strict logical records definitions and
   private environment entity bindings into Relay's existing governed records
-  model. A SnapshotExact integration references the same logical entity, so one
+  model. A Snapshot integration references the same logical entity, so one
   immutable local materialization serves records and evidence while retaining
   principal-bound filters, projection, cursor pagination, relationships,
   aggregates, metadata, and configured OGC or SP DCI adapters.
 - Exact consultation selectors now accept one to four required, typed,
   canonical components across bounded HTTP, unified DCI exact predicates, and
-  SnapshotExact. The compiler emits canonical exact-AND artifacts and validates
+  Snapshot. The compiler emits canonical exact-AND artifacts and validates
   full-date inputs, complete fixture and request mappings, and injective private
   physical bindings before source access. Authored input names use Relay's exact
   64-byte lower-snake wire grammar, values are bounded to 256 bytes, and regex
@@ -48,11 +48,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   negative vectors.
 - OpenCRVS and DHIS2 golden workspaces now expose the approved age-band claims
   derived from explicit caller-supplied full dates while preserving the listed
-  direct facts, predicates, disclosure modes, and credential claim allow-lists.
-- Country reports separate semantic digest changes from required review
+  direct outputs, predicates, disclosure modes, and credential claim allow-lists.
+- Project reports separate semantic digest changes from required review
   classes and identify safe actual fixture failure codes without disclosing
   fixture values.
-- Offline country fixtures compile an internal authority-free product artifact
+- Offline project fixtures compile an internal authority-free product artifact
   closure and reuse Relay's closed decoders and typed normalization plus
   Notary's static authentication, pre-source policy gates, CEL worker, claim
   evaluation, and disclosure behavior. Exact OpenCRVS fixtures use public RSA
@@ -61,7 +61,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Security
 
-- Country authoring rejects unknown fields, symlinks, path traversal, secret
+- Project authoring rejects unknown fields, symlinks, path traversal, secret
   values in authored environment bindings, caller-selected source requests,
   implicit live environments, and direct live registry access. Governed live
   tests contact only the configured Notary evaluation endpoint and refuse
@@ -72,16 +72,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   before generated Relay startup validation.
 - Fixed request headers use a closed non-credential allow-list, named
   environment-backed secrets are complete in deployment descriptors, and
-  implementation-only Rhai probes are unavailable from country fixture YAML.
+  implementation-only Rhai probes are unavailable from project fixture YAML.
 
 ### Fixed
 
-- Signed country review records now bind the exact verified baseline manifest,
+- Signed product-bundle baseline review records now bind the exact verified baseline manifest,
   prior per-class review digests, and current per-class review digests or
   explicit nulls. Compiler-version changes require all review classes even
   when authored semantics also change.
 - Disclosure-only changes are classified directionally: narrowing requires
-  claim review, widening requires country-policy review, and incomparable
+  claim review, widening requires service-policy review, and incomparable
   changes require both.
 - Sandboxed Rhai release enablement is keyed only by the implementation-owned
   authoring and worker contract. Source product and version remain review and

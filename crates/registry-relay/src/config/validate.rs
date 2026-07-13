@@ -91,7 +91,7 @@ pub fn run_with_source(config: &Config, source: ConfigSource) -> Result<(), Erro
 /// any secret values or opening the state-plane database.
 ///
 /// The typed serde model closes individual field grammars. This pass binds the
-/// Notary workload to OIDC, checks the state-plane identity, requires the
+/// authorized consultation workload to OIDC, checks the state-plane identity, requires the
 /// governed artifact closure, and enforces cross-catalog bounds and uniqueness.
 /// Environment references and configured claim values are deliberately omitted
 /// from diagnostics.
@@ -144,12 +144,12 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
         },
     )?;
 
-    let notary = &consultation.notary_workload;
+    let notary = &consultation.authorized_workload;
     if ConfiguredAudience::try_from(notary.audience.as_str()).is_err() {
         tracing::error!(
             code = "config.validation_error",
-            field = "consultation.notary_workload.audience",
-            "Notary workload audience is invalid"
+            field = "consultation.authorized_workload.audience",
+            "Authorized consultation workload audience is invalid"
         );
         return Err(ConfigError::ValidationError);
     }
@@ -160,16 +160,16 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
     {
         tracing::error!(
             code = "config.validation_error",
-            field = "consultation.notary_workload.audience",
-            "Notary workload audience must be one exact auth.oidc.audiences entry"
+            field = "consultation.authorized_workload.audience",
+            "Authorized consultation workload audience must be one exact auth.oidc.audiences entry"
         );
         return Err(ConfigError::ValidationError);
     }
     if ExpectedClientValue::try_from(notary.client_value.as_str()).is_err() {
         tracing::error!(
             code = "config.validation_error",
-            field = "consultation.notary_workload.client_value",
-            "Notary workload client value is invalid"
+            field = "consultation.authorized_workload.client_value",
+            "Authorized consultation workload client value is invalid"
         );
         return Err(ConfigError::ValidationError);
     }
@@ -177,7 +177,7 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
         if notary.client_claim_selector == super::ConsultationClientClaimSelectorConfig::ClientId {
             tracing::error!(
                 code = "config.validation_error",
-                field = "consultation.notary_workload.client_claim_selector",
+                field = "consultation.authorized_workload.client_claim_selector",
                 "a client_id Notary binding requires auth.oidc.allowed_clients to be empty because shared OIDC admission prefers azp"
             );
             return Err(ConfigError::ValidationError);
@@ -190,7 +190,7 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
             tracing::error!(
                 code = "config.validation_error",
                 field = "auth.oidc.allowed_clients",
-                "the OIDC client allowlist must admit the fixed Notary client binding"
+                "the OIDC client allowlist must admit the fixed consultation workload binding"
             );
             return Err(ConfigError::ValidationError);
         }
@@ -198,8 +198,8 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
     if ConfiguredPrincipalId::try_from(notary.principal_id.as_str()).is_err() {
         tracing::error!(
             code = "config.validation_error",
-            field = "consultation.notary_workload.principal_id",
-            "Notary workload principal identifier is invalid"
+            field = "consultation.authorized_workload.principal_id",
+            "Authorized consultation workload principal identifier is invalid"
         );
         return Err(ConfigError::ValidationError);
     }
@@ -1435,7 +1435,7 @@ fn validate_server(config: &Config) -> Result<(), ConfigError> {
         tracing::error!(
             code = "config.validation_error",
             field = "server.request_timeout",
-            "consultation-enabled Relay requires server.request_timeout greater than the fixed 25-second Notary service-hop deadline"
+            "consultation-enabled Relay requires server.request_timeout greater than the fixed 25-second workload service-hop deadline"
         );
         return Err(ConfigError::ValidationError);
     }
@@ -4584,7 +4584,7 @@ datasets: []
         let hash = |digit: char| format!("sha256:{}", digit.to_string().repeat(64));
         format!(
             r#"consultation:
-  notary_workload:
+  authorized_workload:
     audience: relay-consultation
     client_claim_selector: azp
     client_value: registry-notary
@@ -4763,7 +4763,7 @@ datasets: []
 
         let without_artifacts = r#"
 consultation:
-  notary_workload:
+  authorized_workload:
     audience: relay-consultation
     client_claim_selector: azp
     client_value: registry-notary

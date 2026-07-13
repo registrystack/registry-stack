@@ -15,7 +15,7 @@ The admin listener is optional and only exists when `server.admin_bind` is confi
 The public URL space is structured as follows:
 
 - `/v1/datasets/{dataset_id}/entities/{entity}/...` and related aggregate, measure, and dimension routes are the entity-oriented data-plane surface.
-- `/v1/consultations/{profile_id}/versions/{profile_version}` and its `/execute` subresource expose fixed, purpose-aware consultation profiles to the configured Registry Notary workload.
+- `/v1/consultations/{profile_id}/versions/{profile_version}` and its `/execute` subresource expose fixed, purpose-aware consultation profiles to the configured authorized workload.
 - `/v1/attribute-releases` and `/v1/attribute-releases/{profile_id}/versions/{version}/resolve` (feature: `attribute-release`, off by default for 1.0) resolve governed identity attribute-release profiles to minimized claim bundles.
 - `/metadata/*` is the standards-facing metadata surface: catalog, DCAT, SHACL, policies, evidence offerings, and dataset/entity descriptors.
 - `/.well-known/api-catalog` is the public well-known discovery entry point.
@@ -107,11 +107,11 @@ Scopes are independent. Grant the narrowest scope that lets the caller do its jo
 
 Global admin-listener scopes are independent of dataset scopes: `registry_relay:admin` for reload and configuration mutation, `registry_relay:metrics_read` for metrics, and `registry_relay:ops_read` for read-only posture and capability discovery.
 
-Consultation scopes are also independent. Each public consultation contract pins one exact scope, such as `registry:consult:dhis2-enrollment-status`. The configured Notary workload must present that scope and the contract's audience, client, tenant, registry, and purpose bindings must all match.
+Consultation scopes are also independent. Each public consultation contract pins one exact scope, such as `registry:consult:dhis2-enrollment-status`. The configured workload must present that scope and the contract's audience, client, tenant, registry, and purpose bindings must all match.
 
 ## Purpose-aware consultations
 
-Native consultation routes are active only when the complete `consultation` block and its hash-pinned artifact closure compile successfully at startup. They require OIDC and accept only the one configured Registry Notary workload. There is no API-key fallback, caller-selected source URL, generic proxy route, or hot profile activation.
+Native consultation routes are active only when the complete `consultation` block and its hash-pinned artifact closure compile successfully at startup. They require OIDC and accept only the one configured authorized workload. There is no API-key fallback, caller-selected source URL, generic proxy route, or hot profile activation.
 
 Fetch the protected contract metadata before execution:
 

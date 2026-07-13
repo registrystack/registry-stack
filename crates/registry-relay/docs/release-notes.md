@@ -2,14 +2,14 @@
 
 ## Unreleased
 
-- Relay consultation artifacts are now product-neutral: country tooling can
+- Relay consultation artifacts are now product-neutral: project tooling can
   author closed bounded HTTP, signed DCI, immutable snapshot, and explicitly
   release-gated SandboxedRhai plans without adding product-specific Relay
   branches. Private bindings are independently pinned by raw and typed hashes,
   and snapshot physical mappings no longer appear in public artifacts.
 - Compatible snapshot profiles reuse one immutable materialization slot with
   per-profile readiness. SandboxedRhai uses a fresh scrubbed process, typed
-  prior outputs, reviewed named operations, a closed final fact map, and fixed
+  prior outputs, reviewed named operations, a closed final output map, and fixed
   compute and IPC limits; source credentials and authorization context never
   cross the worker boundary.
 - Production SandboxedRhai activation is Linux-only because Relay requires the
@@ -20,17 +20,17 @@
   dedicated `registry-relay-rhai-worker` beside `registry-relay`; standalone
   deployments must install both release assets in the same directory under
   those canonical executable names.
-- Country fixture runs now compile and execute through Relay-owned closed
+- Project fixture runs now compile and execute through Relay-owned closed
   decoders for bounded HTTP, signed DCI, SnapshotExact, and SandboxedRhai.
   Fixtures cannot supply a destination, credential, callback, or worker
-  command, and no-match or ambiguous outcomes disclose no fact map.
+  command, and no-match or ambiguous outcomes disclose no output map.
 - Relay adds the authenticated, purpose-aware native consultation surface and
   the maintained DHIS2 2.41.9 enrollment-status profile. The profile performs
   one retry-free bounded source exchange, returns only a closed minimized
   outcome, and keeps source credentials in Relay.
 - A consultation request now carries one to four required exact selector
   components for one subject. Component names use at most 64 ASCII characters.
-  `match` returns only the profile's closed typed fact map, while `no_match`
+  `match` returns only the profile's closed typed output map, while `no_match`
   and `ambiguous` return `data: null`. Registry-backed batch retries use a
   private Notary-to-Relay child identity; that header is not part of the public
   OpenAPI contract, and conflicting durable reuse returns

@@ -1,0 +1,10 @@
+name: patient-no-match
+input: { birthdate: 2018-05-12, family: Example, given: Ada }
+source:
+  patient:
+    status: 200
+    body: { resourceType: Bundle, type: searchset, total: 0, entry: [] }
+expect:
+  outcome: no_match
+  outputs: {}
+  claims: { patient-record-exists: false, coverage-active: false }

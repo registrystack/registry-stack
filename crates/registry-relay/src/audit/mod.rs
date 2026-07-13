@@ -1043,7 +1043,7 @@ pub async fn audit_layer(
             .cloned()
             .or(principal_on_req)
     };
-    // The generic layer cannot prove the fixed Notary workload. Never retain
+    // The generic layer cannot prove the fixed authorized consultation workload. Never retain
     // an unrelated or attacker-selected OIDC principal/scope on consultation
     // traffic; the dedicated durable consultation audit owns verified
     // workload identity after exact binding.

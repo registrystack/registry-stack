@@ -1044,7 +1044,7 @@
       "openapi": true,
       "stability": "experimental",
       "data_classification": "metadata",
-      "notes": "Protected consultation profile metadata for the fixed Notary workload.",
+      "notes": "Protected consultation profile metadata for the fixed authorized workload.",
       "source": "manual",
       "enforcement_tests": [
         "src/api/consultation.rs::router_exposes_only_the_exact_get_and_post_paths",
@@ -1094,7 +1094,7 @@
       "openapi": true,
       "stability": "experimental",
       "data_classification": "personal",
-      "notes": "Purpose-bound, fenced consultation execution for the fixed Notary workload.",
+      "notes": "Purpose-bound, fenced consultation execution for the fixed authorized workload.",
       "source": "manual",
       "enforcement_tests": [
         "src/api/consultation.rs::quota_denial_has_one_bounded_integer_retry_after_header",

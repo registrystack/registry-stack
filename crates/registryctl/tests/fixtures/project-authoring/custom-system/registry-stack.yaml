@@ -1,0 +1,43 @@
+version: 1
+
+registry:
+  id: fictional-household-authority
+
+integrations:
+  eligibility:
+    file: integrations/eligibility/integration.yaml
+
+services:
+  household-eligibility:
+    kind: evidence
+    version: 1
+    purpose: household-support-screening
+    legal_basis: public-service-delivery
+    consent: not_required
+    access:
+      scopes: ["evidence:household:read"]
+    consultations:
+      household:
+        integration: eligibility
+        input:
+          household_reference: request.target.identifiers.household_reference
+    claims:
+      household-record-exists:
+        evidence: registry_backed
+        output: household.exists
+        disclosure: predicate
+      household-category:
+        evidence: registry_backed
+        output: household.category
+        disclosure: value
+      household-eligible:
+        evidence: registry_backed
+        cel: >-
+          household.approved != null ? household.exists && household.approved : false
+        disclosure: predicate
+    credentials:
+      household-eligibility:
+        format: dc+sd-jwt
+        type: https://credentials.invalid/household-eligibility/v1
+        validity: 5m
+        claims: [household-record-exists, household-category, household-eligible]

@@ -1,0 +1,37 @@
+version: 1
+
+integrations:
+  person-record:
+    source_version: project-fixture-v1
+    data_destination:
+      origin: https://citizen-registry.invalid
+    credential:
+      type: static_bearer
+      token: { secret: FICTIONAL_REGISTRY_TOKEN }
+      generation: 1
+
+issuance:
+  issuer: did:web:notary.invalid
+  signing_kid: project-issuer-key
+  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
+  generation: 1
+
+callers:
+  evidence-client:
+    api_key_fingerprint: { secret: EVIDENCE_CLIENT_TOKEN_HASH }
+    scopes: ["evidence:person:read"]
+
+relay:
+  origin: https://relay.internal.invalid
+  issuer: https://workload-issuer.internal.invalid
+  jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
+  audience: registry-relay
+  workload_client_id: fictional-registry-notary
+
+notary_relay:
+  token_file: /run/secrets/relay-workload-token
+
+deployment:
+  profile: local
+  relay: { service: fictional-registry-relay }
+  notary: { service: fictional-registry-notary }

@@ -1,0 +1,16 @@
+name: ambiguous-coverage
+input: { birthdate: 2018-05-12, family: Example, given: Ada }
+source:
+  patient:
+    status: 200
+    body: { resourceType: Bundle, type: searchset, total: 1, entry: [{ resource: { resourceType: Patient, id: patient-1 } }] }
+  coverage:
+    status: 200
+    body:
+      resourceType: Bundle
+      type: searchset
+      total: 2
+      entry:
+        - { resource: { resourceType: Coverage, status: active } }
+        - { resource: { resourceType: Coverage, status: cancelled } }
+expect: { outcome: ambiguous, outputs: {}, claims: {} }

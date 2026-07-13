@@ -55,11 +55,10 @@ use super::policy::evaluate_compiled_policy;
 use super::pseudonym::AuditPseudonymMaterialProvider;
 use super::response::PublishableConsultationResponse;
 use super::{
-    AuthenticatedConsultationWorkload, AuthenticatedNotaryWorkload, ClientClaimSelector,
-    ConfiguredAudience, ConfiguredClientBinding, ConfiguredIssuer, ConfiguredOidcWorkloadProof,
-    ConfiguredPrincipalId, ConsultationId, ConsultationKey, ConsultationWorkloadBinding,
-    ConsultationWorkloadRole, ExpectedClientValue, PreAuthorizationConsultationCore,
-    ResolvedConsultationProfile,
+    AuthenticatedConsultationWorkload, ClientClaimSelector, ConfiguredAudience,
+    ConfiguredClientBinding, ConfiguredIssuer, ConfiguredOidcWorkloadProof, ConfiguredPrincipalId,
+    ConsultationId, ConsultationKey, ConsultationWorkloadBinding, ConsultationWorkloadRole,
+    ExpectedClientValue, PreAuthorizationConsultationCore, ResolvedConsultationProfile,
 };
 
 const MAX_PROTECTED_CONTRACT_JSON_BYTES: usize = MAX_CLOSED_JSON_STRING_BYTES as usize;
@@ -273,10 +272,8 @@ impl ResolvedConsultationContext {
         &self.resolved_profile
     }
 
-    pub(crate) fn notary_workload(&self) -> AuthenticatedNotaryWorkload<'_> {
-        self.workload
-            .try_as_notary()
-            .expect("resolved consultation contexts always bind the fixed Notary role")
+    pub(crate) const fn authorized_workload(&self) -> &AuthenticatedConsultationWorkload {
+        &self.workload
     }
 
     pub(crate) fn metadata_bytes(&self) -> &[u8] {
@@ -308,7 +305,7 @@ struct ActivatedProfile {
 
 struct CompiledServiceActivation {
     registry: CompiledConsultationRegistry,
-    fixed_notary_identity: ConfiguredOidcWorkloadProof,
+    fixed_workload_identity: ConfiguredOidcWorkloadProof,
     profiles: BTreeMap<ConsultationKey, ActivatedProfile>,
     basic_credentials: Option<CompiledBasicSourceCredentialProvider>,
     static_bearer_credentials: Option<CompiledStaticBearerSourceCredentialProvider>,
@@ -320,7 +317,7 @@ struct CompiledServiceActivation {
 /// Restart-only concrete consultation service.
 pub struct ConsultationService {
     registry: CompiledConsultationRegistry,
-    fixed_notary_identity: ConfiguredOidcWorkloadProof,
+    fixed_workload_identity: ConfiguredOidcWorkloadProof,
     profiles: BTreeMap<ConsultationKey, ActivatedProfile>,
     basic_credentials: CompiledBasicSourceCredentialProvider,
     static_bearer_credentials: CompiledStaticBearerSourceCredentialProvider,
@@ -413,7 +410,7 @@ impl ConsultationService {
         .map_err(|_| ConsultationServiceActivationError::UnsupportedPlan)?;
         Ok(Arc::new(Self {
             registry: compiled.registry,
-            fixed_notary_identity: compiled.fixed_notary_identity,
+            fixed_workload_identity: compiled.fixed_workload_identity,
             profiles: compiled.profiles,
             basic_credentials,
             static_bearer_credentials,
@@ -469,7 +466,7 @@ impl ConsultationService {
         ConsultationServiceReadiness::Ready
     }
 
-    /// Prove the fixed Notary identity before consulting the profile map, then
+    /// Prove the fixed authorized workload identity before consulting the profile map, then
     /// apply the selected profile's exact scope and workload binding.
     pub(crate) fn resolve(
         &self,
@@ -481,7 +478,7 @@ impl ConsultationService {
         {
             return Err(ConsultationServiceError::Unavailable);
         }
-        self.fixed_notary_identity
+        self.fixed_workload_identity
             .precheck_authentication(authentication)
             .map_err(|_| ConsultationServiceError::InvalidCredentials)?;
         let activated = self
@@ -1041,7 +1038,7 @@ fn compile_service_activation(
         .consultation
         .as_ref()
         .ok_or(ConsultationServiceActivationError::MissingConfiguration)?;
-    let fixed_notary_identity = compile_fixed_notary_identity(config, consultation)?;
+    let fixed_workload_identity = compile_fixed_workload_identity(config, consultation)?;
     let rhai_workers = initialize_rhai_worker_capabilities(&artifacts)
         .map_err(|_| ConsultationServiceActivationError::RegistryActivation)?;
     let registry = CompiledConsultationRegistry::compile(
@@ -1056,7 +1053,7 @@ fn compile_service_activation(
     validate_snapshot_config_bindings(config, &registry)?;
     let mut profiles = BTreeMap::new();
     for plan in registry.plans_for_concrete_activation() {
-        let (key, activated) = compile_profile_activation(plan, &fixed_notary_identity)?;
+        let (key, activated) = compile_profile_activation(plan, &fixed_workload_identity)?;
         if profiles.insert(key, activated).is_some() {
             return Err(ConsultationServiceActivationError::RegistryActivation);
         }
@@ -1106,7 +1103,7 @@ fn compile_service_activation(
     );
     Ok(CompiledServiceActivation {
         registry,
-        fixed_notary_identity,
+        fixed_workload_identity,
         profiles,
         basic_credentials,
         static_bearer_credentials,
@@ -1267,7 +1264,7 @@ fn validate_snapshot_config_bindings(
     Ok(())
 }
 
-fn compile_fixed_notary_identity(
+fn compile_fixed_workload_identity(
     config: &Config,
     consultation: &ConsultationConfig,
 ) -> Result<ConfiguredOidcWorkloadProof, ConsultationServiceActivationError> {
@@ -1279,7 +1276,7 @@ fn compile_fixed_notary_identity(
         .oidc
         .as_ref()
         .ok_or(ConsultationServiceActivationError::InvalidWorkloadBinding)?;
-    let configured = &consultation.notary_workload;
+    let configured = &consultation.authorized_workload;
     if !oidc
         .audiences
         .iter()
@@ -1316,7 +1313,7 @@ fn compile_fixed_notary_identity(
 
 fn compile_profile_activation(
     plan: &CompiledSourcePlan,
-    fixed_notary_identity: &ConfiguredOidcWorkloadProof,
+    fixed_workload_identity: &ConfiguredOidcWorkloadProof,
 ) -> Result<(ConsultationKey, ActivatedProfile), ConsultationServiceActivationError> {
     let executor = ConcreteExecutorKind::activate(plan)
         .map_err(|_| ConsultationServiceActivationError::UnsupportedPlan)?;
@@ -1337,9 +1334,9 @@ fn compile_profile_activation(
     let rhai_worker_semaphore = compiled_rhai_worker_semaphore(runtime);
     let metadata = Arc::from(protected_metadata_bytes(plan)?.into_boxed_slice());
     let workload_binding = ConsultationWorkloadBinding::new(
-        ConsultationWorkloadRole::Notary,
+        ConsultationWorkloadRole::Authorized,
         runtime.workload_id().clone(),
-        fixed_notary_identity.clone(),
+        fixed_workload_identity.clone(),
         runtime.required_scope().clone(),
         runtime.tenant().clone(),
         runtime.registry_instance().clone(),

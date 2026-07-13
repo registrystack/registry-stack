@@ -1410,7 +1410,7 @@ fn consultation_profile_path_item() -> Value {
         "get": {
             "operationId": "get_consultation_profile",
             "summary": "Get a consultation profile contract",
-            "description": "Returns the hash-pinned public contract for one exact consultation profile. The response is protected and visible only to the configured Registry Notary OIDC workload with the profile's exact required scope. `contract_json` is the canonical profile contract itself; this generic operation deliberately does not generate a separate OpenAPI schema for every profile.",
+            "description": "Returns the hash-pinned public contract for one exact consultation profile. The response is protected and visible only to the configured authorized OIDC workload with the profile's exact required scope. `contract_json` is the canonical profile contract itself; this generic operation deliberately does not generate a separate OpenAPI schema for every profile.",
             "tags": [TAG_CONSULTATIONS],
             "security": [{ "consultationOidc": [] }],
             "parameters": consultation_path_parameters(),
@@ -1447,7 +1447,7 @@ fn consultation_execute_path_item() -> Value {
         "post": {
             "operationId": "execute_consultation",
             "summary": "Execute a governed consultation",
-            "description": "Executes one exact, purpose-bound, single-subject consultation for the configured Registry Notary OIDC workload with the profile's exact required scope. The request supplies the profile's one to four required typed selector components, and Relay returns only the profile-approved result envelope and provenance. This route does not accept a subject batch.",
+            "description": "Executes one exact, purpose-bound, single-subject consultation for the configured authorized OIDC workload with the profile's exact required scope. The request supplies the profile's one to four required typed selector components, and Relay returns only the profile-approved result envelope and provenance. This route does not accept a subject batch.",
             "tags": [TAG_CONSULTATIONS],
             "security": [{ "consultationOidc": [] }],
             "parameters": parameters,
@@ -1684,7 +1684,7 @@ fn aggregate_tag_name(dataset_id: &str) -> String {
 fn consultation_tag_definition() -> Value {
     json!({
         "name": TAG_CONSULTATIONS,
-        "description": "Purpose-bound, read-only consultations exposed only to the configured Registry Notary OIDC workload.",
+        "description": "Purpose-bound, read-only consultations exposed only to the configured authorized OIDC workload.",
     })
 }
 
@@ -1841,7 +1841,7 @@ fn security_schemes(config: &Config) -> Value {
             "type": "http",
             "scheme": "bearer",
             "bearerFormat": "JWT",
-            "description": "OIDC/OAuth2 bearer JWT accepted only when its verified claims identify the configured Registry Notary workload and it carries the selected consultation profile's exact required scope.",
+            "description": "OIDC/OAuth2 bearer JWT accepted only when its verified claims identify the configured consultation workload and it carries the selected consultation profile's exact required scope.",
         }),
     );
     let bearer_description = match config.auth.mode {
@@ -5416,7 +5416,7 @@ mod tests {
         config.auth.mode = AuthMode::Oidc;
         config.consultation = Some(
             serde_json::from_value(json!({
-                "notary_workload": {
+                "authorized_workload": {
                     "audience": "relay-consultation",
                     "client_claim_selector": "azp",
                     "client_value": "registry-notary",

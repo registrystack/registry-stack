@@ -1,0 +1,7 @@
+name: wrong-resource-type
+input: { birthdate: 2018-05-12, family: Example, given: Ada }
+source:
+  patient:
+    status: 200
+    body: { resourceType: Bundle, type: searchset, total: 1, entry: [{ resource: { resourceType: Coverage, id: patient-1 } }] }
+expect: { error: source.response_malformed, outputs: {}, claims: {} }

@@ -1,0 +1,136 @@
+version: 1
+id: fictional-dhis2-health-record
+source:
+  product: dhis2
+  versions: { tested: [2.41.9] }
+input:
+  tracked_entity:
+    type: string
+    bytes: 16
+    pattern: "^[A-Za-z][A-Za-z0-9]{10}$"
+    canonicalization: identity
+capability:
+  script:
+    runtime: rhai_v1
+    script: orchestration.rhai
+    credential: { type: basic }
+    operations:
+      identity:
+        request:
+          method: GET
+          destination: data
+          path: /api/tracker/trackedEntities
+          query:
+            trackedEntity: { input: tracked_entity }
+            fields: { value: "firstName,lastName,dateOfBirth" }
+            pageSize: { value: 2 }
+        response:
+          statuses: [200]
+          max_bytes: 32768
+          schema:
+            type: object
+            additional_fields: reject
+            fields:
+              trackedEntities:
+                required: true
+                type: array
+                max_items: 2
+                items:
+                  type: object
+                  additional_fields: reject
+                  fields:
+                    first_name: { required: true, type: string, max_bytes: 80 }
+                    last_name: { required: true, type: string, max_bytes: 80 }
+                    date_of_birth: { required: true, type: date }
+          cardinality: { records: trackedEntities, mode: probe_two }
+      child_program:
+        depends_on: [identity]
+        when: { prior: identity.presence, equals: true }
+        request:
+          method: GET
+          destination: data
+          path: /api/tracker/enrollments/child-program
+          query:
+            trackedEntity: { input: tracked_entity }
+            fields: { value: "active,programmeCode,reconciliationReference" }
+            pageSize: { value: 2 }
+        response:
+          statuses: [200]
+          max_bytes: 32768
+          schema:
+            type: object
+            additional_fields: reject
+            fields:
+              enrollments:
+                required: true
+                type: array
+                max_items: 2
+                items:
+                  type: object
+                  additional_fields: reject
+                  fields:
+                    active: { required: true, type: boolean }
+                    programme_code: { required: true, type: string, max_bytes: 32 }
+                    reconciliation_reference: { required: true, type: string, max_bytes: 64 }
+          cardinality: { records: enrollments, mode: probe_two }
+      care:
+        depends_on: [child_program]
+        when: { prior: identity.presence, equals: true }
+        request:
+          method: GET
+          destination: data
+          path: /api/tracker/events/care
+          query:
+            trackedEntity: { input: tracked_entity }
+            fields: { value: "maternalPostnatalActive,childHealthVisitRecorded" }
+        response:
+          statuses: [200]
+          max_bytes: 16384
+          schema:
+            type: object
+            additional_fields: reject
+            fields:
+              maternal_postnatal_active: { required: true, type: boolean }
+              child_health_visit_recorded: { required: true, type: boolean }
+          cardinality: { mode: singleton }
+      tb_program:
+        depends_on: [care]
+        when: { prior: identity.presence, equals: true }
+        request:
+          method: GET
+          destination: data
+          path: /api/tracker/enrollments/tb-program
+          query:
+            trackedEntity: { input: tracked_entity }
+            fields: { value: active }
+            pageSize: { value: 2 }
+        response:
+          statuses: [200]
+          max_bytes: 16384
+          schema:
+            type: object
+            additional_fields: reject
+            fields:
+              enrollments:
+                required: true
+                type: array
+                max_items: 2
+                items:
+                  type: object
+                  additional_fields: reject
+                  fields:
+                    active: { required: true, type: boolean }
+          cardinality: { records: enrollments, mode: probe_two }
+outputs:
+  exists: { type: boolean, from: identity.presence }
+  first_name: { type: string, nullable: true, max_bytes: 80, from: identity.record.first_name }
+  last_name: { type: string, nullable: true, max_bytes: 80, from: identity.record.last_name }
+  date_of_birth: { type: date, nullable: true, from: identity.record.date_of_birth }
+  child_program_active: { type: boolean, nullable: true, from: child_program.record.active }
+  programme_code: { type: string, nullable: true, max_bytes: 32, from: child_program.record.programme_code }
+  reconciliation_reference: { type: string, nullable: true, max_bytes: 64, from: child_program.record.reconciliation_reference }
+  maternal_postnatal_active: { type: boolean, nullable: true, from: care.maternal_postnatal_active }
+  child_health_visit_recorded: { type: boolean, nullable: true, from: care.child_health_visit_recorded }
+  tb_program_active: { type: boolean, nullable: true, from: tb_program.record.active }
+bounds: { calls: 4, source_bytes: 131072, request_bytes: 8192, deadline: 15s, concurrency: 8 }
+fixtures: fixtures/

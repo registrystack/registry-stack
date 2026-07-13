@@ -369,7 +369,7 @@ impl ConfiguredOidcWorkloadProof {
         &self.principal_id
     }
 
-    /// Prove the fixed Notary service identity before any profile lookup.
+    /// Prove the fixed authorized workload identity before any profile lookup.
     /// Profile-specific scope, tenant, registry, and workload checks remain in
     /// [`AuthenticatedConsultationWorkload::try_bind`].
     pub(crate) fn precheck_authentication(
@@ -414,8 +414,8 @@ fn require_exact_oidc_identity<'authentication>(
 /// reviewed protocol change rather than relying on a workload-id convention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConsultationWorkloadRole {
-    /// The configured Registry Notary service.
-    Notary,
+    /// The one configured consultation client for this Relay deployment.
+    Authorized,
     #[cfg(test)]
     Other,
 }
@@ -425,7 +425,7 @@ impl ConsultationWorkloadRole {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Notary => "notary",
+            Self::Authorized => "authorized",
             #[cfg(test)]
             Self::Other => "test-other",
         }
@@ -565,7 +565,7 @@ impl AuthenticatedConsultationWorkload {
     #[cfg(test)]
     pub(crate) fn for_runtime_vector_test(authentication_expires_at_unix_ms: i64) -> Self {
         Self {
-            role: ConsultationWorkloadRole::Notary,
+            role: ConsultationWorkloadRole::Authorized,
             workload_id: WorkloadId::try_from("registry-notary").unwrap(),
             issuer: ConfiguredIssuer::try_from("https://issuer.synthetic.example").unwrap(),
             audience: ConfiguredAudience::try_from("registry-relay").unwrap(),
@@ -629,18 +629,6 @@ impl AuthenticatedConsultationWorkload {
         self.role
     }
 
-    /// Narrow this generic authenticated service to the Notary-only
-    /// correlation capability.
-    pub(crate) fn try_as_notary(&self) -> Option<AuthenticatedNotaryWorkload<'_>> {
-        match self.role {
-            ConsultationWorkloadRole::Notary => Some(AuthenticatedNotaryWorkload {
-                proof: AuthenticatedNotaryProof::Bound(self),
-            }),
-            #[cfg(test)]
-            ConsultationWorkloadRole::Other => None,
-        }
-    }
-
     /// Return the fixed workload identifier.
     #[must_use]
     pub const fn workload_id(&self) -> &WorkloadId {
@@ -701,48 +689,6 @@ impl AuthenticatedConsultationWorkload {
     }
 }
 
-enum AuthenticatedNotaryProof<'a> {
-    Bound(&'a AuthenticatedConsultationWorkload),
-    #[cfg(test)]
-    WireTest,
-}
-
-/// Proof that the exact fixed Notary workload binding was authenticated.
-///
-/// The proof has no public constructor, implements neither `Clone`, `Debug`,
-/// nor serialization, and borrows the coupled verified workload. A generic or
-/// future non-Notary consultation workload cannot create it.
-///
-/// ```compile_fail
-/// use registry_relay::consultation::AuthenticatedNotaryWorkload;
-/// let _forged: AuthenticatedNotaryWorkload<'static> =
-///     AuthenticatedNotaryWorkload {};
-/// ```
-pub struct AuthenticatedNotaryWorkload<'a> {
-    proof: AuthenticatedNotaryProof<'a>,
-}
-
-impl AuthenticatedNotaryWorkload<'_> {
-    /// Return the complete coupled workload proof.
-    #[must_use]
-    pub fn workload(&self) -> &AuthenticatedConsultationWorkload {
-        match &self.proof {
-            AuthenticatedNotaryProof::Bound(workload) => workload,
-            #[cfg(test)]
-            AuthenticatedNotaryProof::WireTest => {
-                panic!("test-only Notary wire proof has no workload")
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) const fn for_wire_test() -> Self {
-        Self {
-            proof: AuthenticatedNotaryProof::WireTest,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -772,7 +718,11 @@ mod tests {
         selector: ClientClaimSelector,
         expected_client: &str,
     ) -> ConsultationWorkloadBinding {
-        binding_with_role(ConsultationWorkloadRole::Notary, selector, expected_client)
+        binding_with_role(
+            ConsultationWorkloadRole::Authorized,
+            selector,
+            expected_client,
+        )
     }
 
     fn binding_with_role(
@@ -982,7 +932,7 @@ mod tests {
         .expect("exact workload binding");
 
         assert_eq!(workload.auth_mode().as_str(), "oidc");
-        assert_eq!(workload.role().as_str(), "notary");
+        assert_eq!(workload.role().as_str(), "authorized");
         assert_eq!(workload.workload_id().as_str(), "registry-notary");
         assert_eq!(workload.issuer().as_str(), ISSUER);
         assert_eq!(workload.audience().as_str(), AUDIENCE);
@@ -995,12 +945,10 @@ mod tests {
         );
         assert_eq!(workload.tenant().as_str(), "example-government");
         assert_eq!(workload.registry_instance().as_str(), "people-primary");
-        let notary = workload.try_as_notary().expect("typed Notary capability");
-        assert_eq!(notary.workload().principal_id(), "notary-service");
     }
 
     #[tokio::test]
-    async fn a_non_notary_role_cannot_mint_notary_header_authority() {
+    async fn a_non_authorized_role_remains_distinct() {
         let (signing, verifying) = keypair();
         let authentication = authenticate(
             oidc_config(ISSUER, vec![AUDIENCE.to_string()]),
@@ -1017,9 +965,8 @@ mod tests {
                 "notary-azp",
             ),
         )
-        .expect("the exact OIDC facts still bind the test-only non-Notary role");
+        .expect("the exact OIDC facts still bind the test-only alternate role");
         assert_eq!(workload.role(), ConsultationWorkloadRole::Other);
-        assert!(workload.try_as_notary().is_none());
     }
 
     #[tokio::test]

@@ -1,0 +1,136 @@
+version: 1
+id: fictional-provincial-dci-birth-record
+source:
+  product: opencrvs-provincial-configuration
+  versions: { unverified: [provincial-fixture-v2] }
+input:
+  registration_number:
+    type: string
+    bytes: 20
+    pattern: "^BR-[A-Z]{2}-[0-9]{7}$"
+    canonicalization: identity
+capability:
+  http:
+    credential: { type: oauth2_client_credentials }
+    operations:
+      oauth:
+        role: credential
+        primitive: oauth2_client_credentials
+        request: { method: POST, destination: credential, path: /identity/access-token, codec: oauth2_client_credentials_json_v1 }
+        response:
+          statuses: [200]
+          max_bytes: 4096
+          codec: oauth2_token_v1
+          schema:
+            type: object
+            additional_fields: reject
+            fields:
+              access_token: { required: true, type: string, max_bytes: 2048 }
+              token_type: { required: true, type: string, max_bytes: 16 }
+      jwks:
+        role: verification
+        primitive: jwks_json_v1
+        request: { method: GET, destination: data, path: /identity/signing-keys }
+        response:
+          statuses: [200]
+          max_bytes: 32768
+          codec: jwks_json_v1
+          schema:
+            type: object
+            additional_fields: reject
+            fields:
+              keys:
+                required: true
+                type: array
+                max_items: 2
+                items:
+                  type: object
+                  additional_fields: reject
+                  fields:
+                    kid: { required: true, type: string, max_bytes: 80 }
+                    kty: { required: true, type: string, max_bytes: 8 }
+                    use: { required: true, type: string, max_bytes: 8 }
+                    alg: { required: true, type: string, max_bytes: 24 }
+                    n: { required: true, type: string, max_bytes: 1366 }
+                    e: { required: true, type: string, max_bytes: 12 }
+      birth:
+        depends_on: [oauth, jwks]
+        primitive: dci_search_v1
+        request:
+          method: POST
+          destination: data
+          path: /exchange/v2/records/search
+          codec: dci_search_v1
+          authorization: { prior: oauth.access_token }
+          body:
+            protocol_version: { value: 1.0.0 }
+            sender: { value: provincial-notary }
+            receiver: { value: provincial-civil-registry }
+            registry_type: { value: provincial-civil-registry }
+            registry_event_type: { value: birth-registration }
+            record_type: { value: vital-birth }
+            identifier_type: { value: BIRTH_REGISTRATION_NUMBER }
+            exact_and:
+              registration_number:
+                field: identifier_value
+                response_pointer: /identifier/0/identifier_value
+            locale: { value: fr }
+            page_number: { value: 1 }
+        verification: { primitive: dci_jws_v1, jwks: jwks.keys }
+        response:
+          statuses: [200]
+          max_bytes: 65536
+          codec: dci_search_response_v1
+          schema:
+            type: object
+            additional_fields: reject
+            fields:
+              results:
+                required: true
+                type: array
+                max_items: 2
+                items:
+                  type: object
+                  additional_fields: reject
+                  fields:
+                    identifier:
+                      required: true
+                      type: array
+                      max_items: 2
+                      items:
+                        type: object
+                        additional_fields: reject
+                        fields:
+                          identifier_type: { required: true, type: string, max_bytes: 32 }
+                          identifier_value: { required: true, type: string, max_bytes: 20 }
+                    person:
+                      required: true
+                      type: object
+                      additional_fields: reject
+                      fields:
+                        names:
+                          required: true
+                          type: object
+                          additional_fields: reject
+                          fields:
+                            primary_given: { required: true, type: string, max_bytes: 80 }
+                            primary_family: { required: true, type: string, max_bytes: 80 }
+                        birth:
+                          required: true
+                          type: object
+                          additional_fields: reject
+                          fields:
+                            date: { required: true, type: date }
+                            sex_code: { required: true, type: string, max_bytes: 16 }
+                            locality: { required: true, type: string, max_bytes: 120 }
+              signature: { required: true, type: string, max_bytes: 4096 }
+          cardinality: { records: results, mode: probe_two }
+outputs:
+  exists: { type: boolean, from: birth.presence }
+  date_of_birth: { type: date, nullable: true, from: birth.record.person.birth.date }
+  sex: { type: string, nullable: true, max_bytes: 16, from: birth.record.person.birth.sex_code }
+  child_given_name: { type: string, nullable: true, max_bytes: 80, from: birth.record.person.names.primary_given }
+  child_family_name: { type: string, nullable: true, max_bytes: 80, from: birth.record.person.names.primary_family }
+  place_of_birth: { type: string, nullable: true, max_bytes: 120, from: birth.record.person.birth.locality }
+bounds: { calls: 3, source_bytes: 102400, request_bytes: 16384, deadline: 20s, concurrency: 8 }
+fixtures: fixtures/

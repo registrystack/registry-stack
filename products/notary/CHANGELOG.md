@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Notary verifies and reuses across direct and CEL-derived claims. Supported
   public facts are Boolean, bounded String, exact JSON-safe Integer, full-date,
   Presence, and explicitly nullable variants; floating-point Number remains
-  rejected. Generated country configurations may declare bounded full-date
+  rejected. Generated project configurations may declare bounded full-date
   request variables, such as an age calculation date, while CEL remains limited
   to the consultation's allow-listed facts, those declared variables, and the
   frozen date helpers. Missing or undeclared variables fail before Relay or any
@@ -49,7 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cancellation, reconcile it from Relay's audit using the forwarded Notary
   evaluation ID. Relay IDs never enter public claim results, provenance, debug
   output, or error bodies.
-- The product-owned country fixture harness now validates the production
+- The product-owned project fixture harness now validates the production
   Notary config, authenticates through the static credential verifier, derives
   scopes from compiled claims, binds exact Relay profile contracts, and runs
   the production runtime and isolated CEL worker without a direct source

@@ -2285,7 +2285,7 @@
       },
       "consultationOidc": {
         "bearerFormat": "JWT",
-        "description": "OIDC/OAuth2 bearer JWT accepted only when its verified claims identify the configured Registry Notary workload and it carries the selected consultation profile's exact required scope.",
+        "description": "OIDC/OAuth2 bearer JWT accepted only when its verified claims identify the configured consultation workload and it carries the selected consultation profile's exact required scope.",
         "scheme": "bearer",
         "type": "http"
       }
@@ -4775,7 +4775,7 @@
     },
     "/v1/consultations/{profile_id}/versions/{profile_version}": {
       "get": {
-        "description": "Returns the hash-pinned public contract for one exact consultation profile. The response is protected and visible only to the configured Registry Notary OIDC workload with the profile's exact required scope. `contract_json` is the canonical profile contract itself; this generic operation deliberately does not generate a separate OpenAPI schema for every profile.",
+        "description": "Returns the hash-pinned public contract for one exact consultation profile. The response is protected and visible only to the configured authorized OIDC workload with the profile's exact required scope. `contract_json` is the canonical profile contract itself; this generic operation deliberately does not generate a separate OpenAPI schema for every profile.",
         "operationId": "get_consultation_profile",
         "parameters": [
           {
@@ -4926,7 +4926,7 @@
     },
     "/v1/consultations/{profile_id}/versions/{profile_version}/execute": {
       "post": {
-        "description": "Executes one exact, purpose-bound, single-subject consultation for the configured Registry Notary OIDC workload with the profile's exact required scope. The request supplies the profile's one to four required typed selector components, and Relay returns only the profile-approved result envelope and provenance. This route does not accept a subject batch.",
+        "description": "Executes one exact, purpose-bound, single-subject consultation for the configured authorized OIDC workload with the profile's exact required scope. The request supplies the profile's one to four required typed selector components, and Relay returns only the profile-approved result envelope and provenance. This route does not accept a subject batch.",
         "operationId": "execute_consultation",
         "parameters": [
           {
@@ -7238,7 +7238,7 @@
       "x-displayName": "Individual"
     },
     {
-      "description": "Purpose-bound, read-only consultations exposed only to the configured Registry Notary OIDC workload.",
+      "description": "Purpose-bound, read-only consultations exposed only to the configured authorized OIDC workload.",
       "name": "Consultations"
     },
     {

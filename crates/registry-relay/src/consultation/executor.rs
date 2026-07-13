@@ -1121,7 +1121,7 @@ async fn evaluate_rhai_round(
         .await
         .map_err(|_| ConcreteExecutorUnfinished)?;
     if output.operation_choices.is_empty() {
-        return Ok(RhaiRoundResult::Final(output.facts));
+        return Ok(RhaiRoundResult::Final(output.outputs));
     }
     if executed.len() + planned.len() + output.operation_choices.len()
         > usize::from(limits.max_calls())
@@ -1824,7 +1824,7 @@ mod tests {
     }
 
     #[test]
-    fn sandboxed_rhai_terminal_facts_preserve_the_closed_scalar_types() {
+    fn sandboxed_rhai_terminal_outputs_preserve_the_closed_scalar_types() {
         let string = rhai_fact_value(RhaiTypedValue::String {
             value: Some("programme-a".to_owned()),
         })

@@ -1,0 +1,32 @@
+version: 1
+integrations:
+  individual:
+    source_version: fixture-api-v2
+    data_destination: { origin: https://social-registry.invalid }
+    credential:
+      type: static_bearer
+      token: { secret: SOCIAL_REGISTRY_TOKEN }
+      generation: 1
+issuance:
+  issuer: did:web:social-registry-notary.invalid
+  signing_kid: project-issuer-key
+  signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
+  generation: 1
+callers:
+  programme-service:
+    api_key_fingerprint: { secret: PROGRAMME_SERVICE_TOKEN_HASH }
+    scopes: ["evidence:social-registry:read"]
+relay:
+  origin: https://social-registry-relay.internal.invalid
+  issuer: https://workload-issuer.internal.invalid
+  jwks_url: https://workload-issuer.internal.invalid/.well-known/jwks.json
+  audience: registry-relay
+  workload_client_id: social-registry-notary
+
+notary_relay:
+  token_file: /run/secrets/relay-workload-token
+
+deployment:
+  profile: local
+  relay: { service: social-registry-relay }
+  notary: { service: social-registry-notary }

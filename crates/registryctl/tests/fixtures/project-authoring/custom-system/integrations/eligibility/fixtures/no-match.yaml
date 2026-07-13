@@ -1,0 +1,8 @@
+name: no-household
+input: { household_reference: HH-AB12CD34 }
+source:
+  resolve: { status: 200, body: { matches: [] } }
+expect:
+  outputs: {}
+  claims: { household-record-exists: false, household-category: null, household-eligible: false }
+  calls: [resolve]

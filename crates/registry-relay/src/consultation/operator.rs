@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Bounded offline operator workflows for governed consultations.
 //!
-//! This module intentionally exposes one country-deployment bootstrap journey,
+//! This module intentionally exposes one project-deployment bootstrap journey,
 //! not a general migration framework. PostgreSQL databases and roles are
 //! provisioned by the DBA. Relay only installs or attests its owned schema,
 //! binds the pre-created authority identities, and initializes generation one

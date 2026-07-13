@@ -1,0 +1,14 @@
+name: snapshot-match
+input: { person_id: PER-00000001 }
+source:
+  snapshot: { status: 200, body: { registration_status: active, eligible: true } }
+expect:
+  outcome: match
+  calls: [snapshot]
+  outputs: { exists: true, registration_status: active, eligible: true }
+  claims:
+    population-record-exists: true
+    benefits-status: active
+    benefits-eligible: true
+    emergency-record-exists: true
+    emergency-status: redacted

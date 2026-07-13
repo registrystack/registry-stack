@@ -3784,7 +3784,7 @@ audit:
   sink: stdout
   hash_secret_env: REGISTRY_RELAY_DIAGNOSTIC_AUDIT_HASH
 consultation:
-  notary_workload:
+  authorized_workload:
     audience: relay-consultation
     client_claim_selector: azp
     client_value: registry-notary

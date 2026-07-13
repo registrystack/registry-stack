@@ -1055,7 +1055,7 @@ mod tests {
         config.deployment.profile = Some(DeploymentProfile::Production);
         config.consultation = Some(
             serde_json::from_value(json!({
-                "notary_workload": {
+                "authorized_workload": {
                     "audience": "relay-consultation",
                     "client_claim_selector": "azp",
                     "client_value": "registry-notary",

@@ -1,0 +1,249 @@
+---
+title: Author an HTTP Registry Stack project
+description: Copy the HTTP starter, run its offline fixtures, review the generated plan, and build unsigned Relay and Notary Config Bundle inputs.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-07-12"
+doc_type: tutorial
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+Create a Registry Stack project with a bounded HTTP integration without editing product source
+code.
+You will copy the built-in starter, prove its synthetic journey offline, inspect the bounded
+acquisition and disclosure plan, and build separate unsigned inputs for Registry Relay and
+Registry Notary.
+
+One project defines one registry trust domain. A deployment can use Relay only for governed
+materialization and records APIs, Notary only for source-free or self-attested evidence, or both
+products for registry-backed consultations and claims derived from Relay outputs. Independent
+registries require separate projects.
+
+<QuickstartMeta
+  outcome="A tested project workspace with reviewable bounded HTTP configuration and unsigned Relay and Notary Config Bundle inputs."
+  time="About 10 minutes after registryctl is installed"
+  level="Local authoring with synthetic fixtures"
+  prerequisites={['A registryctl build with project authoring commands', 'A shell and a text editor']}
+/>
+
+This tutorial uses a fictional registry and synthetic records.
+Do not add source credentials, production endpoints, or real subject records.
+
+{/* Evidence: crates/registryctl/src/main.rs, crates/registryctl/src/project_authoring.rs,
+    and crates/registryctl/assets/project-starters/bounded-http/. */}
+
+## Copy the HTTP starter
+
+Create a local project workspace:
+
+```sh
+registryctl init --from http --project-dir registry-project
+```
+
+The JSON report contains:
+
+```text
+"status": "initialized"
+```
+
+The command creates this authored layout:
+
+```text
+registry-project/
+  registry-stack.yaml
+  integrations/
+    person-record/
+      integration.yaml
+      fixtures/
+  environments/
+    local.yaml
+```
+
+The starter is copied into your workspace.
+Registry Stack does not resolve a remote package or download integration code at runtime.
+
+## Prove the starter offline
+
+Run every fixture before changing the source contract:
+
+```sh
+registryctl test --project-dir registry-project
+```
+
+The JSON report contains:
+
+```text
+"status": "passed"
+```
+
+The fixture set covers match, no match, malformed and oversized responses, invalid input,
+unexpected source status, timeout, wrong caller or scope, wrong purpose, and attempted request
+authority changes.
+The command does not contact Registry Relay, Registry Notary, or a source registry.
+
+## Adapt the authored contract
+
+For this synthetic journey, make these exact substitutions with your editor:
+
+| File | Field | Replace | With |
+| --- | --- | --- | --- |
+| `registry-stack.yaml` | `registry.id` | `fictional-citizen-registry` | `fictional-civic-support-registry` |
+| `integrations/person-record/integration.yaml` | `source.product` | `fictional-citizen-system` | `fictional-civic-support-api` |
+| `integrations/person-record/integration.yaml` | `source.versions.unverified` | `[project-fixture-v1]` | `[tutorial-contract-v2]` |
+| `integrations/person-record/integration.yaml` | the `person` request `path` | `/v1/person-records` | `/v2/citizens/status` |
+| `environments/local.yaml` | `source_version` | `project-fixture-v1` | `tutorial-contract-v2` |
+| `environments/local.yaml` | `data_destination.origin` | `https://citizen-registry.invalid` | `https://civic-support.invalid` |
+
+These values remain fictional and `.invalid` destinations cannot identify a live service. The
+fixture observations describe response bodies rather than executing HTTP requests, so they remain
+valid after the fixed request paths change.
+
+For an actual integration, review all four authored surfaces and replace the fictional contract
+with approved project values:
+
+1. In `registry-stack.yaml`, name the registry, service, purpose, caller scopes, consultation
+   input mapping, outputs, claims, disclosure modes, and credential claim allow-list.
+2. In `integrations/person-record/integration.yaml`, define the typed subject input, fixed
+   operation, closed response schema, output mapping, cardinality, bytes, calls, deadline, and
+   concurrency.
+3. In `integrations/person-record/fixtures/`, replace the synthetic source observations and
+   expected outputs and claims. Keep positive and denial fixtures.
+4. In `environments/local.yaml`, bind the source version, non-production destination, secret
+   references, caller fingerprints, Relay trust, and deployment services.
+
+The integration fixes the destination slot, method, path, parameter names, response fields, and
+bounds before deployment.
+Consultation inputs can populate only declared value slots.
+They cannot select an origin, operation, credential, codec, projection, or response mapper.
+
+Use `source.product` as review metadata for the source system.
+It does not select a product executor or runtime capability.
+Mark a source version `unverified` until the required integration evidence exists.
+
+{/* Evidence: crates/registryctl/tests/project_authoring.rs,
+    http_starter_adapts_to_a_structurally_different_source_api and
+    source_product_is_metadata_not_runtime_dispatch. */}
+
+## Rerun the fixture journey
+
+Test the edited project:
+
+```sh
+registryctl test --project-dir registry-project
+```
+
+The report must again contain:
+
+```text
+"status": "passed"
+```
+
+Failures identify the authored file and fixture.
+A fixture can supply bounded source observations, but it cannot supply a destination, credential,
+worker command, authentication bypass, or decoder mode.
+
+## Review the generated plan
+
+Compile the authored project through the Relay and Notary validators without writing build
+output:
+
+```sh
+registryctl check \
+  --project-dir registry-project \
+  --environment local \
+  --explain
+```
+
+The JSON report contains:
+
+```text
+"status": "valid"
+"baseline": "initial_without_baseline"
+```
+
+Review the fixed operations, input mappings, caller scopes, purpose, outputs, claims, disclosure
+modes, and credential membership in `explanation`.
+An initial project without an approved baseline requires the `claim`, `integration`,
+`service_policy`, and `operator_security` review classes.
+A valid report is not legal approval, source interoperability evidence, or deployment authority.
+
+## Build unsigned product inputs
+
+Generate deterministic unsigned product inputs for the existing Config Bundle v1 workflow:
+
+```sh
+registryctl build \
+  --project-dir registry-project \
+  --environment local
+```
+
+The JSON report contains:
+
+```text
+"status": "built"
+```
+
+The output root contains:
+
+```text
+registry-project/.registry-stack/build/local/
+  reviewable/
+    integration-packs/
+    consultation-contracts/
+    review.json
+  private/
+    relay/
+      config/relay.yaml
+      approval/review.json
+    notary/
+      config/notary.yaml
+      approval/review.json
+```
+
+The product input directories remain separate and contain secret references, not secret values.
+They are inputs to each product's Config Bundle workflow, not a signed project root or a deployable
+bundle. `build` does not create a bundle manifest, sign a bundle, or read a secret value. Package,
+sign, verify, and activate each product directory through that product's Config Bundle workflow.
+One signed project-level deployment bundle whose root binds compatible product submanifests is
+future work; the current CLI does not emit that artifact.
+Treat every generated directory as institutionally sensitive and keep it out of source control.
+
+## Clean up generated output
+
+Keep `registry-project/` as the authored project workspace.
+If you do not need the generated inputs, remove only
+`registry-project/.registry-stack/build/local/`.
+You can reproduce that directory with the same `build` command.
+
+## What you built
+
+You copied a local HTTP starter, proved its positive and denial fixtures without source
+access, adapted the reviewed source contract, inspected the complete redacted plan, and generated
+separate unsigned Relay and Notary inputs.
+The generated profile keeps source acquisition in Relay and claim disclosure in Notary.
+
+## Next
+
+- [Configure API-key source authentication](../configure-project-api-key-authentication/) when
+  the upstream requires a fixed header or query credential.
+- [Configure a FHIR R4 integration](../configure-project-fhir-r4/) when the reviewed journey uses
+  a fixed Patient anchor and declared relation.
+- [Configure an exact snapshot materialization](../configure-project-snapshot-materialization/)
+  when consultation reads an immutable local snapshot.
+- [Configure Sandboxed Rhai orchestration](../configure-project-sandboxed-rhai/) only when the
+  reviewed source recipe cannot be expressed as declarative bounded HTTP operations.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `project destination must be absent or an empty real directory` | `init` found content, a non-directory, or a symlink. | Choose an absent or empty real directory. |
+| `input.pattern_mismatch` | A fixture input does not satisfy the declared type or pattern. | Correct the synthetic fixture or the reviewed input contract. |
+| `fixture.request_override_forbidden` | A fixture attempted to choose request authority. | Keep transport and credential authority in the integration and environment. |
+| `--against and --anchor must be supplied together` | Only one approved-baseline argument was present. | Supply the verified bundle and matching trust anchor together. |
+| Generated configuration fails validation | Authored fields cannot produce a valid Relay or Notary startup contract. | Correct the reported authored file and field, then rerun `test` and `check`. |

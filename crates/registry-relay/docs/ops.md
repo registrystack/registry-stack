@@ -253,7 +253,7 @@ Important configuration blocks:
 - `server.cors.allowed_origins`: default deny when empty.
 - `server.trust_proxy`: only enable when the gateway is behind trusted proxies and those proxy CIDRs are configured.
 - `auth.api_keys`: key ids, hash env var names, and scopes.
-- `consultation`: optional restart-only Notary workload, PostgreSQL state
+- `consultation`: optional restart-only authorized workload, PostgreSQL state
   plane, hash-pinned artifact closure, pseudonym material references, and
   source credential references.
 - `config_trust`: optional signed bundle trust anchor, bundle path, anti-rollback state, and local break-glass override path.
@@ -292,7 +292,7 @@ For the legacy entity-read source shape, configure credentials on both sides:
   keys, database URLs, and source tokens.
 
 For native consultation, use OIDC rather than a Relay API key. Bind the
-`consultation.notary_workload` audience and exact `azp` or `client_id` to the
+`consultation.authorized_workload` audience and exact `azp` or `client_id` to the
 Notary service account, grant only the scope pinned by each public contract,
 and keep the PostgreSQL URL, pseudonym material, and source credentials behind
 the environment references named by the configuration. Configuration changes,
