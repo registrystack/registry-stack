@@ -2114,12 +2114,12 @@ fn postgres_state_plane_enforces_role_catalog_and_chain_contract() {
                 .build()
                 .expect("state-plane conformance runtime builds")
                 .block_on(postgres_state_plane_contract())
-                .map_err(|_| ())
+                .map_err(|error| format!("{error:?}"))
         })
         .expect("state-plane conformance worker starts");
     match worker.join() {
         Ok(Ok(())) => {}
-        Ok(Err(())) => panic!("state-plane conformance returned an error"),
+        Ok(Err(error)) => panic!("state-plane conformance returned an error: {error}"),
         Err(panic) => std::panic::resume_unwind(panic),
     }
 }
