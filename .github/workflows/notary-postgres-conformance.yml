@@ -1,0 +1,89 @@
+name: Notary PostgreSQL conformance
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/notary-postgres-conformance.yml
+      - Cargo.lock
+      - Cargo.toml
+      - rust-toolchain.toml
+      - crates/registry-notary/**
+      - crates/registry-notary-core/**
+      - crates/registry-notary-server/**
+      - crates/registry-notary-worker-harness/**
+      - crates/registry-platform-audit/**
+      - crates/registry-platform-authcommon/**
+      - crates/registry-platform-cache/**
+      - crates/registry-platform-crypto/**
+      - crates/registry-platform-ops/**
+      - crates/registry-platform-replay/**
+      - products/notary/scripts/postgresql-conformance.sh
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/notary-postgres-conformance.yml
+      - Cargo.lock
+      - Cargo.toml
+      - rust-toolchain.toml
+      - crates/registry-notary/**
+      - crates/registry-notary-core/**
+      - crates/registry-notary-server/**
+      - crates/registry-notary-worker-harness/**
+      - crates/registry-platform-audit/**
+      - crates/registry-platform-authcommon/**
+      - crates/registry-platform-cache/**
+      - crates/registry-platform-crypto/**
+      - crates/registry-platform-ops/**
+      - crates/registry-platform-replay/**
+      - products/notary/scripts/postgresql-conformance.sh
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target/notary-postgres-conformance
+
+jobs:
+  state-plane:
+    name: Notary state plane (PostgreSQL ${{ matrix.postgresql }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - postgresql: "16"
+            source_image: postgres:16.13-alpine
+            target_image: postgres:16.14-alpine
+          - postgresql: "17"
+            source_image: postgres:17.9-alpine
+            target_image: postgres:17.10-alpine
+          - postgresql: "18"
+            source_image: postgres:18.3-alpine
+            target_image: postgres:18.4-alpine
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: notary-postgresql-${{ matrix.postgresql }}
+
+      - name: Build Registry Notary with CEL support
+        run: cargo build --locked -p registry-notary --features registry-notary-cel
+
+      - name: Run Notary PostgreSQL conformance
+        env:
+          NOTARY_BIN: target/notary-postgres-conformance/debug/registry-notary
+          NOTARY_POSTGRES_SOURCE_IMAGE: ${{ matrix.source_image }}
+          NOTARY_POSTGRES_TARGET_IMAGE: ${{ matrix.target_image }}
+        run: products/notary/scripts/postgresql-conformance.sh "${{ matrix.postgresql }}"
