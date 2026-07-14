@@ -42,7 +42,10 @@ pub use compiler::{
     CompiledValueExpression, PinnedEvidenceArtifact, PinnedSourcePlanArtifact,
     RhaiWorkerCapability, SourcePlanArtifactBundle, SourcePlanCompileError,
 };
-pub(crate) use compiler::{CompiledDciSelector, CompiledRhaiFactType, ParsedOAuth2AccessToken};
+pub(crate) use compiler::{
+    CompiledDciExact, CompiledDciSelector, CompiledRhaiOutputType, CompiledScriptAllowRule,
+    CompiledScriptAuthority, ParsedOAuth2AccessToken,
+};
 #[allow(
     unused_imports,
     reason = "consumed by the consultation executor integration immediately following this slice"
@@ -79,5 +82,6 @@ pub(crate) use compiler::{
     open_crvs_runtime_vector_plan_fixture, open_crvs_runtime_vector_registry_fixture,
     rhai_five_operation_two_slot_completion_seed_fixture, rhai_runtime_vector_plan_fixture,
     semantic_alias_completion_seed_fixture, shared_snapshot_registry_fixture,
-    signed_dci_expiring_oauth_runtime_plan_fixture, snapshot_completion_seed_fixture,
+    signed_dci_expiring_oauth_runtime_plan_fixture, signed_dci_script_runtime_plan_fixture,
+    snapshot_completion_seed_fixture,
 };

@@ -14,6 +14,7 @@ use serde::Deserialize;
 
 const CONTRACT_SCHEMA: &str = "registry.relay.consultation-contract.v1";
 const CONTRACT_VERSION: &str = "1";
+pub(crate) const CONTRACT_HASH_DOMAIN: &[u8] = b"registry.relay.consultation-contract.v1\0";
 const MAX_ID_BYTES: usize = 96;
 const MAX_INPUTS: usize = 16;
 const MAX_SELECTORS: usize = 8;

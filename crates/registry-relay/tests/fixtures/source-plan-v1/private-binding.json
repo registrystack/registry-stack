@@ -38,6 +38,6 @@
     "max_token_lifetime_ms": 1800000
   },
   "capabilities": {
-    "allow_sandboxed_rhai": false
+    "allow_script": false
   }
 }

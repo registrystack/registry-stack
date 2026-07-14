@@ -198,7 +198,7 @@ impl TypedValue {
 }
 
 /// Complete input for one isolated consultation.
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerRequest {
     pub protocol_version: u8,
@@ -354,7 +354,7 @@ impl std::fmt::Debug for SourceOptions {
 }
 
 /// One host-call request emitted by the isolated worker.
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "method", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SourceCall {
     Get {
@@ -424,7 +424,7 @@ impl SourceCall {
 }
 
 /// Bounded source response visible to the script.
-#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceResponse {
     pub status: u16,
@@ -1472,12 +1472,10 @@ struct StdioTransport {
 
 impl BlockingTransport for StdioTransport {
     fn exchange(&self, call: SourceCall) -> Result<SourceResponse, WorkerError> {
-        write_sync_frame(
-            &ChildFrame::HostCall { call: call.clone() },
-            self.frame_limit,
-        )?;
+        let expected_call_id = call.call_id();
+        write_sync_frame(&ChildFrame::HostCall { call }, self.frame_limit)?;
         match read_sync_frame::<ParentFrame>(self.frame_limit)? {
-            ParentFrame::HostResponse { call_id, response } if call_id == call.call_id() => {
+            ParentFrame::HostResponse { call_id, response } if call_id == expected_call_id => {
                 Ok(response)
             }
             ParentFrame::HostResponse { .. } => Err(WorkerError::IpcFailed),
@@ -2242,11 +2240,21 @@ fn apply_process_sandbox(_limits: &WorkerLimits) -> Result<(), WorkerError> {
 mod tests {
     use super::*;
 
-    struct FixedTransport(SourceResponse);
+    struct FixedTransport(std::sync::Mutex<Option<SourceResponse>>);
+
+    impl FixedTransport {
+        fn one(response: SourceResponse) -> Self {
+            Self(std::sync::Mutex::new(Some(response)))
+        }
+    }
 
     impl BlockingTransport for FixedTransport {
         fn exchange(&self, _call: SourceCall) -> Result<SourceResponse, WorkerError> {
-            Ok(self.0.clone())
+            self.0
+                .lock()
+                .map_err(|_| WorkerError::IpcFailed)?
+                .take()
+                .ok_or(WorkerError::IpcFailed)
         }
     }
 
@@ -2268,7 +2276,7 @@ mod tests {
     fn evaluate(request: &WorkerRequest) -> Result<WorkerOutput, WorkerError> {
         evaluate_in_process(
             request,
-            Arc::new(FixedTransport(SourceResponse {
+            Arc::new(FixedTransport::one(SourceResponse {
                 status: 200,
                 body: serde_json::json!({"active": true}),
                 headers: BTreeMap::new(),
@@ -2307,7 +2315,7 @@ mod tests {
         );
         let output = evaluate_in_process(
             &request,
-            Arc::new(FixedTransport(SourceResponse {
+            Arc::new(FixedTransport::one(SourceResponse {
                 status: 200,
                 body: serde_json::json!({
                     "resourceType": "Bundle",
@@ -2350,7 +2358,7 @@ mod tests {
         enabled.enable_signed_dci_search();
         let output = evaluate_in_process(
             &enabled,
-            Arc::new(FixedTransport(SourceResponse {
+            Arc::new(FixedTransport::one(SourceResponse {
                 status: 200,
                 body: serde_json::json!({
                     "message": {"search_response": [{"verified": true}]}
@@ -2584,14 +2592,14 @@ mod tests {
                 },
             )]),
         };
+        let source_call_debug = format!("{source_call:?}");
+        let source_response_debug = format!("{source_response:?}");
         let rendered = format!(
-            "{worker_request:?} {source_call:?} {source_response:?} {output:?} {:?} {:?}",
-            ChildFrame::HostCall {
-                call: source_call.clone(),
-            },
+            "{worker_request:?} {source_call_debug} {source_response_debug} {output:?} {:?} {:?}",
+            ChildFrame::HostCall { call: source_call },
             ParentFrame::HostResponse {
                 call_id: 0,
-                response: source_response.clone(),
+                response: source_response,
             }
         );
         for marker in [

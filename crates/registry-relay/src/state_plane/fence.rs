@@ -133,6 +133,7 @@ impl DispatchPermitBudget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum DispatchPermitKind {
     Credential,
+    Verification,
     Data,
 }
 
@@ -140,6 +141,7 @@ impl DispatchPermitKind {
     pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Credential => "credential",
+            Self::Verification => "verification",
             Self::Data => "data",
         }
     }
@@ -153,14 +155,23 @@ pub(crate) struct ConsultationPermitSet {
 impl ConsultationPermitSet {
     pub(crate) fn from_counts(
         credential_count: u8,
+        verification_count: u8,
         data_count: u8,
     ) -> Result<Self, ServingFenceError> {
-        if credential_count > 1 || data_count > 16 {
+        if credential_count > 1
+            || verification_count > 1
+            || verification_count.saturating_add(data_count) > 16
+        {
             return Err(ServingFenceError::InvalidPermitManifest);
         }
-        let mut permits = Vec::with_capacity(usize::from(credential_count + data_count));
+        let mut permits = Vec::with_capacity(usize::from(
+            credential_count + verification_count + data_count,
+        ));
         if credential_count == 1 {
             permits.push((DispatchPermitKind::Credential, 0));
+        }
+        if verification_count == 1 {
+            permits.push((DispatchPermitKind::Verification, 0));
         }
         permits.extend((0..data_count).map(|ordinal| (DispatchPermitKind::Data, ordinal)));
         Ok(Self { permits })
@@ -285,7 +296,7 @@ impl AuditedConsultationDispatch {
             .map_err(|_| ServingFenceError::RequestCommitmentUnavailable)?;
         Ok(KeyedDispatchRequestCommitment::from_digest(digest))
     }
-    /// Return the optional credential permit before any data exchange starts.
+    /// Return the optional credential permit before any external exchange starts.
     ///
     /// A cached credential legitimately leaves this permit unused. Once a data
     /// permit has entered any non-ready state, however, credential acquisition
@@ -295,7 +306,8 @@ impl AuditedConsultationDispatch {
         &mut self,
     ) -> Result<Option<&mut ConsultationDispatchPermit>, ServingFenceError> {
         if self.permits.iter().any(|permit| {
-            permit.kind == DispatchPermitKind::Data && permit.state != DispatchPermitState::Ready
+            permit.kind != DispatchPermitKind::Credential
+                && permit.state != DispatchPermitState::Ready
         }) {
             return Err(ServingFenceError::PermitOrderViolation);
         }
@@ -303,6 +315,34 @@ impl AuditedConsultationDispatch {
             .permits
             .iter_mut()
             .find(|permit| permit.kind == DispatchPermitKind::Credential))
+    }
+
+    /// Return the optional protocol-verification permit before data dispatch.
+    ///
+    /// Verification is a distinct, exactly committed external effect. An
+    /// uncertain credential exchange blocks it, and no verification effect can
+    /// be inserted after a data ordinal has started.
+    pub(crate) fn verification_permit_mut(
+        &mut self,
+    ) -> Result<Option<&mut ConsultationDispatchPermit>, ServingFenceError> {
+        if self.permits.iter().any(|permit| {
+            permit.kind == DispatchPermitKind::Credential
+                && matches!(
+                    permit.state,
+                    DispatchPermitState::Dispatching | DispatchPermitState::Uncertain
+                )
+        }) {
+            return Err(ServingFenceError::PermitUncertain);
+        }
+        if self.permits.iter().any(|permit| {
+            permit.kind == DispatchPermitKind::Data && permit.state != DispatchPermitState::Ready
+        }) {
+            return Err(ServingFenceError::PermitOrderViolation);
+        }
+        Ok(self
+            .permits
+            .iter_mut()
+            .find(|permit| permit.kind == DispatchPermitKind::Verification))
     }
 
     /// Return only the next monotonically consumable data permit.
@@ -314,13 +354,21 @@ impl AuditedConsultationDispatch {
         &mut self,
     ) -> Result<Option<&mut ConsultationDispatchPermit>, ServingFenceError> {
         if self.permits.iter().any(|permit| {
-            permit.kind == DispatchPermitKind::Credential
-                && matches!(
-                    permit.state,
-                    DispatchPermitState::Dispatching | DispatchPermitState::Uncertain
-                )
+            matches!(
+                permit.kind,
+                DispatchPermitKind::Credential | DispatchPermitKind::Verification
+            ) && matches!(
+                permit.state,
+                DispatchPermitState::Dispatching | DispatchPermitState::Uncertain
+            )
         }) {
             return Err(ServingFenceError::PermitUncertain);
+        }
+        if self.permits.iter().any(|permit| {
+            permit.kind == DispatchPermitKind::Verification
+                && permit.state != DispatchPermitState::Completed
+        }) {
+            return Err(ServingFenceError::PermitOrderViolation);
         }
         let Some(index) = self.permits.iter().position(|permit| {
             permit.kind == DispatchPermitKind::Data
@@ -1438,12 +1486,21 @@ mod tests {
         credential_count: u8,
         data_count: u8,
     ) -> (AuditedConsultationDispatch, tokio::task::JoinHandle<()>) {
+        test_dispatch_with_verification(credential_count, 0, data_count)
+    }
+
+    fn test_dispatch_with_verification(
+        credential_count: u8,
+        verification_count: u8,
+        data_count: u8,
+    ) -> (AuditedConsultationDispatch, tokio::task::JoinHandle<()>) {
         let (admission, _) = watch::channel(true);
         let actor = tokio::spawn(std::future::pending::<()>());
         let operation_id = DispatchOperationId::from_ulid(Ulid::new());
         let budget = DispatchPermitBudget::new(Duration::from_secs(1)).expect("valid budget");
-        let permit_set = ConsultationPermitSet::from_counts(credential_count, data_count)
-            .expect("valid permit set");
+        let permit_set =
+            ConsultationPermitSet::from_counts(credential_count, verification_count, data_count)
+                .expect("valid permit set");
         let deadline_unix_ms = 1_000;
         let local_not_after = Instant::now() + Duration::from_secs(1);
         let permits = permit_set
@@ -1667,7 +1724,7 @@ mod tests {
 
     #[test]
     fn dynamic_data_permit_budget_is_bounded_at_sixteen_ordinals() {
-        let maximum = ConsultationPermitSet::from_counts(1, 16).expect("maximum manifest");
+        let maximum = ConsultationPermitSet::from_counts(1, 0, 16).expect("maximum manifest");
         let data_ordinals = maximum
             .permits()
             .iter()
@@ -1675,9 +1732,52 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(data_ordinals, (0..16).collect::<Vec<_>>());
         assert!(matches!(
-            ConsultationPermitSet::from_counts(0, 17),
+            ConsultationPermitSet::from_counts(0, 0, 17),
             Err(ServingFenceError::InvalidPermitManifest)
         ));
+        assert!(matches!(
+            ConsultationPermitSet::from_counts(0, 2, 0),
+            Err(ServingFenceError::InvalidPermitManifest)
+        ));
+        assert!(matches!(
+            ConsultationPermitSet::from_counts(0, 1, 16),
+            Err(ServingFenceError::InvalidPermitManifest)
+        ));
+    }
+
+    #[tokio::test]
+    async fn verification_is_a_distinct_exact_permit_before_data() {
+        let (mut dispatch, actor) = test_dispatch_with_verification(1, 1, 1);
+        assert!(dispatch
+            .credential_permit_mut()
+            .expect("credential lookup")
+            .is_some());
+        assert_eq!(
+            dispatch.next_data_permit_mut().unwrap_err(),
+            ServingFenceError::PermitOrderViolation
+        );
+        let verification = dispatch
+            .verification_permit_mut()
+            .expect("verification lookup")
+            .expect("verification permit");
+        assert_eq!(verification.ordinal, 0);
+        verification.state = DispatchPermitState::Dispatching;
+        assert_eq!(
+            dispatch.next_data_permit_mut().unwrap_err(),
+            ServingFenceError::PermitUncertain
+        );
+        dispatch.permits[1].state = DispatchPermitState::Completed;
+        let data = dispatch
+            .next_data_permit_mut()
+            .expect("data lookup")
+            .expect("data permit");
+        assert_eq!(data.ordinal, 0);
+        data.state = DispatchPermitState::Completed;
+        assert_eq!(
+            dispatch.verification_permit_mut().unwrap_err(),
+            ServingFenceError::PermitOrderViolation
+        );
+        actor.abort();
     }
 
     #[tokio::test]
@@ -1799,7 +1899,7 @@ mod tests {
             fence_generation: 1,
             budget: DispatchPermitBudget::new(Duration::from_millis(1))
                 .expect("test budget is valid"),
-            permit_set: ConsultationPermitSet::from_counts(0, 0)
+            permit_set: ConsultationPermitSet::from_counts(0, 0, 0)
                 .expect("empty permit set is valid"),
             lifecycle_seal: ConsultationLifecycleSeal::unarmed(&admission, &actor.abort_handle()),
         };

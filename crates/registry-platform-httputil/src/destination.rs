@@ -3045,6 +3045,22 @@ impl<S: DestinationSlot> BoundedDestinationBody<S> {
     }
 }
 
+#[cfg(feature = "test-support")]
+impl BoundedDestinationBody<DataDestination> {
+    /// Construct opaque data-destination bytes for cross-crate contract tests.
+    ///
+    /// This remains input-only: the production boundary still exposes no raw
+    /// response-body extraction API.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn from_test_bytes(bytes: impl AsRef<[u8]>) -> Self {
+        Self {
+            bytes: Zeroizing::new(bytes.as_ref().to_vec()),
+            slot: PhantomData,
+        }
+    }
+}
+
 trait Resolver {
     async fn resolve(
         &self,

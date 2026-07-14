@@ -12,9 +12,7 @@ use registry_platform_audit::{
     AuditChainHasher, DurableAuditOperationId, DurableAuditPhase, DurableAuditSink,
     DurableAuditStreamKind, DurableAuditWrite, DurableAuditWriteError, DurableAuditWriteOutcome,
 };
-use registry_platform_httputil::destination::json::{
-    MAX_CLOSED_JSON_ENCODED_BODY_BYTES, MAX_CLOSED_JSON_STRING_BYTES,
-};
+use registry_platform_httputil::destination::json::MAX_CLOSED_JSON_STRING_BYTES;
 use serde_json::json;
 use thiserror::Error;
 use tokio::sync::{oneshot, Semaphore};
@@ -62,7 +60,7 @@ use super::{
 };
 
 const MAX_PROTECTED_CONTRACT_JSON_BYTES: usize = MAX_CLOSED_JSON_STRING_BYTES as usize;
-const MAX_PROTECTED_PROFILE_METADATA_BYTES: usize = MAX_CLOSED_JSON_ENCODED_BODY_BYTES;
+const MAX_PROTECTED_PROFILE_METADATA_BYTES: usize = 256 * 1_024;
 const DENIAL_DECISION_SCHEMA: &str = "registry.relay.consultation.denial-decision.v1";
 const UNMATCHED_CONSULTATION_ROUTE: &str = "/v1/consultations/{unmatched}";
 
@@ -750,16 +748,20 @@ impl ConsultationService {
                 return Err(map_authorization_commitment_error(error));
             }
         };
-        let (credential_permits, data_permits) = match activated.executor.permit_counts(plan) {
-            Ok(counts) => counts,
-            Err(_) => {
-                release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
-                    .await?;
-                return Err(ConsultationServiceError::Unavailable);
-            }
-        };
-        let permit_set = match ConsultationPermitSet::from_counts(credential_permits, data_permits)
-        {
+        let (credential_permits, verification_permits, data_permits) =
+            match activated.executor.permit_counts(plan) {
+                Ok(counts) => counts,
+                Err(_) => {
+                    release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
+                        .await?;
+                    return Err(ConsultationServiceError::Unavailable);
+                }
+            };
+        let permit_set = match ConsultationPermitSet::from_counts(
+            credential_permits,
+            verification_permits,
+            data_permits,
+        ) {
             Ok(permits) => permits,
             Err(_) => {
                 release_batch_child_before_dispatch(&self.state_plane, batch_context.as_ref())
@@ -1137,7 +1139,7 @@ fn validate_production_rhai_worker_platform(
     validate_production_rhai_worker_requirement(
         registry
             .plans_for_concrete_activation()
-            .any(|plan| plan.kind() == crate::source_plan::SourcePlanKind::SandboxedRhai),
+            .any(|plan| plan.kind() == crate::source_plan::SourcePlanKind::Script),
     )
 }
 
@@ -1148,7 +1150,7 @@ fn validate_production_rhai_worker_platform(
     validate_production_rhai_worker_requirement(
         registry
             .plans_for_concrete_activation()
-            .any(|plan| plan.kind() == crate::source_plan::SourcePlanKind::SandboxedRhai),
+            .any(|plan| plan.kind() == crate::source_plan::SourcePlanKind::Script),
     )
 }
 
@@ -1181,7 +1183,7 @@ fn compiled_rhai_worker_semaphore(
 ) -> Option<Arc<Semaphore>> {
     runtime
         .dispatch()
-        .sandboxed_rhai_limits()
+        .script_limits()
         .map(|limits| Arc::new(Semaphore::new(usize::from(limits.concurrency()))))
 }
 
@@ -1520,7 +1522,7 @@ mod tests {
     }
 
     #[test]
-    fn sandboxed_rhai_activation_enforces_the_compiled_worker_concurrency_permit() {
+    fn script_activation_enforces_the_compiled_worker_concurrency_permit() {
         let plan = rhai_runtime_vector_plan_fixture();
         let worker =
             compiled_rhai_worker_semaphore(plan.runtime_profile()).expect("Rhai worker semaphore");

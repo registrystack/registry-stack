@@ -31,14 +31,14 @@ use super::artifact::{
     InputRoleDocument, InputTypeDocument, IntegrationPackArtifact,
     MaterializationRefreshClassDocument, OAuth2ClientCredentialsRequestFormatDocument,
     OAuth2TokenCacheModeDocument, OAuth2TokenResponseSchemaDocument, OAuth2TokenTypeDocument,
-    OutcomeDocument, OutputTypeDocument, PriorOutputBindingDocument, PrivateBindingArtifact,
+    OutputTypeDocument, PriorOutputBindingDocument, PrivateBindingArtifact,
     ProjectionMechanismDocument, PublicContractArtifact, ReadMethod, RequestCodecDocument,
     RequestSelectorLocationDocument, RequestSignerDocument, ResponseFormatDocument,
-    ResponseNormalizationDocument, ResponseSchemaDocument, SourceAuthDocument, SourceCardinality,
-    SourceObservedAtDocument, SourcePlanArtifactError, SourcePlanKind, SourcePlanLimits,
-    SourceRevisionDocument, StepConditionDocument, ValueExpressionDocument,
-    MAX_ARTIFACTS_PER_BUNDLE, MAX_DCI_EXACT_REQUEST_BODY_BYTES, MAX_EVIDENCE_CLASS_BYTES,
-    MAX_EVIDENCE_FILES_PER_CLASS, MAX_EVIDENCE_FILE_BYTES,
+    ResponseNormalizationDocument, ResponseSchemaDocument, ScriptAuthorityDocument,
+    SourceAuthDocument, SourceCardinality, SourceObservedAtDocument, SourcePlanArtifactError,
+    SourcePlanKind, SourcePlanLimits, SourceRevisionDocument, StepConditionDocument,
+    ValueExpressionDocument, MAX_ARTIFACTS_PER_BUNDLE, MAX_DCI_EXACT_REQUEST_BODY_BYTES,
+    MAX_EVIDENCE_CLASS_BYTES, MAX_EVIDENCE_FILES_PER_CLASS, MAX_EVIDENCE_FILE_BYTES,
 };
 use super::completion_seed::{measure_completion_seed, MAX_COMPLETION_AUDIT_CANONICAL_BYTES_V1};
 use super::identifiers::{CredentialReferenceId, SourceDestinationId};
@@ -178,17 +178,17 @@ pub enum SourcePlanCompileError {
     /// Data and credential destinations overlap or fail the hardened policy.
     #[error("private source-plan destination policy is unsafe")]
     UnsafeDestination,
-    /// A sandboxed Rhai pack was not explicitly enabled by this deployment.
-    #[error("sandboxed Rhai source plan is not enabled by the private binding")]
+    /// A Script pack was not explicitly enabled by this deployment.
+    #[error("Script source plan is not enabled by the private binding")]
     RhaiNotEnabled,
     /// A non-Rhai pack received an unnecessary script-execution capability.
     #[error("private binding enables a capability not used by the reviewed plan")]
     CapabilityMismatch,
     /// A reviewed Rhai plan has no initialized non-config worker capability.
-    #[error("sandboxed Rhai source plan has no initialized worker capability")]
+    #[error("Script source plan has no initialized worker capability")]
     RhaiWorkerUnavailable,
     /// The initialized Rhai worker does not enforce the exact narrowed limits.
-    #[error("sandboxed Rhai worker capability does not match the reviewed binding")]
+    #[error("Script worker capability does not match the reviewed binding")]
     RhaiWorkerMismatch,
     /// The bundle contains too many governed artifacts for one startup graph.
     #[error("source-plan startup bundle exceeds the artifact-count ceiling")]
@@ -242,7 +242,6 @@ pub(crate) struct RhaiWorkerLimits {
 /// metering for one reviewed integration-pack hash.
 pub struct RhaiWorkerCapability {
     integration_pack_hash: Box<str>,
-    callable_operations: BTreeSet<Box<str>>,
     limits: RhaiWorkerLimits,
 }
 
@@ -262,7 +261,6 @@ impl RhaiWorkerCapability {
     /// and deployment configuration deserialization.
     pub(crate) fn from_initialized_worker(
         integration_pack_hash: &str,
-        callable_operations: &[&str],
         limits: RhaiWorkerLimits,
     ) -> Result<Self, SourcePlanCompileError> {
         if !integration_pack_hash.starts_with("sha256:") || integration_pack_hash.len() != 71 {
@@ -270,10 +268,6 @@ impl RhaiWorkerCapability {
         }
         Ok(Self {
             integration_pack_hash: integration_pack_hash.into(),
-            callable_operations: callable_operations
-                .iter()
-                .map(|value| (*value).into())
-                .collect(),
             limits,
         })
     }
@@ -1073,6 +1067,81 @@ pub struct CompiledOperation {
     dci: Option<CompiledDciExact>,
 }
 
+/// Maximum source authority available to one reviewed Script integration.
+///
+/// It contains no authored control flow or operation names. Each dynamic call
+/// is matched against these method/path templates and consumes the next
+/// consultation-wide ordinal.
+pub(crate) struct CompiledScriptAuthority {
+    allow: Box<[CompiledScriptAllowRule]>,
+    auth: CompiledSourceAuth,
+    api_key: Option<CompiledApiKeyPlacement>,
+    response_format: CompiledResponseFormat,
+    response_max_bytes: u32,
+    response_headers: Box<[Box<str>]>,
+    request_max_bytes: u32,
+    request_timeout_ms: u32,
+    signed_dci: Option<CompiledDciExact>,
+}
+
+pub(crate) struct CompiledScriptAllowRule {
+    method: ReadMethod,
+    audit_path: Box<str>,
+    transport_template: DataDestinationRequestTemplate,
+}
+
+impl CompiledScriptAuthority {
+    pub(crate) fn allow(&self) -> impl ExactSizeIterator<Item = &CompiledScriptAllowRule> {
+        self.allow.iter()
+    }
+
+    pub(crate) const fn auth(&self) -> CompiledSourceAuth {
+        self.auth
+    }
+
+    pub(crate) const fn api_key(&self) -> Option<&CompiledApiKeyPlacement> {
+        self.api_key.as_ref()
+    }
+
+    pub(crate) const fn response_format(&self) -> CompiledResponseFormat {
+        self.response_format
+    }
+
+    pub(crate) const fn response_max_bytes(&self) -> u32 {
+        self.response_max_bytes
+    }
+
+    pub(crate) fn response_headers(&self) -> impl ExactSizeIterator<Item = &str> {
+        self.response_headers.iter().map(AsRef::as_ref)
+    }
+
+    pub(crate) const fn request_max_bytes(&self) -> u32 {
+        self.request_max_bytes
+    }
+
+    pub(crate) const fn request_timeout_ms(&self) -> u32 {
+        self.request_timeout_ms
+    }
+
+    pub(crate) const fn signed_dci(&self) -> Option<&CompiledDciExact> {
+        self.signed_dci.as_ref()
+    }
+}
+
+impl CompiledScriptAllowRule {
+    pub(crate) const fn method(&self) -> ReadMethod {
+        self.method
+    }
+
+    pub(crate) const fn audit_path(&self) -> &str {
+        &self.audit_path
+    }
+
+    pub(crate) const fn transport_template(&self) -> &DataDestinationRequestTemplate {
+        &self.transport_template
+    }
+}
+
 /// Fixed same-origin verification exchange selected by a reviewed primitive.
 pub(crate) struct CompiledVerificationOperation {
     id: OperationId,
@@ -1127,6 +1196,11 @@ pub(crate) struct CompiledDciExact {
     locale: Box<str>,
     page_number: u16,
     verification: CompiledVerificationOperation,
+    data_transport: Option<DataDestinationRequestTemplate>,
+    request_max_bytes: u32,
+    request_timeout_ms: u32,
+    response_max_bytes: u32,
+    max_source_records: u8,
 }
 
 pub(crate) enum CompiledDciSelector {
@@ -1193,6 +1267,26 @@ impl CompiledDciExact {
     }
     pub(crate) const fn verification(&self) -> &CompiledVerificationOperation {
         &self.verification
+    }
+
+    pub(crate) const fn data_transport(&self) -> Option<&DataDestinationRequestTemplate> {
+        self.data_transport.as_ref()
+    }
+
+    pub(crate) const fn request_max_bytes(&self) -> u32 {
+        self.request_max_bytes
+    }
+
+    pub(crate) const fn request_timeout_ms(&self) -> u32 {
+        self.request_timeout_ms
+    }
+
+    pub(crate) const fn response_max_bytes(&self) -> u32 {
+        self.response_max_bytes
+    }
+
+    pub(crate) const fn max_source_records(&self) -> u8 {
+        self.max_source_records
     }
 }
 
@@ -1727,7 +1821,8 @@ pub struct CompiledSourcePlan {
     steps: Vec<CompiledStep>,
     runtime_binding: RuntimePrivateBinding,
     rhai_program: Option<CompiledRhaiProgram>,
-    rhai_facts: Box<[CompiledRhaiFact]>,
+    rhai_outputs: Box<[CompiledRhaiOutput]>,
+    script_authority: Option<CompiledScriptAuthority>,
 }
 
 struct CompiledRhaiProgram {
@@ -1736,26 +1831,26 @@ struct CompiledRhaiProgram {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CompiledRhaiFactType {
+pub(crate) enum CompiledRhaiOutputType {
     String { max_bytes: u32 },
     Boolean,
     Integer { minimum: i64, maximum: i64 },
     Date,
 }
 
-pub(crate) struct CompiledRhaiFact {
+pub(crate) struct CompiledRhaiOutput {
     name: Box<str>,
-    fact_type: CompiledRhaiFactType,
+    output_type: CompiledRhaiOutputType,
     nullable: bool,
 }
 
-impl CompiledRhaiFact {
+impl CompiledRhaiOutput {
     pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
-    pub(crate) const fn fact_type(&self) -> CompiledRhaiFactType {
-        self.fact_type
+    pub(crate) const fn output_type(&self) -> CompiledRhaiOutputType {
+        self.output_type
     }
 
     pub(crate) const fn nullable(&self) -> bool {
@@ -1778,7 +1873,7 @@ impl fmt::Debug for CompiledSourcePlan {
 }
 
 impl CompiledSourcePlan {
-    /// Return the immutable, already typed runtime consultation facts.
+    /// Return the immutable, already typed runtime consultation outputs.
     #[must_use]
     pub(crate) const fn runtime_profile(&self) -> &CompiledRuntimeProfile {
         &self.runtime_profile
@@ -1846,8 +1941,12 @@ impl CompiledSourcePlan {
             .map(|program| (program.script.as_ref(), program.entrypoint.as_ref()))
     }
 
-    pub(crate) fn rhai_facts(&self) -> impl ExactSizeIterator<Item = &CompiledRhaiFact> {
-        self.rhai_facts.iter()
+    pub(crate) fn rhai_outputs(&self) -> impl ExactSizeIterator<Item = &CompiledRhaiOutput> {
+        self.rhai_outputs.iter()
+    }
+
+    pub(crate) const fn script_authority(&self) -> Option<&CompiledScriptAuthority> {
+        self.script_authority.as_ref()
     }
 
     /// Iterate closed input slots in the same index order used by expressions.
@@ -1857,7 +1956,7 @@ impl CompiledSourcePlan {
 
     /// Return the fixed execution sequence as operation descriptors.
     pub fn steps(&self) -> impl ExactSizeIterator<Item = &CompiledOperation> {
-        let steps = if self.kind() == SourcePlanKind::SandboxedRhai {
+        let steps = if self.kind() == SourcePlanKind::Script {
             &self.steps[..0]
         } else {
             &self.steps
@@ -1869,7 +1968,7 @@ impl CompiledSourcePlan {
 
     /// Return immutable step and condition descriptors in fixed execution order.
     pub fn compiled_steps(&self) -> impl ExactSizeIterator<Item = &CompiledStep> {
-        if self.kind() == SourcePlanKind::SandboxedRhai {
+        if self.kind() == SourcePlanKind::Script {
             self.steps[..0].iter()
         } else {
             self.steps.iter()
@@ -1970,7 +2069,7 @@ impl fmt::Debug for CompiledSourcePlanRegistry {
 
 impl CompiledSourcePlanRegistry {
     /// Validate a generated artifact bundle with the exact runtime compiler,
-    /// including SandboxedRhai worker-limit and script-surface checks.
+    /// including Script worker-limit and script-surface checks.
     ///
     /// This is an offline authoring gate only. It does not return or expose a
     /// worker capability, and runtime activation still requires the separate
@@ -1982,7 +2081,7 @@ impl CompiledSourcePlanRegistry {
         let bindings = parse_bindings(bundle.private_bindings)?;
         let mut workers = Vec::new();
         for pack in packs.values() {
-            if pack.document.spec.plan.kind != SourcePlanKind::SandboxedRhai {
+            if pack.document.spec.plan.kind != SourcePlanKind::Script {
                 continue;
             }
             let reviewed = pack
@@ -1995,7 +2094,7 @@ impl CompiledSourcePlanRegistry {
             let binding = bindings
                 .values()
                 .find(|binding| binding.pack_identity == *pack.identity())
-                .and_then(|binding| binding.document.capabilities.sandboxed_rhai.as_ref())
+                .and_then(|binding| binding.document.capabilities.script.as_ref())
                 .ok_or(SourcePlanCompileError::RhaiNotEnabled)?;
             let limits = RhaiWorkerLimits {
                 max_calls: binding.max_calls,
@@ -2030,14 +2129,8 @@ impl CompiledSourcePlanRegistry {
             };
             crate::rhai_worker::probe_script(&reviewed.script, &reviewed.entrypoint, worker_limits)
                 .map_err(|_| SourcePlanCompileError::RhaiWorkerMismatch)?;
-            let callable = binding
-                .callable_operations
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>();
             workers.push(RhaiWorkerCapability::from_initialized_worker(
                 pack.identity().hash().as_str(),
-                &callable,
                 limits,
             )?);
         }
@@ -2266,7 +2359,14 @@ fn compile_one(
     let rhai_worker_limits = validate_capabilities(pack, &binding, rhai_workers)?;
     let limits = match rhai_worker_limits {
         Some(rhai_limits) => binding_limits
-            .with_max_data_exchanges(rhai_limits.max_calls)
+            .with_max_data_exchanges(
+                rhai_limits
+                    .max_calls
+                    .checked_add(u8::from(
+                        !pack.document.spec.plan.verification_operations.is_empty(),
+                    ))
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+            )
             .map_err(SourcePlanCompileError::Artifact)?,
         None => binding_limits,
     };
@@ -2287,15 +2387,13 @@ fn compile_one(
 
     let data_destination = match pack.document.spec.plan.kind {
         SourcePlanKind::SnapshotExact => None,
-        SourcePlanKind::BoundedHttp | SourcePlanKind::SandboxedRhai => {
-            Some(compile_data_destination(
-                binding
-                    .document
-                    .data_destination
-                    .as_ref()
-                    .ok_or(SourcePlanCompileError::InvalidCredentialBinding)?,
-            )?)
-        }
+        SourcePlanKind::BoundedHttp | SourcePlanKind::Script => Some(compile_data_destination(
+            binding
+                .document
+                .data_destination
+                .as_ref()
+                .ok_or(SourcePlanCompileError::InvalidCredentialBinding)?,
+        )?),
     };
     let credential_destination = binding
         .document
@@ -2405,6 +2503,27 @@ fn compile_one(
             }),
         &compilation_indexes,
     )?;
+    let script_authority = pack
+        .document
+        .spec
+        .plan
+        .script_authority
+        .as_ref()
+        .map(|authority| {
+            compile_script_authority(
+                pack,
+                authority,
+                data_application_base_path,
+                binding
+                    .document
+                    .verification_destination
+                    .as_ref()
+                    .map_or("/", |destination| {
+                        destination.application_base_path.as_str()
+                    }),
+            )
+        })
+        .transpose()?;
     let credential_application_base_path = binding
         .document
         .credential_destination
@@ -2546,25 +2665,25 @@ fn compile_one(
             script: rhai.script.as_str().into(),
             entrypoint: rhai.entrypoint.as_str().into(),
         });
-    let rhai_facts = if rhai_program.is_some() {
+    let rhai_outputs = if rhai_program.is_some() {
         runtime_profile
             .output()
-            .map(|field| CompiledRhaiFact {
+            .map(|field| CompiledRhaiOutput {
                 name: field.name().into(),
-                fact_type: match field.shape() {
+                output_type: match field.shape() {
                     super::runtime_profile::CompiledOutputShape::String { max_bytes, .. } => {
-                        CompiledRhaiFactType::String { max_bytes }
+                        CompiledRhaiOutputType::String { max_bytes }
                     }
                     super::runtime_profile::CompiledOutputShape::Boolean { .. } => {
-                        CompiledRhaiFactType::Boolean
+                        CompiledRhaiOutputType::Boolean
                     }
                     super::runtime_profile::CompiledOutputShape::Integer {
                         minimum,
                         maximum,
                         ..
-                    } => CompiledRhaiFactType::Integer { minimum, maximum },
+                    } => CompiledRhaiOutputType::Integer { minimum, maximum },
                     super::runtime_profile::CompiledOutputShape::Date { .. } => {
-                        CompiledRhaiFactType::Date
+                        CompiledRhaiOutputType::Date
                     }
                 },
                 nullable: match field.shape() {
@@ -2587,7 +2706,247 @@ fn compile_one(
         steps,
         runtime_binding,
         rhai_program,
-        rhai_facts,
+        rhai_outputs,
+        script_authority,
+    })
+}
+
+fn compile_script_authority(
+    pack: &IntegrationPackArtifact,
+    authority: &ScriptAuthorityDocument,
+    application_base_path: &str,
+    verification_application_base_path: &str,
+) -> Result<CompiledScriptAuthority, SourcePlanCompileError> {
+    let (auth, api_key, authorization_template) = match &authority.auth {
+        SourceAuthDocument::None => (
+            CompiledSourceAuth::None,
+            None,
+            DestinationAuthorizationTemplate::Forbidden,
+        ),
+        SourceAuthDocument::Basic { max_value_bytes } => (
+            CompiledSourceAuth::Basic,
+            None,
+            DestinationAuthorizationTemplate::Basic {
+                max_value_bytes: usize::from(*max_value_bytes),
+            },
+        ),
+        SourceAuthDocument::StaticBearer { max_value_bytes } => (
+            CompiledSourceAuth::StaticBearer,
+            None,
+            DestinationAuthorizationTemplate::Bearer {
+                max_value_bytes: usize::from(*max_value_bytes),
+            },
+        ),
+        SourceAuthDocument::ApiKeyHeader {
+            name,
+            max_value_bytes,
+        } => (
+            CompiledSourceAuth::ApiKeyHeader,
+            Some(CompiledApiKeyPlacement::Header {
+                name: name.as_str().into(),
+                max_value_bytes: *max_value_bytes,
+            }),
+            DestinationAuthorizationTemplate::Forbidden,
+        ),
+        SourceAuthDocument::ApiKeyQuery {
+            name,
+            max_value_bytes,
+        } => (
+            CompiledSourceAuth::ApiKeyQuery,
+            Some(CompiledApiKeyPlacement::Query {
+                name: name.as_str().into(),
+                max_value_bytes: *max_value_bytes,
+            }),
+            DestinationAuthorizationTemplate::Forbidden,
+        ),
+        SourceAuthDocument::OAuthClientCredentials => {
+            let max_value_bytes = pack
+                .document
+                .spec
+                .plan
+                .credential_operation
+                .as_ref()
+                .and_then(|credential| {
+                    usize::from(credential.response.access_token_max_bytes)
+                        .checked_add(b"Bearer ".len())
+                })
+                .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+            (
+                CompiledSourceAuth::OAuthClientCredentials,
+                None,
+                DestinationAuthorizationTemplate::Bearer { max_value_bytes },
+            )
+        }
+    };
+    let (api_key_header, api_key_query) = match &api_key {
+        Some(CompiledApiKeyPlacement::Header {
+            name,
+            max_value_bytes,
+        }) => (Some((name.as_ref(), usize::from(*max_value_bytes))), None),
+        Some(CompiledApiKeyPlacement::Query {
+            name,
+            max_value_bytes,
+        }) => (None, Some((name.as_ref(), usize::from(*max_value_bytes)))),
+        None => (None, None),
+    };
+    let request_headers = authority
+        .request_headers
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let allow = authority
+        .allow
+        .iter()
+        .map(|rule| {
+            let method = rule.method;
+            let fixed_path = destination_fixed_path(application_base_path, &rule.path);
+            let template = DataDestinationRequestTemplate::new_script(
+                match method {
+                    ReadMethod::Get => DestinationMethod::Get,
+                    ReadMethod::ReadOnlyPost => DestinationMethod::ReviewedReadOnlyPost,
+                },
+                &fixed_path,
+                &request_headers,
+                authorization_template,
+                api_key_header,
+                api_key_query,
+                authority.request_max_bytes as usize,
+            )
+            .map_err(|_| {
+                if application_base_path == "/" {
+                    SourcePlanCompileError::CompilerInvariant
+                } else {
+                    SourcePlanCompileError::BindingWidening
+                }
+            })?;
+            Ok(CompiledScriptAllowRule {
+                method,
+                audit_path: fixed_path.into(),
+                transport_template: template,
+            })
+        })
+        .collect::<Result<Box<[_]>, SourcePlanCompileError>>()?;
+    let signed_dci = authority
+        .signed_dci
+        .as_ref()
+        .map(
+            |document| -> Result<CompiledDciExact, SourcePlanCompileError> {
+                let verification = pack
+                    .document
+                    .spec
+                    .plan
+                    .verification_operations
+                    .iter()
+                    .find(|candidate| candidate.id == document.jwks_operation)
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+                let verification_id = OperationId::try_from(verification.id.as_str())
+                    .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+                let verification_path: Box<str> =
+                    if verification.path == "/" && verification_application_base_path != "/" {
+                        verification_application_base_path.into()
+                    } else {
+                        destination_fixed_path(
+                            verification_application_base_path,
+                            verification.path.as_str(),
+                        )
+                    };
+                let verification_transport = DataDestinationRequestTemplate::new(
+                    DestinationMethod::Get,
+                    &verification_path,
+                    &[],
+                    &[],
+                    DestinationAuthorizationTemplate::Forbidden,
+                    DestinationBodyTemplate::Forbidden,
+                    verification.step_limits.max_request_bytes as usize,
+                )
+                .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+                let data_rule = authority
+                    .allow
+                    .iter()
+                    .find(|rule| rule.method == ReadMethod::ReadOnlyPost)
+                    .ok_or(SourcePlanCompileError::CompilerInvariant)?;
+                let data_path = destination_fixed_path(application_base_path, &data_rule.path);
+                let data_transport = DataDestinationRequestTemplate::new_with_exact_headers(
+                    DestinationMethod::ReviewedReadOnlyPost,
+                    &data_path,
+                    &[],
+                    &[
+                        ("accept", b"application/json"),
+                        ("content-type", b"application/json"),
+                    ],
+                    authorization_template,
+                    DestinationBodyTemplate::Required {
+                        max_bytes: MAX_DCI_EXACT_REQUEST_BODY_BYTES,
+                    },
+                    authority.request_max_bytes as usize,
+                )
+                .map_err(|_| SourcePlanCompileError::CompilerInvariant)?;
+                let input_indexes = pack
+                    .document
+                    .spec
+                    .input_slots
+                    .keys()
+                    .enumerate()
+                    .map(|(index, name)| (name.as_str(), index))
+                    .collect::<BTreeMap<_, _>>();
+                Ok(CompiledDciExact {
+                    protocol_version: document.protocol_version.as_str().into(),
+                    sender_id: document.sender_id.as_str().into(),
+                    receiver_id: document.receiver_id.as_deref().map(Into::into),
+                    registry_type: document.registry_type.as_deref().map(Into::into),
+                    registry_event_type: document.registry_event_type.as_deref().map(Into::into),
+                    record_type: document.record_type.as_deref().map(Into::into),
+                    selector: CompiledDciSelector::ExactAnd {
+                        components: document
+                            .exact_and
+                            .iter()
+                            .map(|(input, component)| {
+                                Ok(CompiledDciExactComponent {
+                                    input_index: *input_indexes
+                                        .get(input.as_str())
+                                        .ok_or(SourcePlanCompileError::CompilerInvariant)?,
+                                    field: component.field.as_str().into(),
+                                    response_pointer: component.response_pointer.as_str().into(),
+                                })
+                            })
+                            .collect::<Result<Box<[_]>, SourcePlanCompileError>>()?,
+                        identifier_type: document.identifier_type.as_deref().map(Into::into),
+                    },
+                    locale: document.locale.as_str().into(),
+                    page_number: document.page_number,
+                    verification: CompiledVerificationOperation {
+                        id: verification_id,
+                        fixed_path: verification_path,
+                        transport_template: verification_transport,
+                        response_max_bytes: verification.max_response_bytes,
+                        request_timeout_ms: verification.step_limits.timeout_ms,
+                    },
+                    data_transport: Some(data_transport),
+                    request_max_bytes: authority.request_max_bytes,
+                    request_timeout_ms: pack.document.spec.bounds.timeout_ms,
+                    response_max_bytes: authority.response.max_bytes,
+                    max_source_records: pack.document.spec.bounds.max_source_matches,
+                })
+            },
+        )
+        .transpose()?;
+    Ok(CompiledScriptAuthority {
+        allow,
+        auth,
+        api_key,
+        response_format: match authority.response.format {
+            ResponseFormatDocument::Json => CompiledResponseFormat::Json,
+            ResponseFormatDocument::Text => CompiledResponseFormat::Text,
+        },
+        response_max_bytes: authority.response.max_bytes,
+        response_headers: authority
+            .response_headers
+            .iter()
+            .map(|name| name.as_str().into())
+            .collect(),
+        request_max_bytes: authority.request_max_bytes,
+        request_timeout_ms: pack.document.spec.bounds.timeout_ms,
+        signed_dci,
     })
 }
 
@@ -2743,5 +3102,6 @@ pub(crate) use tests::{
     open_crvs_runtime_vector_plan_fixture, open_crvs_runtime_vector_registry_fixture,
     rhai_five_operation_two_slot_completion_seed_fixture, rhai_runtime_vector_plan_fixture,
     semantic_alias_completion_seed_fixture, shared_snapshot_registry_fixture,
-    signed_dci_expiring_oauth_runtime_plan_fixture, snapshot_completion_seed_fixture,
+    signed_dci_expiring_oauth_runtime_plan_fixture, signed_dci_script_runtime_plan_fixture,
+    snapshot_completion_seed_fixture,
 };

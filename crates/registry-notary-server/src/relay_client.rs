@@ -45,7 +45,7 @@ use zeroize::Zeroizing;
 
 use crate::relay_contract::{
     verify_contract, RelayPublicContract, VerifiedAcquisitionClass, VerifiedContractSemantics,
-    VerifiedSourceField,
+    VerifiedSourceField, CONTRACT_HASH_DOMAIN,
 };
 
 const PROFILE_ID_MAX_BYTES: usize = 96;
@@ -63,7 +63,6 @@ const MAX_PUBLIC_STRING_BYTES: u32 = 64 * 1024;
 const MAX_ACQUIRED_FIELDS: usize = 64;
 const MAX_JSON_INTEROPERABLE_INTEGER: u64 = (1_u64 << 53) - 1;
 const RESULT_SCHEMA: &str = "registry.relay.consultation-result.v1";
-const CONTRACT_HASH_DOMAIN: &[u8] = b"registry.relay.consultation-contract.v1\0";
 const MAX_TOKEN_FILE_PATH_BYTES: usize = 4_096;
 const MAX_TOKEN_FILE_BYTES: usize = TOKEN_MAX_BYTES + 2;
 const BATCH_CHILD_IDENTITY_MAX_BYTES: usize = 43;

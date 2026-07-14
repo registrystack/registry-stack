@@ -47,8 +47,8 @@ consultation:
         sha256: sha256:5193efbaf2dfe64d77e9c8800d1bf96b92f8f5d7e3dc5f8e0567fe9e16181bb8
     private_bindings:
       - path: private-binding.example.json
-        hash: sha256:4cbb1f3408a744d86dd4f681b9e3284bc394f6e0d939d8da12cf7769d13d0cb5
-        sha256: sha256:6d756d58c8bbb307ebb658092bd1da740f2864bca301495a9aaa49f2ebb43bdd
+        hash: sha256:85f4249d8fa5e6898b512ed144d6a9b787d93973fc873f2f4314651eac2ee8fd
+        sha256: sha256:2f7af83b945ac195decf2f1b19225ebbb0ce0b6fd3a03710aa7817ac5340b8a4
     evidence:
       - class: conformance
         path: evidence/conformance.json

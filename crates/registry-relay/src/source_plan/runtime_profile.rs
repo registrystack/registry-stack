@@ -401,14 +401,8 @@ impl CompiledRuntimeProfile {
             })
             .collect();
         let dispatch = match (kind, rhai_worker_limits) {
-            (SourcePlanKind::SandboxedRhai, Some(limits)) => {
-                let mut callable_operations = operations
-                    .iter()
-                    .map(|operation| operation.id().clone())
-                    .collect::<Vec<_>>();
-                callable_operations.sort();
-                CompiledDispatchProfile::SandboxedRhai {
-                    callable_operations: callable_operations.into_boxed_slice(),
+            (SourcePlanKind::Script, Some(limits)) if operations.is_empty() && steps.is_empty() => {
+                CompiledDispatchProfile::Script {
                     worker_limits: CompiledRhaiWorkerLimits::from(limits),
                 }
             }
@@ -1017,8 +1011,7 @@ pub(crate) enum CompiledDispatchProfile {
     BoundedHttp {
         ordered_operations: Box<[OperationId]>,
     },
-    SandboxedRhai {
-        callable_operations: Box<[OperationId]>,
+    Script {
         worker_limits: CompiledRhaiWorkerLimits,
     },
 }
@@ -1027,23 +1020,13 @@ impl CompiledDispatchProfile {
     pub(crate) fn bounded_http_operations(&self) -> Option<&[OperationId]> {
         match self {
             Self::BoundedHttp { ordered_operations } => Some(ordered_operations),
-            Self::SnapshotExact | Self::SandboxedRhai { .. } => None,
+            Self::SnapshotExact | Self::Script { .. } => None,
         }
     }
 
-    pub(crate) fn sandboxed_rhai_operations(&self) -> Option<&[OperationId]> {
+    pub(crate) const fn script_limits(&self) -> Option<CompiledRhaiWorkerLimits> {
         match self {
-            Self::SandboxedRhai {
-                callable_operations,
-                ..
-            } => Some(callable_operations),
-            Self::SnapshotExact | Self::BoundedHttp { .. } => None,
-        }
-    }
-
-    pub(crate) const fn sandboxed_rhai_limits(&self) -> Option<CompiledRhaiWorkerLimits> {
-        match self {
-            Self::SandboxedRhai { worker_limits, .. } => Some(*worker_limits),
+            Self::Script { worker_limits } => Some(*worker_limits),
             Self::SnapshotExact | Self::BoundedHttp { .. } => None,
         }
     }

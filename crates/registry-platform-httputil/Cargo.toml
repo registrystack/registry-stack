@@ -13,6 +13,7 @@ workspace = true
 [features]
 default = ["rustls"]
 rustls = ["reqwest/rustls-tls"]
+test-support = []
 
 [dependencies]
 base64.workspace = true

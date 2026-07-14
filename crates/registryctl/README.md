@@ -36,13 +36,13 @@ For the full walkthroughs, use the Registry Docs tutorials:
 
 - [Publish a spreadsheet as a secured registry API](https://docs.registrystack.org/tutorials/publish-spreadsheet-secured-registry-api/)
 - [Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/)
-- [Connect Notary to a Registry Data API source](https://docs.registrystack.org/tutorials/run-notary-standalone-for-api/)
 
 ## Registry Stack project authoring
 
-Start from the declarative bounded-HTTP workspace, run its closed offline
+Start from a built-in Registry Stack project starter, run its closed offline
 fixtures, inspect the redacted generated plan, and build deterministic Relay
-and Notary inputs:
+and Notary inputs. Available starters are `http`, `dhis2-tracker`,
+`opencrvs-dci`, `fhir-r4`, and `snapshot`:
 
 ```sh
 registryctl init --from http --project-dir registry-project
@@ -68,18 +68,6 @@ Source product and version remain optional interoperability evidence; they do
 not select the Rhai runtime, source operations, or executor.
 `test --live` requires an explicit non-production environment and uses only the
 governed deployed Notary path. It never contacts a source registry directly.
-
-To scaffold a standalone Notary project for an existing FHIR source-adapter
-sidecar:
-
-```sh
-registryctl init notary my-fhir-notary --source-kind fhir-sidecar
-```
-
-This generates a starter `patient-record-exists` claim using the Notary
-source-adapter contract and defaults the sidecar URL to
-`http://host.docker.internal:4360`. It does not start a FHIR server or the
-FHIR sidecar for you.
 
 The installer defaults to `v0.9.0`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
@@ -133,44 +121,6 @@ registryctl update-check
 
 Disable automatic checks with `REGISTRYCTL_NO_UPDATE_CHECK=1` or
 `REGISTRYCTL_UPDATE_CHECK=0`.
-
-## OpenFn sidecar import
-
-`registryctl openfn import` converts an OpenFn workflow URL or exported YAML
-into Registry Notary OpenFn sidecar runtime files:
-
-```sh
-registryctl openfn import ./openfn.yaml \
-  --workflow person-lookup \
-  --source person_lookup \
-  --dataset civil_registry \
-  --entity civil_person \
-  --credential-env REGISTRY_SOURCE_CREDENTIAL_JSON \
-  --smoke national_id=smoke-person
-```
-
-The command writes a sidecar manifest, OpenFn job expression files, and a
-starter Notary config snippet. It checks the workflow topology, adaptor pins,
-credentials, smoke lookup inputs, and sidecar limits before writing output.
-
-For OpenFn-authored native batch workflows, use the
-`@registry/notary-openfn` adaptor in the workflow and import with:
-
-```sh
-registryctl openfn import ./openfn.yaml \
-  --workflow native-batch-person-lookup \
-  --source person_lookup \
-  --dataset civil_registry \
-  --entity civil_person \
-  --credential-env REGISTRY_SOURCE_CREDENTIAL_JSON \
-  --smoke national_id=smoke-person \
-  --batch-mode native
-```
-
-`--batch-mode per-item` remains the default. It compiles the workflow once and
-runs the lookup workflow for each batch item. `--batch-mode native` runs the
-workflow once with `state.data.items` and requires the Registry Notary adaptor
-so authors can return validated per-item results from OpenFn.
 
 ## Development
 

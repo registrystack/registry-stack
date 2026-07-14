@@ -39,10 +39,10 @@ use crate::source_plan::runtime_profile::CompiledConsentProfile;
 use crate::source_plan::{
     CompiledBasicSourceCredentialProvider, CompiledBodyTemplate, CompiledInputRole,
     CompiledOAuthSourceCredentialProvider, CompiledOperation, CompiledRequestCodec,
-    CompiledResponseFormat, CompiledRhaiFactType, CompiledSelectorLocation, CompiledSelectorSource,
-    CompiledSourceAuth, CompiledSourcePlan, CompiledStaticBearerSourceCredentialProvider,
-    CompiledStatusOutcome, CompiledStepPredicate, CompiledValueExpression, ParsedOAuth2AccessToken,
-    ReadMethod, SourcePlanKind,
+    CompiledResponseFormat, CompiledRhaiOutputType, CompiledSelectorLocation,
+    CompiledSelectorSource, CompiledSourceAuth, CompiledSourcePlan,
+    CompiledStaticBearerSourceCredentialProvider, CompiledStatusOutcome, CompiledStepPredicate,
+    CompiledValueExpression, ParsedOAuth2AccessToken, ReadMethod, SourcePlanKind,
 };
 use crate::state_plane::{
     AuditedConsultationDispatch, KnownConsultationCompletionFacts, KnownFailureClass,
@@ -91,6 +91,12 @@ pub(super) fn signed_dci_script_host_required(
     validate_signed_dci_script_activation(plan)
 }
 
+pub(super) fn generic_script_source_calls_allowed(plan: &CompiledSourcePlan) -> bool {
+    plan.script_authority()
+        .and_then(crate::source_plan::CompiledScriptAuthority::signed_dci)
+        .is_none()
+}
+
 /// Value-free reason an artifact-valid plan cannot be served by a maintained
 /// concrete product journey.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
@@ -121,9 +127,9 @@ pub(super) const fn is_anchor_execution_step(
     _operation_index: usize,
     compiled_step_index: Option<usize>,
     execution_position: usize,
-    sandboxed_rhai: bool,
+    script: bool,
 ) -> bool {
-    matches!(compiled_step_index, Some(0)) || (sandboxed_rhai && execution_position == 0)
+    matches!(compiled_step_index, Some(0)) || (script && execution_position == 0)
 }
 
 /// Restart-only selection of one fully reviewed product journey.
@@ -131,7 +137,7 @@ pub(super) const fn is_anchor_execution_step(
 pub(crate) enum ConcreteExecutorKind {
     SnapshotExact,
     BoundedHttp,
-    SandboxedRhai,
+    Script,
 }
 
 impl ConcreteExecutorKind {
@@ -141,8 +147,8 @@ impl ConcreteExecutorKind {
         if validate_snapshot_exact_activation(plan).is_ok() {
             return Ok(Self::SnapshotExact);
         }
-        if validate_sandboxed_rhai_activation(plan).is_ok() {
-            return Ok(Self::SandboxedRhai);
+        if validate_script_activation(plan).is_ok() {
+            return Ok(Self::Script);
         }
         validate_bounded_http_activation(plan)?;
         Ok(Self::BoundedHttp)
@@ -151,18 +157,20 @@ impl ConcreteExecutorKind {
     pub(crate) fn permit_counts(
         self,
         plan: &CompiledSourcePlan,
-    ) -> Result<(u8, u8), ConcreteExecutorActivationError> {
+    ) -> Result<(u8, u8, u8), ConcreteExecutorActivationError> {
         let mut credential = 0_u8;
+        let mut verification = 0_u8;
         let mut data = 0_u8;
         for (kind, ordinal) in plan.runtime_profile().permit_bindings() {
             match kind {
                 "credential" if ordinal == credential => credential += 1,
+                "verification" if ordinal == verification => verification += 1,
                 "data" if ordinal == data => data += 1,
                 _ => return Err(ConcreteExecutorActivationError::UnsupportedPlan),
             }
         }
-        (credential <= 1 && data <= 16)
-            .then_some((credential, data))
+        (credential <= 1 && verification <= 1 && data <= 16)
+            .then_some((credential, verification, data))
             .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)
     }
 
@@ -173,7 +181,7 @@ impl ConcreteExecutorKind {
         match self {
             Self::SnapshotExact => validate_snapshot_exact_activation(plan)?,
             Self::BoundedHttp => validate_bounded_http_activation(plan)?,
-            Self::SandboxedRhai => validate_sandboxed_rhai_activation(plan)?,
+            Self::Script => validate_script_activation(plan)?,
         }
         crate::state_plane::DispatchPermitBudget::new(Duration::from_millis(u64::from(
             plan.limits().operation().timeout_ms,
@@ -182,42 +190,40 @@ impl ConcreteExecutorKind {
     }
 }
 
-fn validate_sandboxed_rhai_activation(
+fn validate_script_activation(
     plan: &CompiledSourcePlan,
 ) -> Result<(), ConcreteExecutorActivationError> {
-    if plan.kind() != SourcePlanKind::SandboxedRhai
+    let authority = plan
+        .script_authority()
+        .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?;
+    let script_limits = plan
+        .runtime_profile()
+        .dispatch()
+        .script_limits()
+        .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?;
+    if plan.kind() != SourcePlanKind::Script
         || !supported_input_cardinality(plan)
-        || !(1..=MAX_DATA_OPERATIONS).contains(&plan.operations().len())
+        || plan.operations().len() != 0
         || plan.steps().len() != 0
         || plan.rhai_program().is_none()
-        || plan
-            .runtime_profile()
-            .dispatch()
-            .sandboxed_rhai_limits()
-            .is_none()
         || plan.data_destination().is_none()
         || !matches!(
             plan.runtime_profile().authorization().consent(),
             CompiledConsentProfile::NotRequired
         )
-        || plan.operations().any(|operation| {
-            (operation.request_codec() != CompiledRequestCodec::None
-                && operation.dci_exact().is_none())
-                || operation.request_signer().is_some()
-        })
+        || authority.allow().len() == 0
     {
         return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
-    let oauth = plan
-        .operations()
-        .any(|operation| operation.auth() == CompiledSourceAuth::OAuthClientCredentials);
+    let oauth = authority.auth() == CompiledSourceAuth::OAuthClientCredentials;
+    let signed_dci = validate_signed_dci_script_activation(plan)?;
     if oauth != plan.credential_operation().is_some()
         || oauth != plan.credential_destination().is_some()
-        || validate_signed_dci_script_activation(plan).is_err()
+        || (signed_dci && script_limits.max_calls() != 1)
     {
         return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
-    let (_, data) = ConcreteExecutorKind::SandboxedRhai.permit_counts(plan)?;
+    let (_, _, data) = ConcreteExecutorKind::Script.permit_counts(plan)?;
     (data > 0)
         .then_some(())
         .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)
@@ -257,7 +263,7 @@ pub(crate) fn validate_snapshot_exact_activation(
 }
 
 /// Proof minted only after one fenced marker reaches a closed, known result.
-/// Output and durable completion facts cannot be assembled independently.
+/// Output and durable completion outputs cannot be assembled independently.
 pub(super) struct ConcreteExecutorProof<T> {
     output: Option<T>,
     completion_facts: KnownConsultationCompletionFacts,
@@ -328,7 +334,7 @@ pub(crate) fn validate_bounded_http_activation(
         return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
     let kind = ConcreteExecutorKind::BoundedHttp;
-    let (_, data) = kind.permit_counts(plan)?;
+    let (_, _, data) = kind.permit_counts(plan)?;
     if data == 0 {
         return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
@@ -663,9 +669,9 @@ async fn execute_bounded_http(
     let bound = execution
         .into_bound()
         .map_err(|_| ConcreteExecutorUnfinished)?;
-    let sandboxed_rhai = bound.plan().kind() == SourcePlanKind::SandboxedRhai;
-    if sandboxed_rhai {
-        validate_sandboxed_rhai_activation(bound.plan()).map_err(|_| ConcreteExecutorUnfinished)?;
+    let script = bound.plan().kind() == SourcePlanKind::Script;
+    if script {
+        validate_script_activation(bound.plan()).map_err(|_| ConcreteExecutorUnfinished)?;
         return execute_interactive_rhai(
             dispatch,
             bound,
@@ -680,7 +686,7 @@ async fn execute_bounded_http(
     }
     validate_bounded_http_activation(bound.plan()).map_err(|_| ConcreteExecutorUnfinished)?;
 
-    if !sandboxed_rhai
+    if !script
         && bound
             .plan()
             .operations()
@@ -703,7 +709,7 @@ async fn execute_bounded_http(
     let mut memory = (0..operation_count)
         .map(|_| None)
         .collect::<Vec<Option<OperationMemory>>>();
-    let mut facts = Vec::<(Box<str>, ProjectedJsonScalar)>::new();
+    let mut outputs = Vec::<(Box<str>, ProjectedJsonScalar)>::new();
     let execution_order = bound
         .plan()
         .compiled_steps()
@@ -731,7 +737,7 @@ async fn execute_bounded_http(
             .transpose()?
             .unwrap_or(true);
         if !should_execute {
-            append_absent_operation_facts(operation, &mut facts);
+            append_absent_operation_outputs(operation, &mut outputs);
             memory[operation_index] = Some(OperationMemory {
                 prior_outputs: (0..operation.response().prior_outputs().len())
                     .map(|_| ProjectedJsonScalar::Null)
@@ -906,7 +912,7 @@ async fn execute_bounded_http(
         match decoded {
             ClosedJsonOutcome::Ambiguous => {
                 drop(quota);
-                return prepare_fact_result(
+                return prepare_output_result(
                     publication,
                     bound.plan().runtime_profile(),
                     ConsultationOutcome::Ambiguous,
@@ -915,7 +921,7 @@ async fn execute_bounded_http(
             }
             ClosedJsonOutcome::NoMatch if anchor_step => {
                 drop(quota);
-                return prepare_fact_result(
+                return prepare_output_result(
                     publication,
                     bound.plan().runtime_profile(),
                     ConsultationOutcome::NoMatch,
@@ -923,7 +929,7 @@ async fn execute_bounded_http(
                 );
             }
             ClosedJsonOutcome::NoMatch => {
-                append_absent_operation_facts(operation, &mut facts);
+                append_absent_operation_outputs(operation, &mut outputs);
                 memory[operation_index] = Some(OperationMemory {
                     prior_outputs: (0..operation.response().prior_outputs().len())
                         .map(|_| ProjectedJsonScalar::Null)
@@ -941,7 +947,7 @@ async fn execute_bounded_http(
                     .drain(output_count..)
                     .map(|field| field.into_parts().1)
                     .collect::<Vec<_>>();
-                facts.extend(projected.into_iter().map(|field| field.into_parts()));
+                outputs.extend(projected.into_iter().map(|field| field.into_parts()));
                 memory[operation_index] = Some(OperationMemory {
                     prior_outputs: prior,
                     present: true,
@@ -951,9 +957,9 @@ async fn execute_bounded_http(
         step_position += 1;
     }
     drop(quota);
-    let output_map = ValidatedOutputMap::try_new(bound.plan().runtime_profile(), facts)
+    let output_map = ValidatedOutputMap::try_new(bound.plan().runtime_profile(), outputs)
         .map_err(|_| ConcreteExecutorUnfinished)?;
-    prepare_fact_result(
+    prepare_output_result(
         publication,
         bound.plan().runtime_profile(),
         ConsultationOutcome::Match,
@@ -969,7 +975,7 @@ fn rhai_worker_limiter(
     let limits = plan
         .runtime_profile()
         .dispatch()
-        .sandboxed_rhai_limits()
+        .script_limits()
         .ok_or(ConcreteExecutorUnfinished)?;
     let key: Box<str> = plan.profile().contract_hash().as_str().into();
     let limiters = RHAI_WORKER_LIMITERS.get_or_init(|| Mutex::new(BTreeMap::new()));
@@ -983,29 +989,21 @@ fn build_rhai_request(
     bound: &BoundConsultationExecution<'_>,
 ) -> Result<WorkerRequest, ConcreteExecutorUnfinished> {
     let plan = bound.plan();
+    let authority = plan.script_authority().ok_or(ConcreteExecutorUnfinished)?;
     let (script, entrypoint) = plan.rhai_program().ok_or(ConcreteExecutorUnfinished)?;
     let limits = plan
         .runtime_profile()
         .dispatch()
-        .sandboxed_rhai_limits()
+        .script_limits()
         .ok_or(ConcreteExecutorUnfinished)?;
-    let largest_response_bytes = plan
-        .operations()
-        .map(|operation| usize::try_from(operation.response_max_bytes()))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ConcreteExecutorUnfinished)?
-        .into_iter()
-        .max()
-        .unwrap_or(0);
-    let largest_text_response_bytes = plan
-        .operations()
-        .filter(|operation| operation.response().format() == CompiledResponseFormat::Text)
-        .map(|operation| usize::try_from(operation.response_max_bytes()))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ConcreteExecutorUnfinished)?
-        .into_iter()
-        .max()
-        .unwrap_or(0);
+    let largest_response_bytes =
+        usize::try_from(authority.response_max_bytes()).map_err(|_| ConcreteExecutorUnfinished)?;
+    let largest_text_response_bytes = if authority.response_format() == CompiledResponseFormat::Text
+    {
+        largest_response_bytes
+    } else {
+        0
+    };
     let ipc_frame_bytes = usize::try_from(limits.ipc_frame_bytes())
         .map_err(|_| ConcreteExecutorUnfinished)?
         .max(largest_response_bytes.saturating_add(256 * 1024))
@@ -1066,36 +1064,36 @@ fn build_rhai_request(
             },
         );
     }
-    for output in plan.rhai_facts() {
+    for output in plan.rhai_outputs() {
         request.output_schema.insert(
             output.name().to_owned(),
             RhaiOutputSchema {
-                output_type: match output.fact_type() {
-                    CompiledRhaiFactType::String { .. } => RhaiOutputType::String,
-                    CompiledRhaiFactType::Boolean => RhaiOutputType::Boolean,
-                    CompiledRhaiFactType::Integer { .. } => RhaiOutputType::Integer,
-                    CompiledRhaiFactType::Date => RhaiOutputType::Date,
+                output_type: match output.output_type() {
+                    CompiledRhaiOutputType::String { .. } => RhaiOutputType::String,
+                    CompiledRhaiOutputType::Boolean => RhaiOutputType::Boolean,
+                    CompiledRhaiOutputType::Integer { .. } => RhaiOutputType::Integer,
+                    CompiledRhaiOutputType::Date => RhaiOutputType::Date,
                 },
                 nullable: output.nullable(),
-                max_bytes: match output.fact_type() {
-                    CompiledRhaiFactType::String { max_bytes } => {
+                max_bytes: match output.output_type() {
+                    CompiledRhaiOutputType::String { max_bytes } => {
                         Some(usize::try_from(max_bytes).map_err(|_| ConcreteExecutorUnfinished)?)
                     }
-                    CompiledRhaiFactType::Boolean
-                    | CompiledRhaiFactType::Integer { .. }
-                    | CompiledRhaiFactType::Date => None,
+                    CompiledRhaiOutputType::Boolean
+                    | CompiledRhaiOutputType::Integer { .. }
+                    | CompiledRhaiOutputType::Date => None,
                 },
-                minimum: match output.fact_type() {
-                    CompiledRhaiFactType::Integer { minimum, .. } => Some(minimum),
-                    CompiledRhaiFactType::String { .. }
-                    | CompiledRhaiFactType::Boolean
-                    | CompiledRhaiFactType::Date => None,
+                minimum: match output.output_type() {
+                    CompiledRhaiOutputType::Integer { minimum, .. } => Some(minimum),
+                    CompiledRhaiOutputType::String { .. }
+                    | CompiledRhaiOutputType::Boolean
+                    | CompiledRhaiOutputType::Date => None,
                 },
-                maximum: match output.fact_type() {
-                    CompiledRhaiFactType::Integer { maximum, .. } => Some(maximum),
-                    CompiledRhaiFactType::String { .. }
-                    | CompiledRhaiFactType::Boolean
-                    | CompiledRhaiFactType::Date => None,
+                maximum: match output.output_type() {
+                    CompiledRhaiOutputType::Integer { maximum, .. } => Some(maximum),
+                    CompiledRhaiOutputType::String { .. }
+                    | CompiledRhaiOutputType::Boolean
+                    | CompiledRhaiOutputType::Date => None,
                 },
             },
         );
@@ -1124,7 +1122,7 @@ fn rhai_output_value(
 }
 
 struct PreparedRhaiCall<'a> {
-    operation: &'a CompiledOperation,
+    rule: &'a crate::source_plan::CompiledScriptAllowRule,
     target: String,
     headers: Vec<(String, String)>,
     body_format: Option<ScriptRequestBodyFormat>,
@@ -1148,11 +1146,13 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
     async fn call(&mut self, call: SourceCall) -> Result<SourceResponse, HostFailure> {
         let call = match call {
             SourceCall::DciSearch { options, .. } => {
-                let operation = self
+                let authority = self
                     .bound
                     .plan()
-                    .operations()
-                    .find(|operation| operation.dci_exact().is_some())
+                    .script_authority()
+                    .ok_or(HostFailure::ContractViolation)?;
+                let dci = authority
+                    .signed_dci()
                     .ok_or(HostFailure::ContractViolation)?;
                 let authored_request =
                     serde_json::to_value(&options).map_err(|_| HostFailure::ContractViolation)?;
@@ -1165,7 +1165,7 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
                 consume_aggregate_bytes(
                     &mut self.request_bytes,
                     authored_request_bytes,
-                    u64::from(operation.request_max_bytes()),
+                    u64::from(dci.request_max_bytes()),
                 )?;
                 let remaining_source_bytes = self
                     .bound
@@ -1199,14 +1199,24 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
             .plan()
             .data_destination()
             .ok_or(HostFailure::ContractViolation)?;
+        if !generic_script_source_calls_allowed(self.bound.plan()) {
+            // Signed DCI authority is protocol-owned. Generic Script source
+            // methods must not expose an unverified response to Rhai.
+            return Err(HostFailure::ContractViolation);
+        }
         let prepared = prepare_rhai_call(self.bound.plan(), destination, call)?;
-        let operation = prepared.operation;
+        let authority = self
+            .bound
+            .plan()
+            .script_authority()
+            .ok_or(HostFailure::ContractViolation)?;
+        let rule = prepared.rule;
         consume_aggregate_bytes(
             &mut self.request_bytes,
             prepared.author_controlled_bytes()?,
-            u64::from(operation.request_max_bytes()),
+            u64::from(authority.request_max_bytes()),
         )?;
-        if operation.auth() == CompiledSourceAuth::OAuthClientCredentials
+        if authority.auth() == CompiledSourceAuth::OAuthClientCredentials
             && self.oauth_token.is_none()
         {
             self.oauth_token = match execute_oauth_credential(
@@ -1228,8 +1238,8 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_bytes()))
             .collect::<Vec<_>>();
-        let request = match operation.auth() {
-            CompiledSourceAuth::None => operation.transport_template().render_script(
+        let request = match authority.auth() {
+            CompiledSourceAuth::None => rule.transport_template().render_script(
                 &prepared.target,
                 &header_refs,
                 None,
@@ -1239,9 +1249,10 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
             ),
             CompiledSourceAuth::Basic => self
                 .basic_credentials
-                .authorization_for(self.bound.plan(), operation)
+                .authorization_for_script(self.bound.plan(), authority)
                 .map_err(|_| HostFailure::SourceAuth)?
-                .render_script(
+                .render(
+                    rule.transport_template(),
                     &prepared.target,
                     &header_refs,
                     prepared.body_format,
@@ -1249,9 +1260,10 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
                 ),
             CompiledSourceAuth::StaticBearer => self
                 .static_bearer_credentials
-                .authorization_for(self.bound.plan(), operation)
+                .authorization_for_script(self.bound.plan(), authority)
                 .map_err(|_| HostFailure::SourceAuth)?
-                .render_script(
+                .render(
+                    rule.transport_template(),
                     &prepared.target,
                     &header_refs,
                     prepared.body_format,
@@ -1259,9 +1271,10 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
                 ),
             CompiledSourceAuth::ApiKeyHeader | CompiledSourceAuth::ApiKeyQuery => self
                 .static_bearer_credentials
-                .api_key_for(self.bound.plan(), operation)
+                .api_key_for_script(self.bound.plan(), authority)
                 .map_err(|_| HostFailure::SourceAuth)?
-                .render_script(
+                .render(
+                    rule.transport_template(),
                     &prepared.target,
                     &header_refs,
                     prepared.body_format,
@@ -1274,7 +1287,7 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
                     .ok_or(HostFailure::SourceAuth)?
                     .bearer_authorization()
                     .map_err(|_| HostFailure::SourceAuth)?;
-                operation.transport_template().render_script(
+                rule.transport_template().render_script(
                     &prepared.target,
                     &header_refs,
                     Some(authorization),
@@ -1288,7 +1301,7 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
         let request_commitment = self
             .dispatch
             .commit_request_effect(
-                CanonicalDispatchRequestEffect::try_from_complete_value(match operation.auth() {
+                CanonicalDispatchRequestEffect::try_from_complete_value(match authority.auth() {
                     CompiledSourceAuth::ApiKeyHeader => {
                         request.effect_value_without_api_key_header(destination.origin_id())
                     }
@@ -1303,7 +1316,7 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
         let max_bytes = remaining_response_body_limit(
             self.source_bytes,
             self.bound.plan().limits().operation().max_source_bytes,
-            operation.response_max_bytes(),
+            authority.response_max_bytes(),
         )?;
         let permit = self
             .dispatch
@@ -1313,7 +1326,7 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
         let (response, encoded_bytes) = self
             .fence
             .authorize_and_dispatch(permit, request_commitment, |deadline| async move {
-                let deadline = operation_deadline(deadline, operation.request_timeout_ms())
+                let deadline = operation_deadline(deadline, authority.request_timeout_ms())
                     .map_err(|_| HostFailure::SourceUnavailable)?;
                 let response = destination
                     .send_with_deadline(request, deadline)
@@ -1325,13 +1338,13 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
                     429 => return Err(HostFailure::SourceRateLimited),
                     _ => {}
                 }
-                if operation.response().format() == CompiledResponseFormat::Json
+                if authority.response_format() == CompiledResponseFormat::Json
                     && response.require_json_content_type().is_err()
                 {
                     return Err(HostFailure::ContractViolation);
                 }
                 let selected_headers = response
-                    .selected_script_response_headers(operation.response().selected_headers())
+                    .selected_script_response_headers(authority.response_headers())
                     .map_err(|_| HostFailure::ContractViolation)?;
                 let body = response
                     .read_bounded(max_bytes)
@@ -1340,7 +1353,7 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
                         DestinationResponseError::BodyTooLarge => HostFailure::BudgetExceeded,
                         _ => HostFailure::SourceUnavailable,
                     })?;
-                let (body, encoded_bytes) = match operation.response().format() {
+                let (body, encoded_bytes) = match authority.response_format() {
                     CompiledResponseFormat::Json => decode_script_json(body)
                         .map_err(|_| HostFailure::ContractViolation)?
                         .into_parts(),
@@ -1355,9 +1368,8 @@ impl SourceHost for ProductionRhaiHost<'_, '_> {
                     SourceResponse {
                         status,
                         body,
-                        headers: operation
-                            .response()
-                            .selected_headers()
+                        headers: authority
+                            .response_headers()
                             .zip(selected_headers)
                             .map(|(name, value)| (name.to_owned(), value))
                             .collect(),
@@ -1463,15 +1475,18 @@ fn prepare_rhai_call<'plan>(
         .canonicalize_same_origin_target(&target)
         .map_err(|_| HostFailure::ContractViolation)?;
     let target = canonical_rhai_target(&target, options.query)?;
-    let matches = plan
-        .operations()
-        .filter_map(|operation| {
-            prepare_for_operation(operation, method, &target, &options.headers, body_format)
+    let authority = plan
+        .script_authority()
+        .ok_or(HostFailure::ContractViolation)?;
+    let matches = authority
+        .allow()
+        .filter_map(|rule| {
+            prepare_for_script_rule(rule, method, &target, &options.headers, body_format)
         })
         .collect::<Vec<_>>();
     match matches.as_slice() {
         [prepared] => Ok(PreparedRhaiCall {
-            operation: prepared.operation,
+            rule: prepared.rule,
             target,
             headers: prepared.headers.clone(),
             body_format,
@@ -1490,23 +1505,22 @@ pub(super) fn canonical_rhai_target(
     encode_rhai_target(path, &query)
 }
 
-fn prepare_for_operation<'a>(
-    operation: &'a CompiledOperation,
+fn prepare_for_script_rule<'a>(
+    rule: &'a crate::source_plan::CompiledScriptAllowRule,
     method: ReadMethod,
     target: &str,
     headers: &BTreeMap<String, String>,
     body_format: Option<ScriptRequestBodyFormat>,
 ) -> Option<PreparedRhaiCall<'a>> {
-    if operation.method() != method {
+    if rule.method() != method {
         return None;
     }
     let header_names = headers.keys().map(String::as_str).collect::<Vec<_>>();
-    operation
-        .transport_template()
+    rule.transport_template()
         .validate_script_request_shape(target, &header_names, body_format)
         .ok()?;
     Some(PreparedRhaiCall {
-        operation,
+        rule,
         target: target.to_owned(),
         headers: headers
             .iter()
@@ -1579,7 +1593,9 @@ fn encode_rhai_target(path: &str, query: &[(String, String)]) -> Result<String, 
     Ok(target)
 }
 
-fn encode_rhai_form(fields: BTreeMap<String, JsonValue>) -> Result<Vec<u8>, HostFailure> {
+pub(super) fn encode_rhai_form(
+    fields: BTreeMap<String, JsonValue>,
+) -> Result<Vec<u8>, HostFailure> {
     let mut output = String::new();
     let mut emitted = 0_usize;
     for (name, value) in fields {
@@ -1697,7 +1713,7 @@ async fn execute_interactive_rhai(
         WorkerOutput::Success {
             outcome: WorkerOutcome::NoMatch,
             ..
-        } => prepare_fact_result(
+        } => prepare_output_result(
             publication,
             bound.plan().runtime_profile(),
             ConsultationOutcome::NoMatch,
@@ -1706,7 +1722,7 @@ async fn execute_interactive_rhai(
         WorkerOutput::Success {
             outcome: WorkerOutcome::Ambiguous,
             ..
-        } => prepare_fact_result(
+        } => prepare_output_result(
             publication,
             bound.plan().runtime_profile(),
             ConsultationOutcome::Ambiguous,
@@ -1724,7 +1740,7 @@ async fn execute_interactive_rhai(
                 .collect::<Result<Vec<_>, _>>()?;
             let output_map = ValidatedOutputMap::try_new(bound.plan().runtime_profile(), outputs)
                 .map_err(|_| ConcreteExecutorUnfinished)?;
-            prepare_fact_result(
+            prepare_output_result(
                 publication,
                 bound.plan().runtime_profile(),
                 ConsultationOutcome::Match,
@@ -1771,7 +1787,7 @@ pub(super) async fn execute_concrete_consultation(
             )
             .await
         }
-        ConcreteExecutorKind::BoundedHttp | ConcreteExecutorKind::SandboxedRhai => {
+        ConcreteExecutorKind::BoundedHttp | ConcreteExecutorKind::Script => {
             execute_bounded_http(
                 dispatch,
                 execution,
@@ -1951,11 +1967,11 @@ fn step_should_execute(
     })
 }
 
-fn append_absent_operation_facts(
+fn append_absent_operation_outputs(
     operation: &CompiledOperation,
-    facts: &mut Vec<(Box<str>, ProjectedJsonScalar)>,
+    outputs: &mut Vec<(Box<str>, ProjectedJsonScalar)>,
 ) {
-    facts.extend(
+    outputs.extend(
         operation
             .response()
             .outputs()
@@ -2127,7 +2143,7 @@ fn append_body_bytes(
     Ok(())
 }
 
-fn prepare_fact_result(
+fn prepare_output_result(
     publication: PendingPublicationContext,
     profile: &crate::source_plan::runtime_profile::CompiledRuntimeProfile,
     outcome: ConsultationOutcome,
@@ -2211,7 +2227,7 @@ fn prepare_public_result(
     let acquired_at_unix_ms = TrustedConsultationTime::sample()
         .map_err(|_| PublicResultPreparationError::Unfinished)?
         .unix_ms();
-    let facts = record
+    let outputs = record
         .map(|record| {
             ValidatedOutputMap::try_new(
                 profile,
@@ -2232,7 +2248,7 @@ fn prepare_public_result(
         publication.notary_evaluation_id(),
         profile,
         outcome,
-        facts.as_ref(),
+        outputs.as_ref(),
         acquired_at_unix_ms,
     )
     .map_err(|error| match error {
@@ -2292,6 +2308,7 @@ mod tests {
         bounded_runtime_vector_plan_fixture, dhis2_duplicate_selector_runtime_vector_plan_fixture,
         dhis2_runtime_vector_plan_fixture, maintained_open_crvs_runtime_plan_fixture,
         rhai_runtime_vector_plan_fixture, signed_dci_expiring_oauth_runtime_plan_fixture,
+        signed_dci_script_runtime_plan_fixture,
     };
 
     #[test]
@@ -2312,6 +2329,21 @@ mod tests {
             remaining_response_body_limit(10, 10, 8),
             Err(HostFailure::BudgetExceeded)
         );
+    }
+
+    #[test]
+    fn signed_dci_script_seals_one_verification_and_one_data_effect() {
+        let plan = signed_dci_script_runtime_plan_fixture();
+        assert_eq!(validate_script_activation(&plan), Ok(()));
+        assert_eq!(
+            ConcreteExecutorKind::Script.permit_counts(&plan),
+            Ok((1, 1, 1))
+        );
+        assert_eq!(
+            plan.runtime_profile().permit_bindings().collect::<Vec<_>>(),
+            [("credential", 0), ("verification", 0), ("data", 0)]
+        );
+        assert!(!generic_script_source_calls_allowed(&plan));
     }
 
     #[test]
@@ -2372,10 +2404,10 @@ mod tests {
             validate_basic_get_activation(&rhai),
             Err(ConcreteExecutorActivationError::UnsupportedPlan)
         );
-        assert_eq!(validate_sandboxed_rhai_activation(&rhai), Ok(()));
+        assert_eq!(validate_script_activation(&rhai), Ok(()));
         assert_eq!(
             ConcreteExecutorKind::activate(&rhai),
-            Ok(ConcreteExecutorKind::SandboxedRhai)
+            Ok(ConcreteExecutorKind::Script)
         );
         let duplicate_selector = dhis2_duplicate_selector_runtime_vector_plan_fixture();
         assert_eq!(
@@ -2399,7 +2431,7 @@ mod tests {
         let expected = plan
             .runtime_profile()
             .dispatch()
-            .sandboxed_rhai_limits()
+            .script_limits()
             .expect("Rhai limits")
             .concurrency();
         let Ok(first) = rhai_worker_limiter(&plan) else {
@@ -2413,11 +2445,11 @@ mod tests {
     }
 
     #[test]
-    fn sandboxed_rhai_terminal_outputs_preserve_the_closed_scalar_types() {
+    fn script_terminal_outputs_preserve_the_closed_scalar_types() {
         let string = rhai_output_value(RhaiTypedValue::String {
             value: Some("programme-a".to_owned()),
         })
-        .unwrap_or_else(|_| panic!("bounded String fact"));
+        .unwrap_or_else(|_| panic!("bounded String output"));
         assert!(matches!(
             string,
             ProjectedJsonScalar::String(value) if value.as_str() == "programme-a"
@@ -2426,7 +2458,7 @@ mod tests {
         let date = rhai_output_value(RhaiTypedValue::Date {
             value: Some("2020-02-29".to_owned()),
         })
-        .unwrap_or_else(|_| panic!("full-date fact"));
+        .unwrap_or_else(|_| panic!("full-date output"));
         assert!(matches!(
             date,
             ProjectedJsonScalar::String(value) if value.as_str() == "2020-02-29"
@@ -2469,7 +2501,7 @@ mod tests {
         );
         let executor = ConcreteExecutorKind::activate(&opencrvs).expect("OpenCRVS executor");
         assert_eq!(executor, ConcreteExecutorKind::BoundedHttp);
-        assert_eq!(executor.permit_counts(&opencrvs), Ok((1, 2)));
+        assert_eq!(executor.permit_counts(&opencrvs), Ok((1, 1, 1)));
         assert_eq!(
             executor
                 .dispatch_budget(&opencrvs)

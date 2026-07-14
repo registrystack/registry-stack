@@ -264,8 +264,8 @@ impl CompiledConsultationRegistry {
         &self.source_plans
     }
 
-    /// Iterate the immutable plan closure for concrete Basic GET and exact
-    /// OpenCRVS activation only. Request paths retain no registry-wide access.
+    /// Iterate the immutable plan closure for restart-only executor activation.
+    /// Request paths retain no registry-wide access.
     pub(crate) fn plans_for_concrete_activation(
         &self,
     ) -> impl ExactSizeIterator<Item = &CompiledSourcePlan> {
@@ -311,7 +311,7 @@ pub(crate) fn initialize_rhai_worker_capabilities(
     for artifact in artifacts.integration_packs() {
         let pack = parse_integration_pack(artifact.bytes(), artifact.artifact_hash())
             .map_err(SourcePlanCompileError::Artifact)?;
-        if pack.document.spec.plan.kind != SourcePlanKind::SandboxedRhai {
+        if pack.document.spec.plan.kind != SourcePlanKind::Script {
             continue;
         }
         let reviewed = pack
@@ -324,7 +324,7 @@ pub(crate) fn initialize_rhai_worker_capabilities(
         let binding = bindings
             .iter()
             .find(|binding| binding.pack_identity == *pack.identity())
-            .and_then(|binding| binding.document.capabilities.sandboxed_rhai.as_ref())
+            .and_then(|binding| binding.document.capabilities.script.as_ref())
             .ok_or(CompiledConsultationRegistryError::RhaiWorkerClosureMismatch)?;
         let limits = super::compiler::RhaiWorkerLimits {
             max_calls: binding.max_calls,
@@ -359,14 +359,8 @@ pub(crate) fn initialize_rhai_worker_capabilities(
         };
         crate::rhai_worker::probe_script(&reviewed.script, &reviewed.entrypoint, worker_limits)
             .map_err(|_| CompiledConsultationRegistryError::RhaiWorkerClosureMismatch)?;
-        let callable = binding
-            .callable_operations
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
         workers.push(RhaiWorkerCapability::from_initialized_worker(
             pack.identity().hash().as_str(),
-            &callable,
             limits,
         )?);
     }
@@ -403,11 +397,11 @@ fn validate_rhai_artifact_closure(
             pack.document.spec.plan.kind,
             pack.document.spec.plan.rhai.as_ref(),
         ) {
-            (SourcePlanKind::SandboxedRhai, Some(rhai)) => {
+            (SourcePlanKind::Script, Some(rhai)) => {
                 required_worker_count += 1;
                 required_scripts.insert(rhai.script_hash.clone());
             }
-            (SourcePlanKind::SandboxedRhai, None) => {
+            (SourcePlanKind::Script, None) => {
                 return Err(CompiledConsultationRegistryError::RhaiArtifactClosureMismatch)
             }
             (_, Some(_)) => {
@@ -548,39 +542,32 @@ mod tests {
     fn rhai_pack(id: &str) -> (Vec<u8>, String) {
         let mut pack = parse_json_strict(PACK).unwrap();
         pack["id"] = json!(id);
-        pack["spec"]["bounds"]["max_source_matches"] = json!(1);
+        pack["spec"]["bounds"]["max_source_matches"] = json!(2);
         pack["spec"]["acquisition"]["class"] = json!("bounded_full_record");
         pack["spec"]["reviewed_acquisition"]["class"] = json!("bounded_full_record");
         pack["spec"]["reviewed_acquisition"]["selector"] = Value::Null;
-        pack["spec"]["reviewed_acquisition"]["cardinality"] = json!("source_enforced_singleton");
-        pack["spec"]["plan"]["kind"] = json!("sandboxed_rhai");
-        pack["spec"]["plan"]["steps"] = json!([]);
-        pack["spec"]["plan"]
-            .as_object_mut()
-            .expect("Rhai plan")
-            .remove("step_conditions");
-        let operation = &mut pack["spec"]["plan"]["operations"][0];
-        operation["query"] = json!({});
-        operation["headers"] = json!({});
-        let operation_object = operation.as_object_mut().expect("Rhai operation");
-        operation_object.remove("path_parameters");
-        operation_object.remove("relation_selector");
-        operation_object.remove("input_selector");
-        operation["acquisition_fields"] = json!([]);
-        operation["control_fields"] = json!([]);
-        operation["projection"] = json!({"mechanism": "bounded_full_record"});
-        operation["response"] = json!({
-            "max_bytes": 65536,
-            "max_records": 1,
-            "normalization": "script_body",
-            "cardinality": {"mechanism": "script_managed"},
-            "schema": {"type": "script_body"},
-            "output_mapping": {}
-        });
+        pack["spec"]["reviewed_acquisition"]["cardinality"] = json!("probe_two");
+        let plan = pack["spec"]["plan"].as_object_mut().expect("Script plan");
+        plan.remove("operations");
+        plan.remove("steps");
+        plan.remove("step_conditions");
+        plan.insert("kind".into(), json!("script"));
+        plan.insert(
+            "script_authority".into(),
+            json!({
+                "allow": [{"method": "GET", "path": "/api/person/status"}],
+                "request_headers": [],
+                "response_headers": [],
+                "response": {"format": "json", "max_bytes": 65536},
+            "auth": {"mode": "oauth_client_credentials"},
+                "request_max_bytes": 65536
+            }),
+        );
         pack["spec"]["plan"]["rhai"] = json!({
             "script": RHAI_SCRIPT,
             "script_hash": raw_hash(RHAI_SCRIPT.as_bytes()),
             "entrypoint": "consult",
+            "abi": crate::rhai_worker::xw::XW_ABI_VERSION,
             "memory_bytes": 67108864,
             "cpu_ms": 500,
             "ipc_frame_bytes": 131072,
@@ -606,9 +593,9 @@ mod tests {
             "source_capability": "script",
             "script_abi": crate::rhai_worker::xw::XW_ABI_VERSION
         });
-        contract["spec"]["bounds"]["max_source_matches"] = json!(1);
+        contract["spec"]["bounds"]["max_source_matches"] = json!(2);
         contract["spec"]["acquisition"]["class"] = json!("bounded_full_record");
-        contract["spec"]["public_behavior"]["outcomes"] = json!(["match", "no_match"]);
+        contract["spec"]["public_behavior"]["outcomes"] = json!(["match", "no_match", "ambiguous"]);
         let policy_bytes = serde_json::to_vec(&policy_preimage(&contract)).unwrap();
         contract["spec"]["authorization"]["policy"]["hash"] =
             json!(typed_hash(POLICY_DOMAIN, &policy_bytes));
@@ -617,9 +604,8 @@ mod tests {
 
         let mut binding = parse_json_strict(BINDING).unwrap();
         binding["integration_pack"]["hash"] = json!(pack_hash);
-        binding["capabilities"]["allow_sandboxed_rhai"] = json!(true);
-        binding["capabilities"]["sandboxed_rhai"] = json!({
-            "callable_operations": ["lookup-status"],
+        binding["capabilities"]["allow_script"] = json!(true);
+        binding["capabilities"]["script"] = json!({
             "max_calls": 1,
             "memory_bytes": 67108864,
             "cpu_ms": 500,
@@ -653,7 +639,6 @@ mod tests {
     fn rhai_worker(pack_hash: &str) -> RhaiWorkerCapability {
         RhaiWorkerCapability::from_initialized_worker(
             pack_hash,
-            &["lookup-status"],
             RhaiWorkerLimits {
                 max_calls: 1,
                 memory_bytes: 67_108_864,

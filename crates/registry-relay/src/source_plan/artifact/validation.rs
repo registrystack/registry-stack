@@ -427,27 +427,20 @@ pub(super) fn validate_consent(
 
 pub(super) fn validate_public_behavior(
     behavior: &mut PublicBehaviorDocument,
-    cardinality: SourceCardinality,
+    _cardinality: SourceCardinality,
 ) -> Result<(), SourcePlanArtifactError> {
     behavior.outcomes.sort();
     if behavior.outcomes.windows(2).any(|pair| pair[0] == pair[1]) {
         return Err(SourcePlanArtifactError::InvalidSet);
     }
-    let expected = match cardinality {
-        SourceCardinality::Singleton if behavior.outcomes.contains(&OutcomeDocument::Ambiguous) => {
-            vec![
-                OutcomeDocument::Match,
-                OutcomeDocument::NoMatch,
-                OutcomeDocument::Ambiguous,
-            ]
-        }
-        SourceCardinality::Singleton => vec![OutcomeDocument::Match, OutcomeDocument::NoMatch],
-        SourceCardinality::AmbiguityProbe => vec![
-            OutcomeDocument::Match,
-            OutcomeDocument::NoMatch,
-            OutcomeDocument::Ambiguous,
-        ],
-    };
+    // The public v1 result union is stable across source implementations.
+    // Source cardinality controls whether ambiguity is reachable, not whether
+    // the public contract can represent it.
+    let expected = vec![
+        OutcomeDocument::Match,
+        OutcomeDocument::NoMatch,
+        OutcomeDocument::Ambiguous,
+    ];
     let mut expected = expected;
     expected.sort();
     if behavior.outcomes != expected {
@@ -525,10 +518,13 @@ pub(super) fn validate_plan(
     if plan.kind == SourcePlanKind::SnapshotExact {
         return validate_snapshot_plan(spec);
     }
+    if plan.kind == SourcePlanKind::Script {
+        return validate_script_plan(spec);
+    }
     if plan.operations.is_empty()
         || plan.operations.len() > MAX_SOURCE_OPERATIONS
         || (plan.kind == SourcePlanKind::BoundedHttp && plan.operations.len() != 1)
-        || (plan.kind == SourcePlanKind::SandboxedRhai) != plan.steps.is_empty()
+        || (plan.kind == SourcePlanKind::Script) != plan.steps.is_empty()
     {
         return Err(SourcePlanArtifactError::InvalidPlan);
     }
@@ -575,7 +571,7 @@ pub(super) fn validate_plan(
             return Err(SourcePlanArtifactError::InvalidPlan);
         }
         validate_http_operation(operation, &operation_validation)?;
-        if plan.kind == SourcePlanKind::SandboxedRhai {
+        if plan.kind == SourcePlanKind::Script {
             script_request_byte_limits.insert(
                 operation
                     .step_limits
@@ -590,7 +586,7 @@ pub(super) fn validate_plan(
             operation.response.records_field.as_deref(),
         )?;
         match record_schema {
-            ResponseSchemaDocument::ScriptBody if plan.kind == SourcePlanKind::SandboxedRhai => {}
+            ResponseSchemaDocument::ScriptBody if plan.kind == SourcePlanKind::Script => {}
             ResponseSchemaDocument::Object { fields, .. } => {
                 for (name, field) in fields {
                     AcquiredField::try_from(name.as_str())
@@ -650,7 +646,7 @@ pub(super) fn validate_plan(
         maximum_data_response_bytes =
             maximum_data_response_bytes.max(u64::from(operation.response.max_bytes));
     }
-    if plan.kind == SourcePlanKind::SandboxedRhai && script_request_byte_limits.len() != 1 {
+    if plan.kind == SourcePlanKind::Script && script_request_byte_limits.len() != 1 {
         return Err(SourcePlanArtifactError::InvalidPlan);
     }
     let mut verification_ids = BTreeSet::new();
@@ -695,13 +691,13 @@ pub(super) fn validate_plan(
                 .map_err(|_| SourcePlanArtifactError::InvalidIdentity)
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
-    let mapped_outputs_valid = if plan.kind == SourcePlanKind::SandboxedRhai {
+    let mapped_outputs_valid = if plan.kind == SourcePlanKind::Script {
         mapped_output_fields.is_empty() || mapped_output_fields == declared_disclosed_fields
     } else {
         mapped_output_fields == declared_disclosed_fields
     };
     let operation_fields_match_acquisition = match plan.kind {
-        SourcePlanKind::SandboxedRhai => true,
+        SourcePlanKind::Script => true,
         SourcePlanKind::BoundedHttp => {
             operation_response_fields.len() == spec.acquisition.fields.len()
                 && operation_response_fields.iter().all(|(name, raw)| {
@@ -739,7 +735,7 @@ pub(super) fn validate_plan(
         && (used_operations != known_operations
             || plan.steps.len() + verification_data_exchanges
                 != usize::from(spec.bounds.max_data_exchanges)))
-        || (plan.kind == SourcePlanKind::SandboxedRhai && !plan.step_conditions.is_empty())
+        || (plan.kind == SourcePlanKind::Script && !plan.step_conditions.is_empty())
     {
         return Err(SourcePlanArtifactError::InvalidPlan);
     }
@@ -754,7 +750,7 @@ pub(super) fn validate_plan(
     }
     let credential_auth = credential_auth_modes.iter().next().cloned();
     validate_credential_operation(plan, spec.bounds, credential_auth)?;
-    if plan.kind == SourcePlanKind::SandboxedRhai {
+    if plan.kind == SourcePlanKind::Script {
         response_bytes = maximum_data_response_bytes
             .checked_mul(u64::from(spec.bounds.max_data_exchanges))
             .ok_or(SourcePlanArtifactError::InvalidLimits)?;
@@ -776,6 +772,153 @@ pub(super) fn validate_plan(
     validate_prior_step_references(plan)?;
     validate_step_conditions(plan)?;
     validate_dci_exact_plan(spec)
+}
+
+fn validate_script_plan(
+    spec: &mut IntegrationPackSpecDocument,
+) -> Result<(), SourcePlanArtifactError> {
+    let (auth, response_max_bytes, signed_dci_jwks) = {
+        let plan = &mut spec.plan;
+        let authority = plan
+            .script_authority
+            .as_mut()
+            .ok_or(SourcePlanArtifactError::InvalidPlan)?;
+        if !plan.operations.is_empty()
+            || !plan.steps.is_empty()
+            || !plan.step_conditions.is_empty()
+            || plan.snapshot.is_some()
+            || plan.rhai.is_none()
+            || !(1..=MAX_SOURCE_OPERATIONS).contains(&authority.allow.len())
+            || authority.request_max_bytes == 0
+            || authority.request_max_bytes > MAX_REQUEST_BYTES
+            || authority.response.max_bytes == 0
+            || authority.response.max_bytes > MAX_DATA_RESPONSE_BYTES
+        {
+            return Err(SourcePlanArtifactError::InvalidPlan);
+        }
+        let mut allow_rules = BTreeSet::new();
+        for rule in &authority.allow {
+            registry_platform_httputil::destination::validate_script_destination_path_rule(
+                &rule.path,
+            )
+            .map_err(|_| SourcePlanArtifactError::InvalidPlan)?;
+            if (rule.method == ReadMethod::ReadOnlyPost)
+                != (rule.semantics == Some(ScriptReadSemanticsDocument::ReadOnly))
+                || (rule.method == ReadMethod::ReadOnlyPost && rule.path.contains("**"))
+                || !allow_rules.insert((rule.method, rule.path.as_str()))
+            {
+                return Err(SourcePlanArtifactError::InvalidPlan);
+            }
+        }
+        let mut request_headers = std::mem::take(&mut authority.request_headers);
+        if request_headers.len() > MAX_STATIC_COMPONENTS {
+            return Err(SourcePlanArtifactError::InvalidLimits);
+        }
+        for name in request_headers.drain(..) {
+            let name = name.to_ascii_lowercase();
+            if !registry_platform_httputil::destination::is_script_writable_request_header_name(
+                &name,
+            ) || authority.request_headers.contains(&name)
+            {
+                return Err(SourcePlanArtifactError::InvalidExpression);
+            }
+            authority.request_headers.push(name);
+        }
+        authority.request_headers.sort_unstable();
+        let mut response_headers = std::mem::take(&mut authority.response_headers);
+        if response_headers.len() > MAX_STATIC_COMPONENTS {
+            return Err(SourcePlanArtifactError::InvalidLimits);
+        }
+        for name in response_headers.drain(..) {
+            let name = name.to_ascii_lowercase();
+            if !registry_platform_httputil::destination::is_script_visible_response_header_name(
+                &name,
+            ) || authority.response_headers.contains(&name)
+            {
+                return Err(SourcePlanArtifactError::InvalidExpression);
+            }
+            authority.response_headers.push(name);
+        }
+        authority.response_headers.sort_unstable();
+        if authority.signed_dci.is_some() {
+            let [rule] = authority.allow.as_slice() else {
+                return Err(SourcePlanArtifactError::InvalidPlan);
+            };
+            if authority.auth != SourceAuthDocument::OAuthClientCredentials
+                || authority.response.format != ResponseFormatDocument::Json
+                || rule.method != ReadMethod::ReadOnlyPost
+                || rule.semantics != Some(ScriptReadSemanticsDocument::ReadOnly)
+                || rule.path.contains('*')
+            {
+                return Err(SourcePlanArtifactError::InvalidPlan);
+            }
+        }
+        (
+            authority.auth.clone(),
+            authority.response.max_bytes,
+            authority
+                .signed_dci
+                .as_ref()
+                .map(|dci| dci.jwks_operation.clone()),
+        )
+    };
+    let credential_auth = (auth != SourceAuthDocument::None).then_some(auth);
+    validate_credential_operation(&mut spec.plan, spec.bounds, credential_auth)?;
+    match (
+        signed_dci_jwks.as_deref(),
+        spec.plan.verification_operations.as_slice(),
+    ) {
+        (None, []) => {}
+        (Some(expected), [verification]) if verification.id == expected => {}
+        _ => return Err(SourcePlanArtifactError::InvalidPlan),
+    }
+    for verification in &mut spec.plan.verification_operations {
+        validate_fixed_path(&verification.path)?;
+        normalize_data_status_set(&mut verification.accepted_statuses)?;
+        if verification.method != ReadMethod::Get
+            || verification.accepted_statuses != [200]
+            || verification.step_limits.max_request_bytes == 0
+            || verification.step_limits.timeout_ms == 0
+            || verification.step_limits.timeout_ms > spec.bounds.timeout_ms
+            || verification.step_limits.max_in_flight != 1
+            || verification.max_response_bytes == 0
+            || verification.max_response_bytes > MAX_DATA_RESPONSE_BYTES
+        {
+            return Err(SourcePlanArtifactError::InvalidPlan);
+        }
+    }
+    let verification_bytes = spec
+        .plan
+        .verification_operations
+        .iter()
+        .try_fold(0_u64, |total, operation| {
+            total.checked_add(u64::from(operation.max_response_bytes))
+        })
+        .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+    let data_response_count = spec
+        .bounds
+        .max_data_exchanges
+        .checked_sub(
+            u8::try_from(spec.plan.verification_operations.len())
+                .map_err(|_| SourcePlanArtifactError::InvalidLimits)?,
+        )
+        .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+    let source_bytes = u64::from(response_max_bytes)
+        .checked_mul(u64::from(data_response_count))
+        .and_then(|total| total.checked_add(verification_bytes))
+        .and_then(|total| {
+            total.checked_add(
+                spec.plan
+                    .credential_operation
+                    .as_ref()
+                    .map_or(0, |operation| u64::from(operation.response.max_bytes)),
+            )
+        })
+        .ok_or(SourcePlanArtifactError::InvalidLimits)?;
+    if source_bytes > spec.bounds.max_source_bytes {
+        return Err(SourcePlanArtifactError::InvalidLimits);
+    }
+    validate_template_kind(&spec.plan, spec.acquisition.class)
 }
 
 fn validate_dci_exact_plan(
@@ -844,7 +987,7 @@ fn validate_dci_exact_plan(
     };
     let exact_topology = (spec.plan.kind == SourcePlanKind::BoundedHttp
         && spec.plan.steps == [operation.id.as_str()])
-        || (spec.plan.kind == SourcePlanKind::SandboxedRhai && spec.plan.steps.is_empty());
+        || (spec.plan.kind == SourcePlanKind::Script && spec.plan.steps.is_empty());
     let exact = exact_topology
         && spec.plan.operations.len() == 1
         && dci.jwks_operation == verification.id
@@ -974,20 +1117,19 @@ pub(super) fn validate_reviewed_acquisition(
                 .map(String::as_str)
                 .eq(selector_names.iter().copied())
             && (spec.plan.steps.first() == Some(operation)
-                || (spec.plan.kind == SourcePlanKind::SandboxedRhai
-                    && spec.plan.steps.is_empty()))
+                || (spec.plan.kind == SourcePlanKind::Script && spec.plan.steps.is_empty()))
             && spec.plan.operations.iter().any(|candidate| {
                 candidate.id == *operation
                     && candidate.relation_selector.is_none()
                     && candidate.input_selector.is_none()
-                    && (spec.plan.kind != SourcePlanKind::SandboxedRhai
+                    && (spec.plan.kind != SourcePlanKind::Script
                         || candidate.request_codec == Some(RequestCodecDocument::DciExactV1))
                     && components.iter().all(|(input, location)| {
                         selector_location_matches(candidate, location, SelectorSource::Input(input))
                     })
             }) =>
         {
-            if spec.plan.kind != SourcePlanKind::SandboxedRhai {
+            if spec.plan.kind != SourcePlanKind::Script {
                 validate_transitively_anchored_steps(&spec.plan, input_name)?;
             }
         }
@@ -998,7 +1140,7 @@ pub(super) fn validate_reviewed_acquisition(
                     .keys()
                     .map(String::as_str)
                     .eq(selector_names.iter().copied()) => {}
-        None if spec.plan.kind == SourcePlanKind::SandboxedRhai => {}
+        None if spec.plan.kind == SourcePlanKind::Script => {}
         _ => return Err(SourcePlanArtifactError::InvalidAcquisition),
     }
     Ok(())
@@ -1277,7 +1419,7 @@ fn validate_http_operation(
         output,
         prior_output_bounds,
     } = context;
-    if *plan_kind == SourcePlanKind::SandboxedRhai {
+    if *plan_kind == SourcePlanKind::Script {
         registry_platform_httputil::destination::validate_script_destination_path_rule(
             &operation.path,
         )
@@ -1286,7 +1428,7 @@ fn validate_http_operation(
         operation_path_parts(operation)?;
     }
     if operation.response.format == ResponseFormatDocument::Text
-        && context.plan_kind != SourcePlanKind::SandboxedRhai
+        && context.plan_kind != SourcePlanKind::Script
     {
         return Err(SourcePlanArtifactError::InvalidPlan);
     }
@@ -1309,14 +1451,14 @@ fn validate_http_operation(
     }
     operation.response.selected_headers.sort_unstable();
     if !operation.response.selected_headers.is_empty()
-        && context.plan_kind != SourcePlanKind::SandboxedRhai
+        && context.plan_kind != SourcePlanKind::Script
     {
         return Err(SourcePlanArtifactError::InvalidPlan);
     }
     let script_request_headers = std::mem::take(&mut operation.script_request_headers);
     for name in script_request_headers {
         let canonical_name = name.to_ascii_lowercase();
-        if *plan_kind != SourcePlanKind::SandboxedRhai
+        if *plan_kind != SourcePlanKind::Script
             || !registry_platform_httputil::destination::is_script_writable_request_header_name(
                 &canonical_name,
             )
@@ -1414,9 +1556,7 @@ fn validate_http_operation(
         normalize_stable_set(&mut operation.acquisition_fields)?;
     }
     if operation.control_fields.is_empty() {
-        if *plan_kind != SourcePlanKind::SandboxedRhai
-            && !operation.response.prior_outputs.is_empty()
-        {
+        if *plan_kind != SourcePlanKind::Script && !operation.response.prior_outputs.is_empty() {
             return Err(SourcePlanArtifactError::InvalidAcquisition);
         }
     } else {
@@ -1433,10 +1573,9 @@ fn validate_http_operation(
         .keys()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    if (*plan_kind == SourcePlanKind::SandboxedRhai
+    if (*plan_kind == SourcePlanKind::Script
         && !declared_operation_controls.is_subset(&prior_names))
-        || (*plan_kind != SourcePlanKind::SandboxedRhai
-            && declared_operation_controls != prior_names)
+        || (*plan_kind != SourcePlanKind::Script && declared_operation_controls != prior_names)
     {
         return Err(SourcePlanArtifactError::InvalidAcquisition);
     }
@@ -1448,7 +1587,7 @@ fn validate_http_operation(
         == ResponseNormalizationDocument::ScriptBody
         || operation.response.cardinality == CardinalityMechanismDocument::ScriptManaged;
     if script_body
-        && (*plan_kind != SourcePlanKind::SandboxedRhai
+        && (*plan_kind != SourcePlanKind::Script
             || !matches!(
                 operation.response.schema,
                 ResponseSchemaDocument::ScriptBody
@@ -1579,7 +1718,7 @@ fn validate_http_operation(
             || (reviewed_control_fields
                 .get(name)
                 .is_none_or(|schema| !schema.matches_response_schema(raw_schema))
-                && *plan_kind != SourcePlanKind::SandboxedRhai)
+                && *plan_kind != SourcePlanKind::Script)
             || !exposed_pointers.insert(pointer_tokens)
         {
             return Err(SourcePlanArtifactError::InvalidLimits);
@@ -1610,7 +1749,7 @@ fn validate_http_operation(
                 ..
             } if !*nullable || declared.nullable),
         };
-        let reviewed_rhai_alias = if *plan_kind == SourcePlanKind::SandboxedRhai {
+        let reviewed_rhai_alias = if *plan_kind == SourcePlanKind::Script {
             operation
                 .response
                 .prior_outputs

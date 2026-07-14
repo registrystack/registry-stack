@@ -16,6 +16,7 @@ default = []
 registry-notary-cel = ["dep:crosswalk-core", "dep:registry-notary-worker-harness"]
 cel-worker-fixture = ["registry-notary-cel"]
 pkcs11 = ["dep:cryptoki", "dep:hex"]
+relay-contract-test-support = ["registry-platform-httputil/test-support"]
 
 [dependencies]
 registry-notary-core.workspace = true

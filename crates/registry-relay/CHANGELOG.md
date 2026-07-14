@@ -27,7 +27,7 @@
   executable names.
 - Relay now owns the authority-free project fixture decoder. It compiles exact
   pinned profiles and reuses the production closed JSON, signed DCI,
-  SnapshotExact, and SandboxedRhai paths while accepting only bounded source
+  SnapshotExact, and Script paths while accepting only bounded source
   observations. Match results release only validated outputs; no-match and
   ambiguity release no output map.
 - BREAKING: Relay now exposes restart-only, OIDC-protected

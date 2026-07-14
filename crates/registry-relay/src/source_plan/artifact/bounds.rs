@@ -90,7 +90,7 @@ pub(in super::super) fn validate_request_shape(
             (1..=MAX_REQUEST_HEADER_VALUE_BYTES).contains(&auth_bytes)
         }
     };
-    if plan_kind == SourcePlanKind::SandboxedRhai {
+    if plan_kind == SourcePlanKind::Script {
         let generic_script_authority = operation.body.is_none()
             && operation.request_signer.is_none()
             && operation.dci.is_none()
@@ -647,7 +647,14 @@ pub(in super::super) fn validate_template_kind(
             Ok(())
         }
         (
-            SourcePlanKind::SandboxedRhai,
+            SourcePlanKind::Script,
+            None,
+            Some(rhai),
+            AcquisitionClassDocument::SourceProjectedExact
+            | AcquisitionClassDocument::BoundedFullRecord,
+        ) if plan.script_authority.is_some() => validate_rhai(rhai),
+        (
+            SourcePlanKind::Script,
             None,
             Some(rhai),
             AcquisitionClassDocument::SourceProjectedExact
@@ -668,6 +675,9 @@ pub(in super::super) fn validate_rhai(
         || sha256_label(rhai.script.as_bytes()) != rhai.script_hash
     {
         return Err(SourcePlanArtifactError::HashMismatch);
+    }
+    if rhai.abi != crate::rhai_worker::xw::XW_ABI_VERSION {
+        return Err(SourcePlanArtifactError::InvalidPlan);
     }
     validate_stable_text(&rhai.entrypoint)?;
     let valid = (1..=MAX_RHAI_MEMORY_BYTES).contains(&rhai.memory_bytes)

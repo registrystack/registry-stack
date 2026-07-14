@@ -28,7 +28,7 @@ use crate::rhai_worker::{
 };
 use crate::source_backend::decode_snapshot_rows;
 use crate::source_plan::{
-    CompiledInputType, CompiledInputValue, CompiledRhaiFactType, CompiledSourcePlan,
+    CompiledInputType, CompiledInputValue, CompiledRhaiOutputType, CompiledSourcePlan,
     CompiledSourcePlanRegistry, CompiledStatusOutcome, SourcePlanArtifactBundle,
     SourcePlanCompileError, SourcePlanKind,
 };
@@ -267,7 +267,7 @@ impl OfflineRelayFixture {
                 execute_snapshot(plan, &inputs, request.interactions, trace)
             }
             SourcePlanKind::BoundedHttp => execute_http(plan, &inputs, request.interactions, trace),
-            SourcePlanKind::SandboxedRhai => execute_rhai(
+            SourcePlanKind::Script => execute_rhai(
                 plan,
                 &inputs,
                 request.interactions,
@@ -597,6 +597,8 @@ struct OfflineRhaiHost<'a> {
     plan: &'a CompiledSourcePlan,
     interactions: OfflineInteractionQueue,
     credential_used: bool,
+    request_bytes: u64,
+    source_bytes: u64,
     terminal_error: Option<OfflineFixtureError>,
 }
 
@@ -619,6 +621,11 @@ impl SourceHost for OfflineRhaiHost<'_> {
                     })
                 }
             };
+        }
+        if !super::executor::generic_script_source_calls_allowed(self.plan) {
+            // Mirror production: only the verified protocol helper may use a
+            // signed DCI authority. Raw generic responses never reach Rhai.
+            return Err(HostFailure::ContractViolation);
         }
         let (method, target, query, headers, body_format, body) = match &call {
             SourceCall::Get {
@@ -665,16 +672,19 @@ impl SourceHost for OfflineRhaiHost<'_> {
             .ok_or(HostFailure::ContractViolation)?
             .canonicalize_same_origin_target(target)
             .map_err(|_| HostFailure::ContractViolation)?;
-        let actual = rendered_script_request(method, &target, query, headers, body)
+        let actual = rendered_script_request(method, &target, query, headers, body.clone())
             .map_err(|_| HostFailure::ContractViolation)?;
         let canonical_target = super::executor::canonical_rhai_target(&target, query.clone())?;
         let header_names = headers.keys().map(String::as_str).collect::<Vec<_>>();
-        let operations = self
+        let authority = self
             .plan
-            .operations()
-            .filter(|operation| {
-                operation.method() == method
-                    && operation
+            .script_authority()
+            .ok_or(HostFailure::ContractViolation)?;
+        let rules = authority
+            .allow()
+            .filter(|rule| {
+                rule.method() == method
+                    && rule
                         .transport_template()
                         .validate_script_request_shape(
                             &canonical_target,
@@ -684,9 +694,43 @@ impl SourceHost for OfflineRhaiHost<'_> {
                         .is_ok()
             })
             .collect::<Vec<_>>();
-        let [operation] = operations.as_slice() else {
+        let [rule] = rules.as_slice() else {
             return Err(HostFailure::ContractViolation);
         };
+        let encoded_body_bytes = match (body_format, body.as_ref()) {
+            (Some(ScriptRequestBodyFormat::Json), Some(body)) => serde_json::to_vec(body)
+                .map_err(|_| HostFailure::ContractViolation)?
+                .len(),
+            (Some(ScriptRequestBodyFormat::Form), Some(Value::Object(fields))) => {
+                super::executor::encode_rhai_form(
+                    fields
+                        .iter()
+                        .map(|(name, value)| (name.clone(), value.clone()))
+                        .collect(),
+                )?
+                .len()
+            }
+            (None, None) => 0,
+            _ => return Err(HostFailure::ContractViolation),
+        };
+        let authored_bytes = canonical_target
+            .len()
+            .checked_add(
+                headers
+                    .iter()
+                    .try_fold(0_usize, |total, (name, value)| {
+                        total.checked_add(name.len())?.checked_add(value.len())
+                    })
+                    .ok_or(HostFailure::BudgetExceeded)?,
+            )
+            .and_then(|total| total.checked_add(encoded_body_bytes))
+            .and_then(|total| u64::try_from(total).ok())
+            .ok_or(HostFailure::BudgetExceeded)?;
+        self.request_bytes = self
+            .request_bytes
+            .checked_add(authored_bytes)
+            .filter(|total| *total <= u64::from(authority.request_max_bytes()))
+            .ok_or(HostFailure::BudgetExceeded)?;
         if !self.credential_used {
             if let Some(credential) = self.plan.credential_operation() {
                 let credential_request = rendered_credential_request_effect(
@@ -713,27 +757,50 @@ impl SourceHost for OfflineRhaiHost<'_> {
                 self.credential_used = true;
             }
         }
-        let observed = match self.interactions.take(
-            operation.id().as_str(),
-            canonical_operation_path(operation).as_str(),
-            &actual,
-        ) {
-            Ok(observed) => observed,
-            Err(error) => {
-                self.terminal_error = Some(error);
-                return Err(HostFailure::ContractViolation);
-            }
-        };
+        let observed =
+            match self
+                .interactions
+                .take("script-source-call", rule.audit_path(), &actual)
+            {
+                Ok(observed) => observed,
+                Err(error) => {
+                    self.terminal_error = Some(error);
+                    return Err(HostFailure::ContractViolation);
+                }
+            };
         match observed {
             OfflineSourceResponse::Http {
                 status,
                 headers,
                 body,
             } => {
+                match status {
+                    401 | 403 => return Err(HostFailure::SourceAuth),
+                    429 => return Err(HostFailure::SourceRateLimited),
+                    _ => {}
+                }
+                let encoded_bytes =
+                    u64::try_from(body.len()).map_err(|_| HostFailure::BudgetExceeded)?;
+                self.source_bytes = self
+                    .source_bytes
+                    .checked_add(encoded_bytes)
+                    .filter(|total| {
+                        *total <= self.plan.limits().operation().max_source_bytes
+                            && encoded_bytes <= u64::from(authority.response_max_bytes())
+                    })
+                    .ok_or(HostFailure::BudgetExceeded)?;
                 let body = if body.is_empty() {
                     Value::Null
                 } else {
-                    match serde_json::from_slice(&body) {
+                    let decoded = match authority.response_format() {
+                        crate::source_plan::CompiledResponseFormat::Json => {
+                            serde_json::from_slice(&body).map_err(|_| ())
+                        }
+                        crate::source_plan::CompiledResponseFormat::Text => {
+                            String::from_utf8(body).map(Value::String).map_err(|_| ())
+                        }
+                    };
+                    match decoded {
                         Ok(body) => body,
                         Err(_) => {
                             self.terminal_error =
@@ -742,13 +809,14 @@ impl SourceHost for OfflineRhaiHost<'_> {
                         }
                     }
                 };
+                let selected_headers = authority
+                    .response_headers()
+                    .map(|name| (name.to_owned(), headers.get(name).cloned()))
+                    .collect();
                 Ok(SourceResponse {
                     status,
                     body,
-                    headers: headers
-                        .into_iter()
-                        .map(|(name, value)| (name, Some(value)))
-                        .collect(),
+                    headers: selected_headers,
                 })
             }
             OfflineSourceResponse::NoMatch => Ok(SourceResponse {
@@ -778,19 +846,24 @@ impl OfflineRhaiHost<'_> {
         if !options.parameters.is_empty() {
             return Err(OfflineFixtureError::ExecutionContractViolation);
         }
-        let mut operations = self
+        let authored_request_bytes = u64::try_from(
+            serde_json::to_vec(&options)
+                .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?
+                .len(),
+        )
+        .map_err(|_| OfflineFixtureError::SourceResponseTooLarge)?;
+        let authority = self
             .plan
-            .operations()
-            .filter(|operation| operation.dci_exact().is_some());
-        let operation = operations
-            .next()
+            .script_authority()
             .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
-        if operations.next().is_some() {
-            return Err(OfflineFixtureError::ExecutionContractViolation);
-        }
-        let dci = operation
-            .dci_exact()
+        let dci = authority
+            .signed_dci()
             .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
+        self.request_bytes = self
+            .request_bytes
+            .checked_add(authored_request_bytes)
+            .filter(|total| *total <= u64::from(dci.request_max_bytes()))
+            .ok_or(OfflineFixtureError::SourceResponseTooLarge)?;
         let components = match dci.selector() {
             crate::source_plan::CompiledDciSelector::ExactAnd { components, .. } => components,
         };
@@ -865,17 +938,27 @@ impl OfflineRhaiHost<'_> {
             )?,
             verification.response_max_bytes(),
         )?;
-        let data_request = rendered_dci_request_values(operation, &component_values)?;
+        let data_request = rendered_dci_request_values(dci, &component_values)?;
         let response = require_http_body(
-            self.interactions.take(
-                operation.id().as_str(),
-                canonical_operation_path(operation).as_str(),
-                &data_request,
-            )?,
-            operation.response_max_bytes(),
+            self.interactions
+                .take("script-source-call", &data_request.path, &data_request)?,
+            dci.response_max_bytes(),
         )?;
-        let expectation = offline_dci_expectation(operation, &component_values)?;
-        let payload = SignedDciDecoder::new(expectation, operation.response_decoder())
+        self.source_bytes = self
+            .source_bytes
+            .checked_add(
+                u64::try_from(jwks.len())
+                    .map_err(|_| OfflineFixtureError::SourceResponseTooLarge)?,
+            )
+            .and_then(|total| {
+                u64::try_from(response.len())
+                    .ok()
+                    .and_then(|bytes| total.checked_add(bytes))
+            })
+            .filter(|total| *total <= self.plan.limits().operation().max_source_bytes)
+            .ok_or(OfflineFixtureError::SourceResponseTooLarge)?;
+        let expectation = offline_dci_expectation(dci, &component_values)?;
+        let payload = SignedDciDecoder::new_script(expectation)
             .decode_verified_payload_offline_fixture(&jwks, &response)
             .map_err(map_dci_decode)?;
         Ok(SourceResponse {
@@ -1057,6 +1140,8 @@ fn execute_rhai(
         plan,
         interactions: OfflineInteractionQueue::new(interactions, trace)?,
         credential_used: false,
+        request_bytes: 0,
+        source_bytes: 0,
         terminal_error: None,
     };
     let output = run_rhai_worker(&request, &mut host, worker_program);
@@ -1118,7 +1203,7 @@ fn build_rhai_request(
     let limits = plan
         .runtime_profile()
         .dispatch()
-        .sandboxed_rhai_limits()
+        .script_limits()
         .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
     let mut request = WorkerRequest::v1(
         script,
@@ -1166,16 +1251,16 @@ fn build_rhai_request(
             },
         );
     }
-    for output in plan.rhai_facts() {
-        let (output_type, max_bytes, minimum, maximum) = match output.fact_type() {
-            CompiledRhaiFactType::String { max_bytes } => {
+    for output in plan.rhai_outputs() {
+        let (output_type, max_bytes, minimum, maximum) = match output.output_type() {
+            CompiledRhaiOutputType::String { max_bytes } => {
                 (RhaiOutputType::String, Some(max_bytes as usize), None, None)
             }
-            CompiledRhaiFactType::Boolean => (RhaiOutputType::Boolean, None, None, None),
-            CompiledRhaiFactType::Integer { minimum, maximum } => {
+            CompiledRhaiOutputType::Boolean => (RhaiOutputType::Boolean, None, None, None),
+            CompiledRhaiOutputType::Integer { minimum, maximum } => {
                 (RhaiOutputType::Integer, None, Some(minimum), Some(maximum))
             }
-            CompiledRhaiFactType::Date => (RhaiOutputType::Date, None, None, None),
+            CompiledRhaiOutputType::Date => (RhaiOutputType::Date, None, None, None),
         };
         request.output_schema.insert(
             output.name().to_owned(),
@@ -1424,7 +1509,7 @@ fn execute_http(
     let mut interactions = OfflineInteractionQueue::new(interactions, trace)?;
     let operations = plan.operations().collect::<Vec<_>>();
     let mut memory = (0..operations.len()).map(|_| None).collect::<Vec<_>>();
-    let mut facts = Vec::new();
+    let mut outputs = Vec::new();
     let mut credential_used = false;
     for (step_position, step) in plan.compiled_steps().enumerate() {
         let index = step.operation_index();
@@ -1432,7 +1517,7 @@ fn execute_http(
             .get(index)
             .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
         if !offline_step_should_execute(step, &memory)? {
-            append_absent(operation, &mut facts);
+            append_absent(operation, &mut outputs);
             memory[index] = Some(OperationMemory {
                 prior_outputs: (0..operation.response().prior_outputs().len())
                     .map(|_| ProjectedJsonScalar::Null)
@@ -1483,7 +1568,7 @@ fn execute_http(
                 ))
             }
             ClosedJsonOutcome::NoMatch => {
-                append_absent(operation, &mut facts);
+                append_absent(operation, &mut outputs);
                 memory[index] = Some(OperationMemory {
                     prior_outputs: (0..operation.response().prior_outputs().len())
                         .map(|_| ProjectedJsonScalar::Null)
@@ -1501,7 +1586,7 @@ fn execute_http(
                     .drain(output_count..)
                     .map(|field| field.into_parts().1)
                     .collect();
-                facts.extend(projected.into_iter().map(|field| field.into_parts()));
+                outputs.extend(projected.into_iter().map(|field| field.into_parts()));
                 memory[index] = Some(OperationMemory {
                     prior_outputs,
                     present: true,
@@ -1512,7 +1597,7 @@ fn execute_http(
     validated_observation(
         plan,
         OfflineFixtureOutcome::Match,
-        facts,
+        outputs,
         interactions.finish()?,
     )
 }
@@ -1721,11 +1806,11 @@ fn rendered_dci_request(
             })
             .collect::<Result<Vec<_>, _>>()?,
     };
-    rendered_dci_request_values(operation, &values)
+    rendered_dci_request_values(dci, &values)
 }
 
 fn rendered_dci_request_values(
-    operation: &crate::source_plan::CompiledOperation,
+    dci: &crate::source_plan::CompiledDciExact,
     component_values: &[&str],
 ) -> Result<OfflineRenderedRequest, OfflineFixtureError> {
     use crate::source_plan::codec::dci::{
@@ -1734,9 +1819,6 @@ fn rendered_dci_request_values(
     };
     use registry_platform_httputil::destination::DestinationAuthorizationValue;
 
-    let dci = operation
-        .dci_exact()
-        .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
     let message_timestamp = time::OffsetDateTime::parse(
         "2026-01-01T00:00:00Z",
         &time::format_description::well_known::Rfc3339,
@@ -1773,7 +1855,7 @@ fn rendered_dci_request_values(
                 .first()
                 .copied()
                 .ok_or(OfflineFixtureError::ExecutionContractViolation)?,
-            requested_max: operation.max_source_records(),
+            requested_max: dci.max_source_records(),
             page_number: dci.page_number(),
             signature: None,
         }),
@@ -1790,7 +1872,7 @@ fn rendered_dci_request_values(
             registry_event_type: dci.registry_event_type(),
             record_type: dci.record_type(),
             components: &components,
-            requested_max: operation.max_source_records(),
+            requested_max: dci.max_source_records(),
             page_number: dci.page_number(),
             signature: None,
         }),
@@ -1801,8 +1883,9 @@ fn rendered_dci_request_values(
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
     let authorization = DestinationAuthorizationValue::bearer(b"synthetic-token".to_vec())
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
-    let rendered = operation
-        .transport_template()
+    let rendered = dci
+        .data_transport()
+        .ok_or(OfflineFixtureError::ExecutionContractViolation)?
         .render_zeroizing(
             &[],
             &[],
@@ -1814,12 +1897,9 @@ fn rendered_dci_request_values(
 }
 
 fn offline_dci_expectation<'a>(
-    operation: &crate::source_plan::CompiledOperation,
+    dci: &crate::source_plan::CompiledDciExact,
     component_values: &'a [&'a str],
 ) -> Result<SignedDciExpectation, OfflineFixtureError> {
-    let dci = operation
-        .dci_exact()
-        .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
     let components = match dci.selector() {
         crate::source_plan::CompiledDciSelector::ExactAnd { components, .. } => components
             .iter()
@@ -1853,9 +1933,9 @@ fn offline_dci_expectation<'a>(
             identifier_type,
             dci.locale(),
             u64::from(dci.page_number()),
-            u64::from(operation.max_source_records()),
+            u64::from(dci.max_source_records()),
             dci.verification().response_max_bytes() as usize,
-            operation.response_max_bytes() as usize,
+            dci.response_max_bytes() as usize,
         ),
         crate::source_plan::CompiledDciSelector::ExactAnd {
             identifier_type: None,
@@ -1872,9 +1952,9 @@ fn offline_dci_expectation<'a>(
                 .ok_or(OfflineFixtureError::ExecutionContractViolation)?,
             dci.locale(),
             u64::from(dci.page_number()),
-            u64::from(operation.max_source_records()),
+            u64::from(dci.max_source_records()),
             dci.verification().response_max_bytes() as usize,
-            operation.response_max_bytes() as usize,
+            dci.response_max_bytes() as usize,
         ),
     }
     .map_err(|_| OfflineFixtureError::ExecutionContractViolation)
@@ -1950,7 +2030,7 @@ fn execute_snapshot(
             _ => OfflineFixtureError::SourceResponseMalformed,
         })?;
     let public = map_outcome(outcome);
-    let facts = match record {
+    let outputs = match record {
         Some(record) => plan
             .runtime_profile()
             .output()
@@ -1962,7 +2042,7 @@ fn execute_snapshot(
         None => Vec::new(),
     };
     if public == OfflineFixtureOutcome::Match {
-        validated_observation(plan, public, facts, calls)
+        validated_observation(plan, public, outputs, calls)
     } else {
         Ok(observation(public, Vec::new(), calls))
     }
@@ -2033,10 +2113,10 @@ fn validate_status(
 fn validated_observation(
     plan: &CompiledSourcePlan,
     outcome: OfflineFixtureOutcome,
-    facts: Vec<(Box<str>, ProjectedJsonScalar)>,
+    outputs: Vec<(Box<str>, ProjectedJsonScalar)>,
     calls: Vec<String>,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
-    let outputs = ValidatedOutputMap::try_new(plan.runtime_profile(), facts)
+    let outputs = ValidatedOutputMap::try_new(plan.runtime_profile(), outputs)
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
     Ok(OfflineFixtureObservation {
         outcome,
@@ -2087,9 +2167,9 @@ fn json_scalar(value: &Value) -> ProjectedJsonScalar {
 
 fn append_absent(
     operation: &crate::source_plan::CompiledOperation,
-    facts: &mut Vec<(Box<str>, ProjectedJsonScalar)>,
+    outputs: &mut Vec<(Box<str>, ProjectedJsonScalar)>,
 ) {
-    facts.extend(
+    outputs.extend(
         operation
             .response()
             .outputs()
@@ -2571,7 +2651,7 @@ mod tests {
     }
 
     #[test]
-    fn sandboxed_rhai_no_match_discards_the_complete_worker_output_map() {
+    fn script_no_match_discards_the_complete_worker_output_map() {
         let plan = crate::source_plan::rhai_runtime_vector_plan_fixture();
         let result = finalize_rhai_observation(
             &plan,
@@ -2585,6 +2665,50 @@ mod tests {
         assert_eq!(result.outcome, OfflineFixtureOutcome::NoMatch);
         assert!(result.outputs.is_empty());
         assert_eq!(result.calls, ["lookup"]);
+    }
+
+    #[tokio::test]
+    async fn signed_dci_script_rejects_generic_post_before_raw_fixture_response() {
+        let plan = crate::source_plan::signed_dci_script_runtime_plan_fixture();
+        let interaction = OfflineInteraction {
+            request: OfflineExpectedRequest {
+                method: OfflineRequestMethod::Post,
+                path: "/registry/sync/search".to_owned(),
+                query: BTreeMap::new(),
+                headers: BTreeMap::new(),
+                body: Some(serde_json::json!({"selector": "reviewed"})),
+            },
+            response: OfflineSourceResponse::Http {
+                status: 200,
+                headers: BTreeMap::new(),
+                body: br#"{"unverified":"must-not-reach-rhai"}"#.to_vec(),
+            },
+        };
+        let mut host = OfflineRhaiHost {
+            plan: &plan,
+            interactions: OfflineInteractionQueue::new(vec![interaction], false)
+                .expect("one closed interaction"),
+            credential_used: false,
+            request_bytes: 0,
+            source_bytes: 0,
+            terminal_error: None,
+        };
+
+        assert_eq!(
+            host.call(SourceCall::PostJson {
+                call_id: 0,
+                target: "/registry/sync/search".to_owned(),
+                body: serde_json::json!({"selector": "reviewed"}),
+                options: crate::rhai_worker::SourceOptions {
+                    query: BTreeMap::new(),
+                    headers: BTreeMap::new(),
+                },
+            })
+            .await,
+            Err(HostFailure::ContractViolation)
+        );
+        assert_eq!(host.interactions.interactions.len(), 1);
+        assert!(host.terminal_error.is_none());
     }
 
     #[test]

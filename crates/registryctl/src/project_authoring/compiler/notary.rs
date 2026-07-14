@@ -231,11 +231,11 @@ fn generated_notary_config(
 
 fn claim_value_type(value: &ClaimValueDeclaration) -> Result<&'static str> {
     match value.value_type {
-        FactType::Boolean => Ok("boolean"),
-        FactType::Integer => Ok("integer"),
-        FactType::String => Ok("string"),
-        FactType::Date => Ok("date"),
-        FactType::Presence => bail!("claim value contracts cannot use presence"),
+        OutputType::Boolean => Ok("boolean"),
+        OutputType::Integer => Ok("integer"),
+        OutputType::String => Ok("string"),
+        OutputType::Date => Ok("date"),
+        OutputType::Presence => bail!("claim value contracts cannot use presence"),
     }
 }
 
@@ -245,10 +245,10 @@ fn generated_notary_output_contracts(integration: &IntegrationDocument) -> Resul
         .iter()
         .map(|(name, output)| {
             let contract = match output.output_type {
-                FactType::Boolean => {
+                OutputType::Boolean => {
                     json!({ "type": "boolean", "nullable": output.nullable })
                 }
-                FactType::Integer => {
+                OutputType::Integer => {
                     if let (Some(minimum), Some(maximum)) = (output.minimum, output.maximum) {
                         json!({
                             "type": "integer",
@@ -264,15 +264,15 @@ fn generated_notary_output_contracts(integration: &IntegrationDocument) -> Resul
                         json!({ "type": "integer", "nullable": output.nullable, "minimum": min, "maximum": max })
                     }
                 }
-                FactType::String => json!({
+                OutputType::String => json!({
                     "type": "string",
                     "nullable": output.nullable,
                     "max_bytes": output.max_bytes.ok_or_else(|| anyhow!("string output bound is absent"))?,
                 }),
-                FactType::Date => {
+                OutputType::Date => {
                     json!({ "type": "date", "nullable": output.nullable })
                 }
-                FactType::Presence => bail!("presence is an outcome, not a declared output"),
+                OutputType::Presence => bail!("presence is an outcome, not a declared output"),
             };
             Ok((name.clone(), contract))
         })
@@ -282,9 +282,9 @@ fn generated_notary_output_contracts(integration: &IntegrationDocument) -> Resul
 
 fn output_source_schema<'a>(
     integration: &'a IntegrationDocument,
-    fact: &OutputDeclaration,
+    output: &OutputDeclaration,
 ) -> Result<&'a SchemaNode> {
-    let (operation, _) = fact
+    let (operation, _) = output
         .from
         .as_deref()
         .ok_or_else(|| anyhow!("output path is absent"))?
@@ -294,7 +294,7 @@ fn output_source_schema<'a>(
         .get(operation)
         .ok_or_else(|| anyhow!("output operation is absent"))?;
     let mut schema = operation_record_schema(operation)?;
-    let pointer = fact
+    let pointer = output
         .source_pointer
         .as_deref()
         .ok_or_else(|| anyhow!("HTTP output pointer is absent"))?;
@@ -337,28 +337,28 @@ fn generated_notary_claim_rule(
     loaded: &LoadedIntegration,
 ) -> Result<(String, bool, Value)> {
     if let Some(fact_path) = &claim.output {
-        let (consultation, fact_name) = fact_path
+        let (consultation, output_name) = fact_path
             .split_once('.')
             .ok_or_else(|| anyhow!("direct claim output path is invalid"))?;
         if consultation != consultation_name {
             bail!("direct claim output path names the wrong consultation");
         }
-        let fact = integration
+        let output = integration
             .outputs
-            .get(fact_name)
+            .get(output_name)
             .ok_or_else(|| anyhow!("direct claim references an unknown output"))?;
-        let value_type = match fact.output_type {
-            FactType::Boolean => "boolean",
-            FactType::Integer => "integer",
-            FactType::String => "string",
-            FactType::Date => "date",
-            FactType::Presence => bail!("presence cannot be referenced as an output"),
+        let value_type = match output.output_type {
+            OutputType::Boolean => "boolean",
+            OutputType::Integer => "integer",
+            OutputType::String => "string",
+            OutputType::Date => "date",
+            OutputType::Presence => bail!("presence cannot be referenced as an output"),
         };
         let nullable = true;
         let rule = json!({
             "type": "consultation_output",
             "consultation": notary_consultation_name,
-            "output": fact_name
+            "output": output_name
         });
         return Ok((value_type.to_string(), nullable, rule));
     }
@@ -559,8 +559,8 @@ fn claim_consultation_name<'a>(
     service: &'a ServiceDeclaration,
     claim: &'a ClaimDeclaration,
 ) -> Result<&'a str> {
-    if let Some(fact) = &claim.output {
-        let (consultation, _) = fact
+    if let Some(output) = &claim.output {
+        let (consultation, _) = output
             .split_once('.')
             .ok_or_else(|| anyhow!("direct claim output path is invalid"))?;
         if service.consultations.contains_key(consultation) {
@@ -799,6 +799,128 @@ fn parse_validity_seconds(value: &str) -> Result<u64> {
         .ok_or_else(|| anyhow!("credential validity overflows"))
 }
 
+fn explained_limit<T: Serialize>(
+    value: T,
+    unit: &str,
+    authored: bool,
+    default: Value,
+    hard_ceiling: Value,
+) -> Value {
+    json!({
+        "value": value,
+        "unit": unit,
+        "source": if authored { "authored" } else { "platform_default" },
+        "default": default,
+        "hard_ceiling": hard_ceiling,
+    })
+}
+
+fn script_call_limit_explanation(value: u8, authored: bool, signed_dci: bool) -> Value {
+    if signed_dci {
+        json!({
+            "value": 1,
+            "unit": "calls",
+            "source": if authored { "authored" } else { "protocol_intrinsic" },
+            "default": 1,
+            "hard_ceiling": 1,
+        })
+    } else {
+        explained_limit(value, "calls", authored, json!(5), json!(16))
+    }
+}
+
+fn integration_explanation(integration: &IntegrationDocument) -> Value {
+    let mut value = json!({
+        "authoring_version": integration.version,
+        "revision": integration.revision,
+        "source_product": integration.source.product,
+        "source_versions": integration.source.versions,
+        "input": integration.input,
+        "outputs": integration.outputs,
+    });
+    let object = value.as_object_mut().expect("integration explanation object");
+    match &integration.capability {
+        CapabilityDeclaration::Http { http } => {
+            object.insert("capability".into(), json!("http"));
+            object.insert("bounds".into(), json!({
+                "calls": {"value": 1, "unit": "calls", "source": "intrinsic", "default": 1, "hard_ceiling": 1},
+                "request_bytes": explained_limit(integration.bounds.request_bytes, "bytes", integration.bounds.request_bytes_authored, json!(64 * 1024), json!(1024 * 1024)),
+                "source_response_bytes": explained_limit(
+                    http.operations.values().find(|operation| operation.role == OperationRole::Data).map_or(512 * 1024, |operation| operation.response.max_bytes),
+                    "bytes",
+                    http.response_max_bytes_authored,
+                    json!(512 * 1024),
+                    json!(8 * 1024 * 1024),
+                ),
+                "source_bytes": explained_limit(integration.bounds.source_bytes, "bytes", integration.bounds.source_bytes_authored, json!(2 * 1024 * 1024), json!(16 * 1024 * 1024)),
+                "deadline": explained_limit(&integration.bounds.deadline, "duration", integration.bounds.deadline_authored, json!("15s"), json!("60s")),
+            }));
+            object.insert(
+                "operations".into(),
+                integration_operations(integration)
+                    .iter()
+                    .map(|(id, operation)| {
+                        json!({
+                            "id": id,
+                            "role": match operation.role {
+                                OperationRole::Data => "data",
+                                OperationRole::Credential => "credential",
+                                OperationRole::Verification => "verification",
+                            },
+                            "method": match operation.request.method { ReadMethod::Get => "GET", ReadMethod::Post => "READ_ONLY_POST" },
+                            "primitive": operation.primitive,
+                            "depends_on": operation.depends_on,
+                            "when": operation.when,
+                            "destination": operation.request.destination,
+                            "path": operation.request.path,
+                            "path_parameters": operation.request.path_parameters,
+                            "query": operation.request.query,
+                            "headers": operation.request.headers,
+                            "body": operation.request.body,
+                            "request_codec": operation.request.codec,
+                            "authorization": operation.request.authorization,
+                            "response_bytes": operation.response.max_bytes,
+                            "response_codec": operation.response.codec,
+                            "response_statuses": operation.response.statuses,
+                            "response_schema": operation.response.schema,
+                            "cardinality": operation.response.cardinality,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            );
+        }
+        CapabilityDeclaration::Script { script } => {
+            object.insert("capability".into(), json!("script"));
+            object.insert("bounds".into(), json!({
+                "calls": script_call_limit_explanation(integration.bounds.calls, integration.bounds.calls_authored, script.signed_dci.is_some()),
+                "request_bytes": explained_limit(integration.bounds.request_bytes, "bytes", integration.bounds.request_bytes_authored, json!(64 * 1024), json!(1024 * 1024)),
+                "source_response_bytes": explained_limit(script.response.max_bytes, "bytes", script.response.max_bytes_authored, json!(512 * 1024), json!(8 * 1024 * 1024)),
+                "source_bytes": explained_limit(integration.bounds.source_bytes, "bytes", integration.bounds.source_bytes_authored, json!(2 * 1024 * 1024), json!(16 * 1024 * 1024)),
+                "deadline": explained_limit(&integration.bounds.deadline, "duration", integration.bounds.deadline_authored, json!("15s"), json!("60s")),
+            }));
+            object.insert(
+                "script_authority".into(),
+                json!({
+                    "allow": script.allow,
+                    "request_headers": script.request_headers,
+                    "response_headers": script.response_headers,
+                    "response": script.response,
+                    "credential_type": credential_interface(integration).credential_type,
+                    "signed_dci": script.signed_dci,
+                    "runtime": script.runtime,
+                    "abi": registry_relay::rhai_worker::xw::XW_ABI_VERSION,
+                }),
+            );
+        }
+        CapabilityDeclaration::Snapshot { snapshot } => {
+            object.insert("capability".into(), json!("snapshot"));
+            object.insert("materialization".into(), json!(snapshot));
+        }
+    }
+    value
+}
+
 fn generated_explanation(
     loaded: &LoadedRegistryProject,
     environment_name: &str,
@@ -813,49 +935,22 @@ fn generated_explanation(
             "defaults_release": env!("CARGO_PKG_VERSION"),
             "script_runtime": "rhai_v1",
             "script_abi": registry_relay::rhai_worker::xw::XW_ABI_VERSION,
+            "defensive_ceilings": {
+                "selector_count": { "value": 8, "unit": "selectors" },
+                "canonical_selector_bytes": { "value": 4096, "unit": "bytes" },
+                "total_inputs": { "value": 16, "unit": "inputs" },
+                "outputs": { "value": 64, "unit": "outputs" },
+                "response_schema_depth": { "value": 8, "unit": "levels" },
+                "response_schema_nodes": { "value": 256, "unit": "nodes" },
+                "response_array_items": { "value": 256, "unit": "items" },
+                "script_string_bytes": { "value": 65536, "unit": "bytes" },
+                "script_collection_items": { "value": 1024, "unit": "items" },
+                "successful_consultation_bytes": { "value": 65536, "unit": "bytes" },
+                "deployment_concurrency": { "value": 8, "unit": "consultations", "hard_ceiling": 16 },
+            },
         },
         "integrations": loaded.integrations.iter().map(|(alias, integration)| {
-            (alias.clone(), json!({
-                "authoring_version": integration.document.version,
-                "revision": integration.document.revision,
-                "source_product": integration.document.source.product,
-                "source_versions": integration.document.source.versions,
-                "input": integration.document.input,
-                "capability": match integration.document.capability {
-                    CapabilityDeclaration::Http { .. } => "http",
-                    CapabilityDeclaration::Snapshot { .. } => "snapshot",
-                    CapabilityDeclaration::Script { .. } => "script",
-                },
-                "operations": integration_operations(&integration.document).iter().map(|(id, operation)| {
-                    json!({
-                        "id": id,
-                        "role": match operation.role {
-                            OperationRole::Data => "data",
-                            OperationRole::Credential => "credential",
-                            OperationRole::Verification => "verification",
-                        },
-                        "method": match operation.request.method { ReadMethod::Get => "GET", ReadMethod::Post => "READ_ONLY_POST" },
-                        "primitive": operation.primitive,
-                        "depends_on": operation.depends_on,
-                        "when": operation.when,
-                        "destination": operation.request.destination,
-                        "path": operation.request.path,
-                        "path_parameters": operation.request.path_parameters,
-                        "query": operation.request.query,
-                        "headers": operation.request.headers,
-                        "body": operation.request.body,
-                        "request_codec": operation.request.codec,
-                        "authorization": operation.request.authorization,
-                        "response_bytes": operation.response.max_bytes,
-                        "response_codec": operation.response.codec,
-                        "response_statuses": operation.response.statuses,
-                        "response_schema": operation.response.schema,
-                        "cardinality": operation.response.cardinality,
-                    })
-                }).collect::<Vec<_>>(),
-                "outputs": integration.document.outputs,
-                "bounds": integration.document.bounds,
-            }))
+            (alias.clone(), integration_explanation(&integration.document))
         }).collect::<Map<String, Value>>(),
         "services": loaded.project.services.iter().map(|(id, service)| {
             (id.clone(), json!({
@@ -930,6 +1025,34 @@ fn generated_explanation(
 #[cfg(test)]
 mod notary_compiler_tests {
     use super::*;
+
+    #[test]
+    fn signed_dci_call_explanation_reports_the_intrinsic_or_authored_one_call_bound() {
+        assert_eq!(
+            script_call_limit_explanation(1, false, true),
+            json!({
+                "value": 1,
+                "unit": "calls",
+                "source": "protocol_intrinsic",
+                "default": 1,
+                "hard_ceiling": 1,
+            })
+        );
+        assert_eq!(
+            script_call_limit_explanation(1, true, true)["source"],
+            "authored"
+        );
+        assert_eq!(
+            script_call_limit_explanation(5, false, false),
+            json!({
+                "value": 5,
+                "unit": "calls",
+                "source": "platform_default",
+                "default": 5,
+                "hard_ceiling": 16,
+            })
+        );
+    }
 
     #[test]
     fn crosswalk_helper_namespaces_receive_unique_internal_aliases() {

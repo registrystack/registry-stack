@@ -753,7 +753,12 @@ fn validate_semantic_changes(value: &Value) -> Result<()> {
             .ok_or_else(|| anyhow!("baseline semantic change dimension must be a string"))?;
         if !matches!(
             dimension,
-            "claim" | "integration" | "service_policy" | "operator_security" | "disclosure"
+            "compiler"
+                | "claim"
+                | "integration"
+                | "service_policy"
+                | "operator_security"
+                | "disclosure"
         ) || !dimensions.insert(dimension)
         {
             bail!("baseline semantic_changes contain an unknown or duplicate dimension");
@@ -792,7 +797,7 @@ fn semantic_change_records(
     baseline: Option<&Value>,
     disclosure_digest: &str,
 ) -> Vec<SemanticChange> {
-    [
+    let mut changes = [
         (
             "claim",
             loaded.semantic_digests.claim.as_str(),
@@ -836,7 +841,17 @@ fn semantic_change_records(
     .into_iter()
     .filter(|(_, current, previous)| *previous != Some(*current))
     .map(|(dimension, _, _)| SemanticChange { dimension })
-    .collect()
+    .collect::<Vec<_>>();
+    if baseline
+        .and_then(|review| review.get("compiler_version"))
+        .and_then(Value::as_str)
+        .is_some_and(|version| version != env!("CARGO_PKG_VERSION"))
+    {
+        changes.push(SemanticChange {
+            dimension: "compiler",
+        });
+    }
+    changes
 }
 
 fn canonical_root(root: &Path) -> Result<PathBuf> {

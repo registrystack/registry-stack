@@ -95,7 +95,7 @@ const DHIS2_POLICY_HASH: &str =
 const DHIS2_CONTRACT_HASH: &str =
     "sha256:5204b26c004cdeb7530012ee00877e184854ed223cfdaa27fd82925117512a32";
 const DHIS2_BINDING_HASH: &str =
-    "sha256:656a826f13a01b6cc7cbab3001678c6ce5269eb9806ee8034a7a43b4353a0da6";
+    "sha256:2195fdb4b47ef523b3c23b45329d6cfaca9d32a2e6c5b2de6fbb520c5fbcb3ca";
 const OPENCRVS_PACK_HASH: &str =
     "sha256:1756f16b1c496e11be1069831ea4f54d8953466ed62bb48efc9f0c7e7def8768";
 const OPENCRVS_POLICY_HASH: &str =
@@ -103,7 +103,7 @@ const OPENCRVS_POLICY_HASH: &str =
 const OPENCRVS_CONTRACT_HASH: &str =
     "sha256:c86ebb8e721fe74a26b5c1726779e352ff120003c503b1a8e45740554218d583";
 const OPENCRVS_BINDING_HASH: &str =
-    "sha256:4222041ed6bf57db2daf04c0312edbd1c56d62709c5bc1e61d43cc21ee08783d";
+    "sha256:84d37eff9db4c95a1b35287087f7d40c9f7d017fd92262cfe8caee3c0bc087b1";
 
 fn vector_manifest() -> &'static Value {
     static MANIFEST: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
@@ -439,6 +439,90 @@ fn open_crvs_fixture() -> Fixture {
         .as_object_mut()
         .expect("binding limits")
         .remove("max_token_lifetime_ms");
+    fixture.refresh_all();
+    fixture
+}
+
+fn signed_dci_script_fixture() -> Fixture {
+    let mut fixture = open_crvs_fixture();
+    let outputs = json!({
+        "found": {"type": "boolean", "nullable": false}
+    });
+    fixture.pack_value["spec"]["output"] = outputs.clone();
+    fixture.contract_value["spec"]["output"] = outputs.clone();
+    fixture.pack_value["spec"]["acquisition"]["fields"] = outputs.clone();
+    fixture.contract_value["spec"]["acquisition"]["fields"] = outputs.clone();
+    fixture.pack_value["spec"]["reviewed_acquisition"]["fields"] = outputs;
+    let dci = fixture.pack_value["spec"]["plan"]["operations"][0]["dci"].clone();
+    let plan = fixture.pack_value["spec"]["plan"]
+        .as_object_mut()
+        .expect("signed DCI Script plan");
+    plan.remove("operations");
+    plan.remove("steps");
+    plan.remove("step_conditions");
+    plan.insert("kind".to_owned(), json!("script"));
+    plan.insert(
+        "script_authority".to_owned(),
+        json!({
+            "allow": [{
+                "method": "READ_ONLY_POST",
+                "path": "/registry/sync/search",
+                "semantics": "read_only",
+            }],
+            "request_headers": [],
+            "response_headers": [],
+            "response": { "format": "json", "max_bytes": 262_144 },
+            "auth": { "mode": "oauth_client_credentials" },
+            "request_max_bytes": 16_384,
+            "signed_dci": dci,
+        }),
+    );
+    let script = "fn consult(ctx) { result.no_match() }";
+    plan.insert(
+        "rhai".to_owned(),
+        json!({
+            "script": script,
+            "script_hash": raw_hash(script.as_bytes()),
+            "entrypoint": "consult",
+            "abi": crate::rhai_worker::xw::XW_ABI_VERSION,
+            "memory_bytes": 67_108_864,
+            "cpu_ms": 500,
+            "ipc_frame_bytes": 131_072,
+            "instructions": 50_000,
+            "call_depth": 8,
+            "string_bytes": 32_768,
+            "array_items": 256,
+            "map_entries": 256,
+            "output_bytes": 32_768,
+            "concurrency": 1,
+        }),
+    );
+    fixture.pack_value["spec"]["reviewed_acquisition"]["selector"] = Value::Null;
+    fixture.pack_value["spec"]["plan"]["credential_operation"]["response"]["max_bytes"] =
+        json!(8_192);
+    fixture.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(335_872);
+    fixture.contract_value["spec"]["bounds"]["max_source_bytes"] = json!(335_872);
+    fixture.binding_value["limits"]["max_source_bytes"] = json!(335_872);
+    fixture.contract_value["spec"]["runtime"] = json!({
+        "platform_profile": "registry-stack.consultation.v1",
+        "source_capability": "script",
+        "script_abi": crate::rhai_worker::xw::XW_ABI_VERSION,
+    });
+    fixture.binding_value["capabilities"]["allow_script"] = json!(true);
+    fixture.binding_value["capabilities"]["script"] = json!({
+        "max_calls": 1,
+        "memory_bytes": 67_108_864,
+        "cpu_ms": 500,
+        "ipc_frame_bytes": 131_072,
+        "instructions": 50_000,
+        "call_depth": 8,
+        "string_bytes": 32_768,
+        "array_items": 256,
+        "map_entries": 256,
+        "output_bytes": 32_768,
+        "concurrency": 1,
+        "isolation": "one_shot_worker_v1",
+    });
     fixture.refresh_all();
     fixture
 }
@@ -995,7 +1079,7 @@ fn open_crvs_exact_presence_plan_compiles_embedded_jwks_and_fresh_oauth() {
     assert_eq!(jwks.response_max_bytes(), 65_536);
     assert_eq!(
         plan.runtime_profile().permit_bindings().collect::<Vec<_>>(),
-        [("credential", 0), ("data", 0), ("data", 1)]
+        [("credential", 0), ("verification", 0), ("data", 0)]
     );
     assert_eq!(plan.steps().count(), 1);
     assert_eq!(
@@ -1153,6 +1237,21 @@ pub(crate) fn open_crvs_runtime_vector_plan_fixture() -> CompiledSourcePlan {
         .expect("one exact OpenCRVS vector plan")
 }
 
+pub(crate) fn signed_dci_script_runtime_plan_fixture() -> CompiledSourcePlan {
+    let fixture = signed_dci_script_fixture();
+    let worker = RhaiWorkerCapability::from_initialized_worker(
+        &fixture.pack_hash,
+        rhai_test_worker_limits(1),
+    )
+    .expect("signed DCI Script worker capability");
+    compile_with_rhai_workers(&fixture, &[worker])
+        .expect("signed DCI Script vector plan compiles")
+        .plans
+        .into_values()
+        .next()
+        .expect("one signed DCI Script vector plan")
+}
+
 pub(crate) fn signed_dci_expiring_oauth_runtime_plan_fixture() -> CompiledSourcePlan {
     let mut fixture = open_crvs_fixture();
     fixture.pack_value["spec"]["plan"]["credential_operation"]["response"] = json!({
@@ -1205,7 +1304,6 @@ pub(crate) fn rhai_runtime_vector_plan_fixture() -> CompiledSourcePlan {
     let fixture = rhai_five_operation_fixture();
     let worker = RhaiWorkerCapability::from_initialized_worker(
         &fixture.pack_hash,
-        &RHAI_FIVE_CALLABLES,
         rhai_test_worker_limits(2),
     )
     .expect("Rhai vector worker capability");
@@ -1336,39 +1434,27 @@ fn rhai_five_operation_fixture() -> Fixture {
     fixture.pack_value["spec"]["output"] = Value::Object(public_fields.clone());
     fixture.contract_value["spec"]["output"] = Value::Object(public_fields.clone());
 
-    let operation_template = fixture.pack_value["spec"]["plan"]["operations"][0].clone();
-    let operations = (0..5)
-        .map(|index| {
-            let mut operation = operation_template.clone();
-            operation["id"] = json!(format!("lookup-status-{index}"));
-            operation["path"] = json!(format!("/api/person/status/{index}"));
-            operation["query"] = json!({});
-            operation["headers"] = json!({});
-            let operation_object = operation.as_object_mut().expect("Rhai operation");
-            operation_object.remove("path_parameters");
-            operation_object.remove("relation_selector");
-            operation_object.remove("input_selector");
-            operation["acquisition_fields"] = json!([]);
-            operation["control_fields"] = json!([]);
-            operation["projection"] = json!({ "mechanism": "bounded_full_record" });
-            operation["response"] = json!({
-                "max_bytes": 20_000,
-                "max_records": 1,
-                "normalization": "script_body",
-                "cardinality": { "mechanism": "script_managed" },
-                "schema": { "type": "script_body" },
-                "output_mapping": {},
-            });
-            operation
-        })
-        .collect();
-    fixture.pack_value["spec"]["plan"]["operations"] = Value::Array(operations);
-    fixture.pack_value["spec"]["plan"]["steps"] = json!([]);
-    fixture.pack_value["spec"]["plan"]
+    let plan = fixture.pack_value["spec"]["plan"]
         .as_object_mut()
-        .expect("Rhai plan")
-        .remove("step_conditions");
-    fixture.pack_value["spec"]["plan"]["kind"] = json!("sandboxed_rhai");
+        .expect("Script plan");
+    plan.remove("operations");
+    plan.remove("steps");
+    plan.remove("step_conditions");
+    plan.insert("kind".to_owned(), json!("script"));
+    plan.insert(
+        "script_authority".to_owned(),
+        json!({
+            "allow": (0..5).map(|index| json!({
+                "method": "GET",
+                "path": format!("/api/person/status/{index}"),
+            })).collect::<Vec<_>>(),
+            "request_headers": [],
+            "response_headers": [],
+            "response": { "format": "json", "max_bytes": 16_000 },
+            "auth": { "mode": "oauth_client_credentials" },
+            "request_max_bytes": 65_536,
+        }),
+    );
     fixture.contract_value["spec"]["runtime"] = json!({
         "platform_profile": "registry-stack.consultation.v1",
         "source_capability": "script",
@@ -1379,6 +1465,7 @@ fn rhai_five_operation_fixture() -> Fixture {
         "script": script,
         "script_hash": raw_hash(script.as_bytes()),
         "entrypoint": "consult",
+        "abi": crate::rhai_worker::xw::XW_ABI_VERSION,
         "memory_bytes": 67108864,
         "cpu_ms": 500,
         "ipc_frame_bytes": 131072,
@@ -1400,20 +1487,13 @@ fn rhai_five_operation_fixture() -> Fixture {
     fixture.pack_value["spec"]["reviewed_acquisition"]["fields"] = Value::Object(public_fields);
     fixture.pack_value["spec"]["reviewed_acquisition"]["control_fields"] = json!({});
     fixture.pack_value["spec"]["reviewed_acquisition"]["selector"] = Value::Null;
-    fixture.pack_value["spec"]["reviewed_acquisition"]["cardinality"] =
-        json!("source_enforced_singleton");
-    fixture.pack_value["spec"]["bounds"]["max_source_matches"] = json!(1);
-    fixture.contract_value["spec"]["bounds"]["max_source_matches"] = json!(1);
-    fixture.contract_value["spec"]["public_behavior"]["outcomes"] = json!(["match", "no_match"]);
-    fixture.binding_value["capabilities"]["allow_sandboxed_rhai"] = json!(true);
-    fixture.binding_value["capabilities"]["sandboxed_rhai"] = json!({
-        "callable_operations": [
-            "lookup-status-0",
-            "lookup-status-1",
-            "lookup-status-2",
-            "lookup-status-3",
-            "lookup-status-4"
-        ],
+    fixture.pack_value["spec"]["reviewed_acquisition"]["cardinality"] = json!("probe_two");
+    fixture.pack_value["spec"]["bounds"]["max_source_matches"] = json!(2);
+    fixture.contract_value["spec"]["bounds"]["max_source_matches"] = json!(2);
+    fixture.contract_value["spec"]["public_behavior"]["outcomes"] =
+        json!(["match", "no_match", "ambiguous"]);
+    fixture.binding_value["capabilities"]["allow_script"] = json!(true);
+    fixture.binding_value["capabilities"]["script"] = json!({
         "max_calls": 2,
         "memory_bytes": 67108864,
         "cpu_ms": 500,
@@ -1430,14 +1510,6 @@ fn rhai_five_operation_fixture() -> Fixture {
     fixture.refresh_all();
     fixture
 }
-
-const RHAI_FIVE_CALLABLES: [&str; 5] = [
-    "lookup-status-0",
-    "lookup-status-1",
-    "lookup-status-2",
-    "lookup-status-3",
-    "lookup-status-4",
-];
 
 fn rhai_test_worker_limits(max_calls: u8) -> RhaiWorkerLimits {
     RhaiWorkerLimits {
@@ -1474,11 +1546,9 @@ fn runtime_digests(fixture: &Fixture) -> (String, String) {
 
 fn rhai_runtime_digests(
     fixture: &Fixture,
-    callable: &[&str],
     limits: RhaiWorkerLimits,
 ) -> Result<(String, String), SourcePlanCompileError> {
-    let worker =
-        RhaiWorkerCapability::from_initialized_worker(&fixture.pack_hash, callable, limits)?;
+    let worker = RhaiWorkerCapability::from_initialized_worker(&fixture.pack_hash, limits)?;
     let registry = compile_with_rhai_workers(fixture, &[worker])?;
     let profile = registry
         .iter()
@@ -1611,11 +1681,14 @@ fn snapshot_fixture() -> Fixture {
         "source_capability": "snapshot",
         "script_abi": null
     });
-    fixture.pack_value["spec"]["plan"]["data_destination_slot"] = Value::Null;
-    fixture.pack_value["spec"]["plan"]["operations"] = json!([]);
-    fixture.pack_value["spec"]["plan"]["steps"] = json!([]);
-    fixture.pack_value["spec"]["plan"]["credential_destination_slot"] = Value::Null;
-    fixture.pack_value["spec"]["plan"]["credential_operation"] = Value::Null;
+    let plan = fixture.pack_value["spec"]["plan"]
+        .as_object_mut()
+        .expect("SnapshotExact plan");
+    plan.insert("data_destination_slot".to_owned(), Value::Null);
+    plan.insert("credential_destination_slot".to_owned(), Value::Null);
+    plan.insert("credential_operation".to_owned(), Value::Null);
+    plan.remove("operations");
+    plan.remove("steps");
     fixture.binding_value["limits"]
         .as_object_mut()
         .expect("binding limits")
@@ -1808,7 +1881,7 @@ fn maintained_opencrvs_birth_record_exists_pack_compiles_to_exact_closed_exchang
     assert_eq!(operation.disclosed_fields().len(), 0);
     assert_eq!(
         plan.runtime_profile().permit_bindings().collect::<Vec<_>>(),
-        [("credential", 0), ("data", 0), ("data", 1)]
+        [("credential", 0), ("verification", 0), ("data", 0)]
     );
 }
 
@@ -1867,7 +1940,8 @@ fn closed_decoder_compiles_every_reviewed_record_root() {
         json!("source_enforced_singleton");
     object.pack_value["spec"]["bounds"]["max_source_matches"] = json!(1);
     object.contract_value["spec"]["bounds"]["max_source_matches"] = json!(1);
-    object.contract_value["spec"]["public_behavior"]["outcomes"] = json!(["match", "no_match"]);
+    object.contract_value["spec"]["public_behavior"]["outcomes"] =
+        json!(["match", "no_match", "ambiguous"]);
     let response = &mut object.pack_value["spec"]["plan"]["operations"][0]["response"];
     response["max_records"] = json!(1);
     response["normalization"] = json!("json_object");
@@ -1948,10 +2022,10 @@ fn impossible_compiled_decoder_shapes_fail_closed_without_value_diagnostics() {
 }
 
 #[test]
-fn closed_json_decoder_retains_its_stricter_response_byte_cap() {
+fn closed_json_decoder_matches_the_reviewed_response_byte_cap() {
     use registry_platform_httputil::destination::json::MAX_CLOSED_JSON_ENCODED_BODY_BYTES;
 
-    assert_eq!(MAX_CLOSED_JSON_ENCODED_BODY_BYTES, 256 * 1_024);
+    assert_eq!(MAX_CLOSED_JSON_ENCODED_BODY_BYTES, 8 * 1_024 * 1_024);
 
     let mut at_cap = fixture();
     let credential_bytes = at_cap.pack_value["spec"]["plan"]["credential_operation"]["response"]
@@ -1978,8 +2052,8 @@ fn closed_json_decoder_retains_its_stricter_response_byte_cap() {
     above_cap.refresh_all();
     assert_eq!(
         compile(&above_cap).unwrap_err(),
-        SourcePlanCompileError::CompilerInvariant,
-        "the 8 MiB transport ceiling must not widen the closed JSON decoder",
+        SourcePlanCompileError::Artifact(SourcePlanArtifactError::InvalidLimits),
+        "the artifact hard ceiling rejects a response above 8 MiB",
     );
 
     let registry = compile(&fixture()).expect("valid decoder fixture compiles");
@@ -2144,7 +2218,7 @@ fn runtime_profile_is_typed_bounded_and_has_no_artifact_reparse_surface() {
             profile.completion_seed_canonical_bytes_max(),
             profile.completion_audit_canonical_bytes_max(),
         ),
-        (2_333, 7_614),
+        (2_333, 7_890),
         "portable completion sizing is a reviewed golden",
     );
 
@@ -3236,7 +3310,7 @@ fn full_date_fact_requires_an_exact_ten_byte_string_source() {
     valid.contract_value["spec"]["output"]["status"]["type"] = json!("date");
     valid.contract_value["spec"]["output"]["status"]["max_bytes"] = json!(10);
     valid.refresh_all();
-    compile(&valid).expect("ten-byte string backs a full-date fact");
+    compile(&valid).expect("ten-byte string backs a full-date output");
 
     let mut invalid = valid;
     invalid.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]["fields"]
@@ -3409,11 +3483,10 @@ fn bounded_http_runtime_commitment_digests_are_stable() {
 }
 
 #[test]
-fn rhai_runtime_commitment_digest_binds_safe_script_and_dispatch_facts() {
+fn rhai_runtime_commitment_digest_binds_safe_script_and_dispatch_outputs() {
     let limits = rhai_test_worker_limits(2);
     let base_fixture = rhai_five_operation_fixture();
-    let base = rhai_runtime_digests(&base_fixture, &RHAI_FIVE_CALLABLES, limits)
-        .expect("base Rhai profile compiles");
+    let base = rhai_runtime_digests(&base_fixture, limits).expect("base Rhai profile compiles");
 
     let mut changed_script = rhai_five_operation_fixture();
     let changed_script_source = "fn consult(ctx) { result.fail(failure.source_unavailable) }";
@@ -3421,9 +3494,13 @@ fn rhai_runtime_commitment_digest_binds_safe_script_and_dispatch_facts() {
     changed_script.pack_value["spec"]["plan"]["rhai"]["script_hash"] =
         json!(raw_hash(changed_script_source.as_bytes()));
     changed_script.refresh_all();
-    let changed_script_digest = rhai_runtime_digests(&changed_script, &RHAI_FIVE_CALLABLES, limits)
-        .expect("changed reviewed script compiles");
+    let changed_script_digest =
+        rhai_runtime_digests(&changed_script, limits).expect("changed reviewed script compiles");
     assert_ne!(changed_script_digest.0, base.0);
+    assert_ne!(
+        changed_script.contract_hash, base_fixture.contract_hash,
+        "a Script-only change must invalidate the pinned public contract"
+    );
 
     let mut dual_entrypoint = rhai_five_operation_fixture();
     let dual_script =
@@ -3432,11 +3509,11 @@ fn rhai_runtime_commitment_digest_binds_safe_script_and_dispatch_facts() {
     dual_entrypoint.pack_value["spec"]["plan"]["rhai"]["script_hash"] =
         json!(raw_hash(dual_script.as_bytes()));
     dual_entrypoint.refresh_all();
-    let primary_entrypoint = rhai_runtime_digests(&dual_entrypoint, &RHAI_FIVE_CALLABLES, limits)
-        .expect("dual-entrypoint script compiles");
+    let primary_entrypoint =
+        rhai_runtime_digests(&dual_entrypoint, limits).expect("dual-entrypoint script compiles");
     dual_entrypoint.pack_value["spec"]["plan"]["rhai"]["entrypoint"] = json!("alternate");
     dual_entrypoint.refresh_all();
-    let alternate_entrypoint = rhai_runtime_digests(&dual_entrypoint, &RHAI_FIVE_CALLABLES, limits)
+    let alternate_entrypoint = rhai_runtime_digests(&dual_entrypoint, limits)
         .expect("alternate reviewed entrypoint compiles");
     assert_ne!(alternate_entrypoint.0, primary_entrypoint.0);
 
@@ -3445,27 +3522,15 @@ fn rhai_runtime_commitment_digest_binds_safe_script_and_dispatch_facts() {
         json!("sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
     stale_script_hash.refresh_all();
     assert!(
-        rhai_runtime_digests(&stale_script_hash, &RHAI_FIVE_CALLABLES, limits).is_err(),
+        rhai_runtime_digests(&stale_script_hash, limits).is_err(),
         "a declared script hash that does not commit to the script must fail closed"
     );
 
-    let mut narrowed_union = rhai_five_operation_fixture();
-    narrowed_union.binding_value["capabilities"]["sandboxed_rhai"]["callable_operations"]
-        .as_array_mut()
-        .expect("callable union")
-        .pop();
-    narrowed_union.refresh_binding();
-    assert!(matches!(
-        rhai_runtime_digests(&narrowed_union, &RHAI_FIVE_CALLABLES[..4], limits),
-        Err(SourcePlanCompileError::BindingWidening)
-    ));
-
     let mut one_call = rhai_five_operation_fixture();
-    one_call.binding_value["capabilities"]["sandboxed_rhai"]["max_calls"] = json!(1);
+    one_call.binding_value["capabilities"]["script"]["max_calls"] = json!(1);
     one_call.refresh_binding();
-    let one_call_digest =
-        rhai_runtime_digests(&one_call, &RHAI_FIVE_CALLABLES, rhai_test_worker_limits(1))
-            .expect("one-call effective Rhai profile compiles");
+    let one_call_digest = rhai_runtime_digests(&one_call, rhai_test_worker_limits(1))
+        .expect("one-call effective Rhai profile compiles");
     assert_ne!(one_call_digest.0, base.0);
     assert_eq!(
         one_call_digest.1, base.1,
@@ -3474,40 +3539,33 @@ fn rhai_runtime_commitment_digest_binds_safe_script_and_dispatch_facts() {
 
     assert_eq!(
         base.0,
-        "sha256:35faaa6b55564cc6ab50a8b15d16f8e8b17ae54b84b744a28dba201334489840"
+        "sha256:9cc086cf48221d1d5793b7dd9ec520d5cb16302de7a85140de2b22d271b46d7d"
     );
     assert_eq!(
         base.1,
-        "sha256:d368a3197da8f72b10f83380bcc5fcf08910cfb58b1b575b5425c9e83d17163b"
+        "sha256:fb6366892e6750e6efb9816f839b167af1aca64c10817d853745665291f1008d"
     );
     assert_eq!(
         changed_script_digest.0,
-        "sha256:789eb7ed7744dee2030e8a7ae31294bafe6de237eaeedbe23cd0b49cdf98a0d8"
+        "sha256:67e301a861318d8ae2cad483796af48bd7391fd74ff341c7bdb574d9cea0eba8"
     );
     assert_eq!(
         primary_entrypoint.0,
-        "sha256:572e5e04ca48ed44bc45bc1ca1ab9c71cdb9e636eaacc8d8ef6122b989b87632"
+        "sha256:c63f22b783e038edca5ba725a6df02d64ab26a29e03f5f9608b10903f53483eb"
     );
     assert_eq!(
         alternate_entrypoint.0,
-        "sha256:107b4da5b3c901e1e926dfc027d6a71bee28125a02b84273e1dee7ec50b549d3"
+        "sha256:10a33a8873b9fe47a0d30cb84e224207185609025877b6f272e3dd684d26aeee"
     );
     assert_eq!(
         one_call_digest.0,
-        "sha256:02fc6a1421e0fe60bb5971e8244e5e4f83f2dbeb56d9c1dff376ea0df4b36b79"
+        "sha256:d8884109b57610c05c87b9581b51ab73ad994e04114a70ffe68c87dce9fc3468"
     );
 }
 
 #[test]
-fn rhai_uses_five_reviewed_callables_but_two_effective_exchange_slots() {
+fn script_authority_uses_five_rules_but_two_effective_exchange_slots() {
     let fixture = rhai_five_operation_fixture();
-    let callable = [
-        "lookup-status-0",
-        "lookup-status-1",
-        "lookup-status-2",
-        "lookup-status-3",
-        "lookup-status-4",
-    ];
     let worker_limits = RhaiWorkerLimits {
         max_calls: 2,
         memory_bytes: 67_108_864,
@@ -3521,9 +3579,8 @@ fn rhai_uses_five_reviewed_callables_but_two_effective_exchange_slots() {
         output_bytes: 32_768,
         concurrency: 1,
     };
-    let worker =
-        RhaiWorkerCapability::from_initialized_worker(&fixture.pack_hash, &callable, worker_limits)
-            .expect("five-operation worker capability");
+    let worker = RhaiWorkerCapability::from_initialized_worker(&fixture.pack_hash, worker_limits)
+        .expect("bounded Script worker capability");
     let registry = compile_with_rhai_workers(&fixture, &[worker]).expect("reviewed Rhai plan");
     let plan = registry.iter().next().expect("Rhai plan");
     let profile = plan.runtime_profile();
@@ -3534,21 +3591,12 @@ fn rhai_uses_five_reviewed_callables_but_two_effective_exchange_slots() {
     assert_eq!(
         profile
             .dispatch()
-            .sandboxed_rhai_limits()
+            .script_limits()
             .expect("Rhai limits")
             .max_calls(),
         2
     );
-    assert_eq!(
-        profile
-            .dispatch()
-            .sandboxed_rhai_operations()
-            .expect("reviewed callable union")
-            .iter()
-            .map(OperationId::as_str)
-            .collect::<Vec<_>>(),
-        callable
-    );
+    assert_eq!(plan.operations().len(), 0);
 
     let seed = rhai_five_operation_two_slot_completion_seed_fixture();
     assert_eq!(seed["bounds"]["data_exchanges"], json!(2));
@@ -3562,10 +3610,9 @@ fn rhai_uses_five_reviewed_callables_but_two_effective_exchange_slots() {
 }
 
 #[test]
-fn sandboxed_rhai_requires_one_consultation_wide_request_byte_budget() {
+fn script_requires_one_consultation_wide_request_byte_budget() {
     let mut mismatch = rhai_five_operation_fixture();
-    mismatch.pack_value["spec"]["plan"]["operations"][1]["step_limits"]["max_request_bytes"] =
-        json!(8_191);
+    mismatch.pack_value["spec"]["plan"]["script_authority"]["request_max_bytes"] = json!(0);
     mismatch.refresh_all();
     assert!(matches!(
         compile(&mismatch),
@@ -3575,12 +3622,66 @@ fn sandboxed_rhai_requires_one_consultation_wide_request_byte_budget() {
     ));
 }
 
+#[test]
+fn script_post_authority_rejects_broad_duplicate_and_escaping_paths() {
+    for path in [
+        "/api/**",
+        "/api/../private",
+        "/api/%2Fprivate",
+        "https://other.test/api",
+    ] {
+        let mut fixture = rhai_five_operation_fixture();
+        fixture.pack_value["spec"]["plan"]["script_authority"]["allow"] = json!([{
+            "method": "READ_ONLY_POST",
+            "path": path,
+            "semantics": "read_only"
+        }]);
+        fixture.refresh_all();
+        assert!(matches!(
+            compile(&fixture),
+            Err(SourcePlanCompileError::Artifact(
+                SourcePlanArtifactError::InvalidPlan
+            ))
+        ));
+    }
+
+    let mut duplicate = rhai_five_operation_fixture();
+    duplicate.pack_value["spec"]["plan"]["script_authority"]["allow"] = json!([
+        {"method": "GET", "path": "/api/records/*"},
+        {"method": "GET", "path": "/api/records/*"}
+    ]);
+    duplicate.refresh_all();
+    assert!(matches!(
+        compile(&duplicate),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidPlan
+        ))
+    ));
+}
+
+#[test]
+fn script_post_authority_accepts_one_narrow_parameterized_path() {
+    let mut fixture = rhai_five_operation_fixture();
+    fixture.pack_value["spec"]["plan"]["script_authority"]["allow"] = json!([{
+        "method": "READ_ONLY_POST",
+        "path": "/api/records/*",
+        "semantics": "read_only"
+    }]);
+    fixture.refresh_all();
+    let worker = RhaiWorkerCapability::from_initialized_worker(
+        &fixture.pack_hash,
+        rhai_test_worker_limits(2),
+    )
+    .expect("Script worker capability");
+    compile_with_rhai_workers(&fixture, &[worker]).expect("narrow POST authority compiles");
+}
+
 fn script_body_rhai_fixture() -> Fixture {
     rhai_five_operation_fixture()
 }
 
 #[test]
-fn generic_rhai_operations_accept_bounded_script_bodies_without_closed_source_schemas() {
+fn script_authority_accepts_bounded_bodies_without_synthesized_response_schemas() {
     let mut fixture = script_body_rhai_fixture();
     let normalized = super::super::artifact::author_integration_pack(&fixture.pack)
         .expect("script-body integration pack normalizes");
@@ -3588,28 +3689,29 @@ fn generic_rhai_operations_accept_bounded_script_bodies_without_closed_source_sc
     fixture.refresh_all();
     let worker = RhaiWorkerCapability::from_initialized_worker(
         &fixture.pack_hash,
-        &RHAI_FIVE_CALLABLES,
         rhai_test_worker_limits(2),
     )
     .expect("script-body worker capability");
     let registry = compile_with_rhai_workers(&fixture, &[worker])
         .expect("product-neutral script-body operations compile");
     let plan = registry.iter().next().expect("script-body plan");
-    assert!(plan.operations().all(|operation| {
-        operation.response().normalization() == CompiledResponseNormalization::ScriptBody
-            && operation.response().schema() == &CompiledResponseSchema::ScriptBody
-    }));
+    assert_eq!(plan.operations().len(), 0);
+    assert_eq!(
+        plan.script_authority()
+            .expect("Script authority")
+            .response_max_bytes(),
+        16_000
+    );
 }
 
 #[test]
-fn script_body_response_mode_is_rejected_outside_the_complete_rhai_shape() {
+fn script_authority_rejects_an_unbounded_response_body() {
     let mut fixture = script_body_rhai_fixture();
-    fixture.pack_value["spec"]["plan"]["operations"][0]["response"]["accepted_statuses"] =
-        json!([200]);
+    fixture.pack_value["spec"]["plan"]["script_authority"]["response"]["max_bytes"] = json!(0);
     fixture.refresh_all();
     assert!(matches!(
         super::super::artifact::author_integration_pack(&fixture.pack),
-        Err(SourcePlanArtifactError::InvalidAcquisition)
+        Err(SourcePlanArtifactError::InvalidPlan)
     ));
 }
 
@@ -3653,11 +3755,10 @@ fn authoring_validation_initializes_reviewed_rhai_capabilities_without_bypassing
 }
 
 #[test]
-fn sandboxed_rhai_terminal_fact_contract_retains_each_scalar_bound() {
+fn script_terminal_output_contract_retains_each_scalar_bound() {
     let string_fixture = rhai_five_operation_fixture();
     let string_worker = RhaiWorkerCapability::from_initialized_worker(
         &string_fixture.pack_hash,
-        &RHAI_FIVE_CALLABLES,
         rhai_test_worker_limits(2),
     )
     .expect("string-bound Rhai worker");
@@ -3667,12 +3768,12 @@ fn sandboxed_rhai_terminal_fact_contract_retains_each_scalar_bound() {
         .iter()
         .next()
         .expect("string plan")
-        .rhai_facts()
-        .map(CompiledRhaiFact::fact_type)
+        .rhai_outputs()
+        .map(CompiledRhaiOutput::output_type)
         .collect::<Vec<_>>();
     assert_eq!(
         string_bounds,
-        vec![CompiledRhaiFactType::String { max_bytes: 64 }; 5]
+        vec![CompiledRhaiOutputType::String { max_bytes: 64 }; 5]
     );
 
     let mut integer_fixture = rhai_five_operation_fixture();
@@ -3694,7 +3795,6 @@ fn sandboxed_rhai_terminal_fact_contract_retains_each_scalar_bound() {
     integer_fixture.refresh_all();
     let integer_worker = RhaiWorkerCapability::from_initialized_worker(
         &integer_fixture.pack_hash,
-        &RHAI_FIVE_CALLABLES,
         rhai_test_worker_limits(2),
     )
     .expect("integer-bound Rhai worker");
@@ -3704,10 +3804,10 @@ fn sandboxed_rhai_terminal_fact_contract_retains_each_scalar_bound() {
         .iter()
         .next()
         .expect("integer plan")
-        .rhai_facts()
-        .all(|fact| matches!(
-            fact.fact_type(),
-            CompiledRhaiFactType::Integer {
+        .rhai_outputs()
+        .all(|output| matches!(
+            output.output_type(),
+            CompiledRhaiOutputType::Integer {
                 minimum: -2,
                 maximum: 2
             }
@@ -3767,13 +3867,6 @@ fn response_byte_bounds_cover_one_http_request_and_repeated_largest_rhai_calls()
         ))
     ));
 
-    let callable = [
-        "lookup-status-0",
-        "lookup-status-1",
-        "lookup-status-2",
-        "lookup-status-3",
-        "lookup-status-4",
-    ];
     let worker_limits = RhaiWorkerLimits {
         max_calls: 2,
         memory_bytes: 67_108_864,
@@ -3788,24 +3881,22 @@ fn response_byte_bounds_cover_one_http_request_and_repeated_largest_rhai_calls()
         concurrency: 1,
     };
     let mut rhai_exact = rhai_five_operation_fixture();
-    // Any slot may repeat the largest callable, so public sizing is
-    // 5 * 20_000 data bytes + 16_384 credential bytes.
-    rhai_exact.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(116_384);
-    rhai_exact.contract_value["spec"]["bounds"]["max_source_bytes"] = json!(116_384);
-    rhai_exact.binding_value["limits"]["max_source_bytes"] = json!(56_384);
+    // The public bound covers five Script calls under the reviewed authority,
+    // while the private binding narrows execution to two calls. Both include
+    // the exact 16 KiB credential-response ceiling.
+    rhai_exact.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(96_384);
+    rhai_exact.contract_value["spec"]["bounds"]["max_source_bytes"] = json!(96_384);
+    rhai_exact.binding_value["limits"]["max_source_bytes"] = json!(48_384);
     rhai_exact.refresh_all();
-    let worker = RhaiWorkerCapability::from_initialized_worker(
-        &rhai_exact.pack_hash,
-        &callable,
-        worker_limits,
-    )
-    .expect("exact-bound worker");
+    let worker =
+        RhaiWorkerCapability::from_initialized_worker(&rhai_exact.pack_hash, worker_limits)
+            .expect("exact-bound worker");
     compile_with_rhai_workers(&rhai_exact, &[worker])
         .expect("public and effective repeated-call byte bounds fit exactly");
 
     let mut public_short = rhai_exact;
-    public_short.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(116_383);
-    public_short.contract_value["spec"]["bounds"]["max_source_bytes"] = json!(116_383);
+    public_short.pack_value["spec"]["bounds"]["max_source_bytes"] = json!(96_383);
+    public_short.contract_value["spec"]["bounds"]["max_source_bytes"] = json!(96_383);
     public_short.refresh_all();
     assert!(matches!(
         compile(&public_short),
@@ -3815,14 +3906,11 @@ fn response_byte_bounds_cover_one_http_request_and_repeated_largest_rhai_calls()
     ));
 
     let mut effective_short = rhai_five_operation_fixture();
-    effective_short.binding_value["limits"]["max_source_bytes"] = json!(56_383);
+    effective_short.binding_value["limits"]["max_source_bytes"] = json!(48_383);
     effective_short.refresh_all();
-    let worker = RhaiWorkerCapability::from_initialized_worker(
-        &effective_short.pack_hash,
-        &callable,
-        worker_limits,
-    )
-    .expect("effective short-bound worker");
+    let worker =
+        RhaiWorkerCapability::from_initialized_worker(&effective_short.pack_hash, worker_limits)
+            .expect("effective short-bound worker");
     assert!(matches!(
         compile_with_rhai_workers(&effective_short, &[worker]),
         Err(SourcePlanCompileError::BindingWidening)
@@ -4255,7 +4343,7 @@ fn rejects_missing_live_destination_and_unused_capability() {
     ));
 
     let mut second = self::fixture();
-    second.binding_value["capabilities"]["allow_sandboxed_rhai"] = json!(true);
+    second.binding_value["capabilities"]["allow_script"] = json!(true);
     second.refresh_binding();
     assert!(matches!(
         compile(&second),
@@ -5006,19 +5094,19 @@ fn bounded_full_record_accepts_only_closed_bounded_nested_schema() {
 }
 
 #[test]
-fn rejects_sandboxed_rhai_without_explicit_deployment_opt_in() {
+fn rejects_script_without_explicit_deployment_opt_in() {
     let mut fixture = rhai_five_operation_fixture();
-    let reviewed_capability = fixture.binding_value["capabilities"]["sandboxed_rhai"].clone();
-    fixture.binding_value["capabilities"]["allow_sandboxed_rhai"] = json!(false);
-    fixture.binding_value["capabilities"]["sandboxed_rhai"] = Value::Null;
+    let reviewed_capability = fixture.binding_value["capabilities"]["script"].clone();
+    fixture.binding_value["capabilities"]["allow_script"] = json!(false);
+    fixture.binding_value["capabilities"]["script"] = Value::Null;
     fixture.refresh_binding();
     assert!(matches!(
         compile(&fixture),
         Err(SourcePlanCompileError::RhaiNotEnabled)
     ));
 
-    fixture.binding_value["capabilities"]["allow_sandboxed_rhai"] = json!(true);
-    fixture.binding_value["capabilities"]["sandboxed_rhai"] = reviewed_capability;
+    fixture.binding_value["capabilities"]["allow_script"] = json!(true);
+    fixture.binding_value["capabilities"]["script"] = reviewed_capability;
     fixture.refresh_binding();
     assert!(matches!(
         compile(&fixture),
@@ -5026,7 +5114,6 @@ fn rejects_sandboxed_rhai_without_explicit_deployment_opt_in() {
     ));
     let worker = RhaiWorkerCapability::from_initialized_worker(
         &fixture.pack_hash,
-        &RHAI_FIVE_CALLABLES,
         rhai_test_worker_limits(2),
     )
     .expect("initialized worker capability");
@@ -5035,18 +5122,10 @@ fn rejects_sandboxed_rhai_without_explicit_deployment_opt_in() {
     let plan = registry.iter().next().expect("Rhai plan");
     assert_eq!(plan.steps().len(), 0, "Rhai has no fixed step sequence");
     let dispatch = plan.runtime_profile().dispatch();
+    assert_eq!(plan.operations().len(), 0);
     assert_eq!(
         dispatch
-            .sandboxed_rhai_operations()
-            .expect("Rhai callable union")
-            .iter()
-            .map(OperationId::as_str)
-            .collect::<Vec<_>>(),
-        RHAI_FIVE_CALLABLES
-    );
-    assert_eq!(
-        dispatch
-            .sandboxed_rhai_limits()
+            .script_limits()
             .expect("Rhai worker limits")
             .max_calls(),
         2
@@ -5054,30 +5133,16 @@ fn rejects_sandboxed_rhai_without_explicit_deployment_opt_in() {
 
     let mut wrong_worker_limits = rhai_test_worker_limits(2);
     wrong_worker_limits.memory_bytes -= 1;
-    let wrong_limits = RhaiWorkerCapability::from_initialized_worker(
-        &fixture.pack_hash,
-        &RHAI_FIVE_CALLABLES,
-        wrong_worker_limits,
-    )
-    .expect("mismatched worker capability");
+    let wrong_limits =
+        RhaiWorkerCapability::from_initialized_worker(&fixture.pack_hash, wrong_worker_limits)
+            .expect("mismatched worker capability");
     assert!(matches!(
         compile_with_rhai_workers(&fixture, &[wrong_limits]),
         Err(SourcePlanCompileError::RhaiWorkerMismatch)
     ));
 
-    let wrong_allowlist = RhaiWorkerCapability::from_initialized_worker(
-        &fixture.pack_hash,
-        &["different-operation"],
-        rhai_test_worker_limits(2),
-    )
-    .expect("mismatched allowlist capability");
-    assert!(matches!(
-        compile_with_rhai_workers(&fixture, &[wrong_allowlist]),
-        Err(SourcePlanCompileError::RhaiWorkerMismatch)
-    ));
-
     let mut missing_detail = fixture.binding_value.clone();
-    missing_detail["capabilities"]["sandboxed_rhai"] = Value::Null;
+    missing_detail["capabilities"]["script"] = Value::Null;
     fixture.binding_value = missing_detail;
     fixture.refresh_binding();
     assert!(matches!(

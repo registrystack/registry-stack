@@ -62,33 +62,22 @@ pub(super) struct VerifiedDciSearch {
 pub(super) fn validate_signed_dci_script_activation(
     plan: &CompiledSourcePlan,
 ) -> Result<bool, ConcreteExecutorActivationError> {
-    let mut operations = plan
-        .operations()
-        .filter(|operation| operation.dci_exact().is_some());
-    let Some(operation) = operations.next() else {
+    let Some(authority) = plan.script_authority() else {
         return Ok(false);
     };
-    if operations.next().is_some()
-        || plan.kind() != SourcePlanKind::SandboxedRhai
+    let Some(dci) = authority.signed_dci() else {
+        return Ok(false);
+    };
+    if plan.kind() != SourcePlanKind::Script
         || plan.credential_operation().is_none()
         || plan.credential_destination().is_none()
         || plan.data_destination().is_none()
         || plan.verification_destination().is_none()
-        || operation.method() != ReadMethod::ReadOnlyPost
-        || operation.auth() != CompiledSourceAuth::OAuthClientCredentials
-        || operation.query().len() != 0
-        || operation.headers().len() != 0
-        || operation.body().is_some()
-        || operation.request_codec() != CompiledRequestCodec::DciExactV1
-        || operation.request_signer().is_some()
-        || !(1..=2).contains(&operation.max_source_records())
-        || operation.response().accepted_statuses().collect::<Vec<_>>() != [200]
+        || authority.auth() != CompiledSourceAuth::OAuthClientCredentials
+        || !(1..=2).contains(&dci.max_source_records())
     {
         return Err(ConcreteExecutorActivationError::UnsupportedPlan);
     }
-    let dci = operation
-        .dci_exact()
-        .ok_or(ConcreteExecutorActivationError::UnsupportedPlan)?;
     match dci.selector() {
         CompiledDciSelector::ExactAnd { components, .. }
             if !components.is_empty()
@@ -117,13 +106,12 @@ pub(super) async fn execute_signed_dci_search_call(
     {
         return Err(HostFailure::ContractViolation);
     }
-    let operation = bound
+    let authority = bound
         .plan()
-        .operations()
-        .find(|operation| operation.dci_exact().is_some())
+        .script_authority()
         .ok_or(HostFailure::ContractViolation)?;
-    let dci = operation
-        .dci_exact()
+    let dci = authority
+        .signed_dci()
         .ok_or(HostFailure::ContractViolation)?;
     let jwks_operation = dci.verification();
     let data_destination = bound
@@ -205,7 +193,7 @@ pub(super) async fn execute_signed_dci_search_call(
                 .first()
                 .map(|(_, value)| *value)
                 .ok_or(HostFailure::ContractViolation)?,
-            requested_max: operation.max_source_records(),
+            requested_max: dci.max_source_records(),
             page_number: dci.page_number(),
             signature: None,
         }),
@@ -222,7 +210,7 @@ pub(super) async fn execute_signed_dci_search_call(
             registry_event_type: dci.registry_event_type(),
             record_type: dci.record_type(),
             components: &request_components,
-            requested_max: operation.max_source_records(),
+            requested_max: dci.max_source_records(),
             page_number: dci.page_number(),
             signature: None,
         }),
@@ -232,8 +220,7 @@ pub(super) async fn execute_signed_dci_search_call(
         .to_json_body()
         .map_err(|_| HostFailure::ContractViolation)?;
     if request_body.as_bytes().len()
-        > usize::try_from(operation.request_max_bytes())
-            .map_err(|_| HostFailure::ContractViolation)?
+        > usize::try_from(dci.request_max_bytes()).map_err(|_| HostFailure::ContractViolation)?
     {
         return Err(HostFailure::BudgetExceeded);
     }
@@ -264,7 +251,7 @@ pub(super) async fn execute_signed_dci_search_call(
         )
         .map_err(|_| HostFailure::ContractViolation)?;
     let jwks_permit = dispatch
-        .next_data_permit_mut()
+        .verification_permit_mut()
         .map_err(|_| HostFailure::ContractViolation)?
         .ok_or(HostFailure::BudgetExceeded)?;
     let jwks_body = fence
@@ -294,8 +281,9 @@ pub(super) async fn execute_signed_dci_search_call(
     let authorization = token
         .bearer_authorization()
         .map_err(|_| HostFailure::SourceAuth)?;
-    let data_request = operation
-        .transport_template()
+    let data_request = dci
+        .data_transport()
+        .ok_or(HostFailure::ContractViolation)?
         .render_zeroizing(
             &[],
             &[],
@@ -306,7 +294,7 @@ pub(super) async fn execute_signed_dci_search_call(
     let response_max_bytes = remaining_signed_dci_body_limit(
         &jwks_body,
         remaining_source_bytes,
-        operation.response_max_bytes(),
+        dci.response_max_bytes(),
     )
     .map_err(|_| HostFailure::BudgetExceeded)?;
     let expectation_components = component_values
@@ -334,7 +322,7 @@ pub(super) async fn execute_signed_dci_search_call(
             identifier_type,
             dci.locale(),
             u64::from(dci.page_number()),
-            u64::from(operation.max_source_records()),
+            u64::from(dci.max_source_records()),
             jwks_max_bytes,
             response_max_bytes,
         ),
@@ -351,13 +339,13 @@ pub(super) async fn execute_signed_dci_search_call(
             dci.record_type().ok_or(HostFailure::ContractViolation)?,
             dci.locale(),
             u64::from(dci.page_number()),
-            u64::from(operation.max_source_records()),
+            u64::from(dci.max_source_records()),
             jwks_max_bytes,
             response_max_bytes,
         ),
     }
     .map_err(|_| HostFailure::ContractViolation)?;
-    let decoder = SignedDciDecoder::new(expectation, operation.response_decoder());
+    let decoder = SignedDciDecoder::new_script(expectation);
     let data_commitment = dispatch
         .commit_request_effect(
             CanonicalDispatchRequestEffect::try_from_complete_value(
@@ -372,7 +360,7 @@ pub(super) async fn execute_signed_dci_search_call(
         .ok_or(HostFailure::BudgetExceeded)?;
     let (payload, source_bytes) = fence
         .authorize_and_dispatch(data_permit, data_commitment, |deadline| async move {
-            let deadline = operation_deadline(deadline, operation.request_timeout_ms())
+            let deadline = operation_deadline(deadline, dci.request_timeout_ms())
                 .map_err(|_| HostFailure::SourceUnavailable)?;
             let response = data_destination
                 .send_with_deadline(data_request, deadline)
@@ -689,7 +677,7 @@ pub(super) async fn execute_signed_dci_exact_bound(
         )
         .map_err(|_| ConcreteExecutorUnfinished)?;
     let jwks_permit = dispatch
-        .next_data_permit_mut()
+        .verification_permit_mut()
         .map_err(|_| ConcreteExecutorUnfinished)?
         .ok_or(ConcreteExecutorUnfinished)?;
     let jwks_result = fence

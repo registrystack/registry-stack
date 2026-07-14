@@ -343,9 +343,13 @@ fn lower_project_integration(
         outputs,
         bounds: BoundsDeclaration {
             calls: 0,
+            calls_authored: false,
             source_bytes: 1024 * 1024,
+            source_bytes_authored: false,
             request_bytes: 64 * 1024,
+            request_bytes_authored: false,
             deadline: "15s".to_string(),
+            deadline_authored: false,
             concurrency: 8,
         },
         fixtures: PathBuf::from("fixtures"),
@@ -355,14 +359,14 @@ fn lower_project_integration(
 fn entity_output_contract(
     name: &str,
     field: &EntityFieldSchema,
-) -> Result<(FactType, bool, Option<u32>)> {
+) -> Result<(OutputType, bool, Option<u32>)> {
     let (scalar, nullable) = schema_type_parts(&field.field_type)?;
     let (output_type, max_bytes) = match (scalar, field.format) {
         (AuthoredScalarType::String, Some(AuthoredStringFormat::Date)) => {
             if field.max_length != Some(10) {
                 bail!("entity field {name} date format requires maxLength: 10");
             }
-            (FactType::Date, Some(40))
+            (OutputType::Date, Some(40))
         }
         (AuthoredScalarType::String, None) => {
             let max_length = field
@@ -379,7 +383,7 @@ fn entity_output_contract(
                 bail!("entity String field {name} has incompatible constraints");
             }
             (
-                FactType::String,
+                OutputType::String,
                 Some(
                     max_length
                         .checked_mul(4)
@@ -396,7 +400,7 @@ fn entity_output_contract(
             {
                 bail!("entity Boolean field {name} has incompatible constraints");
             }
-            (FactType::Boolean, None)
+            (OutputType::Boolean, None)
         }
         (AuthoredScalarType::Integer, None) => {
             let minimum = field
@@ -415,7 +419,7 @@ fn entity_output_contract(
             {
                 bail!("entity Integer field {name} has incompatible constraints");
             }
-            (FactType::Integer, None)
+            (OutputType::Integer, None)
         }
         (AuthoredScalarType::Null, _) => bail!("entity field {name} cannot have only null type"),
         (_, Some(_)) => bail!("entity field {name} format is valid only for String"),
@@ -746,7 +750,7 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
         for (variable, declaration) in &service.variables {
             validate_stable_id(variable, "request variable")?;
             if declaration.from != format!("request.variables.{variable}")
-                || declaration.value_type != FactType::Date
+                || declaration.value_type != OutputType::Date
             {
                 bail!("v1 request variables must be exact declared full-date mappings");
             }
@@ -788,10 +792,10 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                 }
             }
             if let Some(value) = &claim.value {
-                if value.value_type == FactType::String && value.max_bytes.is_none() {
+                if value.value_type == OutputType::String && value.max_bytes.is_none() {
                     bail!("string claim value contracts require max_bytes");
                 }
-                if value.value_type != FactType::String && value.max_bytes.is_some() {
+                if value.value_type != OutputType::String && value.max_bytes.is_some() {
                     bail!("only string claim value contracts may declare max_bytes");
                 }
             }
@@ -1266,7 +1270,7 @@ fn validate_fixture_inputs(
     fixtures: &[(PathBuf, FixtureDocument)],
 ) -> Result<()> {
     let mut fixture_names = BTreeSet::new();
-    for (_, fixture) in fixtures {
+    for (path, fixture) in fixtures {
         if !fixture_names.insert(fixture.name.as_str()) {
             bail!("fixture names must be unique within an integration");
         }
@@ -1292,7 +1296,14 @@ fn validate_fixture_inputs(
             );
         }
         for (name, declaration) in &integration.input {
-            validate_fixture_input_value(name, declaration, &fixture.input[name])?;
+            validate_fixture_input_value(name, declaration, &fixture.input[name]).with_context(
+                || {
+                    format!(
+                        "fixture file {} at input.{name}; correct the value to satisfy integration {alias} input.{name}",
+                        path.display()
+                    )
+                },
+            )?;
         }
         for (index, interaction) in fixture.interactions.iter().enumerate() {
             validate_fixture_request_expectation(&fixture.name, index, &interaction.expect)?;
@@ -1589,11 +1600,9 @@ fn validate_integration(alias: &str, integration: &IntegrationDocument) -> Resul
         bail!("integration outputs must contain between one and 64 entries");
     }
     let operations = integration_operations(integration);
-    let snapshot = matches!(
-        integration.capability,
-        CapabilityDeclaration::Snapshot { .. }
-    );
-    if (!snapshot && operations.is_empty()) || operations.len() > MAX_OPERATIONS + 2 {
+    let http = matches!(integration.capability, CapabilityDeclaration::Http { .. });
+    let snapshot = matches!(integration.capability, CapabilityDeclaration::Snapshot { .. });
+    if (http && operations.is_empty()) || operations.len() > MAX_OPERATIONS + 2 {
         bail!("compiled source plan exceeds the v1 operation bound");
     }
     if (!snapshot && !(1..=16).contains(&integration.bounds.calls))
@@ -1990,14 +1999,13 @@ fn validate_source_binding(
         }
     }
     validate_source_credential_binding(alias, credential_interface(integration), source)?;
-    let signed_dci = authored_signed_dci(integration);
-    match (signed_dci, source.jwks.as_ref()) {
-        (Some(_), Some(jwks)) => {
+    match (has_authored_signed_dci(integration), source.jwks.as_ref()) {
+        (true, Some(jwks)) => {
             validate_private_endpoint(jwks, &format!("integrations.{alias}.source.jwks"))?;
         }
-        (Some(_), None) => bail!("signed DCI requires one exact private JWKS binding"),
-        (None, Some(_)) => bail!("source.jwks is valid only for a signed-DCI integration"),
-        (None, None) => {}
+        (true, None) => bail!("signed DCI requires one exact private JWKS binding"),
+        (false, Some(_)) => bail!("source.jwks is valid only for a signed-DCI integration"),
+        (false, None) => {}
     }
     Ok(())
 }
@@ -2151,10 +2159,15 @@ fn validate_exact_private_path(path: &str, field: &str) -> Result<()> {
     Ok(())
 }
 
-fn authored_signed_dci(integration: &IntegrationDocument) -> Option<&OperationDeclaration> {
-    integration_operations(integration)
-        .values()
-        .find(|operation| operation.primitive.as_deref() == Some("dci_search_v1"))
+fn has_authored_signed_dci(integration: &IntegrationDocument) -> bool {
+    match &integration.capability {
+        CapabilityDeclaration::Http { http } => http
+            .operations
+            .values()
+            .any(|operation| operation.primitive.as_deref() == Some("dci_search_v1")),
+        CapabilityDeclaration::Script { script } => script.signed_dci.is_some(),
+        CapabilityDeclaration::Snapshot { .. } => false,
+    }
 }
 
 fn is_forbidden_api_key_header(name: &str) -> bool {

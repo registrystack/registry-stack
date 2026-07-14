@@ -7,8 +7,8 @@ use std::fmt;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use registry_platform_httputil::destination::{
-    DataDestinationRequest, DestinationAuthorizationValue, DestinationRequestError,
-    ScriptRequestBodyFormat, MAX_DESTINATION_HEADER_VALUE_BYTES,
+    DataDestinationRequest, DataDestinationRequestTemplate, DestinationAuthorizationValue,
+    DestinationRequestError, ScriptRequestBodyFormat, MAX_DESTINATION_HEADER_VALUE_BYTES,
 };
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -25,7 +25,8 @@ use super::compiler::CompiledApiKeyPlacement;
 use super::compiler::CompiledCredentialOperation;
 use super::registry::CompiledConsultationRegistry;
 use super::{
-    CompiledOperation, CompiledSourceAuth, CompiledSourcePlan, CompiledSourcePlanRegistry,
+    CompiledOperation, CompiledScriptAuthority, CompiledSourceAuth, CompiledSourcePlan,
+    CompiledSourcePlanRegistry,
 };
 
 const MAX_BASIC_COMPONENT_BYTES: usize = 4 * 1024;
@@ -162,6 +163,11 @@ struct OperationBindingKey {
 }
 
 impl OperationBindingKey {
+    fn from_plan_script(plan: &CompiledSourcePlan) -> Result<Self, SourceCredentialProviderError> {
+        let id = OperationId::try_from("script-source")
+            .map_err(|_| SourceCredentialProviderError::OperationBindingMismatch)?;
+        Ok(Self::from_plan_operation_id(plan, &id))
+    }
     fn from_plan_operation(plan: &CompiledSourcePlan, operation: &CompiledOperation) -> Self {
         Self::from_plan_operation_id(plan, operation.id())
     }
@@ -319,6 +325,32 @@ impl CompiledBasicSourceCredentialProvider {
         Ok(BasicAuthorizationCapability {
             operation,
             authorization,
+        })
+    }
+
+    pub(crate) fn authorization_for_script<'plan>(
+        &self,
+        plan: &'plan CompiledSourcePlan,
+        authority: &'plan CompiledScriptAuthority,
+    ) -> Result<ScriptBasicAuthorizationCapability, SourceCredentialProviderError> {
+        if authority.auth() != CompiledSourceAuth::Basic
+            || plan
+                .script_authority()
+                .is_none_or(|candidate| !std::ptr::eq(candidate, authority))
+        {
+            return Err(SourceCredentialProviderError::OperationBindingMismatch);
+        }
+        let binding = OperationBindingKey::from_plan_script(plan)?;
+        let credential = self
+            .operation_bindings
+            .get(&binding)
+            .and_then(|key| self.credentials.get(key))
+            .ok_or(SourceCredentialProviderError::OperationBindingMismatch)?;
+        let mut encoded = Zeroizing::new(Vec::with_capacity(credential.encoded_payload.len()));
+        encoded.extend_from_slice(&credential.encoded_payload);
+        Ok(ScriptBasicAuthorizationCapability {
+            authorization: DestinationAuthorizationValue::basic_zeroizing(encoded)
+                .map_err(|_| SourceCredentialProviderError::BasicEncodingFailed)?,
         })
     }
 
@@ -497,6 +529,29 @@ impl CompiledStaticBearerSourceCredentialProvider {
         })
     }
 
+    pub(crate) fn authorization_for_script<'plan>(
+        &self,
+        plan: &'plan CompiledSourcePlan,
+        authority: &'plan CompiledScriptAuthority,
+    ) -> Result<ScriptStaticAuthorizationCapability, SourceCredentialProviderError> {
+        if authority.auth() != CompiledSourceAuth::StaticBearer
+            || plan
+                .script_authority()
+                .is_none_or(|candidate| !std::ptr::eq(candidate, authority))
+        {
+            return Err(SourceCredentialProviderError::OperationBindingMismatch);
+        }
+        let credential = self
+            .operation_bindings
+            .get(&OperationBindingKey::from_plan_script(plan)?)
+            .and_then(|key| self.credentials.get(key))
+            .ok_or(SourceCredentialProviderError::OperationBindingMismatch)?;
+        Ok(ScriptStaticAuthorizationCapability {
+            authorization: DestinationAuthorizationValue::bearer(credential.token.to_vec())
+                .map_err(|_| SourceCredentialProviderError::OperationBindingMismatch)?,
+        })
+    }
+
     pub(crate) fn api_key_for<'operation>(
         &self,
         plan: &'operation CompiledSourcePlan,
@@ -519,6 +574,30 @@ impl CompiledStaticBearerSourceCredentialProvider {
         let mut value = Zeroizing::new(Vec::with_capacity(key.token.len()));
         value.extend_from_slice(&key.token);
         Ok(ApiKeyCapability { operation, value })
+    }
+
+    pub(crate) fn api_key_for_script<'plan>(
+        &self,
+        plan: &'plan CompiledSourcePlan,
+        authority: &'plan CompiledScriptAuthority,
+    ) -> Result<ScriptApiKeyCapability, SourceCredentialProviderError> {
+        if !matches!(
+            authority.auth(),
+            CompiledSourceAuth::ApiKeyHeader | CompiledSourceAuth::ApiKeyQuery
+        ) || plan
+            .script_authority()
+            .is_none_or(|candidate| !std::ptr::eq(candidate, authority))
+        {
+            return Err(SourceCredentialProviderError::OperationBindingMismatch);
+        }
+        let credential = self
+            .operation_bindings
+            .get(&OperationBindingKey::from_plan_script(plan)?)
+            .and_then(|key| self.credentials.get(key))
+            .ok_or(SourceCredentialProviderError::OperationBindingMismatch)?;
+        let mut value = Zeroizing::new(Vec::with_capacity(credential.token.len()));
+        value.extend_from_slice(&credential.token);
+        Ok(ScriptApiKeyCapability { value })
     }
 }
 
@@ -714,15 +793,32 @@ pub(crate) struct ApiKeyCapability<'operation> {
     value: Zeroizing<Vec<u8>>,
 }
 
-impl<'operation> BasicAuthorizationCapability<'operation> {
-    pub(crate) fn render_script(
+/// Consumable authorization closed over one compiled Script authority.
+///
+/// The reviewed allow rule remains a separate compiler-sealed template. The
+/// executor must supply that exact template when consuming this capability.
+pub(crate) struct ScriptBasicAuthorizationCapability {
+    authorization: DestinationAuthorizationValue,
+}
+
+pub(crate) struct ScriptStaticAuthorizationCapability {
+    authorization: DestinationAuthorizationValue,
+}
+
+pub(crate) struct ScriptApiKeyCapability {
+    value: Zeroizing<Vec<u8>>,
+}
+
+impl ScriptBasicAuthorizationCapability {
+    pub(crate) fn render(
         self,
+        template: &DataDestinationRequestTemplate,
         target: &str,
         header_values: &[(&str, &[u8])],
         body_format: Option<ScriptRequestBodyFormat>,
         body: Option<Zeroizing<Vec<u8>>>,
     ) -> Result<DataDestinationRequest, DestinationRequestError> {
-        self.operation.transport_template().render_script(
+        template.render_script(
             target,
             header_values,
             Some(self.authorization),
@@ -731,7 +827,49 @@ impl<'operation> BasicAuthorizationCapability<'operation> {
             body,
         )
     }
+}
 
+impl ScriptStaticAuthorizationCapability {
+    pub(crate) fn render(
+        self,
+        template: &DataDestinationRequestTemplate,
+        target: &str,
+        header_values: &[(&str, &[u8])],
+        body_format: Option<ScriptRequestBodyFormat>,
+        body: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<DataDestinationRequest, DestinationRequestError> {
+        template.render_script(
+            target,
+            header_values,
+            Some(self.authorization),
+            None,
+            body_format,
+            body,
+        )
+    }
+}
+
+impl ScriptApiKeyCapability {
+    pub(crate) fn render(
+        self,
+        template: &DataDestinationRequestTemplate,
+        target: &str,
+        header_values: &[(&str, &[u8])],
+        body_format: Option<ScriptRequestBodyFormat>,
+        body: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<DataDestinationRequest, DestinationRequestError> {
+        template.render_script(
+            target,
+            header_values,
+            None,
+            Some(self.value),
+            body_format,
+            body,
+        )
+    }
+}
+
+impl<'operation> BasicAuthorizationCapability<'operation> {
     /// Consume the authorization while rendering its exact compiled request.
     ///
     /// V1 Basic operations are reviewed GETs with compiled query expressions,
@@ -772,23 +910,6 @@ impl fmt::Debug for BasicAuthorizationCapability<'_> {
 }
 
 impl StaticBearerAuthorizationCapability<'_> {
-    pub(crate) fn render_script(
-        self,
-        target: &str,
-        header_values: &[(&str, &[u8])],
-        body_format: Option<ScriptRequestBodyFormat>,
-        body: Option<Zeroizing<Vec<u8>>>,
-    ) -> Result<DataDestinationRequest, DestinationRequestError> {
-        self.operation.transport_template().render_script(
-            target,
-            header_values,
-            Some(self.authorization),
-            None,
-            body_format,
-            body,
-        )
-    }
-
     pub(crate) fn render(
         self,
         path_segment: Option<&str>,
@@ -824,23 +945,6 @@ impl fmt::Debug for StaticBearerAuthorizationCapability<'_> {
 }
 
 impl ApiKeyCapability<'_> {
-    pub(crate) fn render_script(
-        self,
-        target: &str,
-        header_values: &[(&str, &[u8])],
-        body_format: Option<ScriptRequestBodyFormat>,
-        body: Option<Zeroizing<Vec<u8>>>,
-    ) -> Result<DataDestinationRequest, DestinationRequestError> {
-        self.operation.transport_template().render_script(
-            target,
-            header_values,
-            None,
-            Some(self.value),
-            body_format,
-            body,
-        )
-    }
-
     pub(crate) fn render(
         self,
         path_segment: Option<&str>,
@@ -919,6 +1023,9 @@ fn compile_registry_requirements(
 ) -> Result<BTreeMap<Box<str>, CredentialRequirement>, SourceCredentialProviderError> {
     let mut requirements: BTreeMap<Box<str>, CredentialRequirement> = BTreeMap::new();
     for plan in registry.iter() {
+        let script_basic = plan
+            .script_authority()
+            .is_some_and(|authority| authority.auth() == CompiledSourceAuth::Basic);
         let basic_operations = plan
             .operations()
             .filter(|operation| operation.auth() == CompiledSourceAuth::Basic)
@@ -927,7 +1034,7 @@ fn compile_registry_requirements(
         // Basic operation belong to another closed provider and must coexist
         // in the same compiled consultation registry without being claimed or
         // causing their environment material to be read here.
-        if basic_operations.is_empty() {
+        if basic_operations.is_empty() && !script_basic {
             continue;
         }
         if plan.operations().any(|operation| {
@@ -957,6 +1064,11 @@ fn compile_registry_requirements(
                 .into_iter()
                 .map(|operation| OperationBindingKey::from_plan_operation(plan, operation)),
         );
+        if script_basic {
+            requirement
+                .operations
+                .push(OperationBindingKey::from_plan_script(plan)?);
+        }
     }
     Ok(requirements)
 }
@@ -966,11 +1078,14 @@ fn compile_static_bearer_registry_requirements(
 ) -> Result<BTreeMap<Box<str>, CredentialRequirement>, SourceCredentialProviderError> {
     let mut requirements: BTreeMap<Box<str>, CredentialRequirement> = BTreeMap::new();
     for plan in registry.iter() {
+        let script_static = plan
+            .script_authority()
+            .is_some_and(|authority| authority.auth() == CompiledSourceAuth::StaticBearer);
         let operations = plan
             .operations()
             .filter(|operation| operation.auth() == CompiledSourceAuth::StaticBearer)
             .collect::<Vec<_>>();
-        if operations.is_empty() {
+        if operations.is_empty() && !script_static {
             continue;
         }
         if plan.operations().any(|operation| {
@@ -999,6 +1114,11 @@ fn compile_static_bearer_registry_requirements(
                 .into_iter()
                 .map(|operation| OperationBindingKey::from_plan_operation(plan, operation)),
         );
+        if script_static {
+            requirement
+                .operations
+                .push(OperationBindingKey::from_plan_script(plan)?);
+        }
     }
     Ok(requirements)
 }
@@ -1009,11 +1129,14 @@ fn compile_api_key_registry_requirements(
 ) -> Result<BTreeMap<Box<str>, CredentialRequirement>, SourceCredentialProviderError> {
     let mut requirements: BTreeMap<Box<str>, CredentialRequirement> = BTreeMap::new();
     for plan in registry.iter() {
+        let script_matches = plan
+            .script_authority()
+            .is_some_and(|authority| authority.auth() == auth);
         let operations = plan
             .operations()
             .filter(|operation| operation.auth() == auth)
             .collect::<Vec<_>>();
-        if operations.is_empty() {
+        if operations.is_empty() && !script_matches {
             continue;
         }
         if plan.operations().any(|operation| {
@@ -1039,6 +1162,11 @@ fn compile_api_key_registry_requirements(
                 .into_iter()
                 .map(|operation| OperationBindingKey::from_plan_operation(plan, operation)),
         );
+        if script_matches {
+            requirement
+                .operations
+                .push(OperationBindingKey::from_plan_script(plan)?);
+        }
     }
     Ok(requirements)
 }
@@ -1054,6 +1182,9 @@ fn compile_oauth_registry_requirements(
         if !plan
             .operations()
             .any(|operation| operation.auth() == CompiledSourceAuth::OAuthClientCredentials)
+            && !plan.script_authority().is_some_and(|authority| {
+                authority.auth() == CompiledSourceAuth::OAuthClientCredentials
+            })
         {
             return Err(SourceCredentialProviderError::OAuthOperationShapeMismatch);
         }

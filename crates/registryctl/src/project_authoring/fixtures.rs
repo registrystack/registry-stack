@@ -1447,7 +1447,7 @@ fn validate_output(
     operations: &BTreeMap<String, OperationDeclaration>,
 ) -> Result<()> {
     let Some(source) = declaration.from.as_deref() else {
-        if declaration.output_type == FactType::Presence {
+        if declaration.output_type == OutputType::Presence {
             bail!("script terminal outputs cannot use the internal presence type");
         }
         return Ok(());
@@ -1461,7 +1461,7 @@ fn validate_output(
     if path == "presence" {
         if !matches!(
             declaration.output_type,
-            FactType::Presence | FactType::Boolean
+            OutputType::Presence | OutputType::Boolean
         ) || declaration.nullable
         {
             bail!("presence mapping must use a non-null Boolean or presence type");
@@ -1476,17 +1476,17 @@ fn validate_output(
     {
         bail!("output mapping must use a static record path");
     }
-    if declaration.output_type == FactType::String
+    if declaration.output_type == OutputType::String
         && declaration
             .max_bytes
             .is_none_or(|bound| bound == 0 || bound > 64 * 1024)
     {
         bail!("string output requires a positive bounded max_bytes");
     }
-    if declaration.output_type != FactType::String && declaration.max_bytes.is_some() {
+    if declaration.output_type != OutputType::String && declaration.max_bytes.is_some() {
         bail!("only string outputs may declare max_bytes");
     }
-    if declaration.output_type == FactType::Presence && path != "presence" {
+    if declaration.output_type == OutputType::Presence && path != "presence" {
         bail!("presence outputs must map an operation presence outcome");
     }
     if path != "presence" {
@@ -1519,13 +1519,13 @@ fn validate_output(
             };
         }
         let matches = match (declaration.output_type, schema) {
-            (FactType::Boolean, SchemaNode::Boolean) => true,
-            (FactType::Integer, SchemaNode::Integer { .. }) => true,
-            (FactType::String, SchemaNode::String { max_bytes }) => {
+            (OutputType::Boolean, SchemaNode::Boolean) => true,
+            (OutputType::Integer, SchemaNode::Integer { .. }) => true,
+            (OutputType::String, SchemaNode::String { max_bytes }) => {
                 declaration.max_bytes == Some(*max_bytes)
             }
-            (FactType::Date, SchemaNode::Date) => true,
-            (FactType::Presence, _) | (_, _) => false,
+            (OutputType::Date, SchemaNode::Date) => true,
+            (OutputType::Presence, _) | (_, _) => false,
         };
         if !matches {
             bail!("output type or bound does not exactly match its response schema field");
@@ -1567,7 +1567,7 @@ fn validate_snapshot_output(name: &str, declaration: &OutputDeclaration) -> Resu
         if name != "exists"
             || !matches!(
                 declaration.output_type,
-                FactType::Boolean | FactType::Presence
+                OutputType::Boolean | OutputType::Presence
             )
             || declaration.nullable
             || declaration.max_bytes.is_some()
@@ -1580,17 +1580,17 @@ fn validate_snapshot_output(name: &str, declaration: &OutputDeclaration) -> Resu
     if name != field {
         bail!("snapshot output ids must equal their logical projected field names");
     }
-    if declaration.output_type == FactType::Presence {
+    if declaration.output_type == OutputType::Presence {
         bail!("presence outputs must map snapshot.presence");
     }
-    if declaration.output_type == FactType::String
+    if declaration.output_type == OutputType::String
         && declaration
             .max_bytes
             .is_none_or(|bound| bound == 0 || bound > 64 * 1024)
     {
         bail!("snapshot string output requires a positive bounded max_bytes");
     }
-    if declaration.output_type != FactType::String && declaration.max_bytes.is_some() {
+    if declaration.output_type != OutputType::String && declaration.max_bytes.is_some() {
         bail!("only snapshot string outputs may declare max_bytes");
     }
     Ok(())
@@ -1601,8 +1601,7 @@ fn integration_operations(
 ) -> &BTreeMap<String, OperationDeclaration> {
     match &integration.capability {
         CapabilityDeclaration::Http { http } => &http.operations,
-        CapabilityDeclaration::Script { script } => &script.operations,
-        CapabilityDeclaration::Snapshot { .. } => {
+        CapabilityDeclaration::Script { .. } | CapabilityDeclaration::Snapshot { .. } => {
             static EMPTY: std::sync::LazyLock<BTreeMap<String, OperationDeclaration>> =
                 std::sync::LazyLock::new(BTreeMap::new);
             &EMPTY
@@ -1676,7 +1675,7 @@ mod fixture_interface_tests {
 
     fn rhai_project() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/project-authoring/dhis2-sandboxed-rhai")
+            .join("tests/fixtures/project-authoring/dhis2-script")
     }
 
     fn compiled_project(
@@ -1717,7 +1716,7 @@ mod fixture_interface_tests {
             false,
         )
         .expect("ordinary fixture passes");
-        assert_eq!(ordinary.calls, ["allow-1"]);
+        assert_eq!(ordinary.calls, ["script-source-call"]);
 
         let traced = execute_offline_profiles(
             &compiled,
@@ -1731,7 +1730,7 @@ mod fixture_interface_tests {
         assert_eq!(traced.calls.len(), 1);
         assert_eq!(
             traced.calls[0],
-            "call=1 operation=allow-1 method=GET path=/api/tracker/trackedEntities/* query=[fields] headers=[] body=none"
+            "call=1 operation=script-source-call method=GET path=/api/tracker/trackedEntities/* query=[fields] headers=[] body=none"
         );
         for sensitive in ["A0000000001", "Nia", "REF-0001"] {
             assert!(!traced.calls[0].contains(sensitive));

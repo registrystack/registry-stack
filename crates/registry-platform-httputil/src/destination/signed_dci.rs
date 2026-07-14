@@ -273,7 +273,7 @@ impl fmt::Debug for SignedDciExpectation {
 /// Closed verifier and decoder for one reviewed signed DCI response contract.
 pub struct SignedDciDecoder<'decoder> {
     expected: SignedDciExpectation,
-    record_decoder: &'decoder ClosedJsonDecoder,
+    record_decoder: Option<&'decoder ClosedJsonDecoder>,
 }
 
 impl<'decoder> SignedDciDecoder<'decoder> {
@@ -285,7 +285,20 @@ impl<'decoder> SignedDciDecoder<'decoder> {
     ) -> Self {
         Self {
             expected,
-            record_decoder,
+            record_decoder: Some(record_decoder),
+        }
+    }
+
+    /// Bind a request expectation for a reviewed Script helper.
+    ///
+    /// The helper verifies and releases the bounded signed payload. Record
+    /// traversal remains in the hash-covered Script and therefore has no
+    /// synthesized Relay operation schema.
+    #[must_use]
+    pub const fn new_script(expected: SignedDciExpectation) -> Self {
+        Self {
+            expected,
+            record_decoder: None,
         }
     }
 
@@ -320,6 +333,7 @@ impl<'decoder> SignedDciDecoder<'decoder> {
         };
         let decoded = self
             .record_decoder
+            .ok_or(SignedDciDecodeError::RecordContractViolation)?
             .decode(body)
             .map_err(|_| SignedDciDecodeError::RecordContractViolation)?;
 

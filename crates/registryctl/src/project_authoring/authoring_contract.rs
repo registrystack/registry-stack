@@ -54,7 +54,7 @@ struct AuthoredProtocolDeclaration {
     signed_dci: Option<AuthoredSignedDciDeclaration>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSignedDciDeclaration {
     profile: String,
@@ -68,14 +68,14 @@ struct AuthoredSignedDciDeclaration {
     selectors: BTreeMap<String, AuthoredDciSelectorBinding>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredDciSelectorBinding {
     field: String,
     response_pointer: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct AuthoredSourceAllowRule {
     method: ReadMethod,
@@ -383,7 +383,7 @@ enum AuthoredFixtureBody {
 }
 
 const DEFAULT_SOURCE_RESPONSE_BYTES: u64 = 512 * 1024;
-const MAX_DECLARATIVE_HTTP_RESPONSE_BYTES: u64 = 256 * 1024;
+const MAX_DECLARATIVE_HTTP_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 const DEFAULT_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
 const DEFAULT_REQUEST_BYTES: u64 = 64 * 1024;
 const DEFAULT_SCRIPT_CALLS: u8 = 5;
@@ -435,11 +435,13 @@ fn lower_authored_integration(
         calls: limits
             .and_then(|limits| limits.calls)
             .unwrap_or(DEFAULT_SCRIPT_CALLS),
+        calls_authored: limits.is_some_and(|limits| limits.calls.is_some()),
         source_bytes: limits
             .and_then(|limits| limits.source_bytes.as_ref())
             .map(|size| size.bytes("limits.source_bytes"))
             .transpose()?
             .unwrap_or(DEFAULT_SOURCE_BYTES),
+        source_bytes_authored: limits.is_some_and(|limits| limits.source_bytes.is_some()),
         request_bytes: u32::try_from(
             limits
                 .and_then(|limits| limits.request_bytes.as_ref())
@@ -448,9 +450,11 @@ fn lower_authored_integration(
                 .unwrap_or(DEFAULT_REQUEST_BYTES),
         )
         .map_err(|_| anyhow!("limits.request_bytes exceeds the platform integer range"))?,
+        request_bytes_authored: limits.is_some_and(|limits| limits.request_bytes.is_some()),
         deadline: limits
             .and_then(|limits| limits.deadline.clone())
             .unwrap_or_else(|| DEFAULT_DEADLINE.to_string()),
+        deadline_authored: limits.is_some_and(|limits| limits.deadline.is_some()),
         concurrency: 8,
     };
     let (capability, outputs) = match (&authored.capability, &authored.outputs) {
@@ -486,6 +490,14 @@ fn lower_authored_integration(
                 &authored.capability,
                 AuthoredCapabilityDeclaration::Http { .. }
             ) {
+                1
+            } else if authored
+                .source
+                .as_ref()
+                .and_then(|source| source.protocol.as_ref())
+                .and_then(|protocol| protocol.signed_dci.as_ref())
+                .is_some()
+            {
                 1
             } else {
                 bounds.calls
@@ -561,6 +573,14 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
                 != selectors
             {
                 bail!("source.protocol.signed_dci.selectors must bind every selector exactly once");
+            }
+            if authored
+                .limits
+                .as_ref()
+                .and_then(|limits| limits.calls)
+                .is_some_and(|calls| calls != 1)
+            {
+                bail!("source.protocol.signed_dci supports exactly one high-level Script call");
             }
         }
     }
@@ -659,12 +679,46 @@ fn validate_authored_source(source: &AuthoredSourceDeclaration) -> Result<()> {
                 "source.protocol.signed_dci selector field",
                 160,
             )?;
-            pointer_segments(&binding.response_pointer).with_context(|| {
+            signed_dci_pointer_segments(&binding.response_pointer).with_context(|| {
                 format!("source.protocol.signed_dci.selectors.{name}.response_pointer")
             })?;
         }
     }
     Ok(())
+}
+
+fn signed_dci_pointer_segments(pointer: &str) -> Result<Vec<String>> {
+    let pointer = pointer
+        .strip_prefix('/')
+        .ok_or_else(|| anyhow!("signed DCI selector response pointer must be absolute"))?;
+    if pointer.is_empty() || pointer.contains('~') {
+        bail!("signed DCI selector response pointer must be canonical");
+    }
+    let segments = pointer.split('/').map(str::to_string).collect::<Vec<_>>();
+    if segments.iter().any(String::is_empty) {
+        bail!("signed DCI selector response pointer must be canonical");
+    }
+    if segments.first().is_some_and(|segment| segment == "identifier") {
+        let valid = matches!(
+            segments.as_slice(),
+            [_, index, field]
+                if index.bytes().all(|byte| byte.is_ascii_digit())
+                    && (index == "0" || !index.starts_with('0'))
+                    && index.parse::<usize>().is_ok_and(|index| index < 64)
+                    && matches!(field.as_str(), "identifier_type" | "identifier_value")
+        );
+        if !valid {
+            if segments.get(1).is_some_and(|index| {
+                index.bytes().all(|byte| byte.is_ascii_digit())
+                    && index != "0"
+                    && index.starts_with('0')
+            }) {
+                bail!("signed DCI selector response pointer must use a canonical array index");
+            }
+            bail!("signed DCI selector response pointer is outside the signed record schema");
+        }
+    }
+    Ok(segments)
 }
 
 fn validate_authored_credential_interface(interface: &CredentialInterface) -> Result<()> {
@@ -1072,9 +1126,9 @@ fn lower_http_capability(
         .and_then(|response| response.max_bytes.as_ref())
         .map(|size| size.bytes("source.response.max_bytes"))
         .transpose()?
-        .unwrap_or(MAX_DECLARATIVE_HTTP_RESPONSE_BYTES);
+        .unwrap_or(DEFAULT_SOURCE_RESPONSE_BYTES);
     if response_bytes > MAX_DECLARATIVE_HTTP_RESPONSE_BYTES {
-        bail!("http source.response.max_bytes exceeds the 256KiB closed JSON limit");
+        bail!("http source.response.max_bytes exceeds the 8MiB platform ceiling");
     }
     let operation = OperationDeclaration {
         depends_on: credential
@@ -1122,6 +1176,10 @@ fn lower_http_capability(
             http: HttpDeclaration {
                 credential: source.auth.clone(),
                 operations,
+                response_max_bytes_authored: source
+                    .response
+                    .as_ref()
+                    .is_some_and(|response| response.max_bytes.is_some()),
             },
         },
         outputs,
@@ -1171,73 +1229,18 @@ fn lower_script_capability(
         bail!("script integrations require at least one source.allow rule");
     }
     let outputs = lower_output_map(authored_outputs, "source", false)?;
-    let schema = response_schema_for_outputs(authored_outputs)?;
-    let credential = lower_oauth_credential_operation(&source.auth)?;
-    let credential_dependencies = credential
-        .as_ref()
-        .map(|(id, _)| vec![id.clone()])
-        .unwrap_or_default();
-    let mut operations = source
-        .allow
-        .iter()
-        .enumerate()
-        .map(|(index, rule)| {
-            if rule.method == ReadMethod::Post
-                && rule.semantics != Some(AuthoredRequestSemantics::ReadOnly)
-            {
-                bail!("source.allow[{index}] POST requires semantics: read_only");
-            }
-            Ok((
-                format!("allow-{}", index + 1),
-                OperationDeclaration {
-                    depends_on: credential_dependencies.clone(),
-                    role: OperationRole::Data,
-                    primitive: None,
-                    request: RequestDeclaration {
-                        method: rule.method,
-                        destination: "data".to_string(),
-                        path: rule.path.clone(),
-                        path_parameters: BTreeMap::new(),
-                        query: BTreeMap::new(),
-                        headers: BTreeMap::new(),
-                        body: None,
-                        primitive: None,
-                        codec: None,
-                        authorization: None,
-                    },
-                    response: ResponseDeclaration {
-                        statuses: vec![200],
-                        max_bytes: u32::try_from(
-                            source
-                                .response
-                                .as_ref()
-                                .and_then(|response| response.max_bytes.as_ref())
-                                .map(|size| size.bytes("source.response.max_bytes"))
-                                .transpose()?
-                                .unwrap_or(DEFAULT_SOURCE_RESPONSE_BYTES),
-                        )
-                        .map_err(|_| {
-                            anyhow!("source.response.max_bytes exceeds the product range")
-                        })?,
-                        schema: schema.clone_for_lowering(),
-                        codec: Some("json_v1".to_string()),
-                        cardinality: Some(CardinalityDeclaration {
-                            records: None,
-                            mode: CardinalityMode::Singleton,
-                        }),
-                        status_semantics: None,
-                    },
-                    verification: None,
-                    when: None,
-                },
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>>>()?;
-    if let Some(protocol) = source
+    for (index, rule) in source.allow.iter().enumerate() {
+        if rule.method == ReadMethod::Post
+            && rule.semantics != Some(AuthoredRequestSemantics::ReadOnly)
+        {
+            bail!("source.allow[{index}] POST requires semantics: read_only");
+        }
+    }
+    let signed_dci = source
         .protocol
         .as_ref()
-        .and_then(|protocol| protocol.signed_dci.as_ref())
-    {
+        .and_then(|protocol| protocol.signed_dci.as_ref());
+    if let Some(protocol) = signed_dci {
         if source.allow.len() != 1
             || source.allow[0].method != ReadMethod::Post
             || source.allow[0].path != protocol.path
@@ -1245,24 +1248,40 @@ fn lower_script_capability(
         {
             bail!("signed DCI source.allow must contain only its exact read-only POST path");
         }
-        operations.clear();
-        let mut dependencies = credential_dependencies;
-        dependencies.push("jwks".to_string());
-        operations.insert("jwks".to_string(), lower_signed_dci_jwks_operation());
-        operations.insert(
-            "dci-search".to_string(),
-            lower_signed_dci_operation(protocol, source, dependencies)?,
-        );
     }
-    if let Some((id, operation)) = credential {
-        operations.insert(id, operation);
-    }
+    let response = source.response.as_ref();
+    let max_bytes = u32::try_from(
+        response
+            .and_then(|response| response.max_bytes.as_ref())
+            .map(|size| size.bytes("source.response.max_bytes"))
+            .transpose()?
+            .unwrap_or(DEFAULT_SOURCE_RESPONSE_BYTES),
+    )
+    .map_err(|_| anyhow!("source.response.max_bytes exceeds the product range"))?;
     Ok((
         CapabilityDeclaration::Script {
             script: ScriptDeclaration {
                 runtime: ScriptRuntime::RhaiV1,
                 credential: source.auth.clone(),
-                operations,
+                allow: source
+                    .allow
+                    .iter()
+                    .map(|rule| ScriptAllowRule {
+                        method: rule.method,
+                        path: rule.path.clone(),
+                        semantics: rule.semantics,
+                    })
+                    .collect(),
+                request_headers: source.request_headers.clone(),
+                response_headers: source.response_headers.clone(),
+                response: ScriptResponseDeclaration {
+                    format: response.map_or(AuthoredResponseFormat::Json, |response| {
+                        response.format
+                    }),
+                    max_bytes,
+                    max_bytes_authored: response.is_some_and(|response| response.max_bytes.is_some()),
+                },
+                signed_dci: signed_dci.cloned(),
                 script: script.file.clone(),
                 modules: script.modules.clone(),
             },
@@ -1344,241 +1363,6 @@ fn lower_oauth_credential_operation(
     )))
 }
 
-fn lower_signed_dci_jwks_operation() -> OperationDeclaration {
-    OperationDeclaration {
-        depends_on: Vec::new(),
-        role: OperationRole::Verification,
-        primitive: Some("jwks_json_v1".to_string()),
-        request: RequestDeclaration {
-            method: ReadMethod::Get,
-            destination: "verification".to_string(),
-            path: "/".to_string(),
-            path_parameters: BTreeMap::new(),
-            query: BTreeMap::new(),
-            headers: BTreeMap::new(),
-            body: None,
-            primitive: None,
-            codec: None,
-            authorization: None,
-        },
-        response: ResponseDeclaration {
-            statuses: vec![200],
-            max_bytes: 64 * 1024,
-            schema: SchemaNode::Object {
-                additional_fields: AdditionalFields::Reject,
-                fields: BTreeMap::from([(
-                    "keys".to_string(),
-                    SchemaField {
-                        required: true,
-                        schema: SchemaNode::Array {
-                            max_items: 16,
-                            items: Box::new(SchemaNode::Object {
-                                additional_fields: AdditionalFields::Ignore,
-                                fields: BTreeMap::new(),
-                            }),
-                        },
-                    },
-                )]),
-            },
-            codec: Some("jwks_json_v1".to_string()),
-            cardinality: None,
-            status_semantics: None,
-        },
-        verification: None,
-        when: None,
-    }
-}
-
-fn lower_signed_dci_operation(
-    protocol: &AuthoredSignedDciDeclaration,
-    source: &AuthoredSourceDeclaration,
-    depends_on: Vec<String>,
-) -> Result<OperationDeclaration> {
-    let exact_and = protocol
-        .selectors
-        .iter()
-        .map(|(name, binding)| {
-            (
-                name.clone(),
-                json!({
-                    "field": binding.field,
-                    "response_pointer": binding.response_pointer,
-                }),
-            )
-        })
-        .collect::<Map<String, Value>>();
-    Ok(OperationDeclaration {
-        depends_on,
-        role: OperationRole::Data,
-        primitive: Some("dci_search_v1".to_string()),
-        request: RequestDeclaration {
-            method: ReadMethod::Post,
-            destination: "data".to_string(),
-            path: protocol.path.clone(),
-            path_parameters: BTreeMap::new(),
-            query: BTreeMap::new(),
-            headers: BTreeMap::new(),
-            body: Some(json!({
-                "protocol_version": { "value": "1.0.0" },
-                "sender": { "value": protocol.sender },
-                "receiver": { "value": protocol.receiver },
-                "registry_type": { "value": protocol.registry_type },
-                "registry_event_type": { "value": protocol.record_type },
-                "record_type": { "value": protocol.record_type },
-                "exact_and": exact_and,
-                "locale": { "value": protocol.locale },
-                "page_number": { "value": "1" },
-            })),
-            primitive: None,
-            codec: Some("dci_search_v1".to_string()),
-            authorization: Some(ValueSource::Prior {
-                prior: "oauth.access_token".to_string(),
-            }),
-        },
-        response: ResponseDeclaration {
-            statuses: vec![200],
-            max_bytes: u32::try_from(
-                source
-                    .response
-                    .as_ref()
-                    .and_then(|response| response.max_bytes.as_ref())
-                    .map(|size| size.bytes("source.response.max_bytes"))
-                    .transpose()?
-                    .unwrap_or(DEFAULT_SOURCE_RESPONSE_BYTES),
-            )
-            .map_err(|_| anyhow!("source.response.max_bytes exceeds the product range"))?,
-            schema: signed_dci_record_schema(protocol)?,
-            codec: Some("dci_search_response_v1".to_string()),
-            cardinality: Some(CardinalityDeclaration {
-                records: None,
-                mode: CardinalityMode::ProbeTwo,
-            }),
-            status_semantics: None,
-        },
-        verification: Some(VerificationDeclaration {
-            primitive: "dci_jws_v1".to_string(),
-            jwks: "jwks.keys".to_string(),
-        }),
-        when: None,
-    })
-}
-
-fn signed_dci_record_schema(protocol: &AuthoredSignedDciDeclaration) -> Result<SchemaNode> {
-    let mut root = SchemaNode::Object {
-        additional_fields: AdditionalFields::Reject,
-        fields: BTreeMap::new(),
-    };
-    for selector in protocol.selectors.values() {
-        let segments = signed_dci_pointer_segments(&selector.response_pointer)?;
-        insert_signed_dci_pointer(&mut root, &segments)?;
-    }
-    Ok(root)
-}
-
-fn signed_dci_pointer_segments(pointer: &str) -> Result<Vec<String>> {
-    let pointer = pointer
-        .strip_prefix('/')
-        .ok_or_else(|| anyhow!("signed DCI selector response pointer must be absolute"))?;
-    if pointer.is_empty() || pointer.contains('~') {
-        bail!("signed DCI selector response pointer must be canonical");
-    }
-    let segments = pointer.split('/').map(str::to_string).collect::<Vec<_>>();
-    if segments.iter().any(String::is_empty) {
-        bail!("signed DCI selector response pointer must be canonical");
-    }
-    if segments
-        .first()
-        .is_some_and(|segment| segment == "identifier")
-    {
-        let valid = matches!(
-            segments.as_slice(),
-            [_, index, field]
-                if index.bytes().all(|byte| byte.is_ascii_digit())
-                    && (index == "0" || !index.starts_with('0'))
-                    && index.parse::<usize>().is_ok_and(|index| index < 64)
-                    && matches!(field.as_str(), "identifier_type" | "identifier_value")
-        );
-        if !valid {
-            if segments.get(1).is_some_and(|index| {
-                index.bytes().all(|byte| byte.is_ascii_digit())
-                    && index != "0"
-                    && index.starts_with('0')
-            }) {
-                bail!("signed DCI selector response pointer must use a canonical array index");
-            }
-            bail!("signed DCI selector response pointer is outside the signed record schema");
-        }
-    }
-    Ok(segments)
-}
-
-fn insert_signed_dci_pointer(node: &mut SchemaNode, segments: &[String]) -> Result<()> {
-    let (segment, remaining) = segments
-        .split_first()
-        .ok_or_else(|| anyhow!("signed DCI selector response pointer cannot select the root"))?;
-    match node {
-        SchemaNode::Object { fields, .. } => {
-            if segment.parse::<usize>().is_ok() {
-                bail!("signed DCI selector response pointer has an array index outside an array");
-            }
-            let proposed = if remaining.is_empty() {
-                SchemaNode::String { max_bytes: 16_384 }
-            } else if remaining[0].parse::<usize>().is_ok() {
-                SchemaNode::Array {
-                    max_items: 64,
-                    items: Box::new(if remaining.len() == 1 {
-                        SchemaNode::String { max_bytes: 16_384 }
-                    } else {
-                        SchemaNode::Object {
-                            additional_fields: AdditionalFields::Reject,
-                            fields: BTreeMap::new(),
-                        }
-                    }),
-                }
-            } else {
-                SchemaNode::Object {
-                    additional_fields: AdditionalFields::Reject,
-                    fields: BTreeMap::new(),
-                }
-            };
-            let field = fields.entry(segment.clone()).or_insert(SchemaField {
-                required: true,
-                schema: proposed,
-            });
-            field.required = true;
-            if remaining.is_empty() {
-                if !matches!(field.schema, SchemaNode::String { .. }) {
-                    bail!("signed DCI selector response pointers overlap incompatibly");
-                }
-                return Ok(());
-            }
-            insert_signed_dci_pointer(&mut field.schema, remaining)
-        }
-        SchemaNode::Array { items, .. } => {
-            let index = segment
-                .parse::<usize>()
-                .map_err(|_| anyhow!("signed DCI selector array segment must be an index"))?;
-            if index >= 64 {
-                bail!("signed DCI selector array index exceeds the bounded profile");
-            }
-            if remaining.is_empty() {
-                if !matches!(items.as_ref(), SchemaNode::String { .. }) {
-                    bail!("signed DCI selector response pointers overlap incompatibly");
-                }
-                Ok(())
-            } else {
-                insert_signed_dci_pointer(items, remaining)
-            }
-        }
-        SchemaNode::String { .. }
-        | SchemaNode::Integer { .. }
-        | SchemaNode::Boolean
-        | SchemaNode::Date => {
-            bail!("signed DCI selector response pointers overlap incompatibly")
-        }
-    }
-}
-
 fn lower_output_map(
     authored: &BTreeMap<String, AuthoredOutputDeclaration>,
     step: &str,
@@ -1592,10 +1376,10 @@ fn lower_output_map(
         .map(|(name, declaration)| {
             let (scalar, nullable) = schema_type_parts(&declaration.output_type)?;
             let output_type = match (scalar, declaration.format) {
-                (AuthoredScalarType::String, Some(AuthoredStringFormat::Date)) => FactType::Date,
-                (AuthoredScalarType::String, None) => FactType::String,
-                (AuthoredScalarType::Boolean, None) => FactType::Boolean,
-                (AuthoredScalarType::Integer, None) => FactType::Integer,
+                (AuthoredScalarType::String, Some(AuthoredStringFormat::Date)) => OutputType::Date,
+                (AuthoredScalarType::String, None) => OutputType::String,
+                (AuthoredScalarType::Boolean, None) => OutputType::Boolean,
+                (AuthoredScalarType::Integer, None) => OutputType::Integer,
                 (AuthoredScalarType::Null, _) => {
                     bail!("outputs.{name}: null cannot be the only output type")
                 }
@@ -1612,7 +1396,7 @@ fn lower_output_map(
                 }
                 (None, false) => None,
             };
-            let max_bytes = if output_type == FactType::String {
+            let max_bytes = if output_type == OutputType::String {
                 Some(
                     declaration
                         .max_length
@@ -1620,7 +1404,7 @@ fn lower_output_map(
                         .checked_mul(4)
                         .ok_or_else(|| anyhow!("outputs.{name}.maxLength exceeds byte limits"))?,
                 )
-            } else if output_type == FactType::Date {
+            } else if output_type == OutputType::Date {
                 Some(10)
             } else {
                 None
@@ -1631,10 +1415,10 @@ fn lower_output_map(
                     output_type,
                     nullable,
                     max_bytes,
-                    minimum: (output_type == FactType::Integer)
+                    minimum: (output_type == OutputType::Integer)
                         .then_some(declaration.minimum)
                         .flatten(),
-                    maximum: (output_type == FactType::Integer)
+                    maximum: (output_type == OutputType::Integer)
                         .then_some(declaration.maximum)
                         .flatten(),
                     from: pointer.as_ref().map(|_| format!("{step}.record.{name}")),
@@ -1812,45 +1596,4 @@ fn pointer_segments(pointer: &str) -> Result<Vec<String>> {
             Ok(decoded)
         })
         .collect()
-}
-
-impl SchemaNode {
-    fn clone_for_lowering(&self) -> Self {
-        match self {
-            Self::Object {
-                additional_fields,
-                fields,
-            } => Self::Object {
-                additional_fields: match additional_fields {
-                    AdditionalFields::Reject => AdditionalFields::Reject,
-                    AdditionalFields::Ignore => AdditionalFields::Ignore,
-                },
-                fields: fields
-                    .iter()
-                    .map(|(name, field)| {
-                        (
-                            name.clone(),
-                            SchemaField {
-                                required: field.required,
-                                schema: field.schema.clone_for_lowering(),
-                            },
-                        )
-                    })
-                    .collect(),
-            },
-            Self::Array { max_items, items } => Self::Array {
-                max_items: *max_items,
-                items: Box::new(items.clone_for_lowering()),
-            },
-            Self::String { max_bytes } => Self::String {
-                max_bytes: *max_bytes,
-            },
-            Self::Integer { min, max } => Self::Integer {
-                min: *min,
-                max: *max,
-            },
-            Self::Boolean => Self::Boolean,
-            Self::Date => Self::Date,
-        }
-    }
 }

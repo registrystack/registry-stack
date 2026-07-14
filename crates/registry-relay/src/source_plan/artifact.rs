@@ -162,8 +162,8 @@ pub enum SourcePlanKind {
     SnapshotExact,
     /// A fixed sequence of bounded HTTP operations.
     BoundedHttp,
-    /// A pinned script orchestrating only the pack's bounded operations.
-    SandboxedRhai,
+    /// A pinned script making dynamic calls within one reviewed source authority.
+    Script,
 }
 
 /// The closed cardinality contract for one subject lookup.

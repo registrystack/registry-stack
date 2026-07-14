@@ -615,14 +615,6 @@ fn bounded_scope(parts: &[&str]) -> Result<String> {
     Ok(scope)
 }
 
-fn numeric_artifact_version(digest: &str) -> Result<String> {
-    let hexadecimal = digest
-        .strip_prefix("sha256:")
-        .ok_or_else(|| anyhow!("semantic digest has an invalid shape"))?;
-    let value = u64::from_str_radix(&hexadecimal[..12], 16)? % 9_000_000_000;
-    Ok((value + 1_000_000_000).to_string())
-}
-
 type PackSemantics = (Value, Value, Value, Value, Value, Option<Value>);
 
 fn generated_pack_semantics(
@@ -632,14 +624,145 @@ fn generated_pack_semantics(
     evidence: &[GeneratedEvidence],
 ) -> Result<PackSemantics> {
     match &integration.document.capability {
-        CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Script { .. } => {
+        CapabilityDeclaration::Http { .. } => {
             generated_http_pack_semantics(alias, integration, evidence)
+        }
+        CapabilityDeclaration::Script { script } => {
+            generated_script_pack_semantics(alias, integration, script)
         }
         CapabilityDeclaration::Snapshot { snapshot } => {
             let entity = &loaded.entities[&snapshot.entity].document;
             generated_snapshot_pack_semantics(alias, integration, snapshot, entity)
         }
     }
+}
+
+fn generated_script_pack_semantics(
+    alias: &str,
+    integration: &LoadedIntegration,
+    script: &ScriptDeclaration,
+) -> Result<PackSemantics> {
+    let acquisition_fields = integration
+        .document
+        .outputs
+        .iter()
+        .map(|(name, output)| Ok((name.clone(), relay_acquisition_schema_for_output(output)?)))
+        .collect::<Result<Map<String, Value>>>()?;
+    let output = integration
+        .document
+        .outputs
+        .iter()
+        .map(|(name, output)| {
+            let output_type = match output.output_type {
+                OutputType::Boolean | OutputType::Presence => "boolean",
+                OutputType::Integer => "integer",
+                OutputType::String => "string",
+                OutputType::Date => "date",
+            };
+            let mut declaration = json!({ "type": output_type, "nullable": output.nullable });
+            match output.output_type {
+                OutputType::String => declaration["max_bytes"] = json!(output.max_bytes),
+                OutputType::Integer => {
+                    declaration["minimum"] = json!(output.minimum);
+                    declaration["maximum"] = json!(output.maximum);
+                }
+                OutputType::Date => declaration["max_bytes"] = json!(10),
+                OutputType::Boolean | OutputType::Presence => {}
+            }
+            (name.clone(), declaration)
+        })
+        .collect::<Map<String, Value>>();
+    let signed_dci = script.signed_dci.as_ref().map(|protocol| {
+        json!({
+            "protocol_version": "1.0.0",
+            "sender_id": protocol.sender,
+            "receiver_id": protocol.receiver,
+            "registry_type": protocol.registry_type,
+            "registry_event_type": protocol.record_type,
+            "record_type": protocol.record_type,
+            "exact_and": protocol.selectors.iter().map(|(name, binding)| (name.clone(), json!({
+                "field": binding.field,
+                "response_pointer": binding.response_pointer,
+            }))).collect::<Map<String, Value>>(),
+            "locale": protocol.locale,
+            "page_number": 1,
+            "jwks_operation": "jwks",
+            "response_verifier": "dci_jws_v1",
+        })
+    });
+    let operation_timeout_ms = parse_duration_ms(&integration.document.bounds.deadline)?.min(10_000);
+    let verification_operations = script.signed_dci.as_ref().map_or_else(Vec::new, |_| {
+        vec![json!({
+            "id": "jwks",
+            "primitive": "jwks_v1",
+            "destination_slot": format!("{alias}-verification"),
+            "method": "GET",
+            "path": "/",
+            "step_limits": {
+                "max_request_bytes": integration.document.bounds.request_bytes,
+                "timeout_ms": operation_timeout_ms,
+                "max_in_flight": 1,
+            },
+            "max_response_bytes": 64 * 1024,
+            "accepted_statuses": [200],
+        })]
+    });
+    let credential_operation = generated_credential_operation(alias, &integration.document)?;
+    let response_format = match script.response.format {
+        AuthoredResponseFormat::Json => "json",
+        AuthoredResponseFormat::Text => "text",
+    };
+    let plan = json!({
+        "kind": "script",
+        "data_destination_slot": format!("{alias}-data"),
+        "credential_destination_slot": credential_operation.as_ref().map(|_| format!("{alias}-credential")),
+        "verification_destination_slot": (!verification_operations.is_empty()).then(|| format!("{alias}-verification")),
+        "verification_operations": verification_operations,
+        "credential_operation": credential_operation,
+        "snapshot": null,
+        "rhai": generated_rhai_template(alias, integration)?,
+        "script_authority": {
+            "allow": script.allow.iter().map(|rule| json!({
+                "method": match rule.method { ReadMethod::Get => "GET", ReadMethod::Post => "READ_ONLY_POST" },
+                "path": rule.path,
+                "semantics": rule.semantics.map(|_| "read_only"),
+            })).collect::<Vec<_>>(),
+            "request_headers": script.request_headers,
+            "response_headers": script.response_headers,
+            "response": { "format": response_format, "max_bytes": script.response.max_bytes },
+            "auth": relay_source_auth(&script.credential),
+            "request_max_bytes": integration.document.bounds.request_bytes,
+            "signed_dci": signed_dci,
+        },
+    });
+    let ambiguous = true;
+    let acquisition = json!({ "class": "bounded_full_record", "fields": acquisition_fields });
+    let reviewed = json!({
+        "class": "bounded_full_record",
+        "fields": acquisition_fields,
+        "control_fields": {},
+        "selector": null,
+        "cardinality": if ambiguous { "probe_two" } else { "source_enforced_singleton" },
+        "reject_unknown_fields": true,
+    });
+    let limits = json!({
+        "max_source_matches": if ambiguous { 2 } else { 1 },
+        "max_disclosed_records": 1,
+        "max_data_exchanges": integration
+            .document
+            .bounds
+            .calls
+            .checked_add(u8::from(script.signed_dci.is_some()))
+            .context("Script protocol exchange bound exceeds the platform maximum")?,
+        "max_credential_exchanges": usize::from(credential_operation.is_some()),
+        "max_data_destinations": 1,
+        "max_source_bytes": integration.document.bounds.source_bytes,
+        "timeout_ms": parse_duration_ms(&integration.document.bounds.deadline)?,
+        "max_in_flight": integration.document.bounds.concurrency,
+        "quota_per_minute": 60,
+        "quota_burst": integration.document.bounds.concurrency.min(60),
+    });
+    Ok((acquisition, reviewed, Value::Object(output), plan, limits, None))
 }
 
 fn generated_http_pack_semantics(
@@ -718,32 +841,32 @@ fn generated_http_pack_semantics(
         .document
         .outputs
         .iter()
-        .map(|(name, fact)| {
-            let output_type = if fact
+        .map(|(name, output)| {
+            let output_type = if output
                 .from
                 .as_deref()
                 .is_some_and(|source| source.ends_with(".presence"))
             {
                 "presence"
             } else {
-                match fact.output_type {
-                    FactType::Boolean | FactType::Presence => "boolean",
-                    FactType::Integer => "integer",
-                    FactType::String => "string",
-                    FactType::Date => "date",
+                match output.output_type {
+                    OutputType::Boolean | OutputType::Presence => "boolean",
+                    OutputType::Integer => "integer",
+                    OutputType::String => "string",
+                    OutputType::Date => "date",
                 }
             };
-            let mut declaration = json!({ "type": output_type, "nullable": fact.nullable });
-            match fact.output_type {
-                FactType::String => {
-                    declaration["max_bytes"] = json!(fact.max_bytes);
+            let mut declaration = json!({ "type": output_type, "nullable": output.nullable });
+            match output.output_type {
+                OutputType::String => {
+                    declaration["max_bytes"] = json!(output.max_bytes);
                 }
-                FactType::Integer => {
-                    declaration["minimum"] = json!(fact.minimum);
-                    declaration["maximum"] = json!(fact.maximum);
+                OutputType::Integer => {
+                    declaration["minimum"] = json!(output.minimum);
+                    declaration["maximum"] = json!(output.maximum);
                 }
-                FactType::Date => declaration["max_bytes"] = json!(10),
-                FactType::Boolean | FactType::Presence => {}
+                OutputType::Date => declaration["max_bytes"] = json!(10),
+                OutputType::Boolean | OutputType::Presence => {}
             }
             (name.clone(), declaration)
         })
@@ -808,7 +931,7 @@ fn generated_http_pack_semantics(
     });
     let plan_kind = match integration.document.capability {
         CapabilityDeclaration::Http { .. } => "bounded_http",
-        CapabilityDeclaration::Script { .. } => "sandboxed_rhai",
+        CapabilityDeclaration::Script { .. } => "script",
         CapabilityDeclaration::Snapshot { .. } => unreachable!(),
     };
     let steps = if matches!(
@@ -870,21 +993,21 @@ fn generated_http_pack_semantics(
 
 fn relay_acquisition_schema_for_output(output: &OutputDeclaration) -> Result<Value> {
     Ok(match output.output_type {
-        FactType::String => json!({
+        OutputType::String => json!({
             "type": "string",
             "nullable": output.nullable,
             "max_bytes": output.max_bytes.context("string output max_bytes is absent")?,
         }),
-        FactType::Date => json!({
+        OutputType::Date => json!({
             "type": "string",
             "nullable": output.nullable,
             "max_bytes": 10,
         }),
-        FactType::Boolean | FactType::Presence => json!({
+        OutputType::Boolean | OutputType::Presence => json!({
             "type": "boolean",
             "nullable": output.nullable,
         }),
-        FactType::Integer => json!({
+        OutputType::Integer => json!({
             "type": "integer",
             "nullable": output.nullable,
             "minimum": output.minimum.context("integer output minimum is absent")?,
@@ -901,8 +1024,8 @@ fn generated_snapshot_pack_semantics(
 ) -> Result<PackSemantics> {
     let mut fields = Map::new();
     let mut output = Map::new();
-    for (fact_name, fact) in &integration.document.outputs {
-        let (_, path) = fact
+    for (output_name, output_declaration) in &integration.document.outputs {
+        let (_, path) = output_declaration
             .from
             .as_deref()
             .ok_or_else(|| anyhow!("snapshot output source is absent"))?
@@ -936,7 +1059,7 @@ fn generated_snapshot_pack_semantics(
             _ => bail!("snapshot entity field has an unsupported scalar contract"),
         };
         fields.insert(field.to_string(), schema);
-        output.insert(fact_name.clone(), {
+        output.insert(output_name.clone(), {
             let mut declaration = json!({
             "type": match (scalar, entity_field.format) {
                 (AuthoredScalarType::Boolean, None) => "boolean",
@@ -1258,12 +1381,12 @@ fn generated_http_operation(
     let operation_outputs = integration
         .outputs
         .iter()
-        .filter_map(|(name, fact)| {
-            fact.from
+        .filter_map(|(name, output)| {
+            output.from
                 .as_deref()
                 .and_then(|source| source.split_once('.'))
                 .is_some_and(|(source, _)| source == operation_id)
-                .then_some((name, fact))
+                .then_some((name, output))
         })
         .collect::<Vec<_>>();
     let acquisition_fields = if is_dci {
@@ -1271,8 +1394,8 @@ fn generated_http_operation(
     } else {
         operation_outputs
             .iter()
-            .filter_map(|(_, fact)| {
-                fact.source_pointer
+            .filter_map(|(_, output)| {
+                output.source_pointer
                     .as_deref()
                     .and_then(|pointer| pointer_segments(pointer).ok())
                     .and_then(|segments| segments.into_iter().next())
@@ -1288,8 +1411,8 @@ fn generated_http_operation(
     } else {
         operation_outputs
             .iter()
-            .filter_map(|(name, fact)| {
-                fact.source_pointer
+            .filter_map(|(name, output)| {
+                output.source_pointer
                     .as_ref()
                     .map(|pointer| ((*name).clone(), Value::String(pointer.clone())))
             })
@@ -1800,8 +1923,8 @@ fn generated_step_conditions(integration: &IntegrationDocument) -> Result<Map<St
                     let output = integration
                         .outputs
                         .iter()
-                        .find_map(|(name, fact)| {
-                            (fact.from.as_deref() == Some(format!("{step}.presence").as_str()))
+                        .find_map(|(name, output)| {
+                            (output.from.as_deref() == Some(format!("{step}.presence").as_str()))
                                 .then_some(name)
                         })
                         .ok_or_else(|| anyhow!("presence condition requires a declared presence output"))?;
@@ -1849,23 +1972,10 @@ fn generated_credential_operation(
     alias: &str,
     integration: &IntegrationDocument,
 ) -> Result<Option<Value>> {
-    let operation = integration_operations(integration)
-        .iter()
-        .find(|(_, operation)| operation.role == OperationRole::Credential);
-    let Some((id, operation)) = operation else {
-        return Ok(None);
-    };
-    if operation.primitive.as_deref() != Some("oauth2_client_credentials") {
-        bail!("unsupported credential operation primitive");
-    }
-    let SchemaNode::Object { fields, .. } = &operation.response.schema else {
-        bail!("OAuth response schema must be a closed object");
-    };
-    let access_token_max_bytes = match fields.get("access_token").map(|field| &field.schema) {
-        Some(SchemaNode::String { max_bytes }) => *max_bytes,
-        _ => bail!("OAuth response schema must bound access_token"),
-    };
     let interface = credential_interface(integration);
+    if interface.credential_type != CredentialType::Oauth2ClientCredentials {
+        return Ok(None);
+    }
     let format = match interface
         .request
         .ok_or_else(|| anyhow!("OAuth request format is absent"))?
@@ -1885,10 +1995,10 @@ fn generated_credential_operation(
         .transpose()?
         .unwrap_or(30_000);
     Ok(Some(json!({
-        "id": id,
+        "id": "oauth",
         "kind": "oauth2_client_credentials",
         "destination_slot": format!("{alias}-credential"),
-        "path": operation.request.path,
+        "path": "/",
         "request": {
             "format": format,
             "max_client_id_bytes": 256,
@@ -1900,10 +2010,10 @@ fn generated_credential_operation(
             "scopes": scopes,
         },
         "response": {
-            "max_bytes": operation.response.max_bytes,
-            "accepted_statuses": operation.response.statuses,
+            "max_bytes": 8 * 1024,
+            "accepted_statuses": [200],
             "schema": "strict_access_token_bearer_expires_in",
-            "access_token_max_bytes": access_token_max_bytes,
+            "access_token_max_bytes": 4096,
             "token_type": "Bearer",
             "expires_in_min_seconds": 60,
             "expires_in_max_seconds": 3600,
@@ -2009,10 +2119,11 @@ fn generated_rhai_template(_alias: &str, integration: &LoadedIntegration) -> Res
         return Ok(None);
     };
     let script = compiled_rhai_source(integration)?;
-    let source = std::str::from_utf8(&script).context("sandboxed Rhai closure is not UTF-8")?;
+    let source = std::str::from_utf8(&script).context("Script closure is not UTF-8")?;
     Ok(Some(json!({
         "script": source,
         "script_hash": sha256_uri(&script),
+        "abi": registry_relay::rhai_worker::xw::XW_ABI_VERSION,
         "entrypoint": "consult",
         "memory_bytes": 128 * 1024 * 1024,
         "cpu_ms": 250,
@@ -2033,27 +2144,27 @@ fn compiled_rhai_source(integration: &LoadedIntegration) -> Result<Box<[u8]>> {
     let (script_path, script) = integration
         .script
         .as_ref()
-        .ok_or_else(|| anyhow!("sandboxed Rhai script is absent"))?;
+        .ok_or_else(|| anyhow!("Script script is absent"))?;
     let mut source = Vec::new();
     for (module_path, module) in &integration.script_modules {
         let module_path = module_path
             .strip_prefix(integration_root(script_path, &integration.document)?)
             .unwrap_or(module_path)
             .to_string_lossy();
-        std::str::from_utf8(module).context("sandboxed Rhai module is not UTF-8")?;
+        std::str::from_utf8(module).context("Script module is not UTF-8")?;
         source.extend_from_slice(format!("// registry-local-module:{module_path}\n").as_bytes());
         source.extend_from_slice(module);
         source.extend_from_slice(b"\n");
     }
-    std::str::from_utf8(script).context("sandboxed Rhai script is not UTF-8")?;
+    std::str::from_utf8(script).context("Script script is not UTF-8")?;
     let script_name = script_path
         .file_name()
         .and_then(std::ffi::OsStr::to_str)
-        .ok_or_else(|| anyhow!("sandboxed Rhai script name is not Unicode"))?;
+        .ok_or_else(|| anyhow!("Script script name is not Unicode"))?;
     source.extend_from_slice(format!("// registry-entrypoint:{script_name}\n").as_bytes());
     source.extend_from_slice(script);
     if source.is_empty() || source.len() > MAX_COMPILED_RHAI_BYTES || source.contains(&0) {
-        bail!("sandboxed Rhai script and local modules must form a non-empty 64 KiB closure");
+        bail!("Script script and local modules must form a non-empty 64 KiB closure");
     }
     Ok(source.into_boxed_slice())
 }
@@ -2064,7 +2175,7 @@ fn integration_root<'a>(
 ) -> Result<&'a Path> {
     script_path
         .parent()
-        .ok_or_else(|| anyhow!("sandboxed Rhai script has no integration directory"))
+        .ok_or_else(|| anyhow!("Script script has no integration directory"))
 }
 
 fn generated_profile_identity(
@@ -2079,12 +2190,8 @@ fn generated_profile_identity(
         consultation_name,
     ])?;
     let service = &loaded.project.services[service_id];
-    let version = numeric_artifact_version(&digest_json(&json!({
-        "service": service,
-        "consultation": consultation_name,
-        "pack_hash": pack.artifact.typed_hash(),
-    }))?)?;
-    Ok((id, version))
+    let _ = (service, consultation_name, pack);
+    Ok((id, "1".to_string()))
 }
 
 fn consultation_contract_document(
@@ -2112,10 +2219,6 @@ fn consultation_contract_document(
         .get("bounds")
         .cloned()
         .ok_or_else(|| anyhow!("generated integration pack bounds are absent"))?;
-    let max_matches = bounds
-        .get("max_source_matches")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| anyhow!("generated integration pack cardinality is absent"))?;
     let policy_id = bounded_join_id(&["relay", service_id, consultation_name])?;
     let integration = loaded
         .integrations
@@ -2174,7 +2277,7 @@ fn consultation_contract_document(
         },
         "bounds": bounds,
         "public_behavior": {
-            "outcomes": if max_matches == 2 { vec!["match", "no_match", "ambiguous"] } else { vec!["match", "no_match"] },
+            "outcomes": ["match", "no_match", "ambiguous"],
             "denial_code": "consultation.denied",
             "denial_timing_profile": "measured-uniform-v1",
         },
@@ -2257,15 +2360,8 @@ fn private_binding_document(
         integration.document.capability,
         CapabilityDeclaration::Script { .. }
     );
-    let callable_operations = integration_operations(&integration.document)
-        .iter()
-        .filter_map(|(id, operation)| {
-            (operation.role == OperationRole::Data).then_some(id.as_str())
-        })
-        .collect::<Vec<_>>();
     let rhai = allow_rhai.then(|| {
         json!({
-            "callable_operations": callable_operations,
             "max_calls": integration.document.bounds.calls,
             "memory_bytes": 128 * 1024 * 1024,
             "cpu_ms": 250,
@@ -2314,8 +2410,8 @@ fn private_binding_document(
                 .document
                 .outputs
                 .values()
-                .filter_map(|fact| {
-                    let (_, path) = fact.from.as_deref()?.split_once('.')?;
+                .filter_map(|output| {
+                    let (_, path) = output.from.as_deref()?.split_once('.')?;
                     let field = path.strip_prefix("record.").unwrap_or(path);
                     (field != "presence").then_some(field)
                 })
@@ -2384,8 +2480,8 @@ fn private_binding_document(
             "max_token_lifetime_ms": credential_destination.as_ref().map(|_| 3_600_000),
         },
         "capabilities": {
-            "allow_sandboxed_rhai": allow_rhai,
-            "sandboxed_rhai": rhai,
+            "allow_script": allow_rhai,
+            "script": rhai,
         },
         "materialization": materialization,
     }))

@@ -19,7 +19,7 @@ case "$product" in
     readonly temporary_label="dhis2"
     ;;
   rhai)
-    readonly test_name="live_dhis2_sandboxed_rhai_consultation_lifecycle"
+    readonly test_name="live_dhis2_script_consultation_lifecycle"
     readonly temporary_label="dhis2-rhai"
     ;;
   synthetic)
@@ -284,7 +284,7 @@ if [[ "$product" == "rhai" ]]; then
     'cp /live-postgres-ca/ca.crt /usr/local/share/ca-certificates/registry-live-source.crt
      update-ca-certificates >/dev/null 2>&1
      cargo build --locked --package registry-relay --bin registry-relay --bin registry-relay-rhai-worker --package registryctl --bin registryctl
-     cargo test --locked --package registry-relay --test live_consultation_journeys live_dhis2_sandboxed_rhai_consultation_lifecycle -- --ignored'
+     cargo test --locked --package registry-relay --test live_consultation_journeys live_dhis2_script_consultation_lifecycle -- --ignored'
 else
   cargo test \
     --package registry-relay \

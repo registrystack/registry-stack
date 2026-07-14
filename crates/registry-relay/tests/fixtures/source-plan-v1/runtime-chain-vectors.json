@@ -4,8 +4,8 @@
     {
       "completion_seed": {
         "canonical_bytes": 2333,
-        "canonical_json": "{\"acquisition\":{\"class\":\"source_projected_exact\",\"disclosure_fields\":[\"registration_status\"],\"provenance_contract\":{\"snapshot_generation\":\"absent\",\"snapshot_published_at\":\"absent\",\"source_observed_at\":null,\"source_revision\":null},\"public_outcomes\":[\"match\",\"no_match\",\"ambiguous\"],\"schema\":{\"fields\":{\"registration_status\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"}},\"type\":\"acquisition_union\"}},\"authorization_context_digest\":\"sha256:78ee9a1c4cb4c04d5ef3627253aeb7c6f9888741b88337cb9b130d528ce268f4\",\"bounds\":{\"credential_exchanges\":1,\"credential_token_lifetime_ms\":1800000,\"data_destinations\":1,\"data_exchanges\":1,\"disclosed_records\":1,\"max_in_flight\":8,\"public_response_bytes\":32768,\"quota_burst\":5,\"quota_rate_per_minute\":30,\"source_bytes\":81920,\"source_matches\":2,\"timeout_ms\":4000},\"correlation\":{\"notary_evaluation_id\":\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"},\"credential\":{\"generation\":7,\"reference\":\"people-api-reader\"},\"destinations\":{\"credential_destination_id\":\"registry-oauth-private\",\"data_destination_id\":\"registry-data-private\",\"verification_destination_id\":null},\"dispatch\":{\"permit_bindings\":[{\"kind\":\"credential\",\"ordinal\":0},{\"kind\":\"data\",\"ordinal\":0}],\"plan_kind\":\"bounded_http\"},\"execution_plan_digest\":\"sha256:09bee1a14dfeeffc8b13048212b88a4e09b0997327049f52db723e5bb05a62ff\",\"integration_pack\":{\"hash\":\"sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9\",\"id\":\"synthetic.person-status\",\"version\":\"1\"},\"policy\":{\"consent\":{\"contract_hash\":null,\"decision\":\"not_required\",\"required\":false,\"verifier_id\":null},\"hash\":\"sha256:4b216acf0cc94efe9fd24f72998191e4d2394d69cb1de23124874a256940b6e6\",\"id\":\"relay.synthetic.person-status.exact\",\"legal_basis_id\":\"public_task\",\"obligations_digest\":\"sha256:e348b8325589cd381ed10b7ae06034fbc66c7eac928f5b5b191982ab6d1a229b\"},\"private_binding_hash\":\"sha256:1b9e601590ec894fe5a093fbfdbd8c222d766e019f014936e50325cedd9e5e38\",\"profile\":{\"contract_hash\":\"sha256:960f0a6b1206343876dabbb32b74fa350291a21d5e7f68bdbafe443ba3b8ff10\",\"id\":\"synthetic.person-status.exact\",\"version\":\"1\"},\"purpose\":\"benefit-verification\",\"request_digest\":\"sha256:83e9a30c6d6b0c8684f45ba8e68cc48cc197caa2dd6a4a4f49475fc1d2b53ad0\",\"schema\":\"registry.relay.consultation-completion-seed/v1\",\"workload\":{\"id\":\"registry-notary\",\"registry_id\":\"people-primary\",\"tenant_id\":\"synthetic-government\"}}",
-        "expected_digest": "sha256:a84269af02605316e63fefbf95df29901b9995bcbe8add85170dd9806fa1c799",
+        "canonical_json": "{\"acquisition\":{\"class\":\"source_projected_exact\",\"disclosure_fields\":[\"registration_status\"],\"provenance_contract\":{\"snapshot_generation\":\"absent\",\"snapshot_published_at\":\"absent\",\"source_observed_at\":null,\"source_revision\":null},\"public_outcomes\":[\"match\",\"no_match\",\"ambiguous\"],\"schema\":{\"fields\":{\"registration_status\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"}},\"type\":\"acquisition_union\"}},\"authorization_context_digest\":\"sha256:78ee9a1c4cb4c04d5ef3627253aeb7c6f9888741b88337cb9b130d528ce268f4\",\"bounds\":{\"credential_exchanges\":1,\"credential_token_lifetime_ms\":1800000,\"data_destinations\":1,\"data_exchanges\":1,\"disclosed_records\":1,\"max_in_flight\":8,\"public_response_bytes\":32768,\"quota_burst\":5,\"quota_rate_per_minute\":30,\"source_bytes\":81920,\"source_matches\":2,\"timeout_ms\":4000},\"correlation\":{\"notary_evaluation_id\":\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"},\"credential\":{\"generation\":7,\"reference\":\"people-api-reader\"},\"destinations\":{\"credential_destination_id\":\"registry-oauth-private\",\"data_destination_id\":\"registry-data-private\",\"verification_destination_id\":null},\"dispatch\":{\"permit_bindings\":[{\"kind\":\"credential\",\"ordinal\":0},{\"kind\":\"data\",\"ordinal\":0}],\"plan_kind\":\"bounded_http\"},\"execution_plan_digest\":\"sha256:7da3056c22626550bfaf5c7117ee2f4ecf6ea0352c1cc61d8c63d28f7cd417f6\",\"integration_pack\":{\"hash\":\"sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9\",\"id\":\"synthetic.person-status\",\"version\":\"1\"},\"policy\":{\"consent\":{\"contract_hash\":null,\"decision\":\"not_required\",\"required\":false,\"verifier_id\":null},\"hash\":\"sha256:4b216acf0cc94efe9fd24f72998191e4d2394d69cb1de23124874a256940b6e6\",\"id\":\"relay.synthetic.person-status.exact\",\"legal_basis_id\":\"public_task\",\"obligations_digest\":\"sha256:e348b8325589cd381ed10b7ae06034fbc66c7eac928f5b5b191982ab6d1a229b\"},\"private_binding_hash\":\"sha256:6cb60e5dbc45346db21feff0a53a6360c2eb8da67a79dbf2167bca919e00bf92\",\"profile\":{\"contract_hash\":\"sha256:960f0a6b1206343876dabbb32b74fa350291a21d5e7f68bdbafe443ba3b8ff10\",\"id\":\"synthetic.person-status.exact\",\"version\":\"1\"},\"purpose\":\"benefit-verification\",\"request_digest\":\"sha256:0aff74910d5563a24bd52bce19bf4b400fe56f3875f6233beac28f3f7da838d7\",\"schema\":\"registry.relay.consultation-completion-seed/v1\",\"workload\":{\"id\":\"registry-notary\",\"registry_id\":\"people-primary\",\"tenant_id\":\"synthetic-government\"}}",
+        "expected_digest": "sha256:9d1c9e310b99215c190aa8f0715e82d22b6a6e216c11d9032558427d32fd7360",
         "value": {
           "acquisition": {
             "class": "source_projected_exact",
@@ -74,7 +74,7 @@
             ],
             "plan_kind": "bounded_http"
           },
-          "execution_plan_digest": "sha256:09bee1a14dfeeffc8b13048212b88a4e09b0997327049f52db723e5bb05a62ff",
+          "execution_plan_digest": "sha256:7da3056c22626550bfaf5c7117ee2f4ecf6ea0352c1cc61d8c63d28f7cd417f6",
           "integration_pack": {
             "hash": "sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9",
             "id": "synthetic.person-status",
@@ -92,14 +92,14 @@
             "legal_basis_id": "public_task",
             "obligations_digest": "sha256:e348b8325589cd381ed10b7ae06034fbc66c7eac928f5b5b191982ab6d1a229b"
           },
-          "private_binding_hash": "sha256:1b9e601590ec894fe5a093fbfdbd8c222d766e019f014936e50325cedd9e5e38",
+          "private_binding_hash": "sha256:6cb60e5dbc45346db21feff0a53a6360c2eb8da67a79dbf2167bca919e00bf92",
           "profile": {
             "contract_hash": "sha256:960f0a6b1206343876dabbb32b74fa350291a21d5e7f68bdbafe443ba3b8ff10",
             "id": "synthetic.person-status.exact",
             "version": "1"
           },
           "purpose": "benefit-verification",
-          "request_digest": "sha256:83e9a30c6d6b0c8684f45ba8e68cc48cc197caa2dd6a4a4f49475fc1d2b53ad0",
+          "request_digest": "sha256:0aff74910d5563a24bd52bce19bf4b400fe56f3875f6233beac28f3f7da838d7",
           "schema": "registry.relay.consultation-completion-seed/v1",
           "workload": {
             "id": "registry-notary",
@@ -130,11 +130,11 @@
           }
         },
         "predicate": {
-          "canonical_json": "{\"binding_hash\":\"sha256:1b9e601590ec894fe5a093fbfdbd8c222d766e019f014936e50325cedd9e5e38\",\"exact_predicate\":{\"canonical_inputs\":{\"components\":{\"subject_id\":{\"role\":\"selector\",\"type\":\"string\",\"value\":\"SYNTHETIC-SUBJECT-0001\"}},\"version\":\"registry.relay.consultation-inputs.v1\"},\"predicate_plan_digest\":\"sha256:31f0fcbc0cba178ea211bdce5da7f27a5c643a02a25cfd74cff4f97d7e4097b6\"},\"source_operation\":\"person.status\"}",
+          "canonical_json": "{\"binding_hash\":\"sha256:6cb60e5dbc45346db21feff0a53a6360c2eb8da67a79dbf2167bca919e00bf92\",\"exact_predicate\":{\"canonical_inputs\":{\"components\":{\"subject_id\":{\"role\":\"selector\",\"type\":\"string\",\"value\":\"SYNTHETIC-SUBJECT-0001\"}},\"version\":\"registry.relay.consultation-inputs.v1\"},\"predicate_plan_digest\":\"sha256:31f0fcbc0cba178ea211bdce5da7f27a5c643a02a25cfd74cff4f97d7e4097b6\"},\"source_operation\":\"person.status\"}",
           "domain_label": "registry.relay.consultation-predicate.v1",
-          "expected": "hmac-sha256:16e33d339505260c7a4d493f91cfdf2c9fe332b6dc0339f97897ab8234c3f05a",
+          "expected": "hmac-sha256:b6c309615de7edb920ecace07e823e0d5b866db040302e64a1298e082d81b30b",
           "value": {
-            "binding_hash": "sha256:1b9e601590ec894fe5a093fbfdbd8c222d766e019f014936e50325cedd9e5e38",
+            "binding_hash": "sha256:6cb60e5dbc45346db21feff0a53a6360c2eb8da67a79dbf2167bca919e00bf92",
             "exact_predicate": {
               "canonical_inputs": {
                 "components": {
@@ -209,14 +209,14 @@
           }
         },
         "authorized_request": {
-          "canonical_json": "{\"authorization_context_digest\":\"sha256:78ee9a1c4cb4c04d5ef3627253aeb7c6f9888741b88337cb9b130d528ce268f4\",\"commitment_key_id\":\"synthetic-epoch-1\",\"contract_hash\":\"sha256:960f0a6b1206343876dabbb32b74fa350291a21d5e7f68bdbafe443ba3b8ff10\",\"execution_plan_digest\":\"sha256:09bee1a14dfeeffc8b13048212b88a4e09b0997327049f52db723e5bb05a62ff\",\"input_commitment\":\"hmac-sha256:94fdcac3363101ec6edee8a6234f9e7b42ff37c5d9a13eaa005e69b482d1d45b\",\"profile_id\":\"synthetic.person-status.exact\",\"profile_version\":\"1\",\"route\":\"/v1/consultations/{profile_id}/execute\",\"selector_provenance\":{\"assertion_contract\":{\"hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"id\":\"registry.notary.subject-binding.v1\"},\"type\":\"trusted_notary_assertion\"},\"subject_handle\":\"hmac-sha256:d28c2c40577cbb3bffc5de4fcc9f4b1c4c30389043a1f6a8300677ddab3dfd10\"}",
+          "canonical_json": "{\"authorization_context_digest\":\"sha256:78ee9a1c4cb4c04d5ef3627253aeb7c6f9888741b88337cb9b130d528ce268f4\",\"commitment_key_id\":\"synthetic-epoch-1\",\"contract_hash\":\"sha256:960f0a6b1206343876dabbb32b74fa350291a21d5e7f68bdbafe443ba3b8ff10\",\"execution_plan_digest\":\"sha256:7da3056c22626550bfaf5c7117ee2f4ecf6ea0352c1cc61d8c63d28f7cd417f6\",\"input_commitment\":\"hmac-sha256:94fdcac3363101ec6edee8a6234f9e7b42ff37c5d9a13eaa005e69b482d1d45b\",\"profile_id\":\"synthetic.person-status.exact\",\"profile_version\":\"1\",\"route\":\"/v1/consultations/{profile_id}/execute\",\"selector_provenance\":{\"assertion_contract\":{\"hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"id\":\"registry.notary.subject-binding.v1\"},\"type\":\"trusted_notary_assertion\"},\"subject_handle\":\"hmac-sha256:d28c2c40577cbb3bffc5de4fcc9f4b1c4c30389043a1f6a8300677ddab3dfd10\"}",
           "domain_label": "registry.relay.authorized-consultation.v1",
-          "expected": "sha256:83e9a30c6d6b0c8684f45ba8e68cc48cc197caa2dd6a4a4f49475fc1d2b53ad0",
+          "expected": "sha256:0aff74910d5563a24bd52bce19bf4b400fe56f3875f6233beac28f3f7da838d7",
           "value": {
             "authorization_context_digest": "sha256:78ee9a1c4cb4c04d5ef3627253aeb7c6f9888741b88337cb9b130d528ce268f4",
             "commitment_key_id": "synthetic-epoch-1",
             "contract_hash": "sha256:960f0a6b1206343876dabbb32b74fa350291a21d5e7f68bdbafe443ba3b8ff10",
-            "execution_plan_digest": "sha256:09bee1a14dfeeffc8b13048212b88a4e09b0997327049f52db723e5bb05a62ff",
+            "execution_plan_digest": "sha256:7da3056c22626550bfaf5c7117ee2f4ecf6ea0352c1cc61d8c63d28f7cd417f6",
             "input_commitment": "hmac-sha256:94fdcac3363101ec6edee8a6234f9e7b42ff37c5d9a13eaa005e69b482d1d45b",
             "profile_id": "synthetic.person-status.exact",
             "profile_version": "1",
@@ -232,13 +232,13 @@
           }
         },
         "execution_plan": {
-          "canonical_json": "{\"acquisition_class\":\"source_projected_exact\",\"backend_kind\":\"bounded_http\",\"binding_hash\":\"sha256:1b9e601590ec894fe5a093fbfdbd8c222d766e019f014936e50325cedd9e5e38\",\"dispatch_budget_ms\":4000,\"integration_pack_hash\":\"sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9\",\"max_credential_exchanges\":1,\"max_data_destinations\":1,\"max_data_exchanges\":1,\"max_disclosed_records\":1,\"max_source_bytes\":81920,\"max_source_matches\":2,\"output_fields\":[\"registration_status\"],\"physical_projection_digest\":\"sha256:550f3f915fc0396e5f1dc807ea8435d03db787d1d17f23fbef0eab0289bacb36\",\"predicate_commitment\":\"hmac-sha256:16e33d339505260c7a4d493f91cfdf2c9fe332b6dc0339f97897ab8234c3f05a\",\"source_operation\":\"person.status\",\"timeout_ms\":4000,\"worst_case_acquisition_schema\":{\"fields\":{\"registration_status\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"}},\"type\":\"acquisition_union\"}}",
+          "canonical_json": "{\"acquisition_class\":\"source_projected_exact\",\"backend_kind\":\"bounded_http\",\"binding_hash\":\"sha256:6cb60e5dbc45346db21feff0a53a6360c2eb8da67a79dbf2167bca919e00bf92\",\"dispatch_budget_ms\":4000,\"integration_pack_hash\":\"sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9\",\"max_credential_exchanges\":1,\"max_data_destinations\":1,\"max_data_exchanges\":1,\"max_disclosed_records\":1,\"max_source_bytes\":81920,\"max_source_matches\":2,\"output_fields\":[\"registration_status\"],\"physical_projection_digest\":\"sha256:550f3f915fc0396e5f1dc807ea8435d03db787d1d17f23fbef0eab0289bacb36\",\"predicate_commitment\":\"hmac-sha256:b6c309615de7edb920ecace07e823e0d5b866db040302e64a1298e082d81b30b\",\"source_operation\":\"person.status\",\"timeout_ms\":4000,\"worst_case_acquisition_schema\":{\"fields\":{\"registration_status\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"}},\"type\":\"acquisition_union\"}}",
           "domain_label": "registry.relay.consultation-execution-plan.v1",
-          "expected": "sha256:09bee1a14dfeeffc8b13048212b88a4e09b0997327049f52db723e5bb05a62ff",
+          "expected": "sha256:7da3056c22626550bfaf5c7117ee2f4ecf6ea0352c1cc61d8c63d28f7cd417f6",
           "value": {
             "acquisition_class": "source_projected_exact",
             "backend_kind": "bounded_http",
-            "binding_hash": "sha256:1b9e601590ec894fe5a093fbfdbd8c222d766e019f014936e50325cedd9e5e38",
+            "binding_hash": "sha256:6cb60e5dbc45346db21feff0a53a6360c2eb8da67a79dbf2167bca919e00bf92",
             "dispatch_budget_ms": 4000,
             "integration_pack_hash": "sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9",
             "max_credential_exchanges": 1,
@@ -251,7 +251,7 @@
               "registration_status"
             ],
             "physical_projection_digest": "sha256:550f3f915fc0396e5f1dc807ea8435d03db787d1d17f23fbef0eab0289bacb36",
-            "predicate_commitment": "hmac-sha256:16e33d339505260c7a4d493f91cfdf2c9fe332b6dc0339f97897ab8234c3f05a",
+            "predicate_commitment": "hmac-sha256:b6c309615de7edb920ecace07e823e0d5b866db040302e64a1298e082d81b30b",
             "source_operation": "person.status",
             "timeout_ms": 4000,
             "worst_case_acquisition_schema": {
@@ -270,9 +270,9 @@
     },
     {
       "completion_seed": {
-        "canonical_bytes": 2614,
-        "canonical_json": "{\"acquisition\":{\"class\":\"bounded_full_record\",\"disclosure_fields\":[\"status_0\",\"status_1\",\"status_2\",\"status_3\",\"status_4\"],\"provenance_contract\":{\"snapshot_generation\":\"absent\",\"snapshot_published_at\":\"absent\",\"source_observed_at\":null,\"source_revision\":null},\"public_outcomes\":[\"match\",\"no_match\"],\"schema\":{\"fields\":{\"status_0\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_1\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_2\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_3\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_4\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"}},\"type\":\"acquisition_union\"}},\"authorization_context_digest\":\"sha256:486133dbf804c2d8cc2a3d0c344f0a988e386288f6878a2aacf435b966ca6680\",\"bounds\":{\"credential_exchanges\":1,\"credential_token_lifetime_ms\":1800000,\"data_destinations\":1,\"data_exchanges\":2,\"disclosed_records\":1,\"max_in_flight\":8,\"public_response_bytes\":32768,\"quota_burst\":5,\"quota_rate_per_minute\":30,\"source_bytes\":81920,\"source_matches\":1,\"timeout_ms\":4000},\"correlation\":{\"notary_evaluation_id\":\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"},\"credential\":{\"generation\":7,\"reference\":\"people-api-reader\"},\"destinations\":{\"credential_destination_id\":\"registry-oauth-private\",\"data_destination_id\":\"registry-data-private\",\"verification_destination_id\":null},\"dispatch\":{\"permit_bindings\":[{\"kind\":\"credential\",\"ordinal\":0},{\"kind\":\"data\",\"ordinal\":0},{\"kind\":\"data\",\"ordinal\":1}],\"plan_kind\":\"sandboxed_rhai\"},\"execution_plan_digest\":\"sha256:faab166a9b000bf81c7ea43fad59dfebff33af64ac9cbe4842d2e43bf7d0c444\",\"integration_pack\":{\"hash\":\"sha256:726278890488f44d4fd547d854a4c3d0948ce71f59e0f71c2afe3ceb988cbdbf\",\"id\":\"synthetic.person-status\",\"version\":\"1\"},\"policy\":{\"consent\":{\"contract_hash\":null,\"decision\":\"not_required\",\"required\":false,\"verifier_id\":null},\"hash\":\"sha256:59253577fee39444fd3d5f001574c70fad7e92ce17013336612bcff9e8b68fb8\",\"id\":\"relay.synthetic.person-status.exact\",\"legal_basis_id\":\"public_task\",\"obligations_digest\":\"sha256:e348b8325589cd381ed10b7ae06034fbc66c7eac928f5b5b191982ab6d1a229b\"},\"private_binding_hash\":\"sha256:a0e8a75ce132dd4f431ae66c25908a5a717562e225caddee1bddfeeca47a2406\",\"profile\":{\"contract_hash\":\"sha256:9d45549b9613e76775b5304451ebca0de1baad67d6a9e05110e4cbb77ae16825\",\"id\":\"synthetic.person-status.exact\",\"version\":\"1\"},\"purpose\":\"benefit-verification\",\"request_digest\":\"sha256:dc1480e6b02fa7104f33b67a2542043ceaaa785389b686b82b7e74b242e6dded\",\"schema\":\"registry.relay.consultation-completion-seed/v1\",\"workload\":{\"id\":\"registry-notary\",\"registry_id\":\"people-primary\",\"tenant_id\":\"synthetic-government\"}}",
-        "expected_digest": "sha256:47888de7d1e92fa3da739f5c49272989913c5b1996af92dad72fad8f4fa57b33",
+        "canonical_bytes": 2618,
+        "canonical_json": "{\"acquisition\":{\"class\":\"bounded_full_record\",\"disclosure_fields\":[\"status_0\",\"status_1\",\"status_2\",\"status_3\",\"status_4\"],\"provenance_contract\":{\"snapshot_generation\":\"absent\",\"snapshot_published_at\":\"absent\",\"source_observed_at\":null,\"source_revision\":null},\"public_outcomes\":[\"match\",\"no_match\",\"ambiguous\"],\"schema\":{\"fields\":{\"status_0\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_1\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_2\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_3\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_4\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"}},\"type\":\"acquisition_union\"}},\"authorization_context_digest\":\"sha256:1256e555b2b6ce9f5805ad6476747cb3221c55e477417c6a913383d4a3f5fbed\",\"bounds\":{\"credential_exchanges\":1,\"credential_token_lifetime_ms\":1800000,\"data_destinations\":1,\"data_exchanges\":2,\"disclosed_records\":1,\"max_in_flight\":8,\"public_response_bytes\":32768,\"quota_burst\":5,\"quota_rate_per_minute\":30,\"source_bytes\":81920,\"source_matches\":2,\"timeout_ms\":4000},\"correlation\":{\"notary_evaluation_id\":\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"},\"credential\":{\"generation\":7,\"reference\":\"people-api-reader\"},\"destinations\":{\"credential_destination_id\":\"registry-oauth-private\",\"data_destination_id\":\"registry-data-private\",\"verification_destination_id\":null},\"dispatch\":{\"permit_bindings\":[{\"kind\":\"credential\",\"ordinal\":0},{\"kind\":\"data\",\"ordinal\":0},{\"kind\":\"data\",\"ordinal\":1}],\"plan_kind\":\"script\"},\"execution_plan_digest\":\"sha256:6e62fad22baf62f09463437dd0df8a17deb3cd4be46d36c2407359636f8a5358\",\"integration_pack\":{\"hash\":\"sha256:c17ef829615fb106e335ca8f06399d97b861dd4e18f450e1f9ce17120402060d\",\"id\":\"synthetic.person-status\",\"version\":\"1\"},\"policy\":{\"consent\":{\"contract_hash\":null,\"decision\":\"not_required\",\"required\":false,\"verifier_id\":null},\"hash\":\"sha256:48d3a9c305127ed1c020a82a97821246368daa12905e91b35369fbe8fdb5b6dd\",\"id\":\"relay.synthetic.person-status.exact\",\"legal_basis_id\":\"public_task\",\"obligations_digest\":\"sha256:e348b8325589cd381ed10b7ae06034fbc66c7eac928f5b5b191982ab6d1a229b\"},\"private_binding_hash\":\"sha256:3b5f6a55715ec4d61b8fef90ee5ba5b3b0b972b3df25195c6fd3b8e0110faf06\",\"profile\":{\"contract_hash\":\"sha256:ab549f94c82c0ad7505c37ee6e3cc5d91abb73cffa8208d5285b58d026fba705\",\"id\":\"synthetic.person-status.exact\",\"version\":\"1\"},\"purpose\":\"benefit-verification\",\"request_digest\":\"sha256:a9aeaaf66710c728125e5b505637fe0b16bc8ec3897566ed6f44a6fafe9d5af3\",\"schema\":\"registry.relay.consultation-completion-seed/v1\",\"workload\":{\"id\":\"registry-notary\",\"registry_id\":\"people-primary\",\"tenant_id\":\"synthetic-government\"}}",
+        "expected_digest": "sha256:09a08f4661ed17399bf03ba1aa499b0b75023ac26fb9fc332d35976c1c3fc101",
         "value": {
           "acquisition": {
             "class": "bounded_full_record",
@@ -291,7 +291,8 @@
             },
             "public_outcomes": [
               "match",
-              "no_match"
+              "no_match",
+              "ambiguous"
             ],
             "schema": {
               "fields": {
@@ -324,7 +325,7 @@
               "type": "acquisition_union"
             }
           },
-          "authorization_context_digest": "sha256:486133dbf804c2d8cc2a3d0c344f0a988e386288f6878a2aacf435b966ca6680",
+          "authorization_context_digest": "sha256:1256e555b2b6ce9f5805ad6476747cb3221c55e477417c6a913383d4a3f5fbed",
           "bounds": {
             "credential_exchanges": 1,
             "credential_token_lifetime_ms": 1800000,
@@ -336,7 +337,7 @@
             "quota_burst": 5,
             "quota_rate_per_minute": 30,
             "source_bytes": 81920,
-            "source_matches": 1,
+            "source_matches": 2,
             "timeout_ms": 4000
           },
           "correlation": {
@@ -366,11 +367,11 @@
                 "ordinal": 1
               }
             ],
-            "plan_kind": "sandboxed_rhai"
+            "plan_kind": "script"
           },
-          "execution_plan_digest": "sha256:faab166a9b000bf81c7ea43fad59dfebff33af64ac9cbe4842d2e43bf7d0c444",
+          "execution_plan_digest": "sha256:6e62fad22baf62f09463437dd0df8a17deb3cd4be46d36c2407359636f8a5358",
           "integration_pack": {
-            "hash": "sha256:726278890488f44d4fd547d854a4c3d0948ce71f59e0f71c2afe3ceb988cbdbf",
+            "hash": "sha256:c17ef829615fb106e335ca8f06399d97b861dd4e18f450e1f9ce17120402060d",
             "id": "synthetic.person-status",
             "version": "1"
           },
@@ -381,19 +382,19 @@
               "required": false,
               "verifier_id": null
             },
-            "hash": "sha256:59253577fee39444fd3d5f001574c70fad7e92ce17013336612bcff9e8b68fb8",
+            "hash": "sha256:48d3a9c305127ed1c020a82a97821246368daa12905e91b35369fbe8fdb5b6dd",
             "id": "relay.synthetic.person-status.exact",
             "legal_basis_id": "public_task",
             "obligations_digest": "sha256:e348b8325589cd381ed10b7ae06034fbc66c7eac928f5b5b191982ab6d1a229b"
           },
-          "private_binding_hash": "sha256:a0e8a75ce132dd4f431ae66c25908a5a717562e225caddee1bddfeeca47a2406",
+          "private_binding_hash": "sha256:3b5f6a55715ec4d61b8fef90ee5ba5b3b0b972b3df25195c6fd3b8e0110faf06",
           "profile": {
-            "contract_hash": "sha256:9d45549b9613e76775b5304451ebca0de1baad67d6a9e05110e4cbb77ae16825",
+            "contract_hash": "sha256:ab549f94c82c0ad7505c37ee6e3cc5d91abb73cffa8208d5285b58d026fba705",
             "id": "synthetic.person-status.exact",
             "version": "1"
           },
           "purpose": "benefit-verification",
-          "request_digest": "sha256:dc1480e6b02fa7104f33b67a2542043ceaaa785389b686b82b7e74b242e6dded",
+          "request_digest": "sha256:a9aeaaf66710c728125e5b505637fe0b16bc8ec3897566ed6f44a6fafe9d5af3",
           "schema": "registry.relay.consultation-completion-seed/v1",
           "workload": {
             "id": "registry-notary",
@@ -424,11 +425,11 @@
           }
         },
         "predicate": {
-          "canonical_json": "{\"binding_hash\":\"sha256:a0e8a75ce132dd4f431ae66c25908a5a717562e225caddee1bddfeeca47a2406\",\"exact_predicate\":{\"canonical_inputs\":{\"components\":{\"subject_id\":{\"role\":\"selector\",\"type\":\"string\",\"value\":\"SYNTHETIC-SUBJECT-0001\"}},\"version\":\"registry.relay.consultation-inputs.v1\"},\"predicate_plan_digest\":\"sha256:35faaa6b55564cc6ab50a8b15d16f8e8b17ae54b84b744a28dba201334489840\"},\"source_operation\":\"person.status\"}",
+          "canonical_json": "{\"binding_hash\":\"sha256:3b5f6a55715ec4d61b8fef90ee5ba5b3b0b972b3df25195c6fd3b8e0110faf06\",\"exact_predicate\":{\"canonical_inputs\":{\"components\":{\"subject_id\":{\"role\":\"selector\",\"type\":\"string\",\"value\":\"SYNTHETIC-SUBJECT-0001\"}},\"version\":\"registry.relay.consultation-inputs.v1\"},\"predicate_plan_digest\":\"sha256:9cc086cf48221d1d5793b7dd9ec520d5cb16302de7a85140de2b22d271b46d7d\"},\"source_operation\":\"person.status\"}",
           "domain_label": "registry.relay.consultation-predicate.v1",
-          "expected": "hmac-sha256:c44b68df66c5b18aed263e250e29b53b8ae5b98195aea3aa21a2e9fd3b7c73e5",
+          "expected": "hmac-sha256:4c131732c4cc18ba239a3d185936caf48095450a6bc22a46bb725934e98c8dc6",
           "value": {
-            "binding_hash": "sha256:a0e8a75ce132dd4f431ae66c25908a5a717562e225caddee1bddfeeca47a2406",
+            "binding_hash": "sha256:3b5f6a55715ec4d61b8fef90ee5ba5b3b0b972b3df25195c6fd3b8e0110faf06",
             "exact_predicate": {
               "canonical_inputs": {
                 "components": {
@@ -440,7 +441,7 @@
                 },
                 "version": "registry.relay.consultation-inputs.v1"
               },
-              "predicate_plan_digest": "sha256:35faaa6b55564cc6ab50a8b15d16f8e8b17ae54b84b744a28dba201334489840"
+              "predicate_plan_digest": "sha256:9cc086cf48221d1d5793b7dd9ec520d5cb16302de7a85140de2b22d271b46d7d"
             },
             "source_operation": "person.status"
           }
@@ -465,12 +466,12 @@
           }
         }
       },
-      "name": "sandboxed_rhai_no_consent",
+      "name": "script_no_consent",
       "ordinary_digests": {
         "authorization_context": {
-          "canonical_json": "{\"audience\":\"registry-relay\",\"auth_mode\":\"oidc\",\"authorized_legal_basis\":\"public_task\",\"canonical_purpose\":\"benefit-verification\",\"checked_scopes\":[\"registry:consult:person-status\"],\"client_claim_selector\":\"azp\",\"client_value\":\"synthetic-notary-client\",\"decision_expires_at\":1700000001500,\"issuer\":\"https://issuer.synthetic.example\",\"mandatory_obligations\":[],\"policy_hash\":\"sha256:59253577fee39444fd3d5f001574c70fad7e92ce17013336612bcff9e8b68fb8\",\"policy_id\":\"relay.synthetic.person-status.exact\",\"principal_id\":\"synthetic-notary-service\",\"registry_instance\":\"people-primary\",\"tenant\":\"synthetic-government\",\"verified_consent_decision\":{\"checked_at\":null,\"evidence_commitment\":null,\"expires_at\":null,\"outcome\":\"not_required\",\"required\":false,\"revocation_status\":\"not_applicable\",\"verifier_id\":null,\"verifier_revision\":null},\"workload_id\":\"registry-notary\"}",
+          "canonical_json": "{\"audience\":\"registry-relay\",\"auth_mode\":\"oidc\",\"authorized_legal_basis\":\"public_task\",\"canonical_purpose\":\"benefit-verification\",\"checked_scopes\":[\"registry:consult:person-status\"],\"client_claim_selector\":\"azp\",\"client_value\":\"synthetic-notary-client\",\"decision_expires_at\":1700000001500,\"issuer\":\"https://issuer.synthetic.example\",\"mandatory_obligations\":[],\"policy_hash\":\"sha256:48d3a9c305127ed1c020a82a97821246368daa12905e91b35369fbe8fdb5b6dd\",\"policy_id\":\"relay.synthetic.person-status.exact\",\"principal_id\":\"synthetic-notary-service\",\"registry_instance\":\"people-primary\",\"tenant\":\"synthetic-government\",\"verified_consent_decision\":{\"checked_at\":null,\"evidence_commitment\":null,\"expires_at\":null,\"outcome\":\"not_required\",\"required\":false,\"revocation_status\":\"not_applicable\",\"verifier_id\":null,\"verifier_revision\":null},\"workload_id\":\"registry-notary\"}",
           "domain_label": "registry.relay.consultation-authorization.v1",
-          "expected": "sha256:486133dbf804c2d8cc2a3d0c344f0a988e386288f6878a2aacf435b966ca6680",
+          "expected": "sha256:1256e555b2b6ce9f5805ad6476747cb3221c55e477417c6a913383d4a3f5fbed",
           "value": {
             "audience": "registry-relay",
             "auth_mode": "oidc",
@@ -484,7 +485,7 @@
             "decision_expires_at": 1700000001500,
             "issuer": "https://issuer.synthetic.example",
             "mandatory_obligations": [],
-            "policy_hash": "sha256:59253577fee39444fd3d5f001574c70fad7e92ce17013336612bcff9e8b68fb8",
+            "policy_hash": "sha256:48d3a9c305127ed1c020a82a97821246368daa12905e91b35369fbe8fdb5b6dd",
             "policy_id": "relay.synthetic.person-status.exact",
             "principal_id": "synthetic-notary-service",
             "registry_instance": "people-primary",
@@ -503,14 +504,14 @@
           }
         },
         "authorized_request": {
-          "canonical_json": "{\"authorization_context_digest\":\"sha256:486133dbf804c2d8cc2a3d0c344f0a988e386288f6878a2aacf435b966ca6680\",\"commitment_key_id\":\"synthetic-epoch-1\",\"contract_hash\":\"sha256:9d45549b9613e76775b5304451ebca0de1baad67d6a9e05110e4cbb77ae16825\",\"execution_plan_digest\":\"sha256:faab166a9b000bf81c7ea43fad59dfebff33af64ac9cbe4842d2e43bf7d0c444\",\"input_commitment\":\"hmac-sha256:94fdcac3363101ec6edee8a6234f9e7b42ff37c5d9a13eaa005e69b482d1d45b\",\"profile_id\":\"synthetic.person-status.exact\",\"profile_version\":\"1\",\"route\":\"/v1/consultations/{profile_id}/execute\",\"selector_provenance\":{\"assertion_contract\":{\"hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"id\":\"registry.notary.subject-binding.v1\"},\"type\":\"trusted_notary_assertion\"},\"subject_handle\":\"hmac-sha256:d28c2c40577cbb3bffc5de4fcc9f4b1c4c30389043a1f6a8300677ddab3dfd10\"}",
+          "canonical_json": "{\"authorization_context_digest\":\"sha256:1256e555b2b6ce9f5805ad6476747cb3221c55e477417c6a913383d4a3f5fbed\",\"commitment_key_id\":\"synthetic-epoch-1\",\"contract_hash\":\"sha256:ab549f94c82c0ad7505c37ee6e3cc5d91abb73cffa8208d5285b58d026fba705\",\"execution_plan_digest\":\"sha256:6e62fad22baf62f09463437dd0df8a17deb3cd4be46d36c2407359636f8a5358\",\"input_commitment\":\"hmac-sha256:94fdcac3363101ec6edee8a6234f9e7b42ff37c5d9a13eaa005e69b482d1d45b\",\"profile_id\":\"synthetic.person-status.exact\",\"profile_version\":\"1\",\"route\":\"/v1/consultations/{profile_id}/execute\",\"selector_provenance\":{\"assertion_contract\":{\"hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"id\":\"registry.notary.subject-binding.v1\"},\"type\":\"trusted_notary_assertion\"},\"subject_handle\":\"hmac-sha256:d28c2c40577cbb3bffc5de4fcc9f4b1c4c30389043a1f6a8300677ddab3dfd10\"}",
           "domain_label": "registry.relay.authorized-consultation.v1",
-          "expected": "sha256:dc1480e6b02fa7104f33b67a2542043ceaaa785389b686b82b7e74b242e6dded",
+          "expected": "sha256:a9aeaaf66710c728125e5b505637fe0b16bc8ec3897566ed6f44a6fafe9d5af3",
           "value": {
-            "authorization_context_digest": "sha256:486133dbf804c2d8cc2a3d0c344f0a988e386288f6878a2aacf435b966ca6680",
+            "authorization_context_digest": "sha256:1256e555b2b6ce9f5805ad6476747cb3221c55e477417c6a913383d4a3f5fbed",
             "commitment_key_id": "synthetic-epoch-1",
-            "contract_hash": "sha256:9d45549b9613e76775b5304451ebca0de1baad67d6a9e05110e4cbb77ae16825",
-            "execution_plan_digest": "sha256:faab166a9b000bf81c7ea43fad59dfebff33af64ac9cbe4842d2e43bf7d0c444",
+            "contract_hash": "sha256:ab549f94c82c0ad7505c37ee6e3cc5d91abb73cffa8208d5285b58d026fba705",
+            "execution_plan_digest": "sha256:6e62fad22baf62f09463437dd0df8a17deb3cd4be46d36c2407359636f8a5358",
             "input_commitment": "hmac-sha256:94fdcac3363101ec6edee8a6234f9e7b42ff37c5d9a13eaa005e69b482d1d45b",
             "profile_id": "synthetic.person-status.exact",
             "profile_version": "1",
@@ -526,21 +527,21 @@
           }
         },
         "execution_plan": {
-          "canonical_json": "{\"acquisition_class\":\"bounded_full_record\",\"backend_kind\":\"sandboxed_rhai\",\"binding_hash\":\"sha256:a0e8a75ce132dd4f431ae66c25908a5a717562e225caddee1bddfeeca47a2406\",\"dispatch_budget_ms\":4000,\"integration_pack_hash\":\"sha256:726278890488f44d4fd547d854a4c3d0948ce71f59e0f71c2afe3ceb988cbdbf\",\"max_credential_exchanges\":1,\"max_data_destinations\":1,\"max_data_exchanges\":2,\"max_disclosed_records\":1,\"max_source_bytes\":81920,\"max_source_matches\":1,\"output_fields\":[\"status_0\",\"status_1\",\"status_2\",\"status_3\",\"status_4\"],\"physical_projection_digest\":\"sha256:d368a3197da8f72b10f83380bcc5fcf08910cfb58b1b575b5425c9e83d17163b\",\"predicate_commitment\":\"hmac-sha256:c44b68df66c5b18aed263e250e29b53b8ae5b98195aea3aa21a2e9fd3b7c73e5\",\"source_operation\":\"person.status\",\"timeout_ms\":4000,\"worst_case_acquisition_schema\":{\"fields\":{\"status_0\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_1\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_2\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_3\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_4\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"}},\"type\":\"acquisition_union\"}}",
+          "canonical_json": "{\"acquisition_class\":\"bounded_full_record\",\"backend_kind\":\"script\",\"binding_hash\":\"sha256:3b5f6a55715ec4d61b8fef90ee5ba5b3b0b972b3df25195c6fd3b8e0110faf06\",\"dispatch_budget_ms\":4000,\"integration_pack_hash\":\"sha256:c17ef829615fb106e335ca8f06399d97b861dd4e18f450e1f9ce17120402060d\",\"max_credential_exchanges\":1,\"max_data_destinations\":1,\"max_data_exchanges\":2,\"max_disclosed_records\":1,\"max_source_bytes\":81920,\"max_source_matches\":2,\"output_fields\":[\"status_0\",\"status_1\",\"status_2\",\"status_3\",\"status_4\"],\"physical_projection_digest\":\"sha256:fb6366892e6750e6efb9816f839b167af1aca64c10817d853745665291f1008d\",\"predicate_commitment\":\"hmac-sha256:4c131732c4cc18ba239a3d185936caf48095450a6bc22a46bb725934e98c8dc6\",\"source_operation\":\"person.status\",\"timeout_ms\":4000,\"worst_case_acquisition_schema\":{\"fields\":{\"status_0\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_1\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_2\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_3\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"},\"status_4\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"}},\"type\":\"acquisition_union\"}}",
           "domain_label": "registry.relay.consultation-execution-plan.v1",
-          "expected": "sha256:faab166a9b000bf81c7ea43fad59dfebff33af64ac9cbe4842d2e43bf7d0c444",
+          "expected": "sha256:6e62fad22baf62f09463437dd0df8a17deb3cd4be46d36c2407359636f8a5358",
           "value": {
             "acquisition_class": "bounded_full_record",
-            "backend_kind": "sandboxed_rhai",
-            "binding_hash": "sha256:a0e8a75ce132dd4f431ae66c25908a5a717562e225caddee1bddfeeca47a2406",
+            "backend_kind": "script",
+            "binding_hash": "sha256:3b5f6a55715ec4d61b8fef90ee5ba5b3b0b972b3df25195c6fd3b8e0110faf06",
             "dispatch_budget_ms": 4000,
-            "integration_pack_hash": "sha256:726278890488f44d4fd547d854a4c3d0948ce71f59e0f71c2afe3ceb988cbdbf",
+            "integration_pack_hash": "sha256:c17ef829615fb106e335ca8f06399d97b861dd4e18f450e1f9ce17120402060d",
             "max_credential_exchanges": 1,
             "max_data_destinations": 1,
             "max_data_exchanges": 2,
             "max_disclosed_records": 1,
             "max_source_bytes": 81920,
-            "max_source_matches": 1,
+            "max_source_matches": 2,
             "output_fields": [
               "status_0",
               "status_1",
@@ -548,8 +549,8 @@
               "status_3",
               "status_4"
             ],
-            "physical_projection_digest": "sha256:d368a3197da8f72b10f83380bcc5fcf08910cfb58b1b575b5425c9e83d17163b",
-            "predicate_commitment": "hmac-sha256:c44b68df66c5b18aed263e250e29b53b8ae5b98195aea3aa21a2e9fd3b7c73e5",
+            "physical_projection_digest": "sha256:fb6366892e6750e6efb9816f839b167af1aca64c10817d853745665291f1008d",
+            "predicate_commitment": "hmac-sha256:4c131732c4cc18ba239a3d185936caf48095450a6bc22a46bb725934e98c8dc6",
             "source_operation": "person.status",
             "timeout_ms": 4000,
             "worst_case_acquisition_schema": {
@@ -589,8 +590,8 @@
     {
       "completion_seed": {
         "canonical_bytes": 2414,
-        "canonical_json": "{\"acquisition\":{\"class\":\"source_projected_exact\",\"disclosure_fields\":[\"registration_status\"],\"provenance_contract\":{\"snapshot_generation\":\"absent\",\"snapshot_published_at\":\"absent\",\"source_observed_at\":null,\"source_revision\":null},\"public_outcomes\":[\"match\",\"no_match\",\"ambiguous\"],\"schema\":{\"fields\":{\"registration_status\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"}},\"type\":\"acquisition_union\"}},\"authorization_context_digest\":\"sha256:eadbbddfd9c1a229025e6ceabeb895b3fab5362be5476b44b1a8971aa931409b\",\"bounds\":{\"credential_exchanges\":1,\"credential_token_lifetime_ms\":1800000,\"data_destinations\":1,\"data_exchanges\":1,\"disclosed_records\":1,\"max_in_flight\":8,\"public_response_bytes\":32768,\"quota_burst\":5,\"quota_rate_per_minute\":30,\"source_bytes\":81920,\"source_matches\":2,\"timeout_ms\":4000},\"correlation\":{\"notary_evaluation_id\":\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"},\"credential\":{\"generation\":7,\"reference\":\"people-api-reader\"},\"destinations\":{\"credential_destination_id\":\"registry-oauth-private\",\"data_destination_id\":\"registry-data-private\",\"verification_destination_id\":null},\"dispatch\":{\"permit_bindings\":[{\"kind\":\"credential\",\"ordinal\":0},{\"kind\":\"data\",\"ordinal\":0}],\"plan_kind\":\"bounded_http\"},\"execution_plan_digest\":\"sha256:09bee1a14dfeeffc8b13048212b88a4e09b0997327049f52db723e5bb05a62ff\",\"integration_pack\":{\"hash\":\"sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9\",\"id\":\"synthetic.person-status\",\"version\":\"1\"},\"policy\":{\"consent\":{\"contract_hash\":\"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"decision\":\"verified\",\"required\":true,\"verifier_id\":\"registry.consent.v1\"},\"hash\":\"sha256:07219bc87fd634982a3a2314370624cd7637d3b6308032a954a2f1b7daa6a95f\",\"id\":\"relay.synthetic.person-status.exact\",\"legal_basis_id\":\"public_task\",\"obligations_digest\":\"sha256:e348b8325589cd381ed10b7ae06034fbc66c7eac928f5b5b191982ab6d1a229b\"},\"private_binding_hash\":\"sha256:1b9e601590ec894fe5a093fbfdbd8c222d766e019f014936e50325cedd9e5e38\",\"profile\":{\"contract_hash\":\"sha256:e4c5309e7df87bbbe90117c260c45e9c7b697a2da978659661cac9f744b122e9\",\"id\":\"synthetic.person-status.exact\",\"version\":\"1\"},\"purpose\":\"benefit-verification\",\"request_digest\":\"sha256:61f58f6e97c8260f5bf523e30c14a1d07f8419ad989a66e19d09c90467f99aef\",\"schema\":\"registry.relay.consultation-completion-seed/v1\",\"workload\":{\"id\":\"registry-notary\",\"registry_id\":\"people-primary\",\"tenant_id\":\"synthetic-government\"}}",
-        "expected_digest": "sha256:052c311c14c13afea3227ef1f198897a3f4b01b353ebc7a093ed88d833757f2f",
+        "canonical_json": "{\"acquisition\":{\"class\":\"source_projected_exact\",\"disclosure_fields\":[\"registration_status\"],\"provenance_contract\":{\"snapshot_generation\":\"absent\",\"snapshot_published_at\":\"absent\",\"source_observed_at\":null,\"source_revision\":null},\"public_outcomes\":[\"match\",\"no_match\",\"ambiguous\"],\"schema\":{\"fields\":{\"registration_status\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"}},\"type\":\"acquisition_union\"}},\"authorization_context_digest\":\"sha256:eadbbddfd9c1a229025e6ceabeb895b3fab5362be5476b44b1a8971aa931409b\",\"bounds\":{\"credential_exchanges\":1,\"credential_token_lifetime_ms\":1800000,\"data_destinations\":1,\"data_exchanges\":1,\"disclosed_records\":1,\"max_in_flight\":8,\"public_response_bytes\":32768,\"quota_burst\":5,\"quota_rate_per_minute\":30,\"source_bytes\":81920,\"source_matches\":2,\"timeout_ms\":4000},\"correlation\":{\"notary_evaluation_id\":\"01ARZ3NDEKTSV4RRFFQ69G5FAV\"},\"credential\":{\"generation\":7,\"reference\":\"people-api-reader\"},\"destinations\":{\"credential_destination_id\":\"registry-oauth-private\",\"data_destination_id\":\"registry-data-private\",\"verification_destination_id\":null},\"dispatch\":{\"permit_bindings\":[{\"kind\":\"credential\",\"ordinal\":0},{\"kind\":\"data\",\"ordinal\":0}],\"plan_kind\":\"bounded_http\"},\"execution_plan_digest\":\"sha256:7da3056c22626550bfaf5c7117ee2f4ecf6ea0352c1cc61d8c63d28f7cd417f6\",\"integration_pack\":{\"hash\":\"sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9\",\"id\":\"synthetic.person-status\",\"version\":\"1\"},\"policy\":{\"consent\":{\"contract_hash\":\"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"decision\":\"verified\",\"required\":true,\"verifier_id\":\"registry.consent.v1\"},\"hash\":\"sha256:07219bc87fd634982a3a2314370624cd7637d3b6308032a954a2f1b7daa6a95f\",\"id\":\"relay.synthetic.person-status.exact\",\"legal_basis_id\":\"public_task\",\"obligations_digest\":\"sha256:e348b8325589cd381ed10b7ae06034fbc66c7eac928f5b5b191982ab6d1a229b\"},\"private_binding_hash\":\"sha256:6cb60e5dbc45346db21feff0a53a6360c2eb8da67a79dbf2167bca919e00bf92\",\"profile\":{\"contract_hash\":\"sha256:e4c5309e7df87bbbe90117c260c45e9c7b697a2da978659661cac9f744b122e9\",\"id\":\"synthetic.person-status.exact\",\"version\":\"1\"},\"purpose\":\"benefit-verification\",\"request_digest\":\"sha256:a0f77532d7e252d03df2d8e36a6187695843e3141bf1f2ec7f943fa2ee5c400c\",\"schema\":\"registry.relay.consultation-completion-seed/v1\",\"workload\":{\"id\":\"registry-notary\",\"registry_id\":\"people-primary\",\"tenant_id\":\"synthetic-government\"}}",
+        "expected_digest": "sha256:e7935596d64e192d07526e150505e178d95bc82b28b13b500354247c8b8ea1f7",
         "value": {
           "acquisition": {
             "class": "source_projected_exact",
@@ -659,7 +660,7 @@
             ],
             "plan_kind": "bounded_http"
           },
-          "execution_plan_digest": "sha256:09bee1a14dfeeffc8b13048212b88a4e09b0997327049f52db723e5bb05a62ff",
+          "execution_plan_digest": "sha256:7da3056c22626550bfaf5c7117ee2f4ecf6ea0352c1cc61d8c63d28f7cd417f6",
           "integration_pack": {
             "hash": "sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9",
             "id": "synthetic.person-status",
@@ -677,14 +678,14 @@
             "legal_basis_id": "public_task",
             "obligations_digest": "sha256:e348b8325589cd381ed10b7ae06034fbc66c7eac928f5b5b191982ab6d1a229b"
           },
-          "private_binding_hash": "sha256:1b9e601590ec894fe5a093fbfdbd8c222d766e019f014936e50325cedd9e5e38",
+          "private_binding_hash": "sha256:6cb60e5dbc45346db21feff0a53a6360c2eb8da67a79dbf2167bca919e00bf92",
           "profile": {
             "contract_hash": "sha256:e4c5309e7df87bbbe90117c260c45e9c7b697a2da978659661cac9f744b122e9",
             "id": "synthetic.person-status.exact",
             "version": "1"
           },
           "purpose": "benefit-verification",
-          "request_digest": "sha256:61f58f6e97c8260f5bf523e30c14a1d07f8419ad989a66e19d09c90467f99aef",
+          "request_digest": "sha256:a0f77532d7e252d03df2d8e36a6187695843e3141bf1f2ec7f943fa2ee5c400c",
           "schema": "registry.relay.consultation-completion-seed/v1",
           "workload": {
             "id": "registry-notary",
@@ -723,11 +724,11 @@
           }
         },
         "predicate": {
-          "canonical_json": "{\"binding_hash\":\"sha256:1b9e601590ec894fe5a093fbfdbd8c222d766e019f014936e50325cedd9e5e38\",\"exact_predicate\":{\"canonical_inputs\":{\"components\":{\"subject_id\":{\"role\":\"selector\",\"type\":\"string\",\"value\":\"SYNTHETIC-SUBJECT-0001\"}},\"version\":\"registry.relay.consultation-inputs.v1\"},\"predicate_plan_digest\":\"sha256:31f0fcbc0cba178ea211bdce5da7f27a5c643a02a25cfd74cff4f97d7e4097b6\"},\"source_operation\":\"person.status\"}",
+          "canonical_json": "{\"binding_hash\":\"sha256:6cb60e5dbc45346db21feff0a53a6360c2eb8da67a79dbf2167bca919e00bf92\",\"exact_predicate\":{\"canonical_inputs\":{\"components\":{\"subject_id\":{\"role\":\"selector\",\"type\":\"string\",\"value\":\"SYNTHETIC-SUBJECT-0001\"}},\"version\":\"registry.relay.consultation-inputs.v1\"},\"predicate_plan_digest\":\"sha256:31f0fcbc0cba178ea211bdce5da7f27a5c643a02a25cfd74cff4f97d7e4097b6\"},\"source_operation\":\"person.status\"}",
           "domain_label": "registry.relay.consultation-predicate.v1",
-          "expected": "hmac-sha256:16e33d339505260c7a4d493f91cfdf2c9fe332b6dc0339f97897ab8234c3f05a",
+          "expected": "hmac-sha256:b6c309615de7edb920ecace07e823e0d5b866db040302e64a1298e082d81b30b",
           "value": {
-            "binding_hash": "sha256:1b9e601590ec894fe5a093fbfdbd8c222d766e019f014936e50325cedd9e5e38",
+            "binding_hash": "sha256:6cb60e5dbc45346db21feff0a53a6360c2eb8da67a79dbf2167bca919e00bf92",
             "exact_predicate": {
               "canonical_inputs": {
                 "components": {
@@ -802,14 +803,14 @@
           }
         },
         "authorized_request": {
-          "canonical_json": "{\"authorization_context_digest\":\"sha256:eadbbddfd9c1a229025e6ceabeb895b3fab5362be5476b44b1a8971aa931409b\",\"commitment_key_id\":\"synthetic-epoch-1\",\"contract_hash\":\"sha256:e4c5309e7df87bbbe90117c260c45e9c7b697a2da978659661cac9f744b122e9\",\"execution_plan_digest\":\"sha256:09bee1a14dfeeffc8b13048212b88a4e09b0997327049f52db723e5bb05a62ff\",\"input_commitment\":\"hmac-sha256:94fdcac3363101ec6edee8a6234f9e7b42ff37c5d9a13eaa005e69b482d1d45b\",\"profile_id\":\"synthetic.person-status.exact\",\"profile_version\":\"1\",\"route\":\"/v1/consultations/{profile_id}/execute\",\"selector_provenance\":{\"assertion_contract\":{\"hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"id\":\"registry.notary.subject-binding.v1\"},\"type\":\"trusted_notary_assertion\"},\"subject_handle\":\"hmac-sha256:d28c2c40577cbb3bffc5de4fcc9f4b1c4c30389043a1f6a8300677ddab3dfd10\"}",
+          "canonical_json": "{\"authorization_context_digest\":\"sha256:eadbbddfd9c1a229025e6ceabeb895b3fab5362be5476b44b1a8971aa931409b\",\"commitment_key_id\":\"synthetic-epoch-1\",\"contract_hash\":\"sha256:e4c5309e7df87bbbe90117c260c45e9c7b697a2da978659661cac9f744b122e9\",\"execution_plan_digest\":\"sha256:7da3056c22626550bfaf5c7117ee2f4ecf6ea0352c1cc61d8c63d28f7cd417f6\",\"input_commitment\":\"hmac-sha256:94fdcac3363101ec6edee8a6234f9e7b42ff37c5d9a13eaa005e69b482d1d45b\",\"profile_id\":\"synthetic.person-status.exact\",\"profile_version\":\"1\",\"route\":\"/v1/consultations/{profile_id}/execute\",\"selector_provenance\":{\"assertion_contract\":{\"hash\":\"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"id\":\"registry.notary.subject-binding.v1\"},\"type\":\"trusted_notary_assertion\"},\"subject_handle\":\"hmac-sha256:d28c2c40577cbb3bffc5de4fcc9f4b1c4c30389043a1f6a8300677ddab3dfd10\"}",
           "domain_label": "registry.relay.authorized-consultation.v1",
-          "expected": "sha256:61f58f6e97c8260f5bf523e30c14a1d07f8419ad989a66e19d09c90467f99aef",
+          "expected": "sha256:a0f77532d7e252d03df2d8e36a6187695843e3141bf1f2ec7f943fa2ee5c400c",
           "value": {
             "authorization_context_digest": "sha256:eadbbddfd9c1a229025e6ceabeb895b3fab5362be5476b44b1a8971aa931409b",
             "commitment_key_id": "synthetic-epoch-1",
             "contract_hash": "sha256:e4c5309e7df87bbbe90117c260c45e9c7b697a2da978659661cac9f744b122e9",
-            "execution_plan_digest": "sha256:09bee1a14dfeeffc8b13048212b88a4e09b0997327049f52db723e5bb05a62ff",
+            "execution_plan_digest": "sha256:7da3056c22626550bfaf5c7117ee2f4ecf6ea0352c1cc61d8c63d28f7cd417f6",
             "input_commitment": "hmac-sha256:94fdcac3363101ec6edee8a6234f9e7b42ff37c5d9a13eaa005e69b482d1d45b",
             "profile_id": "synthetic.person-status.exact",
             "profile_version": "1",
@@ -825,13 +826,13 @@
           }
         },
         "execution_plan": {
-          "canonical_json": "{\"acquisition_class\":\"source_projected_exact\",\"backend_kind\":\"bounded_http\",\"binding_hash\":\"sha256:1b9e601590ec894fe5a093fbfdbd8c222d766e019f014936e50325cedd9e5e38\",\"dispatch_budget_ms\":4000,\"integration_pack_hash\":\"sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9\",\"max_credential_exchanges\":1,\"max_data_destinations\":1,\"max_data_exchanges\":1,\"max_disclosed_records\":1,\"max_source_bytes\":81920,\"max_source_matches\":2,\"output_fields\":[\"registration_status\"],\"physical_projection_digest\":\"sha256:550f3f915fc0396e5f1dc807ea8435d03db787d1d17f23fbef0eab0289bacb36\",\"predicate_commitment\":\"hmac-sha256:16e33d339505260c7a4d493f91cfdf2c9fe332b6dc0339f97897ab8234c3f05a\",\"source_operation\":\"person.status\",\"timeout_ms\":4000,\"worst_case_acquisition_schema\":{\"fields\":{\"registration_status\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"}},\"type\":\"acquisition_union\"}}",
+          "canonical_json": "{\"acquisition_class\":\"source_projected_exact\",\"backend_kind\":\"bounded_http\",\"binding_hash\":\"sha256:6cb60e5dbc45346db21feff0a53a6360c2eb8da67a79dbf2167bca919e00bf92\",\"dispatch_budget_ms\":4000,\"integration_pack_hash\":\"sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9\",\"max_credential_exchanges\":1,\"max_data_destinations\":1,\"max_data_exchanges\":1,\"max_disclosed_records\":1,\"max_source_bytes\":81920,\"max_source_matches\":2,\"output_fields\":[\"registration_status\"],\"physical_projection_digest\":\"sha256:550f3f915fc0396e5f1dc807ea8435d03db787d1d17f23fbef0eab0289bacb36\",\"predicate_commitment\":\"hmac-sha256:b6c309615de7edb920ecace07e823e0d5b866db040302e64a1298e082d81b30b\",\"source_operation\":\"person.status\",\"timeout_ms\":4000,\"worst_case_acquisition_schema\":{\"fields\":{\"registration_status\":{\"max_bytes\":64,\"nullable\":false,\"type\":\"string\"}},\"type\":\"acquisition_union\"}}",
           "domain_label": "registry.relay.consultation-execution-plan.v1",
-          "expected": "sha256:09bee1a14dfeeffc8b13048212b88a4e09b0997327049f52db723e5bb05a62ff",
+          "expected": "sha256:7da3056c22626550bfaf5c7117ee2f4ecf6ea0352c1cc61d8c63d28f7cd417f6",
           "value": {
             "acquisition_class": "source_projected_exact",
             "backend_kind": "bounded_http",
-            "binding_hash": "sha256:1b9e601590ec894fe5a093fbfdbd8c222d766e019f014936e50325cedd9e5e38",
+            "binding_hash": "sha256:6cb60e5dbc45346db21feff0a53a6360c2eb8da67a79dbf2167bca919e00bf92",
             "dispatch_budget_ms": 4000,
             "integration_pack_hash": "sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9",
             "max_credential_exchanges": 1,
@@ -844,7 +845,7 @@
               "registration_status"
             ],
             "physical_projection_digest": "sha256:550f3f915fc0396e5f1dc807ea8435d03db787d1d17f23fbef0eab0289bacb36",
-            "predicate_commitment": "hmac-sha256:16e33d339505260c7a4d493f91cfdf2c9fe332b6dc0339f97897ab8234c3f05a",
+            "predicate_commitment": "hmac-sha256:b6c309615de7edb920ecace07e823e0d5b866db040302e64a1298e082d81b30b",
             "source_operation": "person.status",
             "timeout_ms": 4000,
             "worst_case_acquisition_schema": {

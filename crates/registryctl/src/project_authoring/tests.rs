@@ -82,7 +82,7 @@ outputs:
         let operation = &http.operations["request"];
         let request = &operation.request;
         assert_eq!(request.path, "/people/{person_id}");
-        assert_eq!(operation.response.max_bytes, 256 * 1024);
+        assert_eq!(operation.response.max_bytes, 512 * 1024);
         assert!(matches!(
             operation.response.schema,
             SchemaNode::Object {
@@ -357,7 +357,7 @@ outputs:
     fn code_owned_rhai_conformance_matches_http_and_is_deterministic() {
         let bounded = run_code_owned_project_conformance(&project_golden("dhis2-tracker"))
             .expect("bounded DHIS2 conformance passes");
-        let rhai_project = project_golden("dhis2-sandboxed-rhai");
+        let rhai_project = project_golden("dhis2-script");
         let rhai = run_code_owned_project_conformance(&rhai_project)
             .expect("Rhai DHIS2 conformance passes");
         let repeated = run_code_owned_project_conformance(&rhai_project)
@@ -656,6 +656,30 @@ outputs:
         assert_eq!(
             disclosure_change_classes(&mixed, Some(&baseline)),
             (true, true)
+        );
+    }
+
+    #[test]
+    fn compiler_upgrade_is_reported_independently_of_authored_semantic_changes() {
+        let loaded = load_registry_project(&project_golden("custom-system"), None)
+            .expect("golden project loads");
+        let disclosure_digest = format!("sha256:{}", "a".repeat(64));
+        let baseline = json!({
+            "compiler_version": "0.0.0",
+            "semantic_digests": {
+                "claim": format!("sha256:{}", "0".repeat(64)),
+                "integration": loaded.semantic_digests.integration.as_str(),
+                "service_policy": loaded.semantic_digests.service_policy.as_str(),
+                "operator_security": loaded.semantic_digests.operator_security.as_str(),
+            },
+            "disclosure_digest": disclosure_digest,
+        });
+        assert_eq!(
+            semantic_change_records(&loaded, Some(&baseline), &disclosure_digest)
+                .into_iter()
+                .map(|change| change.dimension)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["claim", "compiler"]),
         );
     }
 

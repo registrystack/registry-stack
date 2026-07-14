@@ -41,7 +41,7 @@
       "name": "private_binding",
       "file": "private-binding.json",
       "domain_label": "registry.relay.consultation-binding.v1",
-      "expected_hash": "sha256:1b9e601590ec894fe5a093fbfdbd8c222d766e019f014936e50325cedd9e5e38"
+      "expected_hash": "sha256:6cb60e5dbc45346db21feff0a53a6360c2eb8da67a79dbf2167bca919e00bf92"
     }
   ],
   "cross_references": [

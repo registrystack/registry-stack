@@ -62,6 +62,7 @@ pub(super) struct CompiledCompletionSeedTemplate {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum CompiledOperationKind {
     Credential,
+    Verification,
     Data,
 }
 
@@ -69,6 +70,7 @@ impl CompiledOperationKind {
     pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Credential => "credential",
+            Self::Verification => "verification",
             Self::Data => "data",
         }
     }
@@ -206,27 +208,19 @@ fn compile_predicate_plan_digest(
                 "ordered_steps": ordered_steps,
             })
         }
-        (
-            SourcePlanKind::SandboxedRhai,
-            CompiledDispatchProfile::SandboxedRhai {
-                callable_operations,
-                worker_limits,
-            },
-            Some(rhai),
-        ) if worker_limits.max_calls() > 0 => json!({
-            "schema": "registry.relay.consultation-predicate-plan.v1",
-            "kind": "sandboxed_rhai",
-            "operations": operation_preimages,
-            "rhai": {
-                "script_hash": rhai.script_hash(),
-                "entrypoint": rhai.entrypoint(),
-                "callable_operation_ids": callable_operations
-                    .iter()
-                    .map(crate::consultation::OperationId::as_str)
-                    .collect::<Vec<_>>(),
-                "effective_max_calls": worker_limits.max_calls(),
-            },
-        }),
+        (SourcePlanKind::Script, CompiledDispatchProfile::Script { worker_limits }, Some(rhai))
+            if worker_limits.max_calls() > 0 =>
+        {
+            json!({
+                "schema": "registry.relay.consultation-predicate-plan.v1",
+                "kind": "script",
+                "rhai": {
+                    "script_hash": rhai.script_hash(),
+                    "entrypoint": rhai.entrypoint(),
+                    "effective_max_calls": worker_limits.max_calls(),
+                },
+            })
+        }
         _ => return Err(SourcePlanCompileError::CompilerInvariant),
     };
     PredicatePlanDigest::from_compiled_label(domain_separated_digest(
@@ -706,7 +700,7 @@ const fn source_plan_kind_str(kind: SourcePlanKind) -> &'static str {
     match kind {
         SourcePlanKind::SnapshotExact => "snapshot_exact",
         SourcePlanKind::BoundedHttp => "bounded_http",
-        SourcePlanKind::SandboxedRhai => "sandboxed_rhai",
+        SourcePlanKind::Script => "script",
     }
 }
 
@@ -722,17 +716,19 @@ pub(super) fn measure_completion_seed(
     let operations = &pack.document.spec.plan.operations;
     let credential_operation = pack.document.spec.plan.credential_operation.as_ref();
     let verification_operations = &pack.document.spec.plan.verification_operations;
+    let verification_permit = match verification_operations.as_slice() {
+        [] => false,
+        [_] => true,
+        _ => return Err(SourcePlanCompileError::CompilerInvariant),
+    };
     let data_permit_operations = match pack.document.spec.plan.kind {
         SourcePlanKind::SnapshotExact => Vec::new(),
         SourcePlanKind::BoundedHttp => {
-            if let [verification] = verification_operations.as_slice() {
+            if verification_permit {
                 let main_operation = operations
                     .first()
                     .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-                vec![
-                    vec![verification.id.as_str()],
-                    vec![main_operation.id.as_str()],
-                ]
+                vec![vec![main_operation.id.as_str()]]
             } else {
                 let steps = pack
                     .document
@@ -753,15 +749,10 @@ pub(super) fn measure_completion_seed(
                 bounded_actual_call_permit_operations(&steps, &conditioned)
             }
         }
-        SourcePlanKind::SandboxedRhai => {
+        SourcePlanKind::Script => {
             let limits = rhai_limits.ok_or(SourcePlanCompileError::CompilerInvariant)?;
-            let mut callable = operations
-                .iter()
-                .map(|operation| operation.id.as_str())
-                .collect::<Vec<_>>();
-            callable.sort_unstable();
             (0..limits.max_calls)
-                .map(|_| callable.clone())
+                .map(|_| vec!["script-source-call"])
                 .collect::<Vec<_>>()
         }
     };
@@ -774,6 +765,16 @@ pub(super) fn measure_completion_seed(
         });
         permit_bindings.push(json!({
             "kind": "credential",
+            "ordinal": 0,
+        }));
+    }
+    if verification_permit {
+        compiled_permit_bindings.push(CompiledPermitBinding {
+            kind: CompiledOperationKind::Verification,
+            ordinal: 0,
+        });
+        permit_bindings.push(json!({
+            "kind": "verification",
             "ordinal": 0,
         }));
     }
@@ -846,7 +847,7 @@ pub(super) fn measure_completion_seed(
     let kind = match pack.document.spec.plan.kind {
         SourcePlanKind::SnapshotExact => "snapshot_exact",
         SourcePlanKind::BoundedHttp => "bounded_http",
-        SourcePlanKind::SandboxedRhai => "sandboxed_rhai",
+        SourcePlanKind::Script => "script",
     };
     let acquisition_class = match contract.acquisition_class {
         crate::consultation::AcquisitionClass::SourceProjectedExact => "source_projected_exact",
@@ -854,7 +855,9 @@ pub(super) fn measure_completion_seed(
         crate::consultation::AcquisitionClass::MaterializedSnapshot => "materialized_snapshot",
     };
     let credential_count = usize::from(credential_operation.is_some());
-    if data_permit_operations.len() != usize::from(operation_bounds.max_data_exchanges) {
+    if data_permit_operations.len() + usize::from(verification_permit)
+        != usize::from(operation_bounds.max_data_exchanges)
+    {
         return Err(SourcePlanCompileError::CompilerInvariant);
     }
     let source_observed_at_contract =
@@ -977,6 +980,9 @@ pub(super) fn measure_completion_seed(
                 &seed,
                 &data_permit_operations,
                 credential_operation.map(|operation| operation.id.as_str()),
+                verification_operations
+                    .first()
+                    .map(|operation| operation.id.as_str()),
             )?);
     }
     let maximum_seed = maximum_seed.ok_or(SourcePlanCompileError::CompilerInvariant)?;
@@ -1022,39 +1028,50 @@ fn measure_completion_audit_payload(
     seed: &Value,
     data_permit_operations: &[Vec<&str>],
     credential_operation: Option<&str>,
+    verification_operation: Option<&str>,
 ) -> Result<usize, SourcePlanCompileError> {
+    let payload = completion_audit_payload(
+        seed,
+        data_permit_operations,
+        credential_operation,
+        verification_operation,
+    )?;
+    validate_completion_audit_payload(payload)
+}
+
+fn completion_audit_payload(
+    seed: &Value,
+    data_permit_operations: &[Vec<&str>],
+    credential_operation: Option<&str>,
+    verification_operation: Option<&str>,
+) -> Result<Value, SourcePlanCompileError> {
     let mut permit_evidence = Vec::new();
     let mut actual_path = Vec::new();
-    if let Some(operation) = credential_operation {
+    let request_commitment = format!("hmac-sha256:{}", "f".repeat(64));
+    let mut push_dispatched_permit = |kind: &str, ordinal: usize| {
         permit_evidence.push(json!({
-            "kind": "credential",
-            "ordinal": 0,
-            "operation_id": operation,
+            "kind": kind,
+            "ordinal": ordinal,
+            "request_commitment": request_commitment,
             "dispatched_at_unix_us": 9_007_199_254_740_991_i64,
         }));
         actual_path.push(json!({
-            "kind": "credential",
-            "ordinal": 0,
-            "operation_id": operation,
+            "kind": kind,
+            "ordinal": ordinal,
+            "request_commitment": request_commitment,
         }));
+    };
+    if credential_operation.is_some() {
+        push_dispatched_permit("credential", 0);
+    }
+    if verification_operation.is_some() {
+        push_dispatched_permit("verification", 0);
     }
     for (ordinal, allowed) in data_permit_operations.iter().enumerate() {
-        let operation = allowed
-            .iter()
-            .max_by_key(|operation| operation.len())
-            .copied()
-            .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-        permit_evidence.push(json!({
-            "kind": "data",
-            "ordinal": ordinal,
-            "operation_id": operation,
-            "dispatched_at_unix_us": 9_007_199_254_740_991_i64,
-        }));
-        actual_path.push(json!({
-            "kind": "data",
-            "ordinal": ordinal,
-            "operation_id": operation,
-        }));
+        if allowed.is_empty() {
+            return Err(SourcePlanCompileError::CompilerInvariant);
+        }
+        push_dispatched_permit("data", ordinal);
     }
     let commitment = "x".repeat(1_024);
     let is_snapshot = seed["acquisition"]["class"] == "materialized_snapshot";
@@ -1070,7 +1087,7 @@ fn measure_completion_audit_payload(
         .get("max_bytes")
         .and_then(Value::as_u64)
         .map(|max_bytes| "x".repeat(usize::try_from(max_bytes).unwrap_or(usize::MAX)));
-    let payload = json!({
+    Ok(json!({
         "attempt_event": {
             "envelope_id": "7ZZZZZZZZZZZZZZZZZZZZZZZZZ",
             "chain_hash": format!("registry-audit-chain-v1:{}", "f".repeat(64)),
@@ -1098,11 +1115,11 @@ fn measure_completion_audit_payload(
                     .then_some(9_007_199_254_740_991_i64),
             },
             "actual_credential_exchanges": usize::from(credential_operation.is_some()),
-            "actual_data_exchanges": data_permit_operations.len(),
+            "actual_data_exchanges": data_permit_operations.len()
+                + usize::from(verification_operation.is_some()),
             "actual_path": actual_path,
         },
-    });
-    validate_completion_audit_payload(payload)
+    }))
 }
 
 fn validate_completion_audit_payload(payload: Value) -> Result<usize, SourcePlanCompileError> {
@@ -1124,6 +1141,19 @@ fn validate_completion_audit_payload(payload: Value) -> Result<usize, SourcePlan
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn minimal_completion_seed() -> Value {
+        json!({
+            "acquisition": {
+                "class": "source_projected_exact",
+                "public_outcomes": ["match", "no_match", "ambiguous"],
+                "provenance_contract": {
+                    "source_observed_at": null,
+                    "source_revision": null,
+                },
+            },
+        })
+    }
 
     #[test]
     fn completion_seed_and_audit_caps_leave_bounded_pseudonym_overhead() {
@@ -1151,6 +1181,78 @@ mod tests {
             validate_completion_audit_payload(rejected),
             Err(SourcePlanCompileError::CompletionAuditTooLarge)
         );
+    }
+
+    #[test]
+    fn completion_audit_sizing_matches_runtime_shape_at_sixteen_data_permits() {
+        let seed = minimal_completion_seed();
+        let data_permit_operations = (0..16)
+            .map(|_| vec!["reviewed-operation"])
+            .collect::<Vec<_>>();
+        let payload = completion_audit_payload(
+            &seed,
+            &data_permit_operations,
+            Some("credential-operation"),
+            None,
+        )
+        .expect("maximum permit payload");
+        let request_commitment = format!("hmac-sha256:{}", "f".repeat(64));
+        let permit_evidence = payload["permit_evidence"]
+            .as_array()
+            .expect("permit evidence array");
+        let actual_path = payload["completion_facts"]["actual_path"]
+            .as_array()
+            .expect("actual path array");
+
+        assert_eq!(permit_evidence.len(), 17);
+        assert_eq!(actual_path.len(), 17);
+        assert_eq!(
+            permit_evidence[0],
+            json!({
+                "kind": "credential",
+                "ordinal": 0,
+                "request_commitment": request_commitment,
+                "dispatched_at_unix_us": 9_007_199_254_740_991_i64,
+            })
+        );
+        assert_eq!(
+            actual_path[16],
+            json!({
+                "kind": "data",
+                "ordinal": 15,
+                "request_commitment": request_commitment,
+            })
+        );
+        assert!(permit_evidence
+            .iter()
+            .all(|permit| permit.get("operation_id").is_none()));
+        assert_eq!(
+            payload["completion_facts"]["actual_credential_exchanges"],
+            1
+        );
+        assert_eq!(payload["completion_facts"]["actual_data_exchanges"], 16);
+        validate_completion_audit_payload(payload).expect("maximum permit audit payload");
+    }
+
+    #[test]
+    fn signed_dci_completion_audit_sizing_counts_verification_as_data() {
+        let seed = minimal_completion_seed();
+        let payload = completion_audit_payload(
+            &seed,
+            &[vec!["protocol.dci.search"]],
+            None,
+            Some("protocol.dci.jwks"),
+        )
+        .expect("signed DCI permit payload");
+        let permit_evidence = payload["permit_evidence"]
+            .as_array()
+            .expect("permit evidence array");
+
+        assert_eq!(permit_evidence.len(), 2);
+        assert_eq!(permit_evidence[0]["kind"], "verification");
+        assert_eq!(permit_evidence[1]["kind"], "data");
+        assert_eq!(payload["completion_facts"]["actual_data_exchanges"], 2);
+        validate_completion_audit_payload(payload).expect("signed DCI audit payload");
     }
 
     #[test]

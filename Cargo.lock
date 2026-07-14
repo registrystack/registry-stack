@@ -5791,6 +5791,7 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-relay",
+ "rustix",
  "serde",
  "serde_json",
  "serde_yaml",

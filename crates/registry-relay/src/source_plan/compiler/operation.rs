@@ -24,8 +24,7 @@ fn compile_selector_binding(
         .reviewed_acquisition
         .as_ref()
         .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-    if reviewed.selector.is_none() && pack.document.spec.plan.kind == SourcePlanKind::SandboxedRhai
-    {
+    if reviewed.selector.is_none() && pack.document.spec.plan.kind == SourcePlanKind::Script {
         let input_index = indexes
             .inputs
             .values()
@@ -177,7 +176,7 @@ pub(super) fn compile_operation_descriptors(
             .map_err(|_| SourcePlanCompileError::CompilerInvariant)?
             {
                 ResponseSchemaDocument::ScriptBody
-                    if pack.document.spec.plan.kind == SourcePlanKind::SandboxedRhai =>
+                    if pack.document.spec.plan.kind == SourcePlanKind::Script =>
                 {
                     BTreeSet::new()
                 }
@@ -350,7 +349,7 @@ pub(super) fn compile_operation_descriptors(
                     )
                 }
             };
-            let script_operation = pack.document.spec.plan.kind == SourcePlanKind::SandboxedRhai;
+            let script_operation = pack.document.spec.plan.kind == SourcePlanKind::Script;
             let (operation_fixed_path, path_parameter) = if script_operation {
                 (operation.path.as_str(), None)
             } else {
@@ -532,6 +531,11 @@ pub(super) fn compile_operation_descriptors(
                         response_max_bytes: verification.max_response_bytes,
                         request_timeout_ms: verification.step_limits.timeout_ms,
                     },
+                    data_transport: None,
+                    request_max_bytes: step_limits.max_request_bytes,
+                    request_timeout_ms: step_limits.timeout_ms,
+                    response_max_bytes: response.max_bytes,
+                    max_source_records: operation.response.max_records,
                 })
             } else {
                 None

@@ -452,7 +452,7 @@ pub fn generated_editor_metadata() -> String {
 /// Render the public function reference from the registration catalog.
 pub fn generated_function_reference() -> String {
     let mut output = String::from(
-        "<!-- Generated from crates/registry-relay/src/rhai_worker/xw.rs. Do not edit by hand. -->\n\n# Relay Rhai `xw.v1` function reference\n\n`xw.v1` is available to every reviewed sandboxed Rhai source adapter. Helpers are deterministic and product-neutral. They have no network, filesystem, credential, environment, clock, random, or logging capability. Date calculations require every date explicitly, including the reference date for age calculations.\n\n| Signature | Accepted types | Null behavior | Bounds | Failure behavior | Example |\n| --- | --- | --- | --- | --- | --- |\n",
+        "<!-- Generated from crates/registry-relay/src/rhai_worker/xw.rs. Do not edit by hand. -->\n\n# Relay Rhai `xw.v1` function reference\n\n`xw.v1` is available to every reviewed script source adapter. Helpers are deterministic and product-neutral. They have no network, filesystem, credential, environment, clock, random, or logging capability. Date calculations require every date explicitly, including the reference date for age calculations.\n\n| Signature | Accepted types | Null behavior | Bounds | Failure behavior | Example |\n| --- | --- | --- | --- | --- | --- |\n",
     );
     for function in XW_V1_FUNCTIONS {
         use std::fmt::Write as _;

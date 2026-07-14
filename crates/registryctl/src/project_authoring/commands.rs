@@ -172,13 +172,9 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
                 })
             }
         };
-        let operations = integration_operations(&integration.document);
-        let has_credential_destination = operations
-            .values()
-            .any(|operation| operation.role == OperationRole::Credential);
-        let has_verification_destination = operations
-            .values()
-            .any(|operation| operation.role == OperationRole::Verification);
+        let has_credential_destination =
+            credential_type == CredentialType::Oauth2ClientCredentials;
+        let has_verification_destination = has_authored_signed_dci(&integration.document);
         let credential_path = has_credential_destination
             .then(|| offline_oauth_path(integration))
             .transpose()?;
@@ -548,14 +544,85 @@ fn validate_live_notary_origin(value: &str) -> Result<url::Url> {
 }
 
 fn read_bounded_external_request(path: &Path) -> Result<Vec<u8>> {
-    let metadata = fs::symlink_metadata(path).context("failed to inspect the live request file")?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() > MAX_AUTHORED_FILE_BYTES
-    {
+    #[cfg(unix)]
+    let file = {
+        use rustix::fs::{Mode, OFlags};
+
+        let descriptor = rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+            Mode::empty(),
+        )
+        .context("failed to open the live request file safely")?;
+        fs::File::from(descriptor)
+    };
+    #[cfg(not(unix))]
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .open(path)
+        .context("failed to open the live request file")?;
+
+    let metadata = file
+        .metadata()
+        .context("failed to inspect the opened live request file")?;
+    if !metadata.is_file() || metadata.len() > MAX_AUTHORED_FILE_BYTES {
         bail!("live request must be a bounded regular file, not a symlink");
     }
-    fs::read(path).context("failed to read the live request file")
+    let mut bytes = Vec::new();
+    file.take(MAX_AUTHORED_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .context("failed to read the live request file")?;
+    if bytes.len() as u64 > MAX_AUTHORED_FILE_BYTES {
+        bail!("live request exceeds the authored file-size bound");
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod external_request_reader_tests {
+    use super::*;
+
+    #[test]
+    fn live_request_reader_rejects_oversize_after_opening() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("oversize.json");
+        let file = fs::File::create(&path).expect("oversize file creates");
+        file.set_len(MAX_AUTHORED_FILE_BYTES + 1)
+            .expect("oversize file extends");
+
+        let error = read_bounded_external_request(&path).expect_err("oversize must fail");
+        assert!(format!("{error:#}").contains("bounded regular file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_request_reader_rejects_fifo_without_blocking() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("request.pipe");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .expect("mkfifo runs");
+        assert!(status.success(), "mkfifo creates the test fixture");
+
+        let error = read_bounded_external_request(&path).expect_err("FIFO must fail");
+        assert!(format!("{error:#}").contains("bounded regular file"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_request_reader_rejects_symlink_at_open() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let target = directory.path().join("request.json");
+        fs::write(&target, b"{}\n").expect("target writes");
+        let link = directory.path().join("request-link.json");
+        symlink(&target, &link).expect("symlink creates");
+
+        let error = read_bounded_external_request(&link).expect_err("symlink must fail");
+        assert!(format!("{error:#}").contains("open the live request file safely"));
+    }
 }
 
 fn validate_live_request(loaded: &LoadedRegistryProject, request: &Value) -> Result<Vec<String>> {

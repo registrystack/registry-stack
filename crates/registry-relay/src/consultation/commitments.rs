@@ -1479,17 +1479,10 @@ pub(crate) fn empty_obligations_digest(
 }
 
 pub(super) fn permit_bindings_value(profile: &CompiledRuntimeProfile) -> Vec<Value> {
-    let bounds = profile.effective_limits().operation();
-    let mut permits = Vec::with_capacity(
-        usize::from(bounds.max_credential_exchanges) + usize::from(bounds.max_data_exchanges),
-    );
-    if bounds.max_credential_exchanges == 1 {
-        permits.push(json!({"kind": "credential", "ordinal": 0}));
-    }
-    permits.extend(
-        (0..bounds.max_data_exchanges).map(|ordinal| json!({"kind": "data", "ordinal": ordinal})),
-    );
-    permits
+    profile
+        .permit_bindings()
+        .map(|(kind, ordinal)| json!({"kind": kind, "ordinal": ordinal}))
+        .collect()
 }
 
 pub(super) fn acquisition_schema_value(profile: &CompiledRuntimeProfile) -> Value {
@@ -1670,7 +1663,7 @@ const fn plan_kind_str(kind: SourcePlanKind) -> &'static str {
     match kind {
         SourcePlanKind::SnapshotExact => "snapshot_exact",
         SourcePlanKind::BoundedHttp => "bounded_http",
-        SourcePlanKind::SandboxedRhai => "sandboxed_rhai",
+        SourcePlanKind::Script => "script",
     }
 }
 

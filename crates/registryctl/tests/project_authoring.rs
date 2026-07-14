@@ -136,7 +136,7 @@ fn successful_negative_fixtures_report_the_closed_denial_assertion() {
 #[test]
 fn authored_rhai_script_compiles_under_the_production_surface() {
     let script = std::fs::read_to_string(
-        golden("dhis2-sandboxed-rhai").join("integrations/health-record/adapter.rhai"),
+        golden("dhis2-script").join("integrations/health-record/adapter.rhai"),
     )
     .expect("authored Rhai script");
     registry_relay::rhai_worker::probe_script(
@@ -157,7 +157,7 @@ fn authored_rhai_script_compiles_under_the_production_surface() {
 #[test]
 fn local_rhai_modules_are_a_static_hash_covered_closure() {
     let temporary = tempfile::tempdir().expect("temporary directory");
-    let project = copy_project("dhis2-sandboxed-rhai", temporary.path());
+    let project = copy_project("dhis2-script", temporary.path());
     let integration_directory = project.join("integrations/health-record");
     std::fs::create_dir(integration_directory.join("lib")).expect("module directory creates");
     let module = integration_directory.join("lib/normalize.rhai");
@@ -204,8 +204,8 @@ fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
     std::fs::create_dir(&baseline_root).expect("baseline root creates");
     std::fs::create_dir(&changed_root).expect("changed root creates");
     std::fs::create_dir(&absent_root).expect("absent root creates");
-    let baseline = copy_project("dhis2-sandboxed-rhai", &baseline_root);
-    let project = copy_project("dhis2-sandboxed-rhai", &changed_root);
+    let baseline = copy_project("dhis2-script", &baseline_root);
+    let project = copy_project("dhis2-script", &changed_root);
     replace_in_file(
         &project.join("integrations/health-record/integration.yaml"),
         "product: dhis2",
@@ -217,7 +217,7 @@ fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
         "versions: { unverified: [7.3] }",
     );
 
-    let metadata_free = copy_project("dhis2-sandboxed-rhai", &absent_root);
+    let metadata_free = copy_project("dhis2-script", &absent_root);
     let metadata_free_integration =
         metadata_free.join("integrations/health-record/integration.yaml");
     let mut integration = read_yaml(&metadata_free_integration);
@@ -281,7 +281,7 @@ fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
 #[test]
 fn project_authoring_rhai_commands_are_portable_offline() {
     let temporary = tempfile::tempdir().expect("temporary directory");
-    let project = copy_project("dhis2-sandboxed-rhai", temporary.path());
+    let project = copy_project("dhis2-script", temporary.path());
 
     let test_report = test_registry_project(&ProjectTestOptions {
         project_directory: project.clone(),
@@ -931,7 +931,7 @@ fn authored_unknown_fields_and_traversal_fail_closed() {
     .expect_err("unknown field must fail");
     assert!(format!("{error:#}").contains("unknown field"));
 
-    let conformance_escape = copy_project("dhis2-sandboxed-rhai", temporary.path());
+    let conformance_escape = copy_project("dhis2-script", temporary.path());
     let fixture_path = conformance_escape.join("integrations/health-record/fixtures/match.yaml");
     let mut fixture = read_yaml(&fixture_path);
     fixture["worker_probe"] = serde_yaml::Value::String("network".to_string());
@@ -983,6 +983,20 @@ fn fixture_failure_reports_safe_validation_error_without_input_value() {
     let diagnostic = format!("{error:#}");
     assert!(
         diagnostic.contains("fixture input household_reference violates its pattern"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("integrations/eligibility/fixtures/eligible.yaml"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains("input.household_reference"),
+        "{diagnostic}"
+    );
+    assert!(
+        diagnostic.contains(
+            "correct the value to satisfy integration eligibility input.household_reference"
+        ),
         "{diagnostic}"
     );
     assert!(!diagnostic.contains("invalid-reference"));
@@ -1205,7 +1219,7 @@ fn strict_project_authoring_schemas_compile_and_accept_every_golden() {
         [
             "custom-system",
             "dhis2-tracker",
-            "dhis2-sandboxed-rhai",
+            "dhis2-script",
             "fhir-r4-coverage-active",
             "opencrvs",
             "opencrvs-country-variant",
@@ -1866,17 +1880,16 @@ fn opencrvs_composite_dci_uses_unified_exact_predicates_canonically() {
     let second_pack = std::fs::read(second.join(relative)).expect("second DCI pack");
     assert_eq!(first_pack, second_pack);
     let pack: serde_json::Value = serde_json::from_slice(&first_pack).expect("DCI pack JSON");
-    let selector = &pack["spec"]["reviewed_acquisition"]["selector"];
-    assert_eq!(selector["type"], "http_exact_and");
-    assert_eq!(
-        selector["components"].as_object().map(|map| map.len()),
-        Some(3)
-    );
-    assert!(selector["components"]
+    assert!(pack["spec"]["reviewed_acquisition"]["selector"].is_null());
+    let exact_and = &pack["spec"]["plan"]["script_authority"]["signed_dci"]["exact_and"];
+    assert_eq!(exact_and.as_object().map(|map| map.len()), Some(3));
+    assert!(exact_and
         .as_object()
-        .expect("selector components")
+        .expect("signed DCI exact predicates")
         .values()
-        .all(|component| component["role"] == "dci_exact_predicate"));
+        .all(
+            |component| component["field"].is_string() && component["response_pointer"].is_string()
+        ));
 }
 
 fn validate_yaml(schema: &jsonschema::JSONSchema, path: &Path) {
@@ -1971,8 +1984,185 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "5bde97c6fbe7d1a6a45d29db9d974019abaf3d443a3fb1cff3e0504d162aa26e",
+        "ddeeadf57462d71421002747a72381afe2bbd91ec2f7a962bc209d2ca64085fe",
         "project inputs must match the cross-machine golden digest"
+    );
+}
+
+#[cfg(feature = "relay-contract-test-support")]
+#[test]
+fn generated_relay_contract_activates_through_notary_exactly_and_rejects_a_stale_pin() {
+    use registry_notary_core::{ClaimEvidenceMode, StandaloneRegistryNotaryConfig};
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("combined project builds");
+    let output = PathBuf::from(build.output.expect("build output"));
+    let contract_path = output.join(
+        "private/relay/config/artifacts/consultation-contracts/household-eligibility-household.json",
+    );
+    let contract_bytes = std::fs::read(&contract_path).expect("Relay contract artifact reads");
+    let notary: StandaloneRegistryNotaryConfig = serde_yaml::from_slice(
+        &std::fs::read(output.join("private/notary/config/notary.yaml"))
+            .expect("Notary config reads"),
+    )
+    .expect("generated Notary config parses through its production model");
+    let relay = notary
+        .evidence
+        .relay
+        .as_ref()
+        .expect("combined deployment has one Relay workload");
+    let claim = notary
+        .evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == "household-category")
+        .expect("registry-backed claim");
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
+        panic!("household category remains registry-backed");
+    };
+    let consultation = consultations
+        .values()
+        .next()
+        .expect("claim has one Relay consultation");
+    let input_names = consultation.inputs.keys().cloned().collect::<Vec<_>>();
+    let purpose = claim.purpose.as_deref().expect("claim purpose is explicit");
+
+    assert!(
+        registry_notary_server::relay_contract_test_support::verifies_contract_artifact(
+            &contract_bytes,
+            &consultation.profile.contract_hash,
+            &consultation.profile.id,
+            &relay.workload_client_id,
+            purpose,
+            &input_names,
+            &consultation.outputs,
+        ),
+        "Notary must activate the exact compiler-produced contract and pin"
+    );
+
+    let mut mutated: serde_json::Value =
+        serde_json::from_slice(&contract_bytes).expect("contract artifact parses");
+    mutated["spec"]["output"]["category"]["max_bytes"] = serde_json::json!(84);
+    let mutated = serde_json::to_vec(&mutated).expect("mutated envelope serializes");
+    assert!(
+        !registry_notary_server::relay_contract_test_support::verifies_contract_artifact(
+            &mutated,
+            &consultation.profile.contract_hash,
+            &consultation.profile.id,
+            &relay.workload_client_id,
+            purpose,
+            &input_names,
+            &consultation.outputs,
+        ),
+        "a contract mutation cannot activate under the prior Notary pin"
+    );
+}
+
+#[cfg(feature = "relay-contract-test-support")]
+#[test]
+fn script_only_change_moves_the_contract_hash_and_notary_rejects_the_old_pin() {
+    use registry_notary_core::{ClaimEvidenceMode, StandaloneRegistryNotaryConfig};
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("dhis2-script", temporary.path());
+    let options = ProjectBuildOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    };
+    let first = build_registry_project(&options).expect("initial Script project builds");
+    let first_output = PathBuf::from(first.output.expect("initial build output"));
+    let contract_relative =
+        "private/relay/config/artifacts/consultation-contracts/health-verification-health.json";
+    let first_contract =
+        std::fs::read(first_output.join(contract_relative)).expect("initial contract reads");
+    let notary: StandaloneRegistryNotaryConfig = serde_yaml::from_slice(
+        &std::fs::read(first_output.join("private/notary/config/notary.yaml"))
+            .expect("initial Notary config reads"),
+    )
+    .expect("initial Notary config parses");
+    let relay = notary.evidence.relay.as_ref().expect("Relay workload");
+    let claim = notary
+        .evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == "tracked-entity-first-name")
+        .expect("registry-backed Script claim");
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
+        panic!("Script claim remains registry-backed");
+    };
+    let consultation = consultations.values().next().expect("one consultation");
+    let first_hash = consultation.profile.contract_hash.clone();
+    let input_names = consultation.inputs.keys().cloned().collect::<Vec<_>>();
+    let purpose = claim.purpose.as_deref().expect("claim purpose");
+    assert!(
+        registry_notary_server::relay_contract_test_support::verifies_contract_artifact(
+            &first_contract,
+            &first_hash,
+            &consultation.profile.id,
+            &relay.workload_client_id,
+            purpose,
+            &input_names,
+            &consultation.outputs,
+        ),
+        "Notary accepts the initial Script contract under its generated pin"
+    );
+
+    let script_path = project.join("integrations/health-record/adapter.rhai");
+    let mut script = std::fs::read_to_string(&script_path).expect("Script reads");
+    script.push_str("\n// reviewed script-only contract change\n");
+    std::fs::write(&script_path, script).expect("Script change writes");
+    let second = build_registry_project(&options).expect("changed Script project builds");
+    let second_output = PathBuf::from(second.output.expect("changed build output"));
+    let second_contract =
+        std::fs::read(second_output.join(contract_relative)).expect("changed contract reads");
+    let second_notary: StandaloneRegistryNotaryConfig = serde_yaml::from_slice(
+        &std::fs::read(second_output.join("private/notary/config/notary.yaml"))
+            .expect("changed Notary config reads"),
+    )
+    .expect("changed Notary config parses");
+    let second_claim = second_notary
+        .evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == "tracked-entity-first-name")
+        .expect("changed Script claim");
+    let ClaimEvidenceMode::RegistryBacked {
+        consultations: second_consultations,
+    } = &second_claim.evidence_mode
+    else {
+        panic!("changed Script claim remains registry-backed");
+    };
+    let second_hash = &second_consultations
+        .values()
+        .next()
+        .expect("changed consultation")
+        .profile
+        .contract_hash;
+    assert_ne!(
+        first_hash.as_str(),
+        second_hash,
+        "Script bytes are hash-covered"
+    );
+    assert!(
+        !registry_notary_server::relay_contract_test_support::verifies_contract_artifact(
+            &second_contract,
+            &first_hash,
+            &consultation.profile.id,
+            &relay.workload_client_id,
+            purpose,
+            &input_names,
+            &consultation.outputs,
+        ),
+        "Notary must reject changed Script bytes under the old contract pin"
     );
 }
 
@@ -2542,7 +2732,7 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
     let project_names = [
         "custom-system",
         "dhis2-tracker",
-        "dhis2-sandboxed-rhai",
+        "dhis2-script",
         "fhir-r4-coverage-active",
         "opencrvs",
         "opencrvs-country-variant",

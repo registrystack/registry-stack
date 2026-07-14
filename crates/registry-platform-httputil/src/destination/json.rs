@@ -17,7 +17,8 @@ mod script_response;
 mod typed_envelope;
 
 /// Maximum encoded bytes accepted by the closed JSON decoder.
-pub const MAX_CLOSED_JSON_ENCODED_BODY_BYTES: usize = 256 * 1_024;
+/// Code-owned ceiling shared with Relay's v1 reviewed source-response bound.
+pub const MAX_CLOSED_JSON_ENCODED_BODY_BYTES: usize = 8 * 1_024 * 1_024;
 
 pub use contract::{
     ClosedJsonDecoder, ClosedJsonDecoderBuildError, ClosedJsonField, ClosedJsonPresenceProjection,

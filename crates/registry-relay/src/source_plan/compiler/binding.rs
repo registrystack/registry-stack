@@ -58,7 +58,7 @@ pub(super) fn validate_materialization_binding(
                 .then_some(())
                 .ok_or(SourcePlanCompileError::BindingWidening)
         }
-        SourcePlanKind::BoundedHttp | SourcePlanKind::SandboxedRhai => {
+        SourcePlanKind::BoundedHttp | SourcePlanKind::Script => {
             if contract.document.spec.materialization.is_some()
                 || binding.document.materialization.is_some()
             {
@@ -201,18 +201,18 @@ pub(super) fn validate_capabilities(
     let capabilities = &binding.document.capabilities;
     match pack.document.spec.plan.kind {
         SourcePlanKind::SnapshotExact | SourcePlanKind::BoundedHttp => {
-            if capabilities.allow_sandboxed_rhai || capabilities.sandboxed_rhai.is_some() {
+            if capabilities.allow_script || capabilities.script.is_some() {
                 Err(SourcePlanCompileError::CapabilityMismatch)
             } else {
                 Ok(None)
             }
         }
-        SourcePlanKind::SandboxedRhai if !capabilities.allow_sandboxed_rhai => {
+        SourcePlanKind::Script if !capabilities.allow_script => {
             Err(SourcePlanCompileError::RhaiNotEnabled)
         }
-        SourcePlanKind::SandboxedRhai => {
+        SourcePlanKind::Script => {
             let binding = capabilities
-                .sandboxed_rhai
+                .script
                 .as_ref()
                 .ok_or(SourcePlanCompileError::RhaiNotEnabled)?;
             let reviewed = pack
@@ -222,19 +222,6 @@ pub(super) fn validate_capabilities(
                 .rhai
                 .as_ref()
                 .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-            let callable = binding
-                .callable_operations
-                .iter()
-                .map(|value| value.as_str())
-                .collect::<BTreeSet<_>>();
-            let reviewed_operations = pack
-                .document
-                .spec
-                .plan
-                .operations
-                .iter()
-                .map(|operation| operation.id.as_str())
-                .collect::<BTreeSet<_>>();
             let limits_narrow = binding.max_calls > 0
                 && binding.max_calls <= pack.document.spec.bounds.max_data_exchanges
                 && binding.memory_bytes > 0
@@ -257,10 +244,7 @@ pub(super) fn validate_capabilities(
                 && Some(binding.output_bytes) <= reviewed.output_bytes
                 && binding.concurrency == 1
                 && Some(binding.concurrency) <= reviewed.concurrency;
-            if callable.len() != binding.callable_operations.len()
-                || callable != reviewed_operations
-                || !limits_narrow
-            {
+            if !limits_narrow {
                 return Err(SourcePlanCompileError::BindingWidening);
             }
             let mut matching = rhai_workers.iter().filter(|worker| {
@@ -272,11 +256,6 @@ pub(super) fn validate_capabilities(
             if matching.next().is_some() {
                 return Err(SourcePlanCompileError::RhaiWorkerMismatch);
             }
-            let worker_operations = worker
-                .callable_operations
-                .iter()
-                .map(AsRef::as_ref)
-                .collect::<BTreeSet<&str>>();
             let expected_limits = RhaiWorkerLimits {
                 max_calls: binding.max_calls,
                 memory_bytes: binding.memory_bytes,
@@ -290,7 +269,7 @@ pub(super) fn validate_capabilities(
                 output_bytes: binding.output_bytes,
                 concurrency: binding.concurrency,
             };
-            if worker_operations != callable || worker.limits != expected_limits {
+            if worker.limits != expected_limits {
                 Err(SourcePlanCompileError::RhaiWorkerMismatch)
             } else {
                 Ok(Some(expected_limits))
@@ -326,18 +305,34 @@ pub(super) fn validate_effective_source_bytes(
                 })
                 .ok_or(SourcePlanCompileError::BindingWidening)?
         }
-        SourcePlanKind::SandboxedRhai => {
+        SourcePlanKind::Script => {
             let maximum_data_response_bytes = pack
                 .document
                 .spec
                 .plan
-                .operations
-                .iter()
-                .map(|operation| u64::from(operation.response.max_bytes))
-                .max()
+                .script_authority
+                .as_ref()
+                .map(|authority| u64::from(authority.response.max_bytes))
                 .ok_or(SourcePlanCompileError::CompilerInvariant)?;
-            maximum_data_response_bytes
-                .checked_mul(u64::from(effective_limits.operation().max_data_exchanges))
+            let verification_count =
+                u8::try_from(pack.document.spec.plan.verification_operations.len())
+                    .map_err(|_| SourcePlanCompileError::BindingWidening)?;
+            let data_call_count = effective_limits
+                .operation()
+                .max_data_exchanges
+                .checked_sub(verification_count)
+                .ok_or(SourcePlanCompileError::BindingWidening)?;
+            pack.document
+                .spec
+                .plan
+                .verification_operations
+                .iter()
+                .try_fold(
+                    maximum_data_response_bytes
+                        .checked_mul(u64::from(data_call_count))
+                        .ok_or(SourcePlanCompileError::BindingWidening)?,
+                    |total, operation| total.checked_add(u64::from(operation.max_response_bytes)),
+                )
                 .ok_or(SourcePlanCompileError::BindingWidening)?
         }
     };
@@ -386,23 +381,10 @@ pub(super) fn validate_contract_implementation(
 ) -> Result<(), SourcePlanCompileError> {
     let contract_spec = &contract.document.spec;
     let pack_spec = &pack.document.spec;
-    let pack_can_ambiguous = pack_spec.bounds.max_source_matches == 2
-        || pack_spec
-            .plan
-            .operations
-            .iter()
-            .any(|operation| !operation.response.status_outcomes.ambiguous.is_empty());
-    let contract_can_ambiguous = contract_spec
-        .public_behavior
-        .outcomes
-        .contains(&OutcomeDocument::Ambiguous);
     let runtime_matches = matches!(
         (contract_spec.runtime.source_capability, pack_spec.plan.kind,),
         (SourceCapabilityDocument::Http, SourcePlanKind::BoundedHttp)
-            | (
-                SourceCapabilityDocument::Script,
-                SourcePlanKind::SandboxedRhai
-            )
+            | (SourceCapabilityDocument::Script, SourcePlanKind::Script)
             | (
                 SourceCapabilityDocument::Snapshot,
                 SourcePlanKind::SnapshotExact
@@ -413,7 +395,6 @@ pub(super) fn validate_contract_implementation(
         && pack_spec.source_provenance == contract_spec.source_provenance
         && pack_spec.output == contract_spec.output
         && pack_spec.bounds == contract_spec.bounds
-        && pack_can_ambiguous == contract_can_ambiguous
         && runtime_matches;
     exact
         .then_some(())
@@ -458,26 +439,36 @@ pub(super) fn validate_credential_shape(
     pack: &IntegrationPackArtifact,
     binding: &PrivateBindingArtifact,
 ) -> Result<(), SourcePlanCompileError> {
+    let script_auth = pack
+        .document
+        .spec
+        .plan
+        .script_authority
+        .as_ref()
+        .map(|authority| &authority.auth);
     let uses_oauth = pack
         .document
         .spec
         .plan
         .operations
         .iter()
-        .any(|operation| matches!(operation.auth, SourceAuthDocument::OAuthClientCredentials));
+        .any(|operation| matches!(operation.auth, SourceAuthDocument::OAuthClientCredentials))
+        || script_auth
+            .is_some_and(|auth| matches!(auth, SourceAuthDocument::OAuthClientCredentials));
     let uses_bound_credential = pack
         .document
         .spec
         .plan
         .operations
         .iter()
-        .any(|operation| operation.auth != SourceAuthDocument::None);
+        .any(|operation| operation.auth != SourceAuthDocument::None)
+        || script_auth.is_some_and(|auth| *auth != SourceAuthDocument::None);
     let reviewed = pack.document.spec.plan.credential_operation.is_some();
     let destination = binding.document.credential_destination.is_some();
     let credential = binding.document.credential.is_some();
     let data_destination_matches = match pack.document.spec.plan.kind {
         SourcePlanKind::SnapshotExact => binding.document.data_destination.is_none(),
-        SourcePlanKind::BoundedHttp | SourcePlanKind::SandboxedRhai => {
+        SourcePlanKind::BoundedHttp | SourcePlanKind::Script => {
             binding.document.data_destination.is_some()
         }
     };
@@ -752,9 +743,24 @@ pub(super) fn reject_destination_overlap(
         Url::parse(&data.origin).map_err(|_| SourcePlanCompileError::UnsafeDestination)?;
     let credential_origin =
         Url::parse(&credential.origin).map_err(|_| SourcePlanCompileError::UnsafeDestination)?;
-    let signed_dci = pack.document.spec.plan.operations.len() == 1
-        && pack.document.spec.plan.verification_operations.len() == 1
-        && pack.document.spec.plan.operations[0].dci.is_some();
+    let signed_dci = pack.document.spec.plan.verification_operations.len() == 1
+        && (pack
+            .document
+            .spec
+            .plan
+            .operations
+            .as_slice()
+            .first()
+            .is_some_and(|operation| {
+                pack.document.spec.plan.operations.len() == 1 && operation.dci.is_some()
+            })
+            || pack
+                .document
+                .spec
+                .plan
+                .script_authority
+                .as_ref()
+                .is_some_and(|authority| authority.signed_dci.is_some()));
     if data.id == credential.id || (data_origin == credential_origin && !signed_dci) {
         Err(SourcePlanCompileError::UnsafeDestination)
     } else {

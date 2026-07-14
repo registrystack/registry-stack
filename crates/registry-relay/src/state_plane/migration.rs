@@ -30,15 +30,15 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "audit-pseudonym-keyring=registry.relay.postgres-audit-pseudonym-keyring/v1\0",
     "materialization-publication=registry.relay.postgres-materialization-publication/v1\0",
     "materialization-publication-order=attempt-before-access-atomic-completion-pointer-monotonic-generation-v1\0",
-    "consultation-completion=atomic-intent-sealed-seed-dynamic-ordinal-call-ack-known-unfinished-recovery-v2\0",
+    "consultation-completion=atomic-intent-sealed-seed-closed-three-outcomes-script-verification-permit-dynamic-ordinal-call-ack-known-unfinished-recovery-v4\0",
     "consultation-batch-child-replay=authenticated-hmac-binding-reserve-before-quota-atomic-terminal-publication-fixed-retention-v2\0",
-    "consultation-authorization=database-expiry-dynamic-ordinal-keyed-request-effect-call-ack-v3\0",
+    "consultation-authorization=database-expiry-credential-verification-data-order-keyed-request-effect-call-ack-v4\0",
     "consultation-credentials=direct-data-auth-reference-distinct-authored-verification-no-expiry-v3\0",
     "serving-fence-order=fence-row-keyring-intent-permit-audit-head-v1\0",
     "key-order=utf8-bytewise-key-order-v1\0",
 );
 pub(crate) const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "sha256:752cef3f1715449f9933ca4b2029973c939273b1da20ab00ba1ac100a598cc4c";
+    "sha256:311a81754845cd6ab26300b92ecb4787652dda6a9ed15438e346aa5d2ef53097";
 
 pub(super) const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 7_221_091_440;
 const SUPPORTED_POSTGRES_MIN_MAJOR: i32 = 16;
@@ -47,16 +47,16 @@ const SUPPORTED_POSTGRES_MAX_MAJOR: i32 = 18;
 // Filled from the semantic catalog descriptor below on disposable supported
 // PostgreSQL majors. Constraint rendering is explicitly versioned because
 // pg_get_constraintdef is not a cross-major wire contract.
-const CONSTRAINT_FINGERPRINT_PG16: &str = "6b0af633b8b2ed5dd807b1d501f454d0";
-const CONSTRAINT_FINGERPRINT_PG17: &str = "6b0af633b8b2ed5dd807b1d501f454d0";
-const CONSTRAINT_FINGERPRINT_PG18: &str = "c43c9a1f6c1285d410125f3abc4fb086";
+const CONSTRAINT_FINGERPRINT_PG16: &str = "923e22ecc1106e0a8a6ccd771320b965";
+const CONSTRAINT_FINGERPRINT_PG17: &str = "923e22ecc1106e0a8a6ccd771320b965";
+const CONSTRAINT_FINGERPRINT_PG18: &str = "7dfaf85b762e7e0e2e67505a1cedaed7";
 const COLUMN_FINGERPRINT_PG16: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
 const COLUMN_FINGERPRINT_PG17: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
 const COLUMN_FINGERPRINT_PG18: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
-const FUNCTION_FINGERPRINT_PG16: &str = "01ac9dc531fbcba77d17967a141995ca";
-const FUNCTION_FINGERPRINT_PG17: &str = "01ac9dc531fbcba77d17967a141995ca";
-const FUNCTION_FINGERPRINT_PG18: &str = "01ac9dc531fbcba77d17967a141995ca";
-const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "fdbf33506ab91d424a4c9f49e29f75c0";
+const FUNCTION_FINGERPRINT_PG16: &str = "e4fc5ebad0d20affb946d90f477415d2";
+const FUNCTION_FINGERPRINT_PG17: &str = "e4fc5ebad0d20affb946d90f477415d2";
+const FUNCTION_FINGERPRINT_PG18: &str = "e4fc5ebad0d20affb946d90f477415d2";
+const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "64a1f90d9b28b2a85b3093337c289e69";
 
 /// Runtime-forceable session semantics. Server/SUSET state that the runtime
 /// cannot safely repair is rejected by the attested SQL capability instead.
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_fingerprint_check CHECK (
         capability_fingerprint =
-        'sha256:752cef3f1715449f9933ca4b2029973c939273b1da20ab00ba1ac100a598cc4c'
+        'sha256:311a81754845cd6ab26300b92ecb4787652dda6a9ed15438e346aa5d2ef53097'
     ),
     CONSTRAINT state_plane_metadata_roles_distinct_check CHECK (
         owner_role_oid <> runtime_role_oid
@@ -525,6 +525,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.dispatch_permit (
     CONSTRAINT dispatch_permit_pk PRIMARY KEY (operation_id, kind, ordinal),
     CONSTRAINT dispatch_permit_kind_ordinal_check CHECK (
         (kind = 'credential' AND ordinal = 0)
+        OR (kind = 'verification' AND ordinal = 0)
         OR (kind = 'data' AND ordinal BETWEEN 0 AND 15)
     ),
     CONSTRAINT dispatch_permit_generation_check CHECK (fence_generation > 0),
@@ -915,6 +916,7 @@ DECLARE
     v_binding_sort integer;
     v_previous_binding_sort integer := -1;
     v_credential_binding_count integer := 0;
+    v_verification_binding_count integer := 0;
     v_data_binding_count integer := 0;
 BEGIN
     IF p_seed_canonical IS NULL
@@ -1133,14 +1135,20 @@ BEGIN
            (v_seed #>> '{acquisition,class}' = 'materialized_snapshot') <>
            (v_seed #>> '{acquisition,provenance_contract,snapshot_published_at}' = 'required')
        )
-       OR relay_state_private.jsonb_object_key_count_v1(v_seed -> 'destinations') <> 2
+       OR relay_state_private.jsonb_object_key_count_v1(v_seed -> 'destinations') <> 3
        OR (v_seed -> 'destinations') - ARRAY[
-           'credential_destination_id', 'data_destination_id'
+           'credential_destination_id', 'verification_destination_id',
+           'data_destination_id'
        ]::text[] <> '{}'::jsonb
        OR jsonb_typeof(v_seed #> '{destinations,credential_destination_id}')
             NOT IN ('string', 'null')
        OR (jsonb_typeof(v_seed #> '{destinations,credential_destination_id}') = 'string'
            AND v_seed #>> '{destinations,credential_destination_id}'
+                !~ '^[a-z][a-z0-9._-]{0,95}$')
+       OR jsonb_typeof(v_seed #> '{destinations,verification_destination_id}')
+            NOT IN ('string', 'null')
+       OR (jsonb_typeof(v_seed #> '{destinations,verification_destination_id}') = 'string'
+           AND v_seed #>> '{destinations,verification_destination_id}'
                 !~ '^[a-z][a-z0-9._-]{0,95}$')
        OR jsonb_typeof(v_seed #> '{destinations,data_destination_id}')
             NOT IN ('string', 'null')
@@ -1169,7 +1177,7 @@ BEGIN
            'plan_kind', 'permit_bindings'
        ]::text[] <> '{}'::jsonb
        OR v_seed #>> '{dispatch,plan_kind}' NOT IN (
-           'snapshot_exact', 'bounded_http', 'sandboxed_rhai'
+           'snapshot_exact', 'bounded_http', 'script'
        )
        OR jsonb_typeof(v_seed #> '{dispatch,permit_bindings}') IS DISTINCT FROM 'array'
        OR jsonb_array_length(v_seed #> '{dispatch,permit_bindings}') > 17
@@ -1182,15 +1190,11 @@ BEGIN
            'credential_token_lifetime_ms'
        ]::text[] <> '{}'::jsonb
        OR (v_seed #>> '{bounds,source_matches}')::integer NOT BETWEEN 1 AND 2
+       OR v_seed #> '{acquisition,public_outcomes}'
+            <> '["match","no_match","ambiguous"]'::jsonb
        OR (
-           (v_seed #>> '{bounds,source_matches}')::integer = 1
-           AND v_seed #> '{acquisition,public_outcomes}'
-                <> '["match","no_match"]'::jsonb
-       )
-       OR (
-           (v_seed #>> '{bounds,source_matches}')::integer = 2
-           AND v_seed #> '{acquisition,public_outcomes}'
-                <> '["match","no_match","ambiguous"]'::jsonb
+           v_seed #>> '{dispatch,plan_kind}' = 'script'
+           AND (v_seed #>> '{bounds,source_matches}')::integer <> 2
        )
        OR (v_seed #>> '{bounds,disclosed_records}')::integer <> 1
        OR (v_seed #>> '{bounds,data_exchanges}')::integer NOT BETWEEN 0 AND 16
@@ -1284,12 +1288,7 @@ BEGIN
             WHEN 'ambiguous' THEN 2
             ELSE -1
         END;
-        IF v_public_outcome_sort <= v_previous_public_outcome_sort
-           OR (
-               v_public_outcome = 'ambiguous'
-               AND (v_seed #>> '{bounds,source_matches}')::integer <> 2
-           )
-        THEN
+        IF v_public_outcome_sort <= v_previous_public_outcome_sort THEN
             RETURN false;
         END IF;
         v_previous_public_outcome_sort := v_public_outcome_sort;
@@ -1306,6 +1305,8 @@ BEGIN
            OR NOT (
                (v_binding ->> 'kind' = 'credential'
                 AND (v_binding ->> 'ordinal')::integer = 0)
+               OR (v_binding ->> 'kind' = 'verification'
+                   AND (v_binding ->> 'ordinal')::integer = 0)
                OR (v_binding ->> 'kind' = 'data'
                    AND (v_binding ->> 'ordinal')::integer BETWEEN 0 AND 15)
            )
@@ -1314,7 +1315,8 @@ BEGIN
         END IF;
         v_binding_sort := CASE v_binding ->> 'kind'
             WHEN 'credential' THEN 0
-            ELSE 1 + (v_binding ->> 'ordinal')::integer
+            WHEN 'verification' THEN 1
+            ELSE 2 + (v_binding ->> 'ordinal')::integer
         END;
         IF v_binding_sort <= v_previous_binding_sort THEN
             RETURN false;
@@ -1322,6 +1324,11 @@ BEGIN
         IF v_binding ->> 'kind' = 'credential' THEN
             v_credential_binding_count := v_credential_binding_count + 1;
             IF v_credential_binding_count > 1 THEN
+                RETURN false;
+            END IF;
+        ELSIF v_binding ->> 'kind' = 'verification' THEN
+            v_verification_binding_count := v_verification_binding_count + 1;
+            IF v_verification_binding_count > 1 THEN
                 RETURN false;
             END IF;
         ELSE
@@ -1334,12 +1341,13 @@ BEGIN
     END LOOP;
     IF v_credential_binding_count <>
             (v_seed #>> '{bounds,credential_exchanges}')::integer
-       OR v_data_binding_count <>
+       OR v_verification_binding_count + v_data_binding_count <>
             (v_seed #>> '{bounds,data_exchanges}')::integer
        OR (
            v_seed #>> '{dispatch,plan_kind}' = 'snapshot_exact'
            AND (
-               v_credential_binding_count + v_data_binding_count <> 0
+               v_credential_binding_count + v_verification_binding_count
+                   + v_data_binding_count <> 0
                OR v_seed #>> '{acquisition,class}' <> 'materialized_snapshot'
            )
        )
@@ -1354,10 +1362,13 @@ BEGIN
            (v_seed #>> '{bounds,credential_exchanges}')::integer = 1
            AND jsonb_typeof(v_seed #> '{bounds,credential_token_lifetime_ms}') = 'null'
            AND NOT (
-               v_seed #>> '{dispatch,plan_kind}' = 'bounded_http'
-               AND v_data_binding_count = 2
+               v_seed #>> '{dispatch,plan_kind}' IN ('bounded_http', 'script')
+               AND v_verification_binding_count = 1
+               AND v_data_binding_count = 1
            )
        )
+       OR (v_verification_binding_count = 1) <>
+          (jsonb_typeof(v_seed #> '{destinations,verification_destination_id}') = 'string')
     THEN
         RETURN false;
     END IF;
@@ -1536,7 +1547,7 @@ WITH metadata AS (
       AND schema_version = 1
       AND capability_id = 'registry.relay.postgres-durable-audit/v1'
       AND capability_fingerprint =
-        'sha256:752cef3f1715449f9933ca4b2029973c939273b1da20ab00ba1ac100a598cc4c'
+        'sha256:311a81754845cd6ab26300b92ecb4787652dda6a9ed15438e346aa5d2ef53097'
       AND serving_fence_capability_id = 'registry.relay.postgres-serving-fence/v1'
       AND serving_fence_lock_key <> 0
       AND serving_fence_lock_key <> 7221091440
@@ -2188,9 +2199,9 @@ SELECT
            )
     )
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '6b0af633b8b2ed5dd807b1d501f454d0'
-            WHEN 17 THEN '6b0af633b8b2ed5dd807b1d501f454d0'
-            WHEN 18 THEN 'c43c9a1f6c1285d410125f3abc4fb086'
+            WHEN 16 THEN '923e22ecc1106e0a8a6ccd771320b965'
+            WHEN 17 THEN '923e22ecc1106e0a8a6ccd771320b965'
+            WHEN 18 THEN '7dfaf85b762e7e0e2e67505a1cedaed7'
             ELSE '' END FROM constraint_fingerprint, server)
     AND (SELECT value = CASE server.major
             WHEN 16 THEN 'f1cce8b8398fd1b177d3d6b61a112cec'
@@ -2198,9 +2209,9 @@ SELECT
             WHEN 18 THEN 'f1cce8b8398fd1b177d3d6b61a112cec'
             ELSE '' END FROM column_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '01ac9dc531fbcba77d17967a141995ca'
-            WHEN 17 THEN '01ac9dc531fbcba77d17967a141995ca'
-            WHEN 18 THEN '01ac9dc531fbcba77d17967a141995ca'
+            WHEN 16 THEN 'e4fc5ebad0d20affb946d90f477415d2'
+            WHEN 17 THEN 'e4fc5ebad0d20affb946d90f477415d2'
+            WHEN 18 THEN 'e4fc5ebad0d20affb946d90f477415d2'
             ELSE '' END FROM function_fingerprint, server);
 $function$;
 
@@ -3546,6 +3557,7 @@ BEGIN
                 AS permit(kind, ordinal)
            WHERE NOT (
                (permit.kind = 'credential' AND permit.ordinal = 0)
+               OR (permit.kind = 'verification' AND permit.ordinal = 0)
                OR (permit.kind = 'data' AND permit.ordinal BETWEEN 0 AND 15)
            )
        )
@@ -3572,7 +3584,7 @@ BEGIN
        ), ARRAY[]::smallint[])
        OR p_permit_kinds IS DISTINCT FROM COALESCE((
            SELECT pg_catalog.array_agg(
-               permit.kind ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+               permit.kind ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
                                     permit.ordinal
            )
            FROM unnest(p_permit_kinds, p_permit_ordinals)
@@ -3580,7 +3592,7 @@ BEGIN
        ), ARRAY[]::text[])
        OR p_permit_ordinals IS DISTINCT FROM COALESCE((
            SELECT pg_catalog.array_agg(
-               permit.ordinal ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+               permit.ordinal ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
                                        permit.ordinal
            )
            FROM unnest(p_permit_kinds, p_permit_ordinals)
@@ -3605,7 +3617,7 @@ BEGIN
                 WHERE kind.value = 'credential')
        OR (p_completion_seed_canonical::jsonb #>> '{bounds,data_exchanges}')::integer
             <> (SELECT count(*) FROM pg_catalog.unnest(p_permit_kinds) AS kind(value)
-                WHERE kind.value = 'data')
+                WHERE kind.value IN ('verification', 'data'))
     THEN
         RAISE EXCEPTION 'invalid consultation completion intent request'
             USING ERRCODE = '22023';
@@ -3685,11 +3697,11 @@ BEGIN
     FROM relay_state_private.consultation_completion_intent AS intent
     WHERE intent.operation_id = p_operation_id;
     SELECT COALESCE(pg_catalog.array_agg(
-               permit.kind ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+               permit.kind ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
                                     permit.ordinal
            ), ARRAY[]::text[]),
            COALESCE(pg_catalog.array_agg(
-               permit.ordinal ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+               permit.ordinal ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
                                        permit.ordinal
            ), ARRAY[]::smallint[])
     INTO v_stored_kinds, v_stored_ordinals
@@ -3717,7 +3729,7 @@ BEGIN
        )
        AND v_intent.data_permit_count = (
            SELECT count(*) FROM pg_catalog.unnest(p_permit_kinds) AS kind(value)
-           WHERE kind.value = 'data'
+           WHERE kind.value IN ('verification', 'data')
        )
        AND v_intent.completion_seed_canonical = p_completion_seed_canonical
        AND v_intent.completion_seed_digest = p_completion_seed_digest
@@ -3907,7 +3919,7 @@ BEGIN
         (SELECT count(*) FROM pg_catalog.unnest(p_permit_kinds) AS kind(value)
          WHERE kind.value = 'credential'),
         (SELECT count(*) FROM pg_catalog.unnest(p_permit_kinds) AS kind(value)
-         WHERE kind.value = 'data'),
+         WHERE kind.value IN ('verification', 'data')),
         v_now, v_deadline,
         'registry.relay.consultation-completion-seed/v1',
         p_completion_seed_canonical, p_completion_seed_digest,
@@ -3992,30 +4004,31 @@ BEGIN
         RETURN;
     END IF;
     SELECT COALESCE(pg_catalog.array_agg(
-               permit.kind ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+               permit.kind ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
                                     permit.ordinal
            ), ARRAY[]::text[]),
            COALESCE(pg_catalog.array_agg(
-               permit.ordinal ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+               permit.ordinal ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
                                        permit.ordinal
            ), ARRAY[]::smallint[]),
            COALESCE(pg_catalog.array_agg(
                permit.request_commitment
-               ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+               ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
                         permit.ordinal
            ), ARRAY[]::text[]),
            COALESCE(pg_catalog.array_agg(
                CASE WHEN permit.dispatched_at IS NULL THEN NULL::bigint
                     ELSE floor(extract(epoch FROM permit.dispatched_at) * 1000000)::bigint
                END
-               ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+               ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
                         permit.ordinal
            ), ARRAY[]::bigint[]),
            count(*) FILTER (
                WHERE permit.kind = 'credential' AND permit.dispatched_at IS NOT NULL
            ),
            count(*) FILTER (
-               WHERE permit.kind = 'data' AND permit.dispatched_at IS NOT NULL
+               WHERE permit.kind IN ('verification', 'data')
+                 AND permit.dispatched_at IS NOT NULL
            )
     INTO v_kinds, v_ordinals, v_request_commitments, v_dispatched_at_unix_us,
          v_credential_count, v_data_count
@@ -4035,7 +4048,21 @@ BEGIN
           )
           OR v_intent.data_permit_count <> (
               SELECT count(*) FROM pg_catalog.unnest(v_kinds) AS kind(value)
-              WHERE kind.value = 'data'
+              WHERE kind.value IN ('verification', 'data')
+          )
+          OR EXISTS (
+              SELECT 1
+              FROM relay_state_private.dispatch_permit AS dispatched
+              WHERE dispatched.operation_id = p_operation_id
+                AND dispatched.kind = 'data'
+                AND dispatched.dispatched_at IS NOT NULL
+                AND EXISTS (
+                    SELECT 1
+                    FROM relay_state_private.dispatch_permit AS verification
+                    WHERE verification.operation_id = dispatched.operation_id
+                      AND verification.kind = 'verification'
+                      AND verification.dispatched_at IS NULL
+                )
           )
           OR EXISTS (
               SELECT 1
@@ -4418,22 +4445,23 @@ BEGIN
     PERFORM permit.operation_id
     FROM relay_state_private.dispatch_permit AS permit
     WHERE permit.operation_id = p_operation_id
-    ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+    ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
              permit.ordinal
     FOR UPDATE;
     SELECT COALESCE(pg_catalog.array_agg(
-               permit.kind ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+               permit.kind ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
                                     permit.ordinal
            ), ARRAY[]::text[]),
            COALESCE(pg_catalog.array_agg(
-               permit.ordinal ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+               permit.ordinal ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
                                        permit.ordinal
            ), ARRAY[]::smallint[]),
            count(*) FILTER (
                WHERE permit.kind = 'credential' AND permit.dispatched_at IS NOT NULL
            ),
            count(*) FILTER (
-               WHERE permit.kind = 'data' AND permit.dispatched_at IS NOT NULL
+               WHERE permit.kind IN ('verification', 'data')
+                 AND permit.dispatched_at IS NOT NULL
            ),
            COALESCE(pg_catalog.jsonb_agg(
                pg_catalog.jsonb_build_object(
@@ -4444,14 +4472,14 @@ BEGIN
                        WHEN permit.dispatched_at IS NULL THEN NULL::bigint
                        ELSE floor(extract(epoch FROM permit.dispatched_at) * 1000000)::bigint
                    END
-               ) ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+               ) ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
                           permit.ordinal
            ), '[]'::jsonb),
            COALESCE(pg_catalog.jsonb_agg(
                pg_catalog.jsonb_build_object(
                    'kind', permit.kind, 'ordinal', permit.ordinal,
                    'request_commitment', permit.request_commitment
-               ) ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+               ) ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
                           permit.ordinal
            ) FILTER (WHERE permit.dispatched_at IS NOT NULL), '[]'::jsonb)
     INTO v_kinds, v_ordinals, v_dispatched_credentials, v_dispatched_data,
@@ -4464,7 +4492,7 @@ BEGIN
        )
        OR v_intent.data_permit_count <> (
            SELECT count(*) FROM pg_catalog.unnest(v_kinds) AS kind(value)
-           WHERE kind.value = 'data'
+           WHERE kind.value IN ('verification', 'data')
        )
        OR (p_expected_deadline_unix_ms IS NOT NULL AND
            floor(extract(epoch FROM v_intent.total_deadline_at) * 1000)::bigint
@@ -5567,6 +5595,7 @@ BEGIN
        OR p_operation_id !~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
        OR NOT (
            (p_kind = 'credential' AND p_ordinal = 0)
+           OR (p_kind = 'verification' AND p_ordinal = 0)
            OR (p_kind = 'data' AND p_ordinal BETWEEN 0 AND 15)
        )
        OR p_request_commitment IS NULL
@@ -5592,7 +5621,7 @@ BEGIN
     PERFORM permit.operation_id
     FROM relay_state_private.dispatch_permit AS permit
     WHERE permit.operation_id = p_operation_id
-    ORDER BY CASE permit.kind WHEN 'credential' THEN 0 ELSE 1 END,
+    ORDER BY CASE permit.kind WHEN 'credential' THEN 0 WHEN 'verification' THEN 1 ELSE 2 END,
              permit.ordinal
     FOR UPDATE;
     SELECT permit.* INTO v_permit
@@ -5628,6 +5657,25 @@ BEGIN
         SELECT 1
         FROM relay_state_private.dispatch_permit AS permit
         WHERE permit.operation_id = p_operation_id
+          AND permit.kind IN ('verification', 'data')
+          AND permit.dispatched_at IS NOT NULL
+    ) THEN
+        RETURN QUERY SELECT 'permit_order_violation'::text,
+            floor(extract(epoch FROM v_permit.deadline_at) * 1000)::bigint;
+    ELSIF p_kind IN ('verification', 'data') AND EXISTS (
+        SELECT 1
+        FROM relay_state_private.dispatch_permit AS permit
+        WHERE permit.operation_id = p_operation_id
+          AND permit.kind = 'credential'
+          AND permit.dispatched_at IS NOT NULL
+          AND permit.dispatch_completed_at IS NULL
+    ) THEN
+        RETURN QUERY SELECT 'permit_order_violation'::text,
+            floor(extract(epoch FROM v_permit.deadline_at) * 1000)::bigint;
+    ELSIF p_kind = 'verification' AND EXISTS (
+        SELECT 1
+        FROM relay_state_private.dispatch_permit AS permit
+        WHERE permit.operation_id = p_operation_id
           AND permit.kind = 'data'
           AND permit.dispatched_at IS NOT NULL
     ) THEN
@@ -5635,6 +5683,13 @@ BEGIN
             floor(extract(epoch FROM v_permit.deadline_at) * 1000)::bigint;
     ELSIF p_kind = 'data' AND (
         EXISTS (
+            SELECT 1
+            FROM relay_state_private.dispatch_permit AS permit
+            WHERE permit.operation_id = p_operation_id
+              AND permit.kind = 'verification'
+              AND permit.dispatch_completed_at IS NULL
+        )
+        OR EXISTS (
             SELECT 1
             FROM relay_state_private.dispatch_permit AS permit
             WHERE permit.operation_id = p_operation_id
@@ -5747,6 +5802,7 @@ BEGIN
        OR p_operation_id !~ '^[0-7][0-9A-HJKMNP-TV-Z]{25}$'
        OR NOT (
            (p_kind = 'credential' AND p_ordinal = 0)
+           OR (p_kind = 'verification' AND p_ordinal = 0)
            OR (p_kind = 'data' AND p_ordinal BETWEEN 0 AND 15)
        )
        OR p_request_commitment IS NULL
@@ -8678,7 +8734,9 @@ mod tests {
             "jsonb_typeof(v_seed #> '{bounds,credential_token_lifetime_ms}') = 'null'",
             "v_data_binding_count = 2",
             "v_binding - ARRAY['kind', 'ordinal']::text[]",
+            "v_binding ->> 'kind' = 'verification'",
             "(v_binding ->> 'ordinal')::integer BETWEEN 0 AND 15",
+            "kind.value IN ('verification', 'data')",
         ] {
             assert!(
                 POSTGRES_STATE_PLANE_MIGRATION_V1.contains(required),
@@ -8687,6 +8745,9 @@ mod tests {
         }
         assert!(!POSTGRES_STATE_PLANE_MIGRATION_V1.contains("authorized_operation_union"));
         assert!(!POSTGRES_STATE_PLANE_MIGRATION_V1.contains("~ '\\.jwks$'"));
+        assert!(POSTGRES_STATE_PLANE_MIGRATION_V1
+            .contains("'snapshot_exact', 'bounded_http', 'script'"));
+        assert!(!POSTGRES_STATE_PLANE_MIGRATION_V1.contains("'sandboxed_rhai'"));
     }
 
     #[test]
@@ -8870,8 +8931,9 @@ mod tests {
             PERSISTENT_QUOTA_CAPABILITY_V1,
             AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
             MATERIALIZATION_PUBLICATION_CAPABILITY_V1,
+            "atomic-intent-sealed-seed-closed-three-outcomes-script-verification-permit-dynamic-ordinal-call-ack-known-unfinished-recovery-v4",
             "authenticated-hmac-binding-reserve-before-quota-atomic-terminal-publication-fixed-retention-v2",
-            "database-expiry-dynamic-ordinal-keyed-request-effect-call-ack-v3",
+            "database-expiry-credential-verification-data-order-keyed-request-effect-call-ack-v4",
             "direct-data-auth-reference-distinct-authored-verification-no-expiry-v3",
             "utf8-bytewise-key-order-v1",
         ] {

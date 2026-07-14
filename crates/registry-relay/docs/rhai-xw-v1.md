@@ -2,7 +2,7 @@
 
 # Relay Rhai `xw.v1` function reference
 
-`xw.v1` is available to every reviewed sandboxed Rhai source adapter. Helpers are deterministic and product-neutral. They have no network, filesystem, credential, environment, clock, random, or logging capability. Date calculations require every date explicitly, including the reference date for age calculations.
+`xw.v1` is available to every reviewed script source adapter. Helpers are deterministic and product-neutral. They have no network, filesystem, credential, environment, clock, random, or logging capability. Date calculations require every date explicitly, including the reference date for age calculations.
 
 | Signature | Accepted types | Null behavior | Bounds | Failure behavior | Example |
 | --- | --- | --- | --- | --- | --- |

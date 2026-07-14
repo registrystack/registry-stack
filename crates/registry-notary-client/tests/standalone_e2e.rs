@@ -11,7 +11,7 @@ const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 const PURPOSE: &str = "https://purpose.example.test/eligibility";
 
 #[tokio::test]
-async fn client_discovers_real_notary_only_server_and_maps_unsupported_evaluation() {
+async fn client_evaluates_real_notary_only_self_attested_claim_without_relay() {
     set_env();
 
     let tmp = TempDir::new().expect("tempdir");
@@ -41,20 +41,23 @@ async fn client_discovers_real_notary_only_server_and_maps_unsupported_evaluatio
         .expect("claims list succeeds");
     assert_eq!(claims.body.data[0]["id"], json!("farmer-under-4ha"));
 
-    let error = client
+    let evaluation = client
         .evaluate("person-1")
         .claim("farmer-under-4ha")
         .disclosure("predicate")
         .send()
         .await
-        .expect_err("self-attested claims require an explicit attestation workflow");
-    assert_eq!(error.status().map(|status| status.as_u16()), Some(501));
-    assert_eq!(error.problem_code(), Some("claim.operation_unsupported"));
+        .expect("authorized Notary-only evaluation succeeds without Relay");
+    let result = evaluation.body.first_result().expect("one result");
+    assert_eq!(result.claim_id, "farmer-under-4ha");
+    assert_eq!(result.value, Some(json!(true)));
+    assert_eq!(result.satisfied, Some(true));
+    assert_eq!(result.provenance.used.relay_consultation_count, 0);
 
     let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
     assert!(
-        audit.contains("\"decision\":\"evaluate_denied\""),
-        "unsupported evaluation must be audited as denied: {audit}"
+        audit.contains("\"decision\":\"evaluate\""),
+        "Notary-only evaluation must be audited: {audit}"
     );
     assert!(!audit.contains("api-token"));
     assert!(!audit.contains("person-1"));

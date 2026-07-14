@@ -1124,7 +1124,7 @@ const fn source_plan_kind_str(kind: crate::source_plan::SourcePlanKind) -> &'sta
     match kind {
         crate::source_plan::SourcePlanKind::SnapshotExact => "snapshot_exact",
         crate::source_plan::SourcePlanKind::BoundedHttp => "bounded_http",
-        crate::source_plan::SourcePlanKind::SandboxedRhai => "sandboxed_rhai",
+        crate::source_plan::SourcePlanKind::Script => "script",
     }
 }
 
@@ -1319,7 +1319,7 @@ mod tests {
                 None,
             ),
             (
-                "sandboxed_rhai_no_consent",
+                "script_no_consent",
                 rhai_runtime_vector_plan_fixture(),
                 None,
             ),

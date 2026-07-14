@@ -478,7 +478,7 @@ function verifyDigestMember(member, context) {
 
 const expectedRuntimeCases = new Map([
   ["bounded_http_no_consent", { planKind: "bounded_http", consent: false }],
-  ["sandboxed_rhai_no_consent", { planKind: "sandboxed_rhai", consent: false }],
+  ["script_no_consent", { planKind: "script", consent: false }],
   ["bounded_http_required_consent", { planKind: "bounded_http", consent: true }],
 ]);
 if (!Array.isArray(runtimeVector.cases) || runtimeVector.cases.length !== expectedRuntimeCases.size) {
@@ -601,7 +601,7 @@ for (const runtimeCase of runtimeVector.cases) {
     fail(`${context} completion seed consent contract drifted`);
   }
 
-  if (expectedCase.planKind === "sandboxed_rhai") {
+  if (expectedCase.planKind === "script") {
     const dataPermits = seed.value.dispatch.permit_bindings.filter(({ kind }) => kind === "data");
     if (
       canonicalize(dataPermits.map(({ ordinal }) => ordinal)) !== canonicalize([0, 1])

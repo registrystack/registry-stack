@@ -130,7 +130,7 @@ const MINIMIZATION_FILE: &str = "evidence/minimization.json";
 enum JourneyProfile {
     Dhis2,
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    Dhis2SandboxedRhai,
+    Dhis2Script,
     OpenCrvs,
     SyntheticSnapshot,
 }
@@ -139,9 +139,7 @@ impl JourneyProfile {
     fn directory(self) -> &'static str {
         match self {
             Self::Dhis2 => "profiles/dhis2-2.41.9-enrollment-status",
-            Self::Dhis2SandboxedRhai => {
-                "../registryctl/tests/fixtures/project-authoring/dhis2-sandboxed-rhai"
-            }
+            Self::Dhis2Script => "../registryctl/tests/fixtures/project-authoring/dhis2-script",
             Self::OpenCrvs => "profiles/opencrvs-1.9.0-rc.1-farajaland-birth-record-exists",
             Self::SyntheticSnapshot => "profiles/synthetic-snapshot-exact-person-status",
         }
@@ -150,7 +148,7 @@ impl JourneyProfile {
     fn profile_id(self) -> &'static str {
         match self {
             Self::Dhis2 => "dhis2.tracker.enrollment-status.exact",
-            Self::Dhis2SandboxedRhai => "fictional-health-registry.health-verification.health",
+            Self::Dhis2Script => "fictional-health-registry.health-verification.health",
             Self::OpenCrvs => "opencrvs.dci.farajaland.birth-record-exists.exact",
             Self::SyntheticSnapshot => "synthetic.snapshot.person-status.exact",
         }
@@ -159,7 +157,7 @@ impl JourneyProfile {
     fn purpose(self) -> &'static str {
         match self {
             Self::Dhis2 => "program-enrollment-verification",
-            Self::Dhis2SandboxedRhai => "programme-enrollment-verification",
+            Self::Dhis2Script => "programme-enrollment-verification",
             Self::OpenCrvs => "civil-registration-verification",
             Self::SyntheticSnapshot => "benefit-status-verification",
         }
@@ -168,7 +166,7 @@ impl JourneyProfile {
     fn required_scope(self) -> &'static str {
         match self {
             Self::Dhis2 => "registry:consult:dhis2-enrollment-status",
-            Self::Dhis2SandboxedRhai => "registry:consult:health-verification",
+            Self::Dhis2Script => "registry:consult:health-verification",
             Self::OpenCrvs => "registry:consult:opencrvs-birth-record",
             Self::SyntheticSnapshot => "registry:consult:synthetic-snapshot-person-status",
         }
@@ -177,7 +175,7 @@ impl JourneyProfile {
     fn notary_api_key_hash_env(self) -> &'static str {
         match self {
             Self::Dhis2 => NOTARY_DHIS2_API_KEY_HASH_ENV,
-            Self::Dhis2SandboxedRhai => "PROGRAMME_VERIFIER_TOKEN_HASH",
+            Self::Dhis2Script => "PROGRAMME_VERIFIER_TOKEN_HASH",
             Self::OpenCrvs => NOTARY_OPENCRVS_API_KEY_HASH_ENV,
             Self::SyntheticSnapshot => NOTARY_SYNTHETIC_API_KEY_HASH_ENV,
         }
@@ -186,7 +184,7 @@ impl JourneyProfile {
     fn pack_id(self) -> &'static str {
         match self {
             Self::Dhis2 => "dhis2.tracker.enrollment-status",
-            Self::Dhis2SandboxedRhai => "fictional-health-registry.fictional-dhis2-health-record",
+            Self::Dhis2Script => "fictional-health-registry.fictional-dhis2-health-record",
             Self::OpenCrvs => "opencrvs.dci.farajaland.birth-record-exists",
             Self::SyntheticSnapshot => "synthetic.snapshot.person-status",
         }
@@ -197,7 +195,7 @@ impl JourneyProfile {
             Self::Dhis2 => {
                 "sha256:3ebf1e17fba13e4071101a162ad53311e1a7404bea8e2624ec8621aa9d0ac997"
             }
-            Self::Dhis2SandboxedRhai => {
+            Self::Dhis2Script => {
                 "sha256:8732042fbe873ef34d86658197673b70eab8e6e52897093d355937ef1bf51165"
             }
             Self::OpenCrvs => {
@@ -212,7 +210,7 @@ impl JourneyProfile {
     fn source_environment(self) -> Option<[&'static str; 2]> {
         match self {
             Self::Dhis2 => Some([DHIS2_USERNAME_ENV, DHIS2_PASSWORD_ENV]),
-            Self::Dhis2SandboxedRhai => None,
+            Self::Dhis2Script => None,
             Self::OpenCrvs => Some([OPENCRVS_CLIENT_ID_ENV, OPENCRVS_CLIENT_SECRET_ENV]),
             Self::SyntheticSnapshot => None,
         }
@@ -221,7 +219,7 @@ impl JourneyProfile {
     fn selector(self) -> Zeroizing<String> {
         match self {
             Self::Dhis2 => Zeroizing::new("PQfMcpmXeFE".to_string()),
-            Self::Dhis2SandboxedRhai => Zeroizing::new("A0000000001".to_string()),
+            Self::Dhis2Script => Zeroizing::new("A0000000001".to_string()),
             Self::OpenCrvs => Zeroizing::new(format!("{:010}", OsRng.next_u64() % 10_000_000_000)),
             Self::SyntheticSnapshot => Zeroizing::new("per-2001".to_string()),
         }
@@ -327,9 +325,9 @@ async fn live_dhis2_consultation_lifecycle() {
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires the explicit Linux Rhai runner and a disposable TLS PostgreSQL 16 instance"]
-async fn live_dhis2_sandboxed_rhai_consultation_lifecycle() {
+async fn live_dhis2_script_consultation_lifecycle() {
     if let Err(error) = run_live_rhai_consultation_lifecycle().await {
-        panic!("live DHIS2 SandboxedRhai consultation lifecycle failed: {error}");
+        panic!("live DHIS2 script consultation lifecycle failed: {error}");
     }
 }
 
@@ -448,7 +446,7 @@ async fn run_live_consultation_lifecycle(profile: JourneyProfile) -> Result<(), 
             }
             let source_base_url = required_secret_environment(match profile {
                 JourneyProfile::Dhis2 => DHIS2_BASE_URL_ENV,
-                JourneyProfile::Dhis2SandboxedRhai => {
+                JourneyProfile::Dhis2Script => {
                     unreachable!("Rhai source is owned by its governed runner")
                 }
                 JourneyProfile::OpenCrvs => OPENCRVS_BASE_URL_ENV,
@@ -646,7 +644,7 @@ async fn run_live_consultation_lifecycle(profile: JourneyProfile) -> Result<(), 
 
 #[cfg(target_os = "linux")]
 async fn run_live_rhai_consultation_lifecycle() -> Result<(), LiveJourneyError> {
-    let profile = JourneyProfile::Dhis2SandboxedRhai;
+    let profile = JourneyProfile::Dhis2Script;
     let admin_database_url = required_secret_environment(ADMIN_DATABASE_URL_ENV)?;
     let postgres_ca_path = required_path_environment(POSTGRES_CA_PATH_ENV)?;
     let relay_binary = required_path_environment(RHAI_RELAY_BINARY_ENV)?;
@@ -875,7 +873,7 @@ async fn execute_notary_journey(
         .body(Body::from(
             serde_json::to_vec(&json!({
                 "target": match profile {
-                    JourneyProfile::Dhis2SandboxedRhai => json!({
+                    JourneyProfile::Dhis2Script => json!({
                         "type": "person",
                         "identifiers": [{
                             "scheme": "dhis2_tracked_entity",
@@ -889,7 +887,7 @@ async fn execute_notary_journey(
                         {"id": "dhis2-enrollment-known", "version": "1"},
                         {"id": "dhis2-enrollment-status", "version": "1"}
                     ]),
-                    JourneyProfile::Dhis2SandboxedRhai => json!([
+                    JourneyProfile::Dhis2Script => json!([
                         {"id": "tracked-entity-first-name", "version": "1"},
                         {"id": "programme-code", "version": "1"}
                     ]),
@@ -904,7 +902,7 @@ async fn execute_notary_journey(
                 "disclosure": "value",
                 "purpose": profile.purpose(),
                 "variables": match profile {
-                    JourneyProfile::Dhis2SandboxedRhai => json!({"as_of_date": "2026-01-01"}),
+                    JourneyProfile::Dhis2Script => json!({"as_of_date": "2026-01-01"}),
                     _ => json!({}),
                 }
             }))
@@ -936,7 +934,7 @@ fn validate_minimized_notary_response(
 ) -> Result<String, LiveJourneyError> {
     let expected_result_count = match profile {
         JourneyProfile::Dhis2 => 2,
-        JourneyProfile::Dhis2SandboxedRhai => 2,
+        JourneyProfile::Dhis2Script => 2,
         JourneyProfile::OpenCrvs => 1,
         JourneyProfile::SyntheticSnapshot => 2,
     };
@@ -983,7 +981,7 @@ fn validate_minimized_notary_response(
                 return Err(LiveJourneyError::NotaryResponse);
             }
         }
-        JourneyProfile::Dhis2SandboxedRhai => {
+        JourneyProfile::Dhis2Script => {
             for (claim, expected) in [
                 ("tracked-entity-first-name", json!("Nia")),
                 ("programme-code", json!("CHILD")),
@@ -1483,11 +1481,11 @@ impl LiveJwksServer {
             .map_err(|_| LiveJourneyError::TokenMint)?
             .as_secs();
         let principal = match profile {
-            JourneyProfile::Dhis2SandboxedRhai => "health-registry-notary",
+            JourneyProfile::Dhis2Script => "health-registry-notary",
             _ => NOTARY_PRINCIPAL,
         };
         let audience = match profile {
-            JourneyProfile::Dhis2SandboxedRhai => "registry-relay",
+            JourneyProfile::Dhis2Script => "registry-relay",
             _ => AUDIENCE,
         };
         let claims = json!({
@@ -1747,8 +1745,8 @@ impl GeneratedRhaiProfile {
         jwks_url: &str,
     ) -> Result<Self, LiveJourneyError> {
         let directory = tempfile::tempdir().map_err(|_| LiveJourneyError::ArtifactStaging)?;
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(JourneyProfile::Dhis2SandboxedRhai.directory());
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(JourneyProfile::Dhis2Script.directory());
         let project = directory.path().join("project");
         copy_tree_closed(&source, &project)?;
         let status = Command::new(registryctl)
@@ -1944,7 +1942,7 @@ fn live_private_binding(
     // production bindings otherwise retain the strict dual-stack default.
     let data_destination_id = match profile {
         JourneyProfile::Dhis2 => "dhis2-live-data",
-        JourneyProfile::Dhis2SandboxedRhai => return Err(LiveJourneyError::InvalidSourceBaseUrl),
+        JourneyProfile::Dhis2Script => return Err(LiveJourneyError::InvalidSourceBaseUrl),
         JourneyProfile::OpenCrvs => "opencrvs-live-data",
         JourneyProfile::SyntheticSnapshot => return Err(LiveJourneyError::InvalidSourceBaseUrl),
     };
@@ -1959,7 +1957,7 @@ fn live_private_binding(
     }
     let credential_destination = match profile {
         JourneyProfile::Dhis2 => Value::Null,
-        JourneyProfile::Dhis2SandboxedRhai => return Err(LiveJourneyError::InvalidSourceBaseUrl),
+        JourneyProfile::Dhis2Script => return Err(LiveJourneyError::InvalidSourceBaseUrl),
         JourneyProfile::OpenCrvs => {
             let mut credential = destination.clone();
             credential.insert("id".to_string(), json!("opencrvs-live-oauth"));
@@ -1976,9 +1974,7 @@ fn live_private_binding(
                 8_192,
                 10_000,
             ),
-            JourneyProfile::Dhis2SandboxedRhai => {
-                return Err(LiveJourneyError::InvalidSourceBaseUrl)
-            }
+            JourneyProfile::Dhis2Script => return Err(LiveJourneyError::InvalidSourceBaseUrl),
             JourneyProfile::OpenCrvs => (
                 "opencrvs-live",
                 "dci-crvs-api",
@@ -2008,7 +2004,7 @@ fn live_private_binding(
             "quota_burst": 2,
             "max_public_response_bytes": 4096
         },
-        "capabilities": {"allow_sandboxed_rhai": false}
+        "capabilities": {"allow_script": false}
     }))
 }
 
@@ -2242,7 +2238,7 @@ SELECT
                 1,
                 json!([{"kind": "data", "ordinal": 0, "operation_id": "lookup-enrollment-status"}]),
             ),
-            JourneyProfile::Dhis2SandboxedRhai => (
+            JourneyProfile::Dhis2Script => (
                 "match",
                 0,
                 4,

@@ -1162,6 +1162,7 @@ pub(in super::super) struct SnapshotExactMappingDocument {
 pub(in super::super) struct RhaiTemplateDocument {
     pub(in super::super) script: String,
     pub(in super::super) script_hash: String,
+    pub(in super::super) abi: String,
     pub(in super::super) entrypoint: String,
     pub(in super::super) memory_bytes: u64,
     pub(in super::super) cpu_ms: u32,
@@ -1179,6 +1180,41 @@ pub(in super::super) struct RhaiTemplateDocument {
     pub(in super::super) output_bytes: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) concurrency: Option<u16>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum ScriptReadSemanticsDocument {
+    ReadOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct ScriptAllowRuleDocument {
+    pub(in super::super) method: ReadMethod,
+    pub(in super::super) path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) semantics: Option<ScriptReadSemanticsDocument>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct ScriptResponseDocument {
+    pub(in super::super) format: ResponseFormatDocument,
+    pub(in super::super) max_bytes: u32,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct ScriptAuthorityDocument {
+    pub(in super::super) allow: Vec<ScriptAllowRuleDocument>,
+    pub(in super::super) request_headers: Vec<String>,
+    pub(in super::super) response_headers: Vec<String>,
+    pub(in super::super) response: ScriptResponseDocument,
+    pub(in super::super) auth: SourceAuthDocument,
+    pub(in super::super) request_max_bytes: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) signed_dci: Option<DciExactDocument>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1213,15 +1249,19 @@ pub(in super::super) struct PlanTemplateDocument {
     pub(in super::super) credential_destination_slot: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(in super::super) verification_destination_slot: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in super::super) operations: Vec<HttpOperationDocument>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in super::super) verification_operations: Vec<VerificationOperationDocument>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in super::super) steps: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(in super::super) step_conditions: BTreeMap<String, StepConditionDocument>,
     pub(in super::super) credential_operation: Option<CredentialOperationDocument>,
     pub(in super::super) snapshot: Option<SnapshotTemplateDocument>,
     pub(in super::super) rhai: Option<RhaiTemplateDocument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(in super::super) script_authority: Option<ScriptAuthorityDocument>,
 }
 
 /// Closed evidence classes required for every reviewed integration pack.
@@ -1390,9 +1430,9 @@ pub(in super::super) struct CredentialBindingDocument {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in super::super) struct CapabilitiesDocument {
-    pub(in super::super) allow_sandboxed_rhai: bool,
+    pub(in super::super) allow_script: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(in super::super) sandboxed_rhai: Option<RhaiBindingDocument>,
+    pub(in super::super) script: Option<RhaiBindingDocument>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1404,7 +1444,6 @@ pub(in super::super) enum RhaiIsolationDocument {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in super::super) struct RhaiBindingDocument {
-    pub(in super::super) callable_operations: Vec<String>,
     pub(in super::super) max_calls: u8,
     pub(in super::super) memory_bytes: u64,
     pub(in super::super) cpu_ms: u32,

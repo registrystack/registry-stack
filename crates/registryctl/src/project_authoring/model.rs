@@ -637,7 +637,7 @@ struct RecordSpdci {
 struct RequestVariable {
     from: String,
     #[serde(rename = "type")]
-    value_type: FactType,
+    value_type: OutputType,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -670,7 +670,7 @@ enum ClaimEvidence {
 #[serde(deny_unknown_fields)]
 struct ClaimValueDeclaration {
     #[serde(rename = "type")]
-    value_type: FactType,
+    value_type: OutputType,
     #[serde(default)]
     nullable: bool,
     #[serde(default)]
@@ -839,6 +839,8 @@ enum CapabilityDeclaration {
 struct HttpDeclaration {
     credential: CredentialInterface,
     operations: BTreeMap<String, OperationDeclaration>,
+    #[serde(skip)]
+    response_max_bytes_authored: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -846,9 +848,32 @@ struct HttpDeclaration {
 struct ScriptDeclaration {
     runtime: ScriptRuntime,
     credential: CredentialInterface,
-    operations: BTreeMap<String, OperationDeclaration>,
+    allow: Vec<ScriptAllowRule>,
+    request_headers: Vec<String>,
+    response_headers: Vec<String>,
+    response: ScriptResponseDeclaration,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    signed_dci: Option<AuthoredSignedDciDeclaration>,
     script: PathBuf,
     modules: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptAllowRule {
+    method: ReadMethod,
+    path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    semantics: Option<AuthoredRequestSemantics>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptResponseDeclaration {
+    format: AuthoredResponseFormat,
+    max_bytes: u32,
+    #[serde(skip)]
+    max_bytes_authored: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -1068,7 +1093,7 @@ impl Serialize for SchemaField {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum FactType {
+enum OutputType {
     Boolean,
     Integer,
     String,
@@ -1080,7 +1105,7 @@ enum FactType {
 #[serde(deny_unknown_fields)]
 struct OutputDeclaration {
     #[serde(rename = "type")]
-    output_type: FactType,
+    output_type: OutputType,
     #[serde(default)]
     nullable: bool,
     #[serde(default)]
@@ -1099,9 +1124,17 @@ struct OutputDeclaration {
 #[serde(deny_unknown_fields)]
 struct BoundsDeclaration {
     calls: u8,
+    #[serde(skip)]
+    calls_authored: bool,
     source_bytes: u64,
+    #[serde(skip)]
+    source_bytes_authored: bool,
     request_bytes: u32,
+    #[serde(skip)]
+    request_bytes_authored: bool,
     deadline: String,
+    #[serde(skip)]
+    deadline_authored: bool,
     concurrency: u16,
 }
 

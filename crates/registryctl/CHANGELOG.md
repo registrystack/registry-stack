@@ -80,15 +80,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
-- Signed product-bundle baseline review records now bind the exact verified baseline manifest,
-  prior per-class review digests, and current per-class review digests or
-  explicit nulls. Compiler-version changes require all review classes even
-  when authored semantics also change.
+- Project review output now reports human-readable semantic changes while the
+  separate private approval state binds the verified baseline and generated
+  closure digests. It does not model external reviewer identities or approval
+  records. A compiler-version change is reported independently even when an
+  authored semantic change occurs in the same build.
 - Disclosure-only changes are classified directionally: narrowing requires
   claim review, widening requires service-policy review, and incomparable
   changes require both.
-- Sandboxed Rhai release enablement is keyed only by the implementation-owned
-  authoring and worker contract. Source product and version remain review and
+- Script capability enablement is keyed only by the implementation-owned
+  authoring and Rhai worker contract. Source product and version remain review and
   provenance metadata and cannot select a capability or executor.
 - Governed live validation resolves globally unique claims across every
   evidence service sharing the requested purpose instead of selecting the

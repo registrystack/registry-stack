@@ -270,6 +270,7 @@ fn completion_seed_value(
     let credential_count = if credential_operation.is_some() { 1 } else { 0 };
     let data_count = data_slot_allowed_operations.len() as i64;
     let is_snapshot = plan_kind == "snapshot_exact";
+    let is_script = plan_kind == "script";
     let acquisition_fields = if is_snapshot {
         json!({
             "registration_status": {
@@ -336,7 +337,7 @@ fn completion_seed_value(
                 "fields": acquisition_fields,
             },
             "disclosure_fields": ["registration_status"],
-            "public_outcomes": ["match", "no_match"],
+            "public_outcomes": ["match", "no_match", "ambiguous"],
             "provenance_contract": {
                 "source_observed_at": if is_snapshot {
                     json!({
@@ -361,6 +362,7 @@ fn completion_seed_value(
         },
         "destinations": {
             "credential_destination_id": credential_operation.map(|_| "credential-destination"),
+            "verification_destination_id": null,
             "data_destination_id": (!is_snapshot).then_some("data-destination"),
         },
         "credential": {
@@ -372,7 +374,7 @@ fn completion_seed_value(
             "permit_bindings": permit_bindings,
         },
         "bounds": {
-            "source_matches": 1,
+            "source_matches": if is_script { 2 } else { 1 },
             "disclosed_records": 1,
             "data_exchanges": data_count,
             "credential_exchanges": credential_count,
@@ -1914,7 +1916,7 @@ async fn exercise_batch_terminal_publication_contract(
     let attempt_authority = fence
         .authorize_consultation_attempt(
             DispatchPermitBudget::new(Duration::from_secs(10))?,
-            ConsultationPermitSet::from_counts(0, 1)?,
+            ConsultationPermitSet::from_counts(0, 0, 1)?,
         )
         .await?;
     let prepared = PreparedAtomicConsultationAttempt::for_state_test(
@@ -3633,7 +3635,7 @@ WHERE metadata.singleton = true
     let pseudonym_attempt_authority = fence_one
         .authorize_consultation_attempt(
             DispatchPermitBudget::new(Duration::from_secs(10))?,
-            ConsultationPermitSet::from_counts(0, 0)?,
+            ConsultationPermitSet::from_counts(0, 0, 0)?,
         )
         .await?;
     let mut pseudonym_dispatch = persist_prepared_test_consultation_attempt(
@@ -4414,7 +4416,7 @@ WHERE metadata.singleton = true
             &keyring_runtime,
             &pseudonym_key_id("epoch-2"),
             compiler_seed,
-            ConsultationPermitSet::from_counts(credential_count, data_count)?,
+            ConsultationPermitSet::from_counts(credential_count, 0, data_count)?,
             marker,
         )
         .await?;
@@ -4452,7 +4454,7 @@ WHERE metadata.singleton = true
     let invalid_atomic_authority = fence_one
         .authorize_consultation_attempt(
             DispatchPermitBudget::new(Duration::from_secs(10))?,
-            ConsultationPermitSet::from_counts(0, 1)?,
+            ConsultationPermitSet::from_counts(0, 0, 1)?,
         )
         .await?;
     let invalid_atomic_prepared = PreparedAtomicConsultationAttempt::for_state_test(
@@ -4506,7 +4508,7 @@ WHERE metadata.singleton = true
         let fence_authority = fence_one
             .authorize_consultation_attempt(
                 DispatchPermitBudget::new(Duration::from_millis(fence_timeout_ms))?,
-                ConsultationPermitSet::from_counts(0, 0)?,
+                ConsultationPermitSet::from_counts(0, 0, 0)?,
             )
             .await?;
         let prepared = PreparedAtomicConsultationAttempt::for_state_test(
@@ -4653,7 +4655,7 @@ WHERE metadata.singleton = true
     let expired_authority = fence_one
         .authorize_consultation_attempt(
             DispatchPermitBudget::new(Duration::from_secs(10))?,
-            ConsultationPermitSet::from_counts(0, 0)?,
+            ConsultationPermitSet::from_counts(0, 0, 0)?,
         )
         .await?;
     let expired_prepared = PreparedAtomicConsultationAttempt::for_state_test(
@@ -4710,7 +4712,7 @@ WHERE metadata.singleton = true
     let boundary_authority = fence_one
         .authorize_consultation_attempt(
             DispatchPermitBudget::new(Duration::from_secs(10))?,
-            ConsultationPermitSet::from_counts(0, 0)?,
+            ConsultationPermitSet::from_counts(0, 0, 0)?,
         )
         .await?;
     let boundary_expiry = current_unix_ms() + 1_000;
@@ -4791,7 +4793,7 @@ WHERE metadata.singleton = true
     let replay_authority_one = fence_one
         .authorize_consultation_attempt(
             DispatchPermitBudget::new(Duration::from_secs(10))?,
-            ConsultationPermitSet::from_counts(0, 0)?,
+            ConsultationPermitSet::from_counts(0, 0, 0)?,
         )
         .await?;
     let replay_prepared_one = PreparedAtomicConsultationAttempt::for_state_test(
@@ -4817,7 +4819,7 @@ WHERE metadata.singleton = true
     let replay_authority_two = fence_one
         .authorize_consultation_attempt(
             DispatchPermitBudget::new(Duration::from_secs(10))?,
-            ConsultationPermitSet::from_counts(0, 0)?,
+            ConsultationPermitSet::from_counts(0, 0, 0)?,
         )
         .await?;
     let replay_prepared_two = PreparedAtomicConsultationAttempt::for_state_test(
@@ -4897,7 +4899,7 @@ WHERE metadata.singleton = true
         &keyring_runtime,
         &pseudonym_key_id("epoch-2"),
         bounded_seed,
-        ConsultationPermitSet::from_counts(0, 1)?,
+        ConsultationPermitSet::from_counts(0, 0, 1)?,
         "bounded-selected-operation",
     )
     .await?;
@@ -4968,7 +4970,7 @@ WHERE metadata.singleton = true
         &keyring_runtime,
         &pseudonym_key_id("epoch-2"),
         credential_seed,
-        ConsultationPermitSet::from_counts(1, 1)?,
+        ConsultationPermitSet::from_counts(1, 0, 1)?,
         "credential-only-known-failure",
     )
     .await?;
@@ -5007,12 +5009,132 @@ WHERE metadata.singleton = true
         }
     }
 
-    // A SandboxedRhai call-budget slot carries the complete sorted callable
-    // data union. Independent consultations may select different operations
-    // at the same ordinal without widening or rewriting the sealed manifest.
+    // A protocol helper receives one separately committed verification effect
+    // before its authored Script data call. The public data-exchange bound
+    // remains the total physical non-credential effect count.
+    let mut verified_script_seed = completion_seed_value(
+        "script",
+        Some("fetch-token"),
+        &["dci-search"],
+        &[vec!["dci-search"]],
+    );
+    verified_script_seed["destinations"]["verification_destination_id"] =
+        json!("registry-jwks-private");
+    verified_script_seed["dispatch"]["permit_bindings"] = json!([
+        {"kind": "credential", "ordinal": 0},
+        {"kind": "verification", "ordinal": 0},
+        {"kind": "data", "ordinal": 0},
+    ]);
+    verified_script_seed["bounds"]["credential_exchanges"] = json!(1);
+    verified_script_seed["bounds"]["data_exchanges"] = json!(2);
+    let mut incomplete_credential_dispatch = persist_test_consultation_attempt(
+        &plane_one,
+        &fence_one,
+        &keyring_runtime,
+        &pseudonym_key_id("epoch-2"),
+        verified_script_seed.clone(),
+        ConsultationPermitSet::from_counts(1, 1, 1)?,
+        "script-incomplete-credential-before-verification",
+    )
+    .await?;
+    let incomplete_operation_id = incomplete_credential_dispatch
+        .credential_permit_mut()?
+        .expect("credential permit")
+        .operation_id()
+        .clone();
+    let incomplete_deadline = incomplete_credential_dispatch.deadline_unix_ms();
+    fence_one
+        .authorize_permit_position_for_test(
+            &incomplete_operation_id,
+            DispatchPermitKind::Credential,
+            0,
+            KeyedDispatchRequestCommitment::for_test("incomplete-fetch-token"),
+            incomplete_deadline,
+        )
+        .await?;
+    assert_eq!(
+        fence_one
+            .authorize_permit_position_for_test(
+                &incomplete_operation_id,
+                DispatchPermitKind::Verification,
+                0,
+                KeyedDispatchRequestCommitment::for_test("jwks-before-credential-completion"),
+                incomplete_deadline,
+            )
+            .await
+            .err(),
+        Some(ServingFenceError::PermitOrderViolation),
+        "verification cannot overtake an in-flight credential exchange"
+    );
+    plane_one
+        .close_unfinished_consultation_for_test(
+            incomplete_credential_dispatch,
+            keyring_runtime
+                .current_write_authority()
+                .await?
+                .authorize_use()?,
+        )
+        .await?;
+    let mut verified_script_dispatch = persist_test_consultation_attempt(
+        &plane_one,
+        &fence_one,
+        &keyring_runtime,
+        &pseudonym_key_id("epoch-2"),
+        verified_script_seed,
+        ConsultationPermitSet::from_counts(1, 1, 1)?,
+        "script-verification-before-data",
+    )
+    .await?;
+    let credential = verified_script_dispatch
+        .credential_permit_mut()?
+        .expect("credential permit remains ready");
+    fence_one
+        .authorize_and_dispatch(
+            credential,
+            KeyedDispatchRequestCommitment::for_test("fetch-token"),
+            |_deadline| async {},
+        )
+        .await?;
+    let verification = verified_script_dispatch
+        .verification_permit_mut()?
+        .expect("verification permit");
+    fence_one
+        .authorize_and_dispatch(
+            verification,
+            KeyedDispatchRequestCommitment::for_test("jwks-request"),
+            |_deadline| async {},
+        )
+        .await?;
+    let data = verified_script_dispatch
+        .next_data_permit_mut()?
+        .expect("data permit after verification");
+    fence_one
+        .authorize_and_dispatch(
+            data,
+            KeyedDispatchRequestCommitment::for_test("dci-search-request"),
+            |_deadline| async {},
+        )
+        .await?;
+    let verified_script_receipt = plane_one
+        .close_unfinished_consultation_for_test(
+            verified_script_dispatch,
+            keyring_runtime
+                .current_write_authority()
+                .await?
+                .authorize_use()?,
+        )
+        .await?;
+    assert_eq!(
+        verified_script_receipt.outcome(),
+        ConsultationCompletionOutcome::OutcomeUnknown
+    );
+
+    // A reviewed script call-budget slot authorizes one dynamic request at its
+    // ordinal. Independent consultations may select different allowlisted
+    // destinations without widening or rewriting the sealed manifest.
     for selected_operation in ["lookup-a", "lookup-b"] {
-        let rhai_seed = completion_seed_value(
-            "sandboxed_rhai",
+        let script_seed = completion_seed_value(
+            "script",
             None,
             &["lookup-a", "lookup-b"],
             &[vec!["lookup-a", "lookup-b"]],
@@ -5022,8 +5144,8 @@ WHERE metadata.singleton = true
             &fence_one,
             &keyring_runtime,
             &pseudonym_key_id("epoch-2"),
-            rhai_seed,
-            ConsultationPermitSet::from_counts(0, 1)?,
+            script_seed,
+            ConsultationPermitSet::from_counts(0, 0, 1)?,
             "rhai-call-budget-slot",
         )
         .await?;
@@ -5069,11 +5191,11 @@ WHERE metadata.singleton = true
         );
     }
 
-    // Bypassing the safe Rust cursor still cannot authorize Rhai data ordinal
+    // Bypassing the safe Rust cursor still cannot authorize script data ordinal
     // one before zero. The rejected SQL call leaves both durable markers
     // untouched; the exact prefix is then accepted in order.
-    let ordered_rhai_seed = completion_seed_value(
-        "sandboxed_rhai",
+    let ordered_script_seed = completion_seed_value(
+        "script",
         None,
         &["lookup-a", "lookup-b"],
         &[vec!["lookup-a", "lookup-b"], vec!["lookup-a", "lookup-b"]],
@@ -5083,8 +5205,8 @@ WHERE metadata.singleton = true
         &fence_one,
         &keyring_runtime,
         &pseudonym_key_id("epoch-2"),
-        ordered_rhai_seed,
-        ConsultationPermitSet::from_counts(0, 2)?,
+        ordered_script_seed,
+        ConsultationPermitSet::from_counts(0, 0, 2)?,
         "rhai-monotonic-prefix",
     )
     .await?;
@@ -5171,7 +5293,7 @@ WHERE metadata.singleton = true
         &keyring_runtime,
         &pseudonym_key_id("epoch-2"),
         bounded_reuse_seed,
-        ConsultationPermitSet::from_counts(0, 3)?,
+        ConsultationPermitSet::from_counts(0, 0, 3)?,
         "bounded-fixed-step-no-reuse",
     )
     .await?;
@@ -5253,7 +5375,7 @@ WHERE metadata.singleton = true
         &keyring_runtime,
         &pseudonym_key_id("epoch-2"),
         credential_order_seed,
-        ConsultationPermitSet::from_counts(1, 1)?,
+        ConsultationPermitSet::from_counts(1, 0, 1)?,
         "credential-before-data-if-used",
     )
     .await?;
@@ -5392,7 +5514,7 @@ WHERE metadata.singleton = true
         &keyring_runtime,
         &pseudonym_key_id("epoch-2"),
         orphan_seed,
-        ConsultationPermitSet::from_counts(0, 1)?,
+        ConsultationPermitSet::from_counts(0, 0, 1)?,
         "takeover-outcome-unknown",
     )
     .await?;
@@ -5513,7 +5635,7 @@ WHERE metadata.singleton = true
     let linearized_authority = linearized_fence
         .authorize_consultation_attempt(
             DispatchPermitBudget::new(Duration::from_millis(1))?,
-            ConsultationPermitSet::from_counts(0, 0)?,
+            ConsultationPermitSet::from_counts(0, 0, 0)?,
         )
         .await?;
     let linearized_pseudonym_authority = keyring_runtime
@@ -5671,7 +5793,7 @@ WHERE metadata.singleton = true
     let lost_attempt_authority = lost_attempt_fence
         .authorize_consultation_attempt(
             DispatchPermitBudget::new(Duration::from_millis(1))?,
-            ConsultationPermitSet::from_counts(0, 0)?,
+            ConsultationPermitSet::from_counts(0, 0, 0)?,
         )
         .await?;
     let lost_attempt_pseudonym_authority = keyring_runtime
@@ -5817,7 +5939,7 @@ WHERE metadata.singleton = true
     let marker_authority = marker_fence
         .authorize_consultation_attempt(
             DispatchPermitBudget::new(Duration::from_secs(5))?,
-            ConsultationPermitSet::from_counts(0, 1)?,
+            ConsultationPermitSet::from_counts(0, 0, 1)?,
         )
         .await?;
     let marker_pseudonym_authority = keyring_runtime
@@ -5968,7 +6090,7 @@ WHERE metadata.singleton = true
     let completion_race_authority = completion_race_fence
         .authorize_consultation_attempt(
             DispatchPermitBudget::new(Duration::from_millis(1))?,
-            ConsultationPermitSet::from_counts(0, 0)?,
+            ConsultationPermitSet::from_counts(0, 0, 0)?,
         )
         .await?;
     let completion_race_attempt_authority = keyring_runtime
@@ -6176,7 +6298,7 @@ WHERE metadata.singleton = true
         &keyring_runtime,
         &pseudonym_key_id("epoch-2"),
         completion_seed_value("snapshot_exact", None, &[], &[]),
-        ConsultationPermitSet::from_counts(0, 0)?,
+        ConsultationPermitSet::from_counts(0, 0, 0)?,
         "terminal-rotation-before-snapshot",
         current_unix_ms() + 30_000,
     )
@@ -6209,7 +6331,7 @@ WHERE metadata.singleton = true
         &keyring_runtime,
         &pseudonym_key_id("epoch-2"),
         completion_seed_value("snapshot_exact", None, &[], &[]),
-        ConsultationPermitSet::from_counts(0, 0)?,
+        ConsultationPermitSet::from_counts(0, 0, 0)?,
         "terminal-rotation-before-cas",
         unfinished_rotation_expiry,
     )
