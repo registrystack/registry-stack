@@ -37,8 +37,8 @@ mod federation;
 mod http;
 mod oid4vci;
 mod root;
-mod self_attestation;
 mod state;
+mod subject_access;
 
 pub use audit::*;
 pub use auth::*;
@@ -50,8 +50,8 @@ pub use federation::*;
 pub use http::*;
 pub use oid4vci::*;
 pub use root::*;
-pub use self_attestation::*;
 pub use state::*;
+pub use subject_access::*;
 
 #[cfg(test)]
 mod tests;

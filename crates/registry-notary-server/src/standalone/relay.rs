@@ -357,7 +357,6 @@ deployment:
 server:
   bind: 127.0.0.1:0
 auth:
-  mode: api_key
   api_keys: []
 evidence:
   enabled: true

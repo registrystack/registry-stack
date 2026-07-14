@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Rate limiting for citizen self-attestation paths. Local/test runtimes keep
+//! Rate limiting for citizen subject-access paths. Local/test runtimes keep
 //! the existing in-process counters; PostgreSQL runtimes use typed Notary
 //! state-plane operations over already-keyed pseudonyms.
 
@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 
 use registry_notary_core::{
     Bounded, EvidenceEntityReference, EvidenceError, Hashed, HolderIdentifier,
-    PreAuthorizedCodeIdentifier, PrincipalIdentifier, SelfAttestationDenialCode,
-    SelfAttestationRateLimitsConfig, SubjectBinding,
+    PreAuthorizedCodeIdentifier, PrincipalIdentifier, SubjectAccessDenialCode,
+    SubjectAccessRateLimitsConfig, SubjectBinding,
 };
 use registry_platform_audit::AuditKeyHasher;
 use time::{Duration, OffsetDateTime};
@@ -21,7 +21,7 @@ const MAX_RATE_LIMIT_KEY_LEN: usize = 128;
 type RateLimitKey = Bounded<MAX_RATE_LIMIT_KEY_LEN>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SelfAttestationRateLimitBucket {
+pub enum SubjectAccessRateLimitBucket {
     InvalidTokenPerClientAddress,
     PerPrincipal,
     SubjectMismatchPerPrincipal,
@@ -30,7 +30,7 @@ pub enum SelfAttestationRateLimitBucket {
     TxCodeAttemptPerCode,
 }
 
-impl SelfAttestationRateLimitBucket {
+impl SubjectAccessRateLimitBucket {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -82,28 +82,28 @@ impl SelfAttestationRateLimitBucket {
 pub enum ClientAddressIdentifier {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SelfAttestationRateLimitError {
+pub enum SubjectAccessRateLimitError {
     Limited {
-        bucket: SelfAttestationRateLimitBucket,
+        bucket: SubjectAccessRateLimitBucket,
     },
     Unavailable {
         reason: String,
     },
 }
 
-impl SelfAttestationRateLimitError {
+impl SubjectAccessRateLimitError {
     #[must_use]
     pub fn evidence_error(&self) -> EvidenceError {
         match self {
-            Self::Limited { .. } => EvidenceError::SelfAttestationRateLimited,
-            Self::Unavailable { .. } => EvidenceError::SelfAttestationDenied {
-                reason: SelfAttestationDenialCode::RateLimited,
+            Self::Limited { .. } => EvidenceError::SubjectAccessRateLimited,
+            Self::Unavailable { .. } => EvidenceError::SubjectAccessDenied {
+                reason: SubjectAccessDenialCode::RateLimited,
             },
         }
     }
 
     #[must_use]
-    pub const fn bucket(&self) -> Option<SelfAttestationRateLimitBucket> {
+    pub const fn bucket(&self) -> Option<SubjectAccessRateLimitBucket> {
         match self {
             Self::Limited { bucket } => Some(*bucket),
             Self::Unavailable { .. } => None,
@@ -111,33 +111,29 @@ impl SelfAttestationRateLimitError {
     }
 }
 
-impl std::fmt::Display for SelfAttestationRateLimitError {
+impl std::fmt::Display for SubjectAccessRateLimitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Limited { bucket } => {
-                write!(
-                    f,
-                    "self-attestation rate limit exceeded: {}",
-                    bucket.as_str()
-                )
+                write!(f, "subject-access rate limit exceeded: {}", bucket.as_str())
             }
             Self::Unavailable { reason } => {
-                write!(f, "self-attestation rate limiter unavailable: {reason}")
+                write!(f, "subject-access rate limiter unavailable: {reason}")
             }
         }
     }
 }
 
-impl std::error::Error for SelfAttestationRateLimitError {}
+impl std::error::Error for SubjectAccessRateLimitError {}
 
-pub type SelfAttestationRateLimitResult<T> = Result<T, SelfAttestationRateLimitError>;
+pub type SubjectAccessRateLimitResult<T> = Result<T, SubjectAccessRateLimitError>;
 
 #[derive(Debug, Clone)]
-pub struct SelfAttestationRateLimitKeys {
+pub struct SubjectAccessRateLimitKeys {
     hasher: AuditKeyHasher,
 }
 
-impl SelfAttestationRateLimitKeys {
+impl SubjectAccessRateLimitKeys {
     #[must_use]
     pub fn new(hasher: AuditKeyHasher) -> Self {
         Self { hasher }
@@ -146,28 +142,28 @@ impl SelfAttestationRateLimitKeys {
     pub fn principal(
         &self,
         principal_id: &str,
-    ) -> SelfAttestationRateLimitResult<Hashed<PrincipalIdentifier>> {
+    ) -> SubjectAccessRateLimitResult<Hashed<PrincipalIdentifier>> {
         self.hash_identifier("principal", principal_id)
     }
 
     pub fn client_address(
         &self,
         client_address: &str,
-    ) -> SelfAttestationRateLimitResult<Hashed<ClientAddressIdentifier>> {
+    ) -> SubjectAccessRateLimitResult<Hashed<ClientAddressIdentifier>> {
         self.hash_identifier("client_address", client_address)
     }
 
     pub fn holder(
         &self,
         holder_id: &str,
-    ) -> SelfAttestationRateLimitResult<Hashed<HolderIdentifier>> {
+    ) -> SubjectAccessRateLimitResult<Hashed<HolderIdentifier>> {
         self.hash_identifier("holder", holder_id)
     }
 
     pub fn subject_binding(
         &self,
         subject_binding: &str,
-    ) -> SelfAttestationRateLimitResult<Hashed<SubjectBinding>> {
+    ) -> SubjectAccessRateLimitResult<Hashed<SubjectBinding>> {
         self.hash_identifier("subject_binding", subject_binding)
     }
 
@@ -176,14 +172,14 @@ impl SelfAttestationRateLimitKeys {
     /// bindings so the hash distinguishes subjects that share an id value across
     /// different id-type schemes. Keyed under a dedicated domain class so it never
     /// collides with the value-only [`Self::subject_binding`] keyspace, and the
-    /// non-delegated self-attestation hashing stays byte-for-byte unchanged.
+    /// non-delegated subject-access hashing stays byte-for-byte unchanged.
     pub fn delegated_subject_binding(
         &self,
         id_type: &str,
         id: &str,
-    ) -> SelfAttestationRateLimitResult<Hashed<SubjectBinding>> {
+    ) -> SubjectAccessRateLimitResult<Hashed<SubjectBinding>> {
         if id_type.is_empty() || id.is_empty() {
-            return Err(SelfAttestationRateLimitError::Unavailable {
+            return Err(SubjectAccessRateLimitError::Unavailable {
                 reason: "delegated subject binding identifier is empty".to_string(),
             });
         }
@@ -203,7 +199,7 @@ impl SelfAttestationRateLimitKeys {
     pub fn pre_authorized_code(
         &self,
         pre_authorized_code: &str,
-    ) -> SelfAttestationRateLimitResult<Hashed<PreAuthorizedCodeIdentifier>> {
+    ) -> SubjectAccessRateLimitResult<Hashed<PreAuthorizedCodeIdentifier>> {
         self.hash_identifier("pre_authorized_code", pre_authorized_code)
     }
 
@@ -211,9 +207,9 @@ impl SelfAttestationRateLimitKeys {
         &self,
         id_type: &str,
         subject_ref: &str,
-    ) -> SelfAttestationRateLimitResult<Hashed<SubjectBinding>> {
+    ) -> SubjectAccessRateLimitResult<Hashed<SubjectBinding>> {
         if subject_ref.is_empty() {
-            return Err(SelfAttestationRateLimitError::Unavailable {
+            return Err(SubjectAccessRateLimitError::Unavailable {
                 reason: "subject_ref identifier is empty".to_string(),
             });
         }
@@ -223,7 +219,7 @@ impl SelfAttestationRateLimitKeys {
             subject_ref.len()
         );
         let hashed =
-            self.audit_reference_hash("self-attestation-subject-ref-v1", &canonical_input)?;
+            self.audit_reference_hash("subject-access-subject-ref-v1", &canonical_input)?;
         ensure_bounded(&hashed)?;
         Ok(Hashed::from_hash(hashed))
     }
@@ -232,9 +228,9 @@ impl SelfAttestationRateLimitKeys {
         &self,
         class: &str,
         canonical_input: &str,
-    ) -> SelfAttestationRateLimitResult<Hashed<EvidenceEntityReference>> {
+    ) -> SubjectAccessRateLimitResult<Hashed<EvidenceEntityReference>> {
         if class.is_empty() || canonical_input.is_empty() {
-            return Err(SelfAttestationRateLimitError::Unavailable {
+            return Err(SubjectAccessRateLimitError::Unavailable {
                 reason: "audit pseudonym input is empty".to_string(),
             });
         }
@@ -248,9 +244,9 @@ impl SelfAttestationRateLimitKeys {
         issuer: &str,
         credential_configuration_id: &str,
         nonce: &str,
-    ) -> SelfAttestationRateLimitResult<String> {
+    ) -> SubjectAccessRateLimitResult<String> {
         if issuer.is_empty() || credential_configuration_id.is_empty() || nonce.is_empty() {
-            return Err(SelfAttestationRateLimitError::Unavailable {
+            return Err(SubjectAccessRateLimitError::Unavailable {
                 reason: "oid4vci nonce identifier is empty".to_string(),
             });
         }
@@ -261,18 +257,14 @@ impl SelfAttestationRateLimitKeys {
         Ok(hashed)
     }
 
-    fn hash_identifier<T>(
-        &self,
-        kind: &str,
-        raw: &str,
-    ) -> SelfAttestationRateLimitResult<Hashed<T>> {
+    fn hash_identifier<T>(&self, kind: &str, raw: &str) -> SubjectAccessRateLimitResult<Hashed<T>> {
         if raw.is_empty() {
-            return Err(SelfAttestationRateLimitError::Unavailable {
+            return Err(SubjectAccessRateLimitError::Unavailable {
                 reason: format!("{kind} rate-limit identifier is empty"),
             });
         }
         let canonical_input = format!("value\0{}\0{raw}", raw.len());
-        let class = format!("self-attestation-{kind}-v1");
+        let class = format!("subject-access-{kind}-v1");
         let hashed = self.audit_reference_hash(&class, &canonical_input)?;
         ensure_bounded(&hashed)?;
         Ok(Hashed::from_hash(hashed))
@@ -282,25 +274,25 @@ impl SelfAttestationRateLimitKeys {
         &self,
         class: &str,
         canonical_input: &str,
-    ) -> SelfAttestationRateLimitResult<String> {
+    ) -> SubjectAccessRateLimitResult<String> {
         self.hasher
             .audit_reference_hash(class, "", canonical_input)
-            .map_err(|error| SelfAttestationRateLimitError::Unavailable {
+            .map_err(|error| SubjectAccessRateLimitError::Unavailable {
                 reason: error.to_string(),
             })
     }
 }
 
 #[derive(Debug)]
-pub struct SelfAttestationRateLimiter {
-    config: SelfAttestationRateLimitsConfig,
+pub struct SubjectAccessRateLimiter {
+    config: SubjectAccessRateLimitsConfig,
     state_plane: Option<Arc<NotaryStatePlaneHandle>>,
     counters: Mutex<HashMap<RateLimitKey, Counter>>,
 }
 
-impl SelfAttestationRateLimiter {
+impl SubjectAccessRateLimiter {
     #[must_use]
-    pub fn new(config: SelfAttestationRateLimitsConfig) -> Self {
+    pub fn new(config: SubjectAccessRateLimitsConfig) -> Self {
         Self {
             config,
             state_plane: None,
@@ -310,7 +302,7 @@ impl SelfAttestationRateLimiter {
 
     #[must_use]
     pub(crate) fn with_state_plane(
-        config: SelfAttestationRateLimitsConfig,
+        config: SubjectAccessRateLimitsConfig,
         state_plane: Arc<NotaryStatePlaneHandle>,
     ) -> Self {
         Self {
@@ -323,9 +315,9 @@ impl SelfAttestationRateLimiter {
     pub async fn check_invalid_token_for_client_address(
         &self,
         client_address: &Hashed<ClientAddressIdentifier>,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let denial = BucketCheck::new(
-            SelfAttestationRateLimitBucket::InvalidTokenPerClientAddress,
+            SubjectAccessRateLimitBucket::InvalidTokenPerClientAddress,
             client_address.as_str(),
         )?;
         self.check_and_consume_current(Vec::new(), Some(denial))
@@ -335,9 +327,9 @@ impl SelfAttestationRateLimiter {
     pub async fn check_invalid_token_for_client_address_available(
         &self,
         client_address: &Hashed<ClientAddressIdentifier>,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let check = BucketCheck::new(
-            SelfAttestationRateLimitBucket::InvalidTokenPerClientAddress,
+            SubjectAccessRateLimitBucket::InvalidTokenPerClientAddress,
             client_address.as_str(),
         )?;
         self.check_only_current(&[check]).await
@@ -346,9 +338,9 @@ impl SelfAttestationRateLimiter {
     pub async fn check_authenticated_request(
         &self,
         principal: &Hashed<PrincipalIdentifier>,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let checks = vec![BucketCheck::new(
-            SelfAttestationRateLimitBucket::PerPrincipal,
+            SubjectAccessRateLimitBucket::PerPrincipal,
             principal.as_str(),
         )?];
         self.check_and_consume_current(checks, None).await
@@ -357,13 +349,13 @@ impl SelfAttestationRateLimiter {
     pub async fn consume_subject_mismatch_denial(
         &self,
         principal: &Hashed<PrincipalIdentifier>,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let checks = vec![BucketCheck::new(
-            SelfAttestationRateLimitBucket::PerPrincipal,
+            SubjectAccessRateLimitBucket::PerPrincipal,
             principal.as_str(),
         )?];
         let denial = BucketCheck::new(
-            SelfAttestationRateLimitBucket::SubjectMismatchPerPrincipal,
+            SubjectAccessRateLimitBucket::SubjectMismatchPerPrincipal,
             principal.as_str(),
         )?;
         self.check_and_consume_current(checks, Some(denial)).await
@@ -372,9 +364,9 @@ impl SelfAttestationRateLimiter {
     pub async fn consume_subject_mismatch_denial_only(
         &self,
         principal: &Hashed<PrincipalIdentifier>,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let denial = BucketCheck::new(
-            SelfAttestationRateLimitBucket::SubjectMismatchPerPrincipal,
+            SubjectAccessRateLimitBucket::SubjectMismatchPerPrincipal,
             principal.as_str(),
         )?;
         self.check_and_consume_current(Vec::new(), Some(denial))
@@ -385,7 +377,7 @@ impl SelfAttestationRateLimiter {
         &self,
         principal: &Hashed<PrincipalIdentifier>,
         holder: Option<&Hashed<HolderIdentifier>>,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let checks = self.credential_issuance_checks(principal, holder)?;
         self.check_and_consume_current(checks, None).await
     }
@@ -396,9 +388,9 @@ impl SelfAttestationRateLimiter {
     pub async fn check_tx_code_attempt(
         &self,
         pre_authorized_code: &Hashed<PreAuthorizedCodeIdentifier>,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let checks = vec![BucketCheck::new(
-            SelfAttestationRateLimitBucket::TxCodeAttemptPerCode,
+            SubjectAccessRateLimitBucket::TxCodeAttemptPerCode,
             pre_authorized_code.as_str(),
         )?];
         self.check_and_consume_current(checks, None).await
@@ -408,7 +400,7 @@ impl SelfAttestationRateLimiter {
         &self,
         checks: Vec<BucketCheck>,
         denial: Option<BucketCheck>,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let Some(state_plane) = self
             .state_plane
             .as_ref()
@@ -428,10 +420,7 @@ impl SelfAttestationRateLimiter {
             .await
     }
 
-    async fn check_only_current(
-        &self,
-        checks: &[BucketCheck],
-    ) -> SelfAttestationRateLimitResult<()> {
+    async fn check_only_current(&self, checks: &[BucketCheck]) -> SubjectAccessRateLimitResult<()> {
         let Some(state_plane) = self
             .state_plane
             .as_ref()
@@ -448,7 +437,7 @@ impl SelfAttestationRateLimiter {
         state_plane: &NotaryStatePlaneHandle,
         checks: &[BucketCheck],
         consume: bool,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let bucket_kinds = checks
             .iter()
             .map(|check| check.bucket.as_str())
@@ -477,10 +466,10 @@ impl SelfAttestationRateLimiter {
             .map_err(|_| postgres_unavailable())?;
         let statement = if consume {
             "SELECT allowed, denied_bucket, retry_after_seconds \
-               FROM registry_notary_api.self_attestation_quota_debit_v1($1, $2, $3, $4)"
+               FROM registry_notary_api.subject_access_quota_debit_v1($1, $2, $3, $4)"
         } else {
             "SELECT allowed, denied_bucket, retry_after_seconds \
-               FROM registry_notary_api.self_attestation_quota_check_v1($1, $2, $3, $4)"
+               FROM registry_notary_api.subject_access_quota_check_v1($1, $2, $3, $4)"
         };
         let row = session
             .run_operation(session.client().query_one(
@@ -498,9 +487,9 @@ impl SelfAttestationRateLimiter {
             .map_err(|_| postgres_unavailable())?;
         let bucket = denied_bucket
             .as_deref()
-            .and_then(SelfAttestationRateLimitBucket::parse)
+            .and_then(SubjectAccessRateLimitBucket::parse)
             .ok_or_else(postgres_unavailable)?;
-        Err(SelfAttestationRateLimitError::Limited { bucket })
+        Err(SubjectAccessRateLimitError::Limited { bucket })
     }
 
     #[cfg(test)]
@@ -508,9 +497,9 @@ impl SelfAttestationRateLimiter {
         &self,
         client_address: &Hashed<ClientAddressIdentifier>,
         now: OffsetDateTime,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let denial = BucketCheck::new(
-            SelfAttestationRateLimitBucket::InvalidTokenPerClientAddress,
+            SubjectAccessRateLimitBucket::InvalidTokenPerClientAddress,
             client_address.as_str(),
         )?;
         self.check_and_consume(Vec::new(), Some(denial), now)
@@ -521,9 +510,9 @@ impl SelfAttestationRateLimiter {
         &self,
         principal: &Hashed<PrincipalIdentifier>,
         now: OffsetDateTime,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let checks = vec![BucketCheck::new(
-            SelfAttestationRateLimitBucket::PerPrincipal,
+            SubjectAccessRateLimitBucket::PerPrincipal,
             principal.as_str(),
         )?];
         self.check_and_consume(checks, None, now)
@@ -534,13 +523,13 @@ impl SelfAttestationRateLimiter {
         &self,
         principal: &Hashed<PrincipalIdentifier>,
         now: OffsetDateTime,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let checks = vec![BucketCheck::new(
-            SelfAttestationRateLimitBucket::PerPrincipal,
+            SubjectAccessRateLimitBucket::PerPrincipal,
             principal.as_str(),
         )?];
         let denial = BucketCheck::new(
-            SelfAttestationRateLimitBucket::SubjectMismatchPerPrincipal,
+            SubjectAccessRateLimitBucket::SubjectMismatchPerPrincipal,
             principal.as_str(),
         )?;
         self.check_and_consume(checks, Some(denial), now)
@@ -552,7 +541,7 @@ impl SelfAttestationRateLimiter {
         principal: &Hashed<PrincipalIdentifier>,
         holder: Option<&Hashed<HolderIdentifier>>,
         now: OffsetDateTime,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let checks = self.credential_issuance_checks(principal, holder)?;
         self.check_and_consume(checks, None, now)
     }
@@ -561,20 +550,20 @@ impl SelfAttestationRateLimiter {
         &self,
         principal: &Hashed<PrincipalIdentifier>,
         holder: Option<&Hashed<HolderIdentifier>>,
-    ) -> SelfAttestationRateLimitResult<Vec<BucketCheck>> {
+    ) -> SubjectAccessRateLimitResult<Vec<BucketCheck>> {
         let mut checks = vec![
             BucketCheck::new(
-                SelfAttestationRateLimitBucket::PerPrincipal,
+                SubjectAccessRateLimitBucket::PerPrincipal,
                 principal.as_str(),
             )?,
             BucketCheck::new(
-                SelfAttestationRateLimitBucket::CredentialIssuancePerPrincipal,
+                SubjectAccessRateLimitBucket::CredentialIssuancePerPrincipal,
                 principal.as_str(),
             )?,
         ];
         if let Some(holder) = holder {
             checks.push(BucketCheck::new(
-                SelfAttestationRateLimitBucket::PerHolderIssuance,
+                SubjectAccessRateLimitBucket::PerHolderIssuance,
                 holder.as_str(),
             )?);
         }
@@ -586,9 +575,9 @@ impl SelfAttestationRateLimiter {
         &self,
         pre_authorized_code: &Hashed<PreAuthorizedCodeIdentifier>,
         now: OffsetDateTime,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let checks = vec![BucketCheck::new(
-            SelfAttestationRateLimitBucket::TxCodeAttemptPerCode,
+            SubjectAccessRateLimitBucket::TxCodeAttemptPerCode,
             pre_authorized_code.as_str(),
         )?];
         self.check_and_consume(checks, None, now)
@@ -599,11 +588,11 @@ impl SelfAttestationRateLimiter {
         checks: Vec<BucketCheck>,
         denial: Option<BucketCheck>,
         now: OffsetDateTime,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let mut counters =
             self.counters
                 .lock()
-                .map_err(|_| SelfAttestationRateLimitError::Unavailable {
+                .map_err(|_| SubjectAccessRateLimitError::Unavailable {
                     reason: "counter mutex is poisoned".to_string(),
                 })?;
         prune_expired(&mut counters, now);
@@ -616,7 +605,7 @@ impl SelfAttestationRateLimiter {
                 .find(|check| !self.bucket_allows(&counters, check, now))
                 .cloned()
             {
-                return Err(SelfAttestationRateLimitError::Limited {
+                return Err(SubjectAccessRateLimitError::Limited {
                     bucket: over_limit.bucket,
                 });
             }
@@ -625,7 +614,7 @@ impl SelfAttestationRateLimiter {
             .find(|check| !self.bucket_allows(&counters, check, now))
             .cloned()
         {
-            return Err(SelfAttestationRateLimitError::Limited {
+            return Err(SubjectAccessRateLimitError::Limited {
                 bucket: over_limit.bucket,
             });
         }
@@ -647,11 +636,11 @@ impl SelfAttestationRateLimiter {
         &self,
         checks: &[BucketCheck],
         now: OffsetDateTime,
-    ) -> SelfAttestationRateLimitResult<()> {
+    ) -> SubjectAccessRateLimitResult<()> {
         let mut counters =
             self.counters
                 .lock()
-                .map_err(|_| SelfAttestationRateLimitError::Unavailable {
+                .map_err(|_| SubjectAccessRateLimitError::Unavailable {
                     reason: "counter mutex is poisoned".to_string(),
                 })?;
         prune_expired(&mut counters, now);
@@ -659,7 +648,7 @@ impl SelfAttestationRateLimiter {
             .iter()
             .find(|check| !self.bucket_allows(&counters, check, now))
         {
-            return Err(SelfAttestationRateLimitError::Limited {
+            return Err(SubjectAccessRateLimitError::Limited {
                 bucket: over_limit.bucket,
             });
         }
@@ -682,20 +671,20 @@ impl SelfAttestationRateLimiter {
         }
     }
 
-    const fn limit_for(&self, bucket: SelfAttestationRateLimitBucket) -> u32 {
+    const fn limit_for(&self, bucket: SubjectAccessRateLimitBucket) -> u32 {
         match bucket {
-            SelfAttestationRateLimitBucket::InvalidTokenPerClientAddress => {
+            SubjectAccessRateLimitBucket::InvalidTokenPerClientAddress => {
                 self.config.invalid_token_per_client_address_per_minute
             }
-            SelfAttestationRateLimitBucket::PerPrincipal => self.config.per_principal_per_minute,
-            SelfAttestationRateLimitBucket::SubjectMismatchPerPrincipal => {
+            SubjectAccessRateLimitBucket::PerPrincipal => self.config.per_principal_per_minute,
+            SubjectAccessRateLimitBucket::SubjectMismatchPerPrincipal => {
                 self.config.subject_mismatch_per_principal_per_hour
             }
-            SelfAttestationRateLimitBucket::PerHolderIssuance => self.config.per_holder_per_hour,
-            SelfAttestationRateLimitBucket::CredentialIssuancePerPrincipal => {
+            SubjectAccessRateLimitBucket::PerHolderIssuance => self.config.per_holder_per_hour,
+            SubjectAccessRateLimitBucket::CredentialIssuancePerPrincipal => {
                 self.config.credential_issuance_per_principal_per_hour
             }
-            SelfAttestationRateLimitBucket::TxCodeAttemptPerCode => {
+            SubjectAccessRateLimitBucket::TxCodeAttemptPerCode => {
                 self.config.tx_code_attempts_per_code_per_minute
             }
         }
@@ -704,9 +693,9 @@ impl SelfAttestationRateLimiter {
     #[cfg(test)]
     fn count_for(
         &self,
-        bucket: SelfAttestationRateLimitBucket,
+        bucket: SubjectAccessRateLimitBucket,
         hashed_id: &str,
-    ) -> SelfAttestationRateLimitResult<u32> {
+    ) -> SubjectAccessRateLimitResult<u32> {
         let key = bucket_key(bucket, hashed_id)?;
         Ok(self
             .counters
@@ -730,16 +719,16 @@ impl SelfAttestationRateLimiter {
 
 #[derive(Debug, Clone)]
 struct BucketCheck {
-    bucket: SelfAttestationRateLimitBucket,
+    bucket: SubjectAccessRateLimitBucket,
     key: RateLimitKey,
     pseudonym: String,
 }
 
 impl BucketCheck {
     fn new(
-        bucket: SelfAttestationRateLimitBucket,
+        bucket: SubjectAccessRateLimitBucket,
         hashed_id: &str,
-    ) -> SelfAttestationRateLimitResult<Self> {
+    ) -> SubjectAccessRateLimitResult<Self> {
         Ok(Self {
             bucket,
             key: bucket_key(bucket, hashed_id)?,
@@ -750,7 +739,7 @@ impl BucketCheck {
 
 #[derive(Debug, Clone)]
 struct Counter {
-    bucket: SelfAttestationRateLimitBucket,
+    bucket: SubjectAccessRateLimitBucket,
     window_start: OffsetDateTime,
     used: u32,
 }
@@ -762,12 +751,12 @@ impl Counter {
 }
 
 fn bucket_key(
-    bucket: SelfAttestationRateLimitBucket,
+    bucket: SubjectAccessRateLimitBucket,
     hashed_id: &str,
-) -> SelfAttestationRateLimitResult<RateLimitKey> {
+) -> SubjectAccessRateLimitResult<RateLimitKey> {
     ensure_bounded(hashed_id)?;
     RateLimitKey::new(format!("{}:{hashed_id}", bucket.key_prefix())).map_err(|error| {
-        SelfAttestationRateLimitError::Unavailable {
+        SubjectAccessRateLimitError::Unavailable {
             reason: error.to_string(),
         }
     })
@@ -794,15 +783,15 @@ fn prune_expired(counters: &mut HashMap<RateLimitKey, Counter>, now: OffsetDateT
     counters.retain(|_, counter| counter.in_window(now));
 }
 
-fn ensure_bounded(value: &str) -> SelfAttestationRateLimitResult<()> {
-    RateLimitKey::new(value).map(|_| ()).map_err(|error| {
-        SelfAttestationRateLimitError::Unavailable {
+fn ensure_bounded(value: &str) -> SubjectAccessRateLimitResult<()> {
+    RateLimitKey::new(value)
+        .map(|_| ())
+        .map_err(|error| SubjectAccessRateLimitError::Unavailable {
             reason: error.to_string(),
-        }
-    })
+        })
 }
 
-fn decode_keyed_pseudonym_hash(value: &str) -> SelfAttestationRateLimitResult<Vec<u8>> {
+fn decode_keyed_pseudonym_hash(value: &str) -> SubjectAccessRateLimitResult<Vec<u8>> {
     let encoded = value
         .strip_prefix("hmac-sha256:")
         .ok_or_else(postgres_unavailable)?;
@@ -828,9 +817,9 @@ fn hex_nibble(value: u8) -> Option<u8> {
     }
 }
 
-fn postgres_unavailable() -> SelfAttestationRateLimitError {
-    SelfAttestationRateLimitError::Unavailable {
-        reason: "PostgreSQL self-attestation quota operation failed".to_string(),
+fn postgres_unavailable() -> SubjectAccessRateLimitError {
+    SubjectAccessRateLimitError::Unavailable {
+        reason: "PostgreSQL subject-access quota operation failed".to_string(),
     }
 }
 
@@ -838,20 +827,19 @@ fn postgres_unavailable() -> SelfAttestationRateLimitError {
 mod tests {
     use super::*;
 
-    fn config() -> SelfAttestationRateLimitsConfig {
-        SelfAttestationRateLimitsConfig {
+    fn config() -> SubjectAccessRateLimitsConfig {
+        SubjectAccessRateLimitsConfig {
             invalid_token_per_client_address_per_minute: 2,
             per_principal_per_minute: 2,
             subject_mismatch_per_principal_per_hour: 2,
             per_holder_per_hour: 1,
             credential_issuance_per_principal_per_hour: 2,
             tx_code_attempts_per_code_per_minute: 2,
-            ..SelfAttestationRateLimitsConfig::default()
         }
     }
 
-    fn keys() -> SelfAttestationRateLimitKeys {
-        SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only())
+    fn keys() -> SubjectAccessRateLimitKeys {
+        SubjectAccessRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only())
     }
 
     fn now() -> OffsetDateTime {
@@ -860,7 +848,7 @@ mod tests {
 
     #[test]
     fn invalid_token_bucket_is_keyed_by_hashed_client_address() {
-        let limiter = SelfAttestationRateLimiter::new(config());
+        let limiter = SubjectAccessRateLimiter::new(config());
         let client = keys()
             .client_address("203.0.113.10")
             .expect("client address hashes");
@@ -877,8 +865,8 @@ mod tests {
 
         assert_eq!(
             error,
-            SelfAttestationRateLimitError::Limited {
-                bucket: SelfAttestationRateLimitBucket::InvalidTokenPerClientAddress,
+            SubjectAccessRateLimitError::Limited {
+                bucket: SubjectAccessRateLimitBucket::InvalidTokenPerClientAddress,
             }
         );
         assert!(
@@ -892,7 +880,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_token_availability_precheck_does_not_consume_quota() {
-        let limiter = SelfAttestationRateLimiter::new(config());
+        let limiter = SubjectAccessRateLimiter::new(config());
         let client = keys()
             .client_address("203.0.113.10")
             .expect("client address hashes");
@@ -918,7 +906,7 @@ mod tests {
 
         assert_eq!(
             error.bucket(),
-            Some(SelfAttestationRateLimitBucket::InvalidTokenPerClientAddress)
+            Some(SubjectAccessRateLimitBucket::InvalidTokenPerClientAddress)
         );
     }
 
@@ -1006,18 +994,18 @@ mod tests {
     #[test]
     fn identity_keys_use_platform_audit_reference_domain() {
         let hasher = AuditKeyHasher::unkeyed_dev_only();
-        let key_builder = SelfAttestationRateLimitKeys::new(hasher.clone());
+        let key_builder = SubjectAccessRateLimitKeys::new(hasher.clone());
         let principal = key_builder
             .principal("citizen-123")
             .expect("principal hashes");
         let expected = hasher
             .audit_reference_hash(
-                "self-attestation-principal-v1",
+                "subject-access-principal-v1",
                 "",
                 &format!("value\0{}\0citizen-123", "citizen-123".len()),
             )
             .expect("reference hash");
-        let legacy = hasher.hash("registry-notary:self-attestation:principal:citizen-123");
+        let legacy = hasher.hash("registry-notary:subject-access:principal:citizen-123");
 
         assert_eq!(principal.as_str(), expected);
         assert_ne!(principal.as_str(), legacy);
@@ -1047,7 +1035,7 @@ mod tests {
     fn authenticated_request_consumes_per_principal_bucket() {
         let mut config = config();
         config.per_principal_per_minute = 1;
-        let limiter = SelfAttestationRateLimiter::new(config);
+        let limiter = SubjectAccessRateLimiter::new(config);
         let principal = keys().principal("citizen-123").expect("principal hashes");
 
         limiter
@@ -1059,7 +1047,7 @@ mod tests {
 
         assert_eq!(
             error.bucket(),
-            Some(SelfAttestationRateLimitBucket::PerPrincipal)
+            Some(SubjectAccessRateLimitBucket::PerPrincipal)
         );
     }
 
@@ -1068,7 +1056,7 @@ mod tests {
         let mut config = config();
         config.per_principal_per_minute = 2;
         config.subject_mismatch_per_principal_per_hour = 1;
-        let limiter = SelfAttestationRateLimiter::new(config);
+        let limiter = SubjectAccessRateLimiter::new(config);
         let principal = keys().principal("citizen-123").expect("principal hashes");
 
         limiter
@@ -1077,7 +1065,7 @@ mod tests {
         assert_eq!(
             limiter
                 .count_for(
-                    SelfAttestationRateLimitBucket::SubjectMismatchPerPrincipal,
+                    SubjectAccessRateLimitBucket::SubjectMismatchPerPrincipal,
                     principal.as_str()
                 )
                 .expect("counter can be read"),
@@ -1086,7 +1074,7 @@ mod tests {
         assert_eq!(
             limiter
                 .count_for(
-                    SelfAttestationRateLimitBucket::PerPrincipal,
+                    SubjectAccessRateLimitBucket::PerPrincipal,
                     principal.as_str()
                 )
                 .expect("counter can be read"),
@@ -1101,7 +1089,7 @@ mod tests {
             .expect_err("second subject mismatch is limited");
         assert_eq!(
             error.bucket(),
-            Some(SelfAttestationRateLimitBucket::SubjectMismatchPerPrincipal)
+            Some(SubjectAccessRateLimitBucket::SubjectMismatchPerPrincipal)
         );
     }
 
@@ -1110,7 +1098,7 @@ mod tests {
         let mut config = config();
         config.per_principal_per_minute = 1;
         config.subject_mismatch_per_principal_per_hour = 2;
-        let limiter = SelfAttestationRateLimiter::new(config);
+        let limiter = SubjectAccessRateLimiter::new(config);
         let principal = keys().principal("citizen-123").expect("principal hashes");
 
         limiter
@@ -1122,12 +1110,12 @@ mod tests {
 
         assert_eq!(
             error.bucket(),
-            Some(SelfAttestationRateLimitBucket::PerPrincipal)
+            Some(SubjectAccessRateLimitBucket::PerPrincipal)
         );
         assert_eq!(
             limiter
                 .count_for(
-                    SelfAttestationRateLimitBucket::SubjectMismatchPerPrincipal,
+                    SubjectAccessRateLimitBucket::SubjectMismatchPerPrincipal,
                     principal.as_str()
                 )
                 .expect("counter can be read"),
@@ -1137,7 +1125,7 @@ mod tests {
 
     #[test]
     fn credential_issuance_is_atomic_across_holder_and_principal_buckets() {
-        let limiter = SelfAttestationRateLimiter::new(config());
+        let limiter = SubjectAccessRateLimiter::new(config());
         let key_builder = keys();
         let principal = key_builder
             .principal("citizen-123")
@@ -1157,7 +1145,7 @@ mod tests {
             .expect_err("same holder is limited");
         assert_eq!(
             error.bucket(),
-            Some(SelfAttestationRateLimitBucket::PerHolderIssuance)
+            Some(SubjectAccessRateLimitBucket::PerHolderIssuance)
         );
 
         limiter
@@ -1166,7 +1154,7 @@ mod tests {
         assert_eq!(
             limiter
                 .count_for(
-                    SelfAttestationRateLimitBucket::CredentialIssuancePerPrincipal,
+                    SubjectAccessRateLimitBucket::CredentialIssuancePerPrincipal,
                     principal.as_str()
                 )
                 .expect("counter can be read"),
@@ -1178,7 +1166,7 @@ mod tests {
     fn tx_code_attempts_lock_a_single_pre_authorized_code() {
         let mut config = config();
         config.tx_code_attempts_per_code_per_minute = 2;
-        let limiter = SelfAttestationRateLimiter::new(config);
+        let limiter = SubjectAccessRateLimiter::new(config);
         let code = keys()
             .pre_authorized_code("pre-auth-code-secret")
             .expect("pre-authorized code hashes");
@@ -1195,13 +1183,13 @@ mod tests {
 
         assert_eq!(
             error.bucket(),
-            Some(SelfAttestationRateLimitBucket::TxCodeAttemptPerCode)
+            Some(SubjectAccessRateLimitBucket::TxCodeAttemptPerCode)
         );
     }
 
     #[test]
     fn tx_code_bucket_is_keyed_by_hashed_code_not_the_raw_code() {
-        let limiter = SelfAttestationRateLimiter::new(config());
+        let limiter = SubjectAccessRateLimiter::new(config());
         let raw_code = "pre-auth-code-secret";
         let code = keys()
             .pre_authorized_code(raw_code)
@@ -1224,7 +1212,7 @@ mod tests {
     fn tx_code_attempts_are_isolated_per_code() {
         let mut config = config();
         config.tx_code_attempts_per_code_per_minute = 1;
-        let limiter = SelfAttestationRateLimiter::new(config);
+        let limiter = SubjectAccessRateLimiter::new(config);
         let key_builder = keys();
         let code_one = key_builder
             .pre_authorized_code("code-one")
@@ -1241,7 +1229,7 @@ mod tests {
             .expect_err("second attempt on code-one is limited");
         assert_eq!(
             error.bucket(),
-            Some(SelfAttestationRateLimitBucket::TxCodeAttemptPerCode)
+            Some(SubjectAccessRateLimitBucket::TxCodeAttemptPerCode)
         );
         limiter
             .check_tx_code_attempt_at(&code_two, now())
@@ -1252,7 +1240,7 @@ mod tests {
     fn windows_expire_and_reset() {
         let mut config = config();
         config.per_principal_per_minute = 1;
-        let limiter = SelfAttestationRateLimiter::new(config);
+        let limiter = SubjectAccessRateLimiter::new(config);
         let principal = keys().principal("citizen-123").expect("principal hashes");
 
         limiter

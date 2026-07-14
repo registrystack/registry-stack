@@ -204,7 +204,7 @@ credential_profiles:
             created_at: "1970-01-01T00:00:00Z".to_string(),
             expires_at: "1970-01-01T00:00:00Z".to_string(),
             request_hash: "h".to_string(),
-            self_attestation: None,
+            subject_access: None,
         };
 
         let err = credential_profile_for(&evidence, &evaluation, Some("profile_b"))
@@ -252,7 +252,7 @@ profile_b:
             created_at: "1970-01-01T00:00:00Z".to_string(),
             expires_at: "1970-01-01T00:00:00Z".to_string(),
             request_hash: "h".to_string(),
-            self_attestation: None,
+            subject_access: None,
         };
 
         let err = credential_profile_for(&evidence, &evaluation, Some("profile_a"))

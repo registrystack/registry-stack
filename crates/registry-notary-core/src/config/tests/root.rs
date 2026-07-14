@@ -274,9 +274,9 @@ pub(super) fn validate_allows_ack_cursor_on_stdout_sink_without_shipping_declare
 #[test]
 pub(super) fn gate_input_reports_assisted_access_transaction_token_posture() {
     let mut config = minimal_config();
-    config.self_attestation.enabled = true;
+    config.subject_access.enabled = true;
     let input_without_anchor = config.gate_input();
-    assert!(input_without_anchor.self_attestation_enabled);
+    assert!(input_without_anchor.subject_access_enabled);
     assert!(!input_without_anchor.transaction_token_anchor_configured);
 
     config.auth.access_token_signing.enabled = true;
@@ -390,7 +390,6 @@ pub(super) fn invalid_profile_value_fails_config_load() {
 evidence:
   enabled: true
 auth:
-  mode: api_key
 deployment:
   profile: prod
 "#,
@@ -520,7 +519,6 @@ evidence:
       kid: did:web:issuer.example#key-1
       status: active
 auth:
-  mode: api_key
   api_keys:
     - id: test-key
       fingerprint:
@@ -550,7 +548,7 @@ cel:
     config.validate().expect("CEL config validates");
 }
 
-pub(super) fn valid_self_attestation_config() -> StandaloneRegistryNotaryConfig {
+pub(super) fn valid_subject_access_config() -> StandaloneRegistryNotaryConfig {
     serde_norway::from_str(
         r#"
 evidence:
@@ -588,7 +586,7 @@ evidence:
         type: self_attested
       value:
         type: boolean
-      purpose: citizen_self_attestation
+      purpose: citizen_subject_access
       rule:
         type: cel
         expression: "true"
@@ -602,7 +600,6 @@ evidence:
       credential_profiles:
         - civil_status_sd_jwt
 auth:
-  mode: oidc
   oidc:
     issuer: https://id.example.gov
     jwks_url: https://id.example.gov/oauth/v2/keys
@@ -612,12 +609,11 @@ auth:
       - citizen-portal
     scope_claim: scope
     scope_map:
-      citizen_self_attestation:
-        - self_attestation
+      citizen_subject_access:
+        - subject_access
     leeway: 30s
-self_attestation:
+subject_access:
   enabled: true
-  requires_auth_mode: oidc
   subject_binding:
     token_claim: https://id.example.gov/claims/national_id
     request_field: SubjectId
@@ -643,7 +639,7 @@ self_attestation:
     issue_credential: true
     batch_evaluate: false
   allowed_purposes:
-    - citizen_self_attestation
+    - citizen_subject_access
   allowed_claims:
     - date-of-birth
   allowed_formats:
@@ -652,13 +648,12 @@ self_attestation:
   allowed_disclosures:
     - value
   required_scopes:
-    - self_attestation
+    - subject_access
   allowed_wallet_origins:
     - https://wallet.example.gov
   credential_profiles:
     - civil_status_sd_jwt
   rate_limits:
-    mode: in_process
     invalid_token_per_client_address_per_minute: 20
     per_principal_per_minute: 10
     subject_mismatch_per_principal_per_hour: 5
@@ -666,11 +661,11 @@ self_attestation:
     credential_issuance_per_principal_per_hour: 5
 "#,
     )
-    .expect("self-attestation config is valid YAML")
+    .expect("subject-access config is valid YAML")
 }
 
-pub(super) fn valid_delegated_self_attestation_config() -> StandaloneRegistryNotaryConfig {
-    let mut config = valid_self_attestation_config();
+pub(super) fn valid_delegated_subject_access_config() -> StandaloneRegistryNotaryConfig {
+    let mut config = valid_subject_access_config();
     config.evidence.relay = Some(
         serde_norway::from_str(
             r#"
@@ -686,7 +681,7 @@ token_file: /run/secrets/registry-notary-relay.jwt
     proof.title = "Guardian link".to_string();
     proof.subject_type = "relationship".to_string();
     proof.purpose = Some("dependent_attestation".to_string());
-    proof.required_scopes = vec!["self_attestation".to_string()];
+    proof.required_scopes = vec!["subject_access".to_string()];
     proof.evidence_mode = ClaimEvidenceMode::RegistryBacked {
         consultations: BTreeMap::from([(
             "guardian_link".to_string(),
@@ -740,9 +735,9 @@ token_file: /run/secrets/registry-notary-relay.jwt
 
     config.evidence.claims.push(proof);
     config.evidence.claims.push(dependent);
-    config.self_attestation.delegation = SelfAttestationDelegationConfig {
+    config.subject_access.delegation = SubjectAccessDelegationConfig {
         enabled: true,
-        allowed_relationships: vec![SelfAttestationDelegatedRelationshipConfig {
+        allowed_relationships: vec![SubjectAccessDelegatedRelationshipConfig {
             relationship_type: "guardian".to_string(),
             proof_claim: "guardian-link".to_string(),
             target_id_type: Some("civil_registration_id".to_string()),
@@ -760,7 +755,7 @@ token_file: /run/secrets/registry-notary-relay.jwt
 }
 
 pub(super) fn valid_oid4vci_config() -> StandaloneRegistryNotaryConfig {
-    let mut config = valid_self_attestation_config();
+    let mut config = valid_subject_access_config();
     config
         .evidence
         .credential_profiles
@@ -821,7 +816,7 @@ pub(super) fn add_oid4vci_projection_claim(
     claim.credential_profiles = vec!["civil_status_sd_jwt".to_string()];
     config.evidence.claims.push(claim);
     config
-        .self_attestation
+        .subject_access
         .allowed_claims
         .push(claim_id.to_string());
     config
@@ -859,12 +854,12 @@ pub(super) fn valid_oid4vci_projection_config() -> StandaloneRegistryNotaryConfi
     config
 }
 
-pub(super) fn expect_self_attestation_error(config: &StandaloneRegistryNotaryConfig) -> String {
+pub(super) fn expect_subject_access_error(config: &StandaloneRegistryNotaryConfig) -> String {
     match config
         .validate()
-        .expect_err("self-attestation config must fail validation")
+        .expect_err("subject-access config must fail validation")
     {
-        EvidenceConfigError::InvalidSelfAttestationConfig { reason } => reason,
+        EvidenceConfigError::InvalidSubjectAccessConfig { reason } => reason,
         other => panic!("unexpected error variant: {other}"),
     }
 }

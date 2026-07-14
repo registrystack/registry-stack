@@ -4,9 +4,9 @@ use super::*;
 use super::{auth::*, credentials::*, infrastructure::*, preauth::*, root::*};
 
 #[test]
-pub(super) fn self_attestation_is_disabled_by_default() {
+pub(super) fn subject_access_is_disabled_by_default() {
     let config = minimal_config();
-    assert!(!config.self_attestation.enabled);
+    assert!(!config.subject_access.enabled);
     assert!(config.validate().is_ok());
 }
 
@@ -18,13 +18,13 @@ pub(super) fn oid4vci_is_disabled_by_default() {
 }
 
 #[test]
-pub(super) fn disabled_default_self_attestation_is_omitted_from_serialized_config() {
+pub(super) fn disabled_default_subject_access_is_omitted_from_serialized_config() {
     let config = minimal_config();
     let serialized = serde_json::to_value(&config).expect("config serializes as JSON");
 
     assert!(
-        serialized.get("self_attestation").is_none(),
-        "disabled default self_attestation must stay compact when serialized: {serialized}",
+        serialized.get("subject_access").is_none(),
+        "disabled default subject_access must stay compact when serialized: {serialized}",
     );
 }
 
@@ -40,14 +40,14 @@ pub(super) fn disabled_default_oid4vci_is_omitted_from_serialized_config() {
 }
 
 #[test]
-pub(super) fn valid_self_attestation_config_passes_validation() {
-    let config = valid_self_attestation_config();
+pub(super) fn valid_subject_access_config_passes_validation() {
+    let config = valid_subject_access_config();
     assert!(config.validate().is_ok());
 }
 
 #[test]
 pub(super) fn delegated_attestation_accepts_compiler_pinned_relay_proofs() {
-    let config = valid_delegated_self_attestation_config();
+    let config = valid_delegated_subject_access_config();
     config
         .validate()
         .expect("Relay-backed delegated proof config validates");
@@ -228,7 +228,7 @@ pub(super) fn oid4vci_projection_rejects_claim_outside_profile_allow_list() {
 pub(super) fn oid4vci_projection_rejects_mixed_claim_purposes() {
     let mut config = valid_oid4vci_projection_config();
     config
-        .self_attestation
+        .subject_access
         .allowed_purposes
         .push("other_purpose".to_string());
     let claim = config
@@ -289,18 +289,18 @@ pub(super) fn oid4vci_accepts_vct_under_path_prefixed_credential_issuer() {
 
 #[test]
 pub(super) fn oid4vci_deserializes_absent_block_with_default() {
-    let config = valid_self_attestation_config();
+    let config = valid_subject_access_config();
     assert_eq!(config.oid4vci, Oid4vciConfig::default());
 }
 
 #[test]
-pub(super) fn oid4vci_requires_enabled_self_attestation() {
+pub(super) fn oid4vci_requires_enabled_subject_access() {
     let mut config = valid_oid4vci_config();
-    config.self_attestation.enabled = false;
+    config.subject_access.enabled = false;
 
     let reason = expect_oid4vci_error(&config);
     assert!(
-        reason.contains("self_attestation.enabled"),
+        reason.contains("subject_access.enabled"),
         "unexpected: {reason}"
     );
 }
@@ -498,9 +498,9 @@ pub(super) fn oid4vci_rejects_bad_binding_methods() {
 }
 
 #[test]
-pub(super) fn self_attestation_requires_oidc_auth_mode() {
-    let mut config = valid_self_attestation_config();
-    config.auth.mode = EvidenceAuthMode::ApiKey;
+pub(super) fn subject_access_requires_oidc_authenticator() {
+    let mut config = valid_subject_access_config();
+    config.auth.oidc = None;
     config.auth.api_keys.push(EvidenceCredentialConfig {
         id: "api".to_string(),
         fingerprint: CredentialFingerprintRef {
@@ -512,25 +512,25 @@ pub(super) fn self_attestation_requires_oidc_auth_mode() {
         authorization_details: None,
     });
 
-    let reason = expect_self_attestation_error(&config);
-    assert!(reason.contains("auth.mode = oidc"), "unexpected: {reason}");
+    let reason = expect_subject_access_error(&config);
+    assert!(reason.contains("auth.oidc"), "unexpected: {reason}");
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_unsafe_subject_claim_names() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.subject_binding.token_claim = "national id".to_string();
+pub(super) fn subject_access_rejects_unsafe_subject_claim_names() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.subject_binding.token_claim = "national id".to_string();
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(reason.contains("token_claim"), "unexpected: {reason}");
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_sub_without_explicit_civil_id_opt_in() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.subject_binding.token_claim = "sub".to_string();
+pub(super) fn subject_access_rejects_sub_without_explicit_civil_id_opt_in() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.subject_binding.token_claim = "sub".to_string();
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
         reason.contains("allow_sub_as_civil_id"),
         "unexpected: {reason}"
@@ -538,31 +538,27 @@ pub(super) fn self_attestation_rejects_sub_without_explicit_civil_id_opt_in() {
 }
 
 #[test]
-pub(super) fn self_attestation_allows_sub_with_explicit_civil_id_opt_in() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.subject_binding.token_claim = "sub".to_string();
-    config
-        .self_attestation
-        .subject_binding
-        .allow_sub_as_civil_id = true;
+pub(super) fn subject_access_allows_sub_with_explicit_civil_id_opt_in() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.subject_binding.token_claim = "sub".to_string();
+    config.subject_access.subject_binding.allow_sub_as_civil_id = true;
 
     assert!(config.validate().is_ok());
 }
 
 #[test]
-pub(super) fn self_attestation_subject_request_field_only_accepts_subject_id() {
+pub(super) fn subject_access_subject_request_field_only_accepts_subject_id() {
     let err = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
         r#"
 evidence:
   enabled: true
 auth:
-  mode: oidc
   oidc:
     issuer: https://id.example.gov
     jwks_url: https://id.example.gov/keys
     audiences:
       - registry-notary-citizen
-self_attestation:
+subject_access:
   enabled: true
   subject_binding:
     token_claim: https://id.example.gov/claims/national_id
@@ -585,7 +581,6 @@ pub(super) fn shared_canonical_oidc_fixture_parses() {
 evidence:
   enabled: true
 auth:
-  mode: oidc
   oidc:
     issuer: https://id.example.gov
     audiences:
@@ -610,19 +605,18 @@ auth:
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_non_exact_normalization() {
+pub(super) fn subject_access_rejects_non_exact_normalization() {
     let err = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
         r#"
 evidence:
   enabled: true
 auth:
-  mode: oidc
   oidc:
     issuer: https://id.example.gov
     jwks_url: https://id.example.gov/keys
     audiences:
       - registry-notary-citizen
-self_attestation:
+subject_access:
   enabled: true
   subject_binding:
     token_claim: https://id.example.gov/claims/national_id
@@ -640,11 +634,11 @@ self_attestation:
 }
 
 #[test]
-pub(super) fn self_attestation_requires_nonempty_allow_lists() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.allowed_claims.clear();
+pub(super) fn subject_access_requires_nonempty_allow_lists() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.allowed_claims.clear();
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
         reason.contains("allowed_claims must not be empty"),
         "unexpected: {reason}"
@@ -652,14 +646,14 @@ pub(super) fn self_attestation_requires_nonempty_allow_lists() {
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_unused_allow_list_entries() {
-    let mut config = valid_self_attestation_config();
+pub(super) fn subject_access_rejects_unused_allow_list_entries() {
+    let mut config = valid_subject_access_config();
     config
-        .self_attestation
+        .subject_access
         .allowed_formats
         .push("application/unsupported".to_string());
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
         reason.contains("allowed_formats entry"),
         "unexpected: {reason}"
@@ -667,27 +661,27 @@ pub(super) fn self_attestation_rejects_unused_allow_list_entries() {
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_batch_evaluate_operation() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.allowed_operations.batch_evaluate = true;
+pub(super) fn subject_access_rejects_batch_evaluate_operation() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.allowed_operations.batch_evaluate = true;
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(reason.contains("batch_evaluate"), "unexpected: {reason}");
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_wildcard_wallet_origins() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.allowed_wallet_origins = vec!["*".to_string()];
+pub(super) fn subject_access_rejects_wildcard_wallet_origins() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.allowed_wallet_origins = vec!["*".to_string()];
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(reason.contains("wildcards"), "unexpected: {reason}");
 }
 
 #[test]
-pub(super) fn self_attestation_allows_empty_wallet_origins_for_non_browser_flows() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.allowed_wallet_origins.clear();
+pub(super) fn subject_access_allows_empty_wallet_origins_for_non_browser_flows() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.allowed_wallet_origins.clear();
 
     config
         .validate()
@@ -695,47 +689,47 @@ pub(super) fn self_attestation_allows_empty_wallet_origins_for_non_browser_flows
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_zero_rate_limits() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.rate_limits.per_principal_per_minute = 0;
+pub(super) fn subject_access_rejects_zero_rate_limits() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.rate_limits.per_principal_per_minute = 0;
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(reason.contains("rate_limits"), "unexpected: {reason}");
 }
 
 #[test]
-pub(super) fn self_attestation_requires_allowed_client_or_audience() {
-    let mut config = valid_self_attestation_config();
+pub(super) fn subject_access_requires_allowed_client_or_audience() {
+    let mut config = valid_subject_access_config();
     config
-        .self_attestation
+        .subject_access
         .citizen_clients
         .allowed_client_ids
         .clear();
     config
-        .self_attestation
+        .subject_access
         .citizen_clients
         .allowed_audiences
         .clear();
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(reason.contains("citizen_clients"), "unexpected: {reason}");
 }
 
 #[test]
-pub(super) fn self_attestation_requires_scopes_to_be_mapped() {
-    let mut config = valid_self_attestation_config();
+pub(super) fn subject_access_requires_scopes_to_be_mapped() {
+    let mut config = valid_subject_access_config();
     config.auth.oidc.as_mut().unwrap().scope_map.clear();
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(reason.contains("scope_map"), "unexpected: {reason}");
 }
 
 #[test]
-pub(super) fn self_attestation_required_scope_policy_requires_scopes() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.required_scopes.clear();
+pub(super) fn subject_access_required_scope_policy_requires_scopes() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.required_scopes.clear();
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
         reason.contains("scope_policy requires required_scopes"),
         "unexpected: {reason}"
@@ -743,31 +737,31 @@ pub(super) fn self_attestation_required_scope_policy_requires_scopes() {
 }
 
 #[test]
-pub(super) fn self_attestation_optional_scope_policy_still_requires_scope_mapping() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.scope_policy = SelfAttestationScopePolicy::Optional;
+pub(super) fn subject_access_optional_scope_policy_still_requires_scope_mapping() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.scope_policy = SubjectAccessScopePolicy::Optional;
     config.auth.oidc.as_mut().unwrap().scope_map.clear();
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(reason.contains("scope_map"), "unexpected: {reason}");
 }
 
 #[test]
-pub(super) fn self_attestation_optional_scope_policy_passes_with_required_scopes() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.scope_policy = SelfAttestationScopePolicy::Optional;
+pub(super) fn subject_access_optional_scope_policy_passes_with_required_scopes() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.scope_policy = SubjectAccessScopePolicy::Optional;
 
     config
         .validate()
-        .expect("optional scope policy uses configured self-attestation scopes");
+        .expect("optional scope policy uses configured subject-access scopes");
 }
 
 #[test]
-pub(super) fn self_attestation_disabled_scope_policy_rejects_required_scopes() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.scope_policy = SelfAttestationScopePolicy::Disabled;
+pub(super) fn subject_access_disabled_scope_policy_rejects_required_scopes() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.scope_policy = SubjectAccessScopePolicy::Disabled;
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
         reason.contains("scope_policy = disabled"),
         "unexpected: {reason}"
@@ -775,20 +769,20 @@ pub(super) fn self_attestation_disabled_scope_policy_rejects_required_scopes() {
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_leeway_above_token_policy() {
-    let mut config = valid_self_attestation_config();
+pub(super) fn subject_access_rejects_leeway_above_token_policy() {
+    let mut config = valid_subject_access_config();
     config.auth.oidc.as_mut().unwrap().leeway = Duration::from_secs(61);
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(reason.contains("leeway"), "unexpected: {reason}");
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_unknown_claim_references() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.allowed_claims = vec!["missing-claim".to_string()];
+pub(super) fn subject_access_rejects_unknown_claim_references() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.allowed_claims = vec!["missing-claim".to_string()];
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
         reason.contains("unknown claim 'missing-claim'"),
         "unexpected: {reason}"
@@ -796,20 +790,20 @@ pub(super) fn self_attestation_rejects_unknown_claim_references() {
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_unallowed_claim_purpose() {
-    let mut config = valid_self_attestation_config();
+pub(super) fn subject_access_rejects_unallowed_claim_purpose() {
+    let mut config = valid_subject_access_config();
     config.evidence.claims[0].purpose = Some("machine_verification".to_string());
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(reason.contains("unallowed purpose"), "unexpected: {reason}");
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_claim_without_purpose() {
-    let mut config = valid_self_attestation_config();
+pub(super) fn subject_access_rejects_claim_without_purpose() {
+    let mut config = valid_subject_access_config();
     config.evidence.claims[0].purpose = None;
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
         reason.contains("must declare purpose"),
         "unexpected: {reason}"
@@ -817,11 +811,11 @@ pub(super) fn self_attestation_rejects_claim_without_purpose() {
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_unknown_profile_references() {
-    let mut config = valid_self_attestation_config();
-    config.self_attestation.credential_profiles = vec!["missing-profile".to_string()];
+pub(super) fn subject_access_rejects_unknown_profile_references() {
+    let mut config = valid_subject_access_config();
+    config.subject_access.credential_profiles = vec!["missing-profile".to_string()];
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
         reason.contains("unknown profile 'missing-profile'"),
         "unexpected: {reason}"
@@ -829,8 +823,8 @@ pub(super) fn self_attestation_rejects_unknown_profile_references() {
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_citizen_profile_validity_above_ceiling() {
-    let mut config = valid_self_attestation_config();
+pub(super) fn subject_access_rejects_citizen_profile_validity_above_ceiling() {
+    let mut config = valid_subject_access_config();
     config
         .evidence
         .credential_profiles
@@ -852,12 +846,12 @@ pub(super) fn self_attestation_rejects_citizen_profile_validity_above_ceiling() 
 }
 
 #[test]
-pub(super) fn self_attestation_accepts_citizen_profile_validity_at_configured_ceiling() {
+pub(super) fn subject_access_accepts_citizen_profile_validity_at_configured_ceiling() {
     const AGENCY_CREDENTIAL_VALIDITY_SECONDS: u64 = 31_536_000;
-    let mut config = valid_self_attestation_config();
+    let mut config = valid_subject_access_config();
     config.evidence.max_credential_validity_seconds = AGENCY_CREDENTIAL_VALIDITY_SECONDS;
     config
-        .self_attestation
+        .subject_access
         .token_policy
         .max_credential_validity_seconds = AGENCY_CREDENTIAL_VALIDITY_SECONDS;
     config
@@ -873,8 +867,8 @@ pub(super) fn self_attestation_accepts_citizen_profile_validity_at_configured_ce
 }
 
 #[test]
-pub(super) fn self_attestation_profile_without_validity_uses_default_under_ceiling() {
-    let mut config = valid_self_attestation_config();
+pub(super) fn subject_access_profile_without_validity_uses_default_under_ceiling() {
+    let mut config = valid_subject_access_config();
     let profile: CredentialProfileConfig = serde_norway::from_str(
         r#"
 format: application/dc+sd-jwt
@@ -901,7 +895,7 @@ disclosure:
 
     config
         .validate()
-        .expect("omitted credential validity defaults under self-attestation ceiling");
+        .expect("omitted credential validity defaults under subject-access ceiling");
     assert_eq!(
         config
             .evidence
@@ -914,8 +908,8 @@ disclosure:
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_profile_without_did_holder_binding() {
-    let mut config = valid_self_attestation_config();
+pub(super) fn subject_access_rejects_profile_without_did_holder_binding() {
+    let mut config = valid_subject_access_config();
     config
         .evidence
         .credential_profiles
@@ -924,7 +918,7 @@ pub(super) fn self_attestation_rejects_profile_without_did_holder_binding() {
         .holder_binding
         .mode = "none".to_string();
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
         reason.contains("holder_binding.mode must be did"),
         "unexpected: {reason}"
@@ -932,8 +926,8 @@ pub(super) fn self_attestation_rejects_profile_without_did_holder_binding() {
 }
 
 #[test]
-pub(super) fn self_attestation_rejects_profile_without_required_holder_proof() {
-    let mut config = valid_self_attestation_config();
+pub(super) fn subject_access_rejects_profile_without_required_holder_proof() {
+    let mut config = valid_subject_access_config();
     config
         .evidence
         .credential_profiles
@@ -942,7 +936,7 @@ pub(super) fn self_attestation_rejects_profile_without_required_holder_proof() {
         .holder_binding
         .proof_of_possession = None;
 
-    let reason = expect_self_attestation_error(&config);
+    let reason = expect_subject_access_error(&config);
     assert!(
         reason.contains("holder_binding.proof_of_possession must be required"),
         "unexpected: {reason}"
@@ -950,8 +944,8 @@ pub(super) fn self_attestation_rejects_profile_without_required_holder_proof() {
 }
 
 #[test]
-pub(super) fn self_attestation_keeps_did_jwk_proof_of_possession_validation() {
-    let mut config = valid_self_attestation_config();
+pub(super) fn subject_access_keeps_did_jwk_proof_of_possession_validation() {
+    let mut config = valid_subject_access_config();
     config
         .evidence
         .credential_profiles
@@ -1011,7 +1005,7 @@ pub(super) fn test_public_jwk(kid: &str, x: &str) -> PublicJwk {
 pub(super) fn valid_pre_auth_config() -> StandaloneRegistryNotaryConfig {
     let mut config = valid_oid4vci_config();
     config
-        .self_attestation
+        .subject_access
         .rate_limits
         .tx_code_attempts_per_code_per_minute = 5;
     config

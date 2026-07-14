@@ -417,7 +417,6 @@ server:
     mode: dedicated
     bind: 127.0.0.1:1
 auth:
-  mode: api_key
   api_keys:
     - id: test-key
       fingerprint:

@@ -73,11 +73,11 @@ pub trait EvidenceIssuerResolver: Send + Sync {
 #[derive(Clone)]
 pub struct RegistryNotaryApiState {
     pub(crate) evidence: Arc<EvidenceConfig>,
-    pub(crate) self_attestation: Arc<SelfAttestationConfig>,
+    pub(crate) subject_access: Arc<SubjectAccessConfig>,
     pub(crate) oid4vci: Arc<Oid4vciConfig>,
     pub(crate) federation: Arc<FederationConfig>,
-    pub(super) self_attestation_rate_limiter: Arc<SelfAttestationRateLimiter>,
-    pub(crate) self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
+    pub(super) subject_access_rate_limiter: Arc<SubjectAccessRateLimiter>,
+    pub(crate) subject_access_rate_keys: Arc<SubjectAccessRateLimitKeys>,
     pub(super) machine_quota_limiter: Arc<MachineQuotaLimiter>,
     pub(crate) replay: ReplayStores,
     pub(crate) credential_status: CredentialStatusStore,
@@ -122,9 +122,9 @@ impl RegistryNotaryApiState {
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
     ) -> Self {
-        Self::new_with_self_attestation(
+        Self::new_with_subject_access(
             evidence,
-            Arc::new(SelfAttestationConfig::default()),
+            Arc::new(SubjectAccessConfig::default()),
             audit_hasher,
             store,
             issuers,
@@ -132,16 +132,16 @@ impl RegistryNotaryApiState {
     }
 
     #[must_use]
-    pub fn new_with_self_attestation(
+    pub fn new_with_subject_access(
         evidence: Arc<EvidenceConfig>,
-        self_attestation: Arc<SelfAttestationConfig>,
+        subject_access: Arc<SubjectAccessConfig>,
         audit_hasher: AuditKeyHasher,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
     ) -> Self {
-        Self::new_with_self_attestation_and_oid4vci(
+        Self::new_with_subject_access_and_oid4vci(
             evidence,
-            self_attestation,
+            subject_access,
             Arc::new(Oid4vciConfig::default()),
             audit_hasher,
             store,
@@ -150,17 +150,17 @@ impl RegistryNotaryApiState {
     }
 
     #[must_use]
-    pub fn new_with_self_attestation_and_oid4vci(
+    pub fn new_with_subject_access_and_oid4vci(
         evidence: Arc<EvidenceConfig>,
-        self_attestation: Arc<SelfAttestationConfig>,
+        subject_access: Arc<SubjectAccessConfig>,
         oid4vci: Arc<Oid4vciConfig>,
         audit_hasher: AuditKeyHasher,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
     ) -> Self {
-        Self::new_with_self_attestation_and_oid4vci_hasher(
+        Self::new_with_subject_access_and_oid4vci_hasher(
             evidence,
-            self_attestation,
+            subject_access,
             oid4vci,
             audit_hasher,
             store,
@@ -169,16 +169,16 @@ impl RegistryNotaryApiState {
     }
 
     #[must_use]
-    pub fn new_with_self_attestation_hasher(
+    pub fn new_with_subject_access_hasher(
         evidence: Arc<EvidenceConfig>,
-        self_attestation: Arc<SelfAttestationConfig>,
+        subject_access: Arc<SubjectAccessConfig>,
         audit_hasher: AuditKeyHasher,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
     ) -> Self {
-        Self::new_with_self_attestation_and_oid4vci_hasher(
+        Self::new_with_subject_access_and_oid4vci_hasher(
             evidence,
-            self_attestation,
+            subject_access,
             Arc::new(Oid4vciConfig::default()),
             audit_hasher,
             store,
@@ -187,9 +187,9 @@ impl RegistryNotaryApiState {
     }
 
     #[must_use]
-    pub fn new_with_self_attestation_and_oid4vci_hasher(
+    pub fn new_with_subject_access_and_oid4vci_hasher(
         evidence: Arc<EvidenceConfig>,
-        self_attestation: Arc<SelfAttestationConfig>,
+        subject_access: Arc<SubjectAccessConfig>,
         oid4vci: Arc<Oid4vciConfig>,
         audit_hasher: AuditKeyHasher,
         store: Arc<EvidenceStore>,
@@ -197,7 +197,7 @@ impl RegistryNotaryApiState {
     ) -> Self {
         Self::new_with_runtime_blocks(
             evidence,
-            self_attestation,
+            subject_access,
             oid4vci,
             Arc::new(FederationConfig::default()),
             None,
@@ -214,7 +214,7 @@ impl RegistryNotaryApiState {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new_with_federation(
         evidence: Arc<EvidenceConfig>,
-        self_attestation: Arc<SelfAttestationConfig>,
+        subject_access: Arc<SubjectAccessConfig>,
         oid4vci: Arc<Oid4vciConfig>,
         federation: Arc<FederationConfig>,
         audit_hasher: AuditKeyHasher,
@@ -246,7 +246,7 @@ impl RegistryNotaryApiState {
             .map(Arc::new);
         Ok(Self::new_with_runtime_blocks(
             evidence,
-            self_attestation,
+            subject_access,
             oid4vci,
             federation,
             federation_runtime,
@@ -263,7 +263,7 @@ impl RegistryNotaryApiState {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new_with_runtime_blocks(
         evidence: Arc<EvidenceConfig>,
-        self_attestation: Arc<SelfAttestationConfig>,
+        subject_access: Arc<SubjectAccessConfig>,
         oid4vci: Arc<Oid4vciConfig>,
         federation: Arc<FederationConfig>,
         federation_runtime: Option<Arc<crate::federation::FederationRuntimeState>>,
@@ -275,10 +275,10 @@ impl RegistryNotaryApiState {
         issuers: Arc<dyn EvidenceIssuerResolver>,
         signer_readiness: SignerReadiness,
     ) -> Self {
-        let self_attestation_rate_limiter = Arc::new(SelfAttestationRateLimiter::new(
-            self_attestation.rate_limits.clone(),
+        let subject_access_rate_limiter = Arc::new(SubjectAccessRateLimiter::new(
+            subject_access.rate_limits.clone(),
         ));
-        let self_attestation_rate_keys = Arc::new(SelfAttestationRateLimitKeys::new(audit_hasher));
+        let subject_access_rate_keys = Arc::new(SubjectAccessRateLimitKeys::new(audit_hasher));
         let machine_quota_limiter = Arc::new(MachineQuotaLimiter::new(evidence.machine_quota));
         let issuer_runtime = Arc::new(IssuerRuntimeBundle {
             issuers,
@@ -293,11 +293,11 @@ impl RegistryNotaryApiState {
         });
         Self {
             evidence,
-            self_attestation,
+            subject_access,
             oid4vci,
             federation,
-            self_attestation_rate_limiter,
-            self_attestation_rate_keys,
+            subject_access_rate_limiter,
+            subject_access_rate_keys,
             machine_quota_limiter,
             replay,
             credential_status,
@@ -331,11 +331,10 @@ impl RegistryNotaryApiState {
         state_plane: Arc<crate::state_plane::NotaryStatePlaneHandle>,
         audit_hasher: AuditKeyHasher,
     ) -> Self {
-        self.self_attestation_rate_limiter =
-            Arc::new(SelfAttestationRateLimiter::with_state_plane(
-                self.self_attestation.rate_limits.clone(),
-                Arc::clone(&state_plane),
-            ));
+        self.subject_access_rate_limiter = Arc::new(SubjectAccessRateLimiter::with_state_plane(
+            self.subject_access.rate_limits.clone(),
+            Arc::clone(&state_plane),
+        ));
         self.machine_quota_limiter = Arc::new(MachineQuotaLimiter::with_state_plane(
             self.evidence.machine_quota,
             state_plane,
@@ -503,8 +502,8 @@ impl RegistryNotaryApiState {
     }
 
     pub(crate) fn runtime(&self) -> RegistryNotaryRuntime {
-        let runtime = RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(
-            &self.self_attestation_rate_keys,
+        let runtime = RegistryNotaryRuntime::new_with_subject_access_rate_keys(Arc::clone(
+            &self.subject_access_rate_keys,
         ))
         .with_activated_relay(self.activated_relay.get().map(Arc::clone));
         #[cfg(feature = "registry-notary-cel")]

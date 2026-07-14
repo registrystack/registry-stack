@@ -4,21 +4,22 @@ use super::*;
 use super::{credentials::*, infrastructure::*, issuance::*, preauth::*, root::*};
 
 #[test]
-pub(super) fn oidc_auth_mode_requires_oidc_block() {
+pub(super) fn at_least_one_authenticator_is_required() {
     let mut config = minimal_config();
-    config.auth.mode = EvidenceAuthMode::Oidc;
+    config.auth.api_keys.clear();
+    config.auth.bearer_tokens.clear();
+    config.auth.oidc = None;
 
     let err = config
         .validate()
-        .expect_err("oidc mode requires OIDC settings");
+        .expect_err("an empty auth configuration must fail");
 
-    assert!(matches!(err, EvidenceConfigError::MissingOidcConfig));
+    assert!(matches!(err, EvidenceConfigError::NoCredentialsConfigured));
 }
 
 #[test]
-pub(super) fn oidc_auth_mode_validates_required_settings() {
+pub(super) fn oidc_auth_validates_required_settings() {
     let mut config = minimal_config();
-    config.auth.mode = EvidenceAuthMode::Oidc;
     config.auth.api_keys.clear();
     config.auth.oidc = Some(EvidenceOidcAuthConfig {
         issuer: "https://issuer.example".to_string(),
@@ -107,7 +108,6 @@ pub(super) fn duplicate_static_credential_id_across_api_key_and_bearer_token_rej
 #[test]
 pub(super) fn oidc_jwks_url_must_use_https() {
     let mut config = minimal_config();
-    config.auth.mode = EvidenceAuthMode::Oidc;
     config.auth.api_keys.clear();
     config.auth.oidc = Some(EvidenceOidcAuthConfig {
         issuer: "https://issuer.example".to_string(),
@@ -154,7 +154,6 @@ pub(super) fn oidc_jwks_url_must_use_https() {
 #[test]
 pub(super) fn oidc_jwks_url_allows_insecure_localhost_only_when_enabled() {
     let mut config = minimal_config();
-    config.auth.mode = EvidenceAuthMode::Oidc;
     config.auth.api_keys.clear();
     config.auth.oidc = Some(EvidenceOidcAuthConfig {
         issuer: "https://issuer.example".to_string(),
@@ -196,7 +195,6 @@ pub(super) fn api_key_plaintext_is_never_loaded_only_fingerprint() {
 evidence:
   enabled: true
 auth:
-  mode: api_key
   api_keys:
     - id: test-key
       token_env: TEST_TOKEN
@@ -217,7 +215,6 @@ pub(super) fn legacy_api_key_fingerprint_commitment_rejected() {
 evidence:
   enabled: true
 auth:
-  mode: api_key
   api_keys:
     - id: test-key
       fingerprint:
@@ -242,7 +239,6 @@ pub(super) fn legacy_bearer_token_fingerprint_commitment_rejected() {
 evidence:
   enabled: true
 auth:
-  mode: api_key
   bearer_tokens:
     - id: test-bearer
       fingerprint:
@@ -261,7 +257,7 @@ auth:
 }
 
 #[test]
-pub(super) fn unsupported_auth_mode_is_rejected_at_parse_time() {
+pub(super) fn removed_auth_mode_is_rejected_at_parse_time() {
     let err = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
         r#"
 evidence:
@@ -270,18 +266,18 @@ auth:
   mode: oauth2
 "#,
     )
-    .expect_err("unknown auth mode must fail deserialization");
+    .expect_err("the removed auth mode field must fail deserialization");
 
     let message = err.to_string();
     assert!(
-        message.contains("oauth2") || message.contains("unknown variant"),
+        message.contains("mode") || message.contains("unknown field"),
         "unexpected error: {message}"
     );
 }
 
 #[test]
-pub(super) fn oidc_auth_rejects_static_credentials() {
-    let mut config = valid_self_attestation_config();
+pub(super) fn oidc_auth_allows_api_key_credentials() {
+    let mut config = valid_subject_access_config();
     config.auth.api_keys.push(EvidenceCredentialConfig {
         id: "legacy-api-key".to_string(),
         fingerprint: CredentialFingerprintRef {
@@ -289,20 +285,35 @@ pub(super) fn oidc_auth_rejects_static_credentials() {
             name: Some("LEGACY_API_KEY_HASH".to_string()),
             path: None,
         },
-        scopes: vec!["self_attestation".to_string()],
+        scopes: vec!["subject_access".to_string()],
+        authorization_details: None,
+    });
+
+    config
+        .validate()
+        .expect("OIDC and API-key authenticators use distinct carriers");
+}
+
+#[test]
+pub(super) fn oidc_auth_rejects_static_bearer_credentials() {
+    let mut config = valid_subject_access_config();
+    config.auth.bearer_tokens.push(EvidenceCredentialConfig {
+        id: "ambiguous-bearer".to_string(),
+        fingerprint: CredentialFingerprintRef {
+            provider: registry_platform_authcommon::CredentialFingerprintProvider::Env,
+            name: Some("AMBIGUOUS_BEARER_HASH".to_string()),
+            path: None,
+        },
+        scopes: vec!["subject_access".to_string()],
         authorization_details: None,
     });
 
     let reason = match config
         .validate()
-        .expect_err("OIDC mode must not accept static credentials")
+        .expect_err("OIDC and static bearer tokens share one carrier")
     {
         EvidenceConfigError::InvalidOidcConfig { reason } => reason,
         other => panic!("unexpected error variant: {other}"),
     };
-
-    assert!(
-        reason.contains("auth.api_keys"),
-        "unexpected error reason: {reason}"
-    );
+    assert!(reason.contains("Authorization: Bearer"));
 }

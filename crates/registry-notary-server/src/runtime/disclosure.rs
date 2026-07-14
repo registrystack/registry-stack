@@ -37,7 +37,7 @@ pub(super) fn redact_object_fields(
 }
 
 pub(super) fn view_claim(
-    self_attestation_rate_keys: &SelfAttestationRateLimitKeys,
+    subject_access_rate_keys: &SubjectAccessRateLimitKeys,
     result: &ClaimResultInternal,
     claim: &ClaimDefinition,
     disclosure: DisclosureProfile,
@@ -101,9 +101,9 @@ pub(super) fn view_claim(
         requester_ref: result
             .requester
             .as_ref()
-            .map(|requester| entity_ref_view(self_attestation_rate_keys, "requester", requester))
+            .map(|requester| entity_ref_view(subject_access_rate_keys, "requester", requester))
             .transpose()?,
-        target_ref: target_ref_view(self_attestation_rate_keys, &result.target)?,
+        target_ref: target_ref_view(subject_access_rate_keys, &result.target)?,
         value,
         satisfied,
         disclosure: effective_disclosure.as_str().to_string(),

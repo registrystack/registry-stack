@@ -113,12 +113,13 @@ pub(in crate::api) fn oid4vci_error_response(error: Oid4vciWireError) -> Respons
 
 pub(in crate::api) fn oid4vci_error_from_evidence(error: &EvidenceError) -> Oid4vciWireError {
     match error {
-        EvidenceError::SelfAttestationRateLimited => Oid4vciWireError::RateLimited,
+        EvidenceError::SubjectAccessRateLimited => Oid4vciWireError::RateLimited,
         EvidenceError::HolderProofRequired | EvidenceError::HolderProofReplay => {
             Oid4vciWireError::InvalidProof
         }
-        EvidenceError::SelfAttestationInvalidToken
-        | EvidenceError::SelfAttestationAssuranceDenied => Oid4vciWireError::InvalidToken,
+        EvidenceError::SubjectAccessInvalidToken | EvidenceError::SubjectAccessAssuranceDenied => {
+            Oid4vciWireError::InvalidToken
+        }
         EvidenceError::FormatUnsupported | EvidenceError::CredentialIssuerNotConfigured => {
             Oid4vciWireError::UnsupportedCredentialType
         }

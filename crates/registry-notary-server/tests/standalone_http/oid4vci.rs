@@ -15,7 +15,7 @@ pub(super) async fn oid4vci_metadata_offer_and_nonce_are_public() {
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_oid4vci_config(
+    let app = standalone_router(subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -85,14 +85,14 @@ pub(super) async fn oid4vci_nonce_is_rate_limited_before_reservation() {
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
     );
     config
-        .self_attestation
+        .subject_access
         .rate_limits
         .invalid_token_per_client_address_per_minute = 2;
     let app = standalone_router(config).expect("standalone router builds");
@@ -133,7 +133,7 @@ pub(super) async fn oid4vci_type_metadata_is_public_and_matches_configured_vct()
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -222,7 +222,7 @@ pub(super) async fn oid4vci_type_metadata_normalizes_forwarded_scheme_and_host_c
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -282,7 +282,7 @@ pub(super) async fn oid4vci_type_metadata_supports_nested_paths_and_public_404s(
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -331,7 +331,7 @@ pub(super) async fn oid4vci_type_metadata_supports_path_prefixed_issuer_behind_s
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -391,7 +391,7 @@ pub(super) async fn oid4vci_type_metadata_is_not_served_when_oid4vci_is_disabled
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -419,7 +419,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_is_public_and_matches_confi
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -481,7 +481,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_supports_nested_paths_and_p
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -530,7 +530,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_is_not_served_when_oid4vci_
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -558,7 +558,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_keeps_protected_routes_auth
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -594,7 +594,7 @@ pub(super) async fn oid4vci_type_metadata_well_known_serves_wallet_cors() {
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -652,7 +652,7 @@ pub(super) async fn public_probe_routes_remain_public_except_metrics() {
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -723,7 +723,7 @@ pub(super) async fn manifest_public_protected_routes_are_mounted_behind_auth() {
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -1021,7 +1021,7 @@ pub(super) async fn disabled_oid4vci_credential_route_stays_hidden_for_malformed
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_oidc_config(
+    let app = standalone_router(subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -1049,7 +1049,7 @@ pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -1067,7 +1067,7 @@ pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
             "status_admin".to_string(),
             vec!["registry_notary:admin".to_string()],
         );
-    config.self_attestation.allowed_operations.issue_credential = true;
+    config.subject_access.allowed_operations.issue_credential = true;
     config
         .evidence
         .claims
@@ -1104,7 +1104,7 @@ pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation person-is-alive",
+        "scope": "subject_access person-is-alive",
         "national_id": "person-1",
         "authorization_details": [{
             "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
@@ -1284,10 +1284,10 @@ pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
                 && record["status"] == json!(200)
         })
         .expect("OID4VCI credential audit record exists");
-    assert_eq!(credential_audit["access_mode"], json!("self_attestation"));
+    assert_eq!(credential_audit["access_mode"], json!("subject_bound"));
     assert_eq!(
         credential_audit["purposes"],
-        json!(["citizen_self_attestation"])
+        json!(["citizen_subject_access"])
     );
     assert_eq!(credential_audit["protocol"], json!("openid4vci"));
     assert_eq!(
@@ -1315,7 +1315,7 @@ pub(super) async fn oid4vci_field_projection_issues_separate_disclosures() {
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -1361,7 +1361,7 @@ pub(super) async fn oid4vci_field_projection_issues_separate_disclosures() {
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation person-is-alive",
+        "scope": "subject_access person-is-alive",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -1421,13 +1421,13 @@ pub(super) async fn oid4vci_credential_route_rejects_replayed_nonce() {
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
     );
-    config.self_attestation.allowed_operations.issue_credential = true;
+    config.subject_access.allowed_operations.issue_credential = true;
     config
         .evidence
         .claims
@@ -1454,7 +1454,7 @@ pub(super) async fn oid4vci_credential_route_rejects_replayed_nonce() {
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation person-is-alive",
+        "scope": "subject_access person-is-alive",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -1514,13 +1514,13 @@ pub(super) async fn oid4vci_malformed_proof_is_rejected_before_oidc_auth() {
         .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
     );
-    config.self_attestation.subject_binding.claim_source = SelfAttestationClaimSource::Userinfo;
+    config.subject_access.subject_binding.claim_source = SubjectAccessClaimSource::Userinfo;
     config
         .auth
         .oidc
@@ -1534,7 +1534,7 @@ pub(super) async fn oid4vci_malformed_proof_is_rejected_before_oidc_auth() {
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "auth_time": now,
         "iat": now,
         "exp": now + 300,

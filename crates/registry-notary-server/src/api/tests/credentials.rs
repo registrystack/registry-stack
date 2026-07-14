@@ -77,7 +77,7 @@ async fn issue_credential_fails_closed_when_status_record_write_fails() {
             created_at: "2026-05-23T00:00:00Z".to_string(),
             expires_at: "2999-01-01T00:00:00Z".to_string(),
             request_hash: "request-hash".to_string(),
-            self_attestation: None,
+            subject_access: None,
         })
         .await
         .expect("evaluation inserts");
@@ -92,7 +92,7 @@ async fn issue_credential_fails_closed_when_status_record_write_fails() {
     let state = Arc::new(
         RegistryNotaryApiState::new_with_federation(
             Arc::new(evidence),
-            Arc::new(SelfAttestationConfig::default()),
+            Arc::new(SubjectAccessConfig::default()),
             Arc::new(Oid4vciConfig::default()),
             Arc::new(FederationConfig::default()),
             AuditKeyHasher::unkeyed_dev_only(),
@@ -163,14 +163,14 @@ async fn issue_credential_rejects_purpose_mismatch() {
             created_at: "2026-05-23T00:00:00Z".to_string(),
             expires_at: "2999-01-01T00:00:00Z".to_string(),
             request_hash: "request-hash".to_string(),
-            self_attestation: None,
+            subject_access: None,
         })
         .await
         .expect("evaluation inserts");
     let state = Arc::new(
         RegistryNotaryApiState::new_with_federation(
             Arc::new(evidence),
-            Arc::new(SelfAttestationConfig::default()),
+            Arc::new(SubjectAccessConfig::default()),
             Arc::new(Oid4vciConfig::default()),
             Arc::new(FederationConfig::default()),
             AuditKeyHasher::unkeyed_dev_only(),

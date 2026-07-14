@@ -72,7 +72,7 @@ pub(crate) struct PreAuthRuntime {
     /// How the subject-binding claim is sourced. `Userinfo` makes the callback
     /// fetch the eSignet userinfo JWS; otherwise the binding value is read from
     /// the `id_token`.
-    subject_binding_claim_source: SelfAttestationClaimSource,
+    subject_binding_claim_source: SubjectAccessClaimSource,
     /// Claim name that must bind the credential subject during the citizen
     /// login leg.
     subject_binding_claim: String,
@@ -239,8 +239,8 @@ impl PreAuthRuntime {
                 let url = esignet.userinfo_url.trim();
                 (!url.is_empty()).then(|| url.to_string())
             },
-            subject_binding_claim_source: config.self_attestation.subject_binding.claim_source,
-            subject_binding_claim: config.self_attestation.subject_binding.token_claim.clone(),
+            subject_binding_claim_source: config.subject_access.subject_binding.claim_source,
+            subject_binding_claim: config.subject_access.subject_binding.token_claim.clone(),
             esignet_id_token_verifier,
             fetch_url_policy,
             login_state_ttl_seconds: esignet.login_state_ttl_seconds,
@@ -345,7 +345,7 @@ impl PreAuthRuntime {
     fn authorization_claims_param(&self) -> Option<String> {
         if !matches!(
             self.subject_binding_claim_source,
-            SelfAttestationClaimSource::Userinfo
+            SubjectAccessClaimSource::Userinfo
         ) {
             return None;
         }
@@ -402,7 +402,7 @@ impl PreAuthRuntime {
             return Err(EvidenceError::MissingCredential);
         }
         let subject_binding_value = match self.subject_binding_claim_source {
-            SelfAttestationClaimSource::Userinfo => {
+            SubjectAccessClaimSource::Userinfo => {
                 self.subject_binding_value_from_userinfo(
                     &verified,
                     subject_binding_claim,
@@ -410,7 +410,7 @@ impl PreAuthRuntime {
                 )
                 .await?
             }
-            SelfAttestationClaimSource::AccessToken => {
+            SubjectAccessClaimSource::AccessToken => {
                 subject_binding_value_from_id_token(&verified, subject_binding_claim)?
             }
         };
@@ -729,7 +729,7 @@ pub(crate) struct PreAuthAuditFields {
     pub(crate) principal_id_hash: Option<Hashed<PrincipalIdentifier>>,
     pub(crate) correlation_id_hash: Option<Hashed<RequestIdentifier>>,
     pub(crate) credential_configuration_id: Option<registry_notary_core::ConfigMetadata>,
-    pub(crate) denial_code: Option<SelfAttestationDenialCode>,
+    pub(crate) denial_code: Option<SubjectAccessDenialCode>,
     pub(crate) rate_limit_bucket: Option<RateLimitBucket>,
 }
 
@@ -763,7 +763,7 @@ pub(crate) fn pre_auth_audit_event(
         relay_consultation_ids: Vec::new(),
         forwarded: None,
         error_code: None,
-        access_mode: Some(AccessMode::SelfAttestation),
+        access_mode: Some(AccessMode::SubjectBound),
         federation_peer_id_hash: None,
         federation_issuer: None,
         federation_profile: None,

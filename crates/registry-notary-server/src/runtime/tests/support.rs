@@ -102,19 +102,19 @@ fn machine_principal() -> EvidencePrincipal {
     }
 }
 
-fn self_attestation_principal() -> EvidencePrincipal {
+fn subject_access_principal() -> EvidencePrincipal {
     EvidencePrincipal {
         auth_profile_id: registry_notary_core::EvidenceAuthProfileId::ExternalOidc,
         principal_id: "citizen".to_string(),
-        scopes: vec!["self_attestation".to_string()],
-        access_mode: AccessMode::SelfAttestation,
+        scopes: vec!["subject_access".to_string()],
+        access_mode: AccessMode::SubjectBound,
         verified_claims: None,
         authorization_details: None,
     }
 }
 
 fn delegated_attestation_capability(
-    keys: &SelfAttestationRateLimitKeys,
+    keys: &SubjectAccessRateLimitKeys,
     requester_subject: &str,
     dependent_subject: &str,
 ) -> EvaluationCapability {

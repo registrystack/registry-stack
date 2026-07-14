@@ -156,10 +156,10 @@ pub fn format_time(value: OffsetDateTime) -> String {
 }
 
 pub(super) fn target_ref_view(
-    self_attestation_rate_keys: &SelfAttestationRateLimitKeys,
+    subject_access_rate_keys: &SubjectAccessRateLimitKeys,
     target: &EvidenceEntity,
 ) -> Result<TargetRefView, EvidenceError> {
-    let entity_ref = entity_ref_view(self_attestation_rate_keys, "target", target)?;
+    let entity_ref = entity_ref_view(subject_access_rate_keys, "target", target)?;
     Ok(TargetRefView {
         entity_type: entity_ref.entity_type,
         handle: entity_ref.handle,
@@ -169,7 +169,7 @@ pub(super) fn target_ref_view(
 }
 
 pub(super) fn entity_ref_view(
-    self_attestation_rate_keys: &SelfAttestationRateLimitKeys,
+    subject_access_rate_keys: &SubjectAccessRateLimitKeys,
     role: &str,
     entity: &EvidenceEntity,
 ) -> Result<EvidenceEntityRef, EvidenceError> {
@@ -181,7 +181,7 @@ pub(super) fn entity_ref_view(
         "attributes": entity.attributes,
     })
     .to_string();
-    let hash = self_attestation_rate_keys
+    let hash = subject_access_rate_keys
         .subject_ref(role, &stable_input)
         .map_err(|error| error.evidence_error())?;
     let mut identifier_schemes: Vec<String> = entity

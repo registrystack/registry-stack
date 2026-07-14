@@ -2,7 +2,7 @@
 
     #[test]
     fn value_disclosure_rejects_object_redaction_when_configured_field_is_absent() {
-        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let keys = SubjectAccessRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
         let mut claim = test_claim("selected", Vec::new(), false);
         claim.value.value_type = "object".to_string();
         let result = test_claim_result(
@@ -25,7 +25,7 @@
 
     #[test]
     fn value_disclosure_removes_every_configured_object_redaction_field() {
-        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let keys = SubjectAccessRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
         let mut claim = test_claim("selected", Vec::new(), false);
         claim.value.value_type = "object".to_string();
         let result = test_claim_result(
@@ -48,7 +48,7 @@
 
     #[test]
     fn predicate_disclosure_rejects_redacted_claim_result() {
-        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let keys = SubjectAccessRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
         let mut claim = test_claim("selected", Vec::new(), false);
         claim.disclosure.allowed.push("predicate".to_string());
         let result = test_claim_result(
@@ -71,7 +71,7 @@
 
     #[test]
     fn redacted_scalar_disclosure_reports_redacted_claim_id() {
-        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let keys = SubjectAccessRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
         let claim = test_claim("opencrvs-age-band", Vec::new(), false);
         let result = test_claim_result("opencrvs-age-band", json!("child"), BTreeSet::new());
 
@@ -92,7 +92,7 @@
     async fn issued_sd_jwt_disclosure_uses_view_claim_redacted_object_value() {
         const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 
-        let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+        let keys = SubjectAccessRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
         let mut claim = test_claim("household-summary", Vec::new(), false);
         claim.value.value_type = "object".to_string();
         let result = test_claim_result(

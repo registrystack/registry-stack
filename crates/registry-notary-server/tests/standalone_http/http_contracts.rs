@@ -330,14 +330,14 @@ pub(super) async fn cors_csp_corp_headers_present_and_corp_conditional() {
 }
 
 #[tokio::test]
-pub(super) async fn self_attestation_cors_uses_wallet_origins_on_browser_paths() {
+pub(super) async fn subject_access_cors_uses_wallet_origins_on_browser_paths() {
     set_audit_secret();
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -397,14 +397,14 @@ pub(super) async fn self_attestation_cors_uses_wallet_origins_on_browser_paths()
 }
 
 #[tokio::test]
-pub(super) async fn self_attestation_preflight_uses_wallet_origin_allow_list() {
+pub(super) async fn subject_access_preflight_uses_wallet_origin_allow_list() {
     set_audit_secret();
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),

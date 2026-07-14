@@ -29,7 +29,7 @@ pub(in super::super) async fn auth_audit_middleware(
             purposes: None,
             row_count: None,
             access_mode: Some(AccessMode::Unknown),
-            denial_code: Some(SelfAttestationDenialCode::RateLimited),
+            denial_code: Some(SubjectAccessDenialCode::RateLimited),
             token_claim_name: None,
             credential_profile: None,
             protocol: None,
@@ -74,7 +74,7 @@ pub(in super::super) async fn auth_audit_middleware(
                     purposes: None,
                     row_count: None,
                     access_mode: Some(AccessMode::Unknown),
-                    denial_code: Some(SelfAttestationDenialCode::RateLimited),
+                    denial_code: Some(SubjectAccessDenialCode::RateLimited),
                     token_claim_name: None,
                     credential_profile: None,
                     protocol: None,
@@ -178,13 +178,13 @@ pub(in super::super) async fn maybe_rate_limit_auth_rejection_before_auth(
     state: &AuthAuditState,
     credentials: &RequestCredentials,
     client_address: &str,
-) -> Result<(), crate::SelfAttestationRateLimitError> {
+) -> Result<(), crate::SubjectAccessRateLimitError> {
     if credentials.bearer_token.is_none() && !credentials.are_absent() {
         return Ok(());
     }
     let (Some(limiter), Some(keys)) = (
-        state.self_attestation_invalid_token_limiter.as_ref(),
-        state.self_attestation_rate_keys.as_ref(),
+        state.subject_access_invalid_token_limiter.as_ref(),
+        state.subject_access_rate_keys.as_ref(),
     ) else {
         return Ok(());
     };
@@ -197,10 +197,10 @@ pub(in super::super) async fn maybe_rate_limit_auth_rejection_before_auth(
 pub(in super::super) async fn consume_auth_rejection_after_auth_failure(
     state: &AuthAuditState,
     client_address: &str,
-) -> Result<(), crate::SelfAttestationRateLimitError> {
+) -> Result<(), crate::SubjectAccessRateLimitError> {
     let (Some(limiter), Some(keys)) = (
-        state.self_attestation_invalid_token_limiter.as_ref(),
-        state.self_attestation_rate_keys.as_ref(),
+        state.subject_access_invalid_token_limiter.as_ref(),
+        state.subject_access_rate_keys.as_ref(),
     ) else {
         return Ok(());
     };

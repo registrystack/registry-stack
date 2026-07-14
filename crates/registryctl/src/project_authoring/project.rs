@@ -356,12 +356,14 @@ fn lower_project_integration(
                     request_fixture: reason.request_fixture.clone(),
                 }
             }),
-            subject_mismatch: authored.not_applicable.subject_mismatch.as_ref().map(|reason| {
-                NotApplicableReason {
+            subject_mismatch: authored
+                .not_applicable
+                .subject_mismatch
+                .as_ref()
+                .map(|reason| NotApplicableReason {
                     rationale: reason.rationale.clone(),
                     request_fixture: reason.request_fixture.clone(),
-                }
-            }),
+                }),
         },
         bounds: BoundsDeclaration {
             calls: 0,
@@ -400,9 +402,9 @@ fn validate_not_applicable(
         }
         let _ = validate_not_applicable_evidence(alias, "ambiguity", reason, fixtures)?;
         if let CapabilityDeclaration::Snapshot { snapshot } = &integration.capability {
-            let entity = entities
-                .get(&snapshot.entity)
-                .ok_or_else(|| anyhow!("snapshot ambiguity evidence references an unknown entity"))?;
+            let entity = entities.get(&snapshot.entity).ok_or_else(|| {
+                anyhow!("snapshot ambiguity evidence references an unknown entity")
+            })?;
             if !snapshot.exact.contains_key(&entity.document.primary_key) {
                 bail!(
                     "snapshot ambiguity may be not_applicable only when exact selectors include the entity primary_key"
@@ -514,8 +516,7 @@ fn validate_subject_mismatch_contract(
                 "integration {alias} must provide a fixture expecting failure.subject_mismatch or declare not_applicable.subject_mismatch with request evidence"
             )
         })?;
-    let evidence =
-        validate_not_applicable_evidence(alias, "subject_mismatch", reason, fixtures)?;
+    let evidence = validate_not_applicable_evidence(alias, "subject_mismatch", reason, fixtures)?;
     if exposes_comparable_subject(integration) {
         bail!(
             "integration {alias} subject mismatch may be not_applicable only when the reviewed response contract has no selector-comparable identifier"
@@ -527,12 +528,16 @@ fn validate_subject_mismatch_contract(
         .filter(|(_, declaration)| declaration.role == AuthoredInputRole::Selector)
         .filter_map(|(name, _)| evidence.input.get(name))
         .collect::<Vec<_>>();
-    if evidence.interactions.iter().any(|interaction| match &interaction.respond {
-        FixtureSourceResponse::Http { body, .. } => selector_values
-            .iter()
-            .any(|selector| json_contains_scalar(body, selector)),
-        FixtureSourceResponse::Timeout { .. } => false,
-    }) {
+    if evidence
+        .interactions
+        .iter()
+        .any(|interaction| match &interaction.respond {
+            FixtureSourceResponse::Http { body, .. } => selector_values
+                .iter()
+                .any(|selector| json_contains_scalar(body, selector)),
+            FixtureSourceResponse::Timeout { .. } => false,
+        })
+    {
         bail!(
             "integration {alias} subject mismatch request evidence contains a selector-comparable response identifier"
         );
@@ -1837,7 +1842,10 @@ fn validate_integration(alias: &str, integration: &IntegrationDocument) -> Resul
     }
     let operations = integration_operations(integration);
     let http = matches!(integration.capability, CapabilityDeclaration::Http { .. });
-    let snapshot = matches!(integration.capability, CapabilityDeclaration::Snapshot { .. });
+    let snapshot = matches!(
+        integration.capability,
+        CapabilityDeclaration::Snapshot { .. }
+    );
     if (http && operations.is_empty()) || operations.len() > MAX_OPERATIONS + 2 {
         bail!("compiled source plan exceeds the v1 operation bound");
     }
@@ -1955,7 +1963,7 @@ fn validate_environment(
     {
         bail!("environment contains an unknown project entity");
     }
-    if requires_notary && environment.callers.is_empty() {
+    if requires_notary && environment.callers.is_empty() && environment.oid4vci.is_none() {
         bail!("a Notary environment must bind at least one authenticated caller");
     }
     if !requires_notary && !environment.callers.is_empty() {
@@ -2002,11 +2010,7 @@ fn validate_environment(
         if relay.allowed_clients.is_empty() && environment.notary_relay.is_none() {
             bail!("a Relay environment must admit at least one OIDC client");
         }
-        validate_https_or_local_loopback_resource(
-            &relay.jwks_url,
-            "Relay OIDC JWKS URL",
-            local,
-        )?;
+        validate_https_or_local_loopback_resource(&relay.jwks_url, "Relay OIDC JWKS URL", local)?;
     }
     if let Some(connection) = &environment.notary_relay {
         validate_token(
@@ -2034,6 +2038,9 @@ fn validate_environment(
             "Notary PostgreSQL root_certificate_path",
         )?;
     }
+    if let Some(oid4vci) = &environment.oid4vci {
+        validate_oid4vci_binding(project, environment, oid4vci)?;
+    }
     if let Some(relay) = &environment.deployment.relay {
         validate_stable_id(&relay.service, "Relay service id")?;
     }
@@ -2048,6 +2055,182 @@ fn validate_environment(
                 bail!("script requires a released project-authoring runtime");
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_oid4vci_binding(
+    project: &RegistryProject,
+    environment: &EnvironmentDocument,
+    binding: &Oid4vciBinding,
+) -> Result<()> {
+    if environment.notary_state.is_none() {
+        bail!("OID4VCI requires a Notary PostgreSQL state binding");
+    }
+    let local = matches!(environment.deployment.profile, DeploymentProfile::Local);
+    validate_https_or_local_loopback_origin(
+        &binding.public_base_url,
+        "OID4VCI public base URL",
+        local,
+    )?;
+    validate_https_or_local_loopback_origin(
+        &binding.authorization_server.issuer,
+        "OID4VCI authorization server issuer",
+        local,
+    )?;
+    for (field, value) in [
+        (
+            "OID4VCI authorization server JWKS URL",
+            binding.authorization_server.jwks_url.as_str(),
+        ),
+        (
+            "OID4VCI authorization server userinfo URL",
+            binding.authorization_server.userinfo_url.as_str(),
+        ),
+        (
+            "OID4VCI authorization server authorize URL",
+            binding.authorization_server.authorize_url.as_str(),
+        ),
+        (
+            "OID4VCI authorization server token URL",
+            binding.authorization_server.token_url.as_str(),
+        ),
+        ("OID4VCI redirect URI", binding.redirect_uri.as_str()),
+    ] {
+        validate_https_or_local_loopback_resource(value, field, local)?;
+    }
+    for (field, value) in [
+        (
+            "OID4VCI authorization server JWKS URL",
+            binding.authorization_server.jwks_url.as_str(),
+        ),
+        (
+            "OID4VCI authorization server userinfo URL",
+            binding.authorization_server.userinfo_url.as_str(),
+        ),
+        (
+            "OID4VCI authorization server token URL",
+            binding.authorization_server.token_url.as_str(),
+        ),
+    ] {
+        validate_resource_origin(value, &binding.authorization_server.issuer, field)?;
+    }
+    let public_base_url = binding.public_base_url.trim_end_matches('/');
+    if binding.redirect_uri != format!("{public_base_url}/oid4vci/offer/callback") {
+        bail!("OID4VCI redirect URI must be the public Notary offer callback");
+    }
+
+    if binding.allowed_wallet_origins.is_empty() || binding.allowed_wallet_origins.len() > 16 {
+        bail!("OID4VCI allowed_wallet_origins must contain between one and 16 exact origins");
+    }
+    let mut wallet_origins = BTreeSet::new();
+    for origin in &binding.allowed_wallet_origins {
+        validate_https_origin(origin, "OID4VCI wallet origin")?;
+        if !wallet_origins.insert(origin) {
+            bail!("OID4VCI allowed_wallet_origins must not contain duplicates");
+        }
+    }
+
+    validate_stable_id(&binding.credential.service, "OID4VCI credential service")?;
+    validate_stable_id(&binding.credential.profile, "OID4VCI credential profile")?;
+    let service = project
+        .services
+        .get(&binding.credential.service)
+        .ok_or_else(|| anyhow!("OID4VCI references an unknown project service"))?;
+    if service.kind != ServiceKind::Evidence {
+        bail!("OID4VCI credential service must be an evidence service");
+    }
+    if service.access.scopes.len() != 1 {
+        bail!("OID4VCI credential service must declare exactly one access scope");
+    }
+    let credential = service
+        .credential_profiles
+        .get(&binding.credential.profile)
+        .ok_or_else(|| anyhow!("OID4VCI references an unknown credential profile"))?;
+    if credential.claims.len() != 1 {
+        bail!("OID4VCI v1 credential profiles must select exactly one claim");
+    }
+    service
+        .claims
+        .get(&credential.claims[0])
+        .ok_or_else(|| anyhow!("OID4VCI credential profile claim is absent"))?;
+    if normalize_credential_format(&credential.format) != "application/dc+sd-jwt" {
+        bail!("OID4VCI credential profile format must be dc+sd-jwt");
+    }
+    let validity_seconds = parse_validity_seconds(&credential.validity)?;
+    if validity_seconds == 0 || validity_seconds > 600 {
+        bail!("OID4VCI credential validity must be between one and 600 seconds");
+    }
+    validate_https_or_local_loopback_resource(
+        &credential.credential_type,
+        "OID4VCI credential type",
+        local,
+    )?;
+    validate_resource_origin(
+        &credential.credential_type,
+        &binding.public_base_url,
+        "OID4VCI credential type",
+    )?;
+    let credential_path = url::Url::parse(&credential.credential_type)
+        .context("OID4VCI credential type is invalid")?
+        .path()
+        .to_string();
+    if !credential_path.starts_with("/credentials/") {
+        bail!("OID4VCI credential type path must start with /credentials/");
+    }
+
+    validate_token(&binding.client.id, "OID4VCI client id", 256)?;
+    validate_secret_reference(&binding.client.signing_key)?;
+    validate_token(
+        &binding.client.signing_kid,
+        "OID4VCI client signing_kid",
+        2048,
+    )?;
+    validate_secret_reference(&binding.access_token.signing_key)?;
+    validate_token(
+        &binding.access_token.signing_kid,
+        "OID4VCI access-token signing_kid",
+        2048,
+    )?;
+    validate_secret_reference(&binding.sensitive_state_key)?;
+    validate_token(
+        &binding.subject.token_claim,
+        "OID4VCI subject token claim",
+        256,
+    )?;
+    validate_token(&binding.subject.id_type, "OID4VCI subject id type", 256)?;
+
+    let issuance = environment
+        .issuance
+        .as_ref()
+        .ok_or_else(|| anyhow!("OID4VCI requires an issuance binding"))?;
+    let secret_names = [
+        issuance.signing_key.secret.as_str(),
+        binding.client.signing_key.secret.as_str(),
+        binding.access_token.signing_key.secret.as_str(),
+    ];
+    if secret_names.into_iter().collect::<BTreeSet<_>>().len() != secret_names.len() {
+        bail!("OID4VCI issuer, client, and access-token signing keys must be distinct");
+    }
+    let signing_kids = [
+        issuance.signing_kid.as_str(),
+        binding.client.signing_kid.as_str(),
+        binding.access_token.signing_kid.as_str(),
+    ];
+    if signing_kids.into_iter().collect::<BTreeSet<_>>().len() != signing_kids.len() {
+        bail!("OID4VCI issuer, client, and access-token signing kids must be distinct");
+    }
+    Ok(())
+}
+
+fn validate_resource_origin(resource: &str, origin: &str, field: &str) -> Result<()> {
+    let resource = url::Url::parse(resource).with_context(|| format!("{field} is invalid"))?;
+    let origin = url::Url::parse(origin).with_context(|| format!("{field} origin is invalid"))?;
+    if resource.scheme() != origin.scheme()
+        || resource.host() != origin.host()
+        || resource.port_or_known_default() != origin.port_or_known_default()
+    {
+        bail!("{field} must use its bound origin");
     }
     Ok(())
 }
@@ -2073,9 +2256,10 @@ fn project_issues_credentials(project: &RegistryProject) -> bool {
 }
 
 fn project_requires_notary_relay(project: &RegistryProject) -> bool {
-    project.services.values().any(|service| {
-        service.kind == ServiceKind::Evidence && !service.consultations.is_empty()
-    })
+    project
+        .services
+        .values()
+        .any(|service| service.kind == ServiceKind::Evidence && !service.consultations.is_empty())
 }
 
 fn is_script_runtime_released(capability: ReleasedScriptRuntime) -> bool {

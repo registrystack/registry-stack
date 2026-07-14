@@ -1176,6 +1176,8 @@ struct EnvironmentDocument {
     relay_state: Option<RelayStateBinding>,
     #[serde(default)]
     notary_state: Option<NotaryStateBinding>,
+    #[serde(default)]
+    oid4vci: Option<Oid4vciBinding>,
     deployment: DeploymentBinding,
 }
 
@@ -1363,6 +1365,59 @@ struct NotaryStateBinding {
 #[serde(deny_unknown_fields)]
 struct NotaryPostgresqlBinding {
     root_certificate_path: PathBuf,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Oid4vciBinding {
+    public_base_url: String,
+    credential: Oid4vciCredentialBinding,
+    authorization_server: Oid4vciAuthorizationServerBinding,
+    client: Oid4vciClientBinding,
+    access_token: Oid4vciSigningKeyBinding,
+    sensitive_state_key: SecretReference,
+    subject: Oid4vciSubjectBinding,
+    redirect_uri: String,
+    allowed_wallet_origins: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Oid4vciCredentialBinding {
+    service: String,
+    profile: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Oid4vciAuthorizationServerBinding {
+    issuer: String,
+    jwks_url: String,
+    userinfo_url: String,
+    authorize_url: String,
+    token_url: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Oid4vciClientBinding {
+    id: String,
+    signing_key: SecretReference,
+    signing_kid: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Oid4vciSigningKeyBinding {
+    signing_key: SecretReference,
+    signing_kid: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct Oid4vciSubjectBinding {
+    token_claim: String,
+    id_type: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

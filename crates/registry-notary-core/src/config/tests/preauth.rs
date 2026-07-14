@@ -505,7 +505,7 @@ pub(super) fn pre_auth_rejects_out_of_range_code_ttl() {
 pub(super) fn pre_auth_requires_tx_code_rate_limit() {
     let mut config = valid_pre_auth_config();
     config
-        .self_attestation
+        .subject_access
         .rate_limits
         .tx_code_attempts_per_code_per_minute = 0;
     let reason = expect_oid4vci_error(&config);
@@ -521,7 +521,7 @@ pub(super) fn pre_auth_optional_tx_code_does_not_require_tx_code_rate_limit() {
         .pre_authorized_code
         .pre_authorized_code_ttl_seconds = MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS;
     config
-        .self_attestation
+        .subject_access
         .rate_limits
         .tx_code_attempts_per_code_per_minute = 0;
     config
@@ -532,7 +532,7 @@ pub(super) fn pre_auth_optional_tx_code_does_not_require_tx_code_rate_limit() {
 #[test]
 pub(super) fn pre_auth_userinfo_binding_requires_esignet_userinfo_url() {
     let mut config = valid_pre_auth_config();
-    config.self_attestation.subject_binding.claim_source = SelfAttestationClaimSource::Userinfo;
+    config.subject_access.subject_binding.claim_source = SubjectAccessClaimSource::Userinfo;
     // Satisfy the resource-server userinfo rule so the failure is
     // specifically the missing pre-auth eSignet userinfo endpoint.
     if let Some(oidc) = config.auth.oidc.as_mut() {
@@ -549,7 +549,7 @@ pub(super) fn pre_auth_userinfo_binding_requires_esignet_userinfo_url() {
 #[test]
 pub(super) fn pre_auth_userinfo_binding_accepts_configured_userinfo_url() {
     let mut config = valid_pre_auth_config();
-    config.self_attestation.subject_binding.claim_source = SelfAttestationClaimSource::Userinfo;
+    config.subject_access.subject_binding.claim_source = SubjectAccessClaimSource::Userinfo;
     if let Some(oidc) = config.auth.oidc.as_mut() {
         oidc.userinfo_endpoint = Some("https://id.example.gov/userinfo".to_string());
     }

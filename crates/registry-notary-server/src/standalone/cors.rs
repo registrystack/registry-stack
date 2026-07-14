@@ -1,17 +1,17 @@
 use super::*;
 
 #[derive(Debug, Clone)]
-pub(super) struct SelfAttestationWalletCorsPolicy {
+pub(super) struct SubjectAccessWalletCorsPolicy {
     enabled: bool,
     allowed_origins: Vec<String>,
     allow_credentials: bool,
 }
 
-impl SelfAttestationWalletCorsPolicy {
+impl SubjectAccessWalletCorsPolicy {
     pub(super) fn from_config(config: &StandaloneRegistryNotaryConfig) -> Self {
         Self {
-            enabled: config.self_attestation.enabled,
-            allowed_origins: config.self_attestation.allowed_wallet_origins.clone(),
+            enabled: config.subject_access.enabled,
+            allowed_origins: config.subject_access.allowed_wallet_origins.clone(),
             allow_credentials: false,
         }
     }
@@ -23,12 +23,12 @@ impl SelfAttestationWalletCorsPolicy {
     }
 }
 
-pub(super) async fn self_attestation_wallet_cors_middleware(
-    State(policy): State<SelfAttestationWalletCorsPolicy>,
+pub(super) async fn subject_access_wallet_cors_middleware(
+    State(policy): State<SubjectAccessWalletCorsPolicy>,
     request: Request,
     next: Next,
 ) -> Response {
-    if !policy.enabled || !is_self_attestation_wallet_cors_path(request.uri().path()) {
+    if !policy.enabled || !is_subject_access_wallet_cors_path(request.uri().path()) {
         return next.run(request).await;
     }
 
@@ -51,7 +51,7 @@ pub(super) async fn self_attestation_wallet_cors_middleware(
     if is_preflight {
         let mut response = StatusCode::NO_CONTENT.into_response();
         if origin_allowed {
-            apply_self_attestation_wallet_cors_headers(
+            apply_subject_access_wallet_cors_headers(
                 response.headers_mut(),
                 origin,
                 requested_headers.as_ref(),
@@ -63,7 +63,7 @@ pub(super) async fn self_attestation_wallet_cors_middleware(
 
     let mut response = next.run(request).await;
     if origin_allowed {
-        apply_self_attestation_wallet_cors_headers(
+        apply_subject_access_wallet_cors_headers(
             response.headers_mut(),
             origin,
             requested_headers.as_ref(),
@@ -75,7 +75,7 @@ pub(super) async fn self_attestation_wallet_cors_middleware(
     response
 }
 
-pub(super) fn is_self_attestation_wallet_cors_path(path: &str) -> bool {
+pub(super) fn is_subject_access_wallet_cors_path(path: &str) -> bool {
     matches!(
         path,
         "/.well-known/evidence-service"
@@ -97,7 +97,7 @@ pub(super) fn is_self_attestation_wallet_cors_path(path: &str) -> bool {
         || path.starts_with("/v1/credentials/")
 }
 
-fn apply_self_attestation_wallet_cors_headers(
+fn apply_subject_access_wallet_cors_headers(
     headers: &mut HeaderMap,
     origin: HeaderValue,
     requested_headers: Option<&HeaderValue>,

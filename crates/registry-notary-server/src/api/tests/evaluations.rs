@@ -315,7 +315,7 @@ fn evaluation_access_uses_stored_claim_version_scope() {
         created_at: "2026-05-23T00:00:00Z".to_string(),
         expires_at: "2999-01-01T00:00:00Z".to_string(),
         request_hash: "request-hash".to_string(),
-        self_attestation: None,
+        subject_access: None,
     };
     let principal = EvidencePrincipal {
         auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,

@@ -1,6 +1,6 @@
 use super::root::{
-    expect_self_attestation_error, minimal_claim, valid_delegated_self_attestation_config,
-    valid_self_attestation_config,
+    expect_subject_access_error, minimal_claim, valid_delegated_subject_access_config,
+    valid_subject_access_config,
 };
 use super::support::minimal_config;
 use super::*;
@@ -79,20 +79,16 @@ fn expect_mode_error(config: &StandaloneRegistryNotaryConfig, expected: &str) {
     );
 }
 
-fn expect_self_attestation_closure_error(config: &StandaloneRegistryNotaryConfig) {
+fn expect_subject_access_closure_error(config: &StandaloneRegistryNotaryConfig) {
     let error = config
         .validate()
-        .expect_err("a self-attestation closure with mixed evidence modes must fail validation");
+        .expect_err("a subject-access closure with mixed evidence modes must fail validation");
     assert!(
         matches!(
             error,
             EvidenceConfigError::InvalidClaimEvidenceMode { ref reason, .. }
                 if reason.contains("self_attested dependency closure")
                     || reason.contains("cannot declare depends_on")
-        ) || matches!(
-            error,
-            EvidenceConfigError::InvalidSelfAttestationConfig { ref reason }
-                if reason.contains("cannot include registry_backed claim")
         ),
         "unexpected error: {error:?}"
     );
@@ -870,13 +866,50 @@ fn removed_plugin_rule_is_rejected_during_deserialization() {
 }
 
 #[test]
-fn self_attestation_allowed_claim_closures_reject_registry_backed_modes() {
-    let mut config = valid_self_attestation_config();
+fn subject_access_allows_exact_subject_bound_registry_claims() {
+    let mut config = valid_subject_access_config();
     config.evidence.relay = Some(relay_connection());
     make_registry_backed(&mut config.evidence.claims[0], "civil_status");
-    expect_self_attestation_closure_error(&config);
+    config.evidence.claims[0].purpose = Some("citizen_subject_access".to_string());
+    config.evidence.claims[0].required_scopes = vec!["subject_access".to_string()];
+    let ClaimEvidenceMode::RegistryBacked { consultations } =
+        &mut config.evidence.claims[0].evidence_mode
+    else {
+        panic!("claim is registry backed");
+    };
+    consultations
+        .get_mut("civil_status")
+        .expect("consultation exists")
+        .inputs
+        .insert(
+            "subject_id".to_string(),
+            RelayConsultationInput::TargetIdentifier("target.identifiers.national_id".to_string()),
+        );
+    config
+        .validate()
+        .expect("the exact authenticated subject identifier may be consulted");
 
-    let mut config = valid_self_attestation_config();
+    let mut wrong_binding = config.clone();
+    let ClaimEvidenceMode::RegistryBacked { consultations } =
+        &mut wrong_binding.evidence.claims[0].evidence_mode
+    else {
+        panic!("claim is registry backed");
+    };
+    consultations
+        .get_mut("civil_status")
+        .expect("consultation exists")
+        .inputs
+        .insert(
+            "subject_id".to_string(),
+            RelayConsultationInput::TargetIdentifier("target.identifiers.other_person".to_string()),
+        );
+    let reason = expect_subject_access_error(&wrong_binding);
+    assert!(reason.contains("outside the authenticated subject binding"));
+}
+
+#[test]
+fn subject_access_still_rejects_registry_backed_dependencies_of_self_attested_claims() {
+    let mut config = valid_subject_access_config();
     config.evidence.relay = Some(relay_connection());
     let mut dependency = minimal_claim("registry-dependency");
     make_registry_backed(&mut dependency, "civil_status");
@@ -884,7 +917,7 @@ fn self_attestation_allowed_claim_closures_reject_registry_backed_modes() {
         .depends_on
         .push(dependency.id.clone());
     config.evidence.claims.push(dependency);
-    expect_self_attestation_closure_error(&config);
+    expect_subject_access_closure_error(&config);
 }
 
 #[test]
@@ -926,8 +959,8 @@ fn claim_dependency_graph_has_fixed_v1_node_and_edge_bounds() {
 }
 
 #[test]
-fn delegated_self_attestation_allows_only_its_configured_registry_proof_edge() {
-    let config = valid_delegated_self_attestation_config();
+fn delegated_subject_access_allows_only_its_configured_registry_proof_edge() {
+    let config = valid_delegated_subject_access_config();
     config
         .validate()
         .expect("configured delegated Relay proof edge validates");
@@ -940,7 +973,7 @@ fn delegated_self_attestation_allows_only_its_configured_registry_proof_edge() {
         .find(|claim| claim.id == "date-of-birth")
         .expect("ordinary self-attested claim")
         .depends_on = vec!["guardian-link".to_string()];
-    expect_self_attestation_closure_error(&ordinary);
+    expect_subject_access_closure_error(&ordinary);
 
     let mut registry_dependent = config;
     let delegated = registry_dependent
@@ -950,26 +983,26 @@ fn delegated_self_attestation_allows_only_its_configured_registry_proof_edge() {
         .find(|claim| claim.id == "dependent-date-of-birth")
         .expect("delegated claim");
     make_registry_backed(delegated, "civil_status");
-    expect_self_attestation_closure_error(&registry_dependent);
+    expect_subject_access_closure_error(&registry_dependent);
 }
 
 #[test]
 fn delegated_relay_proof_requires_requester_target_boolean_and_purpose_alignment() {
-    let mut missing_requester = valid_delegated_self_attestation_config();
+    let mut missing_requester = valid_delegated_subject_access_config();
     delegated_proof_consultation_mut(&mut missing_requester)
         .inputs
         .retain(|_, input| input.is_target_derived());
-    let reason = expect_self_attestation_error(&missing_requester);
+    let reason = expect_subject_access_error(&missing_requester);
     assert!(reason.contains("requester-derived and target-derived"));
 
-    let mut missing_target = valid_delegated_self_attestation_config();
+    let mut missing_target = valid_delegated_subject_access_config();
     delegated_proof_consultation_mut(&mut missing_target)
         .inputs
         .retain(|_, input| input.is_requester_derived());
-    let reason = expect_self_attestation_error(&missing_target);
+    let reason = expect_subject_access_error(&missing_target);
     assert!(reason.contains("requester-derived and target-derived"));
 
-    let mut non_boolean = valid_delegated_self_attestation_config();
+    let mut non_boolean = valid_delegated_subject_access_config();
     let proof = non_boolean
         .evidence
         .claims
@@ -984,10 +1017,10 @@ fn delegated_relay_proof_requires_requester_target_boolean_and_purpose_alignment
             max_bytes: 16,
         },
     )]);
-    let reason = expect_self_attestation_error(&non_boolean);
+    let reason = expect_subject_access_error(&non_boolean);
     assert!(reason.contains("must produce a boolean result"));
 
-    let mut wrong_purpose = valid_delegated_self_attestation_config();
+    let mut wrong_purpose = valid_delegated_subject_access_config();
     wrong_purpose
         .evidence
         .claims
@@ -995,7 +1028,7 @@ fn delegated_relay_proof_requires_requester_target_boolean_and_purpose_alignment
         .find(|claim| claim.id == "guardian-link")
         .expect("delegated proof claim")
         .purpose = Some("different-purpose".to_string());
-    let reason = expect_self_attestation_error(&wrong_purpose);
+    let reason = expect_subject_access_error(&wrong_purpose);
     assert!(reason.contains("must declare the same purpose"));
 }
 

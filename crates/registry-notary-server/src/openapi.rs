@@ -346,7 +346,7 @@ fn build_openapi_document() -> Value {
                 "post": {
                     "summary": "Issue a credential through OpenID4VCI",
                     "operationId": "issueOid4vciCredential",
-                    "description": "Issues a dc+sd-jwt credential for an authenticated self-attestation principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+                    "description": "Issues a dc+sd-jwt credential for an authenticated subject-access principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
                     "security": [
                         { "bearerAuth": [] }
                     ],
@@ -2400,7 +2400,7 @@ fn provenance_generated_by_schema() -> Value {
             "claim_version": { "type": "string" },
             "policy_id": {
                 "type": "string",
-                "description": "Evaluation policy identifier under which this result was produced. Present for flows evaluated under a named policy, such as self-attestation, and omitted for machine-client flows with no evaluation policy."
+                "description": "Evaluation policy identifier under which this result was produced. Present for flows evaluated under a named policy, such as subject-access, and omitted for machine-client flows with no evaluation policy."
             },
             "policy_version": { "type": "string" },
             "policy_hash": {
@@ -2611,9 +2611,9 @@ fn add_runtime_problem_responses(
             ),
             "429" => (
                 429,
-                "self_attestation.rate_limited",
+                "subject_access.rate_limited",
                 "Self-attestation rate limited",
-                "self-attestation request is rate limited",
+                "subject-access request is rate limited",
             ),
             "503" => (
                 503,
@@ -3663,7 +3663,7 @@ fn provenance_example() -> Value {
             "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
             "claim_id": "person_is_alive",
             "claim_version": "1",
-            "policy_id": "self-attestation",
+            "policy_id": "subject-access",
             "policy_version": "v1",
             "policy_hash": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
         },
@@ -4282,7 +4282,7 @@ mod tests {
         );
         assert_eq!(
             doc["paths"]["/oid4vci/credential"]["post"]["description"],
-            json!("Issues a dc+sd-jwt credential for an authenticated self-attestation principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.")
+            json!("Issues a dc+sd-jwt credential for an authenticated subject-access principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.")
         );
         assert_eq!(
             doc["components"]["schemas"]["TokenRequest"]["type"],

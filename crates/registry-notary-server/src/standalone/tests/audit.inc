@@ -98,11 +98,11 @@
     }
 
     #[test]
-    fn audit_event_carries_self_attestation_context_fields() {
+    fn audit_event_carries_subject_access_context_fields() {
         let principal = EvidencePrincipal {
             auth_profile_id: EvidenceAuthProfileId::ExternalOidc,
             principal_id: "citizen".to_string(),
-            scopes: vec!["self_attestation".to_string()],
+            scopes: vec!["subject_access".to_string()],
             access_mode: AccessMode::MachineClient,
             verified_claims: None,
             authorization_details: None,
@@ -117,8 +117,8 @@
             relay_consultation_count: None,
             relay_consultation_ids: Vec::new(),
             forwarded: None,
-            access_mode: Some(AccessMode::SelfAttestation),
-            denial_code: Some(SelfAttestationDenialCode::SubjectMismatch),
+            access_mode: Some(AccessMode::SubjectBound),
+            denial_code: Some(SubjectAccessDenialCode::SubjectMismatch),
             token_claim_name: Some(
                 registry_notary_core::ConfigMetadata::new("national_id").expect("bounded"),
             ),
@@ -152,7 +152,7 @@
 
         assert_eq!(event.decision, "evaluate_denied");
         assert_eq!(event.claim_hash.as_deref(), Some("sha256:claim-hash"));
-        assert_eq!(event.access_mode, Some(AccessMode::SelfAttestation));
+        assert_eq!(event.access_mode, Some(AccessMode::SubjectBound));
         assert!(event.principal_id_hash.is_some());
         let expected_correlation_hash = AuditKeyHasher::unkeyed_dev_only().hash("req-123");
         assert_eq!(
@@ -161,7 +161,7 @@
         );
         assert_eq!(
             event.denial_code,
-            Some(SelfAttestationDenialCode::SubjectMismatch)
+            Some(SubjectAccessDenialCode::SubjectMismatch)
         );
         assert_eq!(
             event.protocol.as_ref().map(|value| value.as_str()),

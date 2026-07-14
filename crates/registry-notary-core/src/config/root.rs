@@ -35,8 +35,8 @@ pub struct StandaloneRegistryNotaryConfig {
     pub credential_status: CredentialStatusConfig,
     #[serde(default, skip_serializing_if = "registry_notary_cel_config_is_default")]
     pub cel: RegistryNotaryCelConfig,
-    #[serde(default, skip_serializing_if = "self_attestation_config_is_default")]
-    pub self_attestation: SelfAttestationConfig,
+    #[serde(default, skip_serializing_if = "subject_access_config_is_default")]
+    pub subject_access: SubjectAccessConfig,
     #[serde(default, skip_serializing_if = "oid4vci_config_is_default")]
     pub oid4vci: Oid4vciConfig,
     #[serde(default, skip_serializing_if = "federation_config_is_default")]
@@ -137,26 +137,20 @@ impl StandaloneRegistryNotaryConfig {
         self.state
             .validate(&self.deployment, self.oid4vci.pre_authorized_code.enabled)?;
         validate_static_credential_ids(&self.auth.api_keys, &self.auth.bearer_tokens)?;
-        match self.auth.mode {
-            EvidenceAuthMode::ApiKey => {
-                if self.auth.api_keys.is_empty() && self.auth.bearer_tokens.is_empty() {
-                    return Err(EvidenceConfigError::NoCredentialsConfigured);
-                }
+        if self.auth.api_keys.is_empty()
+            && self.auth.bearer_tokens.is_empty()
+            && self.auth.oidc.is_none()
+        {
+            return Err(EvidenceConfigError::NoCredentialsConfigured);
+        }
+        if let Some(oidc) = &self.auth.oidc {
+            if !self.auth.bearer_tokens.is_empty() {
+                return Err(EvidenceConfigError::InvalidOidcConfig {
+                    reason: "auth.bearer_tokens cannot be combined with auth.oidc because both use Authorization: Bearer"
+                        .to_string(),
+                });
             }
-            EvidenceAuthMode::Oidc => {
-                let oidc = self
-                    .auth
-                    .oidc
-                    .as_ref()
-                    .ok_or(EvidenceConfigError::MissingOidcConfig)?;
-                if !self.auth.api_keys.is_empty() || !self.auth.bearer_tokens.is_empty() {
-                    return Err(EvidenceConfigError::InvalidOidcConfig {
-                        reason: "auth.api_keys and auth.bearer_tokens must be empty when auth.mode = oidc"
-                            .to_string(),
-                    });
-                }
-                oidc.validate()?;
-            }
+            oidc.validate()?;
         }
         self.evidence.concurrency.validate()?;
         self.evidence.machine_quota.validate()?;
@@ -344,11 +338,11 @@ impl StandaloneRegistryNotaryConfig {
         }
         validate_self_attested_dependency_modes(
             &self.evidence.claims,
-            &self.self_attestation.delegation,
+            &self.subject_access.delegation,
         )?;
         validate_registry_backed_dependency_modes(&self.evidence.claims)?;
         validate_relay_activation_shape(&self.evidence.claims)?;
-        self.self_attestation.validate(&self.auth, &self.evidence)?;
+        self.subject_access.validate(&self.auth, &self.evidence)?;
         self.validate_oid4vci_cross_block()?;
         self.validate_access_token_signing_cross_block()?;
         self.federation.validate(&self.evidence)?;
@@ -440,7 +434,7 @@ impl StandaloneRegistryNotaryConfig {
             holder_proof_required: self.evidence.credential_profiles.values().any(|profile| {
                 profile.holder_binding.proof_of_possession.as_deref() == Some("required")
             }),
-            wallet_facing: self.self_attestation.enabled,
+            wallet_facing: self.subject_access.enabled,
             multi_instance: self.deployment.multi_instance,
             audit_sink_class_durable: audit_sink_is_durable(&self.audit),
             // A local file sink caps retention to whatever the host disk
@@ -470,7 +464,7 @@ impl StandaloneRegistryNotaryConfig {
                 == RegistryNotaryAdminListenerMode::SharedWithPublic,
             openapi_public: !self.server.openapi_requires_auth,
             config_unsigned: self.config_trust.is_none(),
-            self_attestation_enabled: self.self_attestation.enabled,
+            subject_access_enabled: self.subject_access.enabled,
             transaction_token_anchor_configured: self.auth.access_token_signing.enabled,
             // DPoP/mTLS proof validation for transaction tokens is not yet
             // implemented. Keep this explicit so production/evidence profiles
@@ -568,8 +562,7 @@ impl StandaloneRegistryNotaryConfig {
     }
 
     fn validate_oid4vci_cross_block(&self) -> Result<(), EvidenceConfigError> {
-        self.oid4vci
-            .validate(&self.self_attestation, &self.evidence)
+        self.oid4vci.validate(&self.subject_access, &self.evidence)
     }
 
     fn validate_access_token_signing_cross_block(&self) -> Result<(), EvidenceConfigError> {

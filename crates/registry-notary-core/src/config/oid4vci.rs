@@ -43,7 +43,7 @@ pub(super) fn oid4vci_config_is_default(config: &Oid4vciConfig) -> bool {
 impl Oid4vciConfig {
     pub(super) fn validate(
         &self,
-        self_attestation: &SelfAttestationConfig,
+        subject_access: &SubjectAccessConfig,
         evidence: &EvidenceConfig,
     ) -> Result<(), EvidenceConfigError> {
         // The pre-authorized-code block is validated regardless of the oid4vci
@@ -81,7 +81,7 @@ impl Oid4vciConfig {
         // eSignet userinfo endpoint when the claim is userinfo-sourced, so the
         // endpoint must be configured for that path to work.
         if self.pre_authorized_code.enabled
-            && self_attestation.subject_binding.claim_source == SelfAttestationClaimSource::Userinfo
+            && subject_access.subject_binding.claim_source == SubjectAccessClaimSource::Userinfo
             && self
                 .pre_authorized_code
                 .esignet
@@ -90,25 +90,25 @@ impl Oid4vciConfig {
                 .is_empty()
         {
             return invalid_oid4vci(
-                "pre_authorized_code.esignet.userinfo_url must be set when self_attestation.subject_binding.claim_source = userinfo",
+                "pre_authorized_code.esignet.userinfo_url must be set when subject_access.subject_binding.claim_source = userinfo",
             );
         }
         if self.pre_authorized_code.enabled
             && self.pre_authorized_code.tx_code.required
-            && self_attestation
+            && subject_access
                 .rate_limits
                 .tx_code_attempts_per_code_per_minute
                 == 0
         {
             return invalid_oid4vci(
-                "self_attestation.rate_limits.tx_code_attempts_per_code_per_minute must be greater than zero when pre_authorized_code.enabled = true and tx_code.required = true",
+                "subject_access.rate_limits.tx_code_attempts_per_code_per_minute must be greater than zero when pre_authorized_code.enabled = true and tx_code.required = true",
             );
         }
         if !self.enabled {
             return Ok(());
         }
-        if !self_attestation.enabled {
-            return invalid_oid4vci("enabled oid4vci requires self_attestation.enabled = true");
+        if !subject_access.enabled {
+            return invalid_oid4vci("enabled oid4vci requires subject_access.enabled = true");
         }
         validate_oid4vci_public_url("oid4vci.credential_issuer", &self.credential_issuer)?;
         validate_oid4vci_endpoint_url(
@@ -166,12 +166,12 @@ impl Oid4vciConfig {
             .iter()
             .map(|claim| claim.id.as_str())
             .collect();
-        let allowed_claim_ids: HashSet<&str> = self_attestation
+        let allowed_claim_ids: HashSet<&str> = subject_access
             .allowed_claims
             .iter()
             .map(String::as_str)
             .collect();
-        let allowed_profiles: HashSet<&str> = self_attestation
+        let allowed_profiles: HashSet<&str> = subject_access
             .credential_profiles
             .iter()
             .map(String::as_str)
@@ -597,7 +597,7 @@ impl Oid4vciCredentialConfigurationConfig {
             })?;
         if !allowed_profiles.contains(self.credential_profile.as_str()) {
             return invalid_oid4vci(format!(
-                "credential configuration '{configuration_id}' references credential profile '{}' outside self_attestation.credential_profiles",
+                "credential configuration '{configuration_id}' references credential profile '{}' outside subject_access.credential_profiles",
                 self.credential_profile
             ));
         }
@@ -788,7 +788,7 @@ pub(super) fn validate_oid4vci_credential_claim_reference<'a>(
     }
     if !allowed_claim_ids.contains(claim_id) {
         return invalid_oid4vci(format!(
-            "credential configuration '{configuration_id}' references claim '{claim_id}' outside self_attestation.allowed_claims"
+            "credential configuration '{configuration_id}' references claim '{claim_id}' outside subject_access.allowed_claims"
         ));
     }
     if !profile

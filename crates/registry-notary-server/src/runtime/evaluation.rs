@@ -5,7 +5,7 @@ use super::*;
 
 #[derive(Debug, Clone)]
 pub struct RegistryNotaryRuntime {
-    self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
+    subject_access_rate_keys: Arc<SubjectAccessRateLimitKeys>,
     activated_relay: Option<Arc<dyn ActivatedRelayConsultations>>,
     #[cfg(feature = "registry-notary-cel")]
     cel_worker: Option<Arc<CelWorker>>,
@@ -58,17 +58,17 @@ impl RegistryNotaryRuntime {
 
     #[must_use]
     pub fn new_with_audit_hasher(audit_hasher: AuditKeyHasher) -> Self {
-        Self::new_with_self_attestation_rate_keys(Arc::new(SelfAttestationRateLimitKeys::new(
+        Self::new_with_subject_access_rate_keys(Arc::new(SubjectAccessRateLimitKeys::new(
             audit_hasher,
         )))
     }
 
     #[must_use]
-    pub fn new_with_self_attestation_rate_keys(
-        self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
+    pub fn new_with_subject_access_rate_keys(
+        subject_access_rate_keys: Arc<SubjectAccessRateLimitKeys>,
     ) -> Self {
         Self {
-            self_attestation_rate_keys,
+            subject_access_rate_keys,
             activated_relay: None,
             #[cfg(feature = "registry-notary-cel")]
             cel_worker: None,
@@ -235,38 +235,37 @@ impl RegistryNotaryRuntime {
             .collect()
     }
 
-    pub fn service_document_with_self_attestation(
+    pub fn service_document_with_subject_access(
         evidence: &EvidenceConfig,
-        self_attestation: &SelfAttestationConfig,
-        include_self_attestation_details: bool,
+        subject_access: &SubjectAccessConfig,
+        include_subject_access_details: bool,
     ) -> Value {
         let mut document = Self::service_document(evidence);
-        if self_attestation.enabled {
-            let mut self_attestation_document = json!({
+        if subject_access.enabled {
+            let mut subject_access_document = json!({
                 "enabled": true,
             });
-            if include_self_attestation_details {
-                self_attestation_document = json!({
+            if include_subject_access_details {
+                subject_access_document = json!({
                     "enabled": true,
-                    "allowed_operations": self_attestation.allowed_operations,
-                    "allowed_claim_ids": self_attestation.allowed_claims,
-                    "allowed_formats": self_attestation.allowed_formats,
-                    "allowed_disclosures": self_attestation.allowed_disclosures,
-                    "credential_profile_ids": self_attestation.credential_profiles,
-                    "subject_id_type": self_attestation.subject_binding.id_type,
-                    "token_claim_name": self_attestation.subject_binding.token_claim,
-                    "scope_policy": self_attestation.scope_policy,
-                    "required_scopes": self_attestation.required_scopes,
-                    "max_evaluation_age_seconds": self_attestation
+                    "allowed_operations": subject_access.allowed_operations,
+                    "allowed_claim_ids": subject_access.allowed_claims,
+                    "allowed_formats": subject_access.allowed_formats,
+                    "allowed_disclosures": subject_access.allowed_disclosures,
+                    "credential_profile_ids": subject_access.credential_profiles,
+                    "subject_id_type": subject_access.subject_binding.id_type,
+                    "token_claim_name": subject_access.subject_binding.token_claim,
+                    "scope_policy": subject_access.scope_policy,
+                    "required_scopes": subject_access.required_scopes,
+                    "max_evaluation_age_seconds": subject_access
                         .token_policy
                         .max_evaluation_age_seconds,
-                    "max_credential_validity_seconds": self_attestation
+                    "max_credential_validity_seconds": subject_access
                         .token_policy
                         .max_credential_validity_seconds,
-                    "rate_limit_mode": self_attestation.rate_limits.mode,
                 });
             }
-            document["self_attestation"] = self_attestation_document;
+            document["subject_access"] = subject_access_document;
         }
         document
     }
@@ -352,7 +351,7 @@ impl RegistryNotaryRuntime {
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
         let request_claim_ids = claim_ids(&request.claims);
         let evaluation_capability = evaluation_capability_for_principal(
-            &self.self_attestation_rate_keys,
+            &self.subject_access_rate_keys,
             principal,
             &request_claim_ids,
         )?;
@@ -379,7 +378,7 @@ impl RegistryNotaryRuntime {
         evaluation_capability: EvaluationCapability,
         request: EvaluateRequest,
         header_purpose: Option<&str>,
-        self_attestation: Option<StoredSelfAttestationMetadata>,
+        subject_access: Option<StoredSubjectAccessMetadata>,
         correlation_id: Option<BoundedCorrelationId>,
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
         self.evaluate_with_capability_and_audit(
@@ -389,7 +388,7 @@ impl RegistryNotaryRuntime {
             evaluation_capability,
             request,
             header_purpose,
-            self_attestation,
+            subject_access,
             correlation_id,
             Arc::new(EvaluationAuditCollector::new()),
         )
@@ -405,7 +404,7 @@ impl RegistryNotaryRuntime {
         evaluation_capability: EvaluationCapability,
         request: EvaluateRequest,
         header_purpose: Option<&str>,
-        self_attestation: Option<StoredSelfAttestationMetadata>,
+        subject_access: Option<StoredSubjectAccessMetadata>,
         correlation_id: Option<BoundedCorrelationId>,
     ) -> (
         Result<Vec<ClaimResultView>, EvidenceError>,
@@ -420,7 +419,7 @@ impl RegistryNotaryRuntime {
                 evaluation_capability,
                 request,
                 header_purpose,
-                self_attestation,
+                subject_access,
                 correlation_id,
                 Arc::clone(&audit),
             )
@@ -437,7 +436,7 @@ impl RegistryNotaryRuntime {
         evaluation_capability: EvaluationCapability,
         request: EvaluateRequest,
         header_purpose: Option<&str>,
-        self_attestation: Option<StoredSelfAttestationMetadata>,
+        subject_access: Option<StoredSubjectAccessMetadata>,
         correlation_id: Option<BoundedCorrelationId>,
         audit: Arc<EvaluationAuditCollector>,
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
@@ -522,7 +521,7 @@ impl RegistryNotaryRuntime {
             .cel_worker
             .as_ref()
             .map(|_| Arc::new(Semaphore::new(self.cel_config.worker_count.max(1))));
-        let policy = evaluation_policy_from_self_attestation(self_attestation.as_ref());
+        let policy = evaluation_policy_from_subject_access(subject_access.as_ref());
         let internal = self
             .evaluate_claims_dag(
                 Arc::clone(&evidence),
@@ -549,7 +548,7 @@ impl RegistryNotaryRuntime {
                     .get(claim_id.id.as_str())
                     .ok_or(EvidenceError::RuleEvaluationFailed)?;
                 view_claim(
-                    &self.self_attestation_rate_keys,
+                    &self.subject_access_rate_keys,
                     result,
                     claim,
                     disclosure,
@@ -557,12 +556,12 @@ impl RegistryNotaryRuntime {
                 )
             })
             .collect::<Result<Vec<_>, EvidenceError>>()?;
-        let expires_at = self_attestation
+        let expires_at = subject_access
             .as_ref()
             .and_then(|metadata| metadata.evaluation_expires_at.as_deref())
             .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
             .unwrap_or(now + time::Duration::minutes(15));
-        let client_id = stored_evaluation_client_id(principal, self_attestation.as_ref());
+        let client_id = stored_evaluation_client_id(principal, subject_access.as_ref());
         store
             .insert(registry_notary_core::StoredEvaluation {
                 client_id,
@@ -575,7 +574,7 @@ impl RegistryNotaryRuntime {
                 created_at: format_time(now),
                 expires_at: format_time(expires_at),
                 request_hash,
-                self_attestation,
+                subject_access,
             })
             .await?;
         Ok(views)
@@ -589,9 +588,9 @@ impl RegistryNotaryRuntime {
         request: BatchEvaluateRequest,
         options: BatchEvaluateOptions<'_>,
     ) -> Result<BatchEvaluateResponse, EvidenceError> {
-        if principal.is_self_attestation() {
-            return Err(EvidenceError::SelfAttestationDenied {
-                reason: SelfAttestationDenialCode::BatchDenied,
+        if principal.is_subject_access() {
+            return Err(EvidenceError::SubjectAccessDenied {
+                reason: SubjectAccessDenialCode::BatchDenied,
             });
         }
         if request.claims.is_empty() || request.items.is_empty() {
@@ -611,7 +610,7 @@ impl RegistryNotaryRuntime {
             .map(|key| batch_idempotency_key(&principal.principal_id, key));
         let claim_versions = requested_claim_versions(&request.claims)?;
         let evaluation_capability = evaluation_capability_for_principal(
-            &self.self_attestation_rate_keys,
+            &self.subject_access_rate_keys,
             principal,
             &request_claim_ids,
         )?;
@@ -812,22 +811,18 @@ impl RegistryNotaryRuntime {
                             created_at: first.issued_at.clone(),
                             expires_at: format_time(expires_at),
                             request_hash: request_hash.clone(),
-                            self_attestation: None,
+                            subject_access: None,
                         });
                     }
                     succeeded += 1;
                     let batch_item = &request.items[input_index];
                     let target_ref =
-                        target_ref_view(&self.self_attestation_rate_keys, &batch_item.target)?;
+                        target_ref_view(&self.subject_access_rate_keys, &batch_item.target)?;
                     let requester_ref = batch_item
                         .requester
                         .as_ref()
                         .map(|requester| {
-                            entity_ref_view(
-                                &self.self_attestation_rate_keys,
-                                "requester",
-                                requester,
-                            )
+                            entity_ref_view(&self.subject_access_rate_keys, "requester", requester)
                         })
                         .transpose()?;
                     items[input_index] = Some(BatchItemResponse {
@@ -844,16 +839,12 @@ impl RegistryNotaryRuntime {
                     failed += 1;
                     let batch_item = &request.items[input_index];
                     let target_ref =
-                        target_ref_view(&self.self_attestation_rate_keys, &batch_item.target)?;
+                        target_ref_view(&self.subject_access_rate_keys, &batch_item.target)?;
                     let requester_ref = batch_item
                         .requester
                         .as_ref()
                         .map(|requester| {
-                            entity_ref_view(
-                                &self.self_attestation_rate_keys,
-                                "requester",
-                                requester,
-                            )
+                            entity_ref_view(&self.subject_access_rate_keys, "requester", requester)
                         })
                         .transpose()?;
                     items[input_index] = Some(BatchItemResponse {
@@ -1074,12 +1065,12 @@ impl RegistryNotaryRuntime {
                 Err(_) => return Err(EvidenceError::RuleEvaluationFailed),
             };
             let batch_item = &request.items[input_index];
-            let target_ref = target_ref_view(&self.self_attestation_rate_keys, &batch_item.target)?;
+            let target_ref = target_ref_view(&self.subject_access_rate_keys, &batch_item.target)?;
             let requester_ref = batch_item
                 .requester
                 .as_ref()
                 .map(|requester| {
-                    entity_ref_view(&self.self_attestation_rate_keys, "requester", requester)
+                    entity_ref_view(&self.subject_access_rate_keys, "requester", requester)
                 })
                 .transpose()?;
             match result {
@@ -1104,7 +1095,7 @@ impl RegistryNotaryRuntime {
                             created_at: first.issued_at.clone(),
                             expires_at: format_time(now + time::Duration::minutes(15)),
                             request_hash: request_hash.clone(),
-                            self_attestation: None,
+                            subject_access: None,
                         });
                     }
                     items[input_index] = Some(BatchItemResponse {
@@ -1179,7 +1170,7 @@ impl RegistryNotaryRuntime {
                     .get(claim_ref.id.as_str())
                     .ok_or(EvidenceError::RuleEvaluationFailed)?;
                 view_claim(
-                    &self.self_attestation_rate_keys,
+                    &self.subject_access_rate_keys,
                     result,
                     claim,
                     item.disclosure,
@@ -1275,7 +1266,7 @@ impl RegistryNotaryRuntime {
                     .get(claim_id.id.as_str())
                     .ok_or(EvidenceError::RuleEvaluationFailed)?;
                 view_claim(
-                    &self.self_attestation_rate_keys,
+                    &self.subject_access_rate_keys,
                     result,
                     claim,
                     disclosure,
@@ -1321,7 +1312,7 @@ impl RegistryNotaryRuntime {
                 }
                 let ctx = ClaimEvaluationContext {
                     evidence: Arc::clone(&evidence),
-                    self_attestation_rate_keys: Arc::clone(&self.self_attestation_rate_keys),
+                    subject_access_rate_keys: Arc::clone(&self.subject_access_rate_keys),
                     evaluation_capability: evaluation_capability.clone(),
                     relay_plan: relay_plan.as_ref().map(Arc::clone),
                     context: context.clone(),
@@ -1579,14 +1570,14 @@ fn relay_expected_result(
 }
 
 /// Derive the evaluation policy identity for provenance from stored
-/// self-attestation metadata. Self-attestation results are produced under the
-/// canonical `self-attestation` evaluation policy; the version and hash come
-/// from the metadata when present. Non-self-attestation flows pass `None` and
+/// subject-access metadata. Self-attestation results are produced under the
+/// canonical `subject-access` evaluation policy; the version and hash come
+/// from the metadata when present. Non-subject-access flows pass `None` and
 /// receive an empty policy.
-pub(super) fn evaluation_policy_from_self_attestation(
-    self_attestation: Option<&StoredSelfAttestationMetadata>,
+pub(super) fn evaluation_policy_from_subject_access(
+    subject_access: Option<&StoredSubjectAccessMetadata>,
 ) -> EvaluationPolicy {
-    match self_attestation {
+    match subject_access {
         Some(metadata) => EvaluationPolicy {
             policy_id: Some(SELF_ATTESTATION_POLICY_ID.to_string()),
             policy_version: metadata
@@ -1602,14 +1593,14 @@ pub(super) fn evaluation_policy_from_self_attestation(
     }
 }
 
-/// Canonical evaluation `policy_id` for self-attestation flows (D3).
-pub(super) const SELF_ATTESTATION_POLICY_ID: &str = "self-attestation";
+/// Canonical evaluation `policy_id` for subject-access flows (D3).
+pub(super) const SELF_ATTESTATION_POLICY_ID: &str = "subject-access";
 
 pub(super) fn stored_evaluation_client_id(
     principal: &EvidencePrincipal,
-    self_attestation: Option<&StoredSelfAttestationMetadata>,
+    subject_access: Option<&StoredSubjectAccessMetadata>,
 ) -> String {
-    self_attestation
+    subject_access
         .map(|metadata| metadata.principal_hash.as_str().to_string())
         .unwrap_or_else(|| principal.principal_id.clone())
 }

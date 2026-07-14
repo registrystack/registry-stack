@@ -88,7 +88,7 @@
                     subject_binding_claim: "civil_id".to_string(),
                     subject_binding_value: "civil-1".to_string(),
                     client_id: "assisted-access".to_string(),
-                    scopes: vec!["registry_notary:self_attestation".to_string()],
+                    scopes: vec!["registry_notary:subject_access".to_string()],
                     acr: None,
                     auth_time: None,
                 },
@@ -164,7 +164,7 @@
     }
     fn auth_state(audit: AuditPipeline) -> Arc<AuthAuditState> {
         Arc::new(AuthAuditState {
-            authenticator: RwLock::new(Arc::new(Authenticator::Static {
+            authenticator: RwLock::new(Arc::new(Authenticator {
                 api_keys: vec![ResolvedCredential {
                     id: "caseworker".to_string(),
                     fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
@@ -172,13 +172,14 @@
                     authorization_details: None,
                 }],
                 bearer_tokens: Vec::new(),
+                oidc: None,
             })),
             audit,
             replay: ReplayStores::memory(),
             metrics: Arc::new(AppMetrics::default()),
             openapi_requires_auth: AtomicBool::new(true),
-            self_attestation_invalid_token_limiter: None,
-            self_attestation_rate_keys: None,
+            subject_access_invalid_token_limiter: None,
+            subject_access_rate_keys: None,
         })
     }
 
@@ -208,29 +209,30 @@
         );
     }
     #[tokio::test]
-    async fn invalid_bearer_tokens_are_rate_limited_when_self_attestation_is_enabled() {
-        let rate_limits = SelfAttestationRateLimitsConfig {
+    async fn invalid_bearer_tokens_are_rate_limited_when_subject_access_is_enabled() {
+        let rate_limits = SubjectAccessRateLimitsConfig {
             invalid_token_per_client_address_per_minute: 1,
             per_principal_per_minute: 1,
             subject_mismatch_per_principal_per_hour: 1,
             per_holder_per_hour: 1,
             credential_issuance_per_principal_per_hour: 1,
-            ..SelfAttestationRateLimitsConfig::default()
+            ..SubjectAccessRateLimitsConfig::default()
         };
         let audit = AuditPipeline::for_sink_dev_only(Arc::new(JsonlStdoutSink::new()));
         let state = Arc::new(AuthAuditState {
-            authenticator: RwLock::new(Arc::new(Authenticator::Static {
+            authenticator: RwLock::new(Arc::new(Authenticator {
                 api_keys: Vec::new(),
                 bearer_tokens: Vec::new(),
+                oidc: None,
             })),
             audit: audit.clone(),
             replay: ReplayStores::memory(),
             metrics: Arc::new(AppMetrics::default()),
             openapi_requires_auth: AtomicBool::new(true),
-            self_attestation_invalid_token_limiter: Some(Arc::new(
-                SelfAttestationRateLimiter::new(rate_limits),
+            subject_access_invalid_token_limiter: Some(Arc::new(
+                SubjectAccessRateLimiter::new(rate_limits),
             )),
-            self_attestation_rate_keys: Some(Arc::new(SelfAttestationRateLimitKeys::new(
+            subject_access_rate_keys: Some(Arc::new(SubjectAccessRateLimitKeys::new(
                 audit.profile.key_hasher(),
             ))),
         });
@@ -251,33 +253,34 @@
             .await;
         second.assert_status(StatusCode::TOO_MANY_REQUESTS);
         let body: Value = second.json();
-        assert_eq!(body["code"], json!("self_attestation.rate_limited"));
+        assert_eq!(body["code"], json!("subject_access.rate_limited"));
     }
 
     #[tokio::test]
-    async fn missing_credentials_are_rate_limited_when_self_attestation_is_enabled() {
-        let rate_limits = SelfAttestationRateLimitsConfig {
+    async fn missing_credentials_are_rate_limited_when_subject_access_is_enabled() {
+        let rate_limits = SubjectAccessRateLimitsConfig {
             invalid_token_per_client_address_per_minute: 1,
             per_principal_per_minute: 1,
             subject_mismatch_per_principal_per_hour: 1,
             per_holder_per_hour: 1,
             credential_issuance_per_principal_per_hour: 1,
-            ..SelfAttestationRateLimitsConfig::default()
+            ..SubjectAccessRateLimitsConfig::default()
         };
         let audit = AuditPipeline::for_sink_dev_only(Arc::new(JsonlStdoutSink::new()));
         let state = Arc::new(AuthAuditState {
-            authenticator: RwLock::new(Arc::new(Authenticator::Static {
+            authenticator: RwLock::new(Arc::new(Authenticator {
                 api_keys: Vec::new(),
                 bearer_tokens: Vec::new(),
+                oidc: None,
             })),
             audit: audit.clone(),
             replay: ReplayStores::memory(),
             metrics: Arc::new(AppMetrics::default()),
             openapi_requires_auth: AtomicBool::new(true),
-            self_attestation_invalid_token_limiter: Some(Arc::new(
-                SelfAttestationRateLimiter::new(rate_limits),
+            subject_access_invalid_token_limiter: Some(Arc::new(
+                SubjectAccessRateLimiter::new(rate_limits),
             )),
-            self_attestation_rate_keys: Some(Arc::new(SelfAttestationRateLimitKeys::new(
+            subject_access_rate_keys: Some(Arc::new(SubjectAccessRateLimitKeys::new(
                 audit.profile.key_hasher(),
             ))),
         });
@@ -292,13 +295,13 @@
         let second = server.get("/ok").await;
         second.assert_status(StatusCode::TOO_MANY_REQUESTS);
         let body: Value = second.json();
-        assert_eq!(body["code"], json!("self_attestation.rate_limited"));
+        assert_eq!(body["code"], json!("subject_access.rate_limited"));
     }
 
     #[tokio::test]
     async fn auth_state_accepts_case_insensitive_bearer_scheme() {
         let state = AuthAuditState {
-            authenticator: RwLock::new(Arc::new(Authenticator::Static {
+            authenticator: RwLock::new(Arc::new(Authenticator {
                 api_keys: Vec::new(),
                 bearer_tokens: vec![ResolvedCredential {
                     id: "caseworker".to_string(),
@@ -306,13 +309,14 @@
                     scopes: vec!["farmer_registry:evidence_verification".to_string()],
                     authorization_details: None,
                 }],
+                oidc: None,
             })),
             audit: AuditPipeline::for_sink_dev_only(Arc::new(JsonlStdoutSink::new())),
             replay: ReplayStores::memory(),
             metrics: Arc::new(AppMetrics::default()),
             openapi_requires_auth: AtomicBool::new(true),
-            self_attestation_invalid_token_limiter: None,
-            self_attestation_rate_keys: None,
+            subject_access_invalid_token_limiter: None,
+            subject_access_rate_keys: None,
         };
         let request = Request::builder()
             .uri("/v1/claims")
@@ -334,7 +338,7 @@
 
     #[tokio::test]
     async fn static_auth_rejects_multiple_credential_headers() {
-        let authenticator = Authenticator::Static {
+        let authenticator = Authenticator {
             api_keys: vec![ResolvedCredential {
                 id: "api-client".to_string(),
                 fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
@@ -347,6 +351,7 @@
                 scopes: vec!["farmer_registry:evidence_verification".to_string()],
                 authorization_details: None,
             }],
+            oidc: None,
         };
         let request = RequestCredentials {
             api_key: Some("api-token".to_string()),
@@ -365,7 +370,7 @@
 
     #[tokio::test]
     async fn static_auth_rejects_api_key_with_malformed_authorization_header() {
-        let authenticator = Authenticator::Static {
+        let authenticator = Authenticator {
             api_keys: vec![ResolvedCredential {
                 id: "api-client".to_string(),
                 fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
@@ -373,6 +378,7 @@
                 authorization_details: None,
             }],
             bearer_tokens: Vec::new(),
+            oidc: None,
         };
         let request = RequestCredentials {
             api_key: Some("api-token".to_string()),
@@ -539,8 +545,8 @@
             verified_claim_value("JWT"),
             subject_binding_claim,
             Some(subject_binding_claim),
-            SelfAttestationClaimSource::AccessToken,
-            SelfAttestationAssuranceClaimSource::AccessToken,
+            SubjectAccessClaimSource::AccessToken,
+            SubjectAccessAssuranceClaimSource::AccessToken,
         )
         .expect("OIDC principal is derived");
         let verified_claims = authenticated
@@ -631,8 +637,8 @@
             verified_claim_value("JWT"),
             "national_id",
             None,
-            SelfAttestationClaimSource::AccessToken,
-            SelfAttestationAssuranceClaimSource::AccessToken,
+            SubjectAccessClaimSource::AccessToken,
+            SubjectAccessAssuranceClaimSource::AccessToken,
         )
         .expect_err("missing configured principal claim must not fall back to matched client");
 
@@ -655,8 +661,8 @@
             verified_claim_value("JWT"),
             "sub",
             None,
-            SelfAttestationClaimSource::AccessToken,
-            SelfAttestationAssuranceClaimSource::AccessToken,
+            SubjectAccessClaimSource::AccessToken,
+            SubjectAccessAssuranceClaimSource::AccessToken,
         )
         .expect_err("matched client_id must not replace a missing sub principal");
 
@@ -679,8 +685,8 @@
             verified_claim_value("JWT"),
             "sub",
             None,
-            SelfAttestationClaimSource::AccessToken,
-            SelfAttestationAssuranceClaimSource::AccessToken,
+            SubjectAccessClaimSource::AccessToken,
+            SubjectAccessAssuranceClaimSource::AccessToken,
         )
         .expect_err("matched azp alone is not a client-credentials principal");
 
@@ -708,8 +714,8 @@
             verified_claim_value("JWT"),
             "sub",
             None,
-            SelfAttestationClaimSource::AccessToken,
-            SelfAttestationAssuranceClaimSource::AccessToken,
+            SubjectAccessClaimSource::AccessToken,
+            SubjectAccessAssuranceClaimSource::AccessToken,
         )
         .expect_err("malformed matching authorization_details must fail auth");
 
@@ -739,8 +745,8 @@
             verified_claim_value("JWT"),
             "sub",
             None,
-            SelfAttestationClaimSource::AccessToken,
-            SelfAttestationAssuranceClaimSource::AccessToken,
+            SubjectAccessClaimSource::AccessToken,
+            SubjectAccessAssuranceClaimSource::AccessToken,
         )
         .expect_err("duplicate matching authorization_details must fail auth");
 
@@ -771,8 +777,8 @@
             verified_claim_value("JWT"),
             "sub",
             None,
-            SelfAttestationClaimSource::AccessToken,
-            SelfAttestationAssuranceClaimSource::AccessToken,
+            SubjectAccessClaimSource::AccessToken,
+            SubjectAccessAssuranceClaimSource::AccessToken,
         )
         .expect("context-only OIDC authorization_details fall back to scope checks");
 
@@ -782,7 +788,7 @@
     #[test]
     fn oidc_principal_can_bind_userinfo_claims_and_id_token_assurance() {
         let mut access_extra = Map::new();
-        access_extra.insert("scope".to_string(), json!("openid self_attestation"));
+        access_extra.insert("scope".to_string(), json!("openid subject_access"));
         let access_token = VerifiedToken {
             claims: registry_platform_oidc::Claims {
                 sub: Some("pairwise-subject".to_string()),
@@ -796,7 +802,7 @@
                 extra: access_extra,
             },
             matched_client: Some("azp:citizen-client".to_string()),
-            scopes: vec!["openid".to_string(), "self_attestation".to_string()],
+            scopes: vec!["openid".to_string(), "subject_access".to_string()],
         };
         let mut userinfo_extra = Map::new();
         userinfo_extra.insert("individual_id".to_string(), json!("NID-1001"));
@@ -838,8 +844,8 @@
             verified_claim_value("JWT"),
             "sub",
             Some("individual_id"),
-            SelfAttestationClaimSource::Userinfo,
-            SelfAttestationAssuranceClaimSource::IdToken,
+            SubjectAccessClaimSource::Userinfo,
+            SubjectAccessAssuranceClaimSource::IdToken,
         )
         .expect("OIDC principal is derived");
         let verified_claims = authenticated
@@ -883,8 +889,8 @@
             None,
             verified_claim_value("JWT"),
             Some(subject_binding_claim),
-            SelfAttestationClaimSource::AccessToken,
-            SelfAttestationAssuranceClaimSource::AccessToken,
+            SubjectAccessClaimSource::AccessToken,
+            SubjectAccessAssuranceClaimSource::AccessToken,
         )
         .is_none());
 
@@ -900,8 +906,8 @@
             None,
             verified_claim_value("JWT"),
             Some(subject_binding_claim),
-            SelfAttestationClaimSource::AccessToken,
-            SelfAttestationAssuranceClaimSource::AccessToken,
+            SubjectAccessClaimSource::AccessToken,
+            SubjectAccessAssuranceClaimSource::AccessToken,
         )
         .is_none());
     }

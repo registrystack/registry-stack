@@ -1733,6 +1733,107 @@ fn environment_schema_tracks_local_loopback_signing_kid_and_postgresql_state() {
 }
 
 #[test]
+fn environment_schema_types_the_closed_oid4vci_authority_binding() {
+    let schema: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("schemas/project-authoring/environment.schema.json"),
+        )
+        .expect("environment schema reads"),
+    )
+    .expect("environment schema is JSON");
+    let schema = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .expect("environment schema compiles");
+    let environment = serde_json::json!({
+        "version": 1,
+        "issuance": {
+            "issuer": "did:web:notary.example.invalid",
+            "signing_key": { "secret": "NOTARY_ISSUER_JWK" },
+            "signing_kid": "did:web:notary.example.invalid#issuer-key-1",
+            "generation": 1,
+        },
+        "notary_state": {
+            "postgresql": {
+                "root_certificate_path": "/run/secrets/notary-postgres-ca.pem",
+            },
+        },
+        "oid4vci": {
+            "public_base_url": "https://notary.example.invalid",
+            "credential": {
+                "service": "citizen-status",
+                "profile": "citizen-status",
+            },
+            "authorization_server": {
+                "issuer": "https://esignet.example.invalid",
+                "jwks_url": "https://esignet.example.invalid/jwks.json",
+                "userinfo_url": "https://esignet.example.invalid/userinfo",
+                "authorize_url": "https://esignet-ui.example.invalid/authorize",
+                "token_url": "https://esignet.example.invalid/token",
+            },
+            "client": {
+                "id": "citizen-wallet",
+                "signing_key": { "secret": "ESIGNET_CLIENT_JWK" },
+                "signing_kid": "citizen-wallet-key-1",
+            },
+            "access_token": {
+                "signing_key": { "secret": "NOTARY_ACCESS_TOKEN_JWK" },
+                "signing_kid": "did:web:notary.example.invalid#access-token-key-1",
+            },
+            "sensitive_state_key": { "secret": "NOTARY_SENSITIVE_STATE_KEY" },
+            "subject": {
+                "token_claim": "individual_id",
+                "id_type": "solmara_uin",
+            },
+            "redirect_uri": "https://notary.example.invalid/oid4vci/offer/callback",
+            "allowed_wallet_origins": ["https://wallet.example.invalid"],
+        },
+        "deployment": {
+            "profile": "hosted_lab",
+            "notary": { "service": "citizen-notary" },
+        },
+    });
+    assert!(schema.is_valid(&environment));
+
+    let mut empty_callers = environment.clone();
+    empty_callers["callers"] = serde_json::json!({});
+    assert!(schema.is_valid(&empty_callers));
+
+    let mut with_callers = environment.clone();
+    with_callers["callers"] = serde_json::json!({
+        "portal": {
+            "api_key_fingerprint": { "secret": "PORTAL_KEY_HASH" },
+            "scopes": ["evidence:read"],
+        },
+    });
+    assert!(schema.is_valid(&with_callers));
+
+    let mut authored_scope = environment.clone();
+    authored_scope["oid4vci"]["credential"]["scope"] = serde_json::json!("credential:issue");
+    assert!(!schema.is_valid(&authored_scope));
+
+    let mut missing_state = environment.clone();
+    missing_state
+        .as_object_mut()
+        .expect("environment object")
+        .remove("notary_state");
+    assert!(!schema.is_valid(&missing_state));
+
+    let mut relative_redirect = environment.clone();
+    relative_redirect["oid4vci"]["redirect_uri"] = serde_json::json!("/oid4vci/offer/callback");
+    assert!(!schema.is_valid(&relative_redirect));
+
+    let mut hosted_loopback = environment.clone();
+    hosted_loopback["oid4vci"]["public_base_url"] = serde_json::json!("http://127.0.0.1:8081");
+    assert!(!schema.is_valid(&hosted_loopback));
+
+    let mut unknown_key_field = environment;
+    unknown_key_field["oid4vci"]["access_token"]["value"] = serde_json::json!("secret-material");
+    assert!(!schema.is_valid(&unknown_key_field));
+}
+
+#[test]
 fn project_authoring_schemas_reject_incoherent_product_topologies() {
     let schema_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/project-authoring");
     let compile = |schema_name: &str| {
@@ -2418,7 +2519,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "a2ee345741c73aac1b45d8b2e4e1222a10765fbde5157c0d9bd333e78e727a49",
+        "7c1607fcb3e2d1ee4b4a0a93ffb32db7119e0c034064e2623b7e3635eb8b290e",
         "project inputs must match the cross-machine golden digest"
     );
 }
@@ -2497,6 +2598,79 @@ fn generated_relay_contract_activates_through_notary_exactly_and_rejects_a_stale
         ),
         "a contract mutation cannot activate under the prior Notary pin"
     );
+}
+
+#[cfg(feature = "relay-contract-test-support")]
+#[test]
+fn generated_snapshot_contracts_activate_through_notary_at_the_authoring_bound() {
+    use registry_notary_core::{ClaimEvidenceMode, StandaloneRegistryNotaryConfig};
+
+    for (authored_max_bytes, expected_max_bytes) in [
+        ("256MiB", 256 * 1_024 * 1_024_u64),
+        ("512MiB", 512 * 1_024 * 1_024_u64),
+        ("1024MiB", 1_024 * 1_024 * 1_024_u64),
+    ] {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = copy_project("snapshot-exact", temporary.path());
+        let entity_path = project.join("entities/people.yaml");
+        let mut entity = read_yaml(&entity_path);
+        entity["materialization"]["max_bytes"] =
+            serde_yaml::Value::String(authored_max_bytes.to_string());
+        write_yaml(&entity_path, &entity);
+
+        let build = build_registry_project(&ProjectBuildOptions {
+            project_directory: project,
+            environment: "local".to_string(),
+            against: None,
+            anchor: None,
+        })
+        .expect("snapshot project builds within the authored materialization bound");
+        let output = PathBuf::from(build.output.expect("build output"));
+        let contract_bytes = std::fs::read(output.join(
+            "private/relay/config/artifacts/consultation-contracts/benefits-eligibility-person.json",
+        ))
+        .expect("snapshot Relay contract reads");
+        let contract: serde_json::Value =
+            serde_json::from_slice(&contract_bytes).expect("snapshot Relay contract parses");
+        assert_eq!(
+            contract["spec"]["materialization"]["footprint"]["max_source_bytes"].as_u64(),
+            Some(expected_max_bytes)
+        );
+
+        let notary: StandaloneRegistryNotaryConfig = serde_yaml::from_slice(
+            &std::fs::read(output.join("private/notary/config/notary.yaml"))
+                .expect("Notary config reads"),
+        )
+        .expect("generated Notary config parses");
+        let relay = notary.evidence.relay.as_ref().expect("Relay workload");
+        let claim = notary
+            .evidence
+            .claims
+            .iter()
+            .find(|claim| claim.id == "benefits-status")
+            .expect("registry-backed snapshot claim");
+        let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
+            panic!("snapshot claim remains registry-backed");
+        };
+        let consultation = consultations
+            .values()
+            .next()
+            .expect("one snapshot consultation");
+        let input_names = consultation.inputs.keys().cloned().collect::<Vec<_>>();
+        let purpose = claim.purpose.as_deref().expect("claim purpose");
+        assert!(
+            registry_notary_server::relay_contract_test_support::verifies_contract_artifact(
+                &contract_bytes,
+                &consultation.profile.contract_hash,
+                &consultation.profile.id,
+                &relay.workload_client_id,
+                purpose,
+                &input_names,
+                &consultation.outputs,
+            ),
+            "Notary must activate the {authored_max_bytes} compiler-produced snapshot contract"
+        );
+    }
 }
 
 #[cfg(feature = "relay-contract-test-support")]
@@ -2934,6 +3108,239 @@ fn issuance_accepts_a_full_verification_method_kid() {
     })
     .unwrap_err();
     assert!(format!("{error:#}").contains("issuance signing_kid must be one bounded token"));
+}
+
+#[test]
+fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let project_path = project.join("registry-stack.yaml");
+    let mut document = read_yaml(&project_path);
+    document["services"]["household-eligibility"]["credential_profiles"]["household-eligibility"]
+        ["claims"] = serde_yaml::from_str("[household-record-exists]")
+        .expect("single registry-backed credential claim");
+    write_yaml(&project_path, &document);
+    author_oid4vci_binding(
+        &project,
+        "household-eligibility",
+        "household-eligibility",
+        "household_reference",
+    );
+
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("typed OID4VCI authority project builds through the production validator");
+    let output = PathBuf::from(build.output.expect("build output"));
+    let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
+
+    assert_eq!(
+        notary["instance"]["public_base_url"].as_str(),
+        Some("https://notary.example.invalid")
+    );
+    assert_eq!(
+        notary["evidence"]["api_base_url"].as_str(),
+        Some("https://notary.example.invalid")
+    );
+    assert!(notary["auth"].get("mode").is_none());
+    assert_eq!(
+        notary["auth"]["api_keys"][0]["id"].as_str(),
+        Some("benefits-service")
+    );
+    assert_eq!(
+        notary["auth"]["oidc"]["issuer"].as_str(),
+        Some("https://esignet.example.invalid")
+    );
+    assert_eq!(
+        notary["auth"]["access_token_signing"]["signing_key_id"].as_str(),
+        Some("oid4vci-access-token")
+    );
+    assert_eq!(
+        notary["evidence"]["signing_keys"]["oid4vci-access-token"]["private_jwk_env"].as_str(),
+        Some("OID4VCI_ACCESS_TOKEN_JWK")
+    );
+    assert_eq!(
+        notary["evidence"]["signing_keys"]["oid4vci-esignet-client"]["alg"].as_str(),
+        Some("RS256")
+    );
+    assert_eq!(
+        notary["state"]["postgresql"]["sensitive_state_key_env"].as_str(),
+        Some("OID4VCI_SENSITIVE_STATE_KEY")
+    );
+    assert_eq!(
+        notary["evidence"]["credential_profiles"]["household-eligibility.household-eligibility"]
+            ["holder_binding"]["proof_of_possession"]
+            .as_str(),
+        Some("required")
+    );
+    let registry_claim = notary["evidence"]["claims"]
+        .as_sequence()
+        .expect("generated claims")
+        .iter()
+        .find(|claim| claim["id"].as_str() == Some("household-record-exists"))
+        .expect("selected registry-backed claim");
+    assert_eq!(
+        registry_claim["evidence_mode"]["type"].as_str(),
+        Some("registry_backed")
+    );
+    assert_eq!(
+        registry_claim["evidence_mode"]["consultations"]["household"]["inputs"]
+            ["household_reference"]
+            .as_str(),
+        Some("request.target.identifiers.household_reference")
+    );
+    assert_eq!(
+        notary["subject_access"]["allowed_claims"][0].as_str(),
+        Some("household-record-exists")
+    );
+    assert_eq!(
+        notary["subject_access"]["allowed_wallet_origins"][0].as_str(),
+        Some("https://wallet.example.invalid")
+    );
+    assert_eq!(
+        notary["subject_access"]["allowed_operations"]["evaluate"].as_bool(),
+        Some(false)
+    );
+    assert!(notary.get("self_attestation").is_none());
+    assert_eq!(
+        notary["oid4vci"]["credential_endpoint"].as_str(),
+        Some("https://notary.example.invalid/oid4vci/credential")
+    );
+    assert_eq!(
+        notary["oid4vci"]["pre_authorized_code"]["esignet"]["redirect_uri"].as_str(),
+        Some("https://notary.example.invalid/oid4vci/offer/callback")
+    );
+    assert_eq!(
+        notary["oid4vci"]["credential_configurations"]
+            ["household-eligibility.household-eligibility"]["vct"]
+            .as_str(),
+        Some("https://notary.example.invalid/credentials/household-eligibility/v1")
+    );
+    assert_eq!(
+        notary["oid4vci"]["credential_configurations"]
+            ["household-eligibility.household-eligibility"]["scope"]
+            .as_str(),
+        Some("evidence:household:read")
+    );
+
+    let plain_root = tempfile::tempdir().expect("plain temporary directory");
+    let plain = copy_project("notary-only-self-attested", plain_root.path());
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: plain,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("ordinary API-key Notary still builds");
+    let output = PathBuf::from(build.output.expect("plain build output"));
+    let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
+    assert!(notary["auth"].get("mode").is_none());
+    assert_eq!(
+        notary["auth"]["api_keys"][0]["id"].as_str(),
+        Some("application-service")
+    );
+    assert!(notary.get("oid4vci").is_none());
+    assert!(notary.get("subject_access").is_none());
+    assert!(notary.get("self_attestation").is_none());
+}
+
+#[test]
+fn authored_oid4vci_binding_rejects_open_or_incoherent_trust_topologies() {
+    for (name, mutate, expected) in [
+        (
+            "unknown credential profile",
+            "oid4vci:\n  credential:\n    profile: absent-profile\n",
+            "OID4VCI references an unknown credential profile",
+        ),
+        (
+            "cross-origin token endpoint",
+            "oid4vci:\n  authorization_server:\n    token_url: https://attacker.invalid/token\n",
+            "OID4VCI authorization server token URL must use its bound origin",
+        ),
+        (
+            "non-callback redirect",
+            "oid4vci:\n  redirect_uri: https://notary.example.invalid/other-callback\n",
+            "OID4VCI redirect URI must be the public Notary offer callback",
+        ),
+        (
+            "reused issuer key",
+            "oid4vci:\n  access_token:\n    signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }\n",
+            "OID4VCI issuer, client, and access-token signing keys must be distinct",
+        ),
+        (
+            "missing PostgreSQL state",
+            "notary_state: null\n",
+            "OID4VCI requires a Notary PostgreSQL state binding",
+        ),
+    ] {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = copy_project("notary-only-self-attested", temporary.path());
+        author_oid4vci_binding(
+            &project,
+            "applicant-declaration",
+            "applicant-declaration",
+            "example_person_id",
+        );
+        merge_environment_yaml(&project.join("environments/local.yaml"), mutate);
+        let error = check_registry_project(&ProjectCheckOptions {
+            project_directory: project,
+            environment: "local".to_string(),
+            explain: false,
+            against: None,
+            anchor: None,
+        })
+        .expect_err("incoherent OID4VCI binding must fail closed");
+        assert!(format!("{error:#}").contains(expected), "{name}: {error:#}");
+    }
+
+    for (name, scopes, expected) in [
+        (
+            "no access scope",
+            "[]",
+            "caller scopes must contain between one and 16 entries",
+        ),
+        (
+            "multiple access scopes",
+            "[evidence:household:read, evidence:household:issue]",
+            "OID4VCI credential service must declare exactly one access scope",
+        ),
+    ] {
+        let temporary = tempfile::tempdir().expect("access-scope temporary directory");
+        let project = copy_project("custom-system", temporary.path());
+        let project_path = project.join("registry-stack.yaml");
+        let mut document = read_yaml(&project_path);
+        document["services"]["household-eligibility"]["credential_profiles"]
+            ["household-eligibility"]["claims"] = serde_yaml::from_str("[household-record-exists]")
+            .expect("single registry-backed claim");
+        document["services"]["household-eligibility"]["access"]["scopes"] =
+            serde_yaml::from_str(scopes).expect("access scopes");
+        write_yaml(&project_path, &document);
+        author_oid4vci_binding(
+            &project,
+            "household-eligibility",
+            "household-eligibility",
+            "household_reference",
+        );
+        let environment_path = project.join("environments/local.yaml");
+        let mut environment = read_yaml(&environment_path);
+        environment
+            .as_mapping_mut()
+            .expect("environment mapping")
+            .remove(serde_yaml::Value::String("callers".to_string()));
+        write_yaml(&environment_path, &environment);
+        let error = check_registry_project(&ProjectCheckOptions {
+            project_directory: project,
+            environment: "local".to_string(),
+            explain: false,
+            against: None,
+            anchor: None,
+        })
+        .expect_err("OID4VCI service without exactly one access scope must fail closed");
+        assert!(format!("{error:#}").contains(expected), "{name}: {error:#}");
+    }
 }
 
 #[test]
@@ -4475,6 +4882,75 @@ fn copy_project(name: &str, temporary: &Path) -> PathBuf {
     let destination = temporary.join(name);
     copy_tree(&golden(name), &destination);
     destination
+}
+
+fn author_oid4vci_binding(project: &Path, service: &str, profile: &str, id_type: &str) {
+    let project_path = project.join("registry-stack.yaml");
+    let mut authored_project = read_yaml(&project_path);
+    authored_project["services"][service]["credential_profiles"][profile]["type"] =
+        serde_yaml::Value::String(format!(
+            "https://notary.example.invalid/credentials/{profile}/v1"
+        ));
+    write_yaml(&project_path, &authored_project);
+
+    let environment_path = project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["notary_state"] = serde_yaml::from_str(
+        "postgresql:\n  root_certificate_path: /run/secrets/notary-postgres-ca.pem\n",
+    )
+    .expect("Notary PostgreSQL state binding");
+    environment["oid4vci"] = serde_yaml::from_str(&format!(
+        r#"public_base_url: https://notary.example.invalid
+credential:
+  service: {service}
+  profile: {profile}
+authorization_server:
+  issuer: https://esignet.example.invalid
+  jwks_url: https://esignet.example.invalid/.well-known/jwks.json
+  userinfo_url: https://esignet.example.invalid/userinfo
+  authorize_url: https://esignet-ui.example.invalid/authorize
+  token_url: https://esignet.example.invalid/token
+client:
+  id: example-wallet-client
+  signing_key: {{ secret: OID4VCI_ESIGNET_CLIENT_JWK }}
+  signing_kid: example-wallet-client-key-1
+access_token:
+  signing_key: {{ secret: OID4VCI_ACCESS_TOKEN_JWK }}
+  signing_kid: did:web:notary.example.invalid#access-token-key-1
+sensitive_state_key: {{ secret: OID4VCI_SENSITIVE_STATE_KEY }}
+subject:
+  token_claim: individual_id
+  id_type: {id_type}
+redirect_uri: https://notary.example.invalid/oid4vci/offer/callback
+allowed_wallet_origins: [https://wallet.example.invalid]
+"#
+    ))
+    .expect("OID4VCI binding");
+    write_yaml(&environment_path, &environment);
+}
+
+fn merge_environment_yaml(path: &Path, patch: &str) {
+    fn merge(target: &mut serde_yaml::Value, patch: serde_yaml::Value) {
+        match (target, patch) {
+            (serde_yaml::Value::Mapping(target), serde_yaml::Value::Mapping(patch)) => {
+                for (key, value) in patch {
+                    if let Some(target) = target.get_mut(&key) {
+                        merge(target, value);
+                    } else {
+                        target.insert(key, value);
+                    }
+                }
+            }
+            (target, patch) => *target = patch,
+        }
+    }
+
+    let mut environment = read_yaml(path);
+    merge(
+        &mut environment,
+        serde_yaml::from_str(patch).expect("environment patch"),
+    );
+    write_yaml(path, &environment);
 }
 
 fn rename_custom_input(project: &Path, name: &str) {

@@ -18,8 +18,8 @@ use registry_notary_core::{
     DisclosureDowngrade, DisclosureProfile, EvaluateRequest, EvaluationCapability, EvidenceConfig,
     EvidenceEntity, EvidenceEntityRef, EvidenceError, EvidenceFormat, EvidencePrincipal,
     EvidenceRequestContext, ProvenanceUsed, RegistryNotaryCelConfig, RenderRequest, RuleConfig,
-    SelfAttestationConfig, SelfAttestationDenialCode, StoredSelfAttestationMetadata,
-    SubjectRequest, TargetRefView, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    StoredSubjectAccessMetadata, SubjectAccessConfig, SubjectAccessDenialCode, SubjectRequest,
+    TargetRefView, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
     MAX_CLAIM_DEPENDENCY_EDGES_V1, MAX_CLAIM_DEPENDENCY_NODES_V1, SD_JWT_VC_HOLDER_BINDING_METHOD,
     SD_JWT_VC_ISSUER_KEY_TYPE, SD_JWT_VC_JWT_TYP, SD_JWT_VC_SIGNING_ALG,
 };
@@ -43,7 +43,7 @@ use crate::digest::hex_encode;
 use crate::json_path::get_json_path;
 use crate::problem::evidence_title;
 use crate::request_context::with_request_correlation_id;
-use crate::self_attestation_rate_limit::SelfAttestationRateLimitKeys;
+use crate::subject_access_rate_limit::SubjectAccessRateLimitKeys;
 
 #[cfg(feature = "registry-notary-cel")]
 const MAX_CEL_CLAIM_BINDINGS: usize = 64;

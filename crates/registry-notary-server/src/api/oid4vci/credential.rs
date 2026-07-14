@@ -22,8 +22,8 @@ pub(in crate::api) async fn oid4vci_credential(
         Ok(evidence) => evidence,
         Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
     };
-    let principal = match classify_self_attestation_principal(&state.self_attestation, &principal) {
-        Ok(principal) if principal.is_self_attestation() => principal,
+    let principal = match classify_subject_access_principal(&state.subject_access, &principal) {
+        Ok(principal) if principal.is_subject_access() => principal,
         _ => return oid4vci_error_response(Oid4vciWireError::InvalidToken),
     };
     if let Err(error) = require_oid4vci_token_audience(&state.oid4vci, &principal) {
@@ -46,32 +46,32 @@ pub(in crate::api) async fn oid4vci_credential(
     let configuration_claim_ids = configuration.credential_claim_ids();
     if requested_attestation_access_mode(&principal) == AccessMode::DelegatedAttestation {
         let mut response = oid4vci_error_response(Oid4vciWireError::AccessDenied);
-        attach_oid4vci_self_attestation_denial_audit(
+        attach_oid4vci_subject_access_denial_audit(
             &mut response,
             "oid4vci_credential_denied",
             &configuration_claim_ids,
             configuration_id,
-            Some(SelfAttestationDenialCode::DelegatedRelationshipNotAllowed),
-            Some(state.self_attestation.subject_binding.token_claim.as_str()),
+            Some(SubjectAccessDenialCode::DelegatedRelationshipNotAllowed),
+            Some(state.subject_access.subject_binding.token_claim.as_str()),
         );
         return response;
     }
     if let Err(error) = require_oid4vci_configuration_scope(configuration, &principal) {
         let mut response = oid4vci_error_response(error);
-        attach_oid4vci_self_attestation_denial_audit(
+        attach_oid4vci_subject_access_denial_audit(
             &mut response,
             "oid4vci_credential_denied",
             &configuration_claim_ids,
             configuration_id,
-            Some(SelfAttestationDenialCode::OperationDenied),
-            Some(state.self_attestation.subject_binding.token_claim.as_str()),
+            Some(SubjectAccessDenialCode::OperationDenied),
+            Some(state.subject_access.subject_binding.token_claim.as_str()),
         );
         return response;
     }
     let preauth = preauth_runtime(&state);
     if let Err(error) = require_oid4vci_issuance_authorization_details(
         evidence,
-        &state.self_attestation,
+        &state.subject_access,
         configuration,
         &principal,
         oid4vci_requires_authorization_details(
@@ -82,13 +82,13 @@ pub(in crate::api) async fn oid4vci_credential(
     ) {
         let denial_code = denial_code_from_error(&error);
         let mut response = oid4vci_error_response(oid4vci_error_from_evidence(&error));
-        attach_oid4vci_self_attestation_denial_audit(
+        attach_oid4vci_subject_access_denial_audit(
             &mut response,
             "oid4vci_credential_denied",
             &configuration_claim_ids,
             configuration_id,
             denial_code,
-            Some(state.self_attestation.subject_binding.token_claim.as_str()),
+            Some(state.subject_access.subject_binding.token_claim.as_str()),
         );
         return response;
     }
@@ -118,7 +118,7 @@ pub(in crate::api) async fn oid4vci_credential(
         return oid4vci_error_response(Oid4vciWireError::InvalidProof);
     }
     if let Some(nonce) = expected_nonce {
-        let key = match state.self_attestation_rate_keys.oid4vci_nonce(
+        let key = match state.subject_access_rate_keys.oid4vci_nonce(
             &state.oid4vci.credential_issuer,
             configuration_id,
             nonce,
@@ -158,10 +158,10 @@ pub(in crate::api) async fn oid4vci_credential(
     }
     let holder_id = validated_proof.holder_id.as_str();
     if let Err(error) =
-        check_oid4vci_self_attestation_rate_limit(&state, &principal, Some(holder_id)).await
+        check_oid4vci_subject_access_rate_limit(&state, &principal, Some(holder_id)).await
     {
         let mut response = oid4vci_error_response(Oid4vciWireError::RateLimited);
-        attach_self_attestation_rate_limit_audit(
+        attach_subject_access_rate_limit_audit(
             &mut response,
             "oid4vci_rate_limited",
             &configuration_claim_ids,
@@ -169,17 +169,17 @@ pub(in crate::api) async fn oid4vci_credential(
         );
         return response;
     }
-    let target = match oid4vci_bound_subject(&state.self_attestation, &principal) {
+    let target = match oid4vci_bound_subject(&state.subject_access, &principal) {
         Ok(subject) => EvidenceEntity::from_subject_request("Person", subject),
         Err(_) => {
             let mut response = oid4vci_error_response(Oid4vciWireError::InvalidToken);
-            attach_oid4vci_self_attestation_denial_audit(
+            attach_oid4vci_subject_access_denial_audit(
                 &mut response,
                 "oid4vci_credential_denied",
                 &configuration_claim_ids,
                 configuration_id,
-                Some(SelfAttestationDenialCode::InvalidToken),
-                Some(state.self_attestation.subject_binding.token_claim.as_str()),
+                Some(SubjectAccessDenialCode::InvalidToken),
+                Some(state.subject_access.subject_binding.token_claim.as_str()),
             );
             return response;
         }
@@ -202,7 +202,9 @@ pub(in crate::api) async fn oid4vci_credential(
         purpose: None,
     };
     let mut request = request;
-    let context = match prepare_self_attestation_evaluate(&state, evidence, &principal, &request) {
+    let context = match prepare_subject_access_credential_evaluation(
+        &state, evidence, &principal, &request,
+    ) {
         Ok(context) => {
             request.purpose = Some(context.purpose.clone());
             context
@@ -210,13 +212,13 @@ pub(in crate::api) async fn oid4vci_credential(
         Err(error) => {
             let denial_code = denial_code_from_error(&error);
             let mut response = oid4vci_error_response(oid4vci_error_from_evidence(&error));
-            attach_oid4vci_self_attestation_denial_audit(
+            attach_oid4vci_subject_access_denial_audit(
                 &mut response,
                 "oid4vci_credential_denied",
                 &configuration_claim_ids,
                 configuration_id,
                 denial_code,
-                Some(state.self_attestation.subject_binding.token_claim.as_str()),
+                Some(state.subject_access.subject_binding.token_claim.as_str()),
             );
             return response;
         }
@@ -239,13 +241,13 @@ pub(in crate::api) async fn oid4vci_credential(
         Err(error) => {
             let denial_code = denial_code_from_error(&error);
             let mut response = oid4vci_error_response(oid4vci_error_from_evidence(&error));
-            attach_oid4vci_self_attestation_denial_audit(
+            attach_oid4vci_subject_access_denial_audit(
                 &mut response,
                 "oid4vci_credential_denied",
                 &configuration_claim_ids,
                 configuration_id,
                 denial_code,
-                Some(state.self_attestation.subject_binding.token_claim.as_str()),
+                Some(state.subject_access.subject_binding.token_claim.as_str()),
             );
             return response;
         }
@@ -262,7 +264,7 @@ pub(in crate::api) async fn oid4vci_credential(
         Ok(Some(evaluation)) => evaluation,
         Ok(None) | Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
     };
-    if let Err(error) = require_self_attestation_stored_access(
+    if let Err(error) = require_subject_access_stored_access(
         &state,
         evidence,
         &principal,
@@ -274,11 +276,11 @@ pub(in crate::api) async fn oid4vci_credential(
     ) {
         return oid4vci_error_response(oid4vci_error_from_evidence(&error));
     }
-    if !state.self_attestation.allowed_operations.issue_credential {
+    if !state.subject_access.allowed_operations.issue_credential {
         return oid4vci_error_response(Oid4vciWireError::AccessDenied);
     }
-    if let Err(error) = require_self_attestation_credential_profile_policy(
-        &state.self_attestation,
+    if let Err(error) = require_subject_access_credential_profile_policy(
+        &state.subject_access,
         &configuration.credential_profile,
         profile,
     ) {
@@ -333,7 +335,7 @@ pub(in crate::api) async fn oid4vci_credential(
     let next_nonce = if state.oid4vci.nonce.enabled {
         match generate_nonce() {
             Ok(nonce) => {
-                if let Ok(key) = state.self_attestation_rate_keys.oid4vci_nonce(
+                if let Ok(key) = state.subject_access_rate_keys.oid4vci_nonce(
                     &state.oid4vci.credential_issuer,
                     configuration_id,
                     &nonce,
@@ -385,14 +387,14 @@ pub(in crate::api) async fn oid4vci_credential(
     })
     .into_response();
     state.metrics.record_credential("openid4vci", "issued");
-    if attach_self_attestation_credential_audit(
+    if attach_subject_access_credential_audit(
         &mut response,
-        &state.self_attestation_rate_keys,
+        &state.subject_access_rate_keys,
         &evaluation_id,
         &evaluation.claim_ids,
         &evaluation.results,
         evaluation.results.len() as u64,
-        SelfAttestationCredentialAuditDetails {
+        SubjectAccessCredentialAuditDetails {
             profile_id: &configuration.credential_profile,
             holder_binding_mode: &profile.holder_binding.mode,
             policy_hash: context.metadata.policy_hash,
@@ -527,14 +529,14 @@ pub(in crate::api) fn require_oid4vci_configuration_scope(
 
 pub(in crate::api) fn oid4vci_issuance_authorization_details(
     evidence: &EvidenceConfig,
-    config: &SelfAttestationConfig,
+    config: &SubjectAccessConfig,
     configuration: &Oid4vciCredentialConfigurationConfig,
 ) -> Result<registry_notary_core::EvidenceAuthorizationDetails, EvidenceError> {
     let claims = oid4vci_credential_claim_refs(configuration);
     let claim_ids = claim_ids(&claims);
     let disclosure = selected_disclosure(evidence, &claim_ids, None)
         .map_err(|_| EvidenceError::InvalidRequest)?;
-    let purpose = common_self_attestation_purpose(evidence, &claims)?;
+    let purpose = common_subject_access_purpose(evidence, &claims)?;
     Ok(registry_notary_core::EvidenceAuthorizationDetails {
         detail_type: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE.to_string(),
         schema_version: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION
@@ -549,14 +551,14 @@ pub(in crate::api) fn oid4vci_issuance_authorization_details(
             binding_claim: config.subject_binding.token_claim.clone(),
             id_type: config.subject_binding.id_type.clone(),
         }),
-        access_mode: Some(AccessMode::SelfAttestation),
+        access_mode: Some(AccessMode::SubjectBound),
         ..Default::default()
     })
 }
 
 pub(in crate::api) fn require_oid4vci_issuance_authorization_details(
     evidence: &EvidenceConfig,
-    config: &SelfAttestationConfig,
+    config: &SubjectAccessConfig,
     configuration: &Oid4vciCredentialConfigurationConfig,
     principal: &EvidencePrincipal,
     require_details: bool,
@@ -564,8 +566,8 @@ pub(in crate::api) fn require_oid4vci_issuance_authorization_details(
     let details = match principal.authorization_details.as_ref() {
         Some(details) if crate::authz_details::has_transaction_scope(details) => details,
         Some(_) | None if require_details => {
-            return Err(self_attestation_denied(
-                SelfAttestationDenialCode::OperationDenied,
+            return Err(subject_access_denied(
+                SubjectAccessDenialCode::OperationDenied,
             ));
         }
         Some(_) | None => {
@@ -587,7 +589,7 @@ pub(in crate::api) fn require_oid4vci_issuance_authorization_details(
             disclosure: expected.disclosure.as_deref().unwrap_or(""),
             format: expected.format.as_deref().unwrap_or(""),
             purpose: expected.purpose.as_deref().unwrap_or(""),
-            access_mode: AccessMode::SelfAttestation,
+            access_mode: AccessMode::SubjectBound,
             subject: Some(crate::authz_details::ScopedAuthorizationSubject {
                 binding_claim: config.subject_binding.token_claim.clone(),
                 id_type: config.subject_binding.id_type.clone(),
@@ -597,7 +599,7 @@ pub(in crate::api) fn require_oid4vci_issuance_authorization_details(
             allowed_claims: None,
         },
     )
-    .map_err(self_attestation_authorization_details_denial)
+    .map_err(subject_access_authorization_details_denial)
 }
 
 pub(in crate::api) fn oid4vci_requires_authorization_details(
@@ -643,50 +645,50 @@ pub(in crate::api) fn add_scope_if_missing(scopes: &mut Vec<String>, scope: &str
 }
 
 pub(in crate::api) fn oid4vci_bound_subject(
-    config: &SelfAttestationConfig,
+    config: &SubjectAccessConfig,
     principal: &EvidencePrincipal,
 ) -> Result<SubjectRequest, EvidenceError> {
     let subject_id = principal
         .verified_subject_binding_value(&config.subject_binding.token_claim)
-        .ok_or(EvidenceError::SelfAttestationInvalidToken)?;
+        .ok_or(EvidenceError::SubjectAccessInvalidToken)?;
     Ok(SubjectRequest {
         id: subject_id.to_string(),
         id_type: Some(config.subject_binding.id_type.clone()),
     })
 }
 
-pub(in crate::api) fn self_attestation_bound_subject(
-    config: &SelfAttestationConfig,
+pub(in crate::api) fn subject_access_bound_subject(
+    config: &SubjectAccessConfig,
     principal: &EvidencePrincipal,
 ) -> Result<SubjectRequest, EvidenceError> {
     let subject_id = principal
         .verified_subject_binding_value(&config.subject_binding.token_claim)
-        .ok_or_else(|| self_attestation_denied(SelfAttestationDenialCode::SubjectClaimMissing))?;
+        .ok_or_else(|| subject_access_denied(SubjectAccessDenialCode::SubjectClaimMissing))?;
     Ok(SubjectRequest {
         id: subject_id.to_string(),
         id_type: Some(config.subject_binding.id_type.clone()),
     })
 }
 
-pub(in crate::api) fn derive_self_attestation_request_context(
-    config: &SelfAttestationConfig,
+pub(in crate::api) fn derive_subject_access_request_context(
+    config: &SubjectAccessConfig,
     principal: &EvidencePrincipal,
     request: &mut EvaluateRequest,
 ) -> Result<(), EvidenceError> {
-    let subject = self_attestation_bound_subject(config, principal)?;
+    let subject = subject_access_bound_subject(config, principal)?;
     let derived = EvidenceEntity::from_subject_request("Person", subject.clone());
     ensure_optional_entity_matches_subject(config, request.target.as_ref(), &subject)?;
     ensure_optional_entity_matches_subject(config, request.requester.as_ref(), &subject)?;
     if let Some(relationship) = request.relationship.as_ref() {
         if relationship.relationship_type != "self" || !relationship.attributes.is_empty() {
-            return Err(self_attestation_denied(
-                SelfAttestationDenialCode::SubjectMismatch,
+            return Err(subject_access_denied(
+                SubjectAccessDenialCode::SubjectMismatch,
             ));
         }
     }
     if request.on_behalf_of.is_some() {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
+        return Err(subject_access_denied(
+            SubjectAccessDenialCode::SubjectMismatch,
         ));
     }
     request.target = Some(derived.clone());
@@ -707,13 +709,13 @@ pub(in crate::api) fn requested_attestation_access_mode(
         .and_then(|details| details.access_mode)
     {
         Some(AccessMode::DelegatedAttestation) => AccessMode::DelegatedAttestation,
-        _ => AccessMode::SelfAttestation,
+        _ => AccessMode::SubjectBound,
     }
 }
 
-pub(in crate::api) fn apply_stored_self_attestation_access_mode(
+pub(in crate::api) fn apply_stored_subject_access_access_mode(
     principal: &mut EvidencePrincipal,
-    metadata: &StoredSelfAttestationMetadata,
+    metadata: &StoredSubjectAccessMetadata,
 ) -> Result<(), EvidenceError> {
     let requested_access_mode = requested_attestation_access_mode(principal);
     if requested_access_mode != metadata.access_mode {
@@ -724,56 +726,56 @@ pub(in crate::api) fn apply_stored_self_attestation_access_mode(
 }
 
 pub(in crate::api) fn derive_delegated_attestation_request_context(
-    config: &SelfAttestationConfig,
-    keys: &SelfAttestationRateLimitKeys,
+    config: &SubjectAccessConfig,
+    keys: &SubjectAccessRateLimitKeys,
     principal: &EvidencePrincipal,
     request: &mut EvaluateRequest,
 ) -> Result<(), EvidenceError> {
     if !config.delegation.enabled {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
+        return Err(subject_access_denied(
+            SubjectAccessDenialCode::DelegatedRelationshipNotAllowed,
         ));
     }
     if request.requester.is_some()
         || request.relationship.is_some()
         || request.on_behalf_of.is_some()
     {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
+        return Err(subject_access_denied(
+            SubjectAccessDenialCode::DelegatedSubjectNotPermitted,
         ));
     }
     let Some(details) = principal.authorization_details.as_ref() else {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
+        return Err(subject_access_denied(
+            SubjectAccessDenialCode::DelegatedRelationshipNotAllowed,
         ));
     };
     let Some(relationship) = details.relationship.as_ref() else {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
+        return Err(subject_access_denied(
+            SubjectAccessDenialCode::DelegatedRelationshipNotAllowed,
         ));
     };
     let relationship_config = config
         .delegation
         .relationship(&relationship.relationship_type)
         .ok_or_else(|| {
-            self_attestation_denied(SelfAttestationDenialCode::DelegatedRelationshipNotAllowed)
+            subject_access_denied(SubjectAccessDenialCode::DelegatedRelationshipNotAllowed)
         })?;
     if relationship_config.proof_claim != relationship.proof_claim {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::DelegatedRelationshipNotAllowed,
+        return Err(subject_access_denied(
+            SubjectAccessDenialCode::DelegatedRelationshipNotAllowed,
         ));
     }
     let target_id_type = delegated_target_id_type(config, relationship_config);
     let Some(target_subject) = request.target_subject() else {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
+        return Err(subject_access_denied(
+            SubjectAccessDenialCode::DelegatedSubjectNotPermitted,
         ));
     };
     if target_subject.id.trim().is_empty()
         || target_subject.id_type.as_deref() != Some(target_id_type)
     {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
+        return Err(subject_access_denied(
+            SubjectAccessDenialCode::DelegatedSubjectNotPermitted,
         ));
     }
     // Rebuild the target canonically from the validated (id, id_type) only,
@@ -787,7 +789,7 @@ pub(in crate::api) fn derive_delegated_attestation_request_context(
         target_subject,
     ));
 
-    let requester_subject = self_attestation_bound_subject(config, principal)?;
+    let requester_subject = subject_access_bound_subject(config, principal)?;
     let requester = EvidenceEntity::from_subject_request("Person", requester_subject);
     let principal_hash = keys
         .principal(&principal.principal_id)
@@ -814,8 +816,8 @@ pub(in crate::api) fn derive_delegated_attestation_request_context(
 }
 
 pub(in crate::api) fn delegated_target_id_type<'a>(
-    config: &'a SelfAttestationConfig,
-    relationship: &'a SelfAttestationDelegatedRelationshipConfig,
+    config: &'a SubjectAccessConfig,
+    relationship: &'a SubjectAccessDelegatedRelationshipConfig,
 ) -> &'a str {
     relationship
         .target_id_type
@@ -824,7 +826,7 @@ pub(in crate::api) fn delegated_target_id_type<'a>(
 }
 
 pub(in crate::api) fn ensure_optional_entity_matches_subject(
-    config: &SelfAttestationConfig,
+    config: &SubjectAccessConfig,
     entity: Option<&EvidenceEntity>,
     expected: &SubjectRequest,
 ) -> Result<(), EvidenceError> {
@@ -832,34 +834,34 @@ pub(in crate::api) fn ensure_optional_entity_matches_subject(
         return Ok(());
     };
     let Some(actual) = entity.to_subject_request() else {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
+        return Err(subject_access_denied(
+            SubjectAccessDenialCode::SubjectMismatch,
         ));
     };
     if actual.id.trim().is_empty()
         || actual.id != expected.id
         || actual.id_type.as_deref() != Some(config.subject_binding.id_type.as_str())
     {
-        return Err(self_attestation_denied(
-            SelfAttestationDenialCode::SubjectMismatch,
+        return Err(subject_access_denied(
+            SubjectAccessDenialCode::SubjectMismatch,
         ));
     }
     Ok(())
 }
 
-pub(in crate::api) async fn check_oid4vci_self_attestation_rate_limit(
+pub(in crate::api) async fn check_oid4vci_subject_access_rate_limit(
     state: &RegistryNotaryApiState,
     principal: &EvidencePrincipal,
     holder_id: Option<&str>,
-) -> Result<(), SelfAttestationRateLimitError> {
+) -> Result<(), SubjectAccessRateLimitError> {
     let principal_hash = state
-        .self_attestation_rate_keys
+        .subject_access_rate_keys
         .principal(&principal.principal_id)?;
     let holder_hash = holder_id
-        .map(|holder_id| state.self_attestation_rate_keys.holder(holder_id))
+        .map(|holder_id| state.subject_access_rate_keys.holder(holder_id))
         .transpose()?;
     state
-        .self_attestation_rate_limiter
+        .subject_access_rate_limiter
         .check_credential_issuance(&principal_hash, holder_hash.as_ref())
         .await
 }

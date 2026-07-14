@@ -189,7 +189,7 @@ mod tests {
             claims,
             disclosure: Some("predicate".to_string()),
             format: Some("application/vnd.registry-notary.claim-result+json".to_string()),
-            purpose: Some("citizen_self_attestation".to_string()),
+            purpose: Some("citizen_subject_access".to_string()),
             legal_basis_ref: None,
             consent_ref: None,
             jurisdiction: None,
@@ -200,7 +200,7 @@ mod tests {
             }),
             target: None,
             relationship: None,
-            access_mode: Some(AccessMode::SelfAttestation),
+            access_mode: Some(AccessMode::SubjectBound),
             assisted_access_context: None,
         }
     }
@@ -231,8 +231,8 @@ mod tests {
             claims,
             disclosure: "predicate",
             format: "application/vnd.registry-notary.claim-result+json",
-            purpose: "citizen_self_attestation",
-            access_mode: AccessMode::SelfAttestation,
+            purpose: "citizen_subject_access",
+            access_mode: AccessMode::SubjectBound,
             subject: Some(ScopedAuthorizationSubject {
                 binding_claim: "national_id".to_string(),
                 id_type: "national_id".to_string(),
@@ -272,7 +272,7 @@ mod tests {
         assert!(has_transaction_scope(&details));
 
         let mut details = context_only_details();
-        details.purpose = Some("citizen_self_attestation".to_string());
+        details.purpose = Some("citizen_subject_access".to_string());
         assert!(has_transaction_scope(&details));
 
         let mut details = context_only_details();

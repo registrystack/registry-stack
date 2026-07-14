@@ -178,7 +178,6 @@ evidence:
       formats: *formats
       disclosure: *disclosure
 auth:
-  mode: api_key
   api_keys:
     - id: authoring-test-principal
       fingerprint:

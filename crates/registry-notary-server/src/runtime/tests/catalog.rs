@@ -116,13 +116,13 @@
     }
 
     #[test]
-    fn self_attestation_evaluation_capability_uses_keyed_subject_binding_hash() {
+    fn subject_access_evaluation_capability_uses_keyed_subject_binding_hash() {
         const ENV: &str = "TEST_RUNTIME_AUDIT_HASH_SECRET";
         std::env::set_var(ENV, "0123456789abcdef0123456789abcdef");
-        let keys = SelfAttestationRateLimitKeys::new(
+        let keys = SubjectAccessRateLimitKeys::new(
             AuditKeyHasher::from_env(ENV).expect("test audit hasher loads"),
         );
-        let mut principal = self_attestation_principal();
+        let mut principal = subject_access_principal();
         principal.verified_claims = Some(
             serde_json::from_value(json!({
                 "issuer": "https://id.example.gov",
@@ -136,12 +136,12 @@
         let capability =
             evaluation_capability_for_principal(&keys, &principal, &["selected".to_string()])
                 .expect("evaluation capability builds");
-        let EvaluationCapability::SelfAttestation {
+        let EvaluationCapability::SubjectBound {
             subject_binding_hash,
             ..
         } = capability
         else {
-            panic!("expected self-attestation capability");
+            panic!("expected subject-access capability");
         };
 
         assert!(subject_binding_hash.as_str().starts_with("hmac-sha256:"));
@@ -244,7 +244,7 @@
     }
 
     #[test]
-    fn service_document_preserves_output_when_self_attestation_disabled() {
+    fn service_document_preserves_output_when_subject_access_disabled() {
         let evidence = EvidenceConfig {
             enabled: true,
             service_id: "evidence.test".to_string(),
@@ -252,9 +252,9 @@
         };
 
         assert_eq!(
-            RegistryNotaryRuntime::service_document_with_self_attestation(
+            RegistryNotaryRuntime::service_document_with_subject_access(
                 &evidence,
-                &SelfAttestationConfig::default(),
+                &SubjectAccessConfig::default(),
                 false,
             ),
             RegistryNotaryRuntime::service_document(&evidence),
@@ -286,13 +286,13 @@
     }
 
     #[test]
-    fn service_document_redacts_self_attestation_details_when_not_authorized() {
+    fn service_document_redacts_subject_access_details_when_not_authorized() {
         let evidence = EvidenceConfig {
             enabled: true,
             service_id: "evidence.test".to_string(),
             ..EvidenceConfig::default()
         };
-        let self_attestation: SelfAttestationConfig = serde_json::from_value(json!({
+        let subject_access: SubjectAccessConfig = serde_json::from_value(json!({
             "enabled": true,
             "subject_binding": {
                 "token_claim": "https://id.example.gov/claims/national_id",
@@ -316,10 +316,9 @@
             "allowed_claims": ["person-is-alive"],
             "allowed_formats": [FORMAT_CLAIM_RESULT_JSON],
             "allowed_disclosures": ["predicate"],
-            "required_scopes": ["self_attestation"],
+            "required_scopes": ["subject_access"],
             "credential_profiles": ["civil_status_sd_jwt"],
             "rate_limits": {
-                "mode": "in_process",
                 "invalid_token_per_client_address_per_minute": 20,
                 "per_principal_per_minute": 10,
                 "subject_mismatch_per_principal_per_hour": 5,
@@ -327,29 +326,29 @@
                 "credential_issuance_per_principal_per_hour": 5
             }
         }))
-        .expect("self-attestation config parses");
+        .expect("subject-access config parses");
 
-        let document = RegistryNotaryRuntime::service_document_with_self_attestation(
+        let document = RegistryNotaryRuntime::service_document_with_subject_access(
             &evidence,
-            &self_attestation,
+            &subject_access,
             false,
         );
 
-        assert_eq!(document["self_attestation"]["enabled"], json!(true));
-        assert!(document["self_attestation"]["subject_id_type"].is_null());
-        assert!(document["self_attestation"]["token_claim_name"].is_null());
-        assert!(document["self_attestation"]["allowed_claim_ids"].is_null());
-        assert!(document["self_attestation"]["credential_profile_ids"].is_null());
+        assert_eq!(document["subject_access"]["enabled"], json!(true));
+        assert!(document["subject_access"]["subject_id_type"].is_null());
+        assert!(document["subject_access"]["token_claim_name"].is_null());
+        assert!(document["subject_access"]["allowed_claim_ids"].is_null());
+        assert!(document["subject_access"]["credential_profile_ids"].is_null());
     }
 
     #[test]
-    fn service_document_advertises_enabled_self_attestation_capabilities() {
+    fn service_document_advertises_enabled_subject_access_capabilities() {
         let evidence = EvidenceConfig {
             enabled: true,
             service_id: "evidence.test".to_string(),
             ..EvidenceConfig::default()
         };
-        let self_attestation: SelfAttestationConfig = serde_json::from_value(json!({
+        let subject_access: SubjectAccessConfig = serde_json::from_value(json!({
             "enabled": true,
             "subject_binding": {
                 "token_claim": "https://id.example.gov/claims/national_id",
@@ -373,10 +372,9 @@
             "allowed_claims": ["person-is-alive"],
             "allowed_formats": [FORMAT_CLAIM_RESULT_JSON],
             "allowed_disclosures": ["predicate"],
-            "required_scopes": ["self_attestation"],
+            "required_scopes": ["subject_access"],
             "credential_profiles": ["civil_status_sd_jwt"],
             "rate_limits": {
-                "mode": "in_process",
                 "invalid_token_per_client_address_per_minute": 20,
                 "per_principal_per_minute": 10,
                 "subject_mismatch_per_principal_per_hour": 5,
@@ -384,17 +382,17 @@
                 "credential_issuance_per_principal_per_hour": 5
             }
         }))
-        .expect("self-attestation config parses");
+        .expect("subject-access config parses");
 
-        let document = RegistryNotaryRuntime::service_document_with_self_attestation(
+        let document = RegistryNotaryRuntime::service_document_with_subject_access(
             &evidence,
-            &self_attestation,
+            &subject_access,
             true,
         );
 
-        assert_eq!(document["self_attestation"]["enabled"], json!(true));
+        assert_eq!(document["subject_access"]["enabled"], json!(true));
         assert_eq!(
-            document["self_attestation"]["allowed_operations"],
+            document["subject_access"]["allowed_operations"],
             json!({
                 "evaluate": true,
                 "render": true,
@@ -403,51 +401,48 @@
             })
         );
         assert_eq!(
-            document["self_attestation"]["allowed_claim_ids"],
+            document["subject_access"]["allowed_claim_ids"],
             json!(["person-is-alive"])
         );
         assert_eq!(
-            document["self_attestation"]["allowed_formats"],
+            document["subject_access"]["allowed_formats"],
             json!([FORMAT_CLAIM_RESULT_JSON])
         );
         assert_eq!(
-            document["self_attestation"]["allowed_disclosures"],
+            document["subject_access"]["allowed_disclosures"],
             json!(["predicate"])
         );
         assert_eq!(
-            document["self_attestation"]["credential_profile_ids"],
+            document["subject_access"]["credential_profile_ids"],
             json!(["civil_status_sd_jwt"])
         );
         assert_eq!(
-            document["self_attestation"]["subject_id_type"],
+            document["subject_access"]["subject_id_type"],
             json!("national_id")
         );
         assert_eq!(
-            document["self_attestation"]["token_claim_name"],
+            document["subject_access"]["token_claim_name"],
             json!("https://id.example.gov/claims/national_id")
         );
         assert_eq!(
-            document["self_attestation"]["required_scopes"],
-            json!(["self_attestation"])
+            document["subject_access"]["required_scopes"],
+            json!(["subject_access"])
         );
         assert_eq!(
-            document["self_attestation"]["scope_policy"],
+            document["subject_access"]["scope_policy"],
             json!("required")
         );
         assert_eq!(
-            document["self_attestation"]["max_evaluation_age_seconds"],
+            document["subject_access"]["max_evaluation_age_seconds"],
             json!(600)
         );
         assert_eq!(
-            document["self_attestation"]["max_credential_validity_seconds"],
+            document["subject_access"]["max_credential_validity_seconds"],
             json!(300)
         );
-        assert_eq!(
-            document["self_attestation"]["rate_limit_mode"],
-            json!("in_process")
-        );
-        assert!(document["self_attestation"]["rate_limits"].is_null());
-        assert!(document["self_attestation"]["allowed_wallet_origins"].is_null());
-        assert!(document["self_attestation"]["citizen_clients"].is_null());
-        assert!(document["self_attestation"]["token_policy"].is_null());
+        assert!(document["subject_access"]["rate_limit_mode"].is_null());
+        assert!(document["subject_access"]["rate_limits"].is_null());
+        assert!(document["subject_access"]["allowed_wallet_origins"].is_null());
+        assert!(document["subject_access"]["citizen_clients"].is_null());
+        assert!(document["subject_access"]["token_policy"].is_null());
     }

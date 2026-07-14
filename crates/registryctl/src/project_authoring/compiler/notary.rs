@@ -21,9 +21,8 @@ fn generated_notary_config(
         if service.kind != ServiceKind::Evidence {
             continue;
         }
-        let notary_consultation_aliases = generated_notary_consultation_aliases(
-            service.consultations.keys().map(String::as_str),
-        );
+        let notary_consultation_aliases =
+            generated_notary_consultation_aliases(service.consultations.keys().map(String::as_str));
         allowed_purposes.insert(service.purpose.clone());
         for (name, variable) in &service.variables {
             let declaration = json!({ "from": variable.from, "type": "date" });
@@ -42,18 +41,26 @@ fn generated_notary_config(
             let profile_id = bounded_join_id(&[service_id, credential_id])?;
             let validity_seconds = parse_validity_seconds(&credential.validity)?;
             max_validity_seconds = max_validity_seconds.max(validity_seconds);
-            credential_profiles.insert(
-                profile_id,
-                json!({
-                    "format": normalize_credential_format(&credential.format),
-                    "issuer": issuance.issuer,
-                    "signing_key": "project-issuer",
-                    "vct": credential.credential_type,
-                    "validity_seconds": validity_seconds,
-                    "allowed_claims": credential.claims,
-                    "disclosure": { "allowed": ["value", "predicate", "redacted"] },
-                }),
-            );
+            let mut generated_profile = json!({
+                "format": normalize_credential_format(&credential.format),
+                "issuer": issuance.issuer,
+                "signing_key": "project-issuer",
+                "vct": credential.credential_type,
+                "validity_seconds": validity_seconds,
+                "allowed_claims": credential.claims,
+                "disclosure": { "allowed": ["value", "predicate", "redacted"] },
+            });
+            if environment.oid4vci.as_ref().is_some_and(|binding| {
+                binding.credential.service == *service_id
+                    && binding.credential.profile == *credential_id
+            }) {
+                generated_profile["holder_binding"] = json!({
+                    "mode": "did",
+                    "proof_of_possession": "required",
+                    "allowed_did_methods": ["did:jwk"],
+                });
+            }
+            credential_profiles.insert(profile_id, generated_profile);
         }
         for (claim_id, claim) in &service.claims {
             if !seen_claims.insert(claim_id) {
@@ -82,7 +89,9 @@ fn generated_notary_config(
                         let consultation_name = claim_consultation_name(service, claim)?;
                         let notary_consultation_name = notary_consultation_aliases
                             .get(consultation_name)
-                            .ok_or_else(|| anyhow!("generated Notary consultation alias is absent"))?;
+                            .ok_or_else(|| {
+                                anyhow!("generated Notary consultation alias is absent")
+                            })?;
                         let consultation = &service.consultations[consultation_name];
                         let integration = &loaded.integrations[&consultation.integration];
                         let profile = profiles
@@ -193,16 +202,43 @@ fn generated_notary_config(
         "claims": claims,
         "credential_profiles": credential_profiles,
     });
+    let mut signing_keys = Map::new();
     if let Some(issuance) = &environment.issuance {
-        evidence["signing_keys"] = json!({
-            "project-issuer": {
+        signing_keys.insert(
+            "project-issuer".to_string(),
+            json!({
                 "provider": "local_jwk_env",
                 "private_jwk_env": issuance.signing_key.secret,
                 "alg": "EdDSA",
                 "kid": issuance.signing_kid,
                 "status": "active",
-            },
-        });
+            }),
+        );
+    }
+    if let Some(binding) = &environment.oid4vci {
+        signing_keys.insert(
+            "oid4vci-access-token".to_string(),
+            json!({
+                "provider": "local_jwk_env",
+                "private_jwk_env": binding.access_token.signing_key.secret,
+                "alg": "EdDSA",
+                "kid": binding.access_token.signing_kid,
+                "status": "active",
+            }),
+        );
+        signing_keys.insert(
+            "oid4vci-esignet-client".to_string(),
+            json!({
+                "provider": "local_jwk_env",
+                "private_jwk_env": binding.client.signing_key.secret,
+                "alg": "RS256",
+                "kid": binding.client.signing_kid,
+                "status": "active",
+            }),
+        );
+    }
+    if !signing_keys.is_empty() {
+        evidence["signing_keys"] = Value::Object(signing_keys);
     }
     if let (Some(relay), Some(connection)) = (&environment.relay, &environment.notary_relay) {
         evidence["relay"] = json!({
@@ -232,13 +268,48 @@ fn generated_notary_config(
                 .into_owned(),
         );
     }
-    Ok(json!({
-        "instance": {
-            "id": notary_service.service,
-            "environment": environment_name,
-        },
+    if let Some(binding) = &environment.oid4vci {
+        state["postgresql"]["sensitive_state_key_env"] =
+            Value::String(binding.sensitive_state_key.secret.clone());
+    }
+
+    let mut instance = json!({
+        "id": notary_service.service,
+        "environment": environment_name,
+    });
+    let mut auth = json!({ "api_keys": api_keys });
+    if let Some(binding) = &environment.oid4vci {
+        let public_base_url = binding.public_base_url.trim_end_matches('/');
+        instance["public_base_url"] = Value::String(public_base_url.to_string());
+        evidence["api_base_url"] = Value::String(public_base_url.to_string());
+        auth["oidc"] = json!({
+            "issuer": binding.authorization_server.issuer,
+            "jwks_url": binding.authorization_server.jwks_url,
+            "userinfo_endpoint": binding.authorization_server.userinfo_url,
+            "audiences": [binding.client.id],
+            "allowed_clients": [binding.client.id],
+            "allowed_algorithms": ["RS256"],
+            "allowed_token_types": [],
+            "scope_claim": "scope",
+            "scope_separator": " ",
+            "principal_claim": "sub",
+            "leeway": "60s",
+            "allow_insecure_localhost": url_uses_http(&binding.authorization_server.issuer),
+        });
+        auth["access_token_signing"] = json!({
+            "enabled": true,
+            "issuer": public_base_url,
+            "audiences": [public_base_url],
+            "allowed_algorithms": ["EdDSA"],
+            "token_typ": "registry-notary-access+jwt",
+            "signing_key_id": "oid4vci-access-token",
+            "access_token_ttl_seconds": 300,
+        });
+    }
+    let mut generated = json!({
+        "instance": instance,
         "server": { "bind": "127.0.0.1:8081", "request_timeout": "30s" },
-        "auth": { "mode": "api_key", "api_keys": api_keys },
+        "auth": auth,
         "audit": {
             "sink": "stdout",
             "hash_secret_env": "REGISTRY_NOTARY_AUDIT_HASH_SECRET",
@@ -246,7 +317,145 @@ fn generated_notary_config(
         "state": state,
         "evidence": evidence,
         "deployment": { "profile": environment.deployment.profile.as_str() },
-    }))
+    });
+    if let Some(binding) = &environment.oid4vci {
+        add_oid4vci_config(&mut generated, loaded, binding)?;
+    }
+    Ok(generated)
+}
+
+fn add_oid4vci_config(
+    generated: &mut Value,
+    loaded: &LoadedRegistryProject,
+    binding: &Oid4vciBinding,
+) -> Result<()> {
+    let service = loaded
+        .project
+        .services
+        .get(&binding.credential.service)
+        .ok_or_else(|| anyhow!("validated OID4VCI service is absent"))?;
+    let credential = service
+        .credential_profiles
+        .get(&binding.credential.profile)
+        .ok_or_else(|| anyhow!("validated OID4VCI credential profile is absent"))?;
+    let claim_id = credential
+        .claims
+        .first()
+        .ok_or_else(|| anyhow!("validated OID4VCI credential claim is absent"))?;
+    let claim = service
+        .claims
+        .get(claim_id)
+        .ok_or_else(|| anyhow!("validated OID4VCI claim is absent"))?;
+    let profile_id = bounded_join_id(&[
+        binding.credential.service.as_str(),
+        binding.credential.profile.as_str(),
+    ])?;
+    let validity_seconds = parse_validity_seconds(&credential.validity)?;
+    let scope = service
+        .access
+        .scopes
+        .first()
+        .ok_or_else(|| anyhow!("validated OID4VCI service access scope is absent"))?;
+    let (_, allowed_disclosures) = expanded_disclosure(&claim.disclosure);
+    let public_base_url = binding.public_base_url.trim_end_matches('/');
+    let insecure_esignet = [
+        binding.authorization_server.issuer.as_str(),
+        binding.authorization_server.jwks_url.as_str(),
+        binding.authorization_server.userinfo_url.as_str(),
+        binding.authorization_server.authorize_url.as_str(),
+        binding.authorization_server.token_url.as_str(),
+    ]
+    .into_iter()
+    .any(url_uses_http);
+    generated["subject_access"] = json!({
+        "enabled": true,
+        "subject_binding": {
+            "token_claim": binding.subject.token_claim,
+            "claim_source": "userinfo",
+            "request_field": "SubjectId",
+            "id_type": binding.subject.id_type,
+            "normalize": "exact",
+            "allow_sub_as_civil_id": false,
+        },
+        "citizen_clients": {
+            "allowed_client_ids": [binding.client.id],
+            "allowed_audiences": [binding.client.id],
+        },
+        "token_policy": {
+            "assurance_claim_source": "id_token",
+            "max_auth_age_seconds": 1_200,
+            "max_access_token_lifetime_seconds": 1_200,
+            "max_evaluation_age_seconds": 300,
+            "max_credential_validity_seconds": validity_seconds,
+            "max_clock_leeway_seconds": 60,
+        },
+        "allowed_operations": {
+            "evaluate": false,
+            "render": false,
+            "issue_credential": true,
+            "batch_evaluate": false,
+        },
+        "allowed_purposes": [service.purpose],
+        "allowed_claims": [claim_id],
+        "allowed_formats": ["application/dc+sd-jwt"],
+        "allowed_disclosures": allowed_disclosures,
+        "scope_policy": "disabled",
+        "required_scopes": [],
+        "allowed_wallet_origins": binding.allowed_wallet_origins,
+        "credential_profiles": [profile_id],
+        "rate_limits": {
+            "invalid_token_per_client_address_per_minute": 20,
+            "per_principal_per_minute": 10,
+            "subject_mismatch_per_principal_per_hour": 5,
+            "per_holder_per_hour": 10,
+            "credential_issuance_per_principal_per_hour": 5,
+            "tx_code_attempts_per_code_per_minute": 10,
+        },
+    });
+    generated["oid4vci"] = json!({
+        "enabled": true,
+        "credential_issuer": public_base_url,
+        "authorization_servers": [binding.authorization_server.issuer],
+        "accepted_token_audiences": [public_base_url, binding.client.id],
+        "credential_endpoint": format!("{public_base_url}/oid4vci/credential"),
+        "offer_endpoint": format!("{public_base_url}/oid4vci/credential-offer"),
+        "nonce_endpoint": format!("{public_base_url}/oid4vci/nonce"),
+        "nonce": { "enabled": true, "ttl_seconds": 300 },
+        "authorization": { "require_pkce_method": "S256" },
+        "proof": { "max_age_seconds": 300, "max_clock_skew_seconds": 30 },
+        "pre_authorized_code": {
+            "enabled": true,
+            "tx_code": { "required": true, "input_mode": "numeric", "length": 6 },
+            "esignet": {
+                "client_id": binding.client.id,
+                "client_signing_key_id": "oid4vci-esignet-client",
+                "redirect_uri": binding.redirect_uri,
+                "authorize_url": binding.authorization_server.authorize_url,
+                "token_url": binding.authorization_server.token_url,
+                "issuer": binding.authorization_server.issuer,
+                "jwks_uri": binding.authorization_server.jwks_url,
+                "userinfo_url": binding.authorization_server.userinfo_url,
+                "scopes": ["openid", "profile"],
+                "login_state_ttl_seconds": 300,
+                "allow_insecure_localhost": insecure_esignet,
+            },
+            "pre_authorized_code_ttl_seconds": 300,
+        },
+        "display": [],
+        "credential_configurations": {
+            profile_id.clone(): {
+                "claim_id": claim_id,
+                "credential_profile": profile_id,
+                "format": "dc+sd-jwt",
+                "scope": scope,
+                "vct": credential.credential_type,
+                "display_name": binding.credential.profile.replace(['-', '_'], " "),
+                "proof_signing_alg_values_supported": ["EdDSA"],
+                "cryptographic_binding_methods_supported": ["did:jwk"],
+            },
+        },
+    });
+    Ok(())
 }
 
 fn claim_value_type(value: &ClaimValueDeclaration) -> Result<&'static str> {
@@ -404,8 +613,8 @@ fn generated_notary_claim_rule(
 // CEL. Authored consultation names remain product-neutral, so collisions are
 // lowered only inside the generated Notary contract rather than rejected.
 const CROSSWALK_CEL_HELPER_NAMESPACES: &[&str] = &[
-    "address", "code", "date", "email", "geo", "id", "json", "list", "map", "name",
-    "num", "person", "phone", "privacy", "text", "type", "validate",
+    "address", "code", "date", "email", "geo", "id", "json", "list", "map", "name", "num",
+    "person", "phone", "privacy", "text", "type", "validate",
 ];
 
 fn generated_notary_consultation_aliases<'a>(
@@ -504,9 +713,7 @@ fn rewrite_notary_consultation_root<'a>(
                 .is_some_and(|byte| is_cel_identifier_start_byte(*byte))
         {
             member_end += 1;
-            while member_end < bytes.len()
-                && is_cel_identifier_continue_byte(bytes[member_end])
-            {
+            while member_end < bytes.len() && is_cel_identifier_continue_byte(bytes[member_end]) {
                 member_end += 1;
             }
         }
@@ -859,7 +1066,9 @@ fn integration_explanation(integration: &IntegrationDocument) -> Value {
         "outputs": integration.outputs,
         "not_applicable": integration.not_applicable,
     });
-    let object = value.as_object_mut().expect("integration explanation object");
+    let object = value
+        .as_object_mut()
+        .expect("integration explanation object");
     match &integration.capability {
         CapabilityDeclaration::Http { http } => {
             object.insert("capability".into(), json!("http"));
@@ -1160,12 +1369,7 @@ mod notary_compiler_tests {
     fn consultation_root_rewrite_leaves_unrelated_identifiers_unchanged() {
         let expression = "person_id == 'person.matched' && other.matched";
         assert_eq!(
-            rewrite_notary_consultation_root(
-                expression,
-                "person",
-                "relay_person",
-                ["person_id"]
-            ),
+            rewrite_notary_consultation_root(expression, "person", "relay_person", ["person_id"]),
             expression
         );
         assert_eq!(

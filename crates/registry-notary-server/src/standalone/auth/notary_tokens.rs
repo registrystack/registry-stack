@@ -78,8 +78,8 @@ pub(in super::super) async fn authenticate_notary_token(
         verified_claim_value(&anchor.token_typ),
         &anchor.principal_claim,
         anchor.subject_binding_claim.as_deref(),
-        SelfAttestationClaimSource::AccessToken,
-        SelfAttestationAssuranceClaimSource::AccessToken,
+        SubjectAccessClaimSource::AccessToken,
+        SubjectAccessAssuranceClaimSource::AccessToken,
     )
 }
 

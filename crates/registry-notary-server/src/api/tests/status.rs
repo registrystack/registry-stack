@@ -28,7 +28,7 @@ async fn credential_status_list_response_is_signed_status_list_jwt() {
         .expect("status record exists");
     let state = RegistryNotaryApiState::new_with_runtime_blocks(
         Arc::new(evidence_config()),
-        Arc::new(SelfAttestationConfig::default()),
+        Arc::new(SubjectAccessConfig::default()),
         Arc::new(Oid4vciConfig::default()),
         Arc::new(FederationConfig::default()),
         None,
@@ -94,7 +94,7 @@ async fn credential_status_list_response_reuses_cached_signature() {
     let sign_count = Arc::new(AtomicUsize::new(0));
     let state = RegistryNotaryApiState::new_with_runtime_blocks(
         Arc::new(evidence_config()),
-        Arc::new(SelfAttestationConfig::default()),
+        Arc::new(SubjectAccessConfig::default()),
         Arc::new(Oid4vciConfig::default()),
         Arc::new(FederationConfig::default()),
         None,

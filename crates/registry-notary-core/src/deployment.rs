@@ -259,7 +259,7 @@ pub struct GateInput {
     pub admin_shared_exposure: bool,
     pub openapi_public: bool,
     pub config_unsigned: bool,
-    pub self_attestation_enabled: bool,
+    pub subject_access_enabled: bool,
     pub transaction_token_anchor_configured: bool,
     pub transaction_token_sender_constrained: bool,
     pub signer_without_custody_approval: bool,
@@ -429,7 +429,7 @@ fn gate_catalog() -> &'static [Gate] {
             production: Some(ReadinessFail),
             evidence_grade: Some(StartupFail),
             condition: |input| {
-                input.self_attestation_enabled && !input.transaction_token_anchor_configured
+                input.subject_access_enabled && !input.transaction_token_anchor_configured
             },
         },
         Gate {
@@ -1357,12 +1357,12 @@ mod tests {
             GateCase {
                 id: FINDING_ASSISTED_ACCESS_TRANSACTION_TOKEN_ANCHOR_MISSING,
                 triggering: GateInput {
-                    self_attestation_enabled: true,
+                    subject_access_enabled: true,
                     transaction_token_anchor_configured: false,
                     ..GateInput::default()
                 },
                 non_triggering: GateInput {
-                    self_attestation_enabled: true,
+                    subject_access_enabled: true,
                     transaction_token_anchor_configured: true,
                     ..GateInput::default()
                 },

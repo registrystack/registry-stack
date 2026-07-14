@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Quota for machine (non-self-attestation) `evaluate` and `batch_evaluate`
+//! Quota for machine (non-subject-access) `evaluate` and `batch_evaluate`
 //! traffic. PostgreSQL is authoritative when a state plane is configured;
 //! the bounded in-memory path remains for local and test deployments.
 //!
@@ -11,7 +11,7 @@
 //!
 //! Self-attestation principals never reach this limiter; enforcement in
 //! `api.rs` only calls it for principals that failed
-//! [`registry_notary_core::model::EvidencePrincipal::is_self_attestation`].
+//! [`registry_notary_core::model::EvidencePrincipal::is_subject_access`].
 
 use std::{
     collections::HashMap,

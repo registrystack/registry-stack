@@ -127,10 +127,19 @@ pub(in super::super) fn request_credentials(request: &Request) -> RequestCredent
     }
 }
 
+#[cfg(test)]
 pub(in super::super) fn authenticate_static(
     credentials: &RequestCredentials,
     api_keys: &[ResolvedCredential],
     bearer_tokens: &[ResolvedCredential],
+) -> Result<EvidencePrincipal, EvidenceError> {
+    authenticate_api_key(credentials, api_keys)
+        .or_else(|_| authenticate_static_bearer(credentials, bearer_tokens))
+}
+
+pub(in super::super) fn authenticate_api_key(
+    credentials: &RequestCredentials,
+    api_keys: &[ResolvedCredential],
 ) -> Result<EvidencePrincipal, EvidenceError> {
     if let Some(value) = credentials.api_key.as_deref() {
         if let Some(credential) = find_credential(api_keys, value) {
@@ -140,6 +149,13 @@ pub(in super::super) fn authenticate_static(
             ));
         }
     }
+    Err(EvidenceError::MissingCredential)
+}
+
+pub(in super::super) fn authenticate_static_bearer(
+    credentials: &RequestCredentials,
+    bearer_tokens: &[ResolvedCredential],
+) -> Result<EvidencePrincipal, EvidenceError> {
     if let Some(value) = credentials.bearer_token.as_deref() {
         if let Some(credential) = find_credential(bearer_tokens, value) {
             return Ok(principal_from_credential(

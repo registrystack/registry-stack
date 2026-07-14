@@ -527,7 +527,7 @@ pub(super) async fn admin_posture_top_level_keys_match_documented_example() {
 }
 
 #[tokio::test]
-pub(super) async fn admin_posture_reports_self_attestation_summary_and_redacts_signing_key_ids() {
+pub(super) async fn admin_posture_reports_subject_access_summary_and_redacts_signing_key_ids() {
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let issuer = MockIdp::start().await;
@@ -535,7 +535,7 @@ pub(super) async fn admin_posture_reports_self_attestation_summary_and_redacts_s
     let jwks_uri = issuer.jwks_uri();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &issuer_url,
@@ -568,26 +568,26 @@ pub(super) async fn admin_posture_reports_self_attestation_summary_and_redacts_s
     posture.assert_status_ok();
     let body: Value = posture.json();
     assert_matches_posture_schema(&body);
-    assert_eq!(body["notary"]["self_attestation"]["enabled"], json!(true));
+    assert_eq!(body["notary"]["subject_access"]["enabled"], json!(true));
     assert_eq!(
-        body["notary"]["self_attestation"]["allowed_claim_count"],
+        body["notary"]["subject_access"]["allowed_claim_count"],
         json!(1)
     );
     assert_eq!(
-        body["notary"]["self_attestation"]["allowed_purpose_count"],
+        body["notary"]["subject_access"]["allowed_purpose_count"],
         json!(1)
     );
     assert_eq!(
-        body["notary"]["self_attestation"]["credential_profile_count"],
+        body["notary"]["subject_access"]["credential_profile_count"],
         json!(1)
     );
     assert_eq!(
-        body["notary"]["self_attestation"]["wallet_origin_count"],
+        body["notary"]["subject_access"]["wallet_origin_count"],
         json!(1)
     );
     assert_eq!(
-        body["notary"]["self_attestation"]["rate_limit_mode"],
-        json!("in_process")
+        body["notary"]["subject_access"]["rate_limit_mode"],
+        json!("in_memory")
     );
     assert!(body["notary"].get("signing_keys").is_none());
 
@@ -603,7 +603,7 @@ pub(super) async fn admin_posture_reports_oid4vci_bearer_offer_mode() {
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_preauth_config(
+    let mut config = subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &issuer.issuer(),

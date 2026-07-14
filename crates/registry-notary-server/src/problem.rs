@@ -18,7 +18,7 @@ pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
         | EvidenceError::EvaluationNotFound => StatusCode::NOT_FOUND,
         EvidenceError::MissingCredential => StatusCode::UNAUTHORIZED,
         EvidenceError::MultipleCredentials => StatusCode::BAD_REQUEST,
-        EvidenceError::SelfAttestationInvalidToken => StatusCode::UNAUTHORIZED,
+        EvidenceError::SubjectAccessInvalidToken => StatusCode::UNAUTHORIZED,
         EvidenceError::InvalidRequest
         | EvidenceError::ConsultationInvalidRequest
         | EvidenceError::ProfileUnsupported
@@ -29,12 +29,12 @@ pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
         | EvidenceError::PurposeNotAllowed
         | EvidenceError::PolicyDenied { .. }
         | EvidenceError::ScopeDenied { .. }
-        | EvidenceError::SelfAttestationDenied { .. }
-        | EvidenceError::SelfAttestationAssuranceDenied => StatusCode::FORBIDDEN,
+        | EvidenceError::SubjectAccessDenied { .. }
+        | EvidenceError::SubjectAccessAssuranceDenied => StatusCode::FORBIDDEN,
         EvidenceError::EvidenceNotAvailable
         | EvidenceError::IdempotencyConflict
         | EvidenceError::HolderProofReplay => StatusCode::CONFLICT,
-        EvidenceError::SelfAttestationRateLimited | EvidenceError::MachineQuotaExceeded { .. } => {
+        EvidenceError::SubjectAccessRateLimited | EvidenceError::MachineQuotaExceeded { .. } => {
             StatusCode::TOO_MANY_REQUESTS
         }
         EvidenceError::BatchTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -72,10 +72,11 @@ pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
         EvidenceError::MissingCredential => "Missing credential",
         EvidenceError::MultipleCredentials => "Multiple credentials",
         EvidenceError::ScopeDenied { .. } => "Scope denied",
-        EvidenceError::SelfAttestationDenied { .. } => "Self-attestation denied",
-        EvidenceError::SelfAttestationRateLimited => "Self-attestation rate limited",
-        EvidenceError::SelfAttestationInvalidToken
-        | EvidenceError::SelfAttestationAssuranceDenied => "Self-attestation denied",
+        EvidenceError::SubjectAccessDenied { .. } => "Self-attestation denied",
+        EvidenceError::SubjectAccessRateLimited => "Self-attestation rate limited",
+        EvidenceError::SubjectAccessInvalidToken | EvidenceError::SubjectAccessAssuranceDenied => {
+            "Self-attestation denied"
+        }
         EvidenceError::MachineQuotaExceeded { .. } => "Machine quota exceeded",
         _ => "Evidence error",
     }
@@ -116,10 +117,11 @@ pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
         EvidenceError::MissingCredential => "missing authentication credential",
         EvidenceError::MultipleCredentials => "provide exactly one authentication credential",
         EvidenceError::ScopeDenied { .. } => "missing required scope",
-        EvidenceError::SelfAttestationDenied { .. } => "self-attestation request was denied",
-        EvidenceError::SelfAttestationRateLimited => "self-attestation request was rate limited",
-        EvidenceError::SelfAttestationInvalidToken
-        | EvidenceError::SelfAttestationAssuranceDenied => "self-attestation request was denied",
+        EvidenceError::SubjectAccessDenied { .. } => "subject-access request was denied",
+        EvidenceError::SubjectAccessRateLimited => "subject-access request was rate limited",
+        EvidenceError::SubjectAccessInvalidToken | EvidenceError::SubjectAccessAssuranceDenied => {
+            "subject-access request was denied"
+        }
         EvidenceError::MachineQuotaExceeded { .. } => {
             "the machine evaluation quota was exceeded for this principal"
         }

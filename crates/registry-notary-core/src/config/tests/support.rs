@@ -13,7 +13,6 @@ evidence:
       kid: did:web:issuer.example#key-1
       status: active
 auth:
-  mode: api_key
   api_keys:
     - id: test-key
       fingerprint:

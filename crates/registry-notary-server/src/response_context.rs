@@ -3,7 +3,7 @@
 
 use registry_notary_core::{
     AccessMode, ConfigAuditEvent, ConfigMetadata, EvidenceBatchItemAuditEvent,
-    EvidenceEntityReference, Hashed, PolicyIdentifier, RateLimitBucket, SelfAttestationDenialCode,
+    EvidenceEntityReference, Hashed, PolicyIdentifier, RateLimitBucket, SubjectAccessDenialCode,
 };
 
 #[derive(Clone, Default)]
@@ -19,7 +19,7 @@ pub struct EvidenceAuditContext {
     pub relay_consultation_ids: Vec<String>,
     pub forwarded: Option<bool>,
     pub access_mode: Option<AccessMode>,
-    pub denial_code: Option<SelfAttestationDenialCode>,
+    pub denial_code: Option<SubjectAccessDenialCode>,
     pub token_claim_name: Option<ConfigMetadata>,
     pub credential_profile: Option<ConfigMetadata>,
     pub protocol: Option<ConfigMetadata>,

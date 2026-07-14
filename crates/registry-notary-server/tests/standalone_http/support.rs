@@ -12,10 +12,10 @@ pub(super) use registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP;
 #[cfg(feature = "registry-notary-cel")]
 pub(super) use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 pub(super) use registry_notary_core::{
-    ConfigTrustConfig, CredentialProfileConfig, EvidenceAuthMode, EvidenceCredentialConfig,
-    EvidenceOidcAuthConfig, Oid4vciConfig, RegistryNotaryAdminListenerMode,
-    SelfAttestationClaimSource, SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus,
-    StandaloneRegistryNotaryConfig, SD_JWT_VC_SIGNING_ALG,
+    ConfigTrustConfig, CredentialProfileConfig, EvidenceCredentialConfig, EvidenceOidcAuthConfig,
+    Oid4vciConfig, RegistryNotaryAdminListenerMode, SigningKeyConfig, SigningKeyProviderConfig,
+    SigningKeyStatus, StandaloneRegistryNotaryConfig, SubjectAccessClaimSource,
+    SD_JWT_VC_SIGNING_ALG,
 };
 #[cfg(feature = "registry-notary-cel")]
 pub(super) use registry_notary_core::{Oid4vciCredentialClaimConfig, RuleConfig};
@@ -296,7 +296,6 @@ state:
 server:
   bind: 127.0.0.1:0
 auth:
-  mode: api_key
   api_keys:
     - id: caseworker
       fingerprint:

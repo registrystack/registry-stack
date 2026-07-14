@@ -14,7 +14,6 @@ fn relay_config() -> (tempfile::TempDir, PathBuf, StandaloneRegistryNotaryConfig
 deployment:
   profile: local
 auth:
-  mode: api_key
   api_keys:
     - id: local
       fingerprint:

@@ -276,7 +276,7 @@ fn delegated_relay_proof_claim() -> ClaimDefinition {
         },
         "boolean",
     );
-    claim.required_scopes = vec!["self_attestation".to_string()];
+    claim.required_scopes = vec!["subject_access".to_string()];
     let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
         panic!("delegated proof claim is Registry-backed")
     };
@@ -315,7 +315,7 @@ fn delegated_selected_claim(dependencies: Vec<&str>) -> ClaimDefinition {
 
 fn delegated_relay_principal() -> EvidencePrincipal {
     let mut principal = delegated_principal();
-    principal.scopes = vec!["self_attestation".to_string()];
+    principal.scopes = vec!["subject_access".to_string()];
     principal
 }
 
@@ -326,7 +326,7 @@ fn delegated_evidence(claims: Vec<ClaimDefinition>) -> Arc<EvidenceConfig> {
 }
 
 fn delegated_runtime_with_relay(
-    keys: &Arc<SelfAttestationRateLimitKeys>,
+    keys: &Arc<SubjectAccessRateLimitKeys>,
     outcome: RuntimeRelayOutcome,
     proof_value: bool,
     validation_error: Option<crate::relay_client::RelayClientError>,
@@ -341,10 +341,128 @@ fn delegated_runtime_with_relay(
     });
     let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
     (
-        RegistryNotaryRuntime::new_with_self_attestation_rate_keys(Arc::clone(keys))
+        RegistryNotaryRuntime::new_with_subject_access_rate_keys(Arc::clone(keys))
             .with_activated_relay(Some(bound)),
         activated,
     )
+}
+
+fn subject_bound_capability(
+    keys: &SubjectAccessRateLimitKeys,
+    claim_id: &str,
+) -> EvaluationCapability {
+    let claim_id = BoundedClaimId::new(claim_id).expect("claim id is bounded");
+    EvaluationCapability::SubjectBound {
+        claim_id: Some(claim_id.clone()),
+        allowed_claim_ids: BTreeSet::from([claim_id]),
+        subject_binding_hash: keys
+            .subject_binding("person-1")
+            .expect("subject binding hashes"),
+    }
+}
+
+#[tokio::test]
+async fn subject_bound_capability_consults_only_its_exact_registry_claim() {
+    let mut claim = registry_claim(
+        "enrollment-status",
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
+        },
+        "string",
+    );
+    claim.required_scopes = vec!["subject_access".to_string()];
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+        panic!("subject-bound claim is registry backed")
+    };
+    consultations
+        .get_mut("enrollment")
+        .expect("subject-bound consultation exists")
+        .inputs
+        .insert(
+            "tracked_entity".to_string(),
+            RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.national_id".to_string(),
+            ),
+        );
+    let mut evidence = (*test_evidence(vec![claim])).clone();
+    evidence.allowed_purposes = vec!["test".to_string()];
+    let relay = Arc::new(FixedRelayConsultation {
+        calls: AtomicU64::new(0),
+        outcome: RuntimeRelayOutcome::Match,
+    });
+    let bound: Arc<dyn ActivatedRelayConsultations> = relay.clone();
+    let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+    let keys = SubjectAccessRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+
+    let results = runtime
+        .evaluate_with_capability(
+            Arc::new(evidence),
+            &EvidenceStore::default(),
+            &subject_access_principal(),
+            subject_bound_capability(&keys, "enrollment-status"),
+            {
+                let mut request = test_request("enrollment-status");
+                request.target = Some(EvidenceEntity::with_identifier(
+                    "Person",
+                    "national_id",
+                    "person-1",
+                ));
+                request
+            },
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("the exact subject-bound registry claim evaluates");
+
+    assert_eq!(results[0].value, Some(Value::String("ACTIVE".to_string())));
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn subject_bound_capability_denies_an_unlisted_registry_claim_before_relay() {
+    let mut claim = registry_claim(
+        "other-registry-claim",
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
+        },
+        "string",
+    );
+    claim.required_scopes.clear();
+    let mut evidence = (*test_evidence(vec![claim])).clone();
+    evidence.allowed_purposes = vec!["test".to_string()];
+    let relay = Arc::new(FixedRelayConsultation {
+        calls: AtomicU64::new(0),
+        outcome: RuntimeRelayOutcome::Match,
+    });
+    let bound: Arc<dyn ActivatedRelayConsultations> = relay.clone();
+    let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+    let keys = SubjectAccessRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+
+    let error = runtime
+        .evaluate_with_capability(
+            Arc::new(evidence),
+            &EvidenceStore::default(),
+            &subject_access_principal(),
+            subject_bound_capability(&keys, "allowed-registry-claim"),
+            test_request("other-registry-claim"),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("an unlisted registry claim must fail before Relay");
+
+    assert!(matches!(
+        error,
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::ClaimDenied
+        }
+    ));
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -353,7 +471,7 @@ async fn delegated_exact_relay_proof_runs_once_before_the_dependent_claim() {
         delegated_relay_proof_claim(),
         delegated_selected_claim(vec!["guardian-link"]),
     ]);
-    let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+    let keys = Arc::new(SubjectAccessRateLimitKeys::new(
         AuditKeyHasher::unkeyed_dev_only(),
     ));
     let (runtime, relay) = delegated_runtime_with_relay(
@@ -399,7 +517,7 @@ async fn delegated_capability_denies_an_unrelated_registry_backed_dependency_bef
         unrelated,
         delegated_selected_claim(vec!["guardian-link", "unrelated-registry-claim"]),
     ]);
-    let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+    let keys = Arc::new(SubjectAccessRateLimitKeys::new(
         AuditKeyHasher::unkeyed_dev_only(),
     ));
     let (runtime, relay) = delegated_runtime_with_relay(
@@ -426,8 +544,8 @@ async fn delegated_capability_denies_an_unrelated_registry_backed_dependency_bef
 
     assert!(matches!(
         error,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::DelegatedSubjectNotPermitted
         }
     ));
     assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
@@ -439,7 +557,7 @@ async fn delegated_proof_claim_scope_denial_makes_zero_relay_calls() {
         delegated_relay_proof_claim(),
         delegated_selected_claim(vec!["guardian-link"]),
     ]);
-    let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+    let keys = Arc::new(SubjectAccessRateLimitKeys::new(
         AuditKeyHasher::unkeyed_dev_only(),
     ));
     let (runtime, relay) = delegated_runtime_with_relay(
@@ -466,7 +584,7 @@ async fn delegated_proof_claim_scope_denial_makes_zero_relay_calls() {
 
     assert!(matches!(
         error,
-        EvidenceError::ScopeDenied { required } if required == "self_attestation"
+        EvidenceError::ScopeDenied { required } if required == "subject_access"
     ));
     assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
 }
@@ -481,7 +599,7 @@ async fn delegated_requester_or_target_binding_mismatch_makes_zero_relay_calls()
             delegated_relay_proof_claim(),
             delegated_selected_claim(vec!["guardian-link"]),
         ]);
-        let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+        let keys = Arc::new(SubjectAccessRateLimitKeys::new(
             AuditKeyHasher::unkeyed_dev_only(),
         ));
         let (runtime, relay) = delegated_runtime_with_relay(
@@ -508,8 +626,8 @@ async fn delegated_requester_or_target_binding_mismatch_makes_zero_relay_calls()
 
         assert!(matches!(
             error,
-            EvidenceError::SelfAttestationDenied {
-                reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted
+            EvidenceError::SubjectAccessDenied {
+                reason: SubjectAccessDenialCode::DelegatedSubjectNotPermitted
             }
         ));
         assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
@@ -526,7 +644,7 @@ async fn delegated_false_or_no_match_relay_proof_is_relationship_unproven() {
             delegated_relay_proof_claim(),
             delegated_selected_claim(vec!["guardian-link"]),
         ]);
-        let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+        let keys = Arc::new(SubjectAccessRateLimitKeys::new(
             AuditKeyHasher::unkeyed_dev_only(),
         ));
         let (runtime, relay) =
@@ -548,8 +666,8 @@ async fn delegated_false_or_no_match_relay_proof_is_relationship_unproven() {
 
         assert!(matches!(
             error,
-            EvidenceError::SelfAttestationDenied {
-                reason: SelfAttestationDenialCode::DelegatedRelationshipUnproven
+            EvidenceError::SubjectAccessDenied {
+                reason: SubjectAccessDenialCode::DelegatedRelationshipUnproven
             }
         ));
         assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
@@ -562,7 +680,7 @@ async fn delegated_relay_execution_failure_is_proof_denied() {
         delegated_relay_proof_claim(),
         delegated_selected_claim(vec!["guardian-link"]),
     ]);
-    let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+    let keys = Arc::new(SubjectAccessRateLimitKeys::new(
         AuditKeyHasher::unkeyed_dev_only(),
     ));
     let (runtime, relay) = delegated_runtime_with_relay(
@@ -589,8 +707,8 @@ async fn delegated_relay_execution_failure_is_proof_denied() {
 
     assert!(matches!(
         error,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::DelegatedProofDenied
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::DelegatedProofDenied
         }
     ));
     assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
@@ -602,7 +720,7 @@ async fn delegated_relay_contract_mismatch_is_proof_denied_before_execution() {
         delegated_relay_proof_claim(),
         delegated_selected_claim(vec!["guardian-link"]),
     ]);
-    let keys = Arc::new(SelfAttestationRateLimitKeys::new(
+    let keys = Arc::new(SubjectAccessRateLimitKeys::new(
         AuditKeyHasher::unkeyed_dev_only(),
     ));
     let (runtime, relay) = delegated_runtime_with_relay(
@@ -629,8 +747,8 @@ async fn delegated_relay_contract_mismatch_is_proof_denied_before_execution() {
 
     assert!(matches!(
         error,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::DelegatedProofDenied
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::DelegatedProofDenied
         }
     ));
     assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
