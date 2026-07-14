@@ -19,11 +19,11 @@ from your own application workflow.
 
 | Need | Example | Where it comes from |
 | --- | --- | --- |
-| Service base URL | `https://agriculture-notary.lab.registrystack.org` | Hosted lab manifest or Registry Notary operator |
-| Auth credential | `AGRI_EVIDENCE_CLIENT_BEARER` | Hosted lab manifest or Registry Notary operator |
-| Claim id | `eligible-for-climate-smart-input-voucher` | `list_claims` or operator docs |
-| Target identifier | `farmer_id` and `FARMER-1001` | Your application or case record |
-| Purpose | `https://demo.example.gov/purpose/nagdi/climate-smart-input-support` | Your product, policy, or workflow |
+| Service base URL | `https://self-attested-notary.lab.registrystack.org` | Hosted lab manifest or Registry Notary operator |
+| Auth credential | `SELF_ATTESTED_EVIDENCE_CLIENT_TOKEN` | Hosted lab manifest or Registry Notary operator |
+| Claim id | `applicant-declaration` | `list_claims` or operator docs |
+| Target identifier | `applicant_id` and `demo-applicant` | Your application or case record |
+| Purpose | `application-processing` | Your product, policy, or workflow |
 
 Use `list_claims` first when you are unsure which claim ids your credential can
 see. A later `403` on evaluation usually means the credential lacks the
@@ -34,12 +34,12 @@ as written. The lab publishes current demo service URLs and caller credentials
 at `https://lab.registrystack.org/api/lab.json`. These are public demo
 credentials, not production secret-handling guidance.
 
-Read the `agri-evidence` entry from `lab.json` and export the values manually:
+Read the `self-attested-evidence` entry from `lab.json` and export the values manually:
 
 ```bash
-export REGISTRY_NOTARY_BASE_URL="<service_url from the agri-evidence entry>"
-export REGISTRY_NOTARY_BEARER_TOKEN="<token from the agri-evidence entry>"
-export REGISTRY_NOTARY_PURPOSE="<default_purpose from the agri-evidence entry>"
+export REGISTRY_NOTARY_BASE_URL="<service_url from the self-attested-evidence entry>"
+export REGISTRY_NOTARY_API_KEY="<token from the self-attested-evidence entry>"
+export REGISTRY_NOTARY_PURPOSE="<default_purpose from the self-attested-evidence entry>"
 ```
 
 The lab UI at `https://lab.registrystack.org` shows the same values.
@@ -47,7 +47,7 @@ The lab UI at `https://lab.registrystack.org` shows the same values.
 ### Key terms
 
 - **Claim:** A named question Notary can evaluate, such as
-  `eligible-for-climate-smart-input-voucher`.
+  `applicant-declaration`.
 - **Target:** The person, organization, or record being evaluated.
 - **Requester:** The actor asking for the evaluation.
 - **Relationship:** Why the requester may ask about the target, such as `self`.
@@ -121,10 +121,10 @@ npm run check:types --prefix bindings/node
 
 ## First evaluation
 
-This quickstart checks whether the lab farmer `FARMER-1001` satisfies the
-`eligible-for-climate-smart-input-voucher` claim. Use it when your application
-already knows the target identifier and wants a minimized claim result from
-Notary.
+This quickstart asks the retained Notary-only lab service to evaluate the
+`applicant-declaration` claim for `demo-applicant`. Use it when your application
+already knows the target identifier and wants a minimized self-attested claim
+result without consulting Relay or a registry source.
 
 The examples set `default_purpose` or `defaultPurpose` on the client. You can
 also set purpose per call when different workflows share the same client.
@@ -139,7 +139,7 @@ from registry_notary.errors import NotaryProblemError, NotaryTransportError
 
 client = RegistryNotaryClient(
     base_url=os.environ["REGISTRY_NOTARY_BASE_URL"],
-    bearer_token=os.environ["REGISTRY_NOTARY_BEARER_TOKEN"],
+    api_key=os.environ["REGISTRY_NOTARY_API_KEY"],
     default_purpose=os.environ["REGISTRY_NOTARY_PURPOSE"],
     user_agent="benefits-api/1.0",
 )
@@ -150,14 +150,14 @@ print([claim["id"] for claim in claims.get("data", [])])
 try:
     result = client.evaluate_request({
         "target": {
-            "type": "Farmer",
+            "type": "Person",
             "identifiers": [{
-                "scheme": "farmer_id",
-                "value": "FARMER-1001",
+                "scheme": "applicant_id",
+                "value": "demo-applicant",
             }],
         },
         "relationship": {"type": "self"},
-        "claims": ["eligible-for-climate-smart-input-voucher"],
+        "claims": ["applicant-declaration"],
         "disclosure": "predicate",
         "purpose": os.environ["REGISTRY_NOTARY_PURPOSE"],
     })
@@ -183,10 +183,10 @@ Python also has a shorter helper for the common one-target case:
 
 ```python
 result = client.evaluate(
-    target_id="FARMER-1001",
-    identifier_scheme="farmer_id",
-    target_type="Farmer",
-    claims=["eligible-for-climate-smart-input-voucher"],
+    target_id="demo-applicant",
+    identifier_scheme="applicant_id",
+    target_type="Person",
+    claims=["applicant-declaration"],
 )
 ```
 
@@ -205,7 +205,7 @@ import {
 
 const client = new RegistryNotaryClient({
   baseUrl: process.env.REGISTRY_NOTARY_BASE_URL,
-  bearerToken: process.env.REGISTRY_NOTARY_BEARER_TOKEN,
+  apiKey: process.env.REGISTRY_NOTARY_API_KEY,
   defaultPurpose: process.env.REGISTRY_NOTARY_PURPOSE,
   userAgent: "benefits-api/1.0",
 });
@@ -216,11 +216,11 @@ console.log(claims.data?.map((claim) => claim.id) ?? []);
 try {
   const result = await client.evaluate({
     target: {
-      type: "Farmer",
-      identifiers: [{ scheme: "farmer_id", value: "FARMER-1001" }],
+      type: "Person",
+      identifiers: [{ scheme: "applicant_id", value: "demo-applicant" }],
     },
     relationship: { type: "self" },
-    claims: ["eligible-for-climate-smart-input-voucher"],
+    claims: ["applicant-declaration"],
     disclosure: "predicate",
     purpose: process.env.REGISTRY_NOTARY_PURPOSE,
   });
@@ -245,11 +245,11 @@ wire JSON and receive snake_case response JSON.
 ```js
 const result = await client.evaluateRequest({
   target: {
-    type: "Farmer",
-    identifiers: [{ scheme: "farmer_id", value: "FARMER-1001" }],
+    type: "Person",
+    identifiers: [{ scheme: "applicant_id", value: "demo-applicant" }],
   },
   relationship: { type: "self" },
-  claims: ["eligible-for-climate-smart-input-voucher"],
+  claims: ["applicant-declaration"],
   disclosure: "predicate",
   purpose: process.env.REGISTRY_NOTARY_PURPOSE,
 });
@@ -261,11 +261,11 @@ const result = await client.evaluateRequest({
 use registry_notary_client::RegistryNotaryClient;
 
 let base_url = std::env::var("REGISTRY_NOTARY_BASE_URL")?;
-let bearer_token = std::env::var("REGISTRY_NOTARY_BEARER_TOKEN")?;
+let api_key = std::env::var("REGISTRY_NOTARY_API_KEY")?;
 let purpose = std::env::var("REGISTRY_NOTARY_PURPOSE")?;
 
 let client = RegistryNotaryClient::builder(base_url)
-    .bearer_token(bearer_token)
+    .api_key(api_key)
     .default_purpose(purpose.clone())
     .user_agent("benefits-api/1.0")
     .build()?;
@@ -273,16 +273,16 @@ let client = RegistryNotaryClient::builder(base_url)
 let claims = client.list_claims(Default::default()).await?;
 
 let response = client
-    .evaluate_target("Farmer")
-    .target_identifier("farmer_id", "FARMER-1001")
+    .evaluate_target("Person")
+    .target_identifier("applicant_id", "demo-applicant")
     .relationship("self")
-    .claims(["eligible-for-climate-smart-input-voucher"])
+    .claims(["applicant-declaration"])
     .disclosure("predicate")
     .purpose(purpose.clone())
     .send()
     .await?;
 
-if let Some(result) = response.body.result_for("eligible-for-climate-smart-input-voucher") {
+if let Some(result) = response.body.result_for("applicant-declaration") {
     println!("satisfied: {:?}", result.satisfied);
 }
 ```
@@ -325,7 +325,7 @@ different target or acting on behalf of someone else. Use `relationship` to
 explain the permission context, such as `self`, `guardian`, `case_worker`, or a
 deployment-specific value.
 
-For citizen self-attestation flows, omit identity fields and let the server
+For token-bound self-attestation flows, omit identity fields and let the server
 derive the requester, target, and `self` relationship from the verified token
 binding:
 

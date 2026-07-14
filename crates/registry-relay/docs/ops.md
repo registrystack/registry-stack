@@ -278,25 +278,19 @@ Relay can also publish metadata evidence offerings that point clients to
 Notary. Native consultation does not move claim evaluation or issuance signing
 keys into Relay.
 
-For the legacy entity-read source shape, configure credentials on both sides:
-
-- Relay must register a token hash for the Notary source caller, with only the
-  dataset scopes needed by Notary claim profiles.
-- Notary must register the caller token used by programs or wallets against
-  Notary routes, and its source connector must reference the raw Relay token
-  through an environment-backed `token_env`.
-- Keep raw tokens and signing material out of YAML. Use service environment
-  variables such as `REGISTRY_RELAY_CONFIG`, `REGISTRY_RELAY_BIND`,
-  `REGISTRY_RELAY_LOG_FORMAT`, and `REGISTRY_RELAY_ENV_FILE`; use secret
-  indirection fields ending in `_env` for token hashes, audit secrets, signing
-  keys, database URLs, and source tokens.
-
-For native consultation, use OIDC rather than a Relay API key. Bind the
+For a combined Relay and Notary deployment, use OIDC rather than a Relay API
+key. Bind the
 `consultation.authorized_workload` audience and exact `azp` or `client_id` to the
 Notary service account, grant only the scope pinned by each public contract,
 and keep the PostgreSQL URL, pseudonym material, and source credentials behind
 the environment references named by the configuration. Configuration changes,
 artifact changes, and secret generation changes require a restart.
+
+Keep raw tokens and signing material out of YAML. Use service environment
+variables such as `REGISTRY_RELAY_CONFIG`, `REGISTRY_RELAY_BIND`,
+`REGISTRY_RELAY_LOG_FORMAT`, and `REGISTRY_RELAY_ENV_FILE`; use secret
+indirection fields ending in `_env` for token hashes, audit secrets, signing
+keys, database URLs, and source credentials.
 
 ### Bootstrap native consultation state
 

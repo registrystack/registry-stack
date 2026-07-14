@@ -58,9 +58,9 @@ Apply only the changes required by the v0.9.0 changelogs and release notes:
 - Remove hard-gate waivers and configure the required durable audit sink,
   off-host shipping declaration, and acknowledgement cursor for the selected
   deployment profile.
-- Correct Notary claim ids, default disclosure modes, and rule source bindings
-  that fail the new load-time validation. Remove unknown keys from
-  source-adapter sidecar YAML and governed runtime targets.
+- Correct Notary claim ids, default disclosure modes, and rules that refer to
+  undeclared consultation outputs. Remove retired Notary source-adapter,
+  connector, and governed runtime target configuration.
 - Stop calling the Relay and Notary TUF-era admin config verify, dry-run, and
   apply routes, and stop invoking the removed CLI `config apply-bundle`
   command. Run `registryctl bundle verify` for stateless signature and binding
@@ -81,9 +81,10 @@ Apply only the changes required by the v0.9.0 changelogs and release notes:
   trust-context headers, including
   `registry:trust:source_observed_at_unix_seconds:<value>` for
   `x-registry-source-observed-at-unix-seconds`.
-- Keep `registryctl.yaml` at `schema_version: registryctl/v1`, remove unknown
-  project keys, and set `notary.source` to `registry_data_api`, `relay`,
-  `fhir_source_adapter_sidecar`, or `opencrvs_dci`.
+- Replace legacy `registryctl.yaml` authoring files with the
+  `registry-stack.yaml` project contract. Use a source-free service with no
+  consultation for a Notary-only deployment. For a combined deployment, define
+  a product-neutral integration and bind each service consultation to it.
 - Install the registryctl v0.9.0 binary together with its checksum-verified
   `registryctl-v0.9.0-image-lock.json`.
 
