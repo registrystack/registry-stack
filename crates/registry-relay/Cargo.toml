@@ -123,16 +123,16 @@ registry-platform-ops = { workspace = true }
 # ─── errors ──────────────────────────────────────────────────────────────────
 thiserror = { version = "2" }
 
-[target.'cfg(unix)'.dependencies]
-nix = { version = "0.31.3", default-features = false, features = ["process", "resource"] }
-rustix.workspace = true
-
 # ─── openapi ─────────────────────────────────────────────────────────────────
 ogcapi-types = { version = "0.3.0", optional = true, features = ["features"] }
 geojson = { version = "1.0", optional = true, features = ["geo-types"] }
 geo = { version = "0.33", optional = true }
 geo-types = { version = "0.7", optional = true }
 wkt = { version = "0.14", optional = true, features = ["geo-types"] }
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31.3", default-features = false, features = ["process", "resource"] }
+rustix.workspace = true
 
 # ─── dev / test ──────────────────────────────────────────────────────────────
 [dev-dependencies]
