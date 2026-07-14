@@ -12,7 +12,7 @@ server:
 metadata:
   source:
     path: civil-registry-relay.metadata.yaml
-    digest: sha256:bb577e68b7b01fcd9d88bc43a253c278075ef7411163004a8fb7f3c00170c259
+    digest: sha256:7b86305eae0fe4d3efeadd0fb641492059b227e1b9221ee73e04e3c5c5759a51
   ecosystem_binding:
     id: combined-support-eligibility/v1
     version: v1

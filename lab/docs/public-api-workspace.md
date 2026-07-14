@@ -60,7 +60,7 @@ does not replace smoke scripts, release checks, or hosted deployment validation.
 The first implementation covers the public hosted lab and the local Compose
 equivalent for the same surfaces. Relay-only, source-free Notary-only, and
 combined project topologies remain distinct. Combined Notary evaluation uses
-compiler-pinned Relay consultations rather than direct source connectors.
+  compiler-pinned Relay consultations rather than direct registry access.
 
 ## Public Credential Boundary
 

@@ -99,32 +99,6 @@ datasets:
               operator: odrl:isA
               right_operand:
                 iri: https://demo.example.gov/purpose/decentralized-evidence-demo
-    evidence_offerings:
-      - id: household_support_evidence_service
-        iri: https://demo.example.gov/evidence-offerings/household-support
-        title: Household support evidence service
-        description: Evidence Server endpoint that computes enrollment and eligibility status from social protection data.
-        evidence_type: household_support_evidence
-        issuing_authority:
-          id: social_protection_authority
-          iri: did:web:social-protection.demo.example.gov
-          name: Social Protection Authority
-          country: ZZ
-        jurisdiction:
-          country: ZZ
-        level_of_assurance: substantial
-        entity: program_enrollment
-        lookup_keys:
-          - national_id
-        access:
-          kind: registry-notary
-          conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://social-protection-notary:8080
-          discovery_url: https://social-protection-notary:8080/.well-known/evidence-service
-          ruleset: program-enrollment-status-v1
-        policy:
-          purpose:
-            - https://demo.example.gov/purpose/social-protection-review
     entities:
       - name: household
         title: Household

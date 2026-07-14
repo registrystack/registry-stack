@@ -150,22 +150,16 @@ class GenerateFixturesTest(unittest.TestCase):
                 self.assertNotRegex(text, r"\bname:\s*civil_status\b")
                 self.assertNotRegex(text, r"\bcivil-status\b(?!-records)")
 
-    def test_published_metadata_omits_private_notary_hostnames(self) -> None:
+    def test_relay_metadata_does_not_publish_unbacked_notary_services(self) -> None:
         public_metadata_paths = [
             self.generator.ROOT / "config" / "static-metadata" / "metadata.yaml",
             *sorted((self.generator.ROOT / "config" / "coolify" / "relay").glob("*.metadata.yaml")),
         ]
-        private_hosts = (
-            "civil-notary:8080",
-            "social-protection-notary:8080",
-            "shared-eligibility-notary:8080",
-            "nagdi-agriculture-notary:8080",
-        )
         for path in public_metadata_paths:
             with self.subTest(path=path.relative_to(self.generator.ROOT)):
                 text = path.read_text(encoding="utf-8")
-                for host in private_hosts:
-                    self.assertNotIn(host, text)
+                self.assertNotIn("evidence_offerings:", text)
+                self.assertNotIn("kind: registry-notary", text)
 
     def test_v1_notary_outcomes_are_encoded_by_fixture_facts(self) -> None:
         civil_by_id = {row[0]: row for row in self.generator.data_rows(self.generator.CIVIL_ROWS)}

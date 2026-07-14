@@ -12,7 +12,7 @@ server:
 metadata:
   source:
     path: agri-registry-relay.metadata.yaml
-    digest: sha256:11500df610280e587c401126f88805edac1d9d06a2165c96f18a25c52f5be2b2
+    digest: sha256:c244a11d5072114c41cef44dadea08f2f2c62e5bc3de80cefe6a4b5352e54341
 
 catalog:
   title: NAgDI Agricultural Registry Relay (Decentralized Demo)

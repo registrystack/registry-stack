@@ -99,18 +99,6 @@ config-vocabulary-check:
 project-topologies:
     scripts/check-project-topologies.sh
 
-# Run the default signed Notary-to-Notary delegated-evaluation smoke.
-federation:
-    scripts/smoke-federation.sh
-
-# Run the narrated default client flow.
-client:
-    docker compose -f compose.yaml --profile client run --rm demo-client
-
-# Run the Registry Notary Python client against the default Notary services.
-notary-client:
-    scripts/smoke-notary-client.py
-
 # Run Relay's ignored live Postgres integration test against lab Postgres.
 relay-postgres:
     scripts/check-relay-postgres.sh
@@ -401,33 +389,17 @@ agri-generate-planning:
 
 # Build the agricultural NAgDI profile.
 agri-build:
-    docker compose -f compose.yaml --profile agri build agri-registry-relay nagdi-agriculture-notary agri-static-metadata-publisher
+    docker compose -f compose.yaml --profile agri build agri-registry-relay agri-static-metadata-publisher
 
 # Start the agricultural NAgDI profile.
 agri-up:
-    docker compose -f compose.yaml --profile agri up -d agri-registry-relay nagdi-agriculture-notary agri-static-metadata-publisher
+    docker compose -f compose.yaml --profile agri up -d agri-registry-relay agri-static-metadata-publisher
 
 # Stop the agricultural NAgDI profile and remove demo volumes.
 agri-down:
-    docker compose -f compose.yaml --profile agri stop agri-registry-relay nagdi-agriculture-notary agri-static-metadata-publisher
-    docker compose -f compose.yaml --profile agri rm -f -v agri-registry-relay nagdi-agriculture-notary agri-static-metadata-publisher
+    docker compose -f compose.yaml --profile agri stop agri-registry-relay agri-static-metadata-publisher
+    docker compose -f compose.yaml --profile agri rm -f -v agri-registry-relay agri-static-metadata-publisher
     docker volume rm registry-lab_agri-registry-cache 2>/dev/null || true
-
-# Run the agricultural NAgDI smoke.
-agri-smoke:
-    scripts/smoke-agri.sh
-
-# Run the agricultural federated delegated-evaluation smoke.
-agri-federation:
-    scripts/smoke-agri-federation.sh
-
-# Run the narrated agricultural NAgDI client flow.
-agri-client:
-    docker compose -f compose.yaml --profile agri --profile agri-client run --rm agri-demo-client
-
-# Run the voucher MIS agriculture consumer demo.
-agri-voucher-mis:
-    uv run scripts/demo-voucher-mis.py
 
 # Run the QGIS-ready aggregate agriculture planner demo.
 agri-qgis-planner:
@@ -446,15 +418,11 @@ agri-crosswalk-python:
 agri-publicschema-integrator-strict:
     bash -lc 'source ../crosswalk/crates/crosswalk-python/.venv/bin/activate && python scripts/demo-publicschema-integrator.py --require-crosswalk'
 
-# Run the agriculture wallet-holder credential demo.
-agri-wallet:
-    uv run scripts/demo-agri-wallet.py
-
 # Run every agriculture consumer demo.
-agri-consumers: agri-voucher-mis agri-qgis-planner agri-publicschema-integrator agri-wallet
+agri-consumers: agri-qgis-planner agri-publicschema-integrator
 
 # Run every agriculture consumer demo and require Crosswalk-backed PublicSchema output.
-agri-consumers-strict: agri-voucher-mis agri-qgis-planner agri-crosswalk-python agri-publicschema-integrator-strict agri-wallet agri-verify-consumer-artifacts-strict
+agri-consumers-strict: agri-qgis-planner agri-crosswalk-python agri-publicschema-integrator-strict agri-verify-consumer-artifacts-strict
 
 # Validate agriculture consumer artifacts after the demos run.
 agri-verify-consumer-artifacts:

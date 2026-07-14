@@ -12,7 +12,7 @@ server:
 metadata:
   source:
     path: health-registry-relay.metadata.yaml
-    digest: sha256:05099a1941aa300ac5cfb7262a0600a7e9f562e147e476ea054db104f4558328
+    digest: sha256:05460fdc4406cb0119c65078c315cf26d3cdc4627ded45296fa9ac6d4ea8f492
   ecosystem_binding:
     id: combined-support-eligibility/v1
     version: v1

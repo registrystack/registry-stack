@@ -21,7 +21,6 @@ from lab_homepage_explorer import claims as claims_explorer
 from lab_homepage_explorer import registries as registry_explorer
 from lab_homepage_explorer.common import ExplorerInputError, parse_filter_params
 from lab_homepage_scenarios import (
-    run_alive_proof_step,
     run_scenario_step,
     scenario_cards_html,
     scenario_page_html,
@@ -369,16 +368,6 @@ def homepage_html(title: str, lab_mode: str = "hosted") -> bytes:
         {scenario_cards_html(lab_mode)}
       </div>
     </section>
-    <section class="band band-muted" id="wallet">
-      <div class="band-inner">
-        <div class="section-heading">
-          <p class="eyebrow">Take it further</p>
-          <h2>Put a signed proof in a real wallet.</h2>
-          <p>Start the citizen Notary flow, sign in as the matching demo citizen, then paste the generated credential offer into the hosted wallet. The wallet can receive a simple vital-status proof or Miguel's CRVS birth certificate credential.</p>
-        </div>
-        <div class="wallet-grid" id="wallet-grid"></div>
-      </div>
-    </section>
     <section class="band" id="services">
       <div class="band-inner">
         <div class="section-heading">
@@ -595,11 +584,6 @@ class LabHomepageHandler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path.startswith("/api/explorer/claims/"):
             self.send_json(self.claims_explorer_post_payload())
-            return
-        prefix = "/api/scenarios/alive-proof/"
-        if path.startswith(prefix):
-            step_id = path.removeprefix(prefix)
-            self.send_json(run_alive_proof_step(enrich_config(self.config), step_id, lab_mode=self.lab_mode))
             return
         scenario_prefix = "/api/scenarios/"
         if path.startswith(scenario_prefix):

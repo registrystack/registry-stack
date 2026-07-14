@@ -21,88 +21,22 @@ from urllib.parse import urlencode, urljoin, urlparse, urlunparse
 
 DEFAULT_BASE_URL = "https://lab.registrystack.org"
 DEFAULT_CITIZEN_PORTAL_URL = "https://portal.lab.registrystack.org"
-DEFAULT_CITIZEN_ISSUER = "https://citizen-notary.lab.registrystack.org"
-PERSON_ALIVE_CONFIGURATION = "person_is_alive_sd_jwt"
-CRVS_BIRTH_CERTIFICATE_CONFIGURATION = "crvs_birth_certificate_sd_jwt"
-WALLET_CONFIGURATIONS = (
-    PERSON_ALIVE_CONFIGURATION,
-    CRVS_BIRTH_CERTIFICATE_CONFIGURATION,
-)
 CLAIM_RESULT_FORMAT = "application/vnd.registry-notary.claim-result+json"
 
 EXPECTED_STEPS = {
-    "alive-proof": ["discover", "prepare-evidence", "deny-row"],
-    "civil-birth-demographics": ["discover", "lookup"],
-    "civil-birth-evidence": ["discover", "evaluate"],
-    "civil-birth-evidence-demographics": ["discover", "evaluate"],
-    "civil-marriage-evidence": ["discover", "evaluate"],
-    "wallet-credential": ["issuer-metadata", "credential-offer", "holder-key", "nonce", "credential-preview"],
+    "self-attested-declaration": ["discover", "evaluate"],
     "social-aggregate": ["discover", "read-aggregate", "deny-row-with-aggregate", "read-row-with-row-token"],
-    "combined-support": [
-        "discover",
-        "civil-subclaim",
-        "social-subclaim",
-        "health-subclaim",
-        "final-positive",
-        "negative-control",
-    ],
-    "agriculture-voucher": [
-        "discover",
-        "positive-voucher",
-        "inactive-parcel-control",
-        "redeemed-control",
-        "reason-code",
-    ],
 }
 EXPECTED_STEP_STATUSES = {
-    "alive-proof": {
-        "discover": "done",
-        "prepare-evidence": "done",
-        "deny-row": "denied_as_expected",
-    },
-    "civil-birth-demographics": {
-        "discover": "done",
-        "lookup": "done",
-    },
-    "civil-birth-evidence": {
+    "self-attested-declaration": {
         "discover": "done",
         "evaluate": "done",
-    },
-    "civil-birth-evidence-demographics": {
-        "discover": "done",
-        "evaluate": "done",
-    },
-    "civil-marriage-evidence": {
-        "discover": "done",
-        "evaluate": "done",
-    },
-    "wallet-credential": {
-        "issuer-metadata": "done",
-        "credential-offer": "done",
-        "holder-key": "done",
-        "nonce": "done",
-        "credential-preview": "done",
     },
     "social-aggregate": {
         "discover": "done",
         "read-aggregate": "done",
         "deny-row-with-aggregate": "denied_as_expected",
         "read-row-with-row-token": "done",
-    },
-    "combined-support": {
-        "discover": "done",
-        "civil-subclaim": "done",
-        "social-subclaim": "done",
-        "health-subclaim": "done",
-        "final-positive": "done",
-        "negative-control": "done",
-    },
-    "agriculture-voucher": {
-        "discover": "done",
-        "positive-voucher": "done",
-        "inactive-parcel-control": "done",
-        "redeemed-control": "done",
-        "reason-code": "done",
     },
 }
 
@@ -117,12 +51,8 @@ CITIZEN_PORTAL_EXPECTED_STEPS = {
 }
 
 DEFAULT_EVALUATED_CLAIM_SERVICES = {
-    "civil-notary",
-    "social-protection-notary",
-    "shared-eligibility-notary",
-    "agriculture-notary",
+    "self-attested-notary",
 }
-DISCOVERY_REQUIRED_AGRICULTURE_CLAIM = "active-smallholder-farmer"
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -613,31 +543,6 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
 
     lab = client.get(joined_url(base_url, "/api/lab.json"))
     require_ok(lab, "lab-metadata-unavailable")
-    wallet = lab.body.get("wallet") if isinstance(lab.body, dict) else None
-    require(isinstance(wallet, dict), "wallet-metadata-missing", lab.body)
-    wallet_configurations = wallet_credential_configuration_ids(wallet)
-    missing_wallet_configurations = [
-        configuration for configuration in WALLET_CONFIGURATIONS if configuration not in wallet_configurations
-    ]
-    require(
-        not missing_wallet_configurations,
-        "wallet-credential-configuration-mismatch",
-        {"missing": missing_wallet_configurations, "seen": wallet_configurations},
-    )
-
-    citizen_issuer = DEFAULT_CITIZEN_ISSUER if base_url == DEFAULT_BASE_URL else str(wallet.get("issuer") or DEFAULT_CITIZEN_ISSUER)
-    citizen_metadata = client.get(joined_url(citizen_issuer, "/.well-known/openid-credential-issuer"))
-    require_ok(citizen_metadata, "citizen-issuer-metadata-unavailable")
-    configurations = credential_configurations(citizen_metadata.body)
-    missing_issuer_configurations = [
-        configuration for configuration in WALLET_CONFIGURATIONS if configuration not in configurations
-    ]
-    require(
-        not missing_issuer_configurations,
-        "citizen-issuer-configuration-missing",
-        {"missing": missing_issuer_configurations, "seen": sorted(configurations)},
-    )
-
     story_summaries: dict[str, list[str]] = {}
     for scenario_id, expected_ids in EXPECTED_STEPS.items():
         story_response = client.get(joined_url(base_url, f"/api/scenarios/{scenario_id}.json"))
@@ -678,8 +583,6 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
         "checks": (
             1
             + 1
-            + 1
-            + 1
             + sum(len(steps) for steps in EXPECTED_STEP_STATUSES.values())
             + len(EXPECTED_STEPS)
             + explorer_summary["checks"]
@@ -689,8 +592,6 @@ def run_smoke(config: SmokeConfig) -> dict[str, Any]:
         "explorers": explorer_summary,
         "scenarios": step_summaries,
         "stories": {key: len(value) for key, value in story_summaries.items()},
-        "wallet_configuration": PERSON_ALIVE_CONFIGURATION,
-        "wallet_configurations": list(WALLET_CONFIGURATIONS),
     }
     return summary
 
@@ -800,16 +701,11 @@ def run_explorer_smoke(client: JsonClient, base_url: str) -> dict[str, Any]:
         checks += 1
         discovery = claim_service.get("discovery") if isinstance(claim_service.get("discovery"), dict) else {}
         claim_ids = {str(claim.get("id")) for claim in claims if isinstance(claim, dict)}
-        if service_id == "agriculture-notary":
+        if service_id == "self-attested-notary":
             require(
-                discovery.get("status") == "live",
-                "claims-explorer-agriculture-discovery-not-live",
-                {"service": service_id, "discovery": discovery},
-            )
-            require(
-                DISCOVERY_REQUIRED_AGRICULTURE_CLAIM in claim_ids,
-                "claims-explorer-agriculture-discovery-claim-missing",
-                {"claim_id": DISCOVERY_REQUIRED_AGRICULTURE_CLAIM, "claims": sorted(claim_ids)},
+                "applicant-declaration" in claim_ids,
+                "claims-explorer-self-attested-claim-missing",
+                {"claims": sorted(claim_ids)},
             )
 
         mode = "metadata"

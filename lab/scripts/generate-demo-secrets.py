@@ -2,19 +2,16 @@
 """Generate local credentials for the decentralized evidence demo.
 
 Relay and Notary configs reference SHA-256 fingerprint env values. Raw values
-are used only by demo clients and Evidence Server source connectors.
+are used only by demo clients and Relay source consultations.
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import os
-import re
 import shlex
-import subprocess
 import sys
 from pathlib import Path
 
@@ -82,18 +79,7 @@ TOKEN_NAMES = [
     "AGRI_AGGREGATE_READER",
 ]
 
-EVIDENCE_CLIENT_NAMES = [
-    "CIVIL_NOTARY_OPS",
-    "CIVIL_EVIDENCE_CLIENT",
-    "SOCIAL_EVIDENCE_CLIENT",
-    "SHARED_EVIDENCE_CLIENT",
-    "SHARED_EVIDENCE_DENY_ASSURANCE",
-    "SHARED_EVIDENCE_DENY_JURISDICTION",
-    "SHARED_EVIDENCE_DENY_LEGAL_BASIS",
-    "SHARED_EVIDENCE_DENY_CONSENT",
-    "AGRI_EVIDENCE_CLIENT",
-    "SELF_ATTESTED_EVIDENCE_CLIENT",
-]
+EVIDENCE_CLIENT_NAMES = ["SELF_ATTESTED_EVIDENCE_CLIENT"]
 
 
 def fingerprint(raw: str) -> str:
@@ -108,15 +94,6 @@ def env_line(key: str, value: str) -> str:
 
 def generate_env() -> dict[str, str]:
     issuer_jwk = generate_registry_notary_issuer_jwk()
-    rotated_issuer_jwk = generate_registry_notary_issuer_jwk()
-    static_metadata_federation_jwk = generate_registry_notary_issuer_jwk()
-    default_federation_client_jwk = generate_registry_notary_issuer_jwk()
-    civil_federation_response_jwk = generate_registry_notary_issuer_jwk()
-    social_federation_response_jwk = generate_registry_notary_issuer_jwk()
-    agri_federation_client_jwk = generate_registry_notary_issuer_jwk()
-    agri_federation_response_jwk = generate_registry_notary_issuer_jwk()
-    access_token_jwk = generate_registry_notary_issuer_jwk()
-    esignet_rp_jwk = generate_rs256_jwk("registry-lab-live-client-key-1")
     values: dict[str, str] = {
         "CLAIM_VERIFICATION_BINDING_KEY": generate_raw_key(),
         "REGISTRY_RELAY_AUDIT_HASH_SECRET": generate_raw_key(),
@@ -124,28 +101,9 @@ def generate_env() -> dict[str, str]:
         "REGISTRY_NOTARY_REDIS_URL": "redis://127.0.0.1:6379/0",
         "REGISTRY_NOTARY_REPLAY_REDIS_URL": "redis://127.0.0.1:6379/0",
         "REGISTRY_NOTARY_ISSUER_JWK": issuer_jwk,
-        "REGISTRY_NOTARY_ISSUER_PUBLIC_JWK": public_jwk_env_value(
-            issuer_jwk,
-            "did:web:civil-evidence.demo.example#civil-evidence-demo-key-1",
-        ),
-        "REGISTRY_NOTARY_ACCESS_TOKEN_JWK": access_token_jwk,
-        "REGISTRY_NOTARY_ESIGNET_RP_JWK": esignet_rp_jwk,
-        "REGISTRY_NOTARY_ROTATED_ISSUER_JWK": rotated_issuer_jwk,
         "REGISTRY_ESIGNET_KYC_TOKEN_SECRET": generate_raw_key(),
         "REGISTRY_ESIGNET_PSUT_SECRET": generate_raw_key(),
         "REGISTRY_ESIGNET_KYC_KEYSTORE_PASSWORD": generate_raw_key(),
-        "CIVIL_EVIDENCE_ISSUER_JWK": issuer_jwk,
-        "SOCIAL_PROTECTION_EVIDENCE_ISSUER_JWK": issuer_jwk,
-        "SHARED_ELIGIBILITY_EVIDENCE_ISSUER_JWK": issuer_jwk,
-        "STATIC_METADATA_FEDERATION_JWK": static_metadata_federation_jwk,
-        "DEFAULT_FEDERATION_CLIENT_JWK": default_federation_client_jwk,
-        "CIVIL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET": generate_raw_key(),
-        "CIVIL_FEDERATION_RESPONSE_JWK": civil_federation_response_jwk,
-        "SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET": generate_raw_key(),
-        "SOCIAL_FEDERATION_RESPONSE_JWK": social_federation_response_jwk,
-        "AGRI_FEDERATION_CLIENT_JWK": agri_federation_client_jwk,
-        "AGRI_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET": generate_raw_key(),
-        "AGRI_FEDERATION_RESPONSE_JWK": agri_federation_response_jwk,
     }
     for name in TOKEN_NAMES:
         raw = generate_raw_key()
@@ -160,90 +118,7 @@ def generate_env() -> dict[str, str]:
         values[f"{name}_TOKEN_HASH"] = fingerprint(token)
         values[f"{name}_BEARER"] = bearer
         values[f"{name}_BEARER_HASH"] = fingerprint(bearer)
-    values["SOCIAL_PROTECTION_EVIDENCE_CLIENT_TOKEN"] = values["SOCIAL_EVIDENCE_CLIENT_TOKEN"]
-    values["SOCIAL_PROTECTION_EVIDENCE_CLIENT_TOKEN_HASH"] = values[
-        "SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH"
-    ]
-    values["SOCIAL_PROTECTION_EVIDENCE_CLIENT_BEARER"] = values["SOCIAL_EVIDENCE_CLIENT_BEARER"]
-    values["SOCIAL_PROTECTION_EVIDENCE_CLIENT_BEARER_HASH"] = values[
-        "SOCIAL_EVIDENCE_CLIENT_BEARER_HASH"
-    ]
     return values
-
-
-def public_jwk_env_value(private_jwk: str, kid: str) -> str:
-    jwk = json.loads(private_jwk)
-    jwk.pop("d", None)
-    jwk["kid"] = kid
-    jwk["alg"] = jwk.get("alg") or "EdDSA"
-    return json.dumps(jwk, separators=(",", ":"), sort_keys=True)
-
-
-def generate_rs256_jwk(kid: str) -> str:
-    """Generate an RSA private JWK using OpenSSL for eSignet client assertions."""
-
-    try:
-        key = subprocess.run(
-            ["openssl", "genrsa", "2048"],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        text = subprocess.run(
-            ["openssl", "rsa", "-text", "-noout"],
-            input=key.stdout,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        ).stdout
-    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError("openssl is required to generate the RS256 eSignet RP key") from exc
-
-    public_exponent = parse_public_exponent(text)
-    jwk = {
-        "kty": "RSA",
-        "kid": kid,
-        "alg": "RS256",
-        "n": parse_rsa_component(text, "modulus"),
-        "e": int_to_base64url(public_exponent),
-        "d": parse_rsa_component(text, "privateExponent"),
-        "p": parse_rsa_component(text, "prime1"),
-        "q": parse_rsa_component(text, "prime2"),
-        "dp": parse_rsa_component(text, "exponent1"),
-        "dq": parse_rsa_component(text, "exponent2"),
-        "qi": parse_rsa_component(text, "coefficient"),
-    }
-    return json.dumps(jwk, separators=(",", ":"), sort_keys=True)
-
-
-def parse_public_exponent(text: str) -> int:
-    match = re.search(r"^publicExponent:\s+(\d+)", text, flags=re.MULTILINE)
-    if not match:
-        raise ValueError("could not parse RSA public exponent from openssl output")
-    return int(match.group(1))
-
-
-def parse_rsa_component(text: str, label: str) -> str:
-    match = re.search(
-        rf"^{re.escape(label)}:\n((?:\s+(?:[0-9a-fA-F]{{2}}:)*[0-9a-fA-F]{{2}}:?\n)+)",
-        text,
-        flags=re.MULTILINE,
-    )
-    if not match:
-        raise ValueError(f"could not parse RSA component {label!r} from openssl output")
-    hex_value = "".join(part.strip().replace(":", "") for part in match.group(1).splitlines())
-    value = int(hex_value, 16)
-    return int_to_base64url(value)
-
-
-def int_to_base64url(value: int) -> str:
-    if value < 0:
-        raise ValueError("RSA components must be non-negative")
-    size = max(1, (value.bit_length() + 7) // 8)
-    encoded = base64.urlsafe_b64encode(value.to_bytes(size, "big")).decode("ascii")
-    return encoded.rstrip("=")
 
 
 def write_env_file(path: Path, values: dict[str, str]) -> None:
@@ -289,16 +164,6 @@ def main() -> int:
             ),
             "hash_variables": sorted(k for k in values if k.endswith("_HASH")),
             "issuer_jwk": "REGISTRY_NOTARY_ISSUER_JWK",
-            "issuer_public_jwk": "REGISTRY_NOTARY_ISSUER_PUBLIC_JWK",
-            "rotated_issuer_jwk": "REGISTRY_NOTARY_ROTATED_ISSUER_JWK",
-            "access_token_jwk": "REGISTRY_NOTARY_ACCESS_TOKEN_JWK",
-            "esignet_rp_jwk": "REGISTRY_NOTARY_ESIGNET_RP_JWK",
-            "static_metadata_federation_jwk": "STATIC_METADATA_FEDERATION_JWK",
-            "default_federation_client_jwk": "DEFAULT_FEDERATION_CLIENT_JWK",
-            "civil_federation_response_jwk": "CIVIL_FEDERATION_RESPONSE_JWK",
-            "social_federation_response_jwk": "SOCIAL_FEDERATION_RESPONSE_JWK",
-            "agri_federation_client_jwk": "AGRI_FEDERATION_CLIENT_JWK",
-            "agri_federation_response_jwk": "AGRI_FEDERATION_RESPONSE_JWK",
             "binding_key": "CLAIM_VERIFICATION_BINDING_KEY",
         }
         print(json.dumps(summary, indent=2, sort_keys=True))

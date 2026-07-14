@@ -25,10 +25,7 @@ EXPLORER_ALLOWED_HOSTS = {"lab.registrystack.org", "example"}
 EXPLORER_INTERNAL_RUNTIME_HOSTS = {
     "localhost",
     "host.docker.internal",
-    "civil-notary",
-    "shared-eligibility-notary",
-    "nagdi-agriculture-notary",
-    "agriculture-notary",
+    "self-attested-notary",
 }
 
 

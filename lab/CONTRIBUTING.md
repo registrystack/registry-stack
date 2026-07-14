@@ -20,7 +20,6 @@ just generate
 just build
 just up
 just smoke
-just client
 ```
 
 For release proof, use:

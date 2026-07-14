@@ -23,7 +23,7 @@ The generated configuration keeps these invariants:
 - Evaluation and optional holder-bound credential issuance are rate limited.
 - Audit output hashes identifiers and never records bearer tokens or signing
   material.
-- No Relay consultation or direct source connector exists in the Notary
+- No Relay consultation or registry acquisition path exists in the Notary
   configuration.
 
 ## Run the journey

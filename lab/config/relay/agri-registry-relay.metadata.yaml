@@ -92,58 +92,6 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: weekly
-    evidence_offerings:
-      - id: climate_smart_input_voucher_evidence_service
-        iri: https://demo.example.gov/evidence-offerings/nagdi/climate-smart-input-voucher
-        title: Climate-smart input voucher evidence service
-        description: Registry Notary endpoint that evaluates farmer registration, data-use authorization, parcel, crop, climate-risk, entitlement, redemption exclusion, and review controls.
-        evidence_type: climate_smart_input_voucher_evidence
-        issuing_authority:
-          id: nagdi_agriculture_governance_body
-          iri: did:web:nagdi-agriculture.demo.example.gov
-          name: National Agricultural Data Infrastructure Governance Body
-          country: ZZ
-        jurisdiction:
-          country: ZZ
-        level_of_assurance: substantial
-        entity: voucher_eligibility_snapshot
-        lookup_keys:
-          - id
-        access:
-          kind: registry-notary
-          conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-notary:8080
-          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
-          ruleset: eligible-for-input-voucher-v1
-        policy:
-          purpose:
-            - https://demo.example.gov/purpose/nagdi/climate-smart-input-support
-      - id: livestock_movement_permit_evidence_service
-        iri: https://demo.example.gov/evidence-offerings/nagdi/livestock-movement-permit
-        title: Livestock movement permit evidence service
-        description: Registry Notary endpoint that evaluates herd registration, vaccination, quarantine, and conflicting permit controls.
-        evidence_type: livestock_movement_permit_evidence
-        issuing_authority:
-          id: animal_health_authority
-          iri: did:web:animal-health.demo.example.gov
-          name: Animal Health Authority
-          country: ZZ
-        jurisdiction:
-          country: ZZ
-        level_of_assurance: substantial
-        entity: livestock_movement_snapshot
-        lookup_keys:
-          - farmer_id
-          - herd_id
-        access:
-          kind: registry-notary
-          conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://nagdi-agriculture-notary:8080
-          discovery_url: https://nagdi-agriculture-notary:8080/.well-known/evidence-service
-          ruleset: eligible-for-livestock-movement-v1
-        policy:
-          purpose:
-            - https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review
     entities:
       - name: farmer
         title: Farmer

@@ -57,7 +57,6 @@ REGISTRIES: dict[str, dict[str, Any]] = {
         "default_entity": "civil_person",
         "default_limit": 1,
         "purpose": PURPOSE,
-        "related_claim_service_ids": ["civil-notary", "shared-eligibility-notary"],
         "datasets": {
             "civil_registry": {
                 "id": "civil_registry",
@@ -210,7 +209,6 @@ REGISTRIES: dict[str, dict[str, Any]] = {
         "default_aggregate": "households_by_eligibility_band",
         "default_limit": 1,
         "purpose": PURPOSE,
-        "related_claim_service_ids": ["social-protection-notary", "shared-eligibility-notary"],
         "datasets": {
             "social_protection_registry": {
                 "id": "social_protection_registry",
@@ -401,7 +399,6 @@ REGISTRIES: dict[str, dict[str, Any]] = {
         "default_entity": "health_facility",
         "default_limit": 1,
         "purpose": PURPOSE,
-        "related_claim_service_ids": ["shared-eligibility-notary"],
         "datasets": {
             "health_registry": {
                 "id": "health_registry",
@@ -446,7 +443,6 @@ REGISTRIES: dict[str, dict[str, Any]] = {
         "default_entity": "farmer",
         "default_limit": 1,
         "purpose": "https://demo.example.gov/purpose/nagdi/climate-smart-input-support",
-        "related_claim_service_ids": ["agriculture-notary"],
         "datasets": {
             "agri_registry": {
                 "id": "agri_registry",
@@ -850,7 +846,6 @@ def _registry_summary(registry: dict[str, Any], config: dict[str, Any]) -> dict[
         "default_aggregate": registry.get("default_aggregate", ""),
         "default_limit": registry["default_limit"],
         "purpose": registry["purpose"],
-        "related_claim_service_ids": list(registry["related_claim_service_ids"]),
         "credentials": [
             credential_display(config, credential_id)
             for credential_id in credential_ids

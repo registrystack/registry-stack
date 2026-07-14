@@ -7,65 +7,25 @@ import html
 from typing import Any
 
 from . import (
-    agriculture_voucher,
-    civil_alive,
-    civil_birth_demographics,
-    civil_crvs_evidence,
-    combined_support,
+    self_attested,
     social_aggregate,
-    wallet_vc,
 )
 from .attestations import public_label_violations
 
 
 SCENARIOS = [
-    civil_alive,
-    civil_birth_demographics,
-    civil_crvs_evidence.BIRTH,
-    civil_crvs_evidence.BIRTH_DEMOGRAPHICS,
-    civil_crvs_evidence.MARRIAGE,
-    wallet_vc,
+    self_attested,
     social_aggregate,
-    combined_support,
-    agriculture_voucher,
 ]
 STORY_BY_ID = {module.SCENARIO_ID: module for module in SCENARIOS}
 SOURCE_SYSTEM_BY_SCENARIO_ID = {
-    civil_alive.SCENARIO_ID: {
-        "label": "Registry Relay demo source",
-        "summary": "Calls the hosted Civil Relay and Civil Notary over synthetic civil registry fixtures. It does not call OpenCRVS.",
-    },
-    civil_birth_demographics.SCENARIO_ID: {
-        "label": "Registry Relay demo source",
-        "summary": "Calls the hosted Civil Notary over Relay-backed civil registry fixtures. It does not call OpenCRVS.",
-    },
-    civil_crvs_evidence.BIRTH.SCENARIO_ID: {
-        "label": "Registry Relay CRVS fixtures",
-        "summary": "Calls the hosted Civil Notary over Relay-backed birth fixtures. Use the OpenCRVS DCI tutorial for the live OpenCRVS path.",
-    },
-    civil_crvs_evidence.BIRTH_DEMOGRAPHICS.SCENARIO_ID: {
-        "label": "Registry Relay CRVS fixtures",
-        "summary": "Calls the hosted Civil Notary over Relay-backed birth fixtures. Use the OpenCRVS DCI tutorial for the live OpenCRVS path.",
-    },
-    civil_crvs_evidence.MARRIAGE.SCENARIO_ID: {
-        "label": "Registry Relay CRVS fixtures",
-        "summary": "Calls the hosted Civil Notary over Relay-backed marriage fixtures. Use the OpenCRVS DCI tutorial for the live OpenCRVS path.",
-    },
-    wallet_vc.SCENARIO_ID: {
-        "label": "Simulated wallet over Relay-backed civil evidence",
-        "summary": "Uses hosted issuer endpoints and simulated wallet steps. The vital-status source is civil Relay demo data, not OpenCRVS.",
+    self_attested.SCENARIO_ID: {
+        "label": "Self-attested Notary",
+        "summary": "Calls the source-free Notary. No Relay or registry source participates.",
     },
     social_aggregate.SCENARIO_ID: {
         "label": "Registry Relay demo source",
         "summary": "Calls the hosted Social Protection Relay over synthetic XLSX fixtures, not OpenSPP or OpenIMIS.",
-    },
-    combined_support.SCENARIO_ID: {
-        "label": "Registry Relay demo sources",
-        "summary": "Calls the shared Notary over civil, social, and health Relay-backed demo sources. It does not call DHIS2, FHIR, or OpenCRVS.",
-    },
-    agriculture_voucher.SCENARIO_ID: {
-        "label": "Registry Relay demo source",
-        "summary": "Calls the hosted Agriculture Notary over workbook-backed demo registries, not a live NAgDI upstream.",
     },
 }
 
@@ -162,7 +122,7 @@ def scenario_payload(config: dict[str, Any], scenario_id: str | None = None, lab
         return {"story": story, "lab_mode": lab_mode, "runnable": _is_runnable(story, lab_mode)}
     return {
         "lab_mode": lab_mode,
-        "default_scenario_id": civil_alive.SCENARIO_ID,
+        "default_scenario_id": self_attested.SCENARIO_ID,
         "scenarios": [
             {
                 "id": story["id"],
@@ -223,10 +183,6 @@ def run_scenario_step(config: dict[str, Any], scenario_id: str, step_id: str, la
     return module.run_step(config, step_id)
 
 
-def run_alive_proof_step(config: dict[str, Any], step_id: str, lab_mode: str = "hosted") -> dict[str, Any]:
-    return run_scenario_step(config, civil_alive.SCENARIO_ID, step_id, lab_mode=lab_mode)
-
-
 def top_nav_html(active: str = "") -> str:
     """One nav for every lab page; `active` marks the current entry."""
     entries = (
@@ -235,7 +191,6 @@ def top_nav_html(active: str = "") -> str:
         ("citizen-portal", "https://portal.lab.registrystack.org/", "Citizen Portal"),
         ("registry-explorer", "/registry-explorer", "Registry Explorer"),
         ("claims-explorer", "/claims-explorer", "Claims Explorer"),
-        ("wallet", "/#wallet", "Wallet test"),
         ("services", "/#services", "For developers"),
     )
     links = []
@@ -253,7 +208,7 @@ def scenario_cards_html(lab_mode: str = "hosted") -> str:
     remaining hosted-runnable stories, then the local-only walkthroughs.
     """
     items = scenario_payload({}, lab_mode=lab_mode)["scenarios"]
-    default_id = civil_alive.SCENARIO_ID
+    default_id = self_attested.SCENARIO_ID
     ordered = (
         [item for item in items if item["id"] == default_id]
         + [item for item in items if item["id"] != default_id and item["runnable"]]

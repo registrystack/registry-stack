@@ -95,65 +95,17 @@ def base_routes() -> dict[tuple[str, str], Any]:
         ("GET", "/api/scenarios.json"): (
             200,
             {
-                "default_scenario_id": "alive-proof",
+                "default_scenario_id": "self-attested-declaration",
                 "scenarios": [
-                    {"id": "alive-proof", "steps": 3},
-                    {"id": "civil-birth-demographics", "steps": 2},
-                    {"id": "civil-birth-evidence", "steps": 2},
-                    {"id": "civil-birth-evidence-demographics", "steps": 2},
-                    {"id": "civil-marriage-evidence", "steps": 2},
-                    {"id": "wallet-credential", "steps": 5},
+                    {"id": "self-attested-declaration", "steps": 2},
                     {"id": "social-aggregate", "steps": 4},
-                    {"id": "combined-support", "steps": 6},
-                    {"id": "agriculture-voucher", "steps": 5},
                 ],
             },
         ),
         ("GET", "/api/lab.json"): lab_route,
-        ("GET", "/.well-known/openid-credential-issuer"): (
-            200,
-            {
-                "credential_issuer": "https://issuer.example",
-                "credential_endpoint": "https://issuer.example/oid4vci/credential",
-                "credential_configurations_supported": {
-                    "person_is_alive_sd_jwt": {"format": "dc+sd-jwt"},
-                    "crvs_birth_certificate_sd_jwt": {"format": "dc+sd-jwt"},
-                },
-            },
-        ),
-        ("GET", "/api/scenarios/alive-proof.json"): (
-            200,
-            {"story": {"steps": [{"id": "discover"}, {"id": "prepare-evidence"}, {"id": "deny-row"}]}},
-        ),
-        ("GET", "/api/scenarios/civil-birth-demographics.json"): (
-            200,
-            {"story": {"steps": [{"id": "discover"}, {"id": "lookup"}]}},
-        ),
-        ("GET", "/api/scenarios/civil-birth-evidence.json"): (
+        ("GET", "/api/scenarios/self-attested-declaration.json"): (
             200,
             {"story": {"steps": [{"id": "discover"}, {"id": "evaluate"}]}},
-        ),
-        ("GET", "/api/scenarios/civil-birth-evidence-demographics.json"): (
-            200,
-            {"story": {"steps": [{"id": "discover"}, {"id": "evaluate"}]}},
-        ),
-        ("GET", "/api/scenarios/civil-marriage-evidence.json"): (
-            200,
-            {"story": {"steps": [{"id": "discover"}, {"id": "evaluate"}]}},
-        ),
-        ("GET", "/api/scenarios/wallet-credential.json"): (
-            200,
-            {
-                "story": {
-                    "steps": [
-                        {"id": "issuer-metadata"},
-                        {"id": "credential-offer"},
-                        {"id": "holder-key"},
-                        {"id": "nonce"},
-                        {"id": "credential-preview"},
-                    ]
-                }
-            },
         ),
         ("GET", "/api/scenarios/social-aggregate.json"): (
             200,
@@ -164,35 +116,6 @@ def base_routes() -> dict[tuple[str, str], Any]:
                         {"id": "read-aggregate"},
                         {"id": "deny-row-with-aggregate"},
                         {"id": "read-row-with-row-token"},
-                    ]
-                }
-            },
-        ),
-        ("GET", "/api/scenarios/combined-support.json"): (
-            200,
-            {
-                "story": {
-                    "steps": [
-                        {"id": "discover"},
-                        {"id": "civil-subclaim"},
-                        {"id": "social-subclaim"},
-                        {"id": "health-subclaim"},
-                        {"id": "final-positive"},
-                        {"id": "negative-control"},
-                    ]
-                }
-            },
-        ),
-        ("GET", "/api/scenarios/agriculture-voucher.json"): (
-            200,
-            {
-                "story": {
-                    "steps": [
-                        {"id": "discover"},
-                        {"id": "positive-voucher"},
-                        {"id": "inactive-parcel-control"},
-                        {"id": "redeemed-control"},
-                        {"id": "reason-code"},
                     ]
                 }
             },
@@ -252,22 +175,14 @@ def base_routes() -> dict[tuple[str, str], Any]:
             200,
             {
                 "default_format": "application/vnd.registry-notary.claim-result+json",
-                "claim_services": [
-                    {"id": "civil-notary"},
-                    {"id": "social-protection-notary"},
-                    {"id": "shared-eligibility-notary"},
-                    {"id": "agriculture-notary"},
-                ],
+                "claim_services": [{"id": "self-attested-notary"}],
             },
         ),
     }
     for service_id, default_claim, subject, scheme in [
-        ("civil-notary", "person-is-alive", "NID-1001", "national_id"),
-        ("social-protection-notary", "beneficiary-active", "NID-1001", "national_id"),
-        ("shared-eligibility-notary", "eligible-for-combined-support", "NID-1001", "national_id"),
-        ("agriculture-notary", "eligible-for-climate-smart-input-voucher", "FARMER-1001", "farmer_id"),
+        ("self-attested-notary", "applicant-declaration", "demo-applicant", "applicant_id"),
     ]:
-        default_purpose = "https://demo.example.gov/purpose/decentralized-evidence-demo"
+        default_purpose = "application-processing"
         routes[("GET", f"/api/explorer/claims/{service_id}/metadata.json")] = (
             200,
             {
@@ -278,29 +193,14 @@ def base_routes() -> dict[tuple[str, str], Any]:
                     "default_subject": subject,
                     "default_identifier_scheme": scheme,
                     "default_purpose": default_purpose,
-                    "discovery": (
-                        {"status": "live", "source": "notary"}
-                        if service_id == "agriculture-notary"
-                        else {"status": "overlay", "source": "overlay"}
-                    ),
+                    "discovery": {"status": "live", "source": "notary"},
                     "claims": [
                         {
                             "id": default_claim,
                             "default_disclosure": "predicate",
                             "formats": ["application/vnd.registry-notary.claim-result+json"],
                         }
-                    ]
-                    + (
-                        [
-                            {
-                                "id": hosted_smoke.DISCOVERY_REQUIRED_AGRICULTURE_CLAIM,
-                                "default_disclosure": "predicate",
-                                "formats": ["application/vnd.registry-notary.claim-result+json"],
-                            }
-                        ]
-                        if service_id == "agriculture-notary"
-                        else []
-                    ),
+                    ],
                 },
             },
         )
@@ -410,7 +310,7 @@ class HostedSmokeTest(unittest.TestCase):
         with StubServer(routes) as server:
             summary = hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
 
-        self.assertEqual(summary["stories"]["civil-birth-demographics"], 2)
+        self.assertEqual(summary["stories"]["self-attested-declaration"], 2)
 
     def test_none_registry_defaults_fail_without_none_url_requests(self) -> None:
         routes = base_routes()
@@ -468,12 +368,12 @@ class HostedSmokeTest(unittest.TestCase):
 
         self.assertIn("registry-explorer-discovery-not-live", str(raised.exception))
 
-    def test_agriculture_claim_discovery_must_be_live(self) -> None:
+    def test_self_attested_claim_discovery_requires_declaration(self) -> None:
         routes = base_routes()
-        status, body = routes[("GET", "/api/explorer/claims/agriculture-notary/metadata.json")]
+        status, body = routes[("GET", "/api/explorer/claims/self-attested-notary/metadata.json")]
         claim_service = dict(body["claim_service"])
-        claim_service["discovery"] = {"status": "overlay", "source": "overlay"}
-        routes[("GET", "/api/explorer/claims/agriculture-notary/metadata.json")] = (
+        claim_service["claims"] = []
+        routes[("GET", "/api/explorer/claims/self-attested-notary/metadata.json")] = (
             status,
             {"ok": True, "claim_service": claim_service},
         )
@@ -482,27 +382,7 @@ class HostedSmokeTest(unittest.TestCase):
             with self.assertRaises(hosted_smoke.SmokeFailure) as raised:
                 hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
 
-        self.assertIn("claims-explorer-agriculture-discovery-not-live", str(raised.exception))
-
-    def test_agriculture_claim_discovery_requires_live_only_claim(self) -> None:
-        routes = base_routes()
-        status, body = routes[("GET", "/api/explorer/claims/agriculture-notary/metadata.json")]
-        claim_service = dict(body["claim_service"])
-        claim_service["claims"] = [
-            claim
-            for claim in claim_service["claims"]
-            if claim["id"] != hosted_smoke.DISCOVERY_REQUIRED_AGRICULTURE_CLAIM
-        ]
-        routes[("GET", "/api/explorer/claims/agriculture-notary/metadata.json")] = (
-            status,
-            {"ok": True, "claim_service": claim_service},
-        )
-
-        with StubServer(routes) as server:
-            with self.assertRaises(hosted_smoke.SmokeFailure) as raised:
-                hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
-
-        self.assertIn("claims-explorer-agriculture-discovery-claim-missing", str(raised.exception))
+        self.assertIn("claims-explorer-claims-empty", str(raised.exception))
 
     def test_none_claim_service_id_fails_without_none_url_requests(self) -> None:
         routes = base_routes()
@@ -521,16 +401,16 @@ class HostedSmokeTest(unittest.TestCase):
 
     def test_none_default_claim_fails_without_evaluation_request(self) -> None:
         routes = base_routes()
-        routes[("GET", "/api/explorer/claims/civil-notary/metadata.json")] = (
+        routes[("GET", "/api/explorer/claims/self-attested-notary/metadata.json")] = (
             200,
             {
                 "ok": True,
                 "claim_service": {
-                    "id": "civil-notary",
+                    "id": "self-attested-notary",
                     "default_claim": None,
                     "claims": [
                         {
-                            "id": "person-is-alive",
+                            "id": "applicant-declaration",
                             "default_disclosure": "predicate",
                             "formats": ["application/vnd.registry-notary.claim-result+json"],
                         }
@@ -545,13 +425,13 @@ class HostedSmokeTest(unittest.TestCase):
             requested_paths = [path for _, path, _ in server.requests]
 
         self.assertIn("claims-explorer-default-claim-missing", str(raised.exception))
-        self.assertNotIn("/api/explorer/claims/civil-notary/evaluate.json", requested_paths)
+        self.assertNotIn("/api/explorer/claims/self-attested-notary/evaluate.json", requested_paths)
 
     def test_bad_friendly_status_fails(self) -> None:
         routes = base_routes()
-        routes[("POST", "/api/scenarios/alive-proof/prepare-evidence")] = (
+        routes[("POST", "/api/scenarios/self-attested-declaration/evaluate")] = (
             200,
-            {"step_id": "prepare-evidence", "friendly": {"status": "needs_attention"}},
+            {"step_id": "evaluate", "friendly": {"status": "needs_attention"}},
         )
         with StubServer(routes) as server:
             with self.assertRaises(hosted_smoke.SmokeFailure) as raised:
@@ -559,25 +439,8 @@ class HostedSmokeTest(unittest.TestCase):
 
         text = str(raised.exception)
         self.assertIn("scenario-step-status-mismatch", text)
-        self.assertIn("prepare-evidence", text)
+        self.assertIn("evaluate", text)
         self.assertIn("needs_attention", text)
-
-    def test_missing_oid4vci_metadata_fails(self) -> None:
-        routes = base_routes()
-        routes[("GET", "/.well-known/openid-credential-issuer")] = (
-            200,
-            {
-                "credential_issuer": "https://issuer.example",
-                "credential_endpoint": "https://issuer.example/oid4vci/credential",
-                "credential_configurations_supported": {},
-            },
-        )
-        with StubServer(routes) as server:
-            with self.assertRaises(hosted_smoke.SmokeFailure) as raised:
-                hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
-
-        self.assertIn("citizen-issuer-configuration-missing", str(raised.exception))
-        self.assertNotIn("person_is_alive_sd_jwt", str(raised.exception).split("seen", 1)[-1])
 
     def test_failure_redaction_removes_sensitive_fields(self) -> None:
         raw_credential = (

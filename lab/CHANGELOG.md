@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Aligned the public homepage, Claims Explorer, static metadata, performance
+  harness, and hosted smoke with the active self-attested Notary-only topology.
+  Registry-backed Notary examples now require a generated combined project and
+  are no longer advertised as standalone lab services.
+
 ## registry-stack-beta-11-2026-07-10
 
 - Added a pinned OpenID Foundation conformance-suite wrapper, OID4VCI issuer

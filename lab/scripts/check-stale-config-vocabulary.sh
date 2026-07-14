@@ -43,6 +43,13 @@ check_absent 'openfn|OPENFN' .
 check_absent '(opencrvs-dci|fhir-health|dhis2-health)-notary' .
 check_absent 'REGISTRY_OPENFN_NOTARY_SOURCE_DIR|FHIR_SIDECAR|OPENCRVS_DCI_' .
 check_absent 'country-dir|country workspace|country authoring' projects docs README.md justfile scripts
+check_absent 'connector_type|Source connector type' scripts/lab_homepage_explorer scripts/lab_homepage_static
+check_absent 'kind:[[:space:]]*registry-notary' config/relay config/coolify/relay config/static-metadata
+check_absent '(civil|social-protection|shared-eligibility|agriculture)-notary' \
+  config/lab-homepage/public-demo-credentials.json \
+  scripts/lab_homepage_explorer \
+  scripts/lab_homepage_static/claims-explorer.js \
+  scripts/hosted-smoke.py
 
 if [[ "${failures}" -ne 0 ]]; then
   printf 'stale config vocabulary check failed with %s violation set(s)\n' "${failures}" >&2

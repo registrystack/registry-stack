@@ -1,12 +1,12 @@
-const ORIENTING_SENTENCE = "Relay shows what an authorized system can read. Notary returns only the fact a service asked for.";
-const CIVIL_NOTARY_DEFAULT = {
-  serviceId: "civil-notary",
-  claimId: "person-is-alive",
-  subjectScheme: "national_id",
-  subjectValue: "NID-1001",
+const ORIENTING_SENTENCE = "This Notary-only example evaluates an applicant declaration without consulting a registry.";
+const SELF_ATTESTED_DEFAULT = {
+  serviceId: "self-attested-notary",
+  claimId: "applicant-declaration",
+  subjectScheme: "applicant_id",
+  subjectValue: "demo-applicant",
   disclosure: "predicate",
   format: "application/vnd.registry-notary.claim-result+json",
-  purpose: ["https:", "//demo.example.gov/purpose/decentralized-evidence-demo"].join("")
+  purpose: "application-processing"
 };
 
 const text = (value) => value == null ? "" : String(value);
@@ -16,15 +16,15 @@ const state = {
   catalog: [],
   metadata: null,
   evaluation: null,
-  selectedService: CIVIL_NOTARY_DEFAULT.serviceId,
-  selectedClaim: CIVIL_NOTARY_DEFAULT.claimId,
-  subjectScheme: CIVIL_NOTARY_DEFAULT.subjectScheme,
-  subjectValue: CIVIL_NOTARY_DEFAULT.subjectValue,
+  selectedService: SELF_ATTESTED_DEFAULT.serviceId,
+  selectedClaim: SELF_ATTESTED_DEFAULT.claimId,
+  subjectScheme: SELF_ATTESTED_DEFAULT.subjectScheme,
+  subjectValue: SELF_ATTESTED_DEFAULT.subjectValue,
   targetGroupKey: "",
   targetValues: {},
-  disclosure: CIVIL_NOTARY_DEFAULT.disclosure,
-  format: CIVIL_NOTARY_DEFAULT.format,
-  purpose: CIVIL_NOTARY_DEFAULT.purpose
+  disclosure: SELF_ATTESTED_DEFAULT.disclosure,
+  format: SELF_ATTESTED_DEFAULT.format,
+  purpose: SELF_ATTESTED_DEFAULT.purpose
 };
 
 function escapeHtml(value) {
@@ -98,8 +98,8 @@ function renderLoading(root) {
   root.innerHTML = `
     ${comparisonPanel()}
     <section class="loading-card" aria-live="polite">
-      <strong>Loading the Civil Notary example.</strong>
-      <p class="meta">The first screen will show the yes/no answer. Request details stay collapsed until needed.</p>
+      <strong>Loading the self-attested Notary example.</strong>
+      <p class="meta">The first screen shows the declaration result. Request details stay collapsed until needed.</p>
     </section>
   `;
 }
@@ -109,7 +109,7 @@ function renderUnavailable(root, error) {
     ${comparisonPanel()}
     <section class="unavailable-card" aria-live="polite">
       <h2>Claims Explorer unavailable</h2>
-      <p>The Civil Notary first-load evaluation could not be loaded from the same-origin explorer API.</p>
+      <p>The self-attested Notary evaluation could not be loaded from the same-origin explorer API.</p>
       <p class="meta">${escapeHtml(error?.message || "Reload or retry when the lab service is ready.")}</p>
       <div class="actions"><button class="primary" type="button" data-retry>Retry</button></div>
     </section>
@@ -120,9 +120,9 @@ function comparisonPanel() {
   return `
     <section class="comparison-panel compact-comparison">
       <div>
-        <p class="eyebrow">Relay plus Notary</p>
-        <h2>Relay can read rows. Notary returns a limited answer.</h2>
-        <p class="meta">The relying service gets the answer it asked for, not the source row.</p>
+        <p class="eyebrow">Notary-only</p>
+        <h2>The applicant supplies the declaration directly.</h2>
+        <p class="meta">No Relay or registry source is part of this evaluation.</p>
       </div>
     </section>
   `;
@@ -132,24 +132,24 @@ function claimItems() {
   const raw = state.metadata?.claim_service?.claims || state.metadata?.claim_service?.data || state.metadata?.claims || state.metadata?.data || state.metadata?.service?.claims || state.metadata?.service?.data || [];
   const items = normalizeCollection(raw);
   if (items.length) return items;
-  return [{id: CIVIL_NOTARY_DEFAULT.claimId, label: "Vital Status Attestation"}];
+  return [{id: SELF_ATTESTED_DEFAULT.claimId, label: "Applicant declaration"}];
 }
 
 function serviceOptions() {
-  const items = state.catalog.length ? state.catalog : [{id: "civil-notary", label: "Civil Notary"}];
+  const items = state.catalog.length ? state.catalog : [{id: "self-attested-notary", label: "Self-attested Notary"}];
   return items.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === state.selectedService ? "selected" : ""}>${escapeHtml(labelFor(item, item.id))}</option>`).join("");
 }
 
 function selectedClaim() {
-  return byId("claim-select")?.value || state.selectedClaim || CIVIL_NOTARY_DEFAULT.claimId;
+  return byId("claim-select")?.value || state.selectedClaim || SELF_ATTESTED_DEFAULT.claimId;
 }
 
 function selectedScheme() {
-  return byId("scheme-input")?.value || byId("scheme-select")?.value || state.subjectScheme || CIVIL_NOTARY_DEFAULT.subjectScheme;
+  return byId("scheme-input")?.value || byId("scheme-select")?.value || state.subjectScheme || SELF_ATTESTED_DEFAULT.subjectScheme;
 }
 
 function selectedSubject() {
-  return byId("subject-input")?.value || state.subjectValue || CIVIL_NOTARY_DEFAULT.subjectValue;
+  return byId("subject-input")?.value || state.subjectValue || SELF_ATTESTED_DEFAULT.subjectValue;
 }
 
 function targetInputMethods(claim = selectedClaimSummary()) {
@@ -199,9 +199,9 @@ function targetValueKey(input) {
 function defaultTargetValue(input, selected = selectedServiceSummary(), claim = selectedClaimSummary()) {
   if (input.default_value != null) return text(input.default_value);
   const name = text(input.name);
-  const scheme = claim.default_identifier_scheme || selected.default_identifier_scheme || CIVIL_NOTARY_DEFAULT.subjectScheme;
+  const scheme = claim.default_identifier_scheme || selected.default_identifier_scheme || SELF_ATTESTED_DEFAULT.subjectScheme;
   if (input.kind === "identifier" && name === scheme) {
-    return claim.default_subject || selected.default_subject || CIVIL_NOTARY_DEFAULT.subjectValue;
+    return claim.default_subject || selected.default_subject || SELF_ATTESTED_DEFAULT.subjectValue;
   }
   return "";
 }
@@ -247,15 +247,15 @@ function targetFromInputs(group) {
 }
 
 function selectedDisclosure() {
-  return byId("disclosure-select")?.value || state.disclosure || CIVIL_NOTARY_DEFAULT.disclosure;
+  return byId("disclosure-select")?.value || state.disclosure || SELF_ATTESTED_DEFAULT.disclosure;
 }
 
 function selectedFormat() {
-  return byId("format-select")?.value || state.format || CIVIL_NOTARY_DEFAULT.format;
+  return byId("format-select")?.value || state.format || SELF_ATTESTED_DEFAULT.format;
 }
 
 function selectedPurpose() {
-  return byId("purpose-input")?.value || state.purpose || CIVIL_NOTARY_DEFAULT.purpose;
+  return byId("purpose-input")?.value || state.purpose || SELF_ATTESTED_DEFAULT.purpose;
 }
 
 function evaluationPayload() {
@@ -393,11 +393,11 @@ function renderLegacySubjectControls() {
   return `
     <div class="field-control">
       <label for="scheme-input">Subject identifier scheme</label>
-      <input id="scheme-input" value="${escapeHtml(state.subjectScheme || CIVIL_NOTARY_DEFAULT.subjectScheme)}">
+      <input id="scheme-input" value="${escapeHtml(state.subjectScheme || SELF_ATTESTED_DEFAULT.subjectScheme)}">
     </div>
     <div class="field-control">
       <label for="subject-input">Subject identifier</label>
-      <input id="subject-input" value="${escapeHtml(state.subjectValue || CIVIL_NOTARY_DEFAULT.subjectValue)}">
+      <input id="subject-input" value="${escapeHtml(state.subjectValue || SELF_ATTESTED_DEFAULT.subjectValue)}">
     </div>
   `;
 }
@@ -423,8 +423,8 @@ function renderTargetInputControls(groups) {
 
 function renderControls() {
   const claim = selectedClaimSummary();
-  const disclosures = normalizeCollection(claim.allowed_disclosures).length ? normalizeCollection(claim.allowed_disclosures) : [state.disclosure || CIVIL_NOTARY_DEFAULT.disclosure];
-  const formats = normalizeCollection(claim.formats).length ? normalizeCollection(claim.formats) : [state.format || CIVIL_NOTARY_DEFAULT.format];
+  const disclosures = normalizeCollection(claim.allowed_disclosures).length ? normalizeCollection(claim.allowed_disclosures) : [state.disclosure || SELF_ATTESTED_DEFAULT.disclosure];
+  const formats = normalizeCollection(claim.formats).length ? normalizeCollection(claim.formats) : [state.format || SELF_ATTESTED_DEFAULT.format];
   return `
     <details class="explorer-control-panel">
       <summary>Advanced evaluation settings</summary>
@@ -443,12 +443,12 @@ function renderControls() {
         </div>
         <div class="field-control">
           <label for="purpose-input">Purpose for this request</label>
-          <input id="purpose-input" value="${escapeHtml(state.purpose || CIVIL_NOTARY_DEFAULT.purpose)}">
+          <input id="purpose-input" value="${escapeHtml(state.purpose || SELF_ATTESTED_DEFAULT.purpose)}">
         </div>
         <details>
           <summary>Refine query</summary>
           <div class="details-body">
-            <p class="meta">The Civil first load uses the seeded subject NID-1001. Change it only when you want to test another synthetic subject.</p>
+            <p class="meta">The example uses a synthetic applicant identifier. It is not looked up in a registry.</p>
           </div>
         </details>
       </div>
@@ -460,16 +460,13 @@ function renderSourceInfo() {
   const source = sourceInfo();
   return `
     <div class="source-card">
-      <h4>Where this answer came from, with no personal data shown</h4>
+      <h4>How this answer was acquired</h4>
       <div class="result-summary">
-        <div class="summary-item"><span>Registry source</span><strong>${escapeHtml(source.registry || source.registry_id || "civil")}</strong></div>
-        <div class="summary-item"><span>Dataset</span><strong>${escapeHtml(source.dataset || source.dataset_id || "civil_registry")}</strong></div>
-        <div class="summary-item"><span>Entity</span><strong>${escapeHtml(source.entity || source.entity_id || "civil_person")}</strong></div>
-        <div class="summary-item"><span>Lookup field</span><strong>${escapeHtml(source.lookup_field || source.subject_field || "national_id")}</strong></div>
-        <div class="summary-item"><span>Required scope</span><strong>${escapeHtml(source.required_scope || "not shown")}</strong></div>
-        <div class="summary-item"><span>Source connector type</span><strong>${escapeHtml(source.connector_type || source.connector || "relay")}</strong></div>
+        <div class="summary-item"><span>Acquisition path</span><strong>${escapeHtml(source.acquisition_path || "self_attested")}</strong></div>
+        <div class="summary-item"><span>Evidence authority</span><strong>${escapeHtml(source.authority || "applicant")}</strong></div>
+        <div class="summary-item"><span>Registry consulted</span><strong>${source.registry_consulted ? "Yes" : "No"}</strong></div>
       </div>
-      <p class="meta">No source row values are shown in this panel.</p>
+      <p class="meta">This topology has no source row or registry credential.</p>
     </div>
   `;
 }
@@ -546,24 +543,24 @@ async function loadClaimsExample(root) {
   renderLoading(root);
   const catalog = await explorerFetch("/api/explorer/claims.json");
   state.catalog = normalizeItems(catalog, ["claim_services", "services", "items"]);
-  await loadSelectedService(root, CIVIL_NOTARY_DEFAULT.serviceId);
+  await loadSelectedService(root, SELF_ATTESTED_DEFAULT.serviceId);
 }
 
 async function loadSelectedService(root, serviceId) {
   state.selectedService = serviceId;
   state.metadata = await explorerFetch(`/api/explorer/claims/${encodeURIComponent(state.selectedService)}/metadata.json`);
   const selected = selectedServiceSummary();
-  state.selectedClaim = selected.default_claim || claimItems()[0]?.id || CIVIL_NOTARY_DEFAULT.claimId;
-  state.subjectScheme = selected.default_identifier_scheme || CIVIL_NOTARY_DEFAULT.subjectScheme;
-  state.subjectValue = selected.default_subject || CIVIL_NOTARY_DEFAULT.subjectValue;
-  state.purpose = selected.default_purpose || CIVIL_NOTARY_DEFAULT.purpose;
+  state.selectedClaim = selected.default_claim || claimItems()[0]?.id || SELF_ATTESTED_DEFAULT.claimId;
+  state.subjectScheme = selected.default_identifier_scheme || SELF_ATTESTED_DEFAULT.subjectScheme;
+  state.subjectValue = selected.default_subject || SELF_ATTESTED_DEFAULT.subjectValue;
+  state.purpose = selected.default_purpose || SELF_ATTESTED_DEFAULT.purpose;
   const claim = selectedClaimSummary();
   state.purpose = claim.default_purpose || state.purpose;
   state.subjectScheme = claim.default_identifier_scheme || state.subjectScheme;
   state.subjectValue = claim.default_subject || state.subjectValue;
   resetTargetValues(claim);
-  state.disclosure = claim.default_disclosure || CIVIL_NOTARY_DEFAULT.disclosure;
-  state.format = normalizeCollection(claim.formats)[0] || CIVIL_NOTARY_DEFAULT.format;
+  state.disclosure = claim.default_disclosure || SELF_ATTESTED_DEFAULT.disclosure;
+  state.format = normalizeCollection(claim.formats)[0] || SELF_ATTESTED_DEFAULT.format;
   state.evaluation = await explorerFetch(endpoint(`/api/explorer/claims/${encodeURIComponent(state.selectedService)}/evaluate.json`), {
     method: "POST",
     headers: {"Content-Type": "application/json"},

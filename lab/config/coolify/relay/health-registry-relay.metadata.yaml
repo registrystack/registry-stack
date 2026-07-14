@@ -89,32 +89,6 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: weekly
-    evidence_offerings:
-      - id: health_service_availability_evidence_service
-        iri: https://metadata.lab.registrystack.org/evidence-offerings/health-service-availability
-        title: Applicant service availability evidence service
-        description: Evidence Server endpoint that computes facility license and service availability.
-        evidence_type: health_service_availability_evidence
-        issuing_authority:
-          id: health_services_authority
-          iri: did:web:health-relay.lab.registrystack.org
-          name: Health Services Authority
-          country: ZZ
-        jurisdiction:
-          country: ZZ
-        level_of_assurance: substantial
-        entity: health_facility
-        lookup_keys:
-          - national_id
-        access:
-          kind: registry-notary
-          conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://shared-notary.lab.registrystack.org
-          discovery_url: https://shared-notary.lab.registrystack.org/.well-known/evidence-service
-          ruleset: health-service-availability-v1
-        policy:
-          purpose:
-            - https://metadata.lab.registrystack.org/purpose/health-linked-support-eligibility
     entities:
       - name: health_facility
         title: Applicant Service Availability

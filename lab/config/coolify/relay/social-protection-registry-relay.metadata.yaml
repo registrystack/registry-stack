@@ -89,32 +89,6 @@ datasets:
     sensitivity: personal
     access_rights: restricted
     update_frequency: weekly
-    evidence_offerings:
-      - id: household_support_evidence_service
-        iri: https://metadata.lab.registrystack.org/evidence-offerings/household-support
-        title: Household support evidence service
-        description: Evidence Server endpoint that computes enrollment and eligibility status from social protection data.
-        evidence_type: household_support_evidence
-        issuing_authority:
-          id: social_protection_authority
-          iri: did:web:social-relay.lab.registrystack.org
-          name: Social Protection Authority
-          country: ZZ
-        jurisdiction:
-          country: ZZ
-        level_of_assurance: substantial
-        entity: program_enrollment
-        lookup_keys:
-          - national_id
-        access:
-          kind: registry-notary
-          conforms_to: registry-notary-federation/v0.1
-          endpoint_url: https://social-notary.lab.registrystack.org
-          discovery_url: https://social-notary.lab.registrystack.org/.well-known/evidence-service
-          ruleset: program-enrollment-status-v1
-        policy:
-          purpose:
-            - https://metadata.lab.registrystack.org/purpose/social-protection-review
     entities:
       - name: household
         title: Household

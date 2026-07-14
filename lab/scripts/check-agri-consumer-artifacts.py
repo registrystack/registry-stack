@@ -27,27 +27,6 @@ def require(condition: bool, message: str) -> None:
         raise DemoError(message)
 
 
-def check_voucher_mis() -> None:
-    summary = load_json(ROOT / "agri-voucher-mis" / "voucher-mis-summary.json")
-    expected = {
-        "FARMER-1001": ("ready_for_program_review", None),
-        "FARMER-1002": ("not_ready_for_program_review", "parcel.status:not_active"),
-        "FARMER-1003": ("not_ready_for_program_review", "voucher.redemption:already_redeemed"),
-        "FARMER-1004": ("not_ready_for_program_review", "farmer.registration_status:not_active"),
-        "FARMER-1005": ("manual_review_required", "data_quality:manual_review_required"),
-    }
-    cases = summary.get("cases", {})
-    for farmer_id, (state, reason) in expected.items():
-        case = cases.get(farmer_id)
-        require(isinstance(case, dict), f"voucher MIS missing case {farmer_id}")
-        require(case.get("program_review_state") == state, f"voucher MIS wrong state for {farmer_id}")
-        require(case.get("reason_code") == reason, f"voucher MIS wrong reason for {farmer_id}")
-    denials = summary.get("denial_controls", {})
-    require(denials.get("evidence_only_row_read") == 403, "voucher MIS evidence-only denial should be 403")
-    require(denials.get("missing_data_purpose") == 400, "voucher MIS missing-purpose denial should be 400")
-    require(summary.get("source_workbooks_read") is False, "voucher MIS must not read source workbooks")
-
-
 def check_geojson(path: Path) -> int:
     body = load_json(path)
     require(body.get("type") == "FeatureCollection", f"{path} is not a FeatureCollection")
@@ -93,28 +72,15 @@ def check_publicschema(require_crosswalk: bool) -> None:
         require(diagnostics.get("warnings") == [], "strict PublicSchema run should have no warnings")
 
 
-def check_wallet() -> None:
-    summary = load_json(ROOT / "agri-wallet" / "wallet-holder-summary.json")
-    require(summary.get("holder_bound_credential_issued") is True, "wallet did not issue holder-bound credential")
-    controls = summary.get("negative_controls", {})
-    for subject in ["FARMER-1002", "FARMER-1005"]:
-        control = controls.get(subject)
-        require(isinstance(control, dict), f"wallet missing negative control {subject}")
-        require(control.get("credential_issued") is False, f"wallet incorrectly issued credential for {subject}")
-    require(summary.get("source_workbooks_read") is False, "wallet demo must not read source workbooks")
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--require-crosswalk", action="store_true")
     args = parser.parse_args()
 
     load_dotenv()
-    check_voucher_mis()
     check_qgis()
     check_publicschema(args.require_crosswalk)
-    check_wallet()
-    for output_dir in ["agri-voucher-mis", "agri-qgis-planner", "agri-publicschema-integrator", "agri-wallet"]:
+    for output_dir in ["agri-qgis-planner", "agri-publicschema-integrator"]:
         assert_no_secret_values(ROOT / output_dir)
     print("agriculture consumer artifact checks OK")
     return 0

@@ -27,7 +27,6 @@ set +a
 mkdir -p output/perf/results output/perf/reports
 
 k6 run perf/k6/relay_stack_read.js
-k6 run perf/k6/notary_relay_backed.js
 k6 run perf/k6/notary_self_attested.js
 ```
 
@@ -67,12 +66,10 @@ docker run --rm \
   -e CIVIL_RELAY_URL=http://host.docker.internal:4311 \
   -e SOCIAL_RELAY_URL=http://host.docker.internal:4312 \
   -e HEALTH_RELAY_URL=http://host.docker.internal:4313 \
-  -e CIVIL_NOTARY_URL=http://host.docker.internal:4321 \
-  -e SHARED_NOTARY_URL=http://host.docker.internal:4323 \
   -e SELF_ATTESTED_NOTARY_URL=http://host.docker.internal:4321 \
   -v "$PWD:/workspace" \
   -w /workspace \
-  grafana/k6:0.57.0 run perf/k6/notary_relay_backed.js
+  grafana/k6:0.57.0 run perf/k6/notary_self_attested.js
 ```
 
 ## Profiles
@@ -106,7 +103,6 @@ ports.
 Scenario defaults for capacity and breakpoint runs:
 
 - `relay_stack_read`: capacity `1000 req/s`; breakpoint `1000 -> 2000 -> 5000`.
-- `notary_relay_backed`: capacity `200 req/s`; breakpoint `100 -> 200 -> 400`.
 - `notary_self_attested`: capacity `200 req/s`; breakpoint `100 -> 200 -> 400`.
 
 ## Reports

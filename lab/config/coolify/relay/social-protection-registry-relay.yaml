@@ -12,7 +12,7 @@ server:
 metadata:
   source:
     path: social-protection-registry-relay.metadata.yaml
-    digest: sha256:2d6220a06cc85ac3f3631279dda9c5d60d317f7f2f3684c73402ddafc9752065
+    digest: sha256:f4a77bbb6e93704401d2692a99707cc19bcf9af2d1882cb9b441072b5d7d4231
   ecosystem_binding:
     id: combined-support-eligibility/v1
     version: v1
