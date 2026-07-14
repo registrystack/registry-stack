@@ -1145,7 +1145,7 @@ fn validate_entity_definition(entity: &EntityDefinition) -> Result<()> {
         bail!("entity materialization exceeds the v1 bounds");
     }
     if entity.materialization.refresh != "manual" {
-        parse_duration_ms(&entity.materialization.refresh)
+        parse_materialization_refresh_ms(&entity.materialization.refresh)
             .context("entity materialization refresh is invalid")?;
     }
     Ok(())

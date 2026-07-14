@@ -639,7 +639,8 @@ fn entity_refresh_config(refresh: &str) -> Result<Value> {
     if refresh == "manual" {
         Ok(json!({ "mode": "manual" }))
     } else {
-        parse_duration_ms(refresh).context("entity materialization refresh is invalid")?;
+        parse_materialization_refresh_ms(refresh)
+            .context("entity materialization refresh is invalid")?;
         Ok(json!({ "mode": "interval", "interval": refresh }))
     }
 }
@@ -649,7 +650,7 @@ fn entity_materialization_resource_id(
     binding: &EnvironmentEntityBinding,
 ) -> Result<String> {
     let refresh_ms = (entity.materialization.refresh != "manual")
-        .then(|| parse_duration_ms(&entity.materialization.refresh))
+        .then(|| parse_materialization_refresh_ms(&entity.materialization.refresh))
         .transpose()?;
     let digest = digest_json(&json!({
         "entity": {
