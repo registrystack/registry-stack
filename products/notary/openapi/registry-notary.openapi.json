@@ -186,9 +186,6 @@
             "minimum": 0,
             "type": "integer"
           },
-          "matching": {
-            "$ref": "#/components/schemas/MatchingMetadata"
-          },
           "requester_ref": {
             "$ref": "#/components/schemas/EvidenceEntityRef"
           },
@@ -306,9 +303,6 @@
           "issued_at": {
             "format": "date-time",
             "type": "string"
-          },
-          "matching": {
-            "$ref": "#/components/schemas/MatchingMetadata"
           },
           "provenance": {
             "$ref": "#/components/schemas/ClaimProvenance"
@@ -478,7 +472,7 @@
             "type": "string"
           },
           "target_inputs": {
-            "description": "Safe request-input metadata for building evaluation targets. It exposes target-side paths and matching method labels, never connector, connection, dataset, entity, or source-field details.",
+            "description": "Safe request-input metadata for building evaluation targets. It exposes target-side paths and matching method labels, never upstream connection, dataset, entity, or field details.",
             "items": {
               "$ref": "#/components/schemas/ClaimTargetInputMethod"
             },
@@ -1189,36 +1183,6 @@
         ],
         "type": "object"
       },
-      "MatchingMetadata": {
-        "additionalProperties": false,
-        "properties": {
-          "confidence": {
-            "description": "Policy-asserted confidence label configured on the source binding and method. This is returned verbatim for successful matches against that binding; it is not a measured quality score for the individual match.",
-            "type": "string"
-          },
-          "method": {
-            "description": "Configured matching method for the source binding.",
-            "type": "string"
-          },
-          "policy_id": {
-            "description": "Target-matching policy identifier for the source binding: the policy that governs how the request target is matched to a source record. Distinct from generated_by.policy_id in claim provenance, which names the evaluation policy under which the result was produced.",
-            "type": "string"
-          },
-          "score": {
-            "description": "Reserved optional per-match score. Current configured-only matching usually omits this field.",
-            "type": [
-              "number",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "policy_id",
-          "method",
-          "confidence"
-        ],
-        "type": "object"
-      },
       "NonceRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1309,7 +1273,7 @@
             "type": "string"
           },
           "policy_id": {
-            "description": "Evaluation policy identifier: the policy under which this result was produced. Distinct from matching.policy_id, which names the target-matching policy for a source binding. Present for flows evaluated under a named policy (e.g. self-attestation); omitted for machine-client flows with no evaluation policy.",
+            "description": "Evaluation policy identifier under which this result was produced. Present for flows evaluated under a named policy, such as self-attestation, and omitted for machine-client flows with no evaluation policy.",
             "type": "string"
           },
           "policy_version": {
@@ -1342,13 +1306,6 @@
             "minimum": 0,
             "type": "integer"
           },
-          "source_runtimes": {
-            "description": "Minimized summaries for connectors that cross an external execution boundary (the source-adapter sidecar). The full assurance document stays in restricted audit.",
-            "items": {
-              "$ref": "#/components/schemas/SourceRuntimeSummary"
-            },
-            "type": "array"
-          },
           "source_versions": {
             "additionalProperties": {
               "type": "string"
@@ -1358,8 +1315,7 @@
         },
         "required": [
           "source_count",
-          "source_versions",
-          "source_runtimes"
+          "source_versions"
         ],
         "type": "object"
       },
@@ -1721,55 +1677,6 @@
           "ok",
           "failed",
           "custody"
-        ],
-        "type": "object"
-      },
-      "SourceRuntimeAssurance": {
-        "additionalProperties": false,
-        "properties": {
-          "expression_hashes_verified": {
-            "type": "boolean"
-          },
-          "pinned": {
-            "type": "boolean"
-          },
-          "runtime_verified": {
-            "type": "boolean"
-          },
-          "smoke_verified": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "pinned",
-          "expression_hashes_verified",
-          "runtime_verified",
-          "smoke_verified"
-        ],
-        "type": "object"
-      },
-      "SourceRuntimeSummary": {
-        "additionalProperties": false,
-        "properties": {
-          "assurance": {
-            "$ref": "#/components/schemas/SourceRuntimeAssurance"
-          },
-          "config_hash": {
-            "description": "sha256:<hex> digest of the runtime configuration.",
-            "type": "string"
-          },
-          "kind": {
-            "description": "Source-adapter sidecar runtime.",
-            "enum": [
-              "source_adapter_sidecar"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "config_hash",
-          "assurance"
         ],
         "type": "object"
       },
@@ -3597,7 +3504,7 @@
         "operationId": "batchEvaluateClaims",
         "parameters": [
           {
-            "description": "Required for every registry-backed batch. Direct-source batches retain the legacy optional contract. The value is caller-bound and may contain 1 to 256 bytes.",
+            "description": "Required for every registry-backed batch. The value is caller-bound and may contain 1 to 256 bytes.",
             "in": "header",
             "name": "Idempotency-Key",
             "required": false,
@@ -3649,7 +3556,6 @@
                             "schema_version": "registry-notary-claim-provenance/v1",
                             "used": {
                               "source_count": 1,
-                              "source_runtimes": [],
                               "source_versions": {}
                             }
                           },
@@ -3662,12 +3568,6 @@
                       "errors": [],
                       "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
                       "input_index": 0,
-                      "matching": {
-                        "confidence": "high",
-                        "method": "identifier_exact",
-                        "policy_id": "national-id-exact-v1",
-                        "score": 1.0
-                      },
                       "requester_ref": {
                         "handle": "rnref:v1:example-requester-ref",
                         "identifier_schemes": [
@@ -4248,7 +4148,7 @@
                 }
               }
             },
-            "description": "Holder proof replay or source ambiguity conflict"
+            "description": "Holder proof replay or Relay ambiguity conflict"
           },
           "413": {
             "content": {
@@ -4406,12 +4306,6 @@
                       "expires_at": "2026-05-25T12:00:00Z",
                       "format": "application/vnd.registry-notary.claim-result+json",
                       "issued_at": "2026-05-24T12:00:00Z",
-                      "matching": {
-                        "confidence": "high",
-                        "method": "identifier_exact",
-                        "policy_id": "national-id-exact-v1",
-                        "score": 1.0
-                      },
                       "provenance": {
                         "derived_from": [],
                         "generated_by": {
@@ -4427,7 +4321,6 @@
                         "schema_version": "registry-notary-claim-provenance/v1",
                         "used": {
                           "source_count": 1,
-                          "source_runtimes": [],
                           "source_versions": {}
                         }
                       },
@@ -4627,12 +4520,6 @@
                       "expires_at": "2026-05-25T12:00:00Z",
                       "format": "application/vnd.registry-notary.claim-result+json",
                       "issued_at": "2026-05-24T12:00:00Z",
-                      "matching": {
-                        "confidence": "high",
-                        "method": "identifier_exact",
-                        "policy_id": "national-id-exact-v1",
-                        "score": 1.0
-                      },
                       "provenance": {
                         "derived_from": [],
                         "generated_by": {
@@ -4648,7 +4535,6 @@
                         "schema_version": "registry-notary-claim-provenance/v1",
                         "used": {
                           "source_count": 1,
-                          "source_runtimes": [],
                           "source_versions": {}
                         }
                       },
