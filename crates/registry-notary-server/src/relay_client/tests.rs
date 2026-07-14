@@ -435,7 +435,7 @@ fn snapshot_contract_value() -> Value {
         "footprint": {
             "fields": ["status"],
             "max_source_records": 1000,
-            "max_source_bytes": 1_048_576,
+            "max_source_bytes": 256 * 1_024 * 1_024,
             "max_data_exchanges": 2,
             "max_credential_exchanges": 1,
             "max_data_destinations": 1
@@ -1757,6 +1757,66 @@ async fn materialized_snapshot_contract_and_result_are_strictly_verified() {
         );
     }
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn materialized_snapshot_footprint_uses_the_relay_public_bound() {
+    let token_file = TestTokenFile::new(&test_token());
+    for max_source_bytes in [
+        16 * 1_024 * 1_024 + 1,
+        1_024 * 1_024 * 1_024,
+        9_007_199_254_740_991_u64,
+    ] {
+        let mut contract = snapshot_contract_value();
+        contract["spec"]["materialization"]["footprint"]["max_source_bytes"] =
+            json!(max_source_bytes);
+        let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+        let server = FakeRelay::start(
+            metadata_response_for_contract(&contract, &contract_hash),
+            result_response_for_contract_hash(&contract_hash),
+        )
+        .await;
+        client_with_hash(&server, &token_file, &contract_hash)
+            .verify_profile()
+            .await
+            .expect(
+                "reviewed materialization footprint activates independently of operation bytes",
+            );
+        server.shutdown().await;
+    }
+
+    for (label, pointer, value) in [
+        (
+            "materialization footprint above the Relay public ceiling",
+            "/spec/materialization/footprint/max_source_bytes",
+            9_007_199_254_740_992_u64,
+        ),
+        (
+            "consultation operation above the live response ceiling",
+            "/spec/bounds/max_source_bytes",
+            16 * 1_024 * 1_024 + 1,
+        ),
+    ] {
+        let mut contract = snapshot_contract_value();
+        *contract
+            .pointer_mut(pointer)
+            .expect("contract pointer exists") = json!(value);
+        let contract_hash = typed_hash(CONTRACT_DOMAIN, &contract);
+        let server = FakeRelay::start(
+            metadata_response_for_contract(&contract, &contract_hash),
+            result_response_for_contract_hash(&contract_hash),
+        )
+        .await;
+        assert_eq!(
+            client_with_hash(&server, &token_file, &contract_hash)
+                .verify_profile()
+                .await
+                .expect_err(label),
+            RelayClientError::InvalidProfileMetadata,
+            "{label}"
+        );
+        server.shutdown().await;
+    }
 }
 
 #[tokio::test]
