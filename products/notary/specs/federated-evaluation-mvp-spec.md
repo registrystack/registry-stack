@@ -377,13 +377,13 @@ Notary rejects requests where `exp - iat` exceeds
 `max_request_lifetime_seconds`. `jti` entries are retained until
 `exp + clock_leeway_seconds`.
 
-For single-instance development, top-level `replay.storage = in_memory` is
-acceptable. Production or active-active deployments require a shared replay
-store before federation can be enabled. The supported shared backend is
-top-level `replay.storage = redis`, with the Redis URL read from the configured
-environment variable. Redis readiness must verify write and delete capability,
-and stored backend keys must hash replay scope and one-time identifiers rather
-than expose peer ids, holder ids, subjects, nonces, or JWT `jti` values.
+For single-instance development, top-level `state.storage = in_memory` is
+acceptable only with the explicit local deployment profile. Production or
+active-active deployments require the typed Notary-owned PostgreSQL state
+schema before federation can be enabled. Runtime readiness must attest the
+schema, restricted role, write authority, and durability settings. Stored
+replay keys hash scope and one-time identifiers rather than expose peer ids,
+holder ids, subjects, nonces, or JWT `jti` values.
 
 ### Audit
 
@@ -503,11 +503,10 @@ accepts the residual timing side channel.
 After this MVP is working, consider these separately:
 
 1. Batch evaluation.
-2. Shared replay store as a production requirement.
-3. Signed public federation documents.
-4. Audit checkpoints.
-5. Trust bundles.
-6. Federated credential issuance through issuer-direct or transparent-relay
+2. Signed public federation documents.
+3. Audit checkpoints.
+4. Trust bundles.
+5. Federated credential issuance through issuer-direct or transparent-relay
    flows only.
 
 ## Executable Definition Of Done
@@ -559,9 +558,9 @@ until every applicable item below is satisfied and reviewed.
   response, with a focused test.
 - A claim result `issued_at` older than `max_claim_result_age_seconds` is returned
   as a signed evaluation error, with a focused test.
-- In-memory replay storage is bounded for public OID4VCI nonce reservations.
-  Redis replay storage is required for active-active deployments and fails
-  readiness when write or delete capability is unavailable.
+- In-memory correctness state is bounded for public OID4VCI nonce reservations.
+  PostgreSQL correctness state is required for active-active deployments and
+  fails readiness when its capability contract cannot be attested.
 - The repository commands listed in the project README for formatting, linting,
   and focused tests pass, or any skipped command is documented with the exact
   blocker.
@@ -617,9 +616,9 @@ Push to `registry-platform` before or during the matching wave:
   policy instead of writing a parallel JWKS cache. Layer the MVP `typ`,
   `alg = EdDSA`, compact-JWS, issuer/audience, and `iss`/`sub` binding checks
   in Notary if the platform verifier does not expose them directly.
-- Wave 2: use `registry-platform-replay` for replay and consumable nonce
-  semantics, backed by `registry-platform-cache` for in-memory and Redis cache
-  operations. Notary owns configuration and route policy only.
+- Wave 2: use `registry-platform-replay` for local in-memory replay and
+  consumable nonce semantics. Notary owns its typed PostgreSQL replay and nonce
+  transactions, configuration, and route policy.
 - Wave 3: add pairwise HMAC helper and redaction test helpers to
   `registry-platform-crypto` or `registry-platform-authcommon` only if another
   service will consume them. Until then, keep the pairwise subject-hash wrapper

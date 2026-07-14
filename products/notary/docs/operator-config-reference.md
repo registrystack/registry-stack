@@ -17,7 +17,7 @@ are not valid Notary configuration.
 | `config_trust` | Product bundle verification and anti-rollback state |
 | `evidence` | Service identity, Relay connection, claims, signing keys, and credential profiles |
 | `cel` | Isolated claim-policy worker limits |
-| `replay` | Replay and one-time-use state |
+| `state` | PostgreSQL or explicit local in-memory correctness state |
 | `credential_status` | Optional credential lifecycle state |
 | `self_attestation` | OIDC-bound source-free evidence policy |
 | `oid4vci` | Wallet-facing issuance facade |
@@ -79,10 +79,12 @@ compiled edge and does not grant scopes.
 
 ## State and operations
 
-Use durable shared replay and credential-status storage for multi-instance or
-production deployments as required by the deployment gates. Keep Notary and
-Relay state, audit keys, and chains separate. Protect admin routes with their
-dedicated listener and required operator scopes.
+Use the typed Notary-owned PostgreSQL state schema for multi-instance or
+production deployments. The schema holds replay, nonce, evaluation,
+idempotency, credential-status, quota, and preauthorization state. Explicit
+in-memory state is limited to local, single-instance development. Keep Notary
+and Relay state, audit keys, and chains separate. Protect admin routes with
+their dedicated listener and required operator scopes.
 
 ## Validation workflow
 
@@ -91,6 +93,7 @@ Run checks in increasing order of network effect:
 ```sh
 registry-notary explain-config --config generated-notary.yaml
 registry-notary doctor --config generated-notary.yaml
+registry-notary --config generated-notary.yaml state doctor
 registry-notary doctor --config generated-notary.yaml --live
 ```
 

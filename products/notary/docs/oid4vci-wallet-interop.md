@@ -290,8 +290,8 @@ For multiple credential configurations, the nonce request should identify the
 credential configuration. That keeps a nonce from being reused across a
 different credential configuration.
 
-Use Redis replay storage for nonce-backed wallet traffic when more than one
-process can receive requests.
+Use PostgreSQL correctness state for nonce-backed wallet traffic when more
+than one process can receive requests.
 
 ## Credential request
 
@@ -407,4 +407,4 @@ logging boundaries, see the
 | Nonce rejected | Nonce expired, reused, or from another configuration | Nonce TTL, replay store, credential configuration id |
 | Proof rejected | Unsupported alg, wrong holder binding, stale proof, or clock skew | Wallet proof JWT and `oid4vci.proof` |
 | Credential issued but wallet cannot verify | JWKS, issuer DID, `kid`, or `vct` mismatch | Signing key config and credential profile |
-| Works with one process but fails in active-active | In-memory replay store | Use Redis replay storage |
+| Works with one process but fails in active-active | `state.storage: in_memory` | Install and use PostgreSQL correctness state |

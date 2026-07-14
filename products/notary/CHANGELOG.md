@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- BREAKING: all deployable Notary correctness state now uses one typed,
+  Notary-owned PostgreSQL schema configured by the top-level `state` block.
+  Removed Redis and per-domain storage configuration is rejected without
+  aliases. Explicit single-process local development may use `in_memory`.
+- Added `registry-notary state install` and `registry-notary state doctor`,
+  startup and readiness schema attestation, PostgreSQL 16 through 18 support,
+  and active-active transaction semantics for replay, nonce, evaluation,
+  idempotency, credential status, quotas, and preauthorization.
+- Documented clean pre-1.0 cutover, backup and restore, stale-restore
+  quarantine, forward upgrades, sensitive-state key handling, and the
+  local-to-production implementer journey.
 - BREAKING: Registry-backed claims now use only authenticated,
   compiler-pinned Registry Relay consultations. Notary no longer accepts
   direct source connections, DCI/FHIR connectors, source adapter sidecars,
@@ -38,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- Removed production Notary Redis code, dependencies, configuration, and
+  current operator documentation. The standalone Solmara Lab consumes the new
+  PostgreSQL state contract in its owning repository.
 - Removed the Notary source-adapter sidecar image, routes, security inventory,
   direct DCI/FHIR/OpenSPP demo configurations, OpenFn caller demo, and the
   direct-source performance harness.

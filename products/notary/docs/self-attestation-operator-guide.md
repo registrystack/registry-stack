@@ -312,8 +312,8 @@ review the evidence boundary.
 - Credential profiles use DID holder binding with proof of possession.
 - Wallet origins are exact HTTPS origins, or empty for non-browser flows.
 - Gateway and identity-provider rate limits are in place.
-- Redis replay storage is configured when multiple processes can serve holder
-  proof or nonce traffic.
+- PostgreSQL correctness state is installed when multiple processes can serve
+  holder-proof or nonce traffic.
 - `doctor` passes, then a controlled self-attestation test passes with a test
   subject.
 
@@ -328,4 +328,4 @@ review the evidence boundary.
 | Delegation config rejected | Delegated authorization does not match the compiled service policy | Check requester, target, relationship, purpose, and authorization details |
 | Credential issuance denied | Profile or claim missing from allow-lists | `allowed_claims`, `credential_profiles`, claim/profile cross references |
 | Batch request denied | Batch evaluation is not supported for self-attestation | Keep `batch_evaluate: false` |
-| Works locally but fails active-active | In-process rate limits or replay state are not shared | Add gateway limits and Redis replay storage |
+| Works locally but fails active-active | `state.storage: in_memory` is process-local | Add gateway limits and install PostgreSQL correctness state |

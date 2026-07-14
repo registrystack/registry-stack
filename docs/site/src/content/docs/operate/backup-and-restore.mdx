@@ -1,6 +1,6 @@
 ---
 title: Back up and restore a deployment
-description: How to preserve generated secrets, product state directories, Redis data, and config-trust files across container recreation and upgrades.
+description: How to preserve generated secrets, product state, Notary PostgreSQL data, and config-trust files across container recreation and upgrades.
 status: draft
 owner: registry-docs
 source_repos:
@@ -16,8 +16,8 @@ standards_referenced: []
 Use this procedure before you recreate containers, move a host, or upgrade a
 single-node Registry Relay or Registry Notary deployment. Start with `secrets/local.env`
 because losing it rotates generated API credentials, audit HMAC secrets, and the local
-Notary issuer identity; then preserve product state directories, Redis data, config-trust
-files, and source inputs.
+Notary issuer identity; then preserve product state directories, the complete Notary
+PostgreSQL database, config-trust files, and source inputs.
 
 ## When to use this
 
@@ -28,21 +28,21 @@ multi-node, or Kubernetes deployments.
 
 This procedure preserves durable state.
 It does not preserve process-local state such as OpenID Connect (OIDC) JSON Web Key Set
-(JWKS) caches, Relay source-integration token caches, or in-flight OpenID for Verifiable Credential
-Issuance pre-authorized flows.
-Those flows are interrupted by restart and must be started again by the holder or upstream
-journey.
+(JWKS) caches or Relay source-integration token caches. A restart can still interrupt an
+in-flight OpenID for Verifiable Credential Issuance browser journey even when its bounded
+preauthorization state survives in PostgreSQL.
 
 ## Before you start
 
 - Know the project directory that contains `compose.yaml`, `registryctl.yaml`, `secrets/`,
   and `state/`.
-- Know whether the deployment includes Registry Notary and the `registry-notary-redis`
-  service.
+- Know whether the deployment includes Registry Notary and which PostgreSQL database and
+  role-provisioning record it uses.
 - Stop write traffic or use a filesystem snapshot if you need an exact point-in-time copy of
   audit files.
 - Keep backups encrypted and access-controlled. `secrets/local.env`, audit files,
-  config-trust state, and Redis replay data are security-sensitive.
+  config-trust state, PostgreSQL correctness state, and sensitive-state key versions are
+  security-sensitive.
 
 ## Back up generated secrets first
 
@@ -89,30 +89,44 @@ If your hand-written config uses different paths, include them in the archive:
 - Source files, metadata manifests, signed bundles, and trust anchors that are mounted
   into the containers.
 
-## Back up Redis when Notary is present
+## Back up PostgreSQL when Notary is present
 
-Generated Notary projects use Redis for replay and nonce state.
-The generated Redis service writes append-only files to the `registry-notary-redis-data`
-volume.
-Capture that volume, asking Redis to flush a snapshot first when the service is running:
+Back up the complete Notary database at one consistent point. Do not back up individual
+correctness tables. Stop Notary writers for a quiesced backup, or use the database platform's
+transactionally consistent snapshot workflow. Use a PostgreSQL service definition and password
+file so credentials do not appear in process arguments:
 
-```sh
-redis_container="$(docker compose ps --all -q registry-notary-redis)"
-if [ -n "$redis_container" ]; then
-  if [ "$(docker inspect "$redis_container" --format '{{.State.Running}}')" = "true" ]; then
-    docker compose exec -T registry-notary-redis redis-cli SAVE
-  fi
-  redis_volume="$(docker inspect "$redis_container" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')"
-  docker run --rm \
-    -v "$redis_volume:/redis:ro" \
-    -v "$PWD/$backup_dir:/backup" \
-    busybox tar -cf /backup/registry-notary-redis-data.tar -C /redis .
-  sha256sum "$backup_dir/registry-notary-redis-data.tar" > "$backup_dir/registry-notary-redis-data.tar.sha256"
-fi
+```ini
+# /run/registry-notary/pg_service.conf
+[registry_notary_migrator]
+host=postgres.example.internal
+port=5432
+dbname=registry_notary
+user=registry_notary_migrator
+sslmode=verify-full
+sslrootcert=/run/secrets/notary-postgres-ca.pem
 ```
 
-`redis-cli SAVE` prints `OK` when Redis wrote the snapshot.
-If the project has no Notary Redis service, the script block produces no backup archive.
+The service name is operator-defined. The
+[Registry Notary PostgreSQL operations guide](../../products/registry-notary/postgresql-state-operations/)
+provides the complete role-provisioning example and password-file requirements.
+
+```sh
+PGSERVICEFILE=/run/registry-notary/pg_service.conf \
+PGSERVICE=registry_notary_migrator \
+PGPASSFILE=/run/secrets/registry-notary-migrator.pgpass \
+pg_dump --format=custom --no-owner --no-acl \
+  --role=registry_notary_owner \
+  --file="$backup_dir/notary-state.dump" \
+  --dbname=registry_notary
+sha256sum "$backup_dir/notary-state.dump" \
+  > "$backup_dir/notary-state.dump.sha256"
+```
+
+Expected output is one checksum line. Preserve the application release, migration set,
+PostgreSQL major, reproducible owner and runtime role provisioning, recovery timestamp, and
+sensitive-state key version with the encrypted backup. Keep the key value in the secret manager,
+outside the database dump.
 
 ## Restore files
 
@@ -155,27 +169,41 @@ if [ -n "$runtime_uid" ] && [ -n "$runtime_gid" ] && [ -d state ]; then
 fi
 ```
 
-## Restore Redis data
+## Restore PostgreSQL data
 
-Restore Redis before starting Notary if the backup includes
-`registry-notary-redis-data.tar`:
+Restore the dump into an empty, isolated database with no Notary traffic path. Provision the
+restricted migration login, `NOLOGIN` owner role, and runtime role before the restore:
 
 ```sh
-if [ -f "$backup_dir/registry-notary-redis-data.tar" ]; then
-  sha256sum -c "$backup_dir/registry-notary-redis-data.tar.sha256"
-  docker compose up -d registry-notary-redis
-  redis_container="$(docker compose ps -q registry-notary-redis)"
-  redis_volume="$(docker inspect "$redis_container" --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')"
-  docker compose stop registry-notary-redis
-  docker run --rm \
-    -v "$redis_volume:/redis" \
-    -v "$PWD/$backup_dir:/backup:ro" \
-    busybox sh -c 'cd /redis && rm -rf ./* && tar -xf /backup/registry-notary-redis-data.tar'
-fi
+sha256sum -c "$backup_dir/notary-state.dump.sha256"
+PGSERVICEFILE=/run/registry-notary/pg_service.conf \
+PGSERVICE=registry_notary_migrator \
+PGPASSFILE=/run/secrets/registry-notary-migrator.pgpass \
+pg_restore --exit-on-error --single-transaction --no-owner --no-acl \
+  --role=registry_notary_owner \
+  --dbname=registry_notary \
+  "$backup_dir/notary-state.dump"
+registry-notary --config /etc/registry-notary/notary.yaml state install \
+  --migration-url-env REGISTRY_NOTARY_POSTGRES_MIGRATOR_URL \
+  --owner-role registry_notary_owner \
+  --runtime-role registry_notary_runtime
+registry-notary --config /etc/registry-notary/notary.yaml state doctor
 ```
 
-The checksum command prints `OK`.
-The temporary `docker run` command is quiet when the archive extracts successfully.
+The checksum command prints `OK`. The restore omits source-cluster ACLs and creates objects as the
+new `NOLOGIN` owner. The installer safely rebinds role identities and reapplies the complete
+compiled ACL baseline when the released schema still attests. It does not change ownership or
+repair drift. The installer and doctor report schema version and supported PostgreSQL major
+without printing database credentials. Restore the matching sensitive-state key before running
+doctor. When preauthorization is enabled, doctor proves that the key is present and well formed,
+but only a complete preauthorization canary proves that it decrypts state from this recovery point.
+
+Keep Notary offline when the recovery point might predate an acknowledged write. Wait for every
+possibly missing replay, nonce, evaluation, idempotency, preauthorization, and quota decision to
+expire, and reconcile credential status before admitting traffic. A lost suspension or revocation
+does not become safe through waiting. The
+[Registry Notary PostgreSQL operations guide](../../products/registry-notary/postgresql-state-operations/)
+defines the full stale-restore quarantine.
 
 ## Verify after restore
 
@@ -193,7 +221,8 @@ Expected output from `doctor` is a JSON report with no `startup_fail` findings.
 Run `registryctl smoke` only when `registryctl.yaml` declares Relay. For a Notary deployment,
 run `registry-notary doctor --config <your-notary-config.yaml> --format json`, then exercise an
 authenticated claim or credential journey appropriate to that deployment. `registryctl` does not
-provide a product-scoped Notary smoke subcommand.
+provide a product-scoped Notary smoke subcommand. When OID4VCI preauthorization is enabled,
+complete an offer-to-credential journey before admitting traffic.
 
 For a deployment that uses `config_trust`, verify that the restored anti-rollback state still
 matches the configured trust anchor and signed bundle before the service is allowed to serve.
@@ -217,7 +246,7 @@ than the bundle you are trying to boot.
 |---|---|---|
 | Generated API keys no longer work after restore | `secrets/local.env` was regenerated or copied from the wrong project | Restore the original `secrets/local.env`, then restart the containers |
 | Audit records cannot be correlated across the restore | The audit HMAC secret changed | Restore the prior `secrets/local.env`; if the old file is gone, document the break as a key-rotation event |
-| Notary starts but replay checks behave like a fresh deployment | The Redis volume was removed or restored empty | Restore `registry-notary-redis-data.tar`, or accept that in-flight replay and nonce state was lost |
+| Notary state doctor rejects the restore | The schema, runtime role, server major, write authority, durability settings, or configured sensitive-state key is invalid | Keep traffic blocked, restore the matching recovery set, and rerun `state install` and `state doctor` |
 | Config bundle startup fails with a rollback code | The anti-rollback state records a newer accepted sequence | Boot a signed bundle with a higher sequence, or follow the break-glass process documented for config trust |
 
 ## Next

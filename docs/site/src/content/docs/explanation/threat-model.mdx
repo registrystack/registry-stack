@@ -240,8 +240,8 @@ conformance claim:
 
 - Dynamic federation: Dynamic trust-chain discovery, audit checkpoint exchange, and
   federated credential issuance are out of scope. Federation is static-peer only: not a
-  dynamic trust mesh. Replay protection defaults to in-memory, with a Redis-backed shared
-  store available.
+  dynamic trust mesh. Production replay protection uses the typed Notary-owned PostgreSQL
+  state schema; explicit in-memory state is local and single-instance only.
 - Full Evidence Gateway / external-policy interoperability: Governed Relay PDP enforcement
   covers only the supported Evidence Gateway PDP profile (`registry-evidence-gateway-pdp/v1`).
   It is not full Evidence Gateway interoperability, not full OID4VCI issuer behavior, not

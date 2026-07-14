@@ -119,7 +119,8 @@ gap can be traced back to its flow.
 
 ### 20. Replay And Emergency Peer Or Key Denial
 
-- Shared replay store for active-active production deployments.
+- No remaining correctness-state gap. Active-active deployments use the typed
+  Notary-owned PostgreSQL state schema.
 
 ### 21. Auditor Verifies Minimized Decision Evidence
 
@@ -141,6 +142,5 @@ gap can be traced back to its flow.
   subject support.
 - Credential status and freshness policy for remote proofs.
 - Federated credential issuance holder-binding ceremony.
-- Shared replay store for active-active deployments.
 - Signed audit checkpoints and peer monitoring.
 - Registry Lab federation scenario scripts and fixture metadata.

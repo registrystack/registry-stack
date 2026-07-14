@@ -96,6 +96,10 @@
             "slug": "products/registry-notary/federated-evaluation-operator-guide"
           },
           {
+            "label": "PostgreSQL state operations",
+            "slug": "products/registry-notary/postgresql-state-operations"
+          },
+          {
             "label": "Self-attestation operator guide",
             "slug": "products/registry-notary/self-attestation-operator-guide"
           },

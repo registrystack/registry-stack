@@ -47,13 +47,7 @@ must be kept available for the retention window.
 credential_status:
   enabled: true
   base_url: https://notary.example.gov
-  storage: redis
   retention_seconds: 86400
-  redis:
-    url_env: REGISTRY_NOTARY_STATUS_REDIS_URL
-    key_prefix: registry-notary
-    connect_timeout_ms: 1000
-    operation_timeout_ms: 500
 ```
 
 Fields:
@@ -62,15 +56,12 @@ Fields:
   issued credentials.
 - `base_url`: public HTTPS origin used to build status URLs. Use plain HTTP only
   for local or lab deployments.
-- `storage`: `in_memory` or `redis`.
 - `retention_seconds`: how long status records are retained.
-- `redis.url_env`: environment variable containing the Redis URL.
-- `redis.key_prefix`: deployment-specific key prefix.
-- `connect_timeout_ms` and `operation_timeout_ms`: Redis timeout controls.
 
-Use `in_memory` only for local or lab flows. It is process-local and disappears
-on restart. Use Redis when more than one process can issue credentials, when
-rolling deploys overlap traffic, or when status must survive restart.
+Credential status uses the global `state` backend. Production and
+multi-instance deployments use the Notary-owned PostgreSQL state schema. An
+explicit local, single-instance configuration can use `state.storage:
+in_memory`, which loses status rows on restart.
 
 ## Credential payload
 
@@ -184,7 +175,8 @@ references a missing live status URL.
 Treat status retrieval as public verifier traffic. Status mutation is an
 admin operation; limit it to trusted operator tooling.
 
-Readiness fails when a configured Redis status backend is unavailable. That is
+Readiness fails when the PostgreSQL state backend is unavailable or its schema,
+role, write authority, or durability contract cannot be attested. That is
 preferable to issuing status-bearing credentials that cannot be checked or
 updated reliably.
 
@@ -229,8 +221,8 @@ revocation-list profiles. The supported status profile is documented in
   with `credential_status.enabled: true`.
 - Confirm `credential_status.base_url` is the public issuer URL verifiers can
   reach.
-- Use Redis for deployable multi-process status.
-- Keep the status Redis separate or key-prefixed from unrelated applications.
+- Install and attest the Notary-owned PostgreSQL state schema before serving.
+- Back up status rows with the rest of the Notary correctness state.
 - Confirm `/ready` fails when the status backend is unavailable.
 - Run one credential issuance and verify the payload has a status URL.
 - Fetch that status URL and confirm `valid`.
@@ -244,7 +236,7 @@ revocation-list profiles. The supported status profile is documented in
 | --- | --- | --- |
 | Issued credential has no status claim | `credential_status.enabled` is false in the issuing deployment | Check expanded config |
 | Status URL points at localhost | `credential_status.base_url` was copied from a local config | Set public HTTPS base URL |
-| Status is missing after restart | `storage: in_memory` was used | Use Redis for shared or durable status |
+| Status is missing after restart | `state.storage: in_memory` was used | Install and use PostgreSQL correctness state |
 | Admin update is unauthorized | Missing `registry_notary:admin` scope | Check caller scopes or OIDC scope mapping |
 | Verifier sees `expired` quickly | Profile validity is short or clocks differ | Check `validity_seconds`, verifier clock, and expiry policy |
-| Readiness fails after enabling status | Redis URL env var missing or backend unreachable | Check `credential_status.redis.url_env` and Redis connectivity |
+| Readiness fails after enabling status | PostgreSQL is unavailable or state attestation failed | Run `registry-notary state doctor` and check the named state configuration field |

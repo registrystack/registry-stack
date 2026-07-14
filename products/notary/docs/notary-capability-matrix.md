@@ -71,6 +71,6 @@ scenario patterns](notary-scenario-patterns.md).
 | 17 | Agriculture Notary issues voucher eligibility credential | Credential issuance | Supported | Local wallet ceremony is still demo-grade |
 | 18 | Shared Eligibility Notary issues combined-support credential | Credential issuance plus composition | Partial | Credential issuance exists, but peer-result composition is missing |
 | 19 | Consuming service helps holder obtain credential from remote Notary | Federated credential issuance | Planned | No holder-binding ceremony, nonce ownership, or relay rules ship yet; you cannot help a holder obtain a credential from a remote Notary through this service |
-| 20 | Replay and emergency peer/key denial | Governance | Supported | Shared replay store is still needed for active-active production |
+| 20 | Replay and emergency peer/key denial | Governance | Supported | Active-active deployments require the typed Notary-owned PostgreSQL state schema |
 | 21 | Auditor verifies minimized decision evidence | Governance | Partial | Signed results and audit exist, checkpoints are planned |
 | 22 | Peer audit checkpoint monitoring | Governance | Planned | No checkpoint publisher, Merkle builder, or peer monitor ships yet; you cannot independently verify peer audit checkpoints |

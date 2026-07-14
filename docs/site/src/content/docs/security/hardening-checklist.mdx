@@ -145,9 +145,9 @@ or the [Registry Notary operator configuration reference](../../products/registr
 - Use `deployment.evidence.*` flags (for example `ingress_rate_limit`, `api_key_rotation`) only to
   assert controls that live outside the process and cannot be observed by it. Each flag defaults to
   `false`.
-- If a Notary instance runs active-active with peers, declare `multi_instance` and use Redis-backed
-  replay storage. In-memory replay under a multi-instance or federated declaration trips
-  `notary.replay.in_memory_high_risk`.
+- If Notary runs active-active, declare `multi_instance`, install the typed Notary-owned
+  PostgreSQL state schema, and require every replica to pass `state doctor` and runtime readiness.
+  The process rejects `state.storage: in_memory` outside the local, single-instance profile.
 
 ## Incident response
 

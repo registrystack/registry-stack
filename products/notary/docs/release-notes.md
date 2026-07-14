@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- BREAKING: Notary now has one deployable correctness-state backend: typed,
+  Notary-owned PostgreSQL configured under `state`. Redis and per-domain
+  backend selectors are removed without compatibility aliases. Use explicit
+  `in_memory` only for single-process local development.
+- Operators install and verify the schema with `registry-notary state install`
+  and `registry-notary state doctor`. Startup and readiness verify PostgreSQL
+  version, writability, schema fingerprint, role boundaries, and fixed
+  transaction functions before traffic is admitted.
+- Replay, nonce, evaluation, idempotency, credential status, quota, and
+  preauthorization decisions now survive restart and coordinate identical
+  active-active instances. The operations guide covers PostgreSQL 16 through
+  18, backup and restore, stale-restore quarantine, upgrades, and the clean
+  pre-1.0 cutover.
 - BREAKING: Registry-backed evidence now uses only authenticated,
   compiler-pinned Registry Relay consultations. Notary no longer accepts
   direct registry connections, DCI/FHIR connectors, source adapter sidecars,

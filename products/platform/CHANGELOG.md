@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Changed
+
+- BREAKING: `registry-platform-ops` Notary posture now reports the global
+  `notary.state` backend and uses `postgresql`, `in_memory`, and `state`
+  vocabulary. The retired per-domain Redis replay and credential-status
+  values are removed from the schema, examples, redaction fixtures, and
+  allowlist.
+- `registry-platform-cache` and `registry-platform-replay` retain only bounded
+  in-memory implementations for focused tests and explicit single-process
+  local development. Product runtimes own typed durable correctness state.
+
 ## v0.9.0 - 2026-07-10
 
 ### Added

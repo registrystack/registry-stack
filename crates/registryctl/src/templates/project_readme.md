@@ -46,11 +46,12 @@ this local project only and are not production credentials.
 Back up that file before upgrades or host moves. It contains the keys that keep
 audit hashes and generated API credentials stable.
 
-The generated Compose file keeps writable Relay state under `state/relay/`. If
-you add Notary, Redis replay and nonce state lives in the
-`registry-notary-redis-data` Docker volume. Use `registryctl stop` or
-`docker compose down` for container replacement; `docker compose down -v`
-deletes named volumes.
+The generated Compose file keeps writable Relay state under `state/relay/`.
+If you add Notary, preserve its configured PostgreSQL database because the
+database holds replay, nonce, evaluation, quota, preauthorization, and optional
+credential-status state. Use `registryctl stop` or `docker compose down` for
+container replacement. Do not remove database volumes unless you are following
+the documented restore or clean-cutover procedure.
 Docker Compose reads `.env` to run Relay and Notary as the project owner on
 Unix hosts, keeping private state directories writable without widening their
 permissions.
