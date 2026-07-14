@@ -187,6 +187,9 @@ enum ResponseSchema {
         nullable: bool,
         max_bytes: u32,
     },
+    Date {
+        nullable: bool,
+    },
     Boolean {
         nullable: bool,
     },
@@ -834,6 +837,10 @@ fn verify_response_schema(
                 .contains(max_bytes)
                 .then_some(())
                 .ok_or(())
+        }
+        ResponseSchema::Date { nullable } => {
+            let _ = nullable;
+            Ok(())
         }
         ResponseSchema::Boolean { nullable } => {
             let _ = nullable;

@@ -365,7 +365,7 @@ fn typed_output_contract_value() -> Value {
     });
     contract["spec"]["acquisition"]["fields"] = json!({
         "active": { "type": "boolean", "nullable": false },
-        "birth_date": { "type": "string", "nullable": true, "max_bytes": 10 },
+        "birth_date": { "type": "date", "nullable": true },
         "sequence": {
             "type": "integer",
             "nullable": false,
