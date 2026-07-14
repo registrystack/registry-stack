@@ -368,7 +368,78 @@ struct RecordsApiDeclaration {
     relationships: BTreeMap<String, RecordRelationship>,
     #[serde(default)]
     aggregates: BTreeMap<String, RecordAggregate>,
+    #[serde(default)]
+    attribute_release_profiles: BTreeMap<String, RecordAttributeReleaseProfile>,
     standards: RecordStandards,
+}
+
+/// A project-authored, entity-bound identity release. The project compiler
+/// deliberately exposes only the minimizing subset used by Registry Relay:
+/// exact-one subject resolution, purpose binding, typed claim selection, and
+/// a bounded private cache lifetime. Source metadata disclosure is not an
+/// authoring option and is always disabled in the generated Relay config.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RecordAttributeReleaseProfile {
+    version: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    purpose: String,
+    release_scope: String,
+    subject: RecordAttributeReleaseSubject,
+    release_conditions: RecordAttributeReleaseConditions,
+    claims: BTreeMap<String, RecordAttributeReleaseClaim>,
+    #[serde(default)]
+    response: RecordAttributeReleaseResponse,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RecordAttributeReleaseSubject {
+    input: String,
+    source_field: String,
+    id_type: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RecordAttributeReleaseConditions {
+    expression: RecordAttributeReleaseExpression,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RecordAttributeReleaseExpression {
+    cel: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RecordAttributeReleaseClaim {
+    #[serde(default)]
+    source_field: Option<String>,
+    #[serde(default)]
+    expression: Option<RecordAttributeReleaseExpression>,
+    required: bool,
+    sensitivity: RecordAttributeReleaseSensitivity,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum RecordAttributeReleaseSensitivity {
+    DirectIdentifier,
+    Personal,
+    Public,
+    Pseudonymous,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RecordAttributeReleaseResponse {
+    #[serde(default)]
+    max_age_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

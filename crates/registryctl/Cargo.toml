@@ -27,7 +27,7 @@ registry-notary-server = { workspace = true, features = ["registry-notary-cel"] 
 registry-platform-authcommon = { workspace = true }
 registry-platform-config = { workspace = true }
 registry-platform-crypto = { workspace = true }
-registry-relay = { workspace = true, features = ["ogcapi-features", "spdci-api-standards"] }
+registry-relay = { workspace = true, features = ["attribute-release", "ogcapi-features", "spdci-api-standards"] }
 regex = "1"
 rustix.workspace = true
 serde = { version = "1", features = ["derive"] }

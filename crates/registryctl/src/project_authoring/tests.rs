@@ -410,6 +410,117 @@ outputs:
     }
 
     #[test]
+    fn nia_userinfo_release_is_minimized_hash_covered_and_relay_valid() {
+        let project = project_golden("nia-attribute-release");
+        let loaded =
+            load_registry_project(&project, Some("local")).expect("NIA release project loads");
+        let compiled = compile_project(&loaded, None).expect("NIA release project compiles");
+        validate_generated_product_configs(&compiled)
+            .expect("generated NIA Relay config passes the product validator");
+        let relay: Value = serde_yaml::from_slice(
+            compiled
+                .relay_private
+                .get(Path::new("config/relay.yaml"))
+                .expect("generated Relay config exists"),
+        )
+        .expect("generated Relay config parses");
+        let profile = &relay["datasets"][0]["entities"][0]["attribute_release_profiles"][0];
+        assert_eq!(profile["id"], "solmara-nia-userinfo");
+        assert_eq!(profile["version"], "v1");
+        assert_eq!(profile["release_scope"], "population:identity_release");
+        assert_eq!(profile["subject"]["input"], "individual_id");
+        assert_eq!(profile["subject"]["source_field"], "legacy_nid");
+        assert_eq!(profile["subject"]["cardinality"], "one");
+        assert_eq!(
+            profile["release_conditions"]["expression"]["cel"],
+            "source.identity_status == 'active' && source.alive == true"
+        );
+        assert_eq!(profile["response"]["include_source_metadata"], false);
+        assert_eq!(profile["response"]["max_age_seconds"], 300);
+        let claims = profile["claims"]
+            .as_array()
+            .expect("release claims are a closed list")
+            .iter()
+            .map(|claim| {
+                claim["name"]
+                    .as_str()
+                    .expect("claim name is a string")
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            claims,
+            BTreeSet::from([
+                "birthdate",
+                "family_name",
+                "gender",
+                "given_name",
+                "individual_id",
+                "name",
+            ])
+        );
+
+        let mut changed =
+            load_registry_project(&project, Some("local")).expect("comparison project loads");
+        changed
+            .project
+            .services
+            .get_mut("nia-population-records")
+            .and_then(|service| service.api.as_mut())
+            .and_then(|api| {
+                api.attribute_release_profiles
+                    .get_mut("solmara-nia-userinfo")
+            })
+            .and_then(|profile| profile.claims.get_mut("gender"))
+            .expect("gender release claim exists")
+            .required = true;
+        let changed_digests = semantic_digests(
+            &changed.project,
+            &changed.integrations,
+            &changed.entities,
+            changed.environment.as_ref(),
+        )
+        .expect("changed semantic digests compile");
+        assert_ne!(
+            loaded.semantic_digests.service_policy,
+            changed_digests.service_policy,
+            "release claim policy changes must alter the signed semantic digest"
+        );
+        let changed_compiled =
+            compile_project(&changed, None).expect("changed NIA release project compiles");
+        assert_ne!(
+            compiled.approval_state["generated_closure_digests"]["relay"],
+            changed_compiled.approval_state["generated_closure_digests"]["relay"],
+            "release claim changes must alter the signed Relay closure digest"
+        );
+    }
+
+    #[test]
+    fn attribute_release_claims_cannot_read_unprojected_entity_fields() {
+        let mut loaded = load_registry_project(
+            &project_golden("nia-attribute-release"),
+            Some("local"),
+        )
+        .expect("NIA release project loads");
+        loaded
+            .project
+            .services
+            .get_mut("nia-population-records")
+            .and_then(|service| service.api.as_mut())
+            .expect("records API exists")
+            .projection
+            .retain(|field| field != "birth_date");
+        let error = validate_project_entity_links(
+            &loaded.project,
+            &loaded.integrations,
+            &loaded.entities,
+        )
+        .expect_err("unprojected release input must fail closed");
+        assert!(error
+            .to_string()
+            .contains("claim source_field must be an explicitly projected entity field"));
+    }
+
+    #[test]
     fn code_owned_rhai_conformance_matches_http_and_is_deterministic() {
         let bounded = run_code_owned_project_conformance(&project_golden("dhis2-tracker"))
             .expect("bounded DHIS2 conformance passes");

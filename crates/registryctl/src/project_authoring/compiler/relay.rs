@@ -431,6 +431,9 @@ fn generated_records_datasets(
                 Some(RecordStandard::Enabled(spatial)) => Some(serde_json::to_value(spatial)?),
                 Some(RecordStandard::Disabled(_)) | None => None,
             };
+            let attribute_release_profiles = api
+                .map(generated_attribute_release_profiles)
+                .unwrap_or_default();
             let refresh = entity_refresh_config(&entity.materialization.refresh)?;
             let metadata_scope = api
                 .map(|api| api.scopes.metadata.as_str())
@@ -463,6 +466,7 @@ fn generated_records_datasets(
                         },
                         "aggregates": aggregates,
                         "spatial": spatial,
+                        "attribute_release_profiles": attribute_release_profiles,
                     })
                 })
                 .into_iter()
@@ -499,6 +503,47 @@ fn generated_records_datasets(
                 "entities": publication_entities,
                 "aggregates": [],
             }))
+        })
+        .collect()
+}
+
+fn generated_attribute_release_profiles(api: &RecordsApiDeclaration) -> Vec<Value> {
+    api.attribute_release_profiles
+        .iter()
+        .map(|(id, profile)| {
+            let claims = profile
+                .claims
+                .iter()
+                .map(|(name, claim)| {
+                    json!({
+                        "name": name,
+                        "source_field": claim.source_field,
+                        "expression": claim.expression,
+                        "required": claim.required,
+                        "sensitivity": claim.sensitivity,
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({
+                "id": id,
+                "version": profile.version,
+                "title": profile.title,
+                "description": profile.description,
+                "purpose": profile.purpose,
+                "release_scope": profile.release_scope,
+                "subject": {
+                    "input": profile.subject.input,
+                    "source_field": profile.subject.source_field,
+                    "id_type": profile.subject.id_type,
+                    "cardinality": "one",
+                },
+                "release_conditions": profile.release_conditions,
+                "claims": claims,
+                "response": {
+                    "include_source_metadata": false,
+                    "max_age_seconds": profile.response.max_age_seconds,
+                },
+            })
         })
         .collect()
 }

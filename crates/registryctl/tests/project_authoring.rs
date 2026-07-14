@@ -1568,6 +1568,7 @@ fn strict_project_authoring_schemas_compile_and_accept_every_golden() {
             "opencrvs",
             "opencrvs-country-variant",
             "openspp-exact",
+            "nia-attribute-release",
             "snapshot-exact",
             "snapshot-with-records",
             "relay-only-records",
@@ -1612,6 +1613,33 @@ fn strict_project_authoring_schemas_compile_and_accept_every_golden() {
             }
         }
     }
+}
+
+#[test]
+fn project_schema_keeps_attribute_release_source_metadata_private() {
+    let schema: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("schemas/project-authoring/project.schema.json"),
+        )
+        .expect("project schema reads"),
+    )
+    .expect("project schema is JSON");
+    let schema = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .expect("project schema compiles");
+    let mut project = serde_json::to_value(read_yaml(
+        &golden("nia-attribute-release").join("registry-stack.yaml"),
+    ))
+    .expect("NIA project converts to JSON");
+    assert!(schema.is_valid(&project));
+    project["services"]["nia-population-records"]["api"]["attribute_release_profiles"]
+        ["solmara-nia-userinfo"]["response"]["include_source_metadata"] = serde_json::json!(true);
+    assert!(
+        !schema.is_valid(&project),
+        "project authors cannot opt released identity responses into source metadata disclosure"
+    );
 }
 
 #[test]
