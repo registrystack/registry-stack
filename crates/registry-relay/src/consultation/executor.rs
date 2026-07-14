@@ -98,7 +98,7 @@ pub(super) fn generic_script_source_calls_allowed(plan: &CompiledSourcePlan) -> 
 }
 
 /// Value-free reason an artifact-valid plan cannot be served by a maintained
-/// concrete product journey.
+/// source capability.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub(crate) enum ConcreteExecutorActivationError {
     #[error("consultation plan is outside the maintained concrete serving profiles")]
@@ -132,7 +132,7 @@ pub(super) const fn is_anchor_execution_step(
     matches!(compiled_step_index, Some(0)) || (script && execution_position == 0)
 }
 
-/// Restart-only selection of one fully reviewed product journey.
+/// Restart-only selection of one fully reviewed source capability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConcreteExecutorKind {
     SnapshotExact,
@@ -1758,7 +1758,7 @@ async fn execute_interactive_rhai(
     }
 }
 
-/// Consume one sealed execution through the startup-selected product journey.
+/// Consume one sealed execution through the startup-selected source capability.
 /// The closed enum keeps runtime dispatch explicit without exposing a generic
 /// callback or provider surface.
 #[allow(clippy::too_many_arguments)]

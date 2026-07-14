@@ -5,7 +5,7 @@
 //! verifies one fixed policy preimage whose permit rule is the conjunction of
 //! the already typed workload, scope, tenant, registry, purpose, consent, and
 //! empty-obligation facts. Evaluating that closed rule locally avoids a second
-//! policy language or network dependency for the first product journey.
+//! policy language or network dependency for the consultation path.
 
 use std::time::Instant;
 

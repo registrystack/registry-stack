@@ -702,7 +702,7 @@ pub(crate) struct UnfinishedAuditedConsultationDispatch {
 }
 
 impl<'profile> PreparedAuditedConsultationDispatch<'profile> {
-    /// Run one startup-selected concrete product journey. Every outer fence
+    /// Run one startup-selected source capability. Every outer fence
     /// error retains the sealed dispatch for PostgreSQL to classify as
     /// `not_started` or `outcome_unknown`; only a closure-returned known result
     /// enters normal completion.

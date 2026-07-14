@@ -4,7 +4,7 @@
 //! The codec owns only protocol structure. It does not choose a destination,
 //! credential, purpose, source operation, product version, field projection,
 //! claim result, or disclosure. A reviewed integration pack supplies the
-//! explicit DCI protocol version and all product-specific constants before a
+//! explicit DCI protocol version and all integration-specific constants before a
 //! compiled source plan can construct this type.
 
 use registry_platform_crypto::parse_json_strict;
