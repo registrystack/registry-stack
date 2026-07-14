@@ -789,7 +789,6 @@ mod tests {
             "person-record",
             "--fixture",
             "active-person",
-            "--trace",
             "--watch",
         ])
         .unwrap();
@@ -801,12 +800,22 @@ mod tests {
                 live: false,
                 integration: Some(integration),
                 fixture: Some(fixture),
-                trace: true,
+                trace: false,
                 watch: true,
             } if project_dir == std::path::Path::new("registry-project")
                 && integration == "person-record"
                 && fixture == "active-person"
         ));
+
+        assert!(Cli::try_parse_from([
+            "registryctl",
+            "test",
+            "--project-dir",
+            "registry-project",
+            "--trace",
+            "--watch",
+        ])
+        .is_err());
 
         let check = Cli::try_parse_from([
             "registryctl",
