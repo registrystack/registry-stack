@@ -77,6 +77,9 @@ fn notary_only_config(audit_path: &str) -> StandaloneRegistryNotaryConfig {
         r#"
 deployment:
   profile: local
+  multi_instance: false
+state:
+  storage: in_memory
 server:
   bind: 127.0.0.1:0
 auth:
