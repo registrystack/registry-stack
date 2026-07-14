@@ -12,6 +12,7 @@ standards_referenced: []
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+import ProjectStarterSequence from '../../../components/ProjectStarterSequence.astro';
 
 Create a Registry Stack project with a bounded HTTP integration without editing product source
 code.
@@ -36,6 +37,13 @@ Do not add source credentials, production endpoints, or real subject records.
 
 {/* Evidence: crates/registryctl/src/main.rs, crates/registryctl/src/project_authoring/,
     and crates/registryctl/assets/project-starters/bounded-http/. */}
+
+## Canonical HTTP starter sequence
+
+Use this compact sequence as the workflow checklist. The sections that follow explain each command
+and the trust boundary it verifies.
+
+<ProjectStarterSequence starter="http" />
 
 ## Copy the HTTP starter
 
@@ -265,7 +273,7 @@ The generated profile keeps source acquisition in Relay and claim disclosure in 
   a fixed Patient anchor and declared relation.
 - [Configure an exact snapshot materialization](../configure-project-snapshot-materialization/)
   when consultation reads an immutable local snapshot.
-- [Configure a script source adapter](../configure-project-sandboxed-rhai/) only when the reviewed
+- [Configure a script source adapter](../configure-project-script-adapter/) only when the reviewed
   source recipe needs more than one bounded HTTP request.
 
 ## Troubleshooting

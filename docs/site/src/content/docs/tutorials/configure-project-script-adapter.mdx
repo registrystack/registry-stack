@@ -11,6 +11,8 @@ locale: en
 standards_referenced: []
 ---
 
+import ProjectStarterSequence from '../../../components/ProjectStarterSequence.astro';
+
 Use the script capability when one fixed HTTP request is not enough. Rhai is the v1 script
 runtime, but the capability is product-neutral. A DHIS2 label or version does not enable it, and
 an unknown source product can use exactly the same host API.
@@ -19,6 +21,13 @@ The worker has no network, filesystem, environment, subprocess, clock, random, c
 production logging access. It asks the Relay parent to make each bounded source call. Relay
 validates the complete request against the authored same-origin authority, commits the request
 before dispatch, consumes the next durable call permit, and returns only bounded JSON or text.
+
+## Try the bundled script starter
+
+The DHIS2 Tracker starter is one concrete script example. Its product name and version are review
+evidence only; any reviewed source system can use the same script capability and host API.
+
+<ProjectStarterSequence starter="dhis2-tracker" />
 
 ## Declare source authority
 

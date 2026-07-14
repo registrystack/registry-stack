@@ -12,6 +12,8 @@ standards_referenced:
   - fhir-r4
 ---
 
+import ProjectStarterSequence from '../../../components/ProjectStarterSequence.astro';
+
 Use this guide when a reviewed source exposes a bounded FHIR R4 search journey that needs more
 than one HTTP request. You will keep source authority in configuration, use ordinary Rhai for
 project-specific decisions, and delegate FHIR search-set parsing to the versioned protocol helper.
@@ -41,6 +43,13 @@ You need:
 - exact Patient selectors and bounded relationship rules;
 - an `adapter.rhai` file; and
 - synthetic request-aware fixtures for match, no match, and ambiguity.
+
+## Try the bundled FHIR starter
+
+The starter demonstrates the complete offline sequence before you adapt its endpoint, selectors,
+relationships, and synthetic observations.
+
+<ProjectStarterSequence starter="fhir-r4" />
 
 ## Declare typed inputs and source authority
 

@@ -12,6 +12,8 @@ standards_referenced:
   - openapi
 ---
 
+import ProjectStarterSequence from '../../../components/ProjectStarterSequence.astro';
+
 Use this guide when a Registry Stack project needs birth-record claims from an OpenCRVS
 deployment. Registry Relay owns the Digital Convergence Initiative (DCI) source interaction and
 returns only the typed outputs in the compiled consultation. Registry Notary evaluates and
@@ -58,6 +60,13 @@ The JSON report contains:
 
 The project contains one combined topology. Relay owns the OpenCRVS integration and consultation.
 Notary owns the evidence service, claims, disclosure policy, and optional credential profiles.
+
+## Run the canonical starter sequence
+
+Use the focused trace and watch smoke before adapting the OpenCRVS profile. The complete fixture
+test remains offline and uses only synthetic token, key, and DCI search interactions.
+
+<ProjectStarterSequence starter="opencrvs-dci" />
 
 ## Prove the synthetic journey
 
@@ -151,7 +160,7 @@ Before deployment approval, confirm:
 
 - Return to [Author an HTTP Registry Stack project](../author-registry-project/) for the complete
   fixture, review, and unsigned-build workflow.
-- Use [Configure a script source adapter](../configure-project-sandboxed-rhai/) to review the
+- Use [Configure a script source adapter](../configure-project-script-adapter/) to review the
   product-neutral Rhai host boundary.
 - Read [Integration patterns](../../explanation/integration-patterns/) for the Relay and Notary
   topology around a domain system.

@@ -11,6 +11,8 @@ locale: en
 standards_referenced: []
 ---
 
+import ProjectStarterSequence from '../../../components/ProjectStarterSequence.astro';
+
 Use this guide when Registry Relay must query an immutable local materialization instead of
 opening a source connection for each consultation.
 You will declare one logical entity, bind its physical source once in the private
@@ -42,6 +44,13 @@ You need:
 
 Keep provider paths, worksheet or table names, and physical columns out of public entity and
 integration files.
+
+## Try the bundled snapshot starter
+
+The starter proves an exact lookup over an immutable local materialization. Its offline fixture
+does not open a source connection.
+
+<ProjectStarterSequence starter="snapshot" />
 
 ## Define the logical entity
 
@@ -198,5 +207,5 @@ Registry Relay does not fall back to live source access.
 
 - Return to [Author an HTTP Registry Stack project](../author-registry-project/) for the
   ordinary review and unsigned-build workflow.
-- Use [Configure Sandboxed Rhai orchestration](../configure-project-sandboxed-rhai/) only for a
+- Use [Configure a script source adapter](../configure-project-script-adapter/) only for a
   reviewed live HTTP recipe that declarative operations cannot express maintainably.

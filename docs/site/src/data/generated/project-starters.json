@@ -1,0 +1,82 @@
+[
+  {
+    "starter": "http",
+    "label": "Custom HTTP",
+    "summary": "One fixed bounded HTTP request with a closed response projection.",
+    "source": "crates/registryctl/assets/project-starters/bounded-http",
+    "integration": "person-record",
+    "fixture": "active-person",
+    "commands": [
+      "registryctl init --from http --project-dir http-project",
+      "registryctl test --project-dir http-project --integration person-record --fixture active-person --trace",
+      "registryctl test --project-dir http-project --integration person-record --fixture active-person --watch",
+      "registryctl test --project-dir http-project",
+      "registryctl check --project-dir http-project --environment local --explain",
+      "registryctl build --project-dir http-project --environment local"
+    ]
+  },
+  {
+    "starter": "dhis2-tracker",
+    "label": "DHIS2 Tracker",
+    "summary": "A product-neutral script adapter applied to a bounded DHIS2 Tracker read journey.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker",
+    "integration": "health-record",
+    "fixture": "complete-health-match",
+    "commands": [
+      "registryctl init --from dhis2-tracker --project-dir dhis2-project",
+      "registryctl test --project-dir dhis2-project --integration health-record --fixture complete-health-match --trace",
+      "registryctl test --project-dir dhis2-project --integration health-record --fixture complete-health-match --watch",
+      "registryctl test --project-dir dhis2-project",
+      "registryctl check --project-dir dhis2-project --environment local --explain",
+      "registryctl build --project-dir dhis2-project --environment local"
+    ]
+  },
+  {
+    "starter": "opencrvs-dci",
+    "label": "OpenCRVS DCI",
+    "summary": "A product-neutral script adapter with the signed DCI search verification profile.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
+    "integration": "birth-record",
+    "fixture": "birth-record-match",
+    "commands": [
+      "registryctl init --from opencrvs-dci --project-dir opencrvs-project",
+      "registryctl test --project-dir opencrvs-project --integration birth-record --fixture birth-record-match --trace",
+      "registryctl test --project-dir opencrvs-project --integration birth-record --fixture birth-record-match --watch",
+      "registryctl test --project-dir opencrvs-project",
+      "registryctl check --project-dir opencrvs-project --environment local --explain",
+      "registryctl build --project-dir opencrvs-project --environment local"
+    ]
+  },
+  {
+    "starter": "fhir-r4",
+    "label": "FHIR R4",
+    "summary": "A product-neutral script adapter with bounded FHIR R4 search-set parsing.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active",
+    "integration": "coverage",
+    "fixture": "coverage-active",
+    "commands": [
+      "registryctl init --from fhir-r4 --project-dir fhir-project",
+      "registryctl test --project-dir fhir-project --integration coverage --fixture coverage-active --trace",
+      "registryctl test --project-dir fhir-project --integration coverage --fixture coverage-active --watch",
+      "registryctl test --project-dir fhir-project",
+      "registryctl check --project-dir fhir-project --environment local --explain",
+      "registryctl build --project-dir fhir-project --environment local"
+    ]
+  },
+  {
+    "starter": "snapshot",
+    "label": "Exact snapshot",
+    "summary": "An exact lookup over one immutable local materialization.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact",
+    "integration": "person-snapshot",
+    "fixture": "snapshot-match",
+    "commands": [
+      "registryctl init --from snapshot --project-dir snapshot-project",
+      "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-match --trace",
+      "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-match --watch",
+      "registryctl test --project-dir snapshot-project",
+      "registryctl check --project-dir snapshot-project --environment local --explain",
+      "registryctl build --project-dir snapshot-project --environment local"
+    ]
+  }
+]

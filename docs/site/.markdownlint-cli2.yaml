@@ -28,6 +28,7 @@ config:
       - LegendList
       - HomeLanding
       - QuickstartMeta
+      - ProjectStarterSequence
       - Steps
 globs:
   - "**/*.{md,mdx}"

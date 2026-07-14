@@ -12,7 +12,7 @@
     "build:archive": "node scripts/build-archive.mjs",
     "build:archives": "node scripts/build-archives.mjs",
     "preview": "astro preview",
-    "generate": "node scripts/generate-data.mjs && node scripts/fetch-openapi.mjs && node scripts/sync-repo-docs.mjs && node scripts/generate-sidebar.mjs",
+    "generate": "node scripts/generate-data.mjs && node scripts/generate-project-starters.mjs && node scripts/fetch-openapi.mjs && node scripts/sync-repo-docs.mjs && node scripts/generate-sidebar.mjs",
     "test": "node --test \"scripts/**/*.test.mjs\"",
     "check:llms:built": "node scripts/check-llms.mjs",
     "check:docset": "node scripts/check-docset.mjs",

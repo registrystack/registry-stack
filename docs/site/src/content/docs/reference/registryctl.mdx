@@ -11,6 +11,8 @@ locale: en
 standards_referenced: []
 ---
 
+import ProjectStarterSequence from '../../../components/ProjectStarterSequence.astro';
+
 `registryctl` is the local adopter command-line tool for Registry Stack. It creates a local project, starts and stops the generated services, and runs validation and smoke checks against them.
 
 This page lists commands released in registryctl `v0.9.0` and the pre-1.0 project authoring
@@ -51,6 +53,14 @@ Their `semantic_changes` entries identify changed `claim`, `integration`, `servi
 `operator_security`, and `disclosure` dimensions. The authorized bundle signer reviews that report;
 Registry Stack does not create a separate reviewer workflow.
 Generated files are written under `.registry-stack/build/<environment>/` only by `build`.
+
+### Canonical starter sequences
+
+Each bundled starter follows the same offline-first authoring sequence. The integration and fixture
+selectors in this generated matrix come from the committed starter workspace, not from a separate
+documentation copy.
+
+<ProjectStarterSequence />
 
 ### Project authoring schemas
 

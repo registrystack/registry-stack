@@ -218,9 +218,9 @@ require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-fhir-r4
 	'outputs:'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-fhir-r4.mdx" \
 	'protocol.fhir.parse_searchset'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-sandboxed-rhai.mdx" \
+require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx" \
 	'file: adapter.rhai'
-require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-sandboxed-rhai.mdx" \
+require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-script-adapter.mdx" \
 	'result.match(#{'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-snapshot-materialization.mdx" \
 	'kind: records_api'

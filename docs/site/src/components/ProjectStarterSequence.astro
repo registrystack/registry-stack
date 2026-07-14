@@ -1,0 +1,32 @@
+---
+import starters from '../data/generated/project-starters.json';
+
+interface Props {
+  starter?: string;
+}
+
+const { starter } = Astro.props;
+const selected = starter ? starters.filter((item) => item.starter === starter) : starters;
+if (selected.length === 0) {
+  throw new Error(`Unknown Registry Stack project starter: ${starter}`);
+}
+---
+
+<p>
+  Run these commands in order. The focused test prints a safe synthetic trace. The next command
+  starts the same fixture as a watch smoke; press <code>Ctrl+C</code> after its initial passing
+  report. The final three commands test every fixture, explain the redacted plan, and build the
+  unsigned product inputs.
+</p>
+
+{selected.map((item) => (
+  <section class="starter-sequence">
+    <h3><code>{item.starter}</code>: {item.label}</h3>
+    <p>{item.summary}</p>
+    <pre aria-label={`${item.label} starter commands`}><code>{item.commands.join('\n')}</code></pre>
+  </section>
+))}
+
+<p class="source-note">
+  Generated from the five starter workspaces compiled into <code>registryctl</code>.
+</p>
