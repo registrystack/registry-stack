@@ -47,6 +47,12 @@ complete workflow and generated trust boundary.
 | `build --against <bundle> --anchor <anchor>` | Build against an explicitly verified signed baseline. Both flags are required together. |
 
 The commands print JSON reports.
+An initialized starter records its starter ID, Registry Stack release, and
+authored-content digest in `registry-stack.yaml`. `init` verifies that digest,
+and `check --explain` reports `matches` or `diverged` together with the current
+platform-defaults release, script runtime, and `xw.v1` ABI. Divergence is
+informational: it identifies intentional project changes without blocking a
+valid adapted workspace.
 Without `--against`, `check` and `build` label the baseline
 `initial_without_baseline`.
 Their `semantic_changes` entries identify changed `claim`, `integration`, `service_policy`,

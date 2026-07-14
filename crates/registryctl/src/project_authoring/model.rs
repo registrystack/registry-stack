@@ -31,6 +31,16 @@ impl ProjectStarter {
             Self::Snapshot => Ok(&SNAPSHOT_STARTER),
         }
     }
+
+    const fn id(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Dhis2Tracker => "dhis2-tracker",
+            Self::OpencrvsDci => "opencrvs-dci",
+            Self::FhirR4 => "fhir-r4",
+            Self::Snapshot => "snapshot",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -116,12 +126,22 @@ pub struct SemanticChange {
 #[serde(deny_unknown_fields)]
 struct RegistryProject {
     version: u8,
+    #[serde(default)]
+    starter: Option<StarterProvenance>,
     registry: RegistryDeclaration,
     #[serde(default)]
     integrations: BTreeMap<String, IntegrationReference>,
     #[serde(default)]
     entities: BTreeMap<String, EntityReference>,
     services: BTreeMap<String, ServiceDeclaration>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StarterProvenance {
+    id: String,
+    release: String,
+    content_digest: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1361,6 +1381,7 @@ struct LoadedRegistryProject {
     integrations: BTreeMap<String, LoadedIntegration>,
     entities: BTreeMap<String, LoadedEntityDefinition>,
     authored_hash: String,
+    project_content_digest: String,
     semantic_digests: SemanticDigests,
 }
 

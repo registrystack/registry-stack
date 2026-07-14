@@ -8,6 +8,17 @@
   "required": ["version", "registry", "services"],
   "properties": {
     "version": { "const": 1, "default": 1, "description": "Project authoring format version." },
+    "starter": {
+      "description": "Immutable provenance for a workspace initialized from a Registry Stack starter. The digest excludes this content_digest field and covers the starter's authored project files.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "release", "content_digest"],
+      "properties": {
+        "id": { "$ref": "#/$defs/stableId", "description": "Registry Stack starter identifier." },
+        "release": { "$ref": "#/$defs/token", "description": "Registry Stack release that supplied the starter." },
+        "content_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Digest of the initialized starter authoring content, used to report later workspace divergence." }
+      }
+    },
     "registry": {
       "description": "Stable identity of the Registry Stack project.",
       "type": "object",

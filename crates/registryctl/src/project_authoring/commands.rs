@@ -20,16 +20,44 @@ pub fn init_registry_project(options: &ProjectInitOptions) -> Result<ProjectComm
     }
     copy_embedded_dir(starter, &options.directory)?;
     let project = load_registry_project(&options.directory, None)?;
+    let provenance = project
+        .project
+        .starter
+        .as_ref()
+        .ok_or_else(|| anyhow!("embedded project starter is missing provenance"))?;
+    if provenance.id != options.starter.id() {
+        bail!("embedded project starter provenance does not match the selected starter");
+    }
+    if provenance.content_digest != project.project_content_digest {
+        bail!("embedded project starter content digest is invalid");
+    }
     Ok(ProjectCommandReport {
         status: "initialized",
-        project: project.project.registry.id,
+        project: project.project.registry.id.clone(),
         environment: None,
         fixtures: Vec::new(),
         semantic_changes: Vec::new(),
         baseline: "initial_without_baseline",
         output: Some(options.directory.display().to_string()),
-        explanation: None,
+        explanation: Some(starter_explanation(&project)),
     })
+}
+
+fn starter_explanation(loaded: &LoadedRegistryProject) -> Value {
+    match &loaded.project.starter {
+        Some(starter) => json!({
+            "id": starter.id,
+            "release": starter.release,
+            "expected_content_digest": starter.content_digest,
+            "current_content_digest": loaded.project_content_digest,
+            "state": if starter.content_digest == loaded.project_content_digest {
+                "matches"
+            } else {
+                "diverged"
+            },
+        }),
+        None => json!({ "state": "not_initialized_from_starter" }),
+    }
 }
 
 pub fn test_registry_project(options: &ProjectTestOptions) -> Result<ProjectCommandReport> {
@@ -44,6 +72,7 @@ pub fn test_registry_project_selected(
         bail!("live project tests require an explicit non-production --environment");
     }
     let loaded = load_registry_project(&options.project_directory, options.environment.as_deref())?;
+    preflight_project_rhai_scripts(&loaded)?;
     let offline_environment = offline_fixture_environment(&loaded)?;
     validate_environment(
         &loaded.project,
@@ -243,7 +272,11 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
             signing_kid: "offline-fixture-key".to_string(),
             generation: 1,
         }),
-        callers: requires_notary.then_some(callers).unwrap_or_default(),
+        callers: if requires_notary {
+            callers
+        } else {
+            BTreeMap::new()
+        },
         relay: requires_relay.then(|| RelayBinding {
             origin: "https://relay.fixture.invalid".to_string(),
             issuer: "https://workload.fixture.invalid".to_string(),
@@ -594,6 +627,7 @@ pub fn check_registry_project(options: &ProjectCheckOptions) -> Result<ProjectCo
         &options.project_directory,
         Some(options.environment.as_str()),
     )?;
+    preflight_project_rhai_scripts(&loaded)?;
     let baseline = load_verified_baseline(
         options.against.as_deref(),
         options.anchor.as_deref(),
@@ -625,6 +659,7 @@ pub fn build_registry_project(options: &ProjectBuildOptions) -> Result<ProjectCo
         &options.project_directory,
         Some(options.environment.as_str()),
     )?;
+    preflight_project_rhai_scripts(&loaded)?;
     let baseline = load_verified_baseline(
         options.against.as_deref(),
         options.anchor.as_deref(),

@@ -804,6 +804,12 @@ fn generated_explanation(
         "schema": "registry.project.explanation.v1",
         "registry": loaded.project.registry.id,
         "environment": environment_name,
+        "starter": starter_explanation(loaded),
+        "platform": {
+            "defaults_release": env!("CARGO_PKG_VERSION"),
+            "script_runtime": "rhai_v1",
+            "script_abi": registry_relay::rhai_worker::xw::XW_ABI_VERSION,
+        },
         "integrations": loaded.integrations.iter().map(|(alias, integration)| {
             (alias.clone(), json!({
                 "authoring_version": integration.document.version,

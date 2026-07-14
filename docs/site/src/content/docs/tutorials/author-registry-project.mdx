@@ -56,8 +56,17 @@ registryctl init --from http --project-dir registry-project
 The JSON report contains:
 
 ```text
-"status": "initialized"
+"status": "initialized",
+"explanation": {
+  "id": "http",
+  "release": "0.9.0",
+  "state": "matches"
+}
 ```
+
+The copied `registry-stack.yaml` keeps the complete starter provenance,
+including its authored-content digest. Later, `check --explain` reports whether
+the workspace still matches that starter or has intentionally diverged.
 
 The command creates this authored layout:
 

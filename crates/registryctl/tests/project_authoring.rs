@@ -434,6 +434,13 @@ fn all_advertised_starters_initialize_and_test_without_source_access() {
         })
         .expect("starter initializes");
         assert_eq!(initialized.status, "initialized");
+        let provenance = initialized
+            .explanation
+            .as_ref()
+            .expect("starter initialization reports provenance");
+        assert_eq!(provenance["state"], "matches");
+        assert!(provenance["id"].as_str().is_some());
+        assert_eq!(provenance["release"], env!("CARGO_PKG_VERSION"));
         let tested = test_registry_project(&ProjectTestOptions {
             project_directory: project,
             environment: None,
@@ -442,6 +449,47 @@ fn all_advertised_starters_initialize_and_test_without_source_access() {
         .expect("initialized starter passes offline tests");
         assert_eq!(tested.status, "passed");
     }
+}
+
+#[test]
+fn check_explain_reports_starter_divergence_and_runtime_abi() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("registry-project");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Http,
+        directory: project.clone(),
+    })
+    .expect("starter initializes");
+
+    let project_file = project.join("registry-stack.yaml");
+    let authored = std::fs::read_to_string(&project_file).expect("project file");
+    std::fs::write(
+        &project_file,
+        authored.replace("fictional-citizen-registry", "adapted-citizen-registry"),
+    )
+    .expect("project identity is adapted");
+
+    let checked = check_registry_project(&ProjectCheckOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        explain: true,
+        against: None,
+        anchor: None,
+    })
+    .expect("adapted starter remains valid");
+    let explanation = checked.explanation.expect("explanation");
+    assert_eq!(explanation["starter"]["id"], "http");
+    assert_eq!(explanation["starter"]["state"], "diverged");
+    assert_ne!(
+        explanation["starter"]["expected_content_digest"],
+        explanation["starter"]["current_content_digest"]
+    );
+    assert_eq!(
+        explanation["platform"]["defaults_release"],
+        env!("CARGO_PKG_VERSION")
+    );
+    assert_eq!(explanation["platform"]["script_runtime"], "rhai_v1");
+    assert_eq!(explanation["platform"]["script_abi"], "xw.v1");
 }
 
 #[test]
@@ -1035,7 +1083,7 @@ fn project_authoring_schemas_keep_editor_annotations_and_valid_examples() {
 
         let (descriptions, defaults, examples) = schema_annotation_counts(&schema);
         assert!(
-            descriptions >= properties.len() + definitions.len() + 1,
+            descriptions > properties.len() + definitions.len(),
             "{schema_name} description coverage regressed"
         );
         assert!(defaults >= 1, "{schema_name} needs at least one default");
@@ -1840,7 +1888,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "fd946a48cd1ad52623337e229392c53bf228b183f397ec6da00484a31abe088a",
+        "7b20a7531535e91de513ca74b327744e2e8b364059ec59e060266041cdd3f004",
         "project inputs must match the cross-machine golden digest"
     );
 }
@@ -2690,7 +2738,7 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     for relative in ["approval/review.json", "approval/project-state.json"] {
         let tampered = temporary.path().join(format!(
             "tampered-{}",
-            relative.replace('/', "-").replace('.', "-")
+            relative.replace(['/', '.'], "-")
         ));
         copy_tree(&baseline, &tampered);
         let path = tampered.join(relative);

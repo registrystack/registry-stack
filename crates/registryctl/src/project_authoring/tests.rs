@@ -5,6 +5,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn embedded_starter_provenance_matches_authored_content() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let starters = [
+            ("http", manifest_dir.join("assets/project-starters/bounded-http")),
+            (
+                "dhis2-tracker",
+                manifest_dir.join("tests/fixtures/project-authoring/dhis2-tracker"),
+            ),
+            (
+                "opencrvs-dci",
+                manifest_dir.join("tests/fixtures/project-authoring/opencrvs"),
+            ),
+            (
+                "fhir-r4",
+                manifest_dir.join(
+                    "tests/fixtures/project-authoring/fhir-r4-coverage-active",
+                ),
+            ),
+            (
+                "snapshot",
+                manifest_dir.join("tests/fixtures/project-authoring/snapshot-exact"),
+            ),
+        ];
+        let mut mismatches = Vec::new();
+        for (expected_id, path) in starters {
+            let loaded = load_registry_project(&path, None).expect("starter loads");
+            let provenance = loaded.project.starter.as_ref().expect("starter provenance");
+            assert_eq!(provenance.id, expected_id);
+            if provenance.content_digest != loaded.project_content_digest {
+                mismatches.push(format!(
+                    "{expected_id}: expected {}, calculated {}",
+                    provenance.content_digest, loaded.project_content_digest
+                ));
+            }
+        }
+        assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+    }
+
+    #[test]
     fn corrected_http_authoring_lowers_to_one_product_neutral_request() {
         let authored: AuthoredIntegrationDocument = serde_yaml::from_str(
             r#"

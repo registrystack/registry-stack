@@ -8,7 +8,11 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
     validate_project_shape(&project)?;
 
     let mut hasher = Sha256::new();
-    hash_authored_file(&mut hasher, PROJECT_FILE, &project_bytes);
+    hash_authored_file(
+        &mut hasher,
+        PROJECT_FILE,
+        &project_digest_document(&project)?,
+    );
     let mut entities = BTreeMap::new();
     for (alias, reference) in &project.entities {
         let relative = &reference.file;
@@ -115,6 +119,11 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
     validate_service_integration_links(&project, &integrations)?;
     validate_project_entity_links(&project, &integrations, &entities)?;
 
+    let project_content_digest = format!(
+        "sha256:{}",
+        hex::encode(hasher.clone().finalize())
+    );
+
     let (environment_name, environment) = match environment {
         Some(name) => {
             validate_stable_id(name, "environment")?;
@@ -145,8 +154,18 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
         integrations,
         entities,
         authored_hash: format!("sha256:{}", hex::encode(hasher.finalize())),
+        project_content_digest,
         semantic_digests,
     })
+}
+
+fn project_digest_document(project: &RegistryProject) -> Result<Vec<u8>> {
+    let mut value = serde_json::to_value(project)
+        .context("failed to serialize project for starter provenance")?;
+    if let Some(starter) = value.get_mut("starter").and_then(Value::as_object_mut) {
+        starter.remove("content_digest");
+    }
+    canonicalize_json(&value).context("failed to canonicalize project for starter provenance")
 }
 
 fn lower_project_integration(
@@ -572,6 +591,18 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
         bail!("registry-stack.yaml version must be 1");
     }
     validate_stable_id(&project.registry.id, "registry.id")?;
+    if let Some(starter) = &project.starter {
+        validate_stable_id(&starter.id, "starter.id")?;
+        validate_token(&starter.release, "starter.release", 64)?;
+        if starter.content_digest.len() != 71
+            || !starter.content_digest.starts_with("sha256:")
+            || !starter.content_digest[7..]
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            bail!("starter.content_digest must use lowercase sha256:<64-hex> syntax");
+        }
+    }
     if project.integrations.len() > 16 {
         bail!("project must declare no more than 16 integrations");
     }
