@@ -1,0 +1,28 @@
+version: 1
+entities:
+  population:
+    provider:
+      type: postgres
+      connection: { secret: SOLMARA_NIA_DATABASE_URL }
+      schema: public
+      table: population_person
+    columns:
+      uin: uin
+      legacy_nid: legacy_nid
+      given_name: given_name
+      family_name: family_name
+      sex: sex
+      birth_date: birth_date
+      identity_status: identity_status
+      alive: alive
+    source_revision: solmara-nia-population-v1
+    generation: 2026-07-15
+relay:
+  origin: https://nia-relay.solmara.invalid
+  issuer: https://workload-issuer.solmara.invalid
+  jwks_url: https://workload-issuer.solmara.invalid/.well-known/jwks.json
+  audience: registry-relay
+  allowed_clients: [solmara-esignet]
+deployment:
+  profile: local
+  relay: { service: nia-population-relay }

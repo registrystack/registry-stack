@@ -916,6 +916,7 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
     }
     let mut project_claim_ids = BTreeSet::new();
     let mut published_entities = BTreeSet::new();
+    let mut project_attribute_release_profiles = BTreeSet::new();
     for (service_id, service) in &project.services {
         validate_stable_id(service_id, "service id")?;
         match service.kind {
@@ -944,6 +945,20 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                 }
                 if service.api.is_none() {
                     bail!("records_api service requires api publication policy");
+                }
+                for (profile_id, profile) in &service
+                    .api
+                    .as_ref()
+                    .expect("records API policy was checked")
+                    .attribute_release_profiles
+                {
+                    if !project_attribute_release_profiles
+                        .insert((profile_id.as_str(), profile.version.as_str()))
+                    {
+                        bail!(
+                            "attribute release profile id and version pairs must be unique across the project"
+                        );
+                    }
                 }
                 continue;
             }
@@ -1185,6 +1200,7 @@ fn validate_records_service(service: &ServiceDeclaration, entity: &EntityDefinit
         || api.filters.len() > 256
         || api.relationships.len() > 64
         || api.aggregates.len() > 64
+        || api.attribute_release_profiles.len() > 16
     {
         bail!("records publication policy exceeds the v1 collection bounds");
     }
@@ -1214,6 +1230,7 @@ fn validate_records_service(service: &ServiceDeclaration, entity: &EntityDefinit
     {
         bail!("records projection must be a non-empty unique entity field subset");
     }
+    validate_record_attribute_release_profiles(api, entity, &field_names)?;
     for (field, operators) in &api.filters {
         if !field_names.contains(field.as_str()) || operators.is_empty() {
             bail!("records filters must name declared fields and at least one operator");
@@ -1306,6 +1323,123 @@ fn validate_records_service(service: &ServiceDeclaration, entity: &EntityDefinit
     }
     validate_record_standards(api, &field_names)?;
     Ok(())
+}
+
+fn validate_record_attribute_release_profiles(
+    api: &RecordsApiDeclaration,
+    entity: &EntityDefinition,
+    fields: &BTreeSet<&str>,
+) -> Result<()> {
+    let projected = api
+        .projection
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    for (profile_id, profile) in &api.attribute_release_profiles {
+        if !is_record_release_profile_id(profile_id) {
+            bail!(
+                "attribute release profile id must match [a-z][a-z0-9_-]{{0,95}}"
+            );
+        }
+        validate_token(&profile.version, "attribute release profile version", 64)?;
+        if let Some(title) = &profile.title {
+            validate_authored_text(title, "attribute release profile title")?;
+        }
+        if let Some(description) = &profile.description {
+            validate_authored_text(description, "attribute release profile description")?;
+        }
+        validate_token(&profile.purpose, "attribute release profile purpose", 256)?;
+        if !api.purposes.contains(&profile.purpose) {
+            bail!("attribute release profile purpose must be a records API permitted purpose");
+        }
+        let expected_scope = format!("{}:identity_release", entity.id);
+        if profile.release_scope != expected_scope {
+            bail!(
+                "attribute release profile release_scope must be the entity-bound {expected_scope} scope"
+            );
+        }
+        if profile.release_scope == api.scopes.rows {
+            bail!("attribute release scope must differ from the records row scope");
+        }
+        validate_input_name(&profile.subject.input)
+            .context("attribute release subject input is invalid")?;
+        validate_token(
+            &profile.subject.id_type,
+            "attribute release subject id_type",
+            64,
+        )?;
+        if !fields.contains(profile.subject.source_field.as_str())
+            || !projected.contains(profile.subject.source_field.as_str())
+        {
+            bail!("attribute release subject source_field must be an explicitly projected entity field");
+        }
+        validate_record_release_expression(
+            &profile.release_conditions.expression,
+            "attribute release condition",
+        )?;
+        if profile.claims.is_empty() || profile.claims.len() > 32 {
+            bail!("attribute release claims must contain between one and 32 entries");
+        }
+        let mut has_required_claim = false;
+        for (claim_name, claim) in &profile.claims {
+            if claim_name.len() > 64 || !is_lower_snake_id(claim_name) {
+                bail!("attribute release claim names must use bounded lower-snake identifiers");
+            }
+            if claim.source_field.is_some() == claim.expression.is_some() {
+                bail!(
+                    "attribute release claims must declare exactly one of source_field or expression"
+                );
+            }
+            if let Some(source_field) = &claim.source_field {
+                if !fields.contains(source_field.as_str())
+                    || !projected.contains(source_field.as_str())
+                {
+                    bail!(
+                        "attribute release claim source_field must be an explicitly projected entity field"
+                    );
+                }
+            }
+            if let Some(expression) = &claim.expression {
+                validate_record_release_expression(expression, "attribute release claim")?;
+            }
+            has_required_claim |= claim.required;
+        }
+        if !has_required_claim {
+            bail!("attribute release profiles require at least one required claim");
+        }
+        if profile
+            .response
+            .max_age_seconds
+            .is_some_and(|seconds| !(1..=3600).contains(&seconds))
+        {
+            bail!("attribute release response max_age_seconds must be between 1 and 3600");
+        }
+    }
+    Ok(())
+}
+
+fn validate_record_release_expression(
+    expression: &RecordAttributeReleaseExpression,
+    label: &str,
+) -> Result<()> {
+    if expression.cel.is_empty() || expression.cel.len() > 4096 {
+        bail!("{label} CEL must contain between one and 4096 bytes");
+    }
+    let roots = cel_member_roots(&expression.cel).with_context(|| format!("invalid {label} CEL"))?;
+    if roots != BTreeSet::from(["source".to_string()]) {
+        bail!("{label} CEL may reference only the projected source object");
+    }
+    registry_relay::attribute_release::validate_release_expression(&expression.cel)
+        .map_err(|_| anyhow!("{label} CEL failed to compile"))?;
+    Ok(())
+}
+
+fn is_record_release_profile_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    !value.is_empty()
+        && value.len() <= 96
+        && matches!(bytes.next(), Some(b'a'..=b'z'))
+        && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
 }
 
 fn validate_authored_text(value: &str, label: &str) -> Result<()> {

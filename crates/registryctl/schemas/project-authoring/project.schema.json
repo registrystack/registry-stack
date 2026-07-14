@@ -136,6 +136,7 @@
           "propertyNames": { "$ref": "#/$defs/stableId" },
           "additionalProperties": { "$ref": "#/$defs/recordAggregate" }
         },
+        "attribute_release_profiles": { "$ref": "#/$defs/recordAttributeReleaseProfiles" },
         "standards": {
           "type": "object",
           "additionalProperties": false,
@@ -146,6 +147,76 @@
           }
         }
       }
+    },
+    "recordAttributeReleaseProfiles": {
+      "description": "Purpose-bound, exact-one identity releases keyed by stable profile id. Generated Relay responses always omit source metadata.",
+      "type": "object",
+      "maxProperties": 16,
+      "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,95}$" },
+      "additionalProperties": { "$ref": "#/$defs/recordAttributeReleaseProfile" }
+    },
+    "recordAttributeReleaseProfile": {
+      "description": "One purpose-bound, minimized identity release compiled into the owning Relay entity.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "purpose", "release_scope", "subject", "release_conditions", "claims"],
+      "properties": {
+        "version": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^,\\s\\u0000-\\u001F\\u007F]+$" },
+        "title": { "$ref": "#/$defs/text" },
+        "description": { "$ref": "#/$defs/text" },
+        "purpose": { "$ref": "#/$defs/token" },
+        "release_scope": { "$ref": "#/$defs/scope" },
+        "subject": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input", "source_field", "id_type"],
+          "properties": {
+            "input": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+            "source_field": { "$ref": "#/$defs/stableId" },
+            "id_type": { "type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[^,\\s\\u0000-\\u001F\\u007F]+$" }
+          }
+        },
+        "release_conditions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["expression"],
+          "properties": { "expression": { "$ref": "#/$defs/recordAttributeReleaseExpression" } }
+        },
+        "claims": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 32,
+          "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["required", "sensitivity"],
+            "properties": {
+              "source_field": { "$ref": "#/$defs/stableId" },
+              "expression": { "$ref": "#/$defs/recordAttributeReleaseExpression" },
+              "required": { "type": "boolean" },
+              "sensitivity": { "enum": ["direct_identifier", "personal", "public", "pseudonymous"] }
+            },
+            "oneOf": [
+              { "required": ["source_field"] },
+              { "required": ["expression"] }
+            ]
+          }
+        },
+        "response": {
+          "description": "Private cache control for the minimized response. Source metadata disclosure is intentionally unavailable.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "max_age_seconds": { "type": "integer", "minimum": 1, "maximum": 3600 } }
+        }
+      }
+    },
+    "recordAttributeReleaseExpression": {
+      "description": "Bounded CEL evaluated only against the projected source object.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cel"],
+      "properties": { "cel": { "type": "string", "minLength": 1, "maxLength": 4096 } }
     },
     "filterOperators": { "type": "array", "minItems": 1, "uniqueItems": true, "description": "Allowed operators for one queryable field.", "items": { "enum": ["eq", "in", "gte", "lte", "between"] } },
     "fieldList": { "type": "array", "maxItems": 16, "uniqueItems": true, "description": "Bounded unique list of entity field identifiers.", "items": { "$ref": "#/$defs/stableId" } },

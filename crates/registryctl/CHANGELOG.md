@@ -35,6 +35,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   immutable local materialization serves records and evidence while retaining
   principal-bound filters, projection, cursor pagination, relationships,
   aggregates, metadata, and configured OGC or SP DCI adapters.
+- Records services can author bounded, entity-owned attribute-release profiles.
+  The compiler fixes subject cardinality to exactly one, permits claims and CEL
+  only over explicitly projected fields, keeps source metadata disabled, binds
+  each profile to one permitted purpose and distinct entity release scope, and
+  limits private response caching to one hour.
 - Consultations accept one to eight required selector inputs and up to sixteen
   typed inputs in total across HTTP, script, signed DCI, and snapshot. The
   compiler enforces the scalar JSON Schema subset, a 4096-byte canonical

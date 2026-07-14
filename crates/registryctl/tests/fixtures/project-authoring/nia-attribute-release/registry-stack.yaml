@@ -1,0 +1,77 @@
+version: 1
+registry: { id: solmara-nia-population }
+entities:
+  population: { file: entities/population.yaml }
+services:
+  nia-population-records:
+    kind: records_api
+    entity: population
+    title: NIA population records
+    description: Governed population attributes used by NIA-owned services.
+    owner: National Identity Agency
+    sensitivity: personal
+    access_rights: restricted
+    update_frequency: continuous
+    api:
+      scopes:
+        metadata: population:metadata
+        rows: population:rows
+        evidence_verification: population:evidence_verification
+      purposes:
+        - https://id.registrystack.org/solmara/purpose/esignet-identity-verification
+      projection:
+        - uin
+        - legacy_nid
+        - given_name
+        - family_name
+        - sex
+        - birth_date
+        - identity_status
+        - alive
+      pagination: { default_limit: 25, max_limit: 100 }
+      filters:
+        uin: [eq]
+        legacy_nid: [eq]
+      attribute_release_profiles:
+        solmara-nia-userinfo:
+          version: v1
+          title: SolmaraID UserInfo
+          description: Minimal identity attributes for the Solmara eSignet authenticator.
+          purpose: https://id.registrystack.org/solmara/purpose/esignet-identity-verification
+          release_scope: population:identity_release
+          subject:
+            input: individual_id
+            source_field: legacy_nid
+            id_type: national_id
+          release_conditions:
+            expression:
+              cel: "source.identity_status == 'active' && source.alive == true"
+          claims:
+            individual_id:
+              source_field: uin
+              required: true
+              sensitivity: direct_identifier
+            name:
+              expression:
+                cel: "source.given_name + ' ' + source.family_name"
+              required: true
+              sensitivity: direct_identifier
+            given_name:
+              source_field: given_name
+              required: true
+              sensitivity: direct_identifier
+            family_name:
+              source_field: family_name
+              required: true
+              sensitivity: direct_identifier
+            birthdate:
+              source_field: birth_date
+              required: true
+              sensitivity: personal
+            gender:
+              source_field: sex
+              required: false
+              sensitivity: personal
+          response:
+            max_age_seconds: 300
+      standards: { ogc_features: false, sp_dci: false }
