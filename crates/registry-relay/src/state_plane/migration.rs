@@ -53,10 +53,10 @@ const CONSTRAINT_FINGERPRINT_PG18: &str = "7dfaf85b762e7e0e2e67505a1cedaed7";
 const COLUMN_FINGERPRINT_PG16: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
 const COLUMN_FINGERPRINT_PG17: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
 const COLUMN_FINGERPRINT_PG18: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
-const FUNCTION_FINGERPRINT_PG16: &str = "e4fc5ebad0d20affb946d90f477415d2";
-const FUNCTION_FINGERPRINT_PG17: &str = "e4fc5ebad0d20affb946d90f477415d2";
-const FUNCTION_FINGERPRINT_PG18: &str = "e4fc5ebad0d20affb946d90f477415d2";
-const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "64a1f90d9b28b2a85b3093337c289e69";
+const FUNCTION_FINGERPRINT_PG16: &str = "20078d5cdf2d9115c487220827a2b18d";
+const FUNCTION_FINGERPRINT_PG17: &str = "20078d5cdf2d9115c487220827a2b18d";
+const FUNCTION_FINGERPRINT_PG18: &str = "20078d5cdf2d9115c487220827a2b18d";
+const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "57bf8376a1383e4f73483898ecb0a4a1";
 
 /// Runtime-forceable session semantics. Server/SUSET state that the runtime
 /// cannot safely repair is rejected by the attested SQL capability instead.
@@ -2209,9 +2209,9 @@ SELECT
             WHEN 18 THEN 'f1cce8b8398fd1b177d3d6b61a112cec'
             ELSE '' END FROM column_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN 'e4fc5ebad0d20affb946d90f477415d2'
-            WHEN 17 THEN 'e4fc5ebad0d20affb946d90f477415d2'
-            WHEN 18 THEN 'e4fc5ebad0d20affb946d90f477415d2'
+            WHEN 16 THEN '20078d5cdf2d9115c487220827a2b18d'
+            WHEN 17 THEN '20078d5cdf2d9115c487220827a2b18d'
+            WHEN 18 THEN '20078d5cdf2d9115c487220827a2b18d'
             ELSE '' END FROM function_fingerprint, server);
 $function$;
 
