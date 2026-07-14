@@ -130,6 +130,8 @@ jobs:
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          cache-targets: false
 
       - name: Install cargo-deny and just
         uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
@@ -153,6 +155,9 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Reclaim build space before tests
+        run: cargo clean
 
       - name: Workspace tests
         run: cargo test --locked --workspace
