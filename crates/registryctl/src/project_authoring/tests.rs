@@ -495,6 +495,45 @@ outputs:
     }
 
     #[test]
+    fn interval_materialization_refresh_uses_an_operational_bound() {
+        let project = project_golden("nia-attribute-release");
+        let mut loaded =
+            load_registry_project(&project, Some("local")).expect("NIA release project loads");
+        loaded
+            .entities
+            .get_mut("population")
+            .expect("population entity exists")
+            .document
+            .materialization
+            .refresh = "1m".to_string();
+        validate_entity_definition(&loaded.entities["population"].document)
+            .expect("one-minute materialization refresh is supported");
+        let compiled = compile_project(&loaded, None).expect("interval project compiles");
+        let relay: Value = serde_yaml::from_slice(
+            compiled
+                .relay_private
+                .get(Path::new("config/relay.yaml"))
+                .expect("generated Relay config exists"),
+        )
+        .expect("generated Relay config parses");
+        assert_eq!(relay["datasets"][0]["tables"][0]["refresh"]["mode"], "interval");
+        assert_eq!(relay["datasets"][0]["tables"][0]["refresh"]["interval"], "1m");
+
+        loaded
+            .entities
+            .get_mut("population")
+            .expect("population entity exists")
+            .document
+            .materialization
+            .refresh = "31d".to_string();
+        let error = validate_entity_definition(&loaded.entities["population"].document)
+            .expect_err("refresh beyond 30 days must fail closed");
+        assert!(error
+            .to_string()
+            .contains("entity materialization refresh is invalid"));
+    }
+
+    #[test]
     fn attribute_release_claims_cannot_read_unprojected_entity_fields() {
         let mut loaded = load_registry_project(
             &project_golden("nia-attribute-release"),

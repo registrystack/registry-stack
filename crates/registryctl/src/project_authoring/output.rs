@@ -1432,6 +1432,14 @@ fn parse_duration_ms(value: &str) -> Result<u32> {
     parse_duration_ms_with_max(value, 20_000, "deadline")
 }
 
+fn parse_materialization_refresh_ms(value: &str) -> Result<u32> {
+    parse_duration_ms_with_max(
+        value,
+        30 * 24 * 60 * 60 * 1_000,
+        "entity materialization refresh",
+    )
+}
+
 fn parse_duration_ms_with_max(value: &str, maximum: u32, label: &str) -> Result<u32> {
     let milliseconds = if let Some(milliseconds) = value.strip_suffix("ms") {
         Some(milliseconds.parse::<u32>()?)
