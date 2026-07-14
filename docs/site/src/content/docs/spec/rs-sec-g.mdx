@@ -37,6 +37,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.1.0 | 2026-06-13 | draft | Initial security model, distilled from the boundary map, the architecture overview, the Registry Relay and Registry Notary API references, the Registry Notary signing-key reference, and the two protocol specifications. |
 | 0.1.1 | 2026-06-21 | draft | Clarified key custody, readiness, public error detail, and principal-scoped cache boundaries. |
 | 0.2.0 | 2026-07-07 | draft | Enumerated the full unauthenticated surface in REQ-SEC-G-006 and anchored the evidence section to the enforcing code. |
+| 0.3.0 | 2026-07-13 | draft | Assigned registry source access to Relay and restated Notary authorization and federation gates in terms of compiler-pinned Relay consultations. |
 
 ## 1. Scope and references
 
@@ -74,15 +75,15 @@ A runtime service authenticates in exactly one mode, fixed by configuration. The
 flowchart LR
     caller["Caller"]
     authn["Authenticate (one mode):<br/>static fingerprint (sha256, constant-time)<br/>OR OIDC (issuer · audience · algorithm · JWKS)"]
-    authz["Authorize:<br/>scope-before-source<br/>deny-by-default"]
-    serve["Serve:<br/>record read · claim evaluation"]
+    authz["Authorize:<br/>before source or claim work<br/>deny-by-default"]
+    serve["Serve:<br/>Relay source read · Notary claim evaluation"]
     audit["Audit:<br/>Platform envelope · fail-closed<br/>principal · scopes · request_id · purpose"]
     caller --> authn --> authz --> serve --> audit
     keys["Verification keys:<br/>issuer JWKS<br/>(public half only)"] -.-> authn
     peers["Federation:<br/>static peers · verify-before-read"] -.-> authz
 ```
 
-The diagram restates the model: a caller authenticates in the instance's single mode, the request is authorized against the scope its target requires before any source is read, the service serves the configured surface, and the request is recorded. Verification keys are published so a verifier can check issued artifacts; delegated evaluation is admitted only from configured peers.
+The diagram restates the model: a caller authenticates in the instance's single mode, the request is authorized against the scope its target requires before source or claim work, the service serves the configured surface, and the request is recorded. Verification keys are published so a verifier can check issued artifacts; delegated evaluation is admitted only from configured peers.
 
 REQ-SEC-G-002: A runtime service MUST run exactly one authentication mode, either static credentials or OIDC, and MUST authenticate every route that returns person-level records or claim results before it produces a response.
 
@@ -94,7 +95,7 @@ REQ-SEC-G-004: In OIDC mode, the service MUST delegate token verification to the
 
 Authorization is scope-based and deny-by-default: a caller reaches only what its scopes grant, and the grant is fixed by configuration rather than widened at request time.
 
-REQ-SEC-G-005: Authorization MUST be scope-based and deny-by-default. A caller MUST hold the scope a route requires, and the service MUST enforce that scope before it reads any source or evaluates any claim (scope-before-source), so a caller that lacks a required scope is refused before source access, not after.
+REQ-SEC-G-005: Authorization MUST be scope-based and deny-by-default. A caller MUST hold the scope a route requires. Relay MUST enforce that scope before source work. Notary MUST enforce it before claim evaluation or a Relay consultation. A caller that lacks a required scope is refused before a protected effect, not after.
 
 REQ-SEC-G-006: A service MUST NOT widen a caller's reach at request time beyond what configuration grants. Every route that returns person-level records or claim results MUST require authentication, and the unauthenticated surface MUST be limited to routes that carry no person-level data:
 
@@ -126,9 +127,9 @@ REQ-SEC-G-009: A deployment MUST be able to run audit fail-closed, so that a req
 
 ## 7. Federation trust
 
-Delegated evaluation crosses a trust boundary between two services. The model admits only configured peers and verifies the full request before any source is read.
+Delegated evaluation crosses a trust boundary between two services. The model admits only configured peers and verifies the full request before any Relay consultation or claim evaluation.
 
-REQ-SEC-G-010: Delegated evaluation MUST be static-peer only: peers are loaded from configuration at startup, and a request from an unconfigured peer MUST be rejected. Before any source read, the serving service MUST verify the peer's identity and request signature, the request's freshness and single use, and its purpose, profile, and audience. This is the security-model form of REQ-ARC-G-009 and the cross-cutting form of REQ-PR-NOTARY-018 and REQ-PR-NOTARY-019. Dynamic trust-chain discovery, shared replay storage, and federated credential issuance are out of scope for this version and MUST NOT be implied by a conformance claim against this specification.
+REQ-SEC-G-010: Delegated evaluation MUST be static-peer only: peers are loaded from configuration at startup, and a request from an unconfigured peer MUST be rejected. Before any Relay consultation or claim evaluation, the serving service MUST verify the peer's identity and request signature, the request's freshness and single use, and its purpose, profile, and audience. This is the security-model form of REQ-ARC-G-009 and the cross-cutting form of REQ-PR-NOTARY-018 and REQ-PR-NOTARY-019. Dynamic trust-chain discovery, shared replay storage, and federated credential issuance are out of scope for this version and MUST NOT be implied by a conformance claim against this specification.
 
 ## 8. Transport and outbound-call posture
 
@@ -136,7 +137,7 @@ Services present a consistent error surface and constrain the calls they make ou
 
 REQ-SEC-G-011: Error responses MUST use the problem-details media type `application/problem+json` ([RFC 9457](https://www.rfc-editor.org/info/rfc9457)), except on a route whose own protocol defines a different error envelope (for example the OID4VCI routes, per REQ-PR-NOTARY-022).
 
-REQ-SEC-G-012: A runtime service SHOULD apply the Registry Platform HTTP-security primitive (security response headers) on its served surface, and outbound source fetches SHOULD be governed by the Registry Platform outbound-HTTP-policy primitive, which constrains the destinations a source connector may reach. The concrete header set and the outbound allow and deny rules are operational detail (Section 1).
+REQ-SEC-G-012: A runtime service SHOULD apply the Registry Platform HTTP-security primitive (security response headers) on its served surface, and outbound HTTP calls SHOULD be governed by the Registry Platform outbound-policy primitive. Relay source calls MUST also remain inside their compiler-pinned destination and request authority. The concrete header set and the outbound allow and deny rules are operational detail (Section 1).
 
 Problem details are a client-facing protocol surface, not an operator diagnostic channel. Stable problem codes and titles belong in responses; raw bearer tokens, private keys, source values, local filesystem paths, and unbounded internal error chains belong in protected operator logs. Principal-scoped responses, including scoped metadata and claim results, are not public cache entries: where a response varies by authenticated principal, scope, purpose, or authorization context, deployments use cache controls appropriate to that sensitivity, such as private or no-store semantics and `Vary: Authorization` where a response is cacheable.
 
@@ -154,10 +155,10 @@ A registry stack deployment conforms to this specification when it:
 - runs a single authentication mode and authenticates every claim- or record-bearing route (REQ-SEC-G-002);
 - compares static credentials as constant-time fingerprint checks and never configures the raw secret (REQ-SEC-G-003);
 - verifies OIDC tokens by signature, issuer, audience, and permitted algorithm before trusting them (REQ-SEC-G-004);
-- authorizes scope-before-source and deny-by-default, and never widens reach at request time (REQ-SEC-G-005, REQ-SEC-G-006);
+- authorizes before source or claim work, denies by default, and never widens reach at request time (REQ-SEC-G-005, REQ-SEC-G-006);
 - publishes only public verification keys and keeps private material unpublished (REQ-SEC-G-007);
 - audits every request touching person-level data and can run audit fail-closed (REQ-SEC-G-008, REQ-SEC-G-009);
-- admits delegated evaluation only from verified static peers, fully checked before any source read (REQ-SEC-G-010);
+- admits delegated evaluation only from verified static peers, fully checked before any Relay consultation or claim evaluation (REQ-SEC-G-010);
 - reports errors as problem+json outside route-specific error envelopes, and applies the shared HTTP-security and outbound-policy primitives (REQ-SEC-G-011, REQ-SEC-G-012);
 - keeps secrets out of distributable artifacts and leaves provisioning to the operator (REQ-SEC-G-013).
 

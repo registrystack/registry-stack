@@ -46,7 +46,9 @@ The audit hash secret and other secret material are read from operator-named var
 
 ## registryctl
 
-registryctl reads the variables below. It also reads operator-provided source and credential variables whose names are passed to `registryctl init notary` and legacy compatibility flags; those are not fixed names.
+registryctl reads the variables below. Registry Stack projects bind source and credential values
+through operator-selected secret references in environment files; the authored project and
+generated inputs contain the reference names, not the secret values.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
@@ -54,16 +56,6 @@ registryctl reads the variables below. It also reads operator-provided source an
 | `REGISTRYCTL_UPDATE_CHECK` | Disable the automatic update check when set to `0` or `false`. | Optional. |
 | `REGISTRYCTL_VERSION` | Pinned release the installer downloads. Read by the install script, not the running binary. | Defaults to the installer's pinned release. |
 | `CI` | When set to a non-empty value other than `0` or `false`, disables the automatic update check. | Optional. |
-
-registryctl also passes through operator-named source and sidecar variables. The defaults below are the variable names registryctl writes into generated projects and compatibility snippets; the operator can override them with flags.
-
-| Name | Purpose | Default or required |
-| --- | --- | --- |
-| `EVIDENCE_SOURCE_API_TOKEN` | Default source API bearer token variable for a `registry-data-api` Notary starter project. | Default name; override with `init notary --source-token-env`. |
-| `FHIR_SIDECAR_TOKEN` | Default source token variable for a `fhir-sidecar` Notary starter project. | Default name; override with `init notary --source-token-env`. |
-| `OPENFN_TOKEN` | Legacy OpenFn API token name for `registryctl openfn import` URL imports. | Default name; override with `--openfn-token-env`. |
-| `OPENFN_SIDECAR_TOKEN` | Legacy notary-to-sidecar bearer token name written into compatibility snippets. | Default name; override with `--sidecar-token-env`. |
-| `DEV_SIDECAR_TOKEN_HASH` | Notary-to-sidecar bearer token hash. | Default name; override with `--auth-hash-env`. |
 
 ## Source
 

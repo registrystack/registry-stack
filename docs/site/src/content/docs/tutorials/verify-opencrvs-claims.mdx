@@ -1,11 +1,10 @@
 ---
-title: Verify OpenCRVS claims with registryctl
-description: Generate a local Registry Notary project from OpenCRVS credentials, validate the config, and run a live birth-record claim evaluation smoke test.
-status: current
+title: Configure OpenCRVS claims
+description: Copy the OpenCRVS starter, verify its synthetic DCI journey offline, and build Relay and Notary configuration inputs.
+status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-  - registry-notary
 last_reviewed: "2026-06-26"
 doc_type: how-to
 locale: en
@@ -13,255 +12,146 @@ standards_referenced:
   - openapi
 ---
 
-Use this guide when you have OpenCRVS client credentials and want the shortest local
-Registry Notary path to a live claim check.
-`registryctl` generates the Notary project, stores your OpenCRVS client credentials in
-`secrets/local.env`, and writes local Notary demo credentials under `secrets/`.
-The generated project evaluates the starter `opencrvs-birth-record-exists` claim.
+Use this guide when a Registry Stack project needs birth-record claims from an OpenCRVS
+deployment. Registry Relay owns the Digital Convergence Initiative (DCI) source interaction and
+returns only the typed outputs in the compiled consultation. Registry Notary evaluates and
+discloses the configured claims from that Relay result.
 
-This guide validates delegated claim evaluation only.
-It does not configure governed policy, production signing, or credential issuance.
-OpenCRVS remains the evidence source, and Registry Notary evaluates the claim locally.
+{/* Evidence: crates/registryctl tests and fixtures under
+    tests/fixtures/project-authoring/opencrvs/. */}
+
+## When to use this
+
+Use the starter as a reviewed starting point for an OpenCRVS DCI search journey. The built-in
+fixtures are synthetic. They prove the canonical token, key, and search requests, signed response
+verification, exact identifier matching, ambiguity handling, output minimization, and claim
+evaluation without contacting OpenCRVS, Relay, or Notary.
+
+The starter does not prove compatibility with a particular OpenCRVS deployment. Record that
+evidence separately before marking a source version verified.
 
 ## Before you start
 
 You need:
 
-- Docker with Compose v2.20 or later.
-- `registryctl` 0.9.0, with `init notary --source-kind opencrvs-dci` support.
-- `curl` and `jq` for the explicit evaluation check.
-- The HTTPS base URL of your OpenCRVS test environment.
-- OpenCRVS OAuth client credentials for that environment.
-- A known test UIN (unique identification number) for the live smoke test.
+- A `registryctl` build with Registry Stack project authoring commands
+- A shell and a text editor
+- The reviewed OpenCRVS DCI endpoint, sender and receiver identifiers, registry profile, and
+  signing-key policy for the target deployment
 
-Install `registryctl` if you have not already:
+Keep OAuth credentials and signing keys out of authored files, fixtures, commands, and test
+output.
 
-The quick installer verifies the downloaded binary and release image lock against the release's
-`SHA256SUMS`; it does not authenticate the installer script or release. Before
-running it, review the available signature and provenance evidence in the
-canonical [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/main/release/VERIFY.md)
-guide. Evidence availability varies by release, and `v0.8.0` is unsigned.
+## Copy the OpenCRVS starter
+
+Create the project workspace:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.9.0/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.9.0 bash
-registryctl --version
+registryctl init --from opencrvs-dci --project-dir opencrvs-project
 ```
 
-## Generate the Notary project
-
-Generate the project with the OpenCRVS DCI (Digital Convergence Initiative) source kind and the known test UIN:
-
-```sh
-registryctl init notary opencrvs-notary \
-  --source-kind opencrvs-dci \
-  --source-url https://<your-opencrvs-host> \
-  --smoke-target-id <test-uin>
-
-cd opencrvs-notary
-```
-
-The generated `notary/config.yaml` records the source URL, including the OAuth token URL.
-The generated `registryctl.yaml` records the smoke target.
-
-## Set the source credentials
-
-Open `secrets/local.env` and replace the generated placeholders with your OpenCRVS
-OAuth client credentials:
-
-```dotenv
-DCI_CLIENT_ID=<opencrvs-client-id>
-DCI_CLIENT_SECRET=<opencrvs-client-secret>
-```
-
-Keep `secrets/local.env` private.
-Use the exact `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` names.
-Do not paste bearer tokens into the file.
-Registry Notary uses the OAuth client-credentials settings to fetch a source token.
-
-The generated project contains:
+The JSON report contains:
 
 ```text
-opencrvs-notary/
-  .gitignore
-  registryctl.yaml
-  compose.yaml
-  README.md
-  notary/
-    config.yaml
-  secrets/
-    local.env
-  output/
-  bruno/
-    registry-api/
+"status": "initialized"
 ```
 
-`secrets/local.env` contains local Notary API, audit, replay, demo issuer, and OpenCRVS
-OAuth values.
-The generated `compose.yaml` loads that file into the Notary container.
+The project contains one combined topology. Relay owns the OpenCRVS integration and consultation.
+Notary owns the evidence service, claims, disclosure policy, and optional credential profiles.
 
-## Validate and start
+## Prove the synthetic journey
 
-Run the local doctor before starting services:
+Run every fixture without a network connection:
 
 ```sh
-registryctl doctor --profile local --format json | jq '{ok, result}'
+registryctl test --project-dir opencrvs-project
 ```
 
-`doctor` checks the generated project and delegates Registry Notary config validation when a
-compatible `registry-notary` binary is available.
-If the report says the `registry-notary` doctor binary is not installed, continue with the Docker
-smoke test in [Run the first live claim](#run-the-first-live-claim).
-The report must not print your OpenCRVS client secret.
-
-Start the generated stack:
-
-```sh
-registryctl start
-```
-
-On Apple silicon, v0.9.0 images are published for linux/amd64 only. `registryctl start`
-applies the amd64 platform override automatically and prints a notice; you can also set it
-explicitly:
-
-```sh
-DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start
-```
-
-Registry Notary listens on:
+The JSON report contains:
 
 ```text
-http://127.0.0.1:4255
+"status": "passed"
 ```
 
-Open the local API docs when you want to inspect the generated routes:
+The match fixture proves the exact identifier and minimized birth-record outputs. The no-match and
+ambiguity fixtures prove that Relay does not choose a record when the source result is absent or
+non-unique. Derived checks reject malformed signatures, unexpected response shapes, excessive
+data, and source work before authorization.
+
+## Adapt the project contract
+
+Review and update these surfaces:
+
+1. In `registry-stack.yaml`, set the registry id, service purpose, caller scopes, consultation
+   input mapping, claims, disclosure modes, and credential profiles.
+2. In `integrations/birth-record/integration.yaml`, set the OpenCRVS product evidence, allowed
+   source version, DCI endpoint path, sender and receiver identifiers, registry and record types,
+   selector mapping, outputs, and limits.
+3. In `integrations/birth-record/adapter.rhai`, keep the source calls and response handling within
+   the declared method, path, origin, output, and limit authority.
+4. In `integrations/birth-record/fixtures/`, replace the fictional observations with wholly
+   synthetic examples of the reviewed request and response contract.
+5. In `environments/<environment>.yaml`, bind the private source, OAuth, trust, Relay workload,
+   caller, issuance, and deployment settings through secret references.
+
+`source.product` and `source.versions` are interoperability evidence. They do not enable DCI,
+Rhai, or another executor. The script capability remains available for any source product whose
+reviewed integration needs bounded multi-request adaptation.
+
+## Check and build the combined topology
+
+Validate the adapted project and inspect its redacted plan:
 
 ```sh
-registryctl notary open
+registryctl check \
+  --project-dir opencrvs-project \
+  --environment local \
+  --explain
 ```
 
-## Run the first live claim
+The report contains `"status": "valid"`. Review the fixed source authority, required caller
+scopes, consultation input mapping, output projection, claims, disclosure modes, and required
+review classes.
 
-Run the live smoke test:
+Generate deterministic unsigned inputs for both products:
 
 ```sh
-registryctl notary smoke
+registryctl build \
+  --project-dir opencrvs-project \
+  --environment local
 ```
 
-The smoke test checks health, readiness, authenticated Notary access, and the live OpenCRVS-backed
-evaluation.
-`registryctl` writes the detailed report to:
+The report contains `"status": "built"`. The output has separate Relay and Notary Config Bundle
+input directories under `.registry-stack/build/local/private/`. It contains secret references,
+not secret values. Package, sign, verify, and activate each product input through that product's
+Config Bundle workflow.
 
-```text
-output/notary-smoke-results.json
-```
+## Verify the boundary
 
-To test a different UIN, edit `notary.smoke_target_id` in `registryctl.yaml` and rerun
-`registryctl notary smoke`.
+Before deployment approval, confirm:
 
-## Read the result safely
-
-Inspect the redacted smoke report:
-
-```sh
-jq '.checks[] | {name, passed, actual_status}' output/notary-smoke-results.json
-```
-
-Do not paste the full report into support channels unless you have reviewed it.
-The smoke report is designed to avoid raw OpenCRVS rows, target UINs, and secret values, but local
-operators remain responsible for handling evidence reports as sensitive artifacts.
-
-## Run an explicit evaluation
-
-The smoke command proves the live claim works, but it does not print the raw evaluation response.
-Run one explicit evaluation when you want a safe, minimal result summary:
-
-```sh
-export OPENCRVS_DEMO_SUBJECT_UIN='<test-uin>'
-
-NOTARY_API_KEY="$(
-  awk -F= '$1 == "REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW" { sub(/^[^=]*=/, ""); print; exit }' \
-    secrets/local.env
-)"
-
-curl -fsS http://127.0.0.1:4255/v1/evaluations \
-  -H "content-type: application/json" \
-  -H "accept: application/vnd.registry-notary.claim-result+json" \
-  -H "x-api-key: $NOTARY_API_KEY" \
-  -H "data-purpose: https://example.local/purpose/tutorial" \
-  -d '{
-    "target": {
-      "type": "person",
-      "identifiers": [
-        {
-          "scheme": "UIN",
-          "value": "'"$OPENCRVS_DEMO_SUBJECT_UIN"'"
-        }
-      ]
-    },
-    "claims": ["opencrvs-birth-record-exists"],
-    "disclosure": "predicate",
-    "purpose": "https://example.local/purpose/tutorial"
-  }' | jq '{
-    claim_id: .results[0].claim_id,
-    satisfied: .results[0].satisfied,
-    evaluation_id_present: (.results[0].evaluation_id != null)
-  }'
-```
-
-Expected result:
-
-```json
-{
-  "claim_id": "opencrvs-birth-record-exists",
-  "satisfied": true,
-  "evaluation_id_present": true
-}
-```
-
-Do not paste the full evaluation response into support channels unless you have reviewed it.
-
-## Stop the notary project
-
-When you are done:
-
-```sh
-registryctl stop
-```
-
-`registryctl stop` runs `docker compose down`, which stops and removes the containers. The
-generated project defines no named Docker volumes, so there is nothing else for `down` to
-remove. `registryctl.yaml`, `compose.yaml`, `notary/config.yaml`, `secrets/local.env`, `output/`,
-and `bruno/registry-api/` all stay on disk.
-
-## What the generated config does
-
-The generated `notary/config.yaml` configures:
-
-- An OpenCRVS source connection named `opencrvs_crvs`.
-- OAuth client-credentials auth using `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET`.
-- The `/registry/sync/search` source path used by this OpenCRVS connection.
-- A UIN lookup for birth registrations.
-- The `opencrvs-birth-record-exists` claim.
-- `predicate` disclosure as the default response.
-- Claim-result JSON as the starter response format.
-- Local signing material for later demo issuance configuration, not production trust.
-
-For the mental model behind these blocks, see the Registry Notary
-[OpenCRVS onboarding model](https://docs.registrystack.org/products/registry-notary/opencrvs-onboarding/).
+- Only Relay has source origin, credential, token, and source-trust bindings.
+- Notary has a Relay workload binding for registry-backed claims and no direct OpenCRVS connector.
+- The source product and version do not select the script capability.
+- Each fixture proves the canonical source request and a minimized typed result.
+- The generated review record identifies every semantic and operator-security review required by
+  the adapted project.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `registryctl notary smoke` or the explicit evaluation returns a source auth error | Registry Notary could not authenticate to OpenCRVS with the configured OAuth client credentials. | Confirm `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` in `secrets/local.env` match a valid OpenCRVS OAuth client for the target environment. |
-| The smoke or evaluation returns `source.unavailable` (HTTP 503) and the logs show a DNS lookup failure | The `--source-url` host does not resolve; the placeholder was left in, or the URL is wrong. | Rerun `registryctl init notary` with your real OpenCRVS base URL, or fix `source.url` in `notary/config.yaml`. |
-| `registryctl start` times out and the container log shows `missing field \`commitment\`` | registryctl v0.8.4 pins a service image older than its own generated config format ([GH#278](https://github.com/registrystack/registry-stack/issues/278)). | Replace the Notary image in `compose.yaml` with the published v0.8.4 digest `ghcr.io/registrystack/registry-notary@sha256:0cf05184885d7ed17dd9889e20f3797eb2a9ad07517f4ac7c05c03b774a00b8f`, run `docker compose pull`, and start again; reapply after any command that regenerates `compose.yaml`. |
-| `registryctl init notary` reports that its image lock is missing or invalid | The binary was moved or built without the strict image lock from the same release, or the lock does not match the CLI release and tag-built digest evidence. | Rerun the installer from the same pinned target tag so it checksum-verifies and installs both files. For an intentionally separate location, set `REGISTRYCTL_IMAGE_LOCK` to the exact verified lock. Never replace the digest reference with a mutable image tag. |
-| Docker reports no `linux/arm64` manifest for a v0.9.0 image | v0.9.0 images publish for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`, as shown in [Validate and start](#validate-and-start). |
-| `registryctl init notary` fails with `--source-token-from-env is not used with --source-kind opencrvs_dci` | `--source-token-from-env` was passed alongside `--source-kind opencrvs-dci`. | Configure `DCI_CLIENT_ID` and `DCI_CLIENT_SECRET` directly in `secrets/local.env` instead. |
+| A fixture request differs from the trace | The expected DCI interaction does not match the compiled integration. | Correct the integration or update the wholly synthetic interaction proof. |
+| Signature verification fails | The synthetic response, key set, algorithm, or configured key policy is inconsistent. | Regenerate only synthetic fixture evidence from the reviewed contract. |
+| A source response is ambiguous | More than one record matches the exact identifier. | Correct the source data or strengthen the reviewed selector contract. |
+| Notary contains an OpenCRVS source credential | Source authority crossed the Relay boundary. | Remove the Notary binding and bind the credential only to the Relay integration environment. |
+| A product or version change enables script execution | Runtime dispatch is coupled to interoperability metadata. | Keep `capability.script` explicit and treat product and version only as evidence. |
 
 ## Next
 
-- [OpenCRVS onboarding model](https://docs.registrystack.org/products/registry-notary/opencrvs-onboarding/)
-- [Registry Notary overview](../../products/registry-notary/)
-- [Signing key providers](../../products/registry-notary/signing-key-provider/)
+- Return to [Author an HTTP Registry Stack project](../author-registry-project/) for the complete
+  fixture, review, and unsigned-build workflow.
+- Use [Configure a script source adapter](../configure-project-sandboxed-rhai/) to review the
+  product-neutral Rhai host boundary.
+- Read [Integration patterns](../../explanation/integration-patterns/) for the Relay and Notary
+  topology around a domain system.

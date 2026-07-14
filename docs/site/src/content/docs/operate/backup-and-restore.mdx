@@ -28,7 +28,7 @@ multi-node, or Kubernetes deployments.
 
 This procedure preserves durable state.
 It does not preserve process-local state such as OpenID Connect (OIDC) JSON Web Key Set
-(JWKS) caches, source-adapter token caches, or in-flight OpenID for Verifiable Credential
+(JWKS) caches, Relay source-integration token caches, or in-flight OpenID for Verifiable Credential
 Issuance pre-authorized flows.
 Those flows are interrupted by restart and must be started again by the holder or upstream
 journey.
@@ -187,14 +187,13 @@ registryctl doctor --profile local --format json
 if [ -f registryctl.yaml ] && grep -q '^relay:' registryctl.yaml; then
   registryctl smoke
 fi
-if [ -f registryctl.yaml ] && grep -q '^notary:' registryctl.yaml; then
-  registryctl notary smoke
-fi
 ```
 
 Expected output from `doctor` is a JSON report with no `startup_fail` findings.
-Run the Relay and Notary smoke checks only when `registryctl.yaml` declares the matching
-product section.
+Run `registryctl smoke` only when `registryctl.yaml` declares Relay. For a Notary deployment,
+run `registry-notary doctor --config <your-notary-config.yaml> --format json`, then exercise an
+authenticated claim or credential journey appropriate to that deployment. `registryctl` does not
+provide a product-scoped Notary smoke subcommand.
 
 For a deployment that uses `config_trust`, verify that the restored anti-rollback state still
 matches the configured trust anchor and signed bundle before the service is allowed to serve.

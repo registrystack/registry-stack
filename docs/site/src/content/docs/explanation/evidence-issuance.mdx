@@ -1,6 +1,6 @@
 ---
 title: Evidence issuance, end to end
-description: Explains how Registry Notary turns a subject identifier and a configured claim into a signed evaluation or SD-JWT VC credential, including direct, wallet, federated, and receipt-only paths.
+description: Explains how Registry Notary turns typed request inputs and a configured claim into a signed evaluation or SD-JWT VC credential, including direct, wallet, federated, and receipt-only paths.
 status: current
 owner: registry-notary
 source_repos:
@@ -18,10 +18,11 @@ standards_referenced:
   - oid4vci
 ---
 
-This page describes how Registry Notary turns a subject identifier and a configured claim into a
-signed evaluation or verifiable credential. It is an explanation, not a how-to: there are no commands here.
-For commands, see the [Registry Notary documentation](../../products/registry-notary/) and
-[Source and claim modeling](../../products/registry-notary/source-claim-modeling-guide/).
+This page describes how Registry Notary turns typed request inputs and a configured claim into a
+signed evaluation or verifiable credential. It is an explanation, not a how-to: there are no
+commands here.
+For commands, see the [Registry Notary documentation](../../products/registry-notary/) and the
+[Registry Stack project authoring guide](../../tutorials/author-registry-project/).
 
 ## Why issue credentials at all
 
@@ -33,8 +34,9 @@ credential lets a registry answer one question (does this subject satisfy this r
 shipping the records that justify the answer. Registry Notary is the component that produces
 those credentials.
 
-In the three-party credential model, Registry Notary is the issuer: it reads source data,
-evaluates the configured claim, applies the disclosure policy, and signs an SD-JWT VC.
+In the three-party credential model, Registry Notary is the issuer: it evaluates a configured
+claim from compiler-pinned Relay outputs or permitted self-attestation, applies the disclosure
+policy, and signs an SD-JWT VC.
 A wallet is the holder: it stores the credential, presents fields selectively, and proves key
 possession. A verifier is the relying party: it checks the issuer signature, reads the presented
 fields, and applies its own program policy. What Notary produces is evidence, a signed receipt
@@ -45,7 +47,7 @@ to the program, not to Notary.
 <figure>
   <img src="../../images/registry-notary-three-parties.svg"
        alt="Registry Notary as issuer in the three-party credential model. Registry Notary
-            reads source data, evaluates claims, applies disclosure policy, and signs an
+            evaluates Relay-backed or self-attested claims, applies disclosure policy, and signs an
             SD-JWT VC. A wallet, the holder, stores the credential, presents selectively,
             and proves key possession. A verifier, the relying party, checks the issuer
             signature, reads presented fields, and applies program policy. Notary produces
@@ -60,20 +62,19 @@ A single claim evaluation moves through five stages.
 {/* SVG diagram. Essential labels and option lists are restated in the prose that follows. */}
 <figure>
   <img src="../../images/registry-claim-model.svg"
-       alt="Claim model: five configured stages in order. (1) Subject identifier: input
-            from the caller, typed by the source connector. (2) Source connector:
-            registry_data_api, dci, or source_adapter_sidecar, configured per binding.
-            (3) Rule evaluation: one of extract, exists, or cel. (4) Disclosure mode:
+       alt="Claim model: five configured stages in order. (1) Typed request inputs from the
+            caller. (2) A compiler-pinned Relay consultation, or permitted self-attestation.
+            (3) Rule evaluation from closed inputs. (4) Disclosure mode:
             value, predicate, or redacted. (5) Evaluation render format: claim-result
             JSON or CCCEV JSON-LD.
             Eligible stored evaluations can later be materialized as SD-JWT VC credentials." />
 </figure>
 
-The configuration that makes each stage concrete is the `ClaimDefinition` in
-[demo/config/registry-notary.yaml](https://github.com/registrystack/registry-stack/blob/v0.8.1/products/notary/demo/config/registry-notary.yaml).
-Each `ClaimDefinition` names its `source_bindings`, declares its `rule`, sets its `disclosure`
-policy, lists the evaluation render `formats` it may emit, and names any credential profiles that
-can materialize an SD-JWT VC from the stored evaluation.
+Registry Stack project authoring makes each stage concrete. An evidence service declares typed
+request inputs, compiler-pinned consultations, claims over the closed consultation or
+self-attestation inputs, disclosure modes, and optional credential profiles. Product and source
+version labels record interoperability evidence. They do not select a Relay capability or script
+runtime.
 
 ## Four ways to consume an evaluation
 
@@ -115,12 +116,13 @@ evaluation, or receipt.
    results.
 4. Federated delegated evaluation. The caller is another configured Registry Notary. It posts a
    compact signed JWT to `POST /federation/v1/evaluations`; the serving Notary verifies peer
-   policy, replay state, purpose, profile, and audience before source reads, then returns a compact
+   policy, replay state, purpose, profile, and audience before Relay consultation or claim
+   evaluation, then returns a compact
    signed JWT response. This path returns a scoped evaluation result, not a credential.
 
-The [credential tour](../../start/credential-tour/) citizen self-attestation scenario uses path 2: a
-host-side Notary runs against the lab's civil registry, eSignet provides the
-access token, and a wallet completes the OID4VCI flow.
+The [credential tour](../../start/credential-tour/) citizen self-attestation scenario uses path 2:
+eSignet provides the access token, Notary evaluates the permitted authenticated context without a
+registry source, and a wallet completes the OID4VCI flow.
 
 ## Selective disclosure properties
 
@@ -153,14 +155,15 @@ The [doctor diagnostic](https://github.com/registrystack/registry-stack/blob/v0.
 
 ## Where this fits with Relay
 
-Registry Notary is an independently deployable HTTP service. A program does not need to run
-Registry Relay to use Registry Notary. The link between the two is metadata, not code.
+Registry Notary is an independently deployable HTTP service. A Notary-only deployment supports
+source-free and self-attested claims. Registry-backed claims require Registry Relay, and a
+combined deployment calls Relay through the compiler-pinned consultation contract.
 
 Registry Relay surfaces evidence-offering metadata under `/metadata/evidence-offerings/{id}`.
 The metadata document points at a Registry Notary instance, names the claim ids the offering
 covers, and describes the supported disclosure modes and formats. A consumer that finds an
-offering on Relay learns where to call Notary; nothing in the Relay code path issues
-credentials.
+offering on Relay learns where to call Notary. Relay owns registry source access and typed
+consultation outputs; Notary owns claim semantics, disclosure, and credential issuance.
 
 For delegated evaluation, Registry Manifest can also publish `federation` and
 `evaluation_profiles` metadata. That metadata helps a partner configure a static peer relationship.

@@ -19,7 +19,6 @@ standards_referenced:
   - json-ld
   - w3c-did
   - openapi
-  - sp-dci
 layer:
   - evaluation
   - credential
@@ -29,7 +28,7 @@ audience:
   - specification editor
 ---
 
-This document defines the HTTP protocol contract that Registry Notary exposes: how a caller authenticates, discovers capabilities, passes governed source policy decisions before source reads, evaluates a claim, controls disclosure, receives an evaluation result in a supported render format, obtains an SD-JWT VC credential directly or through an OID4VCI wallet flow, uses delegated self-attestation for dependent claims, delegates evaluation to a peer, and what audit and error behavior every request carries. It is the precise, citable version of the behavior the [Registry Notary API reference](../../reference/apis/registry-notary/) describes narratively.
+This document defines the HTTP protocol contract that Registry Notary exposes: how a caller authenticates, discovers capabilities, authorizes compiler-pinned Relay consultations or self-attestation before evaluation, controls disclosure, receives an evaluation result in a supported render format, obtains an SD-JWT VC credential directly or through an OID4VCI wallet flow, uses delegated self-attestation for dependent claims, delegates evaluation to a peer, and what audit and error behavior every request carries. It is the precise, citable version of the behavior the [Registry Notary API reference](../../reference/apis/registry-notary/) describes narratively.
 
 It refines the Registry Notary component defined in [RS-ARC-G](../rs-arc-g/) Section 3 (specifically REQ-ARC-G-004, REQ-ARC-G-007, REQ-ARC-G-008, and REQ-ARC-G-009) one level of detail down, from architectural boundary to wire behavior. Where this document and RS-ARC-G state the same constraint, RS-ARC-G is the general invariant and this document is its protocol-level form.
 
@@ -45,6 +44,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.1.3 | 2026-06-22 | draft | Document delegated self-attestation, proof-claim gating, explicit dependent-target binding, delegated denial reasons, and the OID4VCI delegated-token rejection boundary. |
 | 0.1.4 | 2026-06-27 | draft | Clarified OIDC principal derivation, issuer-bound Notary transaction authorization details, and nonce expiry enforcement for OID4VCI holder proofs. |
 | 0.1.5 | 2026-07-07 | draft | Editorial: pointed the Relay-protocol reference at published RS-PR-RELAY and added explicit evidence citations for REQ-PR-NOTARY-034/035/036. |
+| 0.2.0 | 2026-07-13 | draft | Removed direct registry source connectors and sidecars. Registry-backed claims now consume compiler-pinned Relay consultations; Notary-only claims are source-free or self-attested. |
 
 ## 1. Scope and references
 
@@ -52,7 +52,7 @@ This specification covers Registry Notary's externally observable protocol behav
 
 - Authentication and per-claim authorization.
 - The discovery surface and its access posture.
-- Governed source policy decisions before source reads.
+- Authorization and policy decisions before Relay consultation or claim evaluation.
 - The claim-evaluation request and response contract, including disclosure semantics and response formats.
 - Credential issuance over the direct API and over the OID4VCI wallet flow.
 - Delegated self-attestation for configured requester-dependent relationships.
@@ -62,17 +62,17 @@ This specification covers Registry Notary's externally observable protocol behav
 This specification does not define:
 
 - Exact routes and schemas: The generated OpenAPI document, rendered as the [Registry Notary API reference](../../reference/apis/registry-notary/), is the authoritative route and schema reference. This document states behavior a schema cannot, and does not restate request and response shapes that would drift from the generated source.
-- The claim definition data model: How a `ClaimDefinition` declares its source bindings, rule, disclosure policy, formats, and credential eligibility belongs to [RS-DM-CLAIM](../rs-dm-claim/). This document refers to those fields only where they govern protocol behavior.
+- The claim definition data model: How a `ClaimDefinition` declares its evidence mode, Relay consultation bindings, rule, disclosure policy, formats, and credential eligibility belongs to [RS-DM-CLAIM](../rs-dm-claim/). This document refers to those fields only where they govern protocol behavior.
 - Security model internals: Key management, token fingerprinting, and the OIDC trust configuration belong to [RS-SEC-G](../rs-sec-g/) and deeper security specifications. This document states the authorization behavior a caller observes.
-- Registry Relay's protocol: Relay's own consultation API is a separate surface, specified in [RS-PR-RELAY](../rs-pr-relay/). This document treats Relay only as a source a Notary connector reads over HTTP.
+- Registry Relay's protocol: Relay's consultation API is a separate surface, specified in [RS-PR-RELAY](../rs-pr-relay/). This document specifies only how Notary binds and invokes a compiler-pinned Relay consultation.
 
 For the motivation and worked examples behind this contract, see [Evidence issuance, end to end](../../explanation/evidence-issuance/). For the architecture this protocol sits in, see [RS-ARC-G](../rs-arc-g/). Media types are named per [RS-TERMS](../rs-terms/) Section 2.
 
 ## 2. Service surface and discovery
 
-Registry Notary is a standalone HTTP service for claim evaluation, disclosure policy, credential issuance, and audit (REQ-ARC-G-007). The link between Notary and Registry Relay is metadata and an HTTP source connector, not shared application code: a deployment can run Notary without running Relay.
+Registry Notary is a standalone HTTP service for claim evaluation, disclosure policy, credential issuance, and audit (REQ-ARC-G-007). A Notary-only deployment supports source-free and self-attested claims. A registry-backed claim requires a combined deployment in which Notary calls a compiler-pinned Registry Relay consultation.
 
-REQ-PR-NOTARY-001: Registry Notary MUST be independently deployable. It MUST NOT require a running Registry Relay to start or to serve routes that do not read from a Relay-backed source.
+REQ-PR-NOTARY-001: Registry Notary MUST be independently deployable. It MUST NOT require Registry Relay to start or to evaluate source-free and self-attested claims. A claim configured as registry-backed MUST NOT become ready without its pinned Relay consultation contract.
 
 A caller discovers Notary's capabilities and claim catalog at `GET /.well-known/evidence-service`. The issuer's public verification keys are published at `GET /.well-known/evidence/jwks.json`, and the OID4VCI issuer metadata at `GET /.well-known/openid-credential-issuer`.
 
@@ -87,46 +87,44 @@ Registry Notary runs in one of two authentication modes, selected by configurati
 
 REQ-PR-NOTARY-003: Every claim-bearing route MUST authenticate the caller, in static-credential mode (constant-time fingerprint comparison of an `x-api-key` or `Authorization: Bearer` token) or in OIDC mode (token verification delegated to Registry Platform primitives).
 
-REQ-PR-NOTARY-004: Registry Notary MUST enforce a claim's required scopes before it evaluates the claim or reads any source. A caller whose credential lacks a required scope MUST be refused before source access, not after.
+REQ-PR-NOTARY-004: Registry Notary MUST enforce a claim's required scopes before it evaluates the claim or calls Registry Relay. A caller whose credential lacks a required scope MUST be refused before Relay or claim work, not after.
 
 REQ-PR-NOTARY-034: In OIDC mode, Registry Notary MUST derive its authenticated principal from the configured principal claim, using `sub` by default.
 A matched client id, authorized party, or audience MAY participate in token verification, scope mapping, or self-attestation classification, but MUST NOT substitute for a missing configured principal claim.
 
-When a claim source binding declares matching policy, Notary evaluates the supported Evidence Gateway PDP profile before reading protected source rows. The supported profile covers policy identity and hash, supported ODRL purpose and spatial terms, claim-level and source-bound purpose constraints, jurisdiction, assurance allow-list and minimum assurance, source freshness, required legal basis and consent, relationship and relationship-purpose constraints, requested fact, requested disclosure, requested credential format, source binding, route identity, checked scope, redaction, and unsupported policy terms. Self-asserted target fields do not satisfy trust-context gates that require a trusted principal authorization context.
+When a claim declares governed policy, Notary evaluates the supported Evidence Gateway PDP profile before a Relay consultation or self-attested evaluation. The supported profile covers policy identity and hash, supported ODRL purpose and spatial terms, claim purpose, jurisdiction, assurance, freshness represented by trusted Relay provenance, required legal basis and consent, relationship and relationship-purpose constraints, requested fact, requested disclosure, requested credential format, route identity, checked scope, redaction, and unsupported policy terms. Self-asserted target fields do not satisfy trust-context gates that require a trusted principal authorization context.
 
-REQ-PR-NOTARY-023: Before a source read, Registry Notary MUST obtain the applicable policy decision for the claim and source binding. A denial MUST fail closed with the stable PDP denial code produced for that gate, and MUST NOT be retried as an ungoverned source read.
+REQ-PR-NOTARY-023: Before a Relay consultation or self-attested evaluation, Registry Notary MUST obtain the applicable policy decision for the claim. A denial MUST fail closed with the stable PDP denial code produced for that gate and MUST NOT be retried through a less governed evidence mode.
 
-REQ-PR-NOTARY-024: Source-bound purpose constraints MUST combine the claim's permitted purposes with the source binding's permitted purposes. If either configured purpose set rejects the request purpose, Notary MUST deny before source access.
+REQ-PR-NOTARY-024: Notary MUST require the request purpose to match the claim purpose and the compiler-pinned Relay consultation purpose for a registry-backed claim. A mismatch MUST deny before Relay access.
 
 The internals of key handling and OIDC trust configuration are a security-model concern specified by [RS-SEC-G](../rs-sec-g/).
 
 ## 4. Claim evaluation
 
-A claim evaluation moves a subject identifier through a configured pipeline: a source connector resolves facts about the subject, a rule evaluates the configured condition, a disclosure mode shapes what leaves the service, and a response format carries the result. The narrative form of this pipeline, with worked examples, is in [Evidence issuance, end to end](../../explanation/evidence-issuance/).
+A claim evaluation moves typed request inputs through one configured evidence mode, then a rule, disclosure policy, and response format. Registry-backed claims consume compiler-pinned Relay outputs. Source-free and self-attested claims use only permitted request inputs. The narrative form of this pipeline, with worked examples, is in [Evidence issuance, end to end](../../explanation/evidence-issuance/).
 
 ```mermaid
 flowchart LR
-    subject["Subject identifier<br/>(from caller)"]
-    connector["Source connector<br/>registry_data_api · dci · source_adapter_sidecar<br/>(HTTP only)"]
+    subject["Typed request inputs<br/>(from authorized caller)"]
+    evidence["Evidence mode<br/>Relay consultation · self-attestation"]
     rule["Rule<br/>extract · exists · cel"]
     disclosure["Disclosure mode<br/>value · predicate · redacted"]
     format["Evaluation render format<br/>claim-result JSON · CCCEV JSON-LD"]
     credential["Credential issuance<br/>SD-JWT VC"]
-    subject --> connector --> rule --> disclosure --> format
+    subject --> evidence --> rule --> disclosure --> format
     disclosure --> credential
 ```
 
-The diagram restates the pipeline: a caller supplies a subject identifier and a claim id; the configured source connector reads facts over HTTP; the configured rule evaluates; the disclosure mode constrains the output; and the result can be rendered as claim-result JSON or CCCEV-shaped JSON-LD. SD-JWT VC output is materialized through the credential issuance surface in Section 7. A caller does not supply the evaluated value.
+The diagram restates the pipeline: an authorized caller supplies the configured target and request inputs plus a claim id. A registry-backed claim invokes exactly the pinned Relay consultation; a self-attested claim uses only its configured authenticated context and request inputs. The rule evaluates, disclosure constrains the output, and the result can be rendered as claim-result JSON or CCCEV-shaped JSON-LD. SD-JWT VC output is materialized through the credential issuance surface in Section 7. A caller does not supply the evaluated value.
 
-REQ-PR-NOTARY-005: Claim evaluation MUST be performed by Registry Notary against its configured sources. The caller supplies a subject identifier and a claim id and MUST NOT supply the evaluated value. This is the protocol-level form of REQ-ARC-G-007.
+REQ-PR-NOTARY-005: Claim evaluation MUST be performed by Registry Notary over its configured evidence mode. The caller supplies only the configured request inputs and claim id and MUST NOT supply the evaluated value. This is the protocol-level form of REQ-ARC-G-007.
 
-REQ-PR-NOTARY-006: A source connector MUST reach its target over HTTP. The supported connector kinds are `registry_data_api` (a Registry Relay instance), `dci` (an SP DCI search source), and the source adapter sidecar (which uses built-in `http_json`, `http_flow`, or `fhir` engines to reach external sources such as DHIS2 or FHIR servers). There is no file-based or database connector, and a conforming deployment MUST NOT assume one.
-
-The source adapter sidecar is a private deployment surface behind Registry Notary, not a public subject-facing API. A static bearer token on the Notary-to-sidecar hop authenticates that internal hop; it is not by itself an end-user, tenant, or subject authorization boundary. Deployments keep direct sidecar access off the public network, scope sidecar credentials to the configured source, and scope cache, retry, and backoff state so one caller or source path cannot make authorization-relevant decisions for another.
+REQ-PR-NOTARY-006: Registry Notary MUST NOT configure or execute a direct registry source connector. A registry-backed claim MUST bind one or more compiler-pinned Registry Relay consultations by profile id and contract hash. The request purpose and typed inputs MUST match the pinned contract before Notary calls Relay. Source origins, credentials, HTTP or script execution, protocol helpers, snapshots, and output minimization belong to Relay.
 
 REQ-PR-NOTARY-007: A claim's rule MUST be one of the implemented rule types: `extract`, `exists`, or `cel`. The `plugin` rule type is declared in configuration but is unimplemented at the reviewed commit; a conforming claim MUST NOT depend on it.
 
-REQ-PR-NOTARY-025: When a source binding configures freshness, Registry Notary MUST derive freshness from configured source metadata, not from caller-supplied freshness. Where the connector can preflight the source observation time, stale or missing freshness MUST deny before the protected source row is read. Where the row itself carries the configured observation field, Notary MUST recheck that timestamp after the row read and before disclosure or credential materialization.
+REQ-PR-NOTARY-025: When a registry-backed claim requires freshness, Registry Notary MUST derive freshness from the verified Relay consultation provenance, not from caller-supplied freshness. Stale, absent, or malformed required provenance MUST deny before disclosure or credential materialization.
 
 `POST /v1/evaluations` evaluates a single claim; `POST /v1/batch-evaluations` evaluates several in one request. An evaluation is retained under an `evaluation_id` so it can later be rendered (Section 6) or materialized into a credential (Section 7) without re-reading the source.
 
@@ -178,13 +176,13 @@ Registry Notary has two self-attestation access modes:
 - `self_attestation`: the authenticated principal is the credential subject.
 - `delegated_attestation`: the authenticated principal is the requester, and a configured dependent target can be evaluated only when scoped authorization details name the same target, relationship, and proof claim.
 
-Delegated self-attestation is distinct from Section 9 federation. It does not delegate trust to a peer Notary. It stays inside the citizen/OIDC trust context and uses relationship proof evaluation before dependent source access.
+Delegated self-attestation is distinct from Section 9 federation. It does not delegate trust to a peer Notary. It stays inside the citizen/OIDC trust context and uses a compiler-pinned Relay relationship proof before the dependent claim.
 
-REQ-PR-NOTARY-029: For delegated self-attestation, Registry Notary MUST derive the requester from the authenticated principal, derive the relationship from scoped authorization details, require the scoped authorization details to bind the same dependent target by `target.id_type` and `target.id`, and reject caller-supplied `requester`, `relationship`, or `on_behalf_of` fields before any source read.
+REQ-PR-NOTARY-029: For delegated self-attestation, Registry Notary MUST derive the requester from the authenticated principal, derive the relationship from scoped authorization details, require the scoped authorization details to bind the same dependent target by `target.id_type` and `target.id`, and reject caller-supplied `requester`, `relationship`, or `on_behalf_of` fields before any Relay consultation.
 
-REQ-PR-NOTARY-030: A delegated relationship MUST be enabled in `self_attestation.delegation.allowed_relationships`. The relationship MUST name a `proof_claim`; that proof claim MUST read a source binding whose lookup inputs bind both `requester.*` and `target.*`. Every dependent claim allowed for that relationship MUST be explicitly allow-listed and MUST list the proof claim in `depends_on`.
+REQ-PR-NOTARY-030: A delegated relationship MUST be enabled in `self_attestation.delegation.allowed_relationships`. The relationship MUST name a registry-backed `proof_claim`. That proof claim MUST bind exactly one compiler-pinned Relay consultation whose closed input mapping includes both requester and target identifiers. Every dependent claim allowed for that relationship MUST be explicitly allow-listed and MUST list the proof claim in `depends_on`.
 
-REQ-PR-NOTARY-031: A delegated source-read capability MUST bind the requester subject and dependent target with keyed hashes. Registry Notary MUST evaluate the proof claim before the dependent claim reads its source, and MUST deny the dependent claim when the proof claim is missing, fails, or returns anything other than boolean `true`. Rendering or issuing from a stored delegated evaluation MUST revalidate the current delegated authorization details, including the dependent-target binding, against the stored metadata.
+REQ-PR-NOTARY-031: A delegated Relay capability MUST bind the requester subject and dependent target with keyed hashes. Registry Notary MUST evaluate the proof consultation before the dependent claim and MUST deny the dependent claim when the proof is missing, fails, is ambiguous, or returns anything other than boolean `true`. It MUST NOT fall back to another consultation or self-attestation. Rendering or issuing from a stored delegated evaluation MUST revalidate the current delegated authorization details, including the dependent-target binding, against the stored metadata.
 
 ## 8. OID4VCI issuance flow
 
@@ -210,7 +208,7 @@ REQ-PR-NOTARY-032: The OID4VCI credential endpoint MUST reject delegated-attesta
 
 A configured peer Registry Notary can delegate an evaluation through `POST /federation/v1/evaluations`. The peer posts a compact signed JWT request and receives a compact signed JWT response carrying a scoped evaluation result. This path does not issue a credential.
 
-REQ-PR-NOTARY-018: Delegated evaluation (`POST /federation/v1/evaluations`) MUST accept a compact signed JWT request and return a compact signed JWT response. Before any source read, the serving Registry Notary MUST verify peer policy, replay state, purpose, profile, and audience.
+REQ-PR-NOTARY-018: Delegated evaluation (`POST /federation/v1/evaluations`) MUST accept a compact signed JWT request and return a compact signed JWT response. Before any Relay consultation or claim evaluation, the serving Registry Notary MUST verify peer policy, replay state, purpose, profile, and audience.
 
 REQ-PR-NOTARY-019: Federation MUST be static-peer only: peers are loaded from configuration at startup, and a request from an unconfigured peer MUST be rejected. Delegated evaluation returns a scoped evaluation result, not a credential. Dynamic trust-chain discovery, shared replay storage, and federated credential issuance are out of scope for this version and MUST NOT be implied by a conformance claim against this specification. This is the protocol-level form of REQ-ARC-G-009.
 
@@ -224,7 +222,7 @@ REQ-PR-NOTARY-021: An audit write failure MUST surface as a request error. Regis
 
 REQ-PR-NOTARY-022: Error responses on the claim, credential, and federation routes MUST use the problem-details media type `application/problem+json` ([RFC 9457](https://www.rfc-editor.org/info/rfc9457)). The OID4VCI routes (`/oid4vci/*`) instead return the OID4VCI error envelope their flow defines.
 
-REQ-PR-NOTARY-028: Public claim results MUST carry claim provenance using the `registry-notary-claim-provenance/v1` shape. Audit records for policy-governed evaluations and denials MUST preserve the relevant evaluation policy or matching-policy id, hash, and evaluated rule ids when that policy was selected, while omitting requester-side raw identifiers and secrets from public provenance.
+REQ-PR-NOTARY-028: Public claim results MUST carry claim provenance using the `registry-notary-claim-provenance/v1` shape. Registry-backed provenance MUST identify the verified Relay consultation without exposing source credentials or raw subject identifiers. Audit records for policy-governed evaluations and denials MUST preserve the relevant policy id, hash, and evaluated rule ids when that policy was selected.
 
 REQ-PR-NOTARY-033: Self-attestation policy denials MUST use the public problem code `self_attestation.denied` while preserving the granular denial reason in audit context. Delegated self-attestation denial reasons are `delegated.relationship_unproven`, `delegated.relationship_not_allowed`, `delegated.claim_denied`, `delegated.subject_not_permitted`, and `delegated.proof_denied`.
 
@@ -238,19 +236,19 @@ These constraints are stated so a reader does not infer a capability from the ro
 - Delegated OID4VCI: Delegated-attestation transaction tokens are rejected by the OID4VCI credential endpoint (REQ-PR-NOTARY-032).
 - Notary transaction details: Notary-issued transaction and credential access tokens are bound to the configured Notary issuer before the transaction-details requirement applies. Externally issued OIDC tokens are not treated as Notary tokens by `typ` alone (REQ-PR-NOTARY-035, REQ-PR-NOTARY-036).
 - Federation: Static-peer delegated evaluation only; no dynamic discovery, shared replay storage, or federated credential issuance (REQ-PR-NOTARY-019).
-- Source adapter sidecar: The sidecar is an internal source connector surface. Direct public access, broad reuse of one sidecar token across unrelated sources, or shared cache/backoff state across authorization contexts is outside the security model (REQ-PR-NOTARY-006).
-- Demo and template integrations: Demo helper code and generated workflow snippets are integration examples, not a production freshness or replay-protection profile. Teams that copy them into production must add request freshness, expiry, or nonce checks appropriate to their workflow.
+- Relay dependency: Registry-backed claims require their exact compiler-pinned Relay consultation to be ready. Notary does not provide a direct-source or self-attested fallback (REQ-PR-NOTARY-006).
+- Project fixtures: Offline fixtures prove the compiled request and response contract against synthetic observations. They do not prove live source interoperability or production approval.
 - Admin reload: The admin reload route returns HTTP 501 with code `registry.admin.capability.not_supported` in the standalone router; it performs no reload; runtime configuration changes require deploying a signed local bundle and restarting the service.
 
 ## Conformance
 
 A Registry Notary deployment conforms to this specification when it:
 
-- runs independently of Registry Relay (REQ-PR-NOTARY-001) and gates capability discovery while publishing its JWKS openly (REQ-PR-NOTARY-002);
-- authenticates every claim-bearing route and enforces per-claim scopes before source access (REQ-PR-NOTARY-003, REQ-PR-NOTARY-004);
+- runs independently for source-free and self-attested claims, while requiring the exact Relay contract for registry-backed claims (REQ-PR-NOTARY-001), and gates capability discovery while publishing its JWKS openly (REQ-PR-NOTARY-002);
+- authenticates every claim-bearing route and enforces per-claim scopes before Relay or claim work (REQ-PR-NOTARY-003, REQ-PR-NOTARY-004);
 - derives OIDC principals only from the configured principal claim, without client-identity fallback (REQ-PR-NOTARY-034);
-- enforces governed source policy decisions, source-bound purpose constraints, and source-derived freshness before disclosure or issuance (REQ-PR-NOTARY-023, REQ-PR-NOTARY-024, REQ-PR-NOTARY-025);
-- evaluates claims itself, over HTTP-only source connectors, using only implemented rule types (REQ-PR-NOTARY-005, REQ-PR-NOTARY-006, REQ-PR-NOTARY-007);
+- enforces governed claim policy, purpose agreement with pinned Relay consultations, and Relay-derived freshness before disclosure or issuance (REQ-PR-NOTARY-023, REQ-PR-NOTARY-024, REQ-PR-NOTARY-025);
+- evaluates claims itself from pinned Relay outputs or permitted self-attestation, without direct source connectors, using only implemented rule types (REQ-PR-NOTARY-005, REQ-PR-NOTARY-006, REQ-PR-NOTARY-007);
 - records and honors the disclosure mode, and never leaks a redacted value (REQ-PR-NOTARY-008, REQ-PR-NOTARY-009, REQ-PR-NOTARY-010);
 - returns the claim-result format, may render CCCEV-shaped JSON-LD, and states its CCCEV output as a profiled subset (REQ-PR-NOTARY-011, REQ-PR-NOTARY-012);
 - issues only SD-JWT VC credentials, with digest-based selective disclosure and `did:jwk` holder binding (REQ-PR-NOTARY-013, REQ-PR-NOTARY-014, REQ-PR-NOTARY-015);
@@ -269,9 +267,9 @@ This specification is `verified`: every requirement describes shipped behavior a
 - [Evidence issuance, end to end](../../explanation/evidence-issuance/) walks the claim pipeline, the four consume paths, and the selective-disclosure mechanics that Sections 4 through 9 make precise.
 - The [standards register](../../reference/standards/) records the adoption mode for SD-JWT VC, OID4VCI, CCCEV, and the other standards listed in `standards_referenced`, including the profiled-subset claims this document refers to.
 - [RS-ARC-G](../rs-arc-g/) Section 3 and Section 5 hold the architectural invariants (REQ-ARC-G-004/007/008/009) that this document refines.
-- Delegated self-attestation access modes, source capabilities, stored metadata, and denial reasons are implemented in [`model.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-core/src/model.rs).
+- Delegated self-attestation access modes, Relay consultation capabilities, stored metadata, and denial reasons are implemented in Registry Notary Core and Server.
 - Delegated relationship configuration validation is implemented in [`config.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-core/src/config.rs).
-- Request context derivation, stored-evaluation revalidation, OID4VCI delegated-token rejection, explicit target binding, and proof-gated source reads are implemented in [`api.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/api.rs) and [`runtime.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/runtime.rs).
+- Request context derivation, stored-evaluation revalidation, OID4VCI delegated-token rejection, explicit target binding, and proof-gated Relay consultations are implemented in Registry Notary Server.
 - OIDC principal derivation from the configured principal claim, without client id, authorized party, or audience fallback (REQ-PR-NOTARY-034), is implemented in [`standalone.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/standalone.rs)'s `principal_from_oidc` function and its `oidc_principal_requires_configured_principal_claim` test.
 - The issuer-bound self-attestation transaction-token gate (REQ-PR-NOTARY-035) is implemented in [`api.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/api.rs)'s `self_attestation_requires_authorization_details` function.
 - The issuer-bound OID4VCI transaction-detail gate (REQ-PR-NOTARY-036) is implemented in [`api.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/api.rs)'s `oid4vci_requires_authorization_details` and `require_oid4vci_issuance_authorization_details` functions.

@@ -76,9 +76,9 @@ The self-attestation (wallet) issuance path requires holder proof of possession.
 See [Evidence issuance, end to end](../explanation/evidence-issuance/) for the full credential
 lifecycle.
 
-Delegated evaluation, where one Notary asks a trusted peer to evaluate a claim against a source
-only that peer can read, is admitted only from statically configured peers, and the
-peer's identity, signature, freshness, and purpose are verified before any source read
+Delegated evaluation, where one Notary asks a trusted peer to evaluate a claim, is admitted only
+from statically configured peers. The peer's identity, signature, freshness, and purpose are
+verified before any Relay consultation or claim evaluation
 (REQ-SEC-G-010).
 
 ## What's recommended, not enforced

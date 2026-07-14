@@ -116,9 +116,15 @@ export default defineConfig({
     // Retired monorepo lab tutorials redirect to the current integration guidance.
     '/tutorials/configure-dhis2-claim-checks/': internalRedirect('/explanation/integration-patterns/'),
     '/tutorials/getting-started-fhir-evidence/': internalRedirect('/explanation/integration-patterns/'),
-    // verify-claim-own-api moved into the Apply to your stack path (2026-06).
-    '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/run-notary-standalone-for-api/'),
+    // Direct-source Notary authoring was replaced by Registry Stack project authoring (2026-07).
+    '/tutorials/run-notary-standalone-for-api/': internalRedirect('/tutorials/author-registry-project/'),
+    '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/author-registry-project/'),
     '/tutorials/verify-opencrvs-dci-claims/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
+    '/products/registry-notary/fhir-source-adapter-guide/': internalRedirect('/tutorials/configure-project-fhir-r4/'),
+    '/products/registry-notary/script-rhai-source-adapter-guide/': internalRedirect('/tutorials/configure-project-sandboxed-rhai/'),
+    '/products/registry-notary/opencrvs-onboarding/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
+    '/products/registry-notary/opencrvs-dci-standalone-tutorial/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
+    '/products/registry-notary/sidecar-trust-and-secrets/': internalRedirect('/explanation/threat-model/'),
     // Problems -> marketing /why
     '/problems/': `${marketing}/why/`,
     '/problems/existing-data-not-service-ready/': `${marketing}/why/`,
@@ -156,7 +162,7 @@ export default defineConfig({
     '/projects/registry-notary/configure-a-claim/': internalRedirect('/products/registry-notary/source-claim-modeling-guide/'),
     '/projects/registry-notary/reference/': internalRedirect('/products/registry-notary/operator-config-reference/'),
     // The target exists only in the current docset; archives redirect to the latest page.
-    '/products/registry-notary/opencrvs-dci-onboarding/': currentDocsetRedirect('/products/registry-notary/opencrvs-onboarding/'),
+    '/products/registry-notary/opencrvs-dci-onboarding/': currentDocsetRedirect('/tutorials/verify-opencrvs-claims/'),
     // registry-manifest, registry-atlas, registry-platform, registry-lab projects/*
     // redirects removed: targets are deferred from the MVP docs cut.
     '/projects/registry-lab/demo-flow/': internalRedirect('/tutorials/first-run-with-solmara-lab/'),
@@ -283,7 +289,6 @@ export default defineConfig({
           collapsed: true,
           items: [
             ...generatedProduct('Notary').items,
-            { label: 'Notary for a Registry Data API', slug: 'tutorials/run-notary-standalone-for-api' },
             { label: 'Production signing', slug: 'tutorials/move-notary-to-production-signing' },
           ],
         },

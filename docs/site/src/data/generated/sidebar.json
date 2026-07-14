@@ -81,15 +81,6 @@
         "slug": "products/registry-notary"
       },
       {
-        "label": "Tutorials",
-        "items": [
-          {
-            "label": "OpenCRVS DCI standalone tutorial",
-            "slug": "products/registry-notary/opencrvs-dci-standalone-tutorial"
-          }
-        ]
-      },
-      {
         "label": "How-to",
         "items": [
           {
@@ -99,14 +90,6 @@
           {
             "label": "Source and claim modeling",
             "slug": "products/registry-notary/source-claim-modeling-guide"
-          },
-          {
-            "label": "FHIR source adapter",
-            "slug": "products/registry-notary/fhir-source-adapter-guide"
-          },
-          {
-            "label": "Script and Rhai source adapters",
-            "slug": "products/registry-notary/script-rhai-source-adapter-guide"
           },
           {
             "label": "Federated evaluation operator guide",
@@ -173,14 +156,6 @@
           {
             "label": "Identity and record matching",
             "slug": "products/registry-notary/identity-and-record-matching"
-          },
-          {
-            "label": "OpenCRVS onboarding",
-            "slug": "products/registry-notary/opencrvs-onboarding"
-          },
-          {
-            "label": "Sidecar trust and secrets",
-            "slug": "products/registry-notary/sidecar-trust-and-secrets"
           }
         ]
       }

@@ -246,22 +246,6 @@ export function setRelayMinGroupSize(configPath, datasetId, aggregateId, value) 
   writeYamlDocument(configPath, document);
 }
 
-export function setNotaryAllowedPurposes(configPath, claimId, bindingId, purposes) {
-  const document = readYamlDocument(configPath);
-  const config = document.toJS();
-  const claimIndex = config?.evidence?.claims?.findIndex((claim) => claim.id === claimId) ?? -1;
-  invariant(claimIndex >= 0, `claim ${claimId} not found in ${configPath}`);
-  invariant(
-    config.evidence.claims[claimIndex]?.source_bindings?.[bindingId] !== undefined,
-    `source binding ${bindingId} not found for claim ${claimId}`,
-  );
-  document.setIn(
-    ['evidence', 'claims', claimIndex, 'source_bindings', bindingId, 'matching', 'allowed_purposes'],
-    purposes,
-  );
-  writeYamlDocument(configPath, document);
-}
-
 export function replaceLiteralOnce(value, from, to) {
   const occurrences = value.split(from).length - 1;
   invariant(occurrences === 1, `expected one occurrence of ${JSON.stringify(from)}, found ${occurrences}`);
@@ -386,14 +370,6 @@ async function main([command, ...args]) {
         'usage: set-relay-min-group-size <config> <dataset-id> <aggregate-id> <value>',
       );
       setRelayMinGroupSize(args[0], args[1], args[2], Number(args[3]));
-      return;
-    }
-    case 'set-notary-purposes': {
-      invariant(
-        args.length === 4,
-        'usage: set-notary-purposes <config> <claim-id> <binding-id> <purposes-json>',
-      );
-      setNotaryAllowedPurposes(args[0], args[1], args[2], JSON.parse(args[3]));
       return;
     }
     case 'replace-once': {

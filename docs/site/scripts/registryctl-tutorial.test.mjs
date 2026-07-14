@@ -16,7 +16,6 @@ import {
   rebindProjectImages,
   redactOutput,
   replaceLiteralOnce,
-  setNotaryAllowedPurposes,
   setRelayMinGroupSize,
 } from './registryctl-tutorial.mjs';
 
@@ -106,32 +105,20 @@ test('rebinds generated project images without changing ports', () => {
   }
 });
 
-test('edits Relay and Notary policy YAML by stable identifiers', () => {
+test('edits Relay policy YAML by stable identifiers', () => {
   const directory = mkdtempSync(join(tmpdir(), 'registryctl-config-'));
   const relayPath = join(directory, 'relay.yaml');
-  const notaryPath = join(directory, 'notary.yaml');
   try {
     writeFileSync(
       relayPath,
       'datasets:\n  - id: benefits\n    aggregates:\n      - id: by_district\n        disclosure_control:\n          min_group_size: 2\n',
     );
-    writeFileSync(
-      notaryPath,
-      'evidence:\n  claims:\n    - id: person-exists\n      source_bindings:\n        person:\n          matching:\n            allowed_purposes: [tutorial]\n',
-    );
-
     setRelayMinGroupSize(relayPath, 'benefits', 'by_district', 3);
-    setNotaryAllowedPurposes(notaryPath, 'person-exists', 'person', ['casework']);
 
     assert.equal(
       parse(readFileSync(relayPath, 'utf8')).datasets[0].aggregates[0].disclosure_control
         .min_group_size,
       3,
-    );
-    assert.deepEqual(
-      parse(readFileSync(notaryPath, 'utf8')).evidence.claims[0].source_bindings.person.matching
-        .allowed_purposes,
-      ['casework'],
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });

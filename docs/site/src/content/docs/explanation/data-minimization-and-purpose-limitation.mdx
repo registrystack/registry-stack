@@ -28,8 +28,8 @@ posture under development rather than a finished or warranted product.
 Four terms are enough to follow this page.
 A *claim* is one pre-modelled question (one decision or one extracted value) that a system can ask
 about a person against a registry the institution already holds.
-A *source binding* is the configured rule that connects a claim to the specific source fields it
-reads.
+A *Relay consultation* is the compiler-pinned contract that connects a registry-backed claim to
+the minimized typed outputs Relay may return.
 *Minimized evidence* means a response shaped by data minimization or selective disclosure; a
 *purpose-bound request* is a request that carries or is evaluated against a stated purpose.
 
@@ -40,29 +40,27 @@ A claim definition describes one decision or one extracted value, not a whole re
 a full record would over-collect relative to the question actually asked.
 The design treats the narrow question, not the record, as the thing to be answered.
 
-That principle is enforced one layer down, at the binding between a claim and its source.
-A source binding reads the fields it is configured to project (the declared `binding.fields`, plus
-the lookup and freshness fields), so "read only what the rule needs" depends on the binding being
-configured that way rather than being automatically derived from the rule.
-A request that supplies an input path outside a declared allow-list is rejected, so a binding
-cannot over-collect by accident.
-The allow-list converts "read only what you need" from an aspiration into a gate that refuses
-out-of-scope inputs before they reach the source.
+That principle is enforced at two separate boundaries. A Relay integration declares closed
+request inputs and minimized typed outputs. A Notary claim can consume only the outputs of its
+compiler-pinned consultation, or the configured authenticated context for self-attestation.
+Callers cannot choose a source destination, credential, selector field, adapter capability, or
+undeclared output at request time.
+
+The project author still decides which Relay outputs the claim needs. Minimization therefore
+depends on a reviewed integration contract and synthetic fixtures, not on Notary deriving a
+source projection from the claim rule.
 
 ## Purpose limitation as an enforced gate, not a label
 
-Purpose limitation in this design is more than a field written into a log.
-It is enforced as a policy decision before any source is read.
-Where a source is configured to require a purpose, a request that omits the purpose header is
-rejected, and the supplied purpose is recorded in the audit record.
-Beyond recording it, the evaluation component combines the claim's permitted purposes with the
-source binding's permitted purposes and denies the request before source access if either set
-rejects the stated purpose.
+Purpose limitation in this design is more than a field written into a log. A Registry Stack
+project authors the evidence-service purpose once and compiles it into the Notary claim contract
+and the Relay consultation profile. Notary rejects a missing or mismatched purpose, missing
+scope, or inadmissible typed input before calling Relay. Relay separately verifies its workload
+caller, the same purpose, the consultation profile, and the contract hash before source work.
 
-A matching policy carries the same idea further: it binds a source read to a declared purpose and
-relationship context and constrains which inputs may identify the subject, and a request whose
-purpose, relationship, or inputs the policy does not admit is refused before the source is
-touched.
+The compiler-pinned input mapping carries the same idea further: the request can populate only
+declared typed inputs, and Notary cannot substitute a different consultation when authorization or
+contract validation fails.
 The effect a reviewer should take away is that purpose, when configured, acts as a precondition
 for access rather than an after-the-fact annotation.
 
@@ -103,9 +101,8 @@ credential-issuer implementation, and should not be read as general wallet inter
 full standards conformance.
 
 A further minimization detail guards against a subtler leak.
-A failed subject match collapses by default to a single public reason (evidence not available),
-with the granular reason kept only in the audit record, so the lookup surface cannot by default be
-used to confirm whether a person exists in a registry.
+A failed or ambiguous consultation does not let Notary choose a source record. The public Notary
+surface reports unavailable evidence without returning the raw Relay observation.
 
 ## Data stays at source: distributed custody
 
@@ -170,19 +167,11 @@ operator owns the configuration.
 Several of the protections are conditional, and a reviewer should test the deployment, not the
 design, for each one.
 
-The clearest example is the fallback when no matching policy is configured.
-With no matching policy in place, a binding skips the binding-level gating (no purpose gating, no
-relationship gating, and no input minimization) and falls back to identifier-only resolution.
-Claim-level purpose constraints still apply, though: the claim's own permitted purposes and the
-deployment's allowed-purposes list are enforced before the source is read, so a claim-purpose
-mismatch is refused with no source reads.
-Purpose limitation is therefore not entirely absent without a matching policy; what is missing is
-the binding-level gating.
-
-The existence-oracle protection is also defeasible.
-The matching surface collapses failures to a single public reason by default, but a deployment may
-disable that collapse and surface not-found, ambiguous, or rejected outcomes, an over-disclosure
-risk the operator controls.
+The main conditional control is the authored projection. The compiler prevents Notary from
+bypassing the Relay consultation, but it does not decide which typed outputs an institution has a
+lawful reason to expose. Project reviewers must confirm the source authority, selector inputs,
+output projection, purpose, claims, and disclosure defaults together. Operators must then bind
+only the reviewed source and workload credentials to the generated product inputs.
 
 More broadly, the architecture defines primitives and leaves a large set of
 data-protection-relevant controls to the operator.

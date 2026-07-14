@@ -1,6 +1,6 @@
 ---
 title: Trusted context constraints
-description: Explains how Registry Relay and Registry Notary report legal basis, consent, jurisdiction, assurance, and source freshness constraints without flattening product-specific source semantics.
+description: Explains how Relay and Notary preserve legal basis, consent, jurisdiction, assurance, and freshness context across their separate policy boundaries.
 status: current
 owner: registry-docs
 source_repos:
@@ -12,137 +12,74 @@ standards_referenced:
   - json-schema
 ---
 
-Trusted context constraints describe the cross-cutting policy checks that Registry Relay and
-Registry Notary evaluate with the shared policy layer provided by Registry Platform. The product
-still owns source identity, route identity, lookup semantics, and adapter contracts. The shared
-report shape makes the constraints visible without pretending every product reads the same source
-in the same way.
+Trusted context constraints are policy facts whose meaning must survive the boundary between a
+caller, Registry Notary, Registry Relay, and a source registry. Registry Platform supplies shared
+types and redacted reporting conventions. Each product still owns the decision made at its own
+boundary.
 
-## What the platform owns
+## The shared vocabulary
 
-The platform constraint model covers five families.
+The shared policy vocabulary covers five families:
 
-- Legal basis: whether a trusted legal-basis reference is required, and whether a configured
-  allow-list is enforced.
-- Consent: whether a trusted consent reference is required, and whether a configured allow-list
-  is enforced.
-- Jurisdiction: which jurisdictions are permitted for the request or credential context.
-- Assurance: which assurance levels are accepted, and whether the value came from authorization
-  context or an authentication event.
-- Source freshness: the maximum accepted age of the source observation used for a claim or read.
+- Legal basis records why the requested operation is permitted.
+- Consent records whether a trusted consent reference is required and accepted.
+- Jurisdiction limits where the request or evidence can be used.
+- Assurance records the accepted assurance level and the trusted context that supplied it.
+- Source freshness limits the accepted age of an observation.
 
-These checks are product-safe to report because they describe the policy gates, not raw personal
-data, source tokens, or registry records.
+Sharing names and report shapes does not make Relay and Notary interchangeable. It prevents a
+constraint from being silently renamed or weakened as a request crosses products.
 
-## What products keep
+## Relay owns source context
 
-Registry Relay and Registry Notary do not become the same product because they share the
-constraint vocabulary. Relay applies constraints around data access and governed policy.
-Notary applies constraints around claim source bindings and credential evaluation. Each product
-keeps its own config paths, source connection identifiers, route identity, and matching model.
+Relay owns source identity, destinations, credentials, protocol adaptation, selector
+canonicalization, source observations, and minimized typed outputs. A source freshness check is
+therefore evaluated from Relay-owned observation semantics.
 
-For Notary, a source binding can require legal basis, consent, permitted jurisdiction, allowed
-assurance, and source freshness while still using product-owned matching details such as lookup
-field, allowed target inputs, redaction fields, and DCI response projection. The report names
-those adjacent controls so operators can see which parts are platform policy and which parts are
-Notary behavior.
+`observed_at` means the time represented by the reviewed source observation contract. It is not
+automatically a domain record date. Birth date, registration date, amendment date, or a
+spreadsheet update column does not prove when Relay observed the record unless the integration
+declares that meaning and its fixtures prove it.
 
-## Source freshness and `observed_at`
+If the observation-time contract is not proven, diagnostics must report it as unknown. They must
+not reinterpret a domain date as source freshness.
 
-`observed_at` is the time the source observation was made or fetched for the evidence read. It is
-not automatically a domain record date.
+## Notary owns evidence authorization
 
-A civil-registration record can contain dates such as birth date, registration date, amendment
-date, or a spreadsheet-maintained update column. Those dates describe the registry content. They
-do not prove when Notary observed the source unless the source adapter or DCI response contract
-declares that field as an observation timestamp.
+Notary authenticates the evidence caller and enforces the compiled service purpose, required
+scopes, subject binding, legal basis, consent, jurisdiction, assurance, disclosure, and issuance
+policy before consulting Relay. A failed preflight makes zero Relay calls.
 
-For OpenCRVS DCI (Digital Convergence Initiative) starter projects, `registryctl` maps the
-freshness field from the DCI response envelope:
+For a registry-backed claim, Notary can invoke only the compiler-pinned Relay consultation named
+by its evidence mode. The pinned profile fixes the contract hash, purpose, closed input mapping,
+outcome union, and typed outputs. Notary does not configure a source origin, credential, lookup
+recipe, freshness field, or adapter runtime.
 
-```yaml
-dci:
-  field_paths:
-    observed_at: "$response:/message/search_response/0/timestamp"
-```
+A Notary-only self-attested service performs no Relay or source I/O. Its constraints apply only to
+the authenticated subject context and source-free claim policy.
 
-The Notary source binding then constrains freshness with:
+## Reports and audit evidence
 
-```yaml
-matching:
-  context_constraints:
-    source_freshness:
-      max_age_seconds: 86400
-  source_observed_at_field: observed_at
-```
+Product diagnostics expose bounded policy summaries and may include a `context_constraints`
+array. An empty array means that the configuration has no additional shared constraint block to
+report. It does not mean authentication, purpose, scope, consultation pinning, or product-owned
+policy is disabled.
 
-The report marks this as `observation_timestamp_source: source_observation_timestamp` and
-`observation_contract_proven: true`. If a source freshness rule points at a domain field whose
-observation semantics are not declared, the report must use `unknown` and
-`observation_contract_proven: false`.
+Reports may identify the policy family, product-owned config location, trusted value class, and
+whether a presence or allow-list check was applied. They must not expose source tokens, subject
+identifiers, selectors, raw records, consent values, or authorization details.
 
-## Report shape
+Presence and allow-list checks remain distinct. Requiring a legal-basis or consent reference does
+not imply that every possible value is approved. Authentication-derived assurance also remains
+distinct from an assurance value asserted in authorization context.
 
-Product diagnostic and explanation reports include a `context_constraints` array. Empty means the
-configuration has no reportable context-constraint block.
+## Review questions
 
-Each entry names the product config path that owns the block, the stable platform contract, the
-hash-material contract, and one summary object per constraint family.
-
-```json
-{
-  "context_constraints": [
-    {
-      "container_path": "/evidence/claims/0/source_bindings/birth_record/matching",
-      "product": "registry-notary",
-      "platform_contract": "registry-platform-pdp.context_constraints.v1",
-      "hash_material_contract": "registry-platform-pdp.context_constraints.hash_material.v1",
-      "legal_basis": {
-        "required": true,
-        "approved_value_check": false,
-        "allowed_ref_count": 0,
-        "trusted_value_source": "static_credential_authorization_details"
-      },
-      "consent": {
-        "required": true,
-        "approved_value_check": false,
-        "allowed_ref_count": 0,
-        "trusted_value_source": "static_credential_authorization_details"
-      },
-      "jurisdiction": {
-        "permitted_count": 1,
-        "trusted_value_source": "static_credential_authorization_details"
-      },
-      "assurance": {
-        "allowed_count": 1,
-        "minimum": null,
-        "trusted_value_source": "static_credential_authorization_details",
-        "authn_derived": false
-      },
-      "source_freshness": {
-        "max_age_seconds": 86400,
-        "observation_field": "observed_at",
-        "observation_timestamp_source": "source_observation_timestamp",
-        "observation_contract_proven": true
-      },
-      "product_owned_adjacent_controls": [
-        "source_lookup",
-        "target_input_minimization"
-      ]
-    }
-  ]
-}
-```
-
-## Boundaries
-
-The report distinguishes presence checks from allow-list checks. A legal-basis requirement with
-no allowed references is a presence check, not an approved-value check. The same distinction
-applies to consent.
-
-The report also distinguishes authorization-derived assurance from authentication-derived
-assurance. A static credential can carry a trusted authorization detail such as
-`assurance_level: substantial`, but that does not prove how a human user authenticated.
+- Does Notary reject an unauthorized request before any Relay consultation?
+- Does the compiled Notary contract exactly match the Relay consultation semantics and hash?
+- Is source freshness derived from a proven Relay observation contract rather than a domain date?
+- Are reports bounded and redacted at both product boundaries?
+- Does a self-attested service remain source-free?
 
 ## Related pages
 

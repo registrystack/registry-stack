@@ -99,7 +99,7 @@
     "name": "Registry Notary",
     "repo_path": "../registry-notary",
     "target_repo_path": "../registry-notary",
-    "role": "Standalone service that evaluates eligibility claims against registry data, serves static-peer federated delegated evaluation, and issues SD-JWT verifiable credentials with selective disclosure, composing shared auth, audit, OIDC, HTTP security, crypto, SD-JWT, and testing primitives from Registry Platform.",
+    "role": "Standalone service that evaluates Relay-backed or self-attested claims, serves static-peer federated delegated evaluation, and issues SD-JWT verifiable credentials with selective disclosure, composing shared auth, audit, OIDC, HTTP security, crypto, SD-JWT, and testing primitives from Registry Platform.",
     "owns": [
       "Claim configuration and evaluation.",
       "Disclosure policy and redacted audit event semantics.",
@@ -107,10 +107,11 @@
       "Static-peer delegated evaluation at `/federation/v1/evaluations`.",
       "Credential issuance workflow and claim-to-credential mapping.",
       "OID4VCI Draft 13 credential offer flow (credential-offer, nonce, credential endpoints) and the `/.well-known/openid-credential-issuer` metadata endpoint.",
-      "HTTP source connectors for Registry Data API and SP DCI-style sources."
+      "Compiler-pinned Registry Relay consultation contracts for registry-backed claims.",
+      "Source-free and self-attested claim evaluation."
     ],
     "does_not_own": [
-      "Registry Relay source code or runtime internals.",
+      "Registry source access, credentials, protocol adaptation, or Registry Relay runtime internals.",
       "Portable metadata renderers owned by Registry Manifest.",
       "Shared security and operational primitives owned by Registry Platform.",
       "Open federation, dynamic trust-chain discovery, shared replay storage, or federated credential issuance.",
@@ -133,9 +134,9 @@
     "name": "Registry Lab",
     "repo_path": "../registry-lab",
     "target_repo_path": "../registry-lab",
-    "role": "Docker Compose demo of the registry runtime on a laptop. Wires three Relay instances, four Notary instances, live Postgres and Zitadel services, a source adapter sidecar scenario (using built-in http_json/http_flow/fhir engines), a static metadata publisher, and narrated demo clients together with Registry Platform, Relay, and Notary source pins, fixtures, and smoke tests.",
+    "role": "Docker Compose demo of the registry runtime on a laptop. Wires Relay and Notary instances, live Postgres and Zitadel services, Relay-backed consultations, a static metadata publisher, and narrated demo clients together with Registry Platform source pins, fixtures, and smoke tests.",
     "owns": [
-      "End-to-end local topology for Relay, Notary, live Postgres, live Zitadel, the source adapter sidecar path (built-in http_json/http_flow/fhir engines), the static metadata publisher, and demo-client fixtures.",
+      "End-to-end local topology for Relay, Notary, live Postgres, live Zitadel, Relay-backed consultations, the static metadata publisher, and demo-client fixtures.",
       "Demo scripts, smoke checks, generated local credentials, live-service checks, static metadata checks, and narrated client flows.",
       "Citizen self-attestation walkthrough that exercises the Notary OID4VCI flow end-to-end through the `just citizen-oid4vci-*` recipes.",
       "Acceptance rehearsal after rename waves land."

@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title id="rtb-title">Registry Stack trust boundaries</title>
-  <desc id="rtb-desc">Two layers separated by the primary trust boundary. The portable metadata layer (Registry Manifest) only describes: no production data, no authentication, no secrets; it authorizes nothing, enforces nothing, and publishing grants no access. The runtime services layer enforces authentication, authorization, and disclosure. A caller crosses the service edge, where each service runs exactly one authentication mode, static-credential fingerprint or OIDC, and every claim- or record-bearing route is authenticated before responding. Inside the runtime layer, Registry Notary reads sources over HTTP connectors only: Registry Relay via registry_data_api, an SP DCI source via dci, and the source adapter sidecar; there is no file or database connector, and Notary does not link Relay code. The sidecar is an internal boundary: its bearer token authenticates only the Notary-to-sidecar hop and is not an end-user, tenant, or subject authorization boundary. Federation with a peer Notary is static-peer only, not a dynamic trust mesh; it is not anonymous (a verified peer-signed JWS is required), and peer identity, signature, freshness, single use, purpose, profile, and audience are verified before any source read. Delegated self-attestation is a distinct trust context from peer federation: it does not delegate trust to a peer Notary and stays inside the citizen or OIDC trust context. Unauthenticated surfaces at the service edge are the operational, discovery, and protocol-bootstrap routes listed in the footnote.</desc>
+  <desc id="rtb-desc">Two layers separated by the primary trust boundary. The portable metadata layer (Registry Manifest) only describes: no production data, no authentication, no secrets; it authorizes nothing, enforces nothing, and publishing grants no access. The runtime services layer enforces authentication, authorization, and disclosure. A caller crosses the service edge, where each service runs exactly one authentication mode, static-credential fingerprint or OIDC, and every claim- or record-bearing route is authenticated before responding. Registry Relay owns registry source access and product-neutral adaptation. Registry Notary consumes compiler-pinned Relay consultations for registry-backed claims or configured self-attestation inputs for Notary-only claims. Federation with a peer Notary is static-peer only, not a dynamic trust mesh; it is not anonymous (a verified peer-signed JWS is required), and peer identity, signature, freshness, single use, purpose, profile, and audience are verified before claim evaluation. Delegated self-attestation is a distinct trust context from peer federation: it does not delegate trust to a peer Notary and stays inside the citizen or OIDC trust context. Unauthenticated surfaces at the service edge are the operational, discovery, and protocol-bootstrap routes listed in the footnote.</desc>
 
   <style>
     .k    { font: 700 11px 'Public Sans', system-ui, sans-serif; fill: #6a6a6a; letter-spacing: 0.08em; }
@@ -105,12 +105,12 @@
     <line x1="383" y1="123" x2="393" y2="113"/>
   </g>
 
-  <!-- Notary reads Relay over HTTP as a data source -->
+  <!-- Notary consumes a compiler-pinned Relay consultation -->
   <g stroke="#000091" stroke-width="1.2" fill="none">
     <polyline points="420,260 420,284 308,284 308,266"/>
     <polyline points="304,270 308,264 312,270"/>
   </g>
-  <text x="364" y="298" class="m" text-anchor="middle">HTTP · registry_data_api</text>
+  <text x="364" y="298" class="m" text-anchor="middle">compiler-pinned consultation</text>
 
   <!-- Relay reads its sources in place -->
   <g stroke="#000091" stroke-width="1.2" fill="none">
@@ -118,34 +118,34 @@
     <polyline points="266,306 270,312 274,306"/>
   </g>
   <rect x="238" y="316" width="132" height="54" fill="#ffffff" stroke="#161616" stroke-width="1"/>
-  <text x="248" y="336" class="hs">Sources</text>
-  <text x="248" y="351" class="bm">rows read in place</text>
+  <text x="248" y="336" class="hs">Registry sources</text>
+  <text x="248" y="351" class="bm">Relay-owned boundary</text>
 
-  <!-- Notary to an SP DCI source -->
+  <!-- Notary-only self-attestation input -->
   <g stroke="#000091" stroke-width="1.2" fill="none">
     <line x1="466" y1="260" x2="466" y2="306"/>
     <polyline points="462,306 466,312 470,306"/>
   </g>
   <rect x="406" y="316" width="104" height="54" fill="#ffffff" stroke="#161616" stroke-width="1"/>
-  <text x="414" y="336" class="hx">SP DCI source</text>
-  <text x="414" y="351" class="m">HTTP · dci</text>
+  <text x="414" y="336" class="hx">Self-attestation</text>
+  <text x="414" y="351" class="m">source-free input</text>
 
-  <!-- Notary to the source adapter sidecar (internal boundary) -->
+  <!-- Compiled source-adaptation boundary -->
   <g stroke="#000091" stroke-width="1.2" fill="none">
-    <line x1="520" y1="260" x2="520" y2="386"/>
-    <polyline points="516,380 520,386 524,380"/>
+    <line x1="320" y1="370" x2="320" y2="386"/>
+    <polyline points="316,380 320,386 324,380"/>
   </g>
   <text x="280" y="386" class="bls">INTERNAL BOUNDARY</text>
   <rect x="280" y="392" width="252" height="84" fill="#ffffff" stroke="#161616" stroke-width="1" stroke-dasharray="5 4"/>
-  <text x="292" y="412" class="hs">Source adapter sidecar</text>
-  <text x="292" y="427" class="b">A private deployment surface behind</text>
-  <text x="292" y="439" class="b">Notary. Its bearer token authenticates only</text>
-  <text x="292" y="451" class="b">the Notary-to-sidecar hop; not an end-user,</text>
-  <text x="292" y="463" class="b">tenant, or subject authorization boundary.</text>
+  <text x="292" y="412" class="hs">Relay source adaptation</text>
+  <text x="292" y="427" class="b">Compiled origin, credential interface, method,</text>
+  <text x="292" y="439" class="b">path, input placement, output projection, and</text>
+  <text x="292" y="451" class="b">limits. Product and version metadata do not</text>
+  <text x="292" y="463" class="b">select HTTP, script, or snapshot capability.</text>
 
-  <text x="238" y="494" class="bl">NOTARY → ITS SOURCES · HTTP CONNECTORS ONLY</text>
-  <text x="238" y="508" class="b">Notary calls Relay over HTTP as a data source; it does</text>
-  <text x="238" y="520" class="b">not link Relay code. No file or database connector.</text>
+  <text x="238" y="494" class="bl">RELAY OWNS ALL REGISTRY SOURCE ACCESS</text>
+  <text x="238" y="508" class="b">Notary consumes pinned Relay outputs or configured</text>
+  <text x="238" y="520" class="b">self-attestation inputs. It has no source connector.</text>
 
   <!-- Federation with a peer Notary (crossing the panel edge) -->
   <rect x="572" y="190" width="132" height="50" fill="#ffffff" stroke="#161616" stroke-width="1"/>

@@ -202,7 +202,7 @@ The `x-api-key` header carries the caller's credential. `Data-Purpose` declares 
 asking, and the Notary's configuration allows this token to ask only under the
 `child-benefit-review` purpose. The `disclosure: predicate` request means the response discloses a
 true or false satisfaction per claim, never the underlying civil, population, social, or programme
-registry row the Notary read to answer it. The Notary can also issue a signed
+registry rows Relay consulted to answer it. The Notary can also issue a signed
 [SD-JWT verifiable credential (SD-JWT VC)](../../reference/glossary/) for this same eligibility
 claim set; that holder-bound issuance flow is out of scope for this tutorial. See
 [Registry Notary](../../products/registry-notary/) for the credential issuance contract.
@@ -235,9 +235,9 @@ curl -sS -X POST -H "x-api-key: $(grep -m1 '^CHILD_BENEFIT_NOTARY_TOKEN=' .env |
 You brought up 16 Relay, Notary, portal, and supporting services on your laptop from a single
 `just up`, and the smoke suite verified the topology. You then called the child benefit Notary
 directly and watched it return four satisfied predicates for Mateo Santos without exposing the
-civil, population, social, or programme registry rows it read to answer. The same synthetic token
-and evaluation call are also visible through the Visitor's Center's Engineer door, so you can
-confirm what you ran by hand against what the lab publishes.
+civil, population, social, or programme registry rows Relay consulted to answer. The same
+synthetic token and evaluation call are also visible through the Visitor's Center's Engineer door,
+so you can confirm what you ran by hand against what the lab publishes.
 
 ## Next
 

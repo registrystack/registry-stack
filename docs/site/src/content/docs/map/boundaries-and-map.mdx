@@ -131,13 +131,11 @@ systems only. {/* Evidence: crates/registry-relay/README.md:16 at tag v0.9.0. */
 
 Registry Notary evaluates claims and issues SD-JWT VC credentials. It does not own:
 
-- Registry Relay source code or runtime internals. Registry Notary calls Registry Relay over
-  HTTP using a source connector; it does not import or link Registry Relay libraries. Both
-  services can depend on Registry Platform.
-  {/* Evidence: the registry_data_api HTTP source connector is SourceConnectorKind::RegistryDataApi,
-       crates/registry-notary-core/src/config.rs:6353-6360 at tag v0.9.0; no registry-relay
-       dependency appears in any registry-notary* Cargo.toml, while registry-platform-* deps do,
-       crates/registry-notary-server/Cargo.toml:22-34 at tag v0.9.0. */}
+- Registry source access or adaptation. Registry Notary calls Registry Relay through a
+  compiler-pinned consultation contract for registry-backed claims. A Notary-only deployment
+  supports source-free and self-attested claims; it does not open a registry source directly.
+  Relay owns HTTP, script, and snapshot adaptation, including protocol helpers used by authored
+  integrations.
 - Portable metadata renderers owned by Registry Manifest. Registry Notary does not produce
   DCAT, SHACL, BRegDCAT-AP, or OGC Records artifacts.
   {/* Evidence: registry-notary evidence packet, standards not found in code section: "DCAT: no

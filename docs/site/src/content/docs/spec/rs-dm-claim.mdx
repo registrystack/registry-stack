@@ -1,6 +1,6 @@
 ---
 title: "RS-DM-CLAIM: Registry Notary claim definition data model"
-description: "The data model for a Registry Notary claim definition: identity, inputs, source bindings, matching policy, rule, disclosure policy, render formats, and credential eligibility."
+description: "The data model for a Registry Notary claim definition: identity, evidence mode, typed inputs, Relay consultations, rule, disclosure, formats, and credential eligibility."
 status: draft
 owner: registry-docs
 source_repos:
@@ -16,7 +16,6 @@ standards_referenced:
   - openapi
   - sd-jwt-vc
   - w3c-did
-  - sp-dci
 layer:
   - evaluation
   - credential
@@ -25,7 +24,7 @@ audience:
   - specification editor
 ---
 
-This document defines the target data model of a Registry Notary claim definition: the configuration artifact that declares what Notary can evaluate, what it reads to evaluate it, what it discloses, and what it can issue. It is the structural counterpart to the [Registry Notary protocol](../rs-pr-notary/): RS-PR-NOTARY Section 1 defers the claim-definition structure (source bindings, rule, disclosure policy, and formats) to this document. The Evidence section distinguishes shipped behavior from the implementation gaps tracked in Section 10.
+This document defines the target data model of a Registry Notary claim definition: the configuration artifact that declares what Notary can evaluate, whether evidence is registry-backed or self-attested, what typed inputs and Relay consultations it may use, what it discloses, and what it can issue. It is the structural counterpart to the [Registry Notary protocol](../rs-pr-notary/).
 
 Where this document and [RS-PR-NOTARY](../rs-pr-notary/) state the same constraint, RS-PR-NOTARY is the protocol-level (wire) form and this document is the data-model form. Both refine the Registry Notary component of [RS-ARC-G](../rs-arc-g/) Section 3 (REQ-ARC-G-007) one level of detail down, from architectural boundary to the structure a claim takes in configuration. Security-model concerns (the scope and authentication machinery a claim relies on) belong to [RS-SEC-G](../rs-sec-g/); this document refers to them only where they shape the model.
 
@@ -37,6 +36,8 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | --- | --- | --- | --- |
 | 0.1.0 | 2026-06-13 | draft | Initial claim-definition data model, distilled from the Registry Notary source-and-claim modeling guide, the operator configuration reference, and the two-way credential-eligibility and matching-policy validations the configuration loader enforces. |
 | 0.2.0 | 2026-07-07 | draft | Reworded REQ-DM-CLAIM-005 so the controlled-environment restriction on disabling matching-failure collapse reads as operational guidance rather than a runtime-enforced constraint, and documented the extract/exists value-type-checking gap and the empty-`formats`-list evaluation gap in Limitations. |
+| 0.3.0 | 2026-07-13 | draft | Replaced direct source bindings and Notary matching with registry-backed Relay consultations and self-attested evidence modes. |
+| 0.3.1 | 2026-07-14 | draft | Updated load-time validation limits after duplicate ids, disclosure defaults, evidence-mode rules, and registry-backed output types became startup checks. |
 
 ## 1. Scope and references
 
@@ -44,7 +45,7 @@ This specification covers the structure and invariants of a claim definition:
 
 - The claim's identity and the value it evaluates.
 - Inputs: the request lookup paths a claim consumes.
-- Source bindings: how a claim reaches its source data, and the matching policy that gates a read.
+- Evidence mode and compiler-pinned Relay consultation bindings for registry-backed claims.
 - The rule and its dependencies.
 - The disclosure policy.
 - Response formats and value typing.
@@ -55,53 +56,53 @@ This specification does not define:
 
 - The exact configuration schema: Every field, its YAML key, and its default belong to the [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/) and to the generated OpenAPI document rendered as the [Registry Notary API reference](../../reference/apis/registry-notary/). This document states the model's structure and the invariants a deployment enforces, and does not restate field schemas that would drift from the source.
 - Protocol and wire behavior: How a caller submits an evaluation, negotiates a format, or receives an error belongs to [RS-PR-NOTARY](../rs-pr-notary/).
-- The security model: How scopes, authentication, and key material are configured and enforced belongs to [RS-SEC-G](../rs-sec-g/). This document names a binding's required scope only as part of the model.
+- The security model: How scopes, authentication, workload credentials, and key material are configured and enforced belongs to [RS-SEC-G](../rs-sec-g/).
 - The other data models of the stack: The Registry Relay dataset surface and the portable metadata manifest are separate data models, reserved for their own RS-DM-\* specifications.
 
-For the modeling guidance behind this model, see the [source and claim modeling guide](../../products/registry-notary/source-claim-modeling-guide/); for the matching outcome model, see [identity and record matching](../../products/registry-notary/identity-and-record-matching/); for the worked claim pipeline, see [Evidence issuance, end to end](../../explanation/evidence-issuance/).
+For the authoring guidance behind this model, see [Author an HTTP Registry Stack project](../../tutorials/author-registry-project/). For the worked claim pipeline, see [Evidence issuance, end to end](../../explanation/evidence-issuance/).
 
 ## 2. Anatomy of a claim definition
 
-A claim definition is a named capability. It declares an identity, the inputs and source bindings that read the data it needs, the single rule that decides its value, and the disclosure, format, and credential rules that shape what leaves the service.
+A claim definition is a named capability. It declares an identity, one evidence mode, the typed inputs and Relay consultations it may use, the single rule that decides its value, and the disclosure, format, and credential rules that shape what leaves the service.
 
 ```mermaid
 flowchart TD
     claim["Claim definition<br/>id · subject_type · value type"]
-    inputs["Inputs<br/>target · requester · relationship paths"]
-    bindings["Source bindings<br/>connector · required_scope · lookup · fields · matching"]
+    inputs["Typed inputs<br/>target · requester · declared variables"]
+    evidence["Evidence mode<br/>registry-backed consultation · self-attested"]
     rule["Rule (exactly one)<br/>extract · exists · cel (+ depends_on)"]
     disclosure["Disclosure policy<br/>default and allowed modes"]
     formats["Evaluation render formats<br/>claim-result JSON · CCCEV JSON-LD"]
     creds["Credential profiles<br/>two-way allow-list, issues SD-JWT VC"]
-    claim --> inputs --> bindings --> rule
+    claim --> inputs --> evidence --> rule
     rule --> disclosure
     rule --> formats
     rule -.-> creds
 ```
 
-The diagram restates the model: a claim reads its source data through bindings shaped by its inputs, a single rule decides the value, and the disclosure policy, formats, and credential profiles govern the result. A claim definition describes one decision or one extracted value; a claim that tries to return a whole record over-collects and is hard to authorize.
+The diagram restates the model: a claim receives either compiler-pinned Relay outputs or permitted self-attestation inputs, a single rule decides the value, and the disclosure policy, formats, and credential profiles govern the result. A claim definition describes one decision or one extracted value; a claim that tries to return a whole record over-collects and is hard to authorize.
 
 REQ-DM-CLAIM-001: A claim definition MUST carry a stable identifier (`id`); the `id` is the reference callers use to evaluate the claim and the reference a credential profile uses to name it. The `id` SHOULD be stable, specific, and unique across the configuration.
 
-## 3. Inputs and source bindings
+## 3. Inputs and evidence modes
 
-A claim's inputs are the named request lookup paths it may consume, drawn from the target subject, the requester, and the relationship between them (for example `target.id`, `target.attributes.<name>`, `requester.identifiers.<scheme>`, `relationship.attributes.<name>`). A source binding connects the claim to one source read: it names the connector and connection, the lookup that resolves the subject to a source record, the fields the rule needs, and the scope the read requires.
+A claim's inputs are the named request paths it may consume, drawn from the target subject, requester, and declared variables. A claim selects one evidence mode. `registry_backed` binds compiler-pinned Relay consultations whose typed outputs feed the rule. `self_attested` uses only the configured authenticated context and request inputs. Notary has no direct registry source mode.
 
-REQ-DM-CLAIM-002: Each source binding declares the source read that backs a claim and the caller scope that read requires (its `required_scope`, or the dataset scope Registry Notary synthesizes when none is set). Registry Notary MUST enforce that scope before the binding reads its source. This is the data-model form of REQ-PR-NOTARY-004; the connector kinds a binding may use are fixed by REQ-PR-NOTARY-006.
+REQ-DM-CLAIM-002: Each claim MUST declare exactly one evidence mode. A registry-backed claim MUST bind every Relay consultation by profile id and contract hash and MUST map only declared typed request inputs. A self-attested claim MUST NOT declare a Relay consultation. Registry Notary MUST enforce the claim's required scopes before either mode performs work.
 
-REQ-DM-CLAIM-003: A source binding SHOULD read only the fields its rule needs. Where a binding declares an input allow-list (`allowed_target_inputs` or `allowed_requester_inputs`), a request that supplies an input path outside that allow-list MUST be rejected, so a binding cannot over-collect by accident.
+REQ-DM-CLAIM-003: A registry-backed claim SHOULD bind only the Relay outputs its rule needs. Consultation input mapping MUST NOT select a Relay origin, credential, method, capability, output projection, or response mapper. Request paths outside the closed mapping MUST be rejected.
 
-## 4. Matching policy
+## 4. Relay consultation contract
 
-A source binding MAY carry a matching policy that gates and shapes how a request is resolved to a source record before the read runs. The policy binds the read to a declared purpose and relationship context and constrains which inputs identify the subject. With no matching policy, a binding falls back to unrestricted, identifier-only resolution (Section 9).
+A Registry Stack project compiles subject selection, cardinality, source adaptation, and output minimization into Relay. Notary sees only the consultation inputs and typed output contract.
 
-REQ-DM-CLAIM-004: Where a source binding declares a matching policy, Registry Notary MUST enforce the policy's purpose, relationship, and sufficient-input constraints before it reads the source: a request whose purpose, relationship, or supplied inputs the policy does not admit MUST be refused before source access.
+REQ-DM-CLAIM-004: A registry-backed claim MUST require the request purpose, Relay profile id, contract hash, input map, and output contract to match the compiled consultation before Relay work. A mismatch MUST fail closed and MUST NOT fall back to another profile or evidence mode.
 
-REQ-DM-CLAIM-005: By default, a matching failure MUST collapse to a single public reason (`evidence.not_available`), with the granular reason retained only in the audit record, so the matching surface cannot be used as an existence oracle. A deployment MAY disable this collapse. Operators are expected to disable it only in a controlled environment where exposing not-found, ambiguous, and rejected outcomes to the caller is acceptable; that restriction is operational guidance, and Registry Notary enforces no runtime gate that confines the setting to such an environment.
+REQ-DM-CLAIM-005: Relay no-match, ambiguity, contract, and source failures MUST map into the configured Notary public error posture without exposing raw source rows or unreviewed source diagnostics. Delegated proof failures MUST use the stable delegated denial codes defined by RS-PR-NOTARY.
 
 ## 5. Rule and dependencies
 
-The rule is the single decision at the center of a claim. Registry Notary implements three rule kinds: `exists` (the presence of exactly one source record), `extract` (a value read from a source field), and `cel` (a value derived from source fields or earlier claim results through a hardened expression).
+The rule is the single decision at the center of a claim. Registry Notary implements three rule kinds: `exists` (the presence represented by a consultation result), `extract` (a typed value from a consultation output), and `cel` (a value derived from closed evidence inputs or earlier claim results through a hardened expression).
 
 REQ-DM-CLAIM-006: A claim definition MUST declare exactly one rule, and that rule MUST be one of the implemented kinds `extract`, `exists`, or `cel`. The `plugin` rule kind is declared in configuration but unimplemented; a conforming claim MUST NOT depend on it. This is the data-model form of REQ-PR-NOTARY-007.
 
@@ -127,20 +128,17 @@ REQ-DM-CLAIM-010: A credential MUST be issuable from a claim only when both side
 
 ## 9. Batch behavior
 
-Batch evaluation lets one request evaluate a claim for many subjects. It is a source-read optimization, not a second model: it adds no authorization, disclosure, matching, or issuance behavior of its own.
+Batch evaluation lets one request evaluate claims for several subjects. It is an outer Notary API envelope, not a second evidence model: it adds no authorization, disclosure, consultation, or issuance behavior of its own.
 
-REQ-DM-CLAIM-011: Batch evaluation MUST be semantically equivalent to evaluating the same claim for each subject individually. A claim's configured batch cap bounds the number of subjects one request may carry, and a deployment MUST NOT use batch evaluation to bypass the authorization, matching, or disclosure rules that apply to a single evaluation.
+REQ-DM-CLAIM-011: Batch evaluation MUST be semantically equivalent to evaluating each item independently. Registry-backed batches MUST validate the complete outer request before the first Relay call, require idempotency where the API contract specifies it, preserve item order, and MUST NOT coalesce duplicate subjects across item positions or bypass single-evaluation authorization and disclosure.
 
 ## 10. Limitations
 
-These constraints are stated so a reader does not infer an invariant the reviewed implementation does not enforce at configuration load.
+These constraints are stated so a reader does not infer a capability from a declared but unusable
+shape.
 
-- Plugin rule: Declared in configuration, unimplemented; an evaluation that reaches a `plugin` rule is refused at evaluation time, not at configuration load (REQ-DM-CLAIM-006).
-- Identifier uniqueness: The configuration loader does not reject two claims that share an `id`; uniqueness is an operator responsibility (REQ-DM-CLAIM-001).
-- Disclosure default: The loader does not verify that `default` is a member of `allowed`; a `default` outside `allowed` surfaces as a request error when the result is rendered, not as a startup failure (REQ-DM-CLAIM-008).
-- Rule source reference: The loader does not verify that a rule's `source` names a declared source binding; a dangling reference surfaces when the source is read at evaluation, not at configuration load (REQ-DM-CLAIM-006).
-- Matching fallback: A source binding with no matching policy resolves on identifiers alone, with no purpose, relationship, or input-minimization gating (Section 4).
-- Value-type conformance: Registry Notary checks that an evaluated value conforms to its declared `value.type` only for a `cel` rule; the `extract` and `exists` rule paths return their result without checking it against `value.type` (REQ-DM-CLAIM-009). Tracked in [GH#232](https://github.com/registrystack/registry-stack/issues/232).
+- Plugin rule: The enum is declared, but configuration validation rejects it for both
+  registry-backed and self-attested evidence modes (REQ-DM-CLAIM-006).
 - Empty formats list: A claim definition whose `formats` list is empty (the default) can never be evaluated, because format checking rejects any format not listed, including the default-requested claim-result JSON format (REQ-DM-CLAIM-009). This is not rejected at configuration load. Tracked in [GH#170](https://github.com/registrystack/registry-stack/issues/170).
 
 ## Conformance
@@ -148,12 +146,13 @@ These constraints are stated so a reader does not infer an invariant the reviewe
 A claim definition, and the Registry Notary deployment that serves it, conforms to the target model in this specification when it:
 
 - carries a stable identifier by which it is evaluated and named (REQ-DM-CLAIM-001);
-- binds each source read to the caller scope it requires, enforced before the read, and rejects inputs outside a declared allow-list (REQ-DM-CLAIM-002, REQ-DM-CLAIM-003);
-- enforces a declared matching policy before reading, and collapses matching failures to a single public reason by default (REQ-DM-CLAIM-004, REQ-DM-CLAIM-005);
+- declares exactly one evidence mode, pins every registry-backed Relay consultation, enforces caller scopes before work, and rejects inputs outside the closed mapping (REQ-DM-CLAIM-002, REQ-DM-CLAIM-003);
+- verifies the complete Relay consultation contract before work and preserves the configured public error posture without source leakage (REQ-DM-CLAIM-004, REQ-DM-CLAIM-005);
 - declares exactly one rule of an implemented kind and never depends on the unimplemented plugin kind (REQ-DM-CLAIM-006);
 - keeps `depends_on` references resolvable and acyclic (REQ-DM-CLAIM-007);
 - applies the default disclosure mode and refuses modes outside the allowed set (REQ-DM-CLAIM-008);
-- renders the claim-result format and produces a value matching its declared type after the gaps in Section 10 are closed (REQ-DM-CLAIM-009);
+- renders the claim-result format and produces a value matching its declared type
+  (REQ-DM-CLAIM-009);
 - issues a credential only under the two-way claim-and-profile allow-list (REQ-DM-CLAIM-010);
 - treats batch evaluation as equivalent to repeated single evaluation and never as a way around per-evaluation rules (REQ-DM-CLAIM-011).
 
@@ -163,12 +162,11 @@ Conformance to this specification does not imply conformance to any external sta
 
 This specification is `partial`: most requirements describe shipped behavior a reader can inspect, per RS-DOC REQ-DOC-014, but Section 10 records two target-model gaps that keep REQ-DM-CLAIM-009 from being fully verified today.
 
-- The [source and claim modeling guide](../../products/registry-notary/source-claim-modeling-guide/) walks the claim structure, the three rule kinds, source bindings, the disclosure policy, the two-way credential eligibility, and batch behavior that Sections 2 through 9 make precise.
-- The [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/) lists the claim, matching-policy, and credential-profile fields and the loader validations they carry (non-empty matching labels and lists, the rejected empty `allowed_claims`, the input allow-list minimization) that Sections 3, 4, and 8 state normatively.
-- [Identity and record matching](../../products/registry-notary/identity-and-record-matching/) is the outcome model behind the matching policy in Section 4.
+- [Registry Stack project authoring](../../tutorials/author-registry-project/) walks the authored claim, Relay consultation, disclosure, fixture, review, and unsigned-build workflow.
+- The [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/) lists the claim, Relay, self-attestation, and credential-profile fields.
 - [RS-PR-NOTARY](../rs-pr-notary/) carries the protocol-level form of the scope, rule, disclosure, format, and credential requirements this document gives a data-model form (REQ-PR-NOTARY-004/006/007/009/011/013/015).
 - [RS-ARC-G](../rs-arc-g/) Section 3 holds the Registry Notary component invariant (REQ-ARC-G-007) that both this document and RS-PR-NOTARY refine.
-- The [standards register](../../reference/standards/) records the adoption mode for SD-JWT VC, the W3C DID method, and SP DCI named in `standards_referenced`.
+- The [standards register](../../reference/standards/) records the adoption mode for SD-JWT VC and the W3C DID method named in `standards_referenced`.
 - [GH#170](https://github.com/registrystack/registry-stack/issues/170) and [GH#232](https://github.com/registrystack/registry-stack/issues/232) track the empty-`formats` evaluation gap and the non-CEL value-type conformance gap called out in Section 10.
 
 ## Next

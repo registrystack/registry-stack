@@ -13,7 +13,7 @@ standards_referenced: []
 
 Use this page to decide which Registry Stack state needs backup, off-host shipping, expiry,
 or deletion policy outside the products.
-It documents current Registry Relay, Registry Notary, and source-adapter behavior.
+It documents current Registry Relay and Registry Notary behavior.
 Retention enforcement, record-level erasure, and data-subject-rights workflows are outside the
 1.0 product boundary.
 
@@ -37,7 +37,7 @@ Two consequences follow from that boundary:
 
 | Store | What it can contain | Expiry or rotation | Operator control |
 |---|---|---|---|
-| Relay, Notary, and sidecar audit sinks | Chained audit envelopes with timestamps, event bodies, hashes, and HMAC-pseudonymized sensitive handles when configured. Operational metadata can still identify actors or actions. | Product file sinks default to `100 MB` and `14` retained files. `stdout` and `syslog` retention belongs to the collector. | Configure `audit.sink`, file path, rotation, `audit.hash_secret_env`, and off-host shipping. |
+| Relay and Notary audit sinks | Chained audit envelopes with timestamps, event bodies, hashes, and HMAC-pseudonymized sensitive handles when configured. Operational metadata can still identify actors or actions. | Product file sinks default to `100 MB` and `14` retained files. `stdout` and `syslog` retention belongs to the collector. | Configure `audit.sink`, file path, rotation, `audit.hash_secret_env`, and off-host shipping. |
 | Relay and Notary audit shipper cursor | Local `registry.audit.ack_cursor.v1` state with the acknowledgement time and last acknowledged chain hash, plus an optional shipper identifier. | The shipper atomically replaces the file after each successful hand-off. The runtime does not expire or rewrite it. | Mount the file read-only for the Registry process, keep it on local storage and at or below 16 KiB, and configure `deployment.evidence.audit_ack_cursor_path`. |
 | Relay ingest cache | Normalized Parquet snapshots under `server.cache_dir`. These snapshots can contain full source rows from configured registries. | No time TTL. A successful refresh keeps the current and immediately previous snapshot for each resource and removes older snapshots best effort. | Place `server.cache_dir` on writable storage with the same data classification as the source rows. |
 | Config-trust anti-rollback state | The last accepted sequence, config and bundle hashes, root version, and optional break-glass pin metadata. Operator names, approval references, and reasons can be sensitive. | The state file is rewritten atomically and has no normal TTL. Break-glass overrides require expiry, and consumed override files are renamed. | Preserve `antirollback_state_path` across upgrades and protect break-glass override files with local root controls. |
@@ -55,13 +55,11 @@ Two consequences follow from that boundary:
 | Relay pagination cursors | Client-held signed cursor payloads can include query context, filters, principal ID, ingest version, and position. | Not stored server-side and no product TTL. Cursors become invalid when signer, principal, query, config, or ingest version changes. | Treat cursor tokens as client-held request context and avoid logging them unnecessarily. |
 | OID4VCI pre-authorized-code state | Login state, PKCE verifier, eSignet nonce, selected credential config, and tx-code PIN state. Secrets are redacted in debug output. | In process only. Login state and pre-authorized-code TTLs default to `300` seconds and cap at `600` seconds. | Configure `oid4vci.pre_authorized_code.*` and use short TTLs for production flows. |
 | Credential status-list JWT cache | Signed status-list JWT strings and hashed cache keys derived from credential status metadata, status URL, timestamps, and public JWK hash. | In memory only. Entries are pruned on access and expire no later than the `300` second JWT expiry; valid status entries expire earlier when the credential expires first. | Enabled only when credential status is enabled. Restart clears the cache; there is no separate size or storage knob. |
-| Notary and sidecar OAuth token caches | Access tokens for outbound source systems. | In memory. Refresh occurs at `expires_in - refresh_skew`; default fallback expiry is `300` seconds and default skew is `60` seconds. | Configure source-auth token settings and keep token secrets out of logs and config files. |
-| Source-adapter result cache | `http_json` exact-match results or empty not-found results. Exact-match entries can contain source rows. | In memory per source. Optional exact-match and not-found TTLs; default max entries is `10,000`. FHIR caching is rejected. | Configure `cache.exact_match_ttl_ms`, `cache.not_found_ttl_ms`, and `cache.max_entries` per source. |
-| Sidecar assurance cache | Expected sidecar assurance metadata and config hash, not source rows. | In memory. Default assurance TTL is `30,000` milliseconds. | Configure expected sidecar assurance TTLs with the sidecar trust model. |
+| Relay source OAuth token caches | Access tokens used by compiled Relay source credential providers. | In memory and bounded by the provider's token lifetime. | Configure the Relay integration credential binding and keep token secrets out of logs and config files. |
 
 ## Audit retention
 
-Relay, Notary, and the source-adapter sidecar can write chained JSONL audit records.
+Relay and Notary can write chained JSONL audit records.
 The product file-sink defaults retain `14` files at `100 MB` each.
 The shared platform sink has a smaller generic default, but the products override it when their
 own audit config is used.

@@ -116,16 +116,17 @@ or the [Registry Notary operator configuration reference](../../products/registr
 - Enforce ingress rate limiting at your gateway or edge, then either declare
   `deployment.evidence.ingress_rate_limit: true` or accept the `relay.ingress.rate_limit_missing`
   finding it otherwise raises. The flag defaults to `false`.
-- Leave `allow_insecure_localhost` and `allow_insecure_private_network` false on Notary source
-  connections in production unless a deployment review explicitly accepts the private-network
-  source; a plain `http://` source with neither allowance trips `notary.source.insecure_url`, and
-  enabling the escape hatch trips `notary.source.private_network_escape`.
+- Keep Notary's Relay connection on HTTPS in production. `allow_insecure_localhost` exists only
+  for local development; an insecure Relay URL trips `notary.relay.insecure_url` under the
+  evidence-grade posture.
+- Require every project-authored Relay source destination to be an exact HTTPS origin. The project
+  validator rejects origins with user information, paths, queries, or fragments.
 - For Postgres sources, require `sslmode=require` on the connection string and use read-only
   database credentials; for live materialization, scope that role to `SELECT` only the configured
   table or view.
-- Apply the Registry Platform HTTP-security response headers and outbound-HTTP-policy primitive on
-  source-connector egress; both are RS-SEC-G recommendations (REQ-SEC-G-012), not an enforced
-  default, so confirm your build turns them on.
+- Apply Registry Platform HTTP-security response headers and outbound HTTP policy to product
+  egress. Confirm that Relay source calls remain inside the compiler-pinned destination, method,
+  path, and cumulative budget (REQ-SEC-G-012).
 
 ## Deployment profile and posture endpoint
 

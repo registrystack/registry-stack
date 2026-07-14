@@ -201,13 +201,8 @@ if (corpusPresent[0]) {
 }
 
 // ---- 4. Starlight drafts do not leak into machine-readable outputs ----
-// Draft HTML routes may exist only as redirect stubs. The two retired lab
-// tutorials intentionally keep those redirects, but neither their source
-// content nor any other draft may produce a Markdown endpoint or corpus page.
-const retiredTutorials = new Set([
-  'tutorials/configure-dhis2-claim-checks',
-  'tutorials/getting-started-fhir-evidence',
-]);
+// Draft HTML routes may exist only as redirect stubs. Draft source content
+// must never produce a Markdown endpoint or corpus page.
 const draftPages = await findDraftPages();
 for (const page of draftPages) {
   assert(
@@ -224,27 +219,12 @@ for (const page of draftPages) {
     !htmlPresent || isRedirect,
     `dist/${page.htmlRel} exists and is not a redirect stub`,
   );
-  if (retiredTutorials.has(page.pagePath)) {
-    assert(
-      `retired tutorial /${page.pagePath}/ keeps its HTML redirect`,
-      htmlPresent && isRedirect,
-      `expected redirect stub at dist/${page.htmlRel}`,
-    );
-  }
-
   for (const [file, content] of corpusContents) {
     assert(
       `${file} excludes draft entry "${page.title}"`,
       !hasDraftCorpusEntry(file, content, page),
       `found a corpus page entry for draft source ${page.source}`,
     );
-    if (retiredTutorials.has(page.pagePath)) {
-      assert(
-        `${file} has no retired tutorial URL /${page.pagePath}/`,
-        !content.includes(`/${page.pagePath}/`),
-        `replace links to the retired tutorial with current integration guidance`,
-      );
-    }
   }
 }
 console.log(`  ..  ${draftPages.length} draft pages checked for machine-output leaks`);

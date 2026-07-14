@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry architecture flow</title>
-  <desc>Registry Platform provides shared primitives to Relay and Notary. Registry Manifest produces portable metadata contracts. Registry Relay binds those contracts to protected runtime data sources and serves entity and metadata APIs. Registry Notary evaluates claims against configured sources and issues credentials. Registry Lab runs runtime services together as a compose-based local demo.</desc>
+  <desc>Registry Platform provides shared primitives to Relay and Notary. Registry Manifest produces portable metadata contracts. Registry Relay owns registry source access, product-neutral adaptation, protected APIs, and typed consultations. Registry Notary evaluates Relay-backed or self-attested claims and issues credentials. Registry Lab runs runtime services together as a compose-based local demo.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">SHARED PRIMITIVES</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -48,20 +48,20 @@
   <text x="240" y="238" fill="#6a6a6a" font-size="11.5"
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-relay</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="240" y="268">Binds manifests to CSV,</text>
-    <text x="240" y="286">XLSX, Parquet, or PostgreSQL</text>
-    <text x="240" y="304">sources. Serves protected</text>
-    <text x="240" y="322">entity and metadata APIs.</text>
+    <text x="240" y="268">Owns source access and</text>
+    <text x="240" y="286">product-neutral adaptation.</text>
+    <text x="240" y="304">Serves protected APIs</text>
+    <text x="240" y="322">and typed consultations.</text>
   </g>
 
   <text x="240" y="360" fill="#161616" font-size="14" font-weight="700">Registry Notary</text>
   <text x="240" y="378" fill="#6a6a6a" font-size="11.5"
         font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-notary</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="240" y="408">Evaluates configured</text>
-    <text x="240" y="426">claims against HTTP</text>
-    <text x="240" y="444">sources. Issues SD-JWT</text>
-    <text x="240" y="462">VCs and CCCEV evidence.</text>
+    <text x="240" y="408">Evaluates Relay-backed</text>
+    <text x="240" y="426">or self-attested claims.</text>
+    <text x="240" y="444">Issues SD-JWT VCs and</text>
+    <text x="240" y="462">CCCEV evidence.</text>
   </g>
 
   <g stroke="#000091" stroke-width="1" fill="none">

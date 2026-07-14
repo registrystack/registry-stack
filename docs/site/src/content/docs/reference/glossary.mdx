@@ -46,7 +46,7 @@ Product names are always in English, including on future translated pages.
   <dd>Core Criterion and Core Evidence Vocabulary. Registry Manifest emits CCCEV-shaped requirement, evidence type, and evidence type list metadata. Registry Notary renders CCCEV-shaped JSON-LD for claim evaluation results. Media type: `application/ld+json; profile="cccev"`.</dd>
 
   <dt>claim evaluation</dt>
-  <dd>Registry Notary process that evaluates configured evidence rules against data from one or more source services and returns a structured claim result.</dd>
+  <dd>Registry Notary process that evaluates configured evidence rules over compiler-pinned Registry Relay outputs or permitted self-attestation and returns a structured claim result.</dd>
 
   <dt>claim level</dt>
   <dd>The evidence discipline these docs use for standards claims: `implements`, `emits`, `maps_to`, `aligns_with`, `inspired_by`, or `compares_against`.</dd>
@@ -67,7 +67,7 @@ Product names are always in English, including on future translated pages.
   <dd>Decentralized Identifier. W3C DID Core 1.0. Registry Relay no longer publishes a `did:web` document. Registry Notary parses `did:jwk` values for credential subjects.</dd>
 
   <dt id="delegated-self-attestation">delegated self-attestation</dt>
-  <dd>Registry Notary self-attestation access mode `delegated_attestation`. The authenticated principal is the requester, the request target and scoped authorization details identify the same configured dependent subject, and the dependent claim can read sources only after a configured relationship proof claim evaluates to boolean `true`. This is separate from static-peer delegated evaluation under Notary federation.</dd>
+  <dd>Registry Notary self-attestation access mode `delegated_attestation`. The authenticated principal is the requester, the request target and scoped authorization details identify the same configured dependent subject, and the dependent claim can continue only after a compiler-pinned Relay relationship proof evaluates to boolean `true`. This is separate from static-peer delegated evaluation under Notary federation.</dd>
 
   <dt>disclosure profile</dt>
   <dd>Registry Notary control over what the caller receives: `Value` (full value disclosed), `Predicate` (only true/false satisfaction), or `Redacted` (value fully hidden).</dd>
@@ -79,7 +79,7 @@ Product names are always in English, including on future translated pages.
   <dd>A Relay API route shaped around a domain resource such as `household` or `individual`, not around storage table identifiers.</dd>
 
   <dt>Evidence Gateway</dt>
-  <dd>Governed runtime path for evidence responses. A Relay read or Notary source-bound evaluation selects an evidence pack or source policy, passes trusted request and source context to the shared Policy Decision Point (PDP), and then permits, redacts, or denies the response. The manifest describes governed evidence bindings and evidence packs; runtime services enforce their configured surfaces.</dd>
+  <dd>Governed runtime path for evidence responses. A Relay read or consultation and a Notary claim evaluation pass trusted request and evidence context through configured authorization and disclosure policy before returning or denying a response. Registry-backed Notary claims consume compiler-pinned Relay results.</dd>
 
   <dt>ecosystem binding</dt>
   <dd>Manifest-level binding that connects an external ecosystem profile or governed evidence pack to a Registry Stack runtime surface. A governed evidence ecosystem binding names the evidence pack metadata and policy identity a runtime service can use for PDP enforcement.</dd>
@@ -91,7 +91,7 @@ Product names are always in English, including on future translated pages.
   <dd>Metadata entry that describes a verification capability and the access path a client uses to reach it. In the current stack it points a client from Registry Relay metadata to Registry Notary or another evidence service; Relay describes the offering but does not evaluate the claim.</dd>
 
   <dt>evidence claim</dt>
-  <dd>Registry Stack product term for a verifiable claim, attestation, credential claim, or status assertion that Registry Notary evaluates from configured sources.</dd>
+  <dd>Registry Stack product term for a verifiable claim, attestation, credential claim, or status assertion that Registry Notary evaluates from Relay outputs or permitted self-attestation.</dd>
 
   <dt>evidence type list</dt>
   <dd>CCCEV list of evidence types that satisfy a requirement. In Registry Manifest, one list is one grouped option; multiple lists on the same requirement are alternatives.</dd>
@@ -157,7 +157,7 @@ Product names are always in English, including on future translated pages.
   <dd>Audit fields that explain a governed PDP decision, including policy id, policy hash, evaluated rule ids, route identity, source binding, checked scopes, trust-provenance labels, and stable `pdp.*` denial code when denied.</dd>
 
   <dt>PEP</dt>
-  <dd>Policy enforcement point. The runtime service surface, such as a Registry Relay governed read or a Registry Notary source-bound evaluation, that calls the PDP and enforces the resulting permit, redaction, or deny decision.</dd>
+  <dd>Policy enforcement point. The runtime service surface, such as a Registry Relay governed read or consultation, or a Registry Notary claim evaluation, that calls the PDP and enforces the resulting permit, redaction, or deny decision.</dd>
 
   <dt>policy hash</dt>
   <dd>Lowercase `sha256:` digest that binds a governed evidence policy identity to canonical policy bytes or an externally supplied policy artifact. Manifest verifies it when an inline evidence pack policy object is present; Relay records the selected hash in governed PDP audit provenance.</dd>
@@ -178,7 +178,7 @@ Product names are always in English, including on future translated pages.
   <dd>Security posture where missing, malformed, unsupported, stale, or unauditable governed policy inputs result in denial rather than permit.</dd>
 
   <dt>Registry Lab</dt>
-  <dd>Compose-based runnable local demo that starts three Registry Relay instances, four Registry Notary instances, live Postgres and Zitadel services, a source adapter sidecar path (using built-in `http_json`/`http_flow`/`fhir` engines), a static metadata publisher, and narrated clients. Repo slug: `registry-lab`.</dd>
+  <dd>Compose-based runnable local demo of Registry Relay, Registry Notary, shared platform services, synthetic fixtures, and narrated clients. Repo slug: `registry-lab`.</dd>
 
   <dt>Registry Manifest</dt>
   <dd>Rust workspace for modeling, validating, and rendering standards-facing service, registry, form, and policy metadata without running Registry Relay. Provides a library (`registry-manifest-core`) and a CLI (`registry-manifest-cli`). Repo slug: `registry-manifest`.</dd>
@@ -187,10 +187,10 @@ Product names are always in English, including on future translated pages.
   <dd>Shared Rust workspace for registry security and operational primitives, including auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC helpers, and test fixtures. Repo slug: `registry-platform`.</dd>
 
   <dt>Registry Relay</dt>
-  <dd>Config-driven Rust service that turns existing registry source data, such as files, extracts, and database tables, into protected, read-only, domain-oriented consultation APIs. Repo slug: `registry-relay`.</dd>
+  <dd>Config-driven Rust service that owns registry source access, product-neutral HTTP and script adaptation, immutable snapshot lookups, and protected read-only consultation APIs. Repo slug: `registry-relay`.</dd>
 
   <dt>Registry Notary</dt>
-  <dd>Standalone Rust service for claim evaluation, disclosure policy, credential issuance, and audit. Decoupled from Registry Relay application code by design, while sharing Registry Platform primitives. Repo slug: `registry-notary`.</dd>
+  <dd>Standalone Rust service for Relay-backed or self-attested claim evaluation, disclosure policy, credential issuance, and audit. Repo slug: `registry-notary`.</dd>
 
   <dt>`registry-manifest/v1`</dt>
   <dd>Schema version string for portable metadata manifests.</dd>
@@ -226,7 +226,7 @@ Product names are always in English, including on future translated pages.
   <dd>Runtime or source-policy identifier that names the configured source service, resource, or claim binding a governed decision is allowed to use. Source binding lets audit records and PDP rules distinguish one backend source from another.</dd>
 
   <dt>SP DCI</dt>
-  <dd>Social Protection Digital Convergence Initiative. Relay exposes an SP DCI adapter behind the `spdci-api-standards` feature flag. Registry Notary ships an HTTP source connector that maps SP DCI search responses into claim evaluation inputs.</dd>
+  <dd>Social Protection Digital Convergence Initiative. Registry Relay can expose an SP DCI adapter and can execute a reviewed DCI source integration. Registry Notary consumes the resulting compiler-pinned Relay consultation, not a direct DCI source connector.</dd>
 
   <dt>static publication bundle</dt>
   <dd>Manifest-generated directory containing `catalog.json`, `dcat.jsonld`, `cpsv-ap.jsonld`, `shacl.jsonld`, entity and form JSON Schemas, OGC Records item collections, evidence offering JSON, policy JSON-LD, and embedded SKOS-shaped codelist metadata in linked-data outputs. Can be hosted as static files without running Registry Relay.</dd>

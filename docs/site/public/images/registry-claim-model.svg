@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Claim model: five configured stages</title>
-  <desc>A Registry Notary claim evaluation moves through five configured stages in order. (1) Subject identifier: input from the caller, typed by the source connector. (2) Source connector: registry_data_api, dci, or source_adapter_sidecar, configured per binding. (3) Rule evaluation: one of extract, exists, or cel. (4) Disclosure mode: value, predicate, or redacted. (5) Evaluation render format: claim-result JSON or CCCEV JSON-LD. Eligible stored evaluations can later be materialized as SD-JWT VC credentials.</desc>
+  <desc>A Registry Notary claim evaluation moves through five configured stages in order. (1) Typed request inputs from the caller. (2) A compiler-pinned Registry Relay consultation, or permitted self-attestation. (3) Rule evaluation from closed inputs. (4) Disclosure mode: value, predicate, or redacted. (5) Evaluation render format: claim-result JSON or CCCEV JSON-LD. Eligible stored evaluations can later be materialized as SD-JWT VC credentials.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">CLAIM MODEL · FIVE STAGES IN ORDER</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -16,19 +16,19 @@
   </g>
 
   <g fill="#161616" font-size="14" font-weight="700">
-    <text x="48" y="68">Subject identifier</text>
-    <text x="48" y="112">Source connector</text>
+    <text x="48" y="68">Request inputs</text>
+    <text x="48" y="112">Evidence input</text>
     <text x="48" y="156">Rule evaluation</text>
     <text x="48" y="200">Disclosure mode</text>
     <text x="48" y="244">Render format</text>
   </g>
 
-  <text x="248" y="68" fill="#3a3a3a" font-size="12.5">Input from the caller; type set by the source connector.</text>
+  <text x="248" y="68" fill="#3a3a3a" font-size="12.5">Typed target, requester, and declared variables.</text>
 
   <g fill="#6a6a6a" font-size="11.5"
      font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
-    <text x="248" y="112">registry_data_api  |  dci  |  source_adapter_sidecar</text>
-    <text x="248" y="156">extract  |  exists  |  cel</text>
+    <text x="248" y="112">Relay consultation  |  self-attestation</text>
+    <text x="248" y="156">configured CEL over closed inputs</text>
     <text x="248" y="200">value  |  predicate  |  redacted</text>
     <text x="248" y="244">claim-result JSON  |  CCCEV JSON-LD</text>
   </g>

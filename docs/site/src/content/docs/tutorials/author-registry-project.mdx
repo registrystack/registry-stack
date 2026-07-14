@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-12"
+last_reviewed: "2026-07-14"
 doc_type: tutorial
 locale: en
 standards_referenced: []
@@ -34,7 +34,7 @@ registries require separate projects.
 This tutorial uses a fictional registry and synthetic records.
 Do not add source credentials, production endpoints, or real subject records.
 
-{/* Evidence: crates/registryctl/src/main.rs, crates/registryctl/src/project_authoring.rs,
+{/* Evidence: crates/registryctl/src/main.rs, crates/registryctl/src/project_authoring/,
     and crates/registryctl/assets/project-starters/bounded-http/. */}
 
 ## Copy the HTTP starter
@@ -67,24 +67,54 @@ registry-project/
 The starter is copied into your workspace.
 Registry Stack does not resolve a remote package or download integration code at runtime.
 
-## Prove the starter offline
+## Trace one fixture offline
 
-Run every fixture before changing the source contract:
+Run one matching fixture and include its safe synthetic trace before changing the source contract:
 
 ```sh
-registryctl test --project-dir registry-project
+registryctl test \
+  --project-dir registry-project \
+  --integration person-record \
+  --fixture active-person \
+  --trace
 ```
 
-The JSON report contains:
+The JSON report identifies the selected fixture, typed input, source call, minimized output, claim
+results, and derived security cases. Its primary fixture contains:
 
-```text
-"status": "passed"
+```json
+{
+  "integration": "person-record",
+  "fixture": "active-person",
+  "inputs": ["person_id"],
+  "calls": ["request"],
+  "outputs": ["active"],
+  "claims": ["person-active", "person-record-exists"],
+  "outcome": "match",
+  "passed": true
+}
 ```
 
-The authored fixture set covers meaningful synthetic match, no-match, ambiguity, and source-shape
-variations. The harness derives malformed decoding, byte and structural limits, timeout,
-authorization-before-source, and output-minimization cases from the same integration.
-The command does not contact Registry Relay, Registry Notary, or a source registry.
+The same report includes derived malformed-decoding, byte-ceiling, timeout,
+authorization-before-source, and output-minimization cases. The command does not contact Registry
+Relay, Registry Notary, or a source registry.
+
+## Watch the selected fixture
+
+Keep the same fixture running while you edit the project:
+
+```sh
+registryctl test \
+  --project-dir registry-project \
+  --integration person-record \
+  --fixture active-person \
+  --trace \
+  --watch
+```
+
+The command prints the same passing report, waits for an authored file to change, then reruns the
+selected fixture. Press `Ctrl+C` after you confirm the initial pass. The watcher ignores generated
+`.registry-stack` output and never enables live source access.
 
 ## Adapt the authored contract
 
@@ -128,9 +158,10 @@ Mark a source version `unverified` until the required integration evidence exist
     http_starter_adapts_to_a_structurally_different_source_api and
     source_product_is_metadata_not_runtime_dispatch. */}
 
-## Rerun the fixture journey
+## Run the complete fixture journey
 
-Test the edited project:
+Test every edited fixture, including match, no-match, ambiguity, source-shape, and derived security
+cases:
 
 ```sh
 registryctl test --project-dir registry-project

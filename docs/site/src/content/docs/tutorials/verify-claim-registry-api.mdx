@@ -1,6 +1,6 @@
 ---
 title: Evaluate a claim with Registry Notary
-description: Add Registry Notary to the local registry API project, evaluate one claim, compare the claim result with a protected row read, and change the claim's purpose policy.
+description: Run a combined Relay and Notary claim journey against synthetic fixtures, inspect the pinned consultation, and build unsigned product inputs.
 status: current
 owner: registry-docs
 source_repos:
@@ -15,381 +15,171 @@ standards_referenced: []
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 
-Use this tutorial after you run the protected registry API locally.
-You will add Registry Notary to the same project, evaluate one claim, and see the difference
-between a source row read and a minimized claim result.
+Use this tutorial to prove the combined Registry Relay and Registry Notary path without contacting
+a registry or starting a deployment. The built-in HTTP project has one Relay integration, one
+Notary evidence service, and synthetic fixtures for match, no-match, and ambiguity.
 
 <QuickstartMeta
-  outcome="One claim evaluated against your local Relay, with the claim result compared to the source-facing row read and the claim's purpose policy edited and enforced."
-  time="About 15 minutes after the first tutorial passes"
-  level="Local single-node"
-  prerequisites={['Completed: Run a protected registry API locally', 'registryctl', 'A Docker Compose provider']}
+  outcome="A fixture-tested claim journey and separate unsigned Relay and Notary Config Bundle inputs."
+  time="About 5 minutes"
+  level="Local authoring with synthetic fixtures"
+  prerequisites={['A registryctl build with project authoring commands', 'A shell']}
 />
 
-This tutorial uses synthetic data and local demo credentials.
-Do not use the generated local keys in production.
+Do not add production endpoints, credentials, or subject records to this exercise.
 
-:::note[Current first-run route]
-The v0.9.0 source beta and this local tutorial can be used while hosted credential publication is
-held by [GH#330](https://github.com/registrystack/registry-stack/issues/330) and the incomplete
-[GH#198](https://github.com/registrystack/registry-stack/issues/198) fresh-reader run.
-:::
+{/* Evidence: crates/registryctl/assets/project-starters/bounded-http and
+    crates/registryctl/src/project_authoring/fixtures.rs. */}
 
-## Start from the local API
+## Copy the combined starter
 
-Complete [Run a protected registry API locally](../publish-spreadsheet-secured-registry-api/)
-first.
-
-If you need to recreate the project:
+Create a local Registry Stack project:
 
 ```sh
-registryctl init relay my-first-api --sample benefits
-cd my-first-api
-registryctl start
-registryctl smoke
+registryctl init --from http --project-dir registry-claim-project
 ```
 
-The Relay smoke check must pass before you add Notary.
-
-## Add Notary
-
-From the Relay project directory, add Notary:
-
-```sh
-registryctl add notary --from local-relay
-```
-
-The command adds `notary/config.yaml`, updates `compose.yaml`, refreshes the Bruno collection, and
-adds Notary demo keys to `secrets/local.env`.
-
-Notary reads from Relay through the local Compose network.
-You still call Notary from your workstation at:
+The report contains:
 
 ```text
-http://127.0.0.1:4255
+"status": "initialized"
 ```
 
-## Start Relay and Notary
+The authored `registry-stack.yaml` defines one evidence service. Its consultation maps a bounded
+request input to the Relay integration, and its claims derive only from the consultation outcome
+and typed output.
 
-Start the project again:
+## Evaluate the matching fixture
+
+Run only the active-person fixture and include its safe synthetic trace:
 
 ```sh
-registryctl start
+registryctl test \
+  --project-dir registry-claim-project \
+  --integration person-record \
+  --fixture active-person \
+  --trace
 ```
 
-`registryctl` waits for both services and prints the local URLs:
-
-```text
-Relay API:  http://127.0.0.1:4242
-API docs:   http://127.0.0.1:4242/docs
-Notary API: http://127.0.0.1:4255
-API docs:   http://127.0.0.1:4255/docs
-```
-
-## Run the Notary smoke check
-
-Run the Notary smoke checks:
-
-```sh
-registryctl notary smoke
-```
-
-The core checks pass:
-
-```text
-PASS notary healthz is public
-PASS notary ready is public
-PASS anonymous claims request is denied
-PASS anonymous caller can open Notary API docs
-PASS anonymous caller can fetch Notary OpenAPI
-PASS notary evaluator can list claims
-PASS notary evaluator can verify starter claim
-```
-
-`registryctl` writes the detailed report to:
-
-```text
-output/notary-smoke-results.json
-```
-
-## Load local demo keys
-
-Load the generated local keys into your shell:
-
-```sh
-set -a
-. secrets/local.env
-set +a
-```
-
-The Notary evaluator key is for you calling Notary.
-The Relay source token is for Notary calling Relay.
-They are intentionally separate.
-
-## Make one denied claim request
-
-Call the claim list without a credential:
-
-```sh
-curl -i http://127.0.0.1:4255/v1/claims
-```
-
-Notary returns `401 Unauthorized`.
-
-## List the available claim
-
-Call the same route with the Notary evaluator key:
-
-```sh
-curl -sS \
-  -H "x-api-key: $REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW" \
-  http://127.0.0.1:4255/v1/claims
-```
-
-The starter claim appears with `"id": "benefits-person-exists"`.
-
-## Evaluate one claim
-
-Evaluate whether the synthetic person `per-2001` exists in the Relay-backed benefits dataset:
-
-```sh
-curl -sS -X POST \
-  -H "x-api-key: $REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/vnd.registry-notary.claim-result+json" \
-  -d '{
-    "target": { "type": "person", "id": "per-2001" },
-    "claims": ["benefits-person-exists"],
-    "disclosure": "predicate",
-    "purpose": "https://example.local/purpose/tutorial"
-  }' \
-  http://127.0.0.1:4255/v1/evaluations
-```
-
-Notary returns a claim result.
-The response contains the outcome, provenance, timestamps, and a pseudonymous target reference.
-It does not return the Relay source row.
-
-The important fields look like this:
+The JSON report identifies the exercised integration, fixture, consultation outcome, output, and
+claims. The important fields are:
 
 ```json
 {
-  "results": [
+  "status": "passed",
+  "fixtures": [
     {
-      "claim_id": "benefits-person-exists",
-      "disclosure": "predicate",
-      "format": "application/vnd.registry-notary.claim-result+json",
-      "satisfied": true,
-      "subject_type": "person",
-      "value": true
+      "integration": "person-record",
+      "fixture": "active-person",
+      "outputs": ["active"],
+      "claims": ["person-active", "person-record-exists"],
+      "outcome": "match",
+      "passed": true
     }
   ]
 }
 ```
 
-## Try an unknown person
+The fixture runner executes the Relay acquisition contract in memory, then evaluates the Notary
+claims from the typed consultation result. It does not permit a fixture to choose a destination,
+credential, capability, worker command, or decoder.
 
-Run the same evaluation for an id that is not in the sample workbook:
+## Verify no-match semantics
 
-```sh
-curl -sS -X POST \
-  -H "x-api-key: $REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/vnd.registry-notary.claim-result+json" \
-  -d '{
-    "target": { "type": "person", "id": "per-9999" },
-    "claims": ["benefits-person-exists"],
-    "disclosure": "predicate",
-    "purpose": "https://example.local/purpose/tutorial"
-  }' \
-  http://127.0.0.1:4255/v1/evaluations
-```
-
-Notary does not return `satisfied: false` for a missing person.
-It returns a `409` problem document, because there is no evidence to evaluate:
-
-```json
-{
-  "code": "evidence.not_available",
-  "detail": "the evidence is not available",
-  "request_id": "01KTS31QC7184F5487VW0P7XM3",
-  "status": 409,
-  "title": "Evidence not available",
-  "type": "https://id.registrystack.org/problems/registry-notary/evidence/not_available"
-}
-```
-
-The `request_id` is a server-minted ULID that differs on every request; match the other
-fields exactly.
-
-This distinction matters when you integrate: a claim result answers the configured question about a
-known subject, while a missing subject is an evidence error, not a negative answer.
-
-## Compare a row read and a claim result
-
-Relay still exposes the source-facing consultation API:
+Run the no-match fixture:
 
 ```sh
-curl -sS -G \
-  -H "Authorization: Bearer $ROW_READER_RAW" \
-  -H "Data-Purpose: https://example.local/purpose/tutorial" \
-  --data-urlencode "id=per-2001" \
-  http://127.0.0.1:4242/v1/datasets/benefits_casework/entities/person/records
+registryctl test \
+  --project-dir registry-claim-project \
+  --integration person-record \
+  --fixture no-person
 ```
 
-Notary exposes the claim API:
+The report contains `"outcome": "no_match"` and `"status": "passed"`. The fixture contract expects
+the presence claim to be `false` and the direct output claim to be null. No source error or raw
+record becomes a Notary claim.
+
+Run every fixture to include the ambiguity case and derived security checks:
 
 ```sh
-curl -sS -X POST \
-  -H "x-api-key: $REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/vnd.registry-notary.claim-result+json" \
-  -d '{
-    "target": { "type": "person", "id": "per-2001" },
-    "claims": ["benefits-person-exists"],
-    "disclosure": "predicate",
-    "purpose": "https://example.local/purpose/tutorial"
-  }' \
-  http://127.0.0.1:4255/v1/evaluations
+registryctl test --project-dir registry-claim-project
 ```
 
-Use Relay when a caller is allowed to consult configured records.
-Use Notary when a caller should receive a narrow claim result.
-
-## Inspect the generated claim
-
-Now that the evaluation works, inspect the generated Notary contract:
-
-```sh
-sed -n '1,220p' notary/config.yaml
-```
-
-The generated config defines the source connection to Relay, the evaluator key fingerprint, the
-starter claim, and the disclosure format.
-Raw evaluator keys and Relay source tokens stay in `secrets/local.env`.
-
-Open the local Notary API reference:
-
-```sh
-registryctl notary open
-```
-
-In an environment that cannot launch a browser, the command prints:
+The report must again contain:
 
 ```text
-Notary API docs: http://127.0.0.1:4255/docs
-OpenAPI JSON: http://127.0.0.1:4255/openapi.json
+"status": "passed"
 ```
 
-## Change the purpose the claim accepts
+## Inspect the authored policy
 
-Every evaluation in this tutorial declared the purpose
-`https://example.local/purpose/tutorial`, and the starter claim accepts it because the
-generated source binding says so.
-In `notary/config.yaml`, find the `matching` block under the starter claim:
+Open `registry-claim-project/registry-stack.yaml`. The evidence service owns:
 
-```yaml
-          matching:
-            # Purposes this binding accepts. Requests carrying any other
-            # purpose are denied with pdp.purpose_not_permitted before any
-            # evidence is looked up; an empty list denies everything.
-            # Replace or extend this list with your own purpose URIs.
-            allowed_purposes:
-              - https://example.local/purpose/tutorial
-```
+- the purpose and legal basis;
+- caller scopes;
+- the consultation input mapping;
+- claims and disclosure modes; and
+- the credential profile claim list.
 
-Replace the tutorial purpose with a different URI:
+The integration owns the fixed source request and minimized typed output. Product and version
+metadata document interoperability evidence. They do not select the HTTP or script capability.
 
-```yaml
-            allowed_purposes:
-              - https://example.local/purpose/casework-review
-```
+Change the service `purpose`, then rerun the fixture test. Purpose policy is authored once and
+compiled into both the Relay consultation profile and the Notary claim contract. Do not patch the
+generated Notary YAML.
 
-The containers read the config once at startup, so apply the edit by stopping and
-starting the stack:
+## Validate the cross-product contract
+
+Compile the project through both product validators and print the redacted plan:
 
 ```sh
-registryctl stop
-registryctl start
+registryctl check \
+  --project-dir registry-claim-project \
+  --environment local \
+  --explain
 ```
 
-Repeat the evaluation exactly as before, still declaring the tutorial purpose:
+The report contains `"status": "valid"`. In the explanation, confirm that Notary names the same
+consultation profile, contract hash, purpose, closed inputs, outcome union, and typed outputs that
+Relay exposes. A mismatch fails validation rather than selecting a fallback source path.
+
+## Build unsigned product inputs
+
+Build the reviewed project:
 
 ```sh
-curl -sS -X POST \
-  -H "x-api-key: $REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/vnd.registry-notary.claim-result+json" \
-  -d '{
-    "target": { "type": "person", "id": "per-2001" },
-    "claims": ["benefits-person-exists"],
-    "disclosure": "predicate",
-    "purpose": "https://example.local/purpose/tutorial"
-  }' \
-  http://127.0.0.1:4255/v1/evaluations
+registryctl build \
+  --project-dir registry-claim-project \
+  --environment local
 ```
 
-Notary refuses it with `403 Forbidden` before it looks at any evidence:
-
-```json
-{
-  "code": "pdp.purpose_not_permitted",
-  "detail": "the configured policy denied the evidence request",
-  "request_id": "01KWP278GAFT3KAH5Z3WMJ7W8M",
-  "status": 403,
-  "title": "Policy decision denied",
-  "type": "https://id.registrystack.org/problems/registry-notary/pdp/purpose_not_permitted"
-}
-```
-
-Change the request's `purpose` value to `https://example.local/purpose/casework-review`
-and send it again: the evaluation succeeds with `satisfied: true`.
-The claim, the caller, and the key did not change; the declared purpose did.
-Purpose policy is part of the claim's source binding, and the stable code to script
-against is `pdp.purpose_not_permitted`.
-
-Restore the tutorial purpose in `notary/config.yaml`, then restart and confirm the smoke
-checks still pass:
+The report contains `"status": "built"`. Inspect the generated inputs:
 
 ```sh
-registryctl stop
-registryctl start
-registryctl notary smoke
+sed -n '1,220p' \
+  registry-claim-project/.registry-stack/build/local/private/notary/config/notary.yaml
 ```
 
-## Stop the stack
+The Notary config has one logical Relay connection and one compiler-pinned consultation. It has no
+source destination, source credential, product adapter, or script runtime. Those remain Relay
+responsibilities.
 
-When you are done:
+The generated Relay and Notary directories are separate unsigned inputs to each product's Config
+Bundle workflow. They are not a signed project-level deployment bundle and should not be committed.
+
+## Clean up
+
+Remove the generated project when you no longer need it:
 
 ```sh
-registryctl stop
+rm -rf registry-claim-project
 ```
-
-This stops the local services.
-It does not delete your workbook, generated configs, local keys, or smoke results.
 
 ## Next
 
-- [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/):
-  define more policy for this claim, including context constraints, denial reasons, and audit
-  inspection.
-- [Connect Notary to a Registry Data API source](../run-notary-standalone-for-api/): run Notary in
-  a separate project against a Registry Data API-shaped source.
-- [Hosted credential tour (held)](../../start/credential-tour/): inspect credential issuance and
-  cross-authority flows; this is not the promoted first-run route.
-
-## Troubleshooting
-
-| Symptom | Cause | Resolution |
-| --- | --- | --- |
-| `registryctl add notary --from local-relay` cannot find a Relay project | The current directory does not contain a generated `registryctl.yaml` with a Relay section. | Run the command from the Relay tutorial project directory. |
-| `registryctl add notary --from local-relay` cannot find a source token | `secrets/local.env` is missing or does not contain the Relay row-reader key. | Recreate the Relay project or restore the generated local env file. |
-| `registryctl start` starts Relay but Notary is not ready | Notary config, source token, or Compose service wiring is invalid. | Run `registryctl status`, then `registryctl logs` and check the Notary service errors. |
-| Docker reports no `linux/arm64` manifest for a Registry Stack image | The v0.9.0 Relay and Notary images are published for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`. |
-| `registryctl notary smoke` returns `401` for authorized calls | The Notary evaluator key was not loaded or does not match the generated Notary fingerprint. | Run `. secrets/local.env`, then retry. |
-| Claim evaluation returns a source auth error | Notary cannot authenticate to Relay with `EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN`. | Confirm `secrets/local.env` has the source token and Relay is running. |
-| Claim evaluation returns `409 Evidence not available` | The target id is not in the sample workbook or the Relay entity lookup changed. | Use `per-2001` for the tutorial target, or inspect the Relay `person` entity. |
-| `registryctl doctor` reports `not_run` and asks you to install `registry-relay` | `doctor` validates configs with native product binaries, which this Docker-based tutorial does not install. | Use `registryctl notary smoke` and `registryctl logs` to check a config edit, or install the `registry-relay` and `registry-notary` binaries. |
-| `registryctl start` times out and the container log shows `missing field \`commitment\`` | registryctl v0.8.4 pins a service image older than its own generated config format ([GH#278](https://github.com/registrystack/registry-stack/issues/278)). | Pin `compose.yaml` to the published v0.8.4 digests `ghcr.io/registrystack/registry-relay@sha256:93e194500a3500ba3f6331d5a0a9a3069127c48a709beccb083a5fcbdbc3ec61` and `ghcr.io/registrystack/registry-notary@sha256:0cf05184885d7ed17dd9889e20f3797eb2a9ad07517f4ac7c05c03b774a00b8f`, then run `docker compose pull`. `registryctl add notary` regenerates `compose.yaml`, so reapply the pins after it runs. |
-| `registryctl add notary` reports that its image lock is missing or invalid | The binary and strict release image lock are no longer installed together, or the lock does not match the CLI release and tag-built image evidence. | Rerun the installer from the same pinned target tag so it checksum-verifies and installs both files. For an operator-managed or source-test location, set `REGISTRYCTL_IMAGE_LOCK` to the checksum-verified lock from that exact release. Existing projects can still start from their stored pins, but generation commands fail closed. |
-| `registryctl start` replaces containers you did not expect | Docker Compose derives the project name from the directory basename only, so two differently located `my-first-api` directories share one Compose project. | Give each project directory a unique name, or stop the other project first. |
+- [Author an HTTP Registry Stack project](../author-registry-project/) to adapt the starter while
+  retaining its fixture evidence.
+- [Configure a sandboxed Rhai integration](../configure-project-sandboxed-rhai/) when one bounded
+  HTTP request cannot express the reviewed source recipe.
+- [Registry Notary operator configuration reference](../../products/registry-notary/operator-config-reference/)
+  for the generated runtime contract and deployment gates.

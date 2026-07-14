@@ -24,15 +24,13 @@ guarantee.
 
 ## A question goes in, an answer comes out
 
-The Notary mental model is one sentence: **a scoped question crosses into the
-institution, the record is read in place, and a computed answer crosses back out.**
+The combined Relay and Notary mental model is one sentence: **a scoped question crosses into the
+institution, Relay reads the record in place, and Notary returns a computed answer.**
 
 A Notary caller never sends the value it is asking about and never receives the
 underlying record as the answer.
-It sends the id of a *claim* (a single, pre-modelled question) and the inputs that
-claim needs to resolve the subject: a subject identifier, plus, where the claim's
-matching policy requires them, target or requester attributes, further identifiers, or
-relationship attributes.
+It sends the id of a *claim* (a single, pre-modelled question) and only the typed target,
+requester, or variable inputs that the claim admits.
 It receives one of a few narrow shapes of answer: a yes/no, a single value, a
 machine-readable evaluation result, or a credential the subject can carry in a wallet.
 The source row that the answer was computed from stays behind.
@@ -70,9 +68,9 @@ flowchart LR
 database table into a read-only, access-controlled API without replacing the source.
 Its scoped record routes can return source records to authorized callers that hold the
 dataset's row-read permission.
-Registry Notary evaluates one modelled question against that source and returns a shaped
-answer; it is the only component that evaluates claims, applies disclosure policy, and
-issues credentials.
+Registry Notary evaluates one modelled question against the typed result of a compiler-pinned
+Relay consultation and returns a shaped answer; it is the only component that evaluates claims,
+applies disclosure policy, and issues credentials.
 Notary is the strongest minimization surface.
 Relay record reads are scoped and audited, not open data.
 
@@ -85,7 +83,7 @@ Relay record reads are scoped and audited, not open data.
   (the default), Relay materializes a projected copy into its local cache (`cache_dir`), which
   carries its own retention and access considerations.
 - Storage internals stay private: The paths, table names, and backend credentials that
-  point at the source live in the service's runtime configuration, decided at startup. They
+  point at the source live in Relay's runtime configuration, decided at startup. They
   are never part of the public API surface, and never part of a portable metadata file that
   gets distributed.
 - The institution keeps custody: The design premise is *distributed custody*: each
@@ -101,9 +99,9 @@ What crosses depends on the surface.
 Registry Relay can return scoped source records to an authorized caller through a
 governed, audited read bounded by the caller's per-dataset row scope and the dataset's
 configured filters and limits.
-Registry Notary returns the answer a rule computes rather than the source row; keeping
-that answer narrow is a modelling discipline, because a well-modelled claim returns one
-decision or one extracted value.
+Registry Notary returns the answer a rule computes from typed consultation outputs rather than the
+source row; keeping that answer narrow is a modelling discipline, because a well-modelled claim
+returns one decision or one extracted value.
 A Notary answer takes one of a few shapes:
 
 - A yes/no: only the true/false satisfaction of the modelled rule.
@@ -203,16 +201,16 @@ Security material:
   scalar, so a claim modelled to return an object or extracted record returns one. A claim
   reveals only what its author configured it to reveal; least disclosure is a design choice
   the claim makes, not a property the stack imposes on every answer.
-- Correctness depends on the source: Notary reports what the configured source says; it
-  does not independently vouch for whether the source is correct or current.
+- Correctness depends on the source: Relay reports what the reviewed source consultation says,
+  and Notary evaluates that typed result. Neither product independently vouches for whether the
+  source is correct or current.
 - A plain result is provenance-tagged, not signed: The everyday evaluation response
   carries provenance metadata, not a cryptographic signature. Cryptographic verifiability
   comes from the SD-JWT VC credential and the signed federation result: a receiving system
   that must verify an answer cryptographically uses the credential, not the default response.
-- Matching is only as strict as it is configured: Notary resolves a subject through its
-  configured matching policy and does not independently verify identity beyond that. By
-  default a matching failure collapses to a single public reason, but an authorized caller
-  can still tell a resolved record from a not-available response.
+- Matching is only as strict as the Relay integration contract: Relay returns `match`,
+  `no_match`, or `ambiguous` under the compiled selector and output rules. Notary does not
+  replace that result with direct source matching or choose between ambiguous records.
 - This is not zero-knowledge: A `predicate` answer is a policy-enforced boolean computed
   inside the service; SD-JWT selective disclosure is digest omission. Neither is a
   zero-knowledge proof.

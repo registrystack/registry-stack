@@ -7,11 +7,11 @@
 # "## Verify" sections and executing them, in order, against a Solmara Lab
 # checkout.
 #
-# Also applies the cheap drift pre-gate to the registryctl tutorials
-# (publish-spreadsheet, verify-claim-registry-api) by extracting every `sh`
-# fence and asserting the command-line count. The dedicated source-under-test
-# runner in check-registryctl-tutorials.sh executes those commands in CI; this
-# count assertion fails before that more expensive container build starts.
+# Also applies the cheap drift pre-gate to the registryctl tutorials by
+# extracting every `sh` fence and asserting the command-line count. The
+# dedicated source-under-test runner executes the deployable Relay tutorial in
+# CI. Project-authoring tutorials remain offline and are covered by their
+# command-line drift checks plus the registryctl project-authoring test suite.
 #
 # Usage:
 #   scripts/check-tutorial.sh              extract + execute (needs Docker)
@@ -165,9 +165,9 @@ done
 # inside `sh` fences. Bump the expected count when you intentionally add or
 # remove a documented command.
 REGISTRYCTL_TUTORIALS=(
-	"author-registry-project:10"
+	"author-registry-project:20"
 	"publish-spreadsheet-secured-registry-api:39"
-	"verify-claim-registry-api:71"
+	"verify-claim-registry-api:21"
 )
 
 count_sh_command_lines() {
@@ -217,11 +217,11 @@ require_literal "$REPO_ROOT/src/content/docs/tutorials/author-registry-project.m
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-fhir-r4.mdx" \
 	'outputs:'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-fhir-r4.mdx" \
-	'output: coverage.status'
+	'protocol.fhir.parse_searchset'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-sandboxed-rhai.mdx" \
-	'runtime: rhai_v1'
+	'file: adapter.rhai'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-sandboxed-rhai.mdx" \
-	'outputs: #{}'
+	'result.match(#{'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-snapshot-materialization.mdx" \
 	'kind: records_api'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-snapshot-materialization.mdx" \

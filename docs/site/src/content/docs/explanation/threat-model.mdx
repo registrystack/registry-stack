@@ -78,14 +78,14 @@ auditing separately.
             authorization, and disclosure. A caller crosses the service edge, where each
             service runs exactly one authentication mode, static-credential fingerprint or
             OIDC, and every claim- or record-bearing route is authenticated before
-            responding. Registry Notary reads sources over HTTP connectors only: Registry
-            Relay via registry_data_api, an SP DCI source via dci, and the source adapter
-            sidecar, an internal boundary whose bearer token authenticates only the
-            Notary-to-sidecar hop and is not an end-user, tenant, or subject authorization
-            boundary. Federation with a peer Notary is static-peer only, not a dynamic trust
+            responding. Registry Relay owns registry source access, credentials, product-neutral
+            HTTP and script adaptation, snapshots, and minimized consultation outputs. Registry
+            Notary consumes only compiler-pinned Relay consultations for registry-backed claims,
+            or configured self-attestation inputs for Notary-only claims. Federation with a peer
+            Notary is static-peer only, not a dynamic trust
             mesh; it requires a verified peer-signed JWS, and peer identity, signature,
             freshness, single use, purpose, profile, and audience are verified before any
-            source read. Delegated self-attestation is a distinct trust context from peer
+            Relay consultation or claim evaluation. Delegated self-attestation is a distinct trust context from peer
             federation: it delegates no trust to a peer Notary and stays inside the citizen
             or OIDC trust context." />
 </figure>
@@ -100,19 +100,15 @@ docs, public credential-status reads, and credential type metadata. The federati
 evaluations route is exempt from the API-key/OIDC middleware but still requires a verified
 peer-signed JWS, so it is not anonymous.
 
-**Notary to its sources.** A runtime boundary sits between Registry Notary and the sources
-it reads. Notary calls Relay over HTTP as a data source; it does not link Relay code. The
-only connectors are HTTP (`registry_data_api`, `dci`, and the source adapter sidecar); there
-is no file or database connector.
+**Notary to Relay.** A runtime boundary sits between Registry Notary and Registry Relay for every
+registry-backed claim. The compiler pins the consultation profile, contract hash, purpose, and
+typed input mapping. Notary authorizes the claim before calling Relay, and Relay applies its own
+workload authorization before source work. Notary has no direct registry source connector.
 
-**The source adapter sidecar.** The sidecar is an *internal* trust boundary, not a
-subject-authorization boundary, and this distinction matters for an auditor. Its bearer
-token authenticates only the Notary-to-sidecar hop; it is not an end-user, tenant, or
-subject authorization boundary. It is an internal, private deployment surface behind Notary,
-not a public subject-facing API. Keeping the token off the public network and scoping its
-credentials, cache, and backoff state is outside the security model (it is an operator
-responsibility), and shared cache or backoff state across authorization contexts is not
-something the model reasons about.
+**Relay to registry sources.** Registry Relay owns the source boundary. Its compiled integration
+fixes the origin, credential interface, method and path authority, input placement, output
+projection, and cumulative limits. Product and version metadata do not select the HTTP, script, or
+snapshot capability.
 
 **Federation between two Notary services.** Federation is a deliberate trust boundary
 between two Notary services, and it is **static-peer only**: only configured static peers are
@@ -138,7 +134,7 @@ The assets the design sets out to protect are:
   the portable layer and client-facing surfaces.
 
 The design treats these threat classes as security-relevant: authentication bypass, credential disclosure,
-audit redaction or integrity failure, signing-key handling bugs, source-connector data
+audit redaction or integrity failure, signing-key handling bugs, Relay source-adaptation data
 leakage, and privacy regressions that expose raw subject identifiers.
 
 ## Threats the design considers and mitigates
@@ -148,9 +144,9 @@ leakage, and privacy regressions that expose raw subject identifiers.
 - Token forgery / acceptance of untrusted tokens (OIDC mode): A token is trusted only
   after signature verification against the configured issuer JWKS, plus issuer, audience, and
   algorithm checks. The service still owns its route scopes regardless of the token.
-- Privilege escalation / over-reach: Authorization is scope-based, deny-by-default, and
-  scope-before-source: a caller is refused before any source read or claim evaluation if it
-  lacks the required scope, and reach is never widened at request time.
+- Privilege escalation / over-reach: Authorization is scope-based and deny-by-default. Relay
+  refuses unauthorized callers before source work. Notary refuses unauthorized callers before a
+  Relay consultation or claim evaluation. Reach is never widened at request time.
 - An existence / matching oracle: By default a matching failure collapses to a single
   public reason (`evidence.not_available`), with the granular reason kept only in audit, so
   the matching surface cannot be used to probe whether a record exists. A deployment may
@@ -160,10 +156,9 @@ leakage, and privacy regressions that expose raw subject identifiers.
   stable codes only. Bearer tokens, private keys, source values, filesystem paths, and
   internal error chains stay in protected operator logs, never in responses; principal-scoped
   responses are not public cache entries.
-- Over-collection and value injection in claim evaluation: The caller supplies a claim id
-  plus the subject-resolution inputs the claim policy admits, but never the evaluated
-  value; bindings read only the fields they need and reject input paths outside a declared
-  allow-list.
+- Over-collection and value injection in claim evaluation: The caller supplies a claim id and
+  only the typed request inputs the claim policy admits, never the evaluated value. Relay returns
+  only the compiler-declared typed outputs, and Notary rejects undeclared inputs.
 - Disclosure leakage: A redacted result carries neither the value nor the predicate
   outcome. Selective-disclosure credentials carry SHA-256 digests of unselected fields, so a
   holder cannot present an undisclosed field. Holder binding defaults to `did:jwk` for
@@ -176,22 +171,18 @@ leakage, and privacy regressions that expose raw subject identifiers.
 - Self-attested data crossing a trust gate: Self-attestation and delegated
   self-attestation derive subject, requester, and relationship from the authenticated
   principal and scoped authorization details; caller-supplied `requester`, `relationship`, and
-  `on_behalf_of` fields are rejected before any source read, and self-asserted target fields do
-  not satisfy trusted-principal gates.
+  `on_behalf_of` fields are rejected before any Relay consultation or claim evaluation, and
+  self-asserted target fields do not satisfy trusted-principal gates.
 - Spoofed trust context and ungoverned reads (Relay side): Relay ignores trust-context
   headers unless the principal is scoped to assert that exact value, and a governed read must
   receive a PDP permit or fail closed with a stable `pdp.*` code rather than falling back to an
   ungoverned read.
-- SSRF / uncontrolled egress: Outbound source fetches are meant to be constrained by Registry
-  Platform's outbound-HTTP-policy. Where it is applied, it limits the destinations a source
-  connector may reach. This is recommended posture rather than a hard guarantee: confirm it
-  is enabled rather than assuming it. One detail an auditor should note: the guard exposes an
-  `allow_insecure_private_network` opt-in that, per source connection, re-enables plain-HTTP
-  private-network and link-local destinations the strict policy would otherwise refuse. Even
-  with that opt-in, cloud-metadata addresses (such as `169.254.169.254` and its IPv6
-  equivalent) stay denied. Treat the opt-in as a deployment decision to review, not a default.
+- SSRF / uncontrolled egress: Registry Stack project authoring accepts exact HTTPS source
+  origins. Relay's compiled plan fixes the destination, method, path authority, safe headers, and
+  cumulative call budgets before the runtime resolves a credential or sends a request. Rhai can
+  control ordinary request flow only inside that host-enforced authority.
 - Untrusted federation peers, replay, and wrong-purpose requests: Only configured static
-  peers are admitted, and before any source read the server verifies peer identity, request
+  peers are admitted, and before any Relay consultation or claim evaluation the server verifies peer identity, request
   signature, freshness, single use, purpose, profile, and audience. The single-use and
   freshness checks are backed by a real replay-store primitive that tracks one-time JWT `jti`
   and nonce values (federation request `jti`, OID4VCI `c_nonce`, and holder-proof `jti`).
@@ -224,21 +215,15 @@ These are the risks the design does *not* close:
   and rotation, audit retention and storage, tenant isolation, TLS termination and
   certificates, edge rate limiting, deployment configuration, and incident response are
   operator responsibilities, not behavior the model defines.
-- The sidecar depends on deployment-network controls: The source adapter sidecar relies
-  on deployment-network egress controls; the model does not enforce them.
 - Aggregate routes are not a privacy budget: Relay aggregate routes do not constitute a
   longitudinal privacy budget; v1 does not track cumulative disclosure across repeated or
   overlapping aggregate queries. Do not describe a Relay aggregate as privacy-budgeted unless
   a separate deployed control provides it. This is a residual disclosure risk left to the
   operator.
-- Some claim-definition invariants surface only at runtime: A disclosure default outside
-  the allowed set, a rule source naming an undeclared binding, and the unimplemented plugin
-  rule are not enforced at configuration load; they surface only at evaluation or request
-  time. Duplicate claim ids are different and worse: they are not rejected at load and are
-  never reported, because the runtime lookup returns the first match by id, so a later
-  duplicate is silently shadowed. A source binding with no matching policy resolves on
-  identifiers alone, with no purpose, relationship, or input-minimization gating. These are
-  residual misconfiguration risks left to the operator.
+- Project approval remains a semantic control: Schemas and validators reject malformed claims,
+  duplicate identifiers, incomplete Relay pins, and unsupported evidence modes. They cannot
+  decide whether an institution selected the correct source fields, lawful purpose, claim rule,
+  or disclosure default. Those decisions require project review and fixture evidence.
 - Known product gaps: No revocation flow is specified (though an optional,
   off-by-default credential-status surface can be enabled to mark a credential `revoked`),
   there is no `/.well-known/jwt-vc-issuer` endpoint, and no built-in data-subject erasure

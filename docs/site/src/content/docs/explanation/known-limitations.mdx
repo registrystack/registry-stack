@@ -63,10 +63,8 @@ The [standards register](../../reference/standards/) records how each one is act
 These boundaries cut across components. Read them first.
 
 - No source mutation, no event stream: Registry Relay does not write back to or otherwise mutate
-  source registry data, and it has no event-stream backend; sources are read as batch snapshots or
-  table scans only.
-  Registry Notary likewise has no file-based or database connector; a source connector reaches its
-  target over HTTP, so the connector-to-target hop is HTTP-only.
+  source registry data, and it has no event-stream backend. Registry-backed Notary claims consume
+  Relay consultations; Registry Notary does not connect to registry sources directly.
 - Aggregate routes are not a privacy budget: Relay aggregate routes return the configured
   statistical observations, but provide no built-in longitudinal privacy budget and do not track
   cumulative disclosure across repeated or overlapping queries.
@@ -181,9 +179,12 @@ These limits concern what the claim and manifest configuration loaders do and do
 Read them in full in the [Claim data model](../../spec/rs-dm-claim/) and [Manifest data
 model](../../spec/rs-dm-manifest/).
 
-- The `plugin` rule type is unimplemented: The `plugin` rule type is declared in configuration but has no evaluation implementation; a conforming claim must not depend on it.
-- Load-time invariants are not all enforced: The claim configuration loader does not reject duplicate claim ids, does not verify that the disclosure default is within the allowed set, and does not verify that a rule's source names a declared binding. A disclosure default outside the allowed set and a dangling rule source surface as request or evaluation errors at runtime, not as startup failures. Duplicate claim ids are different: they are never reported, because the runtime lookup returns the first match by id, so a later duplicate is silently shadowed.
-- Identifier-only matching has no further gating: A source binding with no matching policy resolves on identifiers alone, with no purpose, relationship, or input-minimization gating.
+- The `plugin` rule type is unavailable: The enum remains declared, but configuration validation
+  rejects it for both registry-backed and self-attested evidence modes. A conforming claim uses
+  `extract`, `exists`, or `cel` under the constraints of its evidence mode.
+- An empty formats list cannot be evaluated: A claim whose `formats` list is empty does not admit
+  even the default claim-result JSON format. Project-generated claims declare their supported
+  formats explicitly.
 - Manifests describe; they do not enforce: The portable metadata layer only describes: publishing in a discovery artifact grants no access and asserts no fact about a live record. Trust bootstrap stays in the consumer's local policy and Notary peer configuration.
 - Rendered standards artifacts are well-formed, not certified: Manifest rendering emits standards-shaped artifacts but does not validate them against external standard bodies: a rendered CPSV-AP, DCAT, or SHACL document is well-formed by construction, not certified against the standard.
 - Vocabulary influence is not vocabulary emission: PROV-O is a design influence only: provenance-shaped concepts appear in audit fields and the claim provenance struct, but no PROV-O vocabulary terms are emitted as JSON-LD. No standalone SKOS artifact is published yet (only embedded SKOS-shaped nodes), and CPSV-AP has no Relay runtime metadata route.
@@ -206,12 +207,6 @@ Read the full security boundary in the [security model](../../spec/rs-sec-g/).
   fail-closed, so that a request whose audit record cannot be written does not return success.
   That is a switch a deployment is able to turn on, not a promise that every route in a given
   build has been individually audited, nor that every build ships with it on.
-- The source-adapter sidecar is an internal connector, not a public API: The source adapter
-  sidecar is an internal connector surface, not a public subject-facing API.
-  Its static bearer token is not by itself a tenant or subject authorization boundary, and it
-  relies on deployment-network egress controls for outbound source traffic.
-  Direct public access, broad reuse of one sidecar token across unrelated sources, or shared cache
-  or backoff state across authorization contexts is outside the security model.
 - Demo and template code is not a production profile: Demo helper code and generated workflow
   snippets are integration examples, not a production freshness or replay-protection profile, and
   must not be relied on for freshness, expiry, or replay protection.

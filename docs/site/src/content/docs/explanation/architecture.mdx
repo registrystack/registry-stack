@@ -9,7 +9,7 @@ source_repos:
   - registry-relay
   - registry-notary
   - registry-lab
-last_reviewed: "2026-06-20"
+last_reviewed: "2026-07-14"
 doc_type: explanation
 locale: en
 standards_referenced:
@@ -55,7 +55,7 @@ updated policy documents without touching deployment config.
   <img src="../../images/registry-architecture-flow.svg"
        alt="Architecture flow: Registry Platform provides shared primitives. Registry Manifest compiles
             metadata artifacts. Registry Relay binds those artifacts to protected runtime sources.
-            Registry Notary evaluates claims against HTTP sources and issues credentials.
+            Registry Notary evaluates Relay-backed or self-attested claims and issues credentials.
             Registry Lab wires runtime services into a local compose topology." />
 </figure>
 
@@ -70,10 +70,11 @@ updated policy documents without touching deployment config.
 4. Registry Relay starts with runtime config that binds the manifest's logical datasets and entities
    to actual data sources. Clients reach entity routes, metadata routes, and evidence-offering
    endpoints through configured auth.
-5. Registry Notary evaluates claims against configured HTTP sources (`registry_data_api`, `dci`,
-   or source adapter sidecar connectors, with the sidecar using built-in `http_json`, `http_flow`,
-   or `fhir` engines to reach external sources such as DHIS2 or FHIR servers). It renders evaluation
-   results as `application/vnd.registry-notary.claim-result+json`
+5. Registry Relay executes compiler-pinned consultations. Its product-neutral `http`, `script`,
+   and `snapshot` capabilities adapt reviewed source contracts and return only declared typed
+   outputs. Registry Notary evaluates registry-backed claims from those Relay outputs, or evaluates
+   source-free and self-attested claims without Relay. It renders evaluation results as
+   `application/vnd.registry-notary.claim-result+json`
    or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`), and it materializes eligible
    stored evaluations into SD-JWT VC credentials (`application/dc+sd-jwt`).
 6. A trusted Registry Notary can call another trusted Registry Notary through

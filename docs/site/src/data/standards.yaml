@@ -400,22 +400,22 @@
   name: HL7 FHIR
   standards_body: HL7
   official_url: https://hl7.org/fhir/R4/
-  version_or_profile: FHIR R4 bounded source-adapter profile
+  version_or_profile: FHIR R4 bounded Relay script-helper profile
   status: used
   claim_level: maps_to
   adoption_mode: profiled
   used_by:
-    - registry-notary
+    - registry-relay
   surfaces:
-    - FHIR R4 source adapter
-    - configured GET graph projections
+    - product-neutral Relay script adaptation
+    - bounded FHIR R4 search-set parsing helper
   evidence_docs:
-    - label: Registry Notary FHIR source adapter guide
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/products/notary/docs/fhir-source-adapter-guide.md
-    - label: Registry Notary FHIR adapter contract tests
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-source-adapter-sidecar/tests/fhir_contract.rs
+    - label: Registry Stack FHIR project-authoring fixture
+      url: https://github.com/registrystack/registry-stack/tree/2dfcf2dd/crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active
+    - label: Registry Relay protocol helper
+      url: https://github.com/registrystack/registry-stack/tree/066bd89e/crates/registry-relay/src/source_plan
   last_checked: 2026-07-09
-  notes: Registry Notary maps a bounded FHIR R4 GET graph through the governed source-adapter runtime. The adapter projects selected FHIR fields into Notary-ready source facts and does not expose raw FHIR Bundles, implement a FHIR server, or claim broad FHIR conformance.
+  notes: Registry Relay exposes a bounded FHIR R4 search-set parser to product-neutral Rhai scripts. Project code owns profile-specific matching and projections. Source product and version metadata do not enable the helper, and Registry Stack does not claim to implement a FHIR server or broad FHIR conformance.
 - id: govstack-digital-registries
   name: GovStack Digital Registries Building Block
   standards_body: GovStack
@@ -463,23 +463,22 @@
   name: Social Protection Digital Convergence Initiative
   standards_body: SP DCI
   official_url: https://spdci.org/
-  version_or_profile: Optional sync adapter and source connector (no SP-DCI spec version asserted; URL-pinned)
+  version_or_profile: Optional Relay sync adapter and authored source integration (no SP-DCI spec version asserted; URL-pinned)
   status: referenced
   claim_level: maps_to
   adoption_mode: adapted
   used_by:
     - registry-relay
-    - registry-notary
   surfaces:
     - optional sync adapter
-    - HTTP source connector
+    - authored Relay source integration
   evidence_docs:
     - label: Registry Relay README
       url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/README.md
-    - label: Registry Notary source connector
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-core/src/config.rs
+    - label: Registry Stack OpenCRVS project-authoring fixture
+      url: https://github.com/registrystack/registry-stack/tree/2dfcf2dd/crates/registryctl/tests/fixtures/project-authoring/opencrvs
   last_checked: 2026-05-23
-  notes: Relay exposes an SP-DCI sync adapter behind `spdci-api-standards`. Notary ships an HTTP source connector that maps SP-DCI search and sync responses into claim evaluation inputs.
+  notes: Relay exposes an SP-DCI sync adapter behind `spdci-api-standards`. A Registry Stack project can also compile a reviewed DCI source journey into a Relay consultation. Registry Notary consumes the consultation result and does not connect to DCI sources directly.
 - id: oid4vci
   name: OpenID for Verifiable Credential Issuance
   standards_body: OpenID Foundation

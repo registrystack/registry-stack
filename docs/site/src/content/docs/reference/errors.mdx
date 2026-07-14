@@ -42,29 +42,12 @@ Registry Notary returns the codes in the table below from its evidence taxonomy.
 | `claim.version_not_found` | claim version was not found | The requested claim version does not exist. |
 | `claim.operation_unsupported` | claim operation is unsupported | The requested operation is not supported for the claim. |
 | `request.invalid` | evidence request is invalid | The request body or parameters failed validation. |
+| `consultation.invalid_request` | registry-backed consultation request is invalid | A registry-backed batch or consultation input failed validation before Relay was called. |
 | `claim.disclosure_not_allowed` | requested disclosure is not allowed | The requested disclosure level is not permitted for the claim. |
-| `target.not_found` | target record was not found | The target lookup matched no source record. |
-| `target.match_ambiguous` | target lookup returned more than one record | The target lookup matched more than one source record. |
-| `target.identifier_missing` | target identifier is missing | The request omits a required target identifier. |
-| `target.attributes_insufficient` | target attributes are insufficient for matching | The supplied target attributes cannot resolve a match. |
-| `target.matching_policy_rejected` | target matching policy rejected the request | The target matching policy denied the request. |
-| `target.not_in_valid_state` | target is not in a valid state | The matched target is not in a state that allows evaluation. |
-| `target.match_low_confidence` | target match confidence is too low | The best target match scored below the configured threshold. |
-| `requester.not_found` | requester record was not found | The requester lookup matched no record. |
-| `requester.match_ambiguous` | requester lookup returned more than one record | The requester lookup matched more than one record. |
-| `requester.identifier_missing` | requester identifier is missing | The request omits a required requester identifier. |
-| `requester.attributes_insufficient` | requester attributes are insufficient for matching | The supplied requester attributes cannot resolve a match. |
-| `requester.matching_policy_rejected` | requester matching policy rejected the request | The requester matching policy denied the request. |
-| `requester.reauthentication_required` | requester must reauthenticate | The requester needs to authenticate again before the request can proceed. |
-| `relationship.not_established` | relationship was not established | The required relationship between requester and target was not found. |
-| `relationship.match_ambiguous` | relationship match is ambiguous | The relationship lookup matched more than one relationship. |
-| `relationship.attributes_insufficient` | relationship attributes are insufficient for matching | The supplied attributes cannot resolve a relationship match. |
-| `relationship.policy_rejected` | relationship policy rejected the request | The relationship policy denied the request. |
-| `relationship.purpose_not_allowed` | relationship is not allowed for the requested purpose | The relationship cannot be used for the requested purpose. |
 | `purpose.not_allowed` | purpose is not allowed | The requested purpose is not permitted for the claim. |
 | `profile.unsupported` | evidence request profile is unsupported | The requested evidence profile is not supported. |
-| `evidence.not_available` | evidence is not available | Evidence could not be produced; also the collapsed public code for several matching-evidence conditions. |
-| `source.unavailable` | source is unavailable | A configured source service could not be reached or did not respond. |
+| `evidence.not_available` | evidence is not available | The pinned consultation produced no usable evidence or a required proof was not established. |
+| `source.unavailable` | source is unavailable | The required Relay consultation could not be reached or completed. |
 | `batch.too_large` | batch request is too large | The batch request exceeds the configured item limit. |
 | `evaluation.not_found` | evaluation was not found | The referenced evaluation id does not exist. |
 | `evaluation.binding_mismatch` | evaluation binding mismatch | The referenced evaluation does not match the requested binding. |

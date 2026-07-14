@@ -355,60 +355,6 @@ repos:
           - docsets: [v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [sd-jwt-vc, w3c-did]
             last_reviewed: unreviewed
-      - src: products/notary/docs/fhir-source-adapter-guide.md
-        dest: products/registry-notary/fhir-source-adapter-guide
-        label: FHIR source adapter
-        nav_order: 62
-        doc_type: how-to
-        last_reviewed: unreviewed
-        standards_referenced: [fhir-r4]
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
-        docset_overrides:
-          - docsets: [v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: [fhir-r4]
-            last_reviewed: unreviewed
-      - src: products/notary/docs/script-rhai-source-adapter-guide.md
-        dest: products/registry-notary/script-rhai-source-adapter-guide
-        label: Script and Rhai source adapters
-        nav_order: 64
-        doc_type: how-to
-        last_reviewed: unreviewed
-        standards_referenced: [openapi, fhir-r4]
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
-        docset_overrides:
-          - docsets: [v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: [openapi, fhir-r4]
-            last_reviewed: unreviewed
-      - src: products/notary/docs/opencrvs-onboarding.md
-        dest: products/registry-notary/opencrvs-onboarding
-        label: OpenCRVS onboarding
-        nav_order: 66
-        doc_type: explanation
-        last_reviewed: unreviewed
-        standards_referenced: [sd-jwt-vc, w3c-did]
-        docset_overrides:
-          - docsets: [v0.9.0]
-            standards_referenced: [sd-jwt-vc, w3c-did]
-            last_reviewed: unreviewed
-          - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: [sd-jwt-vc]
-            last_reviewed: unreviewed
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
-      - src: products/notary/docs/opencrvs-dci-standalone-tutorial.md
-        dest: products/registry-notary/opencrvs-dci-standalone-tutorial
-        label: OpenCRVS DCI standalone tutorial
-        nav_order: 68
-        doc_type: tutorial
-        last_reviewed: unreviewed
-        standards_referenced: [sd-jwt-vc, verifiable-credentials, w3c-did]
-        docset_overrides:
-          - docsets: [v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: [sd-jwt-vc, verifiable-credentials]
-            last_reviewed: unreviewed
-          - docsets: [v0.9.0, v0.8.4]
-            standards_referenced: [sd-jwt-vc, verifiable-credentials, w3c-did]
-            last_reviewed: unreviewed
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/federated-evaluation-operator-guide.md
         dest: products/registry-notary/federated-evaluation-operator-guide
         label: Federated evaluation operator guide
@@ -432,18 +378,6 @@ repos:
         docset_overrides:
           - docsets: [v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
-            last_reviewed: unreviewed
-      - src: products/notary/docs/sidecar-trust-and-secrets.md
-        dest: products/registry-notary/sidecar-trust-and-secrets
-        label: Sidecar trust and secrets
-        nav_order: 85
-        doc_type: explanation
-        last_reviewed: unreviewed
-        standards_referenced: [sd-jwt-vc, fhir-r4]
-        exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
-        docset_overrides:
-          - docsets: [v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
-            standards_referenced: [sd-jwt-vc, fhir-r4]
             last_reviewed: unreviewed
       - src: products/notary/docs/deployment-hardening-runbook.md
         dest: products/registry-notary/deployment-hardening-runbook

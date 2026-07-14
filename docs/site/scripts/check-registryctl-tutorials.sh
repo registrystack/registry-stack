@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Execute the two adopter registryctl tutorials against checked-out source.
+# Execute the deployable Relay adopter tutorial against checked-out source.
 # This is a source-under-test CI gate: it builds registryctl and the release
 # product image shapes from the current checkout. It deliberately does not run
 # the published installer or release assets; the fresh-reader release proof is
@@ -14,7 +14,6 @@ SITE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$SITE_ROOT/../.." && pwd)"
 HELPER="$SITE_ROOT/scripts/registryctl-tutorial.mjs"
 RELAY_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx"
-NOTARY_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/verify-claim-registry-api.mdx"
 BUILDER_IMAGE="rust:1.95-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb"
 LINUX_TARGET="$REPO_ROOT/target/registryctl-tutorial-linux-amd64"
 CARGO_HOME_DIR="$REPO_ROOT/target/registryctl-tutorial-cargo-home"
@@ -24,8 +23,6 @@ RELAY_IMAGE="registryctl-tutorial-relay:$RUN_ID"
 NOTARY_IMAGE="registryctl-tutorial-notary:$RUN_ID"
 WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/registryctl-tutorial.XXXXXX")"
 HTTP_STATUS_PREFIX="__REGISTRYCTL_TUTORIAL_HTTP_STATUS__:"
-TUTORIAL_PURPOSE="https://example.local/purpose/tutorial"
-CASEWORK_PURPOSE="https://example.local/purpose/casework-review"
 
 PROJECT_DIRS=()
 PROJECT_NAMES=()
@@ -351,82 +348,4 @@ run_relay_tutorial() {
 	node "$HELPER" assert-ports-free 4242 4255
 }
 
-run_notary_tutorial() {
-	local blocks="$WORK_ROOT/notary-blocks"
-	local tutorial_root="$WORK_ROOT/notary-reader"
-	local project_name="registryctl-notary-$RUN_ID"
-	local permitted_request="$WORK_ROOT/notary-permitted-request.sh"
-	mkdir -p "$tutorial_root"
-
-	node "$HELPER" assert-layout "$NOTARY_TUTORIAL" \
-		'["Start from the local API","Add Notary","Start Relay and Notary","Run the Notary smoke check","Load local demo keys","Make one denied claim request","List the available claim","Evaluate one claim","Try an unknown person","Compare a row read and a claim result","Compare a row read and a claim result","Inspect the generated claim","Inspect the generated claim","Change the purpose the claim accepts","Change the purpose the claim accepts","Change the purpose the claim accepts","Stop the stack"]'
-	node "$HELPER" assert-contains "$NOTARY_TUTORIAL" "$CASEWORK_PURPOSE"
-	node "$HELPER" extract-shell "$NOTARY_TUTORIAL" "$blocks"
-
-	export COMPOSE_PROJECT_NAME="$project_name"
-	PROJECT_DIRS+=("$tutorial_root/my-first-api")
-	PROJECT_NAMES+=("$project_name")
-	CURRENT_SECRET_FILE=""
-	cd "$tutorial_root"
-	run_block 'Notary 1: Recreate and verify the Relay prerequisite' "$blocks/01.sh" success
-	assert_fence_lines "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Run the smoke check' text 1
-	CURRENT_SECRET_FILE="$PWD/secrets/local.env"
-	run_block 'Notary 2: Add Notary' "$blocks/02.sh" success
-	run_block 'Notary 3: Start Relay and Notary' "$blocks/03.sh" success
-	assert_fence_lines "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Start Relay and Notary' text 1
-	run_block 'Notary 4: Run the Notary smoke check' "$blocks/04.sh" success
-	assert_fence_lines "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Run the Notary smoke check' text 1
-	[[ -s output/notary-smoke-results.json ]] || { printf 'Notary smoke report is missing\n' >&2; exit 1; }
-	run_block 'Notary 5: Load local demo keys' "$blocks/05.sh" success
-	[[ -n "${REGISTRY_NOTARY_TUTORIAL_EVALUATOR_RAW:-}" && -n "${ROW_READER_RAW:-}" ]] || {
-		printf 'required Notary tutorial credentials were not loaded\n' >&2
-		exit 1
-	}
-	run_block 'Notary 6: Make one denied claim request' "$blocks/06.sh" success
-	assert_problem "$LAST_OUTPUT" 401 auth.missing_credential
-	run_block 'Notary 7: List the available claim' "$blocks/07.sh" success
-	assert_http "$LAST_OUTPUT" 200
-	assert_contains "$LAST_OUTPUT" benefits-person-exists
-	run_block 'Notary 8: Evaluate one claim' "$blocks/08.sh" success
-	assert_http "$LAST_OUTPUT" 200
-	assert_json_subset "$LAST_OUTPUT" '{"results":[{"claim_id":"benefits-person-exists","disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json","satisfied":true,"subject_type":"person","value":true}]}'
-	assert_not_contains "$LAST_OUTPUT" per-2001 hh-1001
-	run_block 'Notary 9: Try an unknown person' "$blocks/09.sh" success
-	assert_problem "$LAST_OUTPUT" 409 evidence.not_available
-	run_block 'Notary 10: Compare the source row read' "$blocks/10.sh" success
-	assert_http "$LAST_OUTPUT" 200
-	assert_contains "$LAST_OUTPUT" per-2001
-	run_block 'Notary 11: Compare the minimized claim result' "$blocks/11.sh" success
-	assert_http "$LAST_OUTPUT" 200
-	assert_json_subset "$LAST_OUTPUT" '{"results":[{"claim_id":"benefits-person-exists","satisfied":true,"value":true}]}'
-	assert_not_contains "$LAST_OUTPUT" per-2001 hh-1001
-	run_block 'Notary 12: Inspect the generated claim' "$blocks/12.sh" success
-	assert_contains "$LAST_OUTPUT" allowed_purposes "$TUTORIAL_PURPOSE"
-	run_block 'Notary 13: Open the Notary API reference' "$blocks/13.sh" success
-	assert_fence_lines "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Inspect the generated claim' text 1
-
-	node "$HELPER" set-notary-purposes notary/config.yaml benefits-person-exists person \
-		"[\"$CASEWORK_PURPOSE\"]"
-	run_block 'Notary 14: Restart with a different allowed purpose' "$blocks/14.sh" success
-	assert_fence_lines "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Start Relay and Notary' text 1
-	run_block 'Notary 15: Refuse the old purpose before evidence lookup' "$blocks/15.sh" success
-	assert_problem "$LAST_OUTPUT" 403 pdp.purpose_not_permitted
-
-	node "$HELPER" replace-once "$blocks/15.sh" "$TUTORIAL_PURPOSE" "$CASEWORK_PURPOSE" \
-		"$permitted_request"
-	run_block 'Notary 15b: Accept the newly allowed purpose' "$permitted_request" success
-	assert_http "$LAST_OUTPUT" 200
-	assert_json_subset "$LAST_OUTPUT" '{"results":[{"claim_id":"benefits-person-exists","satisfied":true,"value":true}]}'
-	assert_not_contains "$LAST_OUTPUT" per-2001 hh-1001
-
-	node "$HELPER" set-notary-purposes notary/config.yaml benefits-person-exists person \
-		"[\"$TUTORIAL_PURPOSE\"]"
-	run_block 'Notary 16: Restore purpose policy and smoke checks' "$blocks/16.sh" success
-	assert_fence_lines "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Run the Notary smoke check' text 1
-	run_block 'Notary 17: Stop the stack' "$blocks/17.sh" success
-	cleanup_stack "$tutorial_root/my-first-api" "$project_name"
-	node "$HELPER" assert-ports-free 4242 4255
-}
-
 run_relay_tutorial
-run_notary_tutorial

@@ -74,7 +74,7 @@
   name: Registry Lab Release Check
   owner: registry-lab
   status: current-source
-  surface: Compose build, fixture generation, secret generation, static metadata publication, core smoke checks, live Postgres checks, live Zitadel and OIDC checks, source adapter sidecar smoke checks, raw-secret log checks, and narrated demo flows.
+  surface: Compose build, fixture generation, secret generation, static metadata publication, core smoke checks, live Postgres checks, live Zitadel and OIDC checks, Relay consultation checks, raw-secret log checks, and narrated demo flows.
   source_of_truth:
     label: Registry Lab README
     url: https://github.com/registrystack/registry-stack/blob/v0.9.0/lab/README.md
