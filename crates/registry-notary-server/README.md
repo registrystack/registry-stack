@@ -70,13 +70,16 @@ state:
     url_env: REGISTRY_NOTARY_POSTGRES_URL
     connect_timeout_ms: 5000
     operation_timeout_ms: 2000
+    max_connections: 16
 ```
 
 Run `registry-notary state install` with a restricted migration login before
 starting the service. Runtime connections require Transport Layer Security
 (TLS), attest the exact schema and runtime role, and fail readiness when the
 database is unavailable, read-only, incompatible, or configured with unsafe
-durability settings.
+durability settings. `max_connections` is a hard physical-connection cap per
+Notary replica. Size the database budget as replica count multiplied by this
+value, plus operator and migration connections.
 
 Local, single-process development can select the process-local backend
 explicitly:

@@ -2242,10 +2242,18 @@ REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA registry_notary_api FROM PUBLIC;
 
 #[cfg(test)]
 mod tests {
+    use std::{path::PathBuf, sync::Arc, time::Duration};
+
+    use crate::state_plane::{
+        NotaryPostgresStatePlaneError, NotaryPostgresStatePlaneReadiness,
+        NotaryPostgresStatePlaneRuntime, PostgresStatePlaneConfig,
+    };
+
     use super::*;
 
     const DATABASE_URL_ENV: &str = "REGISTRY_NOTARY_STATE_POSTGRES_TEST_URL";
     const DATABASE_CA_ENV: &str = "REGISTRY_NOTARY_STATE_POSTGRES_TEST_CA";
+    const POOL_DATABASE_URL_ENV: &str = "REGISTRY_NOTARY_STATE_POOL_TEST_URL";
     const OWNER_ROLE: &str = "registry_notary_owner_test";
     const RUNTIME_ROLE: &str = "registry_notary_runtime_test";
     const MIGRATION_ROLE: &str = "registry_notary_migration_test";
@@ -2779,6 +2787,7 @@ mod tests {
             .await?;
         assert_preauthorization_contracts(&database_url, &runtime, &admin).await?;
         assert_retention_contract(&runtime, &admin).await?;
+        assert_runtime_pool_contract(&database_url).await?;
 
         admin
             .batch_execute(
@@ -2807,6 +2816,110 @@ mod tests {
             .await?;
         drop(admin);
         admin_driver.abort();
+        Ok(())
+    }
+
+    async fn assert_runtime_pool_contract(
+        database_url: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let runtime_url = database_url.replacen("postgres@", &format!("{RUNTIME_ROLE}@"), 1);
+        if runtime_url == database_url {
+            return Err("pool test URL does not contain the expected dedicated admin role".into());
+        }
+        // SAFETY: the conformance harness runs this ignored test by exact name
+        // in its own process, so no concurrent test reads this unique variable.
+        unsafe { std::env::set_var(POOL_DATABASE_URL_ENV, &runtime_url) };
+        let config = PostgresStatePlaneConfig::new(
+            POOL_DATABASE_URL_ENV,
+            Some(PathBuf::from(std::env::var(DATABASE_CA_ENV)?)),
+            Duration::from_secs(2),
+            Duration::from_millis(100),
+            1,
+        )?;
+        let pooled = Arc::new(NotaryPostgresStatePlaneRuntime::connect(&config).await?);
+        assert_eq!(pooled.created_session_count(), 1);
+
+        for _ in 0..3 {
+            let session = pooled.open_domain_session().await?;
+            session
+                .run_operation(session.client().simple_query("SELECT 1"))
+                .await?;
+        }
+        assert_eq!(
+            pooled.created_session_count(),
+            1,
+            "sequential state operations must reuse one physical session"
+        );
+
+        let held = pooled.open_domain_session().await?;
+        let wait_started = tokio::time::Instant::now();
+        assert!(matches!(
+            pooled.open_domain_session().await,
+            Err(NotaryPostgresStatePlaneError::OperationUnavailable)
+        ));
+        let waited = wait_started.elapsed();
+        assert!(
+            waited >= Duration::from_millis(50) && waited < Duration::from_secs(1),
+            "saturated pool admission must honor the configured operation deadline"
+        );
+        assert_eq!(pooled.pool_status().max_size, 1);
+        drop(held);
+
+        let poisoned = pooled.open_domain_session().await?;
+        assert!(matches!(
+            poisoned
+                .run_operation(
+                    poisoned
+                        .client()
+                        .simple_query("SELECT registry_notary_api.pool_test_missing_function_v1()")
+                )
+                .await,
+            Err(NotaryPostgresStatePlaneError::OperationUnavailable)
+        ));
+        drop(poisoned);
+        drop(pooled.open_domain_session().await?);
+        assert_eq!(
+            pooled.created_session_count(),
+            2,
+            "a failed state operation must replace its physical session"
+        );
+
+        let rotated_url =
+            format!("{runtime_url}&application_name=registry-notary-pool-generation-test");
+        // SAFETY: this exact ignored test has exclusive process access to the
+        // unique environment variable, as above.
+        unsafe { std::env::set_var(POOL_DATABASE_URL_ENV, &rotated_url) };
+        drop(pooled.open_domain_session().await?);
+        assert_eq!(
+            pooled.created_session_count(),
+            3,
+            "a URL generation change must evict and fully replace the old session"
+        );
+
+        let held = pooled.open_domain_session().await?;
+        let waiter_runtime = Arc::clone(&pooled);
+        let waiter =
+            tokio::spawn(async move { waiter_runtime.open_domain_session().await.map(|_| ()) });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while pooled.pool_status().waiting != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        pooled.shutdown();
+        assert!(matches!(
+            waiter.await?,
+            Err(NotaryPostgresStatePlaneError::Shutdown)
+        ));
+        drop(held);
+        assert_eq!(
+            pooled.readiness().await,
+            NotaryPostgresStatePlaneReadiness::Shutdown
+        );
+        drop(pooled);
+        // SAFETY: no runtime or concurrent test can read the unique variable
+        // after the exact conformance test completes.
+        unsafe { std::env::remove_var(POOL_DATABASE_URL_ENV) };
         Ok(())
     }
 

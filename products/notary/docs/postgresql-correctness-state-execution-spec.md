@@ -190,6 +190,7 @@ state:
     root_certificate_path: /run/secrets/notary-postgres-ca.pem
     connect_timeout_ms: 5000
     operation_timeout_ms: 2000
+    max_connections: 16
     sensitive_state_key_env: REGISTRY_NOTARY_SENSITIVE_STATE_KEY
 ```
 
@@ -208,6 +209,19 @@ Rules:
 - TLS is required for every PostgreSQL connection, including local PostgreSQL
   testing. The optional root certificate is size-bounded and read without
   disclosing its path on failure.
+- Each replica owns a Notary-specific pool capped by `max_connections`; values
+  outside 1 through 256 are rejected before allocation. Pool admission waits
+  at most `operation_timeout_ms`. Physical
+  connection establishment remains bounded by `connect_timeout_ms`.
+- A physical connection enters the pool only after complete session setup and
+  schema, role, catalog, server, writeability, and durability attestation. It
+  is reused across typed state operations, then discarded after an operation
+  timeout, query or driver failure, failed readiness attestation, or database
+  URL generation change.
+- The database URL generation is a process-keyed HMAC tag. The pool does not
+  retain or log the URL to detect a generation change. A replacement physical
+  connection reloads the named environment variable and completes full
+  attestation before use.
 - The sensitive-state key is base64url-encoded 32-byte key material. It is
   required whenever preauthorization is enabled with PostgreSQL. Identical
   replicas use the same key for the lifetime of any unexpired row.
@@ -388,17 +402,17 @@ Startup fails before listener bind for:
 - connected-role OID mismatch; or
 - missing required or present forbidden privileges.
 
-The readiness probe performs a bounded call through a runtime transaction
-function, in addition to rechecking the metadata and role contract after
-reconnect. Startup also verifies read-write operation and safe durability
-settings required by the deployment contract. It reports a stable component code
-such as `database_unavailable`, `schema_incompatible`, or `role_incompatible`
-without table names, role names, paths, URLs, credentials, SQL, or stored
-identifiers. Detailed logs remain value-free and name the operator action.
+Every readiness probe performs the complete server, writeability, durability,
+schema, catalog, and role attestation on a bounded pooled session. Startup
+performs the same attestation before listener bind. It reports a stable
+component code such as `database_unavailable`, `schema_incompatible`, or
+`role_incompatible` without table names, role names, paths, URLs, credentials,
+SQL, or stored identifiers. Detailed logs remain value-free and name the
+operator action.
 
 Readiness recovers after database availability is restored and a fresh
-connection passes the complete attestation. A stale connection is never
-reported ready.
+connection passes complete attestation. Failed or closed sessions are evicted,
+so a stale connection is never reported ready.
 
 ## 11. Atomic Redis deletion boundary
 
@@ -438,6 +452,9 @@ Focused and PostgreSQL-backed tests must cover:
   check-only behavior, concurrent instances, restart, and expiry;
 - encrypted login-state and transaction-code reserve, peek, consume, delete,
   expiry, wrong key, tampering, restart, and secret-absence assertions;
+- sequential physical-connection reuse, the configured per-replica cap,
+  bounded pool admission, failed-session eviction, and same-process recovery
+  after PostgreSQL stop and restart;
 - startup and readiness failures for availability, TLS, server major, schema,
   fingerprint, role, and permission errors; and
 - a clean backup and restore preserving every domain invariant.

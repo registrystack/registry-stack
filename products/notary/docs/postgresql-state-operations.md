@@ -51,11 +51,29 @@ state:
     root_certificate_path: /run/secrets/notary-postgres-ca.pem
     connect_timeout_ms: 5000
     operation_timeout_ms: 2000
+    max_connections: 16
     sensitive_state_key_env: REGISTRY_NOTARY_SENSITIVE_STATE_KEY
 ```
 
 `postgresql` is the only deployable storage value. `in_memory` is limited to
 `deployment.profile: local` with `deployment.multi_instance: false`.
+
+`max_connections` is the hard physical-connection cap for one Notary replica,
+not the whole deployment. Reserve at least `replica count × max_connections`,
+then add separate capacity for migrations, doctor, backup, monitoring, and
+platform administration. Start with the default 16 only when that budget is
+available. Smaller authority services can set a lower positive cap. A caller
+waiting for a pooled session fails within `operation_timeout_ms`; opening a new
+physical connection uses `connect_timeout_ms` and completes full runtime
+attestation before serving state. Values above 256 are rejected to prevent a
+configuration typo from preallocating an unsafe per-process resource bound.
+
+Healthy physical connections are reused. A query timeout, query or driver
+failure, failed readiness attestation, or changed database URL generation
+evicts the connection. The next checkout reloads the URL from the named
+environment variable and fully attests the replacement. The generation marker
+is a process-keyed HMAC; URL and credential material are not retained in pool
+metadata or emitted in diagnostics.
 
 ## Role separation
 
@@ -275,8 +293,9 @@ manually. Never remove an unexpired replay row, nonce tombstone, idempotency
 completion, credential-status record, quota window, or preauthorization row to
 recover capacity.
 
-Monitor database size, transaction latency, connection saturation, dead
-tuples, autovacuum, backup age, replication or archive lag, and doctor status.
+Monitor database size, transaction latency, pool wait failures, the configured
+per-replica connection cap, database connection saturation, dead tuples,
+autovacuum, backup age, replication or archive lag, and doctor status.
 Do not include row values or identifiers in monitoring labels.
 
 ## Logical backup with pg_dump
@@ -482,7 +501,7 @@ or credentials in smoke-test logs.
 | Missing or wrong sensitive-state key | Stop preauthorization, restore the backup-matched secret version, or follow the 600-second key-loss drain. |
 | Fingerprint or role-identity mismatch after restore | Keep the database isolated, run the matching `state install`, then rerun doctor and stale-restore checks. |
 | Cleanup contention | Check transaction latency, locks, autovacuum, and connection pressure. Do not manually delete unexpired rows. |
-| Readiness remains stale after recovery | Drop stale application connections by restarting the canary replica, then require a new successful doctor and readiness attestation. |
+| Readiness remains unavailable after recovery | Confirm the database accepts a new TLS connection and has the expected role and schema. The pool evicts failed sessions automatically; if the platform still presents the old endpoint or secret generation, correct that injection and restart the canary before requiring doctor and readiness. |
 
 Diagnostics are intentionally value-free. Use redacted database-platform logs
 and the stable component code to investigate. Do not add SQL, row values,

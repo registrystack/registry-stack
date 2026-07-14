@@ -14,6 +14,7 @@ postgresql:
   root_certificate_path: /run/secrets/notary-postgres-ca.pem
   connect_timeout_ms: 5000
   operation_timeout_ms: 2000
+  max_connections: 12
   sensitive_state_key_env: REGISTRY_NOTARY_SENSITIVE_STATE_KEY
 "#,
     )
@@ -40,6 +41,7 @@ pub(super) fn state_defaults_to_postgresql_contract() {
     );
     assert_eq!(config.state.postgresql.connect_timeout_ms, 5_000);
     assert_eq!(config.state.postgresql.operation_timeout_ms, 2_000);
+    assert_eq!(config.state.postgresql.max_connections, 16);
     assert_eq!(
         config.state.postgresql.sensitive_state_key_env,
         "REGISTRY_NOTARY_SENSITIVE_STATE_KEY"
@@ -72,6 +74,16 @@ pub(super) fn state_postgresql_config_rejects_invalid_connection_shape() {
         reason.contains("operation_timeout_ms"),
         "unexpected: {reason}"
     );
+
+    config = minimal_config();
+    config.state.postgresql.max_connections = 0;
+    let reason = expect_state_error(&config);
+    assert!(reason.contains("max_connections"), "unexpected: {reason}");
+
+    config = minimal_config();
+    config.state.postgresql.max_connections = STATE_POSTGRESQL_MAX_CONNECTIONS + 1;
+    let reason = expect_state_error(&config);
+    assert!(reason.contains("max_connections"), "unexpected: {reason}");
 
     config = minimal_config();
     config.state.postgresql.root_certificate_path = Some(std::path::PathBuf::new());
