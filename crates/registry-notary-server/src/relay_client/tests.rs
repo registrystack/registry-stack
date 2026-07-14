@@ -21,9 +21,10 @@ use registry_platform_httputil::destination::{
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, Mutex};
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use zeroize::Zeroizing;
 
 const PROFILE_ID: &str = "dhis2.tracker.enrollment-status.exact";
@@ -47,6 +48,12 @@ const EXECUTE_ROUTE: &str = "/v1/consultations/dhis2.tracker.enrollment-status.e
 const NOTARY_API_KEY: &str = "notary-relay-vertical-api-key";
 const NOTARY_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_RELAY_VERTICAL_API_KEY_HASH";
 const NOTARY_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_RELAY_VERTICAL_AUDIT_SECRET";
+const TRANSITION_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_TRANSITION_API_KEY_HASH";
+const TRANSITION_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_TRANSITION_AUDIT_SECRET";
+const TRANSITION_REPLAY_REDIS_URL_ENV: &str = "REGISTRY_NOTARY_TRANSITION_REPLAY_REDIS_URL";
+const RESTART_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_RESTART_API_KEY_HASH";
+const RESTART_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_RESTART_AUDIT_SECRET";
+const RESTART_REPLAY_REDIS_URL_ENV: &str = "REGISTRY_NOTARY_RESTART_REPLAY_REDIS_URL";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EvaluationIdMode {
@@ -173,6 +180,10 @@ impl FakeRelay {
         *self.state.inner.execute.lock().await = response;
     }
 
+    async fn set_metadata(&self, response: WireResponse) {
+        *self.state.inner.metadata.lock().await = response;
+    }
+
     async fn set_expected_token(&self, token: &str) {
         *self.state.inner.expected_token.lock().await = token.to_owned();
     }
@@ -195,6 +206,102 @@ impl FakeRelay {
         }
         self.task.await.unwrap();
     }
+}
+
+struct FakeRedis {
+    url: String,
+    shutdown: Option<oneshot::Sender<()>>,
+    task: JoinHandle<()>,
+}
+
+impl FakeRedis {
+    async fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown, mut receiver) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let mut connections = JoinSet::new();
+            loop {
+                tokio::select! {
+                    _ = &mut receiver => break,
+                    accepted = listener.accept() => {
+                        let (stream, _) = accepted.unwrap();
+                        connections.spawn(handle_fake_redis_connection(stream));
+                    }
+                }
+            }
+            connections.abort_all();
+            while connections.join_next().await.is_some() {}
+        });
+        Self {
+            url: format!("redis://{address}/"),
+            shutdown: Some(shutdown),
+            task,
+        }
+    }
+
+    async fn shutdown(mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        self.task.await.unwrap();
+    }
+}
+
+async fn handle_fake_redis_connection(mut stream: tokio::net::TcpStream) {
+    let mut buffered = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    loop {
+        let read = stream.read(&mut chunk).await.unwrap();
+        if read == 0 {
+            return;
+        }
+        buffered.extend_from_slice(&chunk[..read]);
+        while let Some((command, consumed)) = parse_resp_command(&buffered) {
+            buffered.drain(..consumed);
+            let response: &[u8] = match command.as_str() {
+                "PING" => b"+PONG\r\n",
+                "SET" | "CLIENT" | "HELLO" | "SELECT" => b"+OK\r\n",
+                "DEL" => b":1\r\n",
+                _ => b"-ERR unsupported test command\r\n",
+            };
+            stream.write_all(response).await.unwrap();
+        }
+    }
+}
+
+fn parse_resp_command(input: &[u8]) -> Option<(String, usize)> {
+    let (count, mut cursor) = parse_resp_number(input, 0, b'*')?;
+    let mut command = None;
+    for index in 0..count {
+        let (length, payload_start) = parse_resp_number(input, cursor, b'$')?;
+        let payload_end = payload_start.checked_add(length)?;
+        if input.get(payload_end..payload_end + 2)? != b"\r\n" {
+            return None;
+        }
+        if index == 0 {
+            command = Some(
+                std::str::from_utf8(input.get(payload_start..payload_end)?)
+                    .ok()?
+                    .to_ascii_uppercase(),
+            );
+        }
+        cursor = payload_end + 2;
+    }
+    Some((command?, cursor))
+}
+
+fn parse_resp_number(input: &[u8], start: usize, prefix: u8) -> Option<(usize, usize)> {
+    if *input.get(start)? != prefix {
+        return None;
+    }
+    let digits = input.get(start + 1..)?;
+    let line_end = digits.windows(2).position(|window| window == b"\r\n")?;
+    let value = std::str::from_utf8(&digits[..line_end])
+        .ok()?
+        .parse()
+        .ok()?;
+    Some((value, start + 1 + line_end + 2))
 }
 
 async fn metadata_handler(State(state): State<FakeState>, request: Request) -> Response<Body> {
@@ -518,6 +625,24 @@ fn result_response() -> WireResponse {
     WireResponse::ok(serde_json::to_vec(&result_value()).unwrap())
 }
 
+fn result_response_for_contract_hash(contract_hash: &str) -> WireResponse {
+    let mut result = result_value();
+    result["profile"]["contract_hash"] = json!(contract_hash);
+    WireResponse::ok(serde_json::to_vec(&result).unwrap())
+}
+
+fn successor_contract_value() -> Value {
+    let mut contract = contract_value();
+    contract["spec"]["bounds"]["timeout_ms"] = json!(4_999);
+    contract
+}
+
+fn metadata_response_for_contract(contract: &Value, contract_hash: &str) -> WireResponse {
+    WireResponse::ok(
+        serde_json::to_vec(&metadata_value_for_contract(contract, contract_hash)).unwrap(),
+    )
+}
+
 fn test_claims() -> Value {
     json!({
         "iss": EXPECTED_ISSUER,
@@ -695,12 +820,36 @@ fn assembled_notary_config(
     token_file: &TestTokenFile,
     audit_path: &std::path::Path,
 ) -> StandaloneRegistryNotaryConfig {
+    assembled_notary_config_for_generation(
+        relay,
+        token_file,
+        audit_path,
+        &contract_hash(),
+        NOTARY_API_KEY_HASH_ENV,
+        NOTARY_AUDIT_SECRET_ENV,
+        None,
+    )
+}
+
+fn assembled_notary_config_for_generation(
+    relay: &FakeRelay,
+    token_file: &TestTokenFile,
+    audit_path: &std::path::Path,
+    contract_hash: &str,
+    api_key_hash_env: &str,
+    audit_secret_env: &str,
+    replay_redis_url_env: Option<&str>,
+) -> StandaloneRegistryNotaryConfig {
     let relay_origin = serde_json::to_string(&relay.origin).expect("Relay origin serializes");
     let token_path =
         serde_json::to_string(&token_file.path.to_string_lossy()).expect("token path serializes");
     let audit_path =
         serde_json::to_string(&audit_path.to_string_lossy()).expect("audit path serializes");
-    let contract_hash = contract_hash();
+    let replay = replay_redis_url_env.map_or_else(String::new, |url_env| {
+        format!(
+            "replay:\n  storage: redis\n  redis:\n    url_env: {url_env}\n    key_prefix: registry-notary-transition\n    connect_timeout_ms: 1000\n    operation_timeout_ms: 500\n"
+        )
+    });
     serde_norway::from_str(&format!(
         r#"
 deployment:
@@ -713,12 +862,13 @@ auth:
     - id: relay-vertical-verifier
       fingerprint:
         provider: env
-        name: {NOTARY_API_KEY_HASH_ENV}
+        name: {api_key_hash_env}
       scopes: [registry:evidence:dhis2-enrollment-status]
 audit:
   sink: file
   path: {audit_path}
-  hash_secret_env: {NOTARY_AUDIT_SECRET_ENV}
+  hash_secret_env: {audit_secret_env}
+{replay}
 evidence:
   enabled: true
   service_id: notary-relay-vertical.test
@@ -886,6 +1036,249 @@ async fn assembled_notary_relay_journey_activates_and_coalesces_two_claims() {
 
     drop(notary);
     relay.shutdown().await;
+}
+
+async fn assert_generation_ready_and_serving(notary: &TestServer) {
+    let readiness = notary.get("/ready").await;
+    readiness.assert_status_ok();
+    let readiness: Value = readiness.json();
+    assert_eq!(readiness["checks"]["relay"]["total"], json!(1));
+    assert_eq!(readiness["checks"]["relay"]["ok"], json!(1));
+    assert_eq!(readiness["checks"]["relay"]["failed"], json!(0));
+    notary
+        .post("/v1/evaluations")
+        .add_header("x-api-key", NOTARY_API_KEY)
+        .json(&json!({
+            "target": { "type": "Person", "id": INPUT_VALUE },
+            "claims": ["dhis2-enrollment-known"],
+            "disclosure": "value",
+            "purpose": PURPOSE,
+        }))
+        .await
+        .assert_status_ok();
+}
+
+#[tokio::test]
+async fn coordinated_blue_green_never_serves_mixed_contract_generations() {
+    let api_key_fingerprint = fingerprint_api_key(NOTARY_API_KEY);
+    let replay = FakeRedis::start().await;
+    let _environment = ScopedEnvironment::set(&[
+        (TRANSITION_API_KEY_HASH_ENV, &api_key_fingerprint),
+        (
+            TRANSITION_AUDIT_SECRET_ENV,
+            "abcdef0123456789abcdef0123456789",
+        ),
+        (TRANSITION_REPLAY_REDIS_URL_ENV, &replay.url),
+    ]);
+    let token_file = TestTokenFile::new(&test_token());
+    let old_contract = contract_value();
+    let old_hash = typed_hash(CONTRACT_DOMAIN, &old_contract);
+    let successor_contract = successor_contract_value();
+    let successor_hash = typed_hash(CONTRACT_DOMAIN, &successor_contract);
+    assert_ne!(old_hash, successor_hash, "a semantic change moves the hash");
+    let directory = tempfile::tempdir().expect("temporary transition directory");
+
+    // A blue/green switch admits only two complete generations. Either mixed
+    // pairing fails during Notary activation, before a serving router exists
+    // and before any Relay execution request can be made.
+    let blue = FakeRelay::start_echoing_evaluation_id(
+        metadata_response_for_contract(&old_contract, &old_hash),
+        result_response_for_contract_hash(&old_hash),
+    )
+    .await;
+    let green = FakeRelay::start_echoing_evaluation_id(
+        metadata_response_for_contract(&successor_contract, &successor_hash),
+        result_response_for_contract_hash(&successor_hash),
+    )
+    .await;
+
+    let old_notary = crate::compile_notary_runtime(assembled_notary_config_for_generation(
+        &blue,
+        &token_file,
+        &directory.path().join("blue-notary-audit.jsonl"),
+        &old_hash,
+        TRANSITION_API_KEY_HASH_ENV,
+        TRANSITION_AUDIT_SECRET_ENV,
+        Some(TRANSITION_REPLAY_REDIS_URL_ENV),
+    ))
+    .expect("blue Notary compiles")
+    .activate_relay()
+    .await
+    .expect("blue Notary activates against blue Relay");
+    let blue_notary = TestServer::builder().http_transport().build(
+        crate::notary_router_from_runtime(old_notary)
+            .expect("the complete blue generation has a serving router"),
+    );
+    assert_generation_ready_and_serving(&blue_notary).await;
+    assert_eq!(blue.execute_calls(), 1);
+
+    let old_notary_green_relay =
+        crate::compile_notary_runtime(assembled_notary_config_for_generation(
+            &green,
+            &token_file,
+            &directory.path().join("mixed-old-notary-audit.jsonl"),
+            &old_hash,
+            TRANSITION_API_KEY_HASH_ENV,
+            TRANSITION_AUDIT_SECRET_ENV,
+            Some(TRANSITION_REPLAY_REDIS_URL_ENV),
+        ))
+        .expect("mixed old Notary configuration compiles")
+        .activate_relay()
+        .await;
+    assert!(
+        old_notary_green_relay.is_err(),
+        "old Notary must not activate against green Relay"
+    );
+    assert_eq!(green.execute_calls(), 0);
+
+    let new_notary_blue_relay =
+        crate::compile_notary_runtime(assembled_notary_config_for_generation(
+            &blue,
+            &token_file,
+            &directory.path().join("mixed-new-notary-audit.jsonl"),
+            &successor_hash,
+            TRANSITION_API_KEY_HASH_ENV,
+            TRANSITION_AUDIT_SECRET_ENV,
+            Some(TRANSITION_REPLAY_REDIS_URL_ENV),
+        ))
+        .expect("mixed successor Notary configuration compiles")
+        .activate_relay()
+        .await;
+    assert!(
+        new_notary_blue_relay.is_err(),
+        "green Notary must not activate against blue Relay"
+    );
+    assert_eq!(blue.execute_calls(), 1);
+
+    let successor_notary = crate::compile_notary_runtime(assembled_notary_config_for_generation(
+        &green,
+        &token_file,
+        &directory.path().join("green-notary-audit.jsonl"),
+        &successor_hash,
+        TRANSITION_API_KEY_HASH_ENV,
+        TRANSITION_AUDIT_SECRET_ENV,
+        Some(TRANSITION_REPLAY_REDIS_URL_ENV),
+    ))
+    .expect("green Notary compiles")
+    .activate_relay()
+    .await
+    .expect("green Notary activates against green Relay");
+    let green_notary = TestServer::builder().http_transport().build(
+        crate::notary_router_from_runtime(successor_notary)
+            .expect("the complete green generation has a serving router"),
+    );
+    assert_generation_ready_and_serving(&green_notary).await;
+    assert_eq!(green.execute_calls(), 1);
+
+    drop(blue_notary);
+    drop(green_notary);
+    blue.shutdown().await;
+    green.shutdown().await;
+    replay.shutdown().await;
+}
+
+#[tokio::test]
+async fn coordinated_drain_and_restart_keeps_partial_generation_unavailable() {
+    let api_key_fingerprint = fingerprint_api_key(NOTARY_API_KEY);
+    let replay = FakeRedis::start().await;
+    let _environment = ScopedEnvironment::set(&[
+        (RESTART_API_KEY_HASH_ENV, &api_key_fingerprint),
+        (RESTART_AUDIT_SECRET_ENV, "fedcba9876543210fedcba9876543210"),
+        (RESTART_REPLAY_REDIS_URL_ENV, &replay.url),
+    ]);
+    let token_file = TestTokenFile::new(&test_token());
+    let old_contract = contract_value();
+    let old_hash = typed_hash(CONTRACT_DOMAIN, &old_contract);
+    let successor_contract = successor_contract_value();
+    let successor_hash = typed_hash(CONTRACT_DOMAIN, &successor_contract);
+    assert_ne!(old_hash, successor_hash, "a semantic change moves the hash");
+    let directory = tempfile::tempdir().expect("temporary restart directory");
+
+    // A smaller deployment drains the old serving process before replacing
+    // Relay. During the partial restart, the old Notary pin cannot activate
+    // and no execution reaches Relay. Traffic resumes only after successor
+    // Notary activation and readiness succeed against successor Relay.
+    let relay = FakeRelay::start_echoing_evaluation_id(
+        metadata_response_for_contract(&old_contract, &old_hash),
+        result_response_for_contract_hash(&old_hash),
+    )
+    .await;
+    let old_notary = crate::compile_notary_runtime(assembled_notary_config_for_generation(
+        &relay,
+        &token_file,
+        &directory.path().join("restart-old-notary-audit.jsonl"),
+        &old_hash,
+        RESTART_API_KEY_HASH_ENV,
+        RESTART_AUDIT_SECRET_ENV,
+        Some(RESTART_REPLAY_REDIS_URL_ENV),
+    ))
+    .expect("old restart Notary compiles")
+    .activate_relay()
+    .await
+    .expect("old restart generation activates");
+    let old_notary = TestServer::builder().http_transport().build(
+        crate::notary_router_from_runtime(old_notary)
+            .expect("old restart generation has a serving router"),
+    );
+    assert_generation_ready_and_serving(&old_notary).await;
+    assert_eq!(relay.execute_calls(), 1);
+
+    drop(old_notary);
+    relay
+        .set_metadata(metadata_response_for_contract(
+            &successor_contract,
+            &successor_hash,
+        ))
+        .await;
+    relay
+        .set_execute(result_response_for_contract_hash(&successor_hash))
+        .await;
+
+    let partial_restart = crate::compile_notary_runtime(assembled_notary_config_for_generation(
+        &relay,
+        &token_file,
+        &directory.path().join("restart-partial-notary-audit.jsonl"),
+        &old_hash,
+        RESTART_API_KEY_HASH_ENV,
+        RESTART_AUDIT_SECRET_ENV,
+        Some(RESTART_REPLAY_REDIS_URL_ENV),
+    ))
+    .expect("partially restarted Notary configuration compiles")
+    .activate_relay()
+    .await;
+    assert!(
+        partial_restart.is_err(),
+        "partially restarted generation remains unavailable"
+    );
+    assert_eq!(
+        relay.execute_calls(),
+        1,
+        "the partial generation never receives source traffic"
+    );
+
+    let successor_notary = crate::compile_notary_runtime(assembled_notary_config_for_generation(
+        &relay,
+        &token_file,
+        &directory.path().join("restart-green-notary-audit.jsonl"),
+        &successor_hash,
+        RESTART_API_KEY_HASH_ENV,
+        RESTART_AUDIT_SECRET_ENV,
+        Some(RESTART_REPLAY_REDIS_URL_ENV),
+    ))
+    .expect("successor restart Notary compiles")
+    .activate_relay()
+    .await
+    .expect("successor restart Notary activates");
+    let successor_notary = TestServer::builder().http_transport().build(
+        crate::notary_router_from_runtime(successor_notary)
+            .expect("complete successor restart has a serving router"),
+    );
+    assert_generation_ready_and_serving(&successor_notary).await;
+    assert_eq!(relay.execute_calls(), 2);
+
+    drop(successor_notary);
+    relay.shutdown().await;
+    replay.shutdown().await;
 }
 
 #[tokio::test]

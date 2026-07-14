@@ -1,0 +1,76 @@
+name: Relay PostgreSQL conformance
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/relay-postgres-conformance.yml
+      - Cargo.lock
+      - Cargo.toml
+      - rust-toolchain.toml
+      - crates/registry-platform-audit/**
+      - crates/registry-platform-crypto/**
+      - crates/registry-relay/**
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/relay-postgres-conformance.yml
+      - Cargo.lock
+      - Cargo.toml
+      - rust-toolchain.toml
+      - crates/registry-platform-audit/**
+      - crates/registry-platform-crypto/**
+      - crates/registry-relay/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  state-plane:
+    name: Relay state plane (PostgreSQL ${{ matrix.postgresql }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        postgresql:
+          - "16"
+          - "17"
+          - "18"
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgresql }}-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username postgres --dbname postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: relay-postgresql-${{ matrix.postgresql }}
+
+      - name: Run Relay PostgreSQL state-plane conformance
+        env:
+          REGISTRY_RELAY_STATE_PLANE_POSTGRES_TEST_URL: postgres://postgres@localhost:5432/postgres?sslmode=disable
+        run: >-
+          cargo test --locked -p registry-relay --lib
+          state_plane::postgres_tests::postgres_state_plane_enforces_role_catalog_and_chain_contract
+          -- --ignored --exact
