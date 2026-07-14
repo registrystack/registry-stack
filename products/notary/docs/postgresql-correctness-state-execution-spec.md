@@ -1,7 +1,8 @@
 # Registry Notary PostgreSQL correctness-state execution specification
 
-**Status:** implementation contract for registry-stack issue #356  
-**Date:** 2026-07-14  
+**Status:** implementation contract for registry-stack issue #356
+
+**Date:** 2026-07-14
 **Stacked base:** `agent/relay-notary-country-authoring` at `94b378320bff397aa0ca32f7d0d696c6fd4b26c5`
 **Implementation branch:** `agent/notary-postgresql`
 
