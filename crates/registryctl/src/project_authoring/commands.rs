@@ -280,6 +280,7 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
             allowed_clients: vec!["registry-project-fixture-client".to_string()],
         }),
         notary_relay: requires_notary_relay.then(|| NotaryRelayBinding {
+            base_url: "https://relay.fixture.invalid".to_string(),
             workload_client_id: "registry-project-fixture-notary".to_string(),
             token_file: PathBuf::from("/run/secrets/offline-fixture-token"),
         }),

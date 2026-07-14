@@ -240,13 +240,13 @@ fn generated_notary_config(
     if !signing_keys.is_empty() {
         evidence["signing_keys"] = Value::Object(signing_keys);
     }
-    if let (Some(relay), Some(connection)) = (&environment.relay, &environment.notary_relay) {
+    if let Some(connection) = &environment.notary_relay {
         evidence["relay"] = json!({
-            "base_url": normalize_url_scheme(&relay.origin)?,
+            "base_url": normalize_url_scheme(&connection.base_url)?,
             "workload_client_id": connection.workload_client_id,
             "token_file": connection.token_file,
             "allowed_private_cidrs": [],
-            "allow_insecure_localhost": url_uses_http(&relay.origin),
+            "allow_insecure_localhost": url_uses_http(&connection.base_url),
             "max_in_flight": 8,
         });
     }

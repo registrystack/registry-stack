@@ -1715,6 +1715,7 @@ fn environment_schema_tracks_local_loopback_signing_kid_and_postgresql_state() {
             "allowed_clients": [],
         },
         "notary_relay": {
+            "base_url": "HTTP://127.0.0.1:8080",
             "workload_client_id": "authority-notary",
             "token_file": "/run/secrets/authority-notary-relay-token",
         },
@@ -1909,6 +1910,7 @@ fn project_authoring_schemas_reject_incoherent_product_topologies() {
         "allowed_clients": ["registry-client"],
     });
     let connection = serde_json::json!({
+        "base_url": "http://127.0.0.1:8080",
         "workload_client_id": "registry-notary",
         "token_file": "/run/secrets/notary-relay-token",
     });
@@ -2572,7 +2574,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "7c1607fcb3e2d1ee4b4a0a93ffb32db7119e0c034064e2623b7e3635eb8b290e",
+        "a46c38a32d9a28596065aad4e96854d5bbb53c81f8ad4742a680a51980a49aa9",
         "project inputs must match the cross-machine golden digest"
     );
 }
@@ -3032,6 +3034,8 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
         serde_yaml::Value::String("HTTP://127.0.0.1:18090".to_string());
     environment["relay"]["jwks_url"] =
         serde_yaml::Value::String("HTTP://127.0.0.1:18090/jwks.json".to_string());
+    environment["notary_relay"]["base_url"] =
+        serde_yaml::Value::String("HTTP://127.0.0.1:18081".to_string());
     environment["notary_state"] = serde_yaml::from_str(
         "postgresql:\n  root_certificate_path: /run/secrets/notary-postgres-ca.pem\n",
     )
@@ -3085,7 +3089,7 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
     );
     assert_eq!(
         notary["evidence"]["relay"]["base_url"].as_str(),
-        Some("http://127.0.0.1:18080")
+        Some("http://127.0.0.1:18081")
     );
 
     for (name, profile, origin, issuer, jwks_url, expected) in [
@@ -3125,6 +3129,60 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
         .unwrap_err();
         assert!(format!("{error:#}").contains(expected), "{name}: {error:#}");
     }
+}
+
+#[test]
+fn hosted_notary_can_use_an_explicit_loopback_relay_connection() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let environment_path = project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["deployment"]["profile"] = serde_yaml::Value::String("hosted_lab".to_string());
+    environment["notary_relay"]["base_url"] =
+        serde_yaml::Value::String("http://127.0.0.1:18080".to_string());
+    write_yaml(&environment_path, &environment);
+
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("hosted project builds with a private loopback Notary-to-Relay connection");
+    let output = PathBuf::from(build.output.expect("build output"));
+    let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
+    assert_eq!(
+        relay["catalog"]["base_url"].as_str(),
+        Some("https://household-relay.internal.invalid")
+    );
+    let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
+    assert_eq!(
+        notary["evidence"]["relay"]["base_url"].as_str(),
+        Some("http://127.0.0.1:18080")
+    );
+    assert_eq!(
+        notary["evidence"]["relay"]["allow_insecure_localhost"].as_bool(),
+        Some(true)
+    );
+
+    let rejected_root = tempfile::tempdir().expect("rejected temporary directory");
+    let rejected = copy_project("custom-system", rejected_root.path());
+    let rejected_environment_path = rejected.join("environments/local.yaml");
+    let mut rejected_environment = read_yaml(&rejected_environment_path);
+    rejected_environment["notary_relay"]["base_url"] =
+        serde_yaml::Value::String("http://10.42.0.8:8080".to_string());
+    write_yaml(&rejected_environment_path, &rejected_environment);
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: rejected,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("private-network cleartext Notary-to-Relay URL must fail");
+    assert!(format!("{error:#}").contains(
+        "Notary-to-Relay base URL must be an exact HTTPS origin or HTTP IP-loopback origin"
+    ));
 }
 
 #[test]

@@ -1361,6 +1361,23 @@ fn validate_https_or_local_loopback_origin(
     Ok(())
 }
 
+fn validate_internal_https_or_loopback_origin(value: &str, field: &str) -> Result<()> {
+    let origin = url::Url::parse(value).with_context(|| format!("{field} is not a URL"))?;
+    let secure = origin.scheme() == "https";
+    let local_loopback = origin.scheme() == "http" && url_host_is_ip_loopback(&origin);
+    if (!secure && !local_loopback)
+        || origin.host().is_none()
+        || !origin.username().is_empty()
+        || origin.password().is_some()
+        || origin.path() != "/"
+        || origin.query().is_some()
+        || origin.fragment().is_some()
+    {
+        bail!("{field} must be an exact HTTPS origin or HTTP IP-loopback origin");
+    }
+    Ok(())
+}
+
 fn validate_https_or_local_loopback_resource(
     value: &str,
     field: &str,

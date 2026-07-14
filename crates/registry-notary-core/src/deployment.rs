@@ -255,7 +255,6 @@ pub struct GateInput {
     /// every other observation (stale, missing, invalid) and when no cursor is
     /// configured: the shipping-stale gate fails closed on anything but `ok`.
     pub audit_ack_health_ok: bool,
-    pub relay_insecure_url: bool,
     pub admin_shared_exposure: bool,
     pub openapi_public: bool,
     pub config_unsigned: bool,
@@ -304,7 +303,6 @@ pub const FINDING_AUDIT_SINK_MISSING: &str = "notary.audit.sink_missing";
 pub const FINDING_AUDIT_RETENTION_LOCAL_ONLY: &str = "notary.audit.retention_local_only";
 pub const FINDING_AUDIT_SHIPPING_UNVERIFIED: &str = "notary.audit.shipping_unverified";
 pub const FINDING_AUDIT_SHIPPING_STALE: &str = "notary.audit.shipping_stale";
-pub const FINDING_RELAY_INSECURE_URL: &str = "notary.relay.insecure_url";
 pub const FINDING_ADMIN_SHARED_EXPOSURE: &str = "notary.admin.shared_exposure";
 pub const FINDING_OPENAPI_PUBLIC: &str = "notary.openapi.public";
 pub const FINDING_CONFIG_UNSIGNED: &str = "notary.config.unsigned";
@@ -395,13 +393,6 @@ fn gate_catalog() -> &'static [Gate] {
             condition: |input| input.audit_ack_cursor_configured && !input.audit_ack_health_ok,
         },
         // Risky-but-legal defaults, surfaced as profile-bound findings. (#208)
-        Gate {
-            id: FINDING_RELAY_INSECURE_URL,
-            hosted_lab: Some(FindingError),
-            production: Some(ReadinessFail),
-            evidence_grade: Some(StartupFail),
-            condition: |input| input.relay_insecure_url,
-        },
         Gate {
             id: FINDING_ADMIN_SHARED_EXPOSURE,
             hosted_lab: Some(FindingError),
@@ -1298,20 +1289,6 @@ mod tests {
 
     fn gate_cases() -> Vec<GateCase> {
         vec![
-            GateCase {
-                id: FINDING_RELAY_INSECURE_URL,
-                triggering: GateInput {
-                    relay_insecure_url: true,
-                    ..GateInput::default()
-                },
-                non_triggering: GateInput {
-                    relay_insecure_url: false,
-                    ..GateInput::default()
-                },
-                hosted_lab: GateSeverity::FindingError,
-                production: GateSeverity::ReadinessFail,
-                evidence_grade: GateSeverity::StartupFail,
-            },
             GateCase {
                 id: FINDING_ADMIN_SHARED_EXPOSURE,
                 triggering: GateInput {

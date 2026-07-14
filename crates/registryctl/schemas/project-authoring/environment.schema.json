@@ -30,9 +30,9 @@
       "properties": { "origin": { "$ref": "#/$defs/relayOrigin" }, "issuer": { "$ref": "#/$defs/relayOrigin" }, "jwks_url": { "$ref": "#/$defs/relayResource" }, "audience": { "type": "string", "minLength": 1, "maxLength": 256 }, "allowed_clients": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 256 } } }
     },
     "notary_relay": {
-      "description": "Notary workload identity and token file used only when Notary consults Relay.",
-      "type": "object", "additionalProperties": false, "required": ["workload_client_id", "token_file"],
-      "properties": { "workload_client_id": { "type": "string", "minLength": 1, "maxLength": 256 }, "token_file": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$" } }
+      "description": "Deployment-internal Relay connection, Notary workload identity, and token file used only when Notary consults Relay.",
+      "type": "object", "additionalProperties": false, "required": ["base_url", "workload_client_id", "token_file"],
+      "properties": { "base_url": { "$ref": "#/$defs/internalOrigin" }, "workload_client_id": { "type": "string", "minLength": 1, "maxLength": 256 }, "token_file": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$" } }
     },
     "relay_state": {
       "description": "Optional deployment binding for Relay-owned consultation PostgreSQL state transport trust.",
@@ -149,8 +149,9 @@
     "secret": { "type": "object", "additionalProperties": false, "description": "Reference to a process-environment variable; secret values are never authored here.", "required": ["secret"], "properties": { "secret": { "type": "string", "pattern": "^[A-Z_][A-Z0-9_]{0,127}$" } } },
     "origin": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP][sS]://[^/?#]+/?$", "description": "HTTPS origin without path, query, or fragment." },
     "httpsResource": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP][sS]://[^/?#]+/[^?#]+$", "description": "Exact HTTPS resource without query or fragment." },
-    "localLoopbackOrigin": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP]://(?:127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?::[0-9]+)?/?$", "description": "HTTP IP-loopback origin accepted only with the local deployment profile." },
+    "localLoopbackOrigin": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP]://(?:127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?::[0-9]+)?/?$", "description": "HTTP IP-loopback origin; public Relay and issuer fields restrict it to the local profile, while internal Notary-to-Relay connections allow it in any profile." },
     "localLoopbackResource": { "type": "string", "format": "uri", "pattern": "^[hH][tT][tT][pP]://(?:127(?:\\.[0-9]{1,3}){3}|\\[::1\\])(?::[0-9]+)?/[^?#]+$", "description": "HTTP IP-loopback resource accepted only with the local deployment profile." },
+    "internalOrigin": { "description": "Deployment-internal HTTPS or HTTP IP-loopback origin.", "anyOf": [{ "$ref": "#/$defs/origin" }, { "$ref": "#/$defs/localLoopbackOrigin" }] },
     "relayOrigin": { "description": "Relay or issuer origin using HTTPS, or HTTP IP-loopback under the local profile.", "anyOf": [{ "$ref": "#/$defs/origin" }, { "$ref": "#/$defs/localLoopbackOrigin" }] },
     "relayResource": { "description": "Relay authentication resource using HTTPS, or HTTP IP-loopback under the local profile.", "anyOf": [{ "$ref": "#/$defs/httpsResource" }, { "$ref": "#/$defs/localLoopbackResource" }] },
     "oid4vci": {
