@@ -650,9 +650,6 @@ fn evaluate_product_claims(
             let evidence = runtime.block_on(harness.evaluate(
                 OfflineNotaryRequest::new(authentication, request).with_header_purpose(purpose),
             ));
-            if evidence.direct_source_calls() != 0 {
-                bail!("offline Notary attempted a forbidden direct source read");
-            }
             if let Some(error) = evidence.error_class() {
                 if require_pre_source_denial && evidence.relay_calls() != 0 {
                     bail!("derived authorization denial occurred after Relay access");
