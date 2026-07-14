@@ -17,8 +17,9 @@ Agency B -> signed request JWT -> Agency A /federation/v1/evaluations
 Agency B <- signed response JWT <- Agency A
 ```
 
-The serving Notary verifies the request, enforces local peer policy, reads its
-own source only after policy passes, emits audit, and returns a signed result.
+The serving Notary verifies the request, enforces local peer policy, evaluates
+an admitted source-free claim only after policy passes, emits audit, and
+returns a signed result.
 
 ```mermaid
 sequenceDiagram
@@ -115,9 +116,10 @@ configure each other, but it does not grant access.
 The current federation endpoint cannot select a claim with
 `evidence_mode.type: registry_backed`. Startup rejects that composition because
 federation audit does not yet carry the Notary evaluation id and Relay
-consultation ids needed for end-to-end reconciliation. Use a governed
-direct-source claim for the existing federation MVP. Relay-backed federation is
-deferred until the audit boundary is implemented as one complete feature.
+consultation ids needed for end-to-end reconciliation. The existing federation
+MVP is therefore limited to admitted source-free/self-attested claims.
+Relay-backed federation is deferred until the audit boundary is implemented as
+one complete feature. Notary has no direct registry-source fallback.
 
 `allow_insecure_private_network` is a development and lab escape hatch for
 private Compose networks. It allows HTTP peer JWKS fetches through the shared

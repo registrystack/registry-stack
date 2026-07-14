@@ -1,12 +1,12 @@
 # Synchronous Adaptor Source Sidecar Spec
 
-> **Status: Archived (2026-05-31).** The source-adapter sidecar source has
-> shipped, but this file is a historical design record and is not the source of
-> truth. The shipped sidecar uses built-in `http_json`, `http_flow`, `fhir`, and
-> `rhai` engines governed by a TUF-verified whole-target `config_hash`; do not
-> read the older OpenFn runtime/adaptor pinning language below as current
-> behavior. For current behavior see the code and
-> crates/registry-notary-source-adapter-sidecar/README.md.
+> **Status: Archived and removed before 1.0 (2026-07-13).** This file preserves
+> the historical source-adapter sidecar design only. Registry Notary no longer
+> ships or accepts this execution path. Registry-backed evidence uses
+> authenticated, compiler-pinned Registry Relay consultations; source-free
+> Notary evidence remains self-attested. Do not read the sidecar, OpenFn,
+> `http_json`, `http_flow`, FHIR, or Rhai engine language below as current
+> behavior.
 
 ## Goal
 

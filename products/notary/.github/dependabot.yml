@@ -19,11 +19,6 @@ updates:
       github-actions:
         patterns:
           - "*"
-  - package-ecosystem: npm
-    directory: /crates/registry-notary-source-adapter-sidecar/workers
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 5
   - package-ecosystem: docker
     directory: "/"
     schedule:
