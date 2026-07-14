@@ -32,9 +32,10 @@ pub use decode::{
     ProjectedJsonScalar,
 };
 pub use script_response::{
-    decode_script_json, decode_script_text, ScriptJsonResponse, ScriptResponseDecodeError,
-    ScriptTextResponse, MAX_SCRIPT_JSON_ARRAY_ITEMS, MAX_SCRIPT_JSON_DEPTH, MAX_SCRIPT_JSON_NODES,
-    MAX_SCRIPT_JSON_OBJECT_MEMBERS, MAX_SCRIPT_JSON_STRING_BYTES,
+    decode_script_fixture_json, decode_script_fixture_text, decode_script_json, decode_script_text,
+    ScriptJsonResponse, ScriptResponseDecodeError, ScriptTextResponse, MAX_SCRIPT_JSON_ARRAY_ITEMS,
+    MAX_SCRIPT_JSON_DEPTH, MAX_SCRIPT_JSON_NODES, MAX_SCRIPT_JSON_OBJECT_MEMBERS,
+    MAX_SCRIPT_JSON_STRING_BYTES,
 };
 pub use typed_envelope::{
     decode_typed_hash_envelope, decode_typed_hash_envelope_as, DecodedTypedHashEnvelope,

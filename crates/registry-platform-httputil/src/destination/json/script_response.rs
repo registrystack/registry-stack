@@ -93,6 +93,23 @@ pub fn decode_script_json(
     body: DataDestinationBody,
 ) -> Result<ScriptJsonResponse, ScriptResponseDecodeError> {
     let BoundedDestinationBody { bytes, slot: _ } = body;
+    decode_script_json_bytes(bytes)
+}
+
+/// Decode caller-owned fixture bytes with the production Script JSON kernel.
+///
+/// This entry point exists so an offline fixture cannot accept a response
+/// that the opaque production transport path would reject. It releases the
+/// same bounded parsed value and never exposes transport-owned raw bytes.
+pub fn decode_script_fixture_json(
+    body: Vec<u8>,
+) -> Result<ScriptJsonResponse, ScriptResponseDecodeError> {
+    decode_script_json_bytes(Zeroizing::new(body))
+}
+
+fn decode_script_json_bytes(
+    bytes: Zeroizing<Vec<u8>>,
+) -> Result<ScriptJsonResponse, ScriptResponseDecodeError> {
     let encoded_bytes = bytes.len();
     preflight_json(
         bytes.as_slice(),
@@ -121,6 +138,22 @@ pub fn decode_script_text(
     body: DataDestinationBody,
 ) -> Result<ScriptTextResponse, ScriptResponseDecodeError> {
     let BoundedDestinationBody { bytes, slot: _ } = body;
+    decode_script_text_bytes(bytes)
+}
+
+/// Decode caller-owned fixture bytes with the production Script text kernel.
+///
+/// The one MiB code-owned text ceiling and UTF-8 validation are identical to
+/// the opaque production transport path.
+pub fn decode_script_fixture_text(
+    body: Vec<u8>,
+) -> Result<ScriptTextResponse, ScriptResponseDecodeError> {
+    decode_script_text_bytes(Zeroizing::new(body))
+}
+
+fn decode_script_text_bytes(
+    bytes: Zeroizing<Vec<u8>>,
+) -> Result<ScriptTextResponse, ScriptResponseDecodeError> {
     let encoded_bytes = bytes.len();
     if bytes.len() > MAX_SCRIPT_JSON_STRING_BYTES {
         return Err(ScriptResponseDecodeError::StructuralLimitExceeded);
@@ -221,6 +254,46 @@ mod tests {
         assert!(matches!(
             decode_script_text(body([0xff])),
             Err(ScriptResponseDecodeError::InvalidText)
+        ));
+    }
+
+    #[test]
+    fn production_and_fixture_json_paths_reject_the_same_semantic_limits() {
+        let duplicate = br#"{"id":1,"id":2}"#;
+        assert!(matches!(
+            decode_script_json(body(duplicate)),
+            Err(ScriptResponseDecodeError::InvalidJson)
+        ));
+        assert!(matches!(
+            decode_script_fixture_json(duplicate.to_vec()),
+            Err(ScriptResponseDecodeError::InvalidJson)
+        ));
+
+        let nested = format!(
+            "{}0{}",
+            "[".repeat(MAX_SCRIPT_JSON_DEPTH),
+            "]".repeat(MAX_SCRIPT_JSON_DEPTH)
+        );
+        assert!(matches!(
+            decode_script_json(body(&nested)),
+            Err(ScriptResponseDecodeError::StructuralLimitExceeded)
+        ));
+        assert!(matches!(
+            decode_script_fixture_json(nested.into_bytes()),
+            Err(ScriptResponseDecodeError::StructuralLimitExceeded)
+        ));
+    }
+
+    #[test]
+    fn production_and_fixture_text_paths_reject_the_same_size_limit() {
+        let oversized = vec![b'x'; MAX_SCRIPT_JSON_STRING_BYTES + 1];
+        assert!(matches!(
+            decode_script_text(body(&oversized)),
+            Err(ScriptResponseDecodeError::StructuralLimitExceeded)
+        ));
+        assert!(matches!(
+            decode_script_fixture_text(oversized),
+            Err(ScriptResponseDecodeError::StructuralLimitExceeded)
         ));
     }
 }

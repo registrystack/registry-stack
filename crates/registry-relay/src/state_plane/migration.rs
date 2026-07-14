@@ -8732,7 +8732,8 @@ mod tests {
         for required in [
             "jsonb_array_length(v_seed #> '{acquisition,disclosure_fields}') NOT BETWEEN 0 AND 64",
             "jsonb_typeof(v_seed #> '{bounds,credential_token_lifetime_ms}') = 'null'",
-            "v_data_binding_count = 2",
+            "v_verification_binding_count = 1",
+            "v_data_binding_count = 1",
             "v_binding - ARRAY['kind', 'ordinal']::text[]",
             "v_binding ->> 'kind' = 'verification'",
             "(v_binding ->> 'ordinal')::integer BETWEEN 0 AND 15",

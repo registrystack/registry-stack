@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use registry_platform_httputil::destination::json::{
-    ClosedJsonDecodeError, ClosedJsonOutcome, ProjectedJsonScalar,
+    decode_script_fixture_json, decode_script_fixture_text, ClosedJsonDecodeError,
+    ClosedJsonOutcome, ProjectedJsonScalar,
 };
 use registry_platform_httputil::destination::signed_dci::{
     SignedDciDecodeError, SignedDciDecoder, SignedDciExactComponent, SignedDciExpectation,
@@ -789,24 +790,20 @@ impl SourceHost for OfflineRhaiHost<'_> {
                             && encoded_bytes <= u64::from(authority.response_max_bytes())
                     })
                     .ok_or(HostFailure::BudgetExceeded)?;
-                let body = if body.is_empty() {
-                    Value::Null
-                } else {
-                    let decoded = match authority.response_format() {
-                        crate::source_plan::CompiledResponseFormat::Json => {
-                            serde_json::from_slice(&body).map_err(|_| ())
-                        }
-                        crate::source_plan::CompiledResponseFormat::Text => {
-                            String::from_utf8(body).map(Value::String).map_err(|_| ())
-                        }
-                    };
-                    match decoded {
-                        Ok(body) => body,
-                        Err(_) => {
-                            self.terminal_error =
-                                Some(OfflineFixtureError::SourceResponseMalformed);
-                            return Err(HostFailure::ContractViolation);
-                        }
+                let decoded = match authority.response_format() {
+                    crate::source_plan::CompiledResponseFormat::Json => {
+                        decode_script_fixture_json(body).map(|decoded| decoded.into_parts().0)
+                    }
+                    crate::source_plan::CompiledResponseFormat::Text => {
+                        decode_script_fixture_text(body)
+                            .map(|decoded| Value::String(decoded.into_parts().0.to_string()))
+                    }
+                };
+                let body = match decoded {
+                    Ok(body) => body,
+                    Err(_) => {
+                        self.terminal_error = Some(OfflineFixtureError::SourceResponseMalformed);
+                        return Err(HostFailure::ContractViolation);
                     }
                 };
                 let selected_headers = authority
@@ -2665,6 +2662,61 @@ mod tests {
         assert_eq!(result.outcome, OfflineFixtureOutcome::NoMatch);
         assert!(result.outputs.is_empty());
         assert_eq!(result.calls, ["lookup"]);
+    }
+
+    #[tokio::test]
+    async fn offline_script_responses_use_production_json_semantics() {
+        let duplicate = br#"{"id":1,"id":2}"#.to_vec();
+        let nested = format!(
+            "{}0{}",
+            "[".repeat(registry_platform_httputil::destination::json::MAX_SCRIPT_JSON_DEPTH,),
+            "]".repeat(registry_platform_httputil::destination::json::MAX_SCRIPT_JSON_DEPTH,)
+        )
+        .into_bytes();
+
+        for body in [duplicate, nested] {
+            let plan = crate::source_plan::rhai_runtime_vector_plan_fixture();
+            let interaction = OfflineInteraction {
+                request: OfflineExpectedRequest {
+                    method: OfflineRequestMethod::Get,
+                    path: "/api/person/status/0".to_owned(),
+                    query: BTreeMap::new(),
+                    headers: BTreeMap::new(),
+                    body: None,
+                },
+                response: OfflineSourceResponse::Http {
+                    status: 200,
+                    headers: BTreeMap::new(),
+                    body,
+                },
+            };
+            let mut host = OfflineRhaiHost {
+                plan: &plan,
+                interactions: OfflineInteractionQueue::new(vec![interaction], false)
+                    .expect("one closed interaction"),
+                credential_used: true,
+                request_bytes: 0,
+                source_bytes: 0,
+                terminal_error: None,
+            };
+
+            assert_eq!(
+                host.call(SourceCall::Get {
+                    call_id: 0,
+                    target: "/api/person/status/0".to_owned(),
+                    options: crate::rhai_worker::SourceOptions {
+                        query: BTreeMap::new(),
+                        headers: BTreeMap::new(),
+                    },
+                })
+                .await,
+                Err(HostFailure::ContractViolation)
+            );
+            assert_eq!(
+                host.terminal_error,
+                Some(OfflineFixtureError::SourceResponseMalformed)
+            );
+        }
     }
 
     #[tokio::test]
