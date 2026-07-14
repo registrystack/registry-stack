@@ -26,9 +26,9 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "database=postgresql-16-17-18-writable-safe-durability-database-clock-v1\0",
     "replay=keyed-scope-identifier-one-winner-expiry-replacement-v1\0",
     "nonce=keyed-reserve-consume-sixty-second-tombstone-v1\0",
-    "evaluation=client-bound-versioned-record-atomic-publication-expiry-v1\0",
-    "batch=keyed-request-owner-lease-quota-once-takeover-atomic-completion-fifteen-minute-retention-v1\0",
-    "credential-status=insert-only-locked-transition-terminal-revocation-expiry-retention-v1\0",
+    "evaluation=client-bound-stored-record-v2-atomic-publication-expiry-v1\0",
+    "batch=keyed-request-owner-lease-quota-once-takeover-atomic-completion-stored-response-v2-fifteen-minute-retention-v1\0",
+    "credential-status=insert-only-locked-transition-terminal-revocation-expiry-retention-monotonic-updated-at-v1\0",
     "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-v1\0",
     "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1\0",
     "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-v1\0",
@@ -36,7 +36,7 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "retention=bounded-expiry-prune-skip-locked-v1\0",
 );
 pub const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "2785aacd1ffdc6d005b2b003c7d0afa31405757810b7c6e0fe534c33b99a8968";
+    "786d9bc5192fc0a11bf9e298b5612bd66233ddd877b65ee32ed70ff5905faea2";
 
 const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 0x4e4f_5441_5259_0001;
 const EXPECTED_PRIVATE_TABLE_COUNT_V1: i64 = 10;
@@ -776,11 +776,11 @@ fn expected_catalog_definition_fingerprint(
 // These fingerprints are derived from the deterministic catalog projection
 // below and are pinned separately for every supported PostgreSQL major.
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG16_V1: &str =
-    "0cecb1899b360b249ee7745cf01e89394322ef04624fae08d9842c65d15b0ea8";
+    "ad2a1f3101bd9c68cd1f0eb840a832335da76ef0ce0d61abdcd443e786db47a1";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG17_V1: &str =
-    "0cecb1899b360b249ee7745cf01e89394322ef04624fae08d9842c65d15b0ea8";
+    "ad2a1f3101bd9c68cd1f0eb840a832335da76ef0ce0d61abdcd443e786db47a1";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG18_V1: &str =
-    "6ddf93d65653aa03a4e47c29670072e0dd0f36c27bfc0f29bad40174b4845bbb";
+    "7daa60e883a4e1fe5bab97590d74039da7c63e306e52e17b39baf2460d2f60c9";
 
 const CATALOG_DEFINITION_QUERY_V1: &str = r#"
 SELECT COALESCE((
@@ -977,7 +977,7 @@ CREATE TABLE registry_notary_private.batch_idempotency (
         (state = 'in_flight' AND owner_token IS NOT NULL AND lease_expires_at IS NOT NULL
             AND response_version IS NULL AND response_json IS NULL)
         OR (state = 'completed' AND owner_token IS NULL AND lease_expires_at IS NULL
-            AND response_version = 1 AND pg_catalog.jsonb_typeof(response_json) = 'object')
+            AND response_version = 2 AND pg_catalog.jsonb_typeof(response_json) = 'object')
         OR (state = 'failed' AND owner_token IS NULL AND lease_expires_at IS NULL
             AND response_version IS NULL AND response_json IS NULL)
     )
@@ -1467,7 +1467,7 @@ DECLARE
     v_now timestamptz := pg_catalog.clock_timestamp();
     v_idempotency registry_notary_private.batch_idempotency%ROWTYPE;
 BEGIN
-    IF p_response_version <> 1
+    IF p_response_version <> 2
        OR pg_catalog.jsonb_typeof(p_response_json) <> 'object'
        OR pg_catalog.jsonb_typeof(p_evaluations) <> 'array'
        OR pg_catalog.jsonb_array_length(p_evaluations) > 1024 THEN
@@ -1648,7 +1648,10 @@ BEGIN
     END IF;
     UPDATE registry_notary_private.credential_status AS stored
        SET status = p_status,
-           updated_at = v_now
+           updated_at = CASE
+               WHEN v_now > stored.updated_at THEN v_now
+               ELSE stored.updated_at
+           END
      WHERE stored.credential_id = p_credential_id
      RETURNING stored.* INTO v_stored;
     RETURN QUERY SELECT 'updated'::text,
@@ -2276,9 +2279,9 @@ mod tests {
             "database=postgresql-16-17-18-writable-safe-durability-database-clock-v1",
             "replay=keyed-scope-identifier-one-winner-expiry-replacement-v1",
             "nonce=keyed-reserve-consume-sixty-second-tombstone-v1",
-            "evaluation=client-bound-versioned-record-atomic-publication-expiry-v1",
-            "batch=keyed-request-owner-lease-quota-once-takeover-atomic-completion-fifteen-minute-retention-v1",
-            "credential-status=insert-only-locked-transition-terminal-revocation-expiry-retention-v1",
+            "evaluation=client-bound-stored-record-v2-atomic-publication-expiry-v1",
+            "batch=keyed-request-owner-lease-quota-once-takeover-atomic-completion-stored-response-v2-fifteen-minute-retention-v1",
+            "credential-status=insert-only-locked-transition-terminal-revocation-expiry-retention-monotonic-updated-at-v1",
             "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-v1",
             "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1",
             "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-v1",
@@ -3125,6 +3128,21 @@ mod tests {
         assert!(runtime
             .query_one(
                 "SELECT registry_notary_api.evaluation_insert_v1(\
+                 'evaluation-v1-rejected', $1, $2, 'conformance', 1::smallint, \
+                 $3::text::jsonb, $4, $5)",
+                &[
+                    &client_hash,
+                    &request_hash,
+                    &record_json,
+                    &created_at,
+                    &expires_at
+                ],
+            )
+            .await
+            .is_err());
+        assert!(runtime
+            .query_one(
+                "SELECT registry_notary_api.evaluation_insert_v1(\
                  'evaluation-direct', $1, $2, 'conformance', 2::smallint, \
                  $3::text::jsonb, $4, $5)",
                 &[
@@ -3266,7 +3284,7 @@ mod tests {
                 "evaluation_id": "evaluation-batch-invalid",
                 "client_id_hash_hex": "7979797979797979797979797979797979797979797979797979797979797979",
                 "purpose": "conformance",
-                "record_version": 2,
+                "record_version": 1,
                 "record": {"decision": "deny"},
                 "created_at": created_at_json,
                 "expires_at": expires_at_json
@@ -3276,6 +3294,14 @@ mod tests {
         let evaluations_json = evaluations.to_string();
         let invalid_evaluations_json = invalid_evaluations.to_string();
         let response_json = response.to_string();
+        assert!(runtime
+            .query_one(
+                "SELECT registry_notary_api.batch_complete_v1(\
+                 $1, $2, $3, $4::text::jsonb, 1::smallint, $5::text::jsonb)",
+                &[&key, &request, &owner_b, &evaluations_json, &response_json],
+            )
+            .await
+            .is_err());
         assert!(runtime
             .query_one(
                 "SELECT registry_notary_api.batch_complete_v1(\
@@ -3314,7 +3340,7 @@ mod tests {
             .is_some());
         let replay = batch_reserve(runtime, &key, &request, &principal, &owner_a, Some(2)).await?;
         assert_eq!(replay.outcome, "replay");
-        assert_eq!(replay.response_version, Some(1));
+        assert_eq!(replay.response_version, Some(2));
         assert_eq!(
             replay
                 .response_json
@@ -3362,7 +3388,9 @@ mod tests {
         runtime: &Client,
         admin: &Client,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let issued_at = time::OffsetDateTime::now_utc();
+        // A Notary instance clock may lead the database clock slightly. Status
+        // transitions must remain valid and monotonic across that skew.
+        let issued_at = time::OffsetDateTime::now_utc() + time::Duration::seconds(5);
         let credential_expires_at = issued_at + time::Duration::hours(1);
         assert!(runtime
             .query_one(
@@ -3814,7 +3842,7 @@ mod tests {
                     (evaluation_id, client_id_hash, request_hash, purpose, record_version,
                      record_json, created_at, expires_at)
                  SELECT 'retention-evaluation-' || label, decode(repeat(hex_marker, 32), 'hex'),
-                        decode(repeat('96', 32), 'hex'), 'retention', 1, '{}'::jsonb,
+                        decode(repeat('96', 32), 'hex'), 'retention', 2, '{}'::jsonb,
                         clock_timestamp() - interval '2 seconds', clock_timestamp() + lifetime
                    FROM (VALUES ('expired', '97', interval '-1 second'),
                                 ('live', '98', interval '5 minutes'))
