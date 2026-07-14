@@ -318,6 +318,11 @@ fn generated_notary_config(
         "evidence": evidence,
         "deployment": { "profile": environment.deployment.profile.as_str() },
     });
+    if let Some(binding) = &environment.notary_cel {
+        generated["cel"] = json!({
+            "worker_memory_bytes": binding.worker_memory_bytes,
+        });
+    }
     if let Some(binding) = &environment.oid4vci {
         add_oid4vci_config(&mut generated, loaded, binding)?;
     }
@@ -1283,6 +1288,9 @@ fn generated_explanation(
             },
             "notary_relay_workload": environment.notary_relay.as_ref().map(|connection| json!({
                 "client_id": connection.workload_client_id,
+            })),
+            "notary_cel": environment.notary_cel.as_ref().map(|binding| json!({
+                "worker_memory_bytes": binding.worker_memory_bytes,
             })),
         })),
     })

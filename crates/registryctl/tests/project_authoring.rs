@@ -1700,6 +1700,9 @@ fn environment_schema_tracks_local_loopback_signing_kid_and_postgresql_state() {
                 "root_certificate_path": "/run/secrets/notary-postgres-ca.pem",
             },
         },
+        "notary_cel": {
+            "worker_memory_bytes": 1073741824,
+        },
         "deployment": {
             "profile": "local",
             "relay": { "service": "authority-relay" },
@@ -1725,6 +1728,22 @@ fn environment_schema_tracks_local_loopback_signing_kid_and_postgresql_state() {
     relative_relay_root["relay_state"]["postgresql"]["root_certificate_path"] =
         serde_json::json!("relay-postgres-ca.pem");
     assert!(!schema.is_valid(&relative_relay_root));
+
+    let mut undersized_cel_worker = local.clone();
+    undersized_cel_worker["notary_cel"]["worker_memory_bytes"] = serde_json::json!(33_554_431);
+    assert!(!schema.is_valid(&undersized_cel_worker));
+
+    let mut oversized_cel_worker = local.clone();
+    oversized_cel_worker["notary_cel"]["worker_memory_bytes"] =
+        serde_json::json!(1_073_741_825_u64);
+    assert!(!schema.is_valid(&oversized_cel_worker));
+
+    let mut relay_only_cel_worker = local.clone();
+    relay_only_cel_worker["deployment"]
+        .as_object_mut()
+        .expect("deployment is an object")
+        .remove("notary");
+    assert!(!schema.is_valid(&relay_only_cel_worker));
 
     let mut whitespace_kid = local.clone();
     whitespace_kid["issuance"]["signing_kid"] =
@@ -2494,6 +2513,12 @@ fn check_and_build_produce_deterministic_product_inputs() {
     let output = PathBuf::from(first.output.expect("build output"));
     let notary_config = std::fs::read_to_string(output.join("private/notary/config/notary.yaml"))
         .expect("generated Notary config");
+    let notary_document: serde_yaml::Value =
+        serde_yaml::from_str(&notary_config).expect("generated Notary config parses");
+    assert!(
+        notary_document.get("cel").is_none(),
+        "absent authoring must preserve the Notary product default"
+    );
     assert!(notary_config.contains("type: consultation_output"));
     assert!(notary_config.contains("consultation: household"));
     assert!(notary_config.contains("output: category"));
@@ -2987,6 +3012,8 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
         "postgresql:\n  root_certificate_path: /run/secrets/relay-postgres-ca.pem\n",
     )
     .expect("Relay state binding parses");
+    environment["notary_cel"] = serde_yaml::from_str("worker_memory_bytes: 1073741824\n")
+        .expect("Notary CEL binding parses");
     write_yaml(&environment_path, &environment);
 
     let build = build_registry_project(&ProjectBuildOptions {
@@ -3019,6 +3046,10 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
     assert_eq!(
         notary["state"]["postgresql"]["root_certificate_path"].as_str(),
         Some("/run/secrets/notary-postgres-ca.pem")
+    );
+    assert_eq!(
+        notary["cel"]["worker_memory_bytes"].as_u64(),
+        Some(1_073_741_824)
     );
     assert_eq!(
         notary["evidence"]["relay"]["allow_insecure_localhost"].as_bool(),
@@ -4150,12 +4181,14 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     let claim_project = scenarios.join("claim");
     let source_version_project = scenarios.join("source-version");
     let operator_project = scenarios.join("operator");
+    let notary_cel_project = scenarios.join("notary-cel");
     let policy_project = scenarios.join("policy");
     let consultation_project = scenarios.join("consultation");
     for destination in [
         &claim_project,
         &source_version_project,
         &operator_project,
+        &notary_cel_project,
         &policy_project,
         &consultation_project,
     ] {
@@ -4242,6 +4275,18 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     );
     assert_change_dimensions(
         operator_project,
+        &baseline,
+        &anchor,
+        BTreeSet::from(["operator_security"]),
+    );
+
+    let notary_cel_environment = notary_cel_project.join("environments/local.yaml");
+    let mut environment = read_yaml(&notary_cel_environment);
+    environment["notary_cel"] = serde_yaml::from_str("worker_memory_bytes: 1073741824\n")
+        .expect("Notary CEL binding parses");
+    write_yaml(&notary_cel_environment, &environment);
+    assert_change_dimensions(
+        notary_cel_project,
         &baseline,
         &anchor,
         BTreeSet::from(["operator_security"]),

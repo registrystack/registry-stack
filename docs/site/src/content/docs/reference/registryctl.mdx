@@ -103,6 +103,19 @@ schema in `.vscode/settings.json`:
 
 Add the other four schema paths with their authored-file patterns from the table.
 
+For a project that deploys Notary, `environments/*.yaml` can set the existing
+dedicated-worker memory ceiling explicitly:
+
+```yaml
+notary_cel:
+  worker_memory_bytes: 1073741824
+```
+
+The field accepts 32 MiB through 1 GiB and participates in the
+`operator_security` review dimension. Omit it to retain Notary's 128 MiB
+default. The value is a per-worker data/address-space ceiling, not reserved
+memory; the 1 GiB maximum exists for emulated local runtimes.
+
 Offline fixture execution uses an implementation-owned, fixture-only binding. It runs the
 same Relay source-plan compiler, closed response decoder, typed normalization, static
 authentication and service-policy gates, and claim evaluator used by the products. Fixture YAML

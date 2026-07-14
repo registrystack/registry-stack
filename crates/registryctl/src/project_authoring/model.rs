@@ -1177,6 +1177,8 @@ struct EnvironmentDocument {
     #[serde(default)]
     notary_state: Option<NotaryStateBinding>,
     #[serde(default)]
+    notary_cel: Option<NotaryCelBinding>,
+    #[serde(default)]
     oid4vci: Option<Oid4vciBinding>,
     deployment: DeploymentBinding,
 }
@@ -1365,6 +1367,12 @@ struct NotaryStateBinding {
 #[serde(deny_unknown_fields)]
 struct NotaryPostgresqlBinding {
     root_certificate_path: PathBuf,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NotaryCelBinding {
+    worker_memory_bytes: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
