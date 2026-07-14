@@ -109,6 +109,33 @@ class RegistryReleaseTest(unittest.TestCase):
         )
         self.assertRegex(workflow, rf"chmod 0755[^\n]*dist/image-bin/{worker}")
 
+    def test_notary_packaging_includes_dedicated_cel_worker(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        worker = "registry-notary-cel-worker"
+
+        product_dockerfile = (ROOT / "products/notary/Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(worker, product_dockerfile)
+
+        self.assertIn(
+            f'"dist/bin/{worker}-${{{{ needs.verify.outputs.tag }}}}-linux-amd64"',
+            workflow,
+        )
+        self.assertIn(f"dist/image-bin/{worker}", workflow)
+        self.assertIn(
+            f"--bin {worker}",
+            workflow,
+        )
+        release_dockerfile = (ROOT / "release/docker/Dockerfile.registry-notary").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            f"COPY --chmod=0755 dist/image-bin/{worker} /usr/local/bin/{worker}",
+            release_dockerfile,
+        )
+        self.assertRegex(workflow, rf"chmod 0755[^\n]*dist/image-bin/{worker}")
+
     def test_release_workflow_publishes_cross_platform_registryctl_binaries(self) -> None:
         # The hermetic linux/amd64 builder cannot produce macOS or arm64 binaries,
         # so registryctl-<tag>-macos-arm64 and -linux-arm64 are built natively on a
