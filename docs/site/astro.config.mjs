@@ -121,7 +121,6 @@ export default defineConfig({
     '/tutorials/verify-claim-own-api/': internalRedirect('/tutorials/author-registry-project/'),
     '/tutorials/verify-opencrvs-dci-claims/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
     '/products/registry-notary/fhir-source-adapter-guide/': internalRedirect('/tutorials/configure-project-fhir-r4/'),
-    '/products/registry-notary/script-rhai-source-adapter-guide/': internalRedirect('/tutorials/configure-project-script-adapter/'),
     '/products/registry-notary/opencrvs-onboarding/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
     '/products/registry-notary/opencrvs-dci-standalone-tutorial/': internalRedirect('/tutorials/verify-opencrvs-claims/'),
     '/products/registry-notary/sidecar-trust-and-secrets/': internalRedirect('/explanation/threat-model/'),

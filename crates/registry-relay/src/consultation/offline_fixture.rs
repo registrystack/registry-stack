@@ -713,17 +713,17 @@ impl SourceHost for OfflineRhaiHost<'_> {
                 self.credential_used = true;
             }
         }
-        let observed =
-            match self
-                .interactions
-                .take(operation.id().as_str(), operation.fixed_path(), &actual)
-            {
-                Ok(observed) => observed,
-                Err(error) => {
-                    self.terminal_error = Some(error);
-                    return Err(HostFailure::ContractViolation);
-                }
-            };
+        let observed = match self.interactions.take(
+            operation.id().as_str(),
+            canonical_operation_path(operation).as_str(),
+            &actual,
+        ) {
+            Ok(observed) => observed,
+            Err(error) => {
+                self.terminal_error = Some(error);
+                return Err(HostFailure::ContractViolation);
+            }
+        };
         match observed {
             OfflineSourceResponse::Http {
                 status,
@@ -869,7 +869,7 @@ impl OfflineRhaiHost<'_> {
         let response = require_http_body(
             self.interactions.take(
                 operation.id().as_str(),
-                operation.fixed_path(),
+                canonical_operation_path(operation).as_str(),
                 &data_request,
             )?,
             operation.response_max_bytes(),
@@ -1459,8 +1459,11 @@ fn execute_http(
             }
         }
         let request = rendered_compiled_operation_request(plan, operation, inputs, &memory)?;
-        let response =
-            interactions.take(operation.id().as_str(), operation.fixed_path(), &request)?;
+        let response = interactions.take(
+            operation.id().as_str(),
+            canonical_operation_path(operation).as_str(),
+            &request,
+        )?;
         let decoded = decode_operation(operation, response)?;
         match decoded {
             ClosedJsonOutcome::Ambiguous => {
@@ -1606,7 +1609,7 @@ fn execute_dci(
     let response = require_http_body(
         interactions.take(
             operation.id().as_str(),
-            operation.fixed_path(),
+            canonical_operation_path(operation).as_str(),
             &data_request,
         )?,
         operation.response_max_bytes(),
@@ -1690,6 +1693,14 @@ fn execute_dci(
                 .collect(),
             calls,
         ),
+    }
+}
+
+fn canonical_operation_path(operation: &crate::source_plan::CompiledOperation) -> String {
+    if operation.path_segment().is_some() {
+        format!("{}*", operation.fixed_path())
+    } else {
+        operation.fixed_path().to_string()
     }
 }
 

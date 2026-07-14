@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 
 use registryctl::{
     add_config_anchor_key, build_registry_project, check_registry_project, init_config_anchor,
-    init_registry_project, sign_config_bundle, test_registry_project, verify_config_bundle_cli,
-    BundleSignOptions, ProjectBuildOptions, ProjectCheckOptions, ProjectInitOptions,
-    ProjectStarter, ProjectTestOptions,
+    init_registry_project, sign_config_bundle, test_registry_project,
+    test_registry_project_selected, verify_config_bundle_cli, BundleSignOptions,
+    ProjectBuildOptions, ProjectCheckOptions, ProjectInitOptions, ProjectStarter,
+    ProjectTestOptions, ProjectTestSelection,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -490,6 +491,81 @@ fn check_explain_reports_starter_divergence_and_runtime_abi() {
     );
     assert_eq!(explanation["platform"]["script_runtime"], "rhai_v1");
     assert_eq!(explanation["platform"]["script_abi"], "xw.v1");
+}
+
+#[test]
+fn check_explain_reports_environment_starter_divergence() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("registry-project");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Http,
+        directory: project.clone(),
+    })
+    .expect("starter initializes");
+
+    let environment_file = project.join("environments/local.yaml");
+    let environment = std::fs::read_to_string(&environment_file).expect("environment file");
+    std::fs::write(
+        &environment_file,
+        environment.replace(
+            "https://citizen-registry.invalid",
+            "https://adapted-citizen-registry.invalid",
+        ),
+    )
+    .expect("source origin is adapted");
+
+    let checked = check_registry_project(&ProjectCheckOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        explain: true,
+        against: None,
+        anchor: None,
+    })
+    .expect("adapted environment remains valid");
+    let explanation = checked.explanation.expect("explanation");
+    assert_eq!(explanation["starter"]["id"], "http");
+    assert_eq!(explanation["starter"]["state"], "diverged");
+    assert_ne!(
+        explanation["starter"]["expected_content_digest"],
+        explanation["starter"]["current_content_digest"]
+    );
+    assert_eq!(
+        explanation["environment_binding"]["integrations"]["person-record"]["source_origin"],
+        "https://adapted-citizen-registry.invalid"
+    );
+}
+
+#[test]
+fn http_trace_marks_the_redacted_dynamic_path_segment() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("registry-project");
+    init_registry_project(&ProjectInitOptions {
+        starter: ProjectStarter::Http,
+        directory: project.clone(),
+    })
+    .expect("starter initializes");
+
+    let report = test_registry_project_selected(
+        &ProjectTestOptions {
+            project_directory: project,
+            environment: None,
+            live: false,
+        },
+        &ProjectTestSelection {
+            integration: Some("person-record".to_string()),
+            fixture: Some("active-person".to_string()),
+            trace: true,
+        },
+    )
+    .expect("focused trace passes");
+    let fixture = report
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.fixture == "active-person")
+        .expect("authored fixture report");
+    assert_eq!(fixture.calls.len(), 1);
+    assert!(fixture.calls[0].contains("path=/people/*"));
+    assert!(!fixture.calls[0].contains("AB-123456"));
 }
 
 #[test]
@@ -1883,12 +1959,19 @@ fn check_and_build_produce_deterministic_product_inputs() {
     };
     let first = build_registry_project(&options).expect("first build");
     let output = PathBuf::from(first.output.expect("build output"));
+    let notary_config = std::fs::read_to_string(output.join("private/notary/config/notary.yaml"))
+        .expect("generated Notary config");
+    assert!(notary_config.contains("type: consultation_output"));
+    assert!(notary_config.contains("consultation: household"));
+    assert!(notary_config.contains("output: category"));
+    assert!(!notary_config.contains("type: extract"));
+    assert!(!notary_config.contains("type: exists"));
     let first_closure = directory_closure(&output);
     build_registry_project(&options).expect("second build");
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "7b20a7531535e91de513ca74b327744e2e8b364059ec59e060266041cdd3f004",
+        "5bde97c6fbe7d1a6a45d29db9d974019abaf3d443a3fb1cff3e0504d162aa26e",
         "project inputs must match the cross-machine golden digest"
     );
 }

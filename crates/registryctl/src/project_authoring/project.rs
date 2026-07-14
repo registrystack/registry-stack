@@ -119,10 +119,7 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
     validate_service_integration_links(&project, &integrations)?;
     validate_project_entity_links(&project, &integrations, &entities)?;
 
-    let project_content_digest = format!(
-        "sha256:{}",
-        hex::encode(hasher.clone().finalize())
-    );
+    let project_content_digest = project_content_digest(&root, &hasher)?;
 
     let (environment_name, environment) = match environment {
         Some(name) => {
@@ -157,6 +154,47 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
         project_content_digest,
         semantic_digests,
     })
+}
+
+fn project_content_digest(root: &Path, authored_hasher: &Sha256) -> Result<String> {
+    const MAX_ENVIRONMENTS: usize = 64;
+
+    let directory = root.join("environments");
+    if !directory.exists() {
+        return Ok(format!(
+            "sha256:{}",
+            hex::encode(authored_hasher.clone().finalize())
+        ));
+    }
+    reject_symlink_components(root, &directory)?;
+    if !fs::symlink_metadata(&directory)
+        .context("failed to inspect project environments")?
+        .is_dir()
+    {
+        bail!("project environments path must be a real directory");
+    }
+    let mut paths = fs::read_dir(&directory)
+        .context("failed to read project environments")?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    paths.retain(|path| path.extension().and_then(OsStr::to_str) == Some("yaml"));
+    paths.sort();
+    if paths.len() > MAX_ENVIRONMENTS {
+        bail!("project must declare no more than {MAX_ENVIRONMENTS} environments");
+    }
+
+    let mut hasher = authored_hasher.clone();
+    for path in paths {
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| anyhow!("environment path escapes project root"))?;
+        let relative = relative
+            .to_str()
+            .ok_or_else(|| anyhow!("environment path is not Unicode"))?;
+        let bytes = read_authored_file(root, &path)?;
+        hash_authored_file(&mut hasher, relative, &bytes);
+    }
+    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
 
 fn project_digest_document(project: &RegistryProject) -> Result<Vec<u8>> {

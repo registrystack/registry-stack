@@ -2,7 +2,7 @@
 
 This starter demonstrates one bounded product-neutral HTTP integration.
 
-From the directory containing this workspace:
+From this workspace directory:
 
 ```bash
 registryctl test --project-dir . --integration person-record --fixture active-person --trace

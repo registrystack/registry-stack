@@ -2,6 +2,7 @@
 //! Deterministic Registry Stack project authoring for Relay and Notary.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{Read as _, Write as _};
 use std::path::{Component, Path, PathBuf};
