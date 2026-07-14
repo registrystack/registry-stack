@@ -48,7 +48,10 @@ Protected endpoints need one of the generated demo keys. List the personas and t
 just demo-keys-list
 ```
 
-See [demo/README.md](demo/README.md) for the datasets, personas, Bruno collection, and worked scenarios, and [demo/decentralized/README.md](demo/decentralized/README.md) for the multi-service compose demo.
+See [demo/README.md](demo/README.md) for the datasets, personas, Bruno
+collection, and worked scenarios. Combined Relay and Notary journeys are
+maintained as Registry Stack project-authoring golden workspaces in
+`crates/registryctl/tests/fixtures/project-authoring/`.
 
 ## Documentation
 

@@ -152,21 +152,6 @@ fn core_demo_configs_load_and_validate() {
     }
 }
 
-#[cfg(feature = "spdci-api-standards")]
-#[test]
-fn evidence_registry_demo_config_loads_and_validates_metadata() {
-    seed_demo_secret_env();
-
-    let registry_path = demo_config("evidence_registries.yaml");
-    let registry = config::load(&registry_path).expect("evidence_registries.yaml failed to load");
-    assert_eq!(registry.datasets.len(), 2);
-    assert_split_metadata_matches_runtime(
-        "evidence_registries.yaml",
-        &registry_path,
-        registry.datasets.len(),
-    );
-}
-
 fn assert_split_metadata_matches_runtime(name: &str, path: &Path, dataset_count: usize) {
     let loaded = config::load_with_metadata(path)
         .unwrap_or_else(|err| panic!("{name} split metadata failed to load: {err}"));

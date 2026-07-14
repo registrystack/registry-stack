@@ -1,4 +1,0 @@
-farmer_id,national_id,given_name,surname,farm_type,farm_place_name,farmed_land_size_hectares,registration_date,district
-FR-MEMBER-001,FAKE-830001,Amina,Kamau,Small subsistence-oriented farms,north farm plot 001,3.2,2024-01-15,north
-FR-MEMBER-002,FAKE-830002,Luis,Rivera,Market-oriented family farm,central farm plot 002,5.6,2024-02-20,central
-FR-MEMBER-003,FAKE-830003,Maya,Okafor,Small subsistence-oriented farms,highlands farm plot 003,1.8,2024-03-10,highlands
