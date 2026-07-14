@@ -15,6 +15,8 @@ use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};
 use thiserror::Error;
 use time::format_description::well_known::Rfc3339;
+use time::format_description::FormatItem;
+use time::macros::format_description;
 use time::OffsetDateTime;
 use zeroize::Zeroizing;
 
@@ -995,12 +997,14 @@ impl Write for BoundedResponseWriter<'_> {
 }
 
 fn rfc3339_milliseconds(unix_ms: i64) -> Result<String, ConsultationResponseError> {
+    const RFC3339_MILLISECONDS: &[FormatItem<'_>] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
     let unix_nanos = i128::from(unix_ms)
         .checked_mul(1_000_000)
         .ok_or(ConsultationResponseError::InvalidTime)?;
     OffsetDateTime::from_unix_timestamp_nanos(unix_nanos)
         .map_err(|_| ConsultationResponseError::InvalidTime)?
-        .format(&Rfc3339)
+        .format(RFC3339_MILLISECONDS)
         .map_err(|_| ConsultationResponseError::InvalidTime)
 }
 
@@ -1056,6 +1060,7 @@ mod tests {
 
     use serde_json::{json, Value};
 
+    use crate::consultation::SnapshotGenerationId;
     use crate::source_plan::dhis2_runtime_vector_plan_fixture;
 
     #[test]
@@ -1065,8 +1070,55 @@ mod tests {
             "2025-07-10T12:00:00.123Z"
         );
         assert_eq!(
+            rfc3339_milliseconds(1_752_148_800_120).unwrap(),
+            "2025-07-10T12:00:00.120Z"
+        );
+        assert_eq!(
+            rfc3339_milliseconds(1_752_148_800_100).unwrap(),
+            "2025-07-10T12:00:00.100Z"
+        );
+        assert_eq!(
+            rfc3339_milliseconds(1_752_148_800_000).unwrap(),
+            "2025-07-10T12:00:00.000Z"
+        );
+        assert_eq!(
             rfc3339_milliseconds(-1),
             Ok("1969-12-31T23:59:59.999Z".into())
+        );
+    }
+
+    #[test]
+    fn snapshot_response_accepts_fixed_millisecond_provenance() {
+        let registry = crate::source_plan::shared_snapshot_registry_fixture();
+        let profile = registry
+            .plans_for_concrete_activation()
+            .next()
+            .expect("snapshot plan")
+            .runtime_profile();
+        let response = PublishableConsultationResponse::serialize_validated_result(
+            ConsultationId::generate(),
+            Some(NotaryEvaluationId::try_parse("01JYZZZZZZZZZZZZZZZZZZZZZZ").unwrap()),
+            profile,
+            ConsultationOutcome::NoMatch,
+            None,
+            1_752_148_800_120,
+            SnapshotResponseProvenance {
+                source_observed_at_unix_ms: None,
+                source_revision: None,
+                generation_id: SnapshotGenerationId::try_from("01JZ0000000000000000000001")
+                    .unwrap(),
+                published_at_unix_ms: 1_752_148_800_100,
+            },
+        )
+        .expect("fixed-width snapshot provenance serializes");
+        let value: Value = serde_json::from_slice(response.bytes_for_test()).unwrap();
+        assert_eq!(
+            value["provenance"]["acquired_at"],
+            "2025-07-10T12:00:00.120Z"
+        );
+        assert_eq!(
+            value["provenance"]["snapshot"]["published_at"],
+            "2025-07-10T12:00:00.100Z"
         );
     }
 
