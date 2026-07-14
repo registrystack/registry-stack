@@ -140,11 +140,11 @@ Notary's Relay readiness check has a separate 5-second outer bound and performs
 only authenticated profile metadata verification. It never executes a
 consultation or calls DHIS2.
 
-The local example uses the single-process in-memory replay store, so Notary's
-overall `/ready` response is deliberately HTTP 503 with
-`readiness_status: degraded`. Its `checks.relay` block must still report one
-successful check and no failure. Configure the documented Redis replay store
-when the deployment needs overall ready status or more than one Notary process.
+The local example explicitly uses Notary's single-process `in_memory` state, so
+`/ready` reports HTTP 200 after the Relay profile is verified. Its
+`checks.relay` block reports one successful check and no failure. Configure the
+typed Notary-owned PostgreSQL state plane for every production or multi-instance
+deployment.
 
 The public response releases only the closed cardinality outcome and, for one
 validated match, the DHIS2 enrollment `status`. Relay never releases the

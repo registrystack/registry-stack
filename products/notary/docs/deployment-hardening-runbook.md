@@ -34,9 +34,11 @@ address protections. Use TLS in deployed environments.
 
 ## State
 
-Use durable shared replay and credential-status storage when the deployment
-profile or multi-instance topology requires it. Back up state with its owning
-release. Do not share Relay tables, Notary stores, audit keys, or audit chains.
+Install the typed Notary-owned PostgreSQL correctness-state schema for every
+production or multi-instance deployment. Run `state doctor` with the restricted
+runtime role before admitting traffic. Back up the complete database, role
+provisioning, migration set, and sensitive-state key version with their owning
+release. Do not share Relay tables, Notary schemas, audit keys, or audit chains.
 
 ## Audit and diagnostics
 
@@ -67,6 +69,7 @@ Run:
 ```sh
 registry-notary explain-config --config generated-notary.yaml
 registry-notary doctor --config generated-notary.yaml
+registry-notary --config generated-notary.yaml state doctor
 registry-notary doctor --config generated-notary.yaml --live
 ```
 

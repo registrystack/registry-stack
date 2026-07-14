@@ -2,7 +2,7 @@
 
 **Status:** implementation contract for registry-stack issue #356  
 **Date:** 2026-07-14  
-**Stacked base:** `agent/relay-notary-country-authoring` at `e74688554af63c33d59fa5e94217914676c9c775`  
+**Stacked base:** `agent/relay-notary-country-authoring` at `94b378320bff397aa0ca32f7d0d696c6fd4b26c5`
 **Implementation branch:** `agent/notary-postgresql`
 
 ## 1. Outcome and boundary
@@ -13,6 +13,11 @@ PostgreSQL owns every decision that must survive process restart or be shared
 between identical Notary instances. In-memory implementations remain only for
 focused tests and an explicit single-process local development mode.
 
+One database belongs to one independently configured Notary authority. Only
+replicas of that same Notary trust domain share it. Independent Notary
+services use separate databases and role pairs rather than a generic tenant
+column or caller-selectable namespace.
+
 This change will:
 
 - move replay, nonce, evaluation, idempotency, credential-status, quota, and
@@ -22,6 +27,9 @@ This change will:
   major, or runtime role is unavailable or incompatible;
 - document installation, forward upgrade, backup, restore, retention, and
   recovery;
+- make the production path usable by implementers through one configuration
+  block, deterministic install and doctor commands, actionable value-free
+  diagnostics, and a realistic local-to-production journey;
 - remove Notary Redis configuration, code, dependencies, images, services,
   checks, and current documentation in the same delivery; and
 - prove PostgreSQL 16, 17, and 18 behavior, process restart, multi-instance
@@ -35,6 +43,39 @@ and value-free diagnostics.
 
 The implementation must not introduce a reusable state framework, an opaque
 key-value table, a dual Redis/PostgreSQL mode, or unrelated hardening.
+
+### 1.1 Implementer experience contract
+
+Security and implementer usability are joint release requirements. A secure
+state plane that an implementer cannot reliably install, inspect, and recover
+does not produce a usable deployment.
+
+The 1.0-facing path therefore has these acceptance criteria:
+
+- one top-level `state` block configures all Notary correctness domains;
+- configuration rejects removed Redis and per-domain storage selectors with a
+  precise field-level error rather than accepting aliases or silent defaults;
+- `registry-notary state install` applies the product-owned schema with a
+  separately provisioned owner connection, and never grants the runtime role
+  table access;
+- `registry-notary state doctor` exercises the same role, schema, version,
+  fingerprint, read-write, and transaction-function contract used at startup
+  and readiness;
+- diagnostics name the failed invariant and the operator action without
+  exposing database URLs, role names, paths, identifiers, ciphertext, or SQL;
+- the documented journey starts with explicit single-process `in_memory`
+  local development, then changes only the `state` block and secrets to reach
+  the supported PostgreSQL deployment;
+- PostgreSQL 16, 17, and 18 use the same migration artifact and public
+  commands; and
+- adding a future correctness domain requires a typed private table, fixed
+  transaction function, migration, retention rule, recovery rule, focused
+  tests, and an update to this inventory. It does not require a new backend
+  selector or generic storage framework.
+
+An implementer proof must run the documented install, doctor, startup,
+readiness, restart, and multi-instance flow without private SQL or
+repository-internal setup knowledge beyond database and role provisioning.
 
 ## 2. State authority inventory
 
@@ -163,8 +204,9 @@ Rules:
 - The database URL is loaded only from the named environment variable, held in
   zeroizing memory, never emitted through `Debug`, posture, doctor, or errors,
   and parsed with the PostgreSQL client parser.
-- TLS is required outside explicit local development. The optional root
-  certificate is size-bounded and read without disclosing its path on failure.
+- TLS is required for every PostgreSQL connection, including local PostgreSQL
+  testing. The optional root certificate is size-bounded and read without
+  disclosing its path on failure.
 - The sensitive-state key is base64url-encoded 32-byte key material. It is
   required whenever preauthorization is enabled with PostgreSQL. Identical
   replicas use the same key for the lifetime of any unexpired row.
@@ -247,12 +289,14 @@ windows.
 
 ## 7. Retention maintenance
 
-Every table has an indexed absolute expiry column where applicable. A bounded
-maintenance operation deletes expired rows in deterministic batches. Each
-Notary instance may invoke maintenance, and concurrent maintenance is safe.
-Maintenance failure makes readiness fail only when it also proves the database
-contract or runtime operation is unavailable; ordinary transient cleanup
-contention does not stop serving valid state.
+Every table has an indexed absolute expiry column where applicable. Every
+serving Notary instance invokes a maintenance transaction once per minute. One
+pass deletes at most 1,000 expired rows from each typed table in deterministic,
+skip-locked batches, so concurrent maintenance is safe. Logical expiry checks
+remain authoritative between passes. Maintenance failure makes readiness fail
+only when it also proves the database contract or runtime operation is
+unavailable; ordinary transient cleanup contention does not stop serving valid
+state.
 
 No retention operation deletes an unexpired replay row, nonce tombstone,
 idempotency completion, revocation record, quota window, or preauthorization
@@ -293,6 +337,13 @@ fingerprint and role, start one replica, verify readiness, then roll out
 identical replicas. Runtime binaries refuse old, new, or partially applied
 schemas, so application rollback also requires restoring the matching database
 backup and preauthorization key material.
+
+After a logical restore into a fresh cluster, role OIDs can legitimately
+change. `state install` may rebind only the metadata owner/runtime OIDs and
+reapply the fixed runtime grants when the capability, schema version, semantic
+fingerprint, complete catalog, and object ownership already match the released
+contract. The rebind and full attestation are one transaction. Any other drift
+rolls the transaction back; the installer does not repair it.
 
 ## 9. Backup, restore, and recovery
 
@@ -357,8 +408,8 @@ The final PostgreSQL checkpoint removes current Notary Redis surfaces from:
   implementations, while preserving focused in-memory test stores;
 - Notary configuration, validation, posture, doctor, explain-config, examples,
   tests, OpenAPI, and generated fixtures;
-- main lab Compose, secrets, scripts, just targets, hosted validation, smoke,
-  volumes, and Notary backup guidance;
+- the standalone Solmara Lab repository's Compose topology, secrets,
+  provisioning, validation, smoke, volumes, and Notary backup guidance;
 - release checks, current product docs, public docs, and current architecture
   diagrams.
 
@@ -393,9 +444,10 @@ Focused and PostgreSQL-backed tests must cover:
 The same conformance test runs against disposable PostgreSQL 16, 17, and 18 in
 local verification and a dedicated read-only GitHub Actions matrix. The final
 gate also runs Notary focused suites, locked workspace check/tests, Clippy with
-warnings denied, cargo-deny, both product OpenAPI checks, lab PostgreSQL and
-topology smoke, docs tests/build, release-source checks, image builds, DCO, and
-an independent security and operability review of the final diff.
+warnings denied, cargo-deny, both product OpenAPI checks, Solmara Lab
+PostgreSQL and topology smoke, docs tests/build, release-source checks, image
+builds, DCO, and an independent security and operability review of the final
+diff.
 
 ## 13. Required delivery checkpoints
 
@@ -404,8 +456,8 @@ an independent security and operability review of the final diff.
    conformance foundation.
 3. Replay, nonce, evaluation, idempotency, status, quota, and preauthorization
    cutover with focused tests.
-4. Atomic Redis deletion plus lab, documentation, recovery, and upgrade
-   guidance.
+4. Atomic Redis deletion plus standalone Solmara Lab, documentation, recovery,
+   and upgrade guidance.
 5. PostgreSQL 16, 17, and 18, multi-instance, restart, backup/restore, full
    verification, and independent review.
 6. Rebase onto the latest `origin/main` only after PR #355 merges, followed by

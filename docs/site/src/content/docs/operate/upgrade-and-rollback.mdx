@@ -36,8 +36,9 @@ anti-rollback state before starting its binary. The
 - Your deployment pins a version tag (`v0.9.0`) or an image digest, never `latest`.
 - You know where your deployment keeps its persistent state. At minimum: the audit log
   directory of each product, the anti-rollback state file if `config_trust` is enabled
-  (`antirollback_state_path`), the Redis instance backing replay and nonce state for
-  Registry Notary, and your config files and secrets. For generated and single-node
+  (`antirollback_state_path`), the PostgreSQL database backing Registry Notary correctness
+  state, its role-provisioning record and sensitive-state key version, and your config files and
+  secrets. For generated and single-node
   Compose deployments, follow [Back up and restore a deployment](../backup-and-restore/)
   before changing the running containers. Store each release's config and anti-rollback
   state as a separate restore set; do not overwrite an older set with a newer file.
@@ -79,14 +80,17 @@ anti-rollback state before starting its binary. The
 
 4. Back up state that a failed upgrade must not lose: `secrets/local.env`, the audit log
    directory (copy, never truncate or edit; the hash chain makes hand-edited files
-   unverifiable), the anti-rollback state file, Redis replay and nonce state, and your
+   unverifiable), the anti-rollback state file, the complete Notary PostgreSQL database, and your
    config and source files as currently deployed. Record hashes and permissions without
    printing secrets, label the restore set with the running release, and leave it unchanged
    when the target release creates or updates its own anti-rollback state.
 
-5. Deploy the new release alongside or in place of the old one, per your orchestration.
-   Keep the old release's binary or image reference and config available until the soak
-   period ends.
+5. For a Notary schema upgrade, remove traffic and stop every old Notary writer. Run the target
+   release's `state install` as the migration role, then run `state doctor` as the runtime role.
+   Do not run old and new Notary binaries concurrently across a schema change. Start one target
+   replica without traffic and admit the rest only after every replica attests the same schema
+   fingerprint. Keep the old release's binary or image reference, config, database backup, role
+   provisioning, and sensitive-state key version until the soak period ends.
 
 6. Verify the new deployment:
 
@@ -118,8 +122,9 @@ If the new release misbehaves and the cause is not a config error you can fix fo
 
 1. Stop the target release. Restore the previous release's binary or image, the config that
    was running before the upgrade, and that release's exact anti-rollback state at its
-   configured path. Retain the target release's state separately. Never start the previous
-   binary against a newer release's state file.
+   configured path. For Notary, also restore the matching complete database backup, role
+   provisioning, and sensitive-state key version. Retain the target release's state separately.
+   Never start the previous binary against a newer schema or anti-rollback state file.
 
 2. Respect the constraints that survive a software roll-back:
 

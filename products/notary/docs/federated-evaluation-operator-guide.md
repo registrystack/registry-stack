@@ -5,8 +5,8 @@
 This guide shows the minimum static-peer setup for delegated evaluation.
 It covers static peer configuration, inbound request verification, and the
 documented limits of the current implementation: no outbound Notary connector,
-no dynamic trust registration, and in-memory replay suitable for single-process
-pilots only.
+no dynamic trust registration, and explicit in-memory state suitable for local,
+single-process development only.
 
 ## What this enables
 
@@ -157,25 +157,25 @@ Stale claim results return HTTP 200 with a signed top-level `error` object.
 Transport denials use RFC 9457 Problem Details JSON and do not prove whether
 the subject exists.
 
-## Replay store
+## Correctness state
 
-Replay protection is selected by the top-level `replay` block. The default
-`in_memory` store is acceptable for local development, single-process pilots,
-and tests:
+Replay protection uses the global Notary correctness-state backend. Production
+and multi-instance deployments use the Notary-owned PostgreSQL schema. Local,
+single-process development can select in-memory state explicitly:
 
 ```yaml
-replay:
+deployment:
+  profile: local
+  multi_instance: false
+state:
   storage: in_memory
 ```
 
-Do not run active-active federation with this store. Multiple serving Notary
-instances need a shared replay store before privileged federation traffic is
-enabled. For the full Redis replay configuration block, see the
-[Replay Store section of the configuration reference](operator-config-reference.md).
-
-`federation.replay.storage` is retained only for legacy configuration shape. If
-it is set to `redis`, startup validation requires top-level
-`replay.storage = redis` so the configured backend is unambiguous.
+Do not run active-active federation with in-memory state. Install the
+PostgreSQL schema and run `registry-notary state doctor` before enabling
+privileged federation traffic. See
+[`postgresql-state-operations.md`](postgresql-state-operations.md) for role,
+installation, backup, restore, and upgrade procedures.
 
 ## Verification checklist
 

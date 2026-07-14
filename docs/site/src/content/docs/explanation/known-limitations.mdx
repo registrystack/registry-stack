@@ -138,10 +138,9 @@ Federation across institutions is static-peer only.
 Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/) and the
 [security model](../../spec/rs-sec-g/).
 
-- Static peers only: Replay protection defaults to in-process, in-memory state, but a Redis-backed
-  shared replay store is available for multi-instance deployments (`replay.storage = redis`, with
-  `federation.replay.storage = redis` when the top-level store is Redis), and federation uses it
-  for request replay and `jti` checks.
+- Static peers only: Federation uses the global typed Notary correctness-state backend for request
+  replay and `jti` checks. Production and multi-instance deployments require the Notary-owned
+  PostgreSQL schema. Explicit in-memory state is limited to local, single-instance development.
   There is still no dynamic trust-chain discovery and no federated credential issuance; both are
   out of scope for this version.
 - Delegated evaluation returns a result, never a credential: Across a federation boundary, what
