@@ -61,7 +61,7 @@
       "source": "manual",
       "enforcement_tests": [
         "crates/registry-notary-server/src/standalone/tests/auth.inc::evidence_service_discovery_is_not_auth_exempt",
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
       ],
       "waiver": null
     },
@@ -170,7 +170,7 @@
       "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
       ],
       "waiver": null
     },
@@ -193,7 +193,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
       ],
       "waiver": null
     },
@@ -426,7 +426,7 @@
       "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
       ],
       "waiver": null
     },
@@ -447,7 +447,7 @@
       "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
       ],
       "waiver": null
     },
@@ -468,7 +468,7 @@
       "notes": "Protected Registry Notary route; route boundary requires an authenticated principal but no fixed scope.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
       ],
       "waiver": null
     },
@@ -491,7 +491,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
       ],
       "waiver": null
     },
@@ -514,7 +514,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
       ],
       "waiver": null
     },
@@ -537,7 +537,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
       ],
       "waiver": null
     },
@@ -560,7 +560,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
       ],
       "waiver": null
     },
@@ -602,7 +602,7 @@
       "notes": "Protected Registry Notary route.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
       ],
       "waiver": null
     },
@@ -626,7 +626,7 @@
       "source": "manual",
       "enforcement_tests": [
         "crates/registry-notary-server/tests/standalone_http/federation.rs::federation_evaluation_returns_signed_response_and_rejects_replay",
-        "crates/registry-notary-server/tests/standalone_http/federation.rs::federation_denial_happens_before_source_read"
+        "crates/registry-notary-server/tests/standalone_http/federation.rs::federation_denial_happens_before_claim_evaluation"
       ],
       "waiver": null
     },
@@ -649,136 +649,7 @@
       "notes": "Admin metrics route mounted on the admin listener in dedicated mode and handler-enforced by admin scope. Simple local shared mode keeps the same admin-scope gate.",
       "source": "manual",
       "enforcement_tests": [
-        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_evaluates_over_http_and_writes_redacted_audit"
-      ],
-      "waiver": null
-    },
-    {
-      "service": "registry-notary",
-      "listener": "sidecar",
-      "method": "GET",
-      "path": "/healthz",
-      "feature": null,
-      "audience": "internal",
-      "auth": "none",
-      "scopes": [],
-      "rate_limit": null,
-      "audit": "not_applicable",
-      "openapi": false,
-      "stability": "beta",
-      "data_classification": "operational",
-      "notes": "Intentionally unauthenticated source-adapter sidecar operational route.",
-      "source": "manual",
-      "enforcement_tests": [],
-      "waiver": null
-    },
-    {
-      "service": "registry-notary",
-      "listener": "sidecar",
-      "method": "GET",
-      "path": "/ready",
-      "feature": null,
-      "audience": "internal",
-      "auth": "none",
-      "scopes": [],
-      "rate_limit": null,
-      "audit": "not_applicable",
-      "openapi": false,
-      "stability": "beta",
-      "data_classification": "operational",
-      "notes": "Intentionally unauthenticated source-adapter sidecar operational route.",
-      "source": "manual",
-      "enforcement_tests": [],
-      "waiver": null
-    },
-    {
-      "service": "registry-notary",
-      "listener": "sidecar",
-      "method": "GET",
-      "path": "/metrics",
-      "feature": null,
-      "audience": "internal",
-      "auth": "none",
-      "scopes": [],
-      "rate_limit": null,
-      "audit": "not_applicable",
-      "openapi": false,
-      "stability": "beta",
-      "data_classification": "operational",
-      "notes": "Intentionally unauthenticated source-adapter sidecar operational route.",
-      "source": "manual",
-      "enforcement_tests": [],
-      "waiver": null
-    },
-    {
-      "service": "registry-notary",
-      "listener": "sidecar",
-      "method": "GET",
-      "path": "/v1/assurance",
-      "feature": "source_adapter_sidecar.config_trust.enabled",
-      "audience": "internal",
-      "auth": "bearer",
-      "scopes": [
-        "sidecar:read"
-      ],
-      "rate_limit": null,
-      "audit": "not_applicable",
-      "openapi": false,
-      "stability": "beta",
-      "data_classification": "operational",
-      "notes": "source-adapter sidecar assurance route. Bearer auth protects verified runtime and config hash state used by Notary expected-sidecar checks.",
-      "source": "manual",
-      "enforcement_tests": [
-        "crates/registry-notary-source-adapter-sidecar/tests/governed_runtime_validation.rs::governed_target_renders_http_json_runtime_and_verifies_locally"
-      ],
-      "waiver": null
-    },
-    {
-      "service": "registry-notary",
-      "listener": "sidecar",
-      "method": "GET",
-      "path": "/v1/datasets/{dataset}/entities/{entity}/records",
-      "feature": null,
-      "audience": "internal",
-      "auth": "bearer",
-      "scopes": [
-        "sidecar:read"
-      ],
-      "rate_limit": null,
-      "audit": "not_applicable",
-      "openapi": false,
-      "stability": "beta",
-      "data_classification": "personal",
-      "notes": "source-adapter sidecar route.",
-      "source": "manual",
-      "enforcement_tests": [
-        "crates/registry-notary-source-adapter-sidecar/tests/http_json_adapter.rs::http_json_health_ready_and_metrics_are_available_without_secret_disclosure",
-        "crates/registry-notary-source-adapter-sidecar/tests/http_json_adapter.rs::http_json_missing_purpose_is_rejected_before_upstream_dispatch"
-      ],
-      "waiver": null
-    },
-    {
-      "service": "registry-notary",
-      "listener": "sidecar",
-      "method": "POST",
-      "path": "/v1/datasets/{dataset}/entities/{entity}/records:batchMatch",
-      "feature": null,
-      "audience": "internal",
-      "auth": "bearer",
-      "scopes": [
-        "sidecar:read"
-      ],
-      "rate_limit": null,
-      "audit": "not_applicable",
-      "openapi": false,
-      "stability": "beta",
-      "data_classification": "personal",
-      "notes": "source-adapter sidecar batch-match route. Bearer auth, data-purpose validation, request minimization, and worker-dispatch guards are enforced before source access.",
-      "source": "manual",
-      "enforcement_tests": [
-        "crates/registry-notary-source-adapter-sidecar/tests/http_json_adapter.rs::http_json_batch_match_runs_sequential_lookups_and_preserves_item_order",
-        "crates/registry-notary-source-adapter-sidecar/tests/http_json_adapter.rs::http_json_post_sends_minimized_body_without_configuration_or_secrets",
-        "crates/registry-notary-source-adapter-sidecar/tests/http_json_adapter.rs::http_json_batch_match_requires_auth_and_purpose_before_upstream_dispatch"
+        "crates/registry-notary-server/tests/standalone_http/audit.rs::standalone_server_authenticates_and_audits_unsupported_access_mode"
       ],
       "waiver": null
     }

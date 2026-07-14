@@ -56,15 +56,3 @@ allowed:
     method: GET
     path: /v1/credentials/{credential_id}/status
     reason: Public credential status lookup with opaque credential id.
-  - listener: sidecar
-    method: GET
-    path: /healthz
-    reason: source-adapter sidecar health probe.
-  - listener: sidecar
-    method: GET
-    path: /ready
-    reason: source-adapter sidecar readiness probe.
-  - listener: sidecar
-    method: GET
-    path: /metrics
-    reason: source-adapter sidecar metrics expose bounded operational counters.

@@ -28,7 +28,6 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
             'pub fn router<S>() -> Router<S> { Router::new().route("/x", get(handler)) }\n'
         )
         (self.root / "Dockerfile").write_text("FROM scratch\n")
-        (self.root / "Dockerfile.source-adapter-sidecar").write_text("FROM scratch\n")
         (self.root / "openapi").mkdir()
         (self.root / "openapi" / "registry-notary.openapi.json").write_text(json.dumps({
             "openapi": "3.0.3",
@@ -234,12 +233,11 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.module.check_openapi_manifest_coverage(self.root / "openapi" / "registry-notary.openapi.json")
 
-    def test_dockerfile_secret_check_covers_add_and_missing_files(self):
+    def test_dockerfile_secret_check_covers_add_and_missing_file(self):
         (self.root / "Dockerfile").write_text("ADD private.pem /app/private.pem\n")
         with self.assertRaises(SystemExit):
             self.module.check_dockerfile_secret_patterns()
-        (self.root / "Dockerfile").write_text("FROM scratch\n")
-        (self.root / "Dockerfile.source-adapter-sidecar").unlink()
+        (self.root / "Dockerfile").unlink()
         with self.assertRaises(SystemExit):
             self.module.check_dockerfile_secret_patterns()
 

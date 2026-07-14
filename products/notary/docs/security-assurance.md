@@ -1,8 +1,7 @@
 # Security Assurance
 
 The root monorepo release workflow publishes Registry Notary images from semver
-`vX.Y.Z` release tags to `ghcr.io/registrystack/registry-notary:<tag>` and
-`ghcr.io/registrystack/registry-notary-source-adapter-sidecar:<tag>`. The
+`vX.Y.Z` release tags to `ghcr.io/registrystack/registry-notary:<tag>`. The
 workflow records the pushed image digests, SBOMs, and Grype reports as GitHub
 Release assets. It does not currently publish moving aliases such as `latest`,
 `vX`, or `vX.Y`, snapshot tags, `sha-<commit-sha>` image tags, or OCI image
@@ -20,13 +19,6 @@ stage must remain `gcr.io/distroless/cc-debian12:nonroot` pinned by digest,
 shell-free, package-manager-free, and compatible with a binary healthcheck and
 JSON-array entrypoint. The container CI guard enforces the runtime base,
 `registry-notary healthcheck`, and `ENTRYPOINT ["/usr/local/bin/registry-notary"]`.
-
-`Dockerfile.source-adapter-sidecar` is a distroless Rust image; sources run
-through the built-in http_json, http_flow, and fhir engines. Its runtime
-stage stays `gcr.io/distroless/cc-debian12:nonroot` pinned by digest,
-shell-free, package-manager-free, and uses a JSON-array entrypoint. Liveness and
-readiness are served over HTTP at `/healthz` and `/ready`, so orchestrator
-probes replace a bundled container healthcheck binary.
 
 Route exposure waivers, when needed, live on the affected entry in
 `security/exposure-manifest.json` so the review context stays with the route.
@@ -83,7 +75,6 @@ Verify an immutable image digest from the root release capsule:
 
 ```sh
 docker buildx imagetools inspect ghcr.io/registrystack/registry-notary@sha256:<digest>
-docker buildx imagetools inspect ghcr.io/registrystack/registry-notary-source-adapter-sidecar@sha256:<digest>
 ```
 
 Verify the release capsule, binary assets, SBOMs, and image evidence files with

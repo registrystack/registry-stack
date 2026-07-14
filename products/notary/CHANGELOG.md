@@ -7,58 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Changed
 
-- BREAKING: Registry-backed claims can now use one hash-pinned Registry Relay
-  consultation instead of a Notary-owned source connection. Notary verifies
-  the protected Relay profile before serving, coalesces compatible claims for
-  one evaluation into one source consultation, reloads its bounded workload
-  JWT file for every Relay operation, derives concurrency from the verified
-  profile, and exposes bounded Relay readiness and `doctor --live` checks.
-  Relay remains the sole workload-token verifier and source credential owner.
-  Exact private Relay networks require explicit `allowed_private_cidrs`. The
-  full service hop uses one fixed, non-configurable 25-second absolute deadline,
-  and Registry-backed configurations require `server.request_timeout` of at
-  least 30 seconds, preserving a configured five-second listener margin around
-  that bound. Every existing claim must now declare `evidence_mode`; use
-  `transitional_direct` only to preserve an existing governed source-connection
-  path while it is migrated, and use `self_attested` only for source-free
-  evidence. `transitional_direct` is an intermediate-PR lane and remains a
-  release blocker; it must not ship in the replacement beta or 1.0 release.
-- Registry-backed consultations can now expose one closed, typed fact map that
-  Notary verifies and reuses across direct and CEL-derived claims. Supported
-  public facts are Boolean, bounded String, exact JSON-safe Integer, full-date,
-  Presence, and explicitly nullable variants; floating-point Number remains
-  rejected. Generated project configurations may declare bounded full-date
-  request variables, such as an age calculation date, while CEL remains limited
-  to the consultation's allow-listed facts, those declared variables, and the
-  frozen date helpers. Missing or undeclared variables fail before Relay or any
-  source is called.
-- Registry-backed `/v1/batch-evaluations` now requires a caller-bound
-  `Idempotency-Key`, preflights every item before the first Relay call, and
-  executes bounded, independently authorized single-subject consultations.
-  Results preserve input order and per-item outcomes. Private child identities
-  let an exact retry reuse completed durable Relay work without coalescing
-  across subjects or sending a multi-subject Relay request; conflicting outer
-  key reuse returns `409`.
-- Notary audit records now retain the evaluation ID, a conservative marker that
-  Relay dispatch was attempted, and every consultation ID returned before the
-  evaluation closes, for restricted cross-service correlation. The marker
-  means the operation may have reached Relay, not that Relay received it. If
-  detached Relay work completes after an early sibling failure or client
-  cancellation, reconcile it from Relay's audit using the forwarded Notary
-  evaluation ID. Relay IDs never enter public claim results, provenance, debug
-  output, or error bodies.
-- The product-owned project fixture harness now validates the production
-  Notary config, authenticates through the static credential verifier, derives
-  scopes from compiled claims, binds exact Relay profile contracts, and runs
-  the production runtime and isolated CEL worker without a direct source
-  capability. Authentication, scope, purpose, and malformed-input fixtures
-  retain value-free zero-call evidence.
-- The internal CEL worker protocol now owns escaped request strings and uses a
-  tagged success/error response. Multiline authored policies and successful
-  JSON `null` results therefore survive the bounded process protocol without
-  weakening expression hashing, environment stripping, or worker limits.
+- BREAKING: Registry-backed claims now use only authenticated,
+  compiler-pinned Registry Relay consultations. Notary no longer accepts
+  direct source connections, DCI/FHIR connectors, source adapter sidecars,
+  source credentials, or transitional evidence modes.
+- Notary validates the complete Relay consultation semantics and
+  `contract_hash` before serving and at readiness. A mismatch fails before
+  Relay can access the registry source.
+- Relay outcomes and typed outputs remain separate from Notary claims,
+  disclosure, and credential issuance. One consultation can supply several
+  direct and CEL claims without exposing raw Relay errors.
+- Relay-only, self-attested Notary-only, and combined deployments are modeled
+  independently. Combined deployments use the project's single Relay
+  connection.
+
+### Removed
+
+- Removed the Notary source-adapter sidecar image, routes, security inventory,
+  direct DCI/FHIR/OpenSPP demo configurations, OpenFn caller demo, and the
+  direct-source performance harness.
 
 ## [0.9.0] - 2026-07-10
 

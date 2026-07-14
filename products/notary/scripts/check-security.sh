@@ -38,7 +38,7 @@ run_optional actionlint actionlint
 run_zizmor_ratchet
 
 if command -v hadolint >/dev/null 2>&1; then
-  hadolint --ignore DL3022 Dockerfile Dockerfile.source-adapter-sidecar
+  hadolint --ignore DL3022 Dockerfile
 else
   echo "security check advisory: hadolint is not installed; skipped" >&2
 fi

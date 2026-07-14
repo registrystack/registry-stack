@@ -1,208 +1,71 @@
 # Registry Notary
 
-> **Experimental:** This codebase is under active development. Its APIs are evolving quickly and may be unstable.
+> **Experimental:** This product is pre-1.0. Its configuration and API may change before the first stable release.
 
-Release label: pre-1.0 technical release for evaluation and integration pilots.
+Registry Notary evaluates purpose-bound claims, applies disclosure policy, and
+issues credentials. Registry-backed evidence enters Notary only through an
+authenticated, compiler-pinned Registry Relay consultation. Notary does not
+hold registry destinations or source credentials and does not execute source
+adapters.
 
-> **Convergence status:** New source-backed claims use authenticated,
-> hash-pinned Registry Relay consultations. Direct HTTP connectors and the
-> source-adapter sidecar remain only as explicit `transitional_direct` cutover
-> scaffolding; their presence blocks the replacement beta and 1.0 release.
+A Registry Stack project may deploy:
 
-Standalone Registry Notary workspace, claim evaluation, federated delegated
-evaluation, credential issuance, and attestation service.
+- Relay only, for governed source access, materialization, or records APIs;
+- Notary only, for source-free self-attested evidence; or
+- Relay and Notary, for claims derived from Relay consultation outcomes and outputs.
 
-This repository owns claim configuration, claim evaluation, disclosure policy,
-Registry Notary API routes, credential issuance primitives, static-peer
-federation, the strict Relay consultation client, fail-closed API key and
-bearer-token auth, and redacted audit event emission. Legacy HTTP source
-connectors remain compiled only for the unreleased migration window.
+Notary keeps independent authority over caller authentication, purpose,
+service policy, claim evaluation, disclosure, credential issuance, and its own
+audit chain. Relay keeps independent authority over source acquisition,
+normalization, protocol verification, typed outputs, and its audit chain.
 
-Shared security and operations primitives come from sibling
-`registry-platform-*` crates, including audit envelopes, auth common code,
-cache/replay stores, HTTP security helpers, OIDC, OpenID4VCI, and SD-JWT
-support.
-
-See [`docs/README.md`](docs/README.md) for the full documentation map: tutorials,
-operator guides, conformance references, and design history.
-
-## Try locally with registryctl
-
-The existing `registryctl` tutorials currently generate temporary direct
-migration scaffolding and must not be used to start a new integration or cut a
-release. For a maintained replacement journey, start with the
-[Relay-backed DHIS2 profile](../../crates/registry-relay/profiles/dhis2-2.41.9-enrollment-status/README.md).
-To exercise the transitional local tutorial, use
-[Verify a claim from your registry API](https://docs.registrystack.org/tutorials/verify-claim-registry-api/).
-It uses `registryctl` to add Registry Notary to a local registry API project, start both services,
-and run the Notary smoke checks without cloning this repository.
-
-If you need to migrate an existing source API, use
-[Verify a claim from your own API](https://docs.registrystack.org/tutorials/verify-claim-own-api/).
-That path creates a temporary `transitional_direct` Notary project and points
-it at an API you operate.
+See [`docs/README.md`](docs/README.md) for product documentation. Use
+Registry Stack project authoring and `registryctl` to generate deployable
+Relay and Notary inputs. Do not hand-author source access inside Notary.
 
 ## Layout
 
-- [`crates/registry-notary-core`](crates/registry-notary-core/README.md):
-  portable Registry Notary domain, config, auth, audit, request, response, and
-  SD-JWT VC contracts.
-- [`crates/registry-notary-server`](crates/registry-notary-server/README.md):
-  Axum routes, runtime evaluation, strict Relay consultation, renderers,
-  credential issuance wiring, auth middleware, audit emission, standalone app
-  assembly, and transitional direct connectors pending deletion.
-- [`crates/registry-notary-client`](crates/registry-notary-client/README.md):
-  typed Rust HTTP client, JSON facade, route-aware retry, bounded response
-  reads, JWKS refresh, and redacted errors.
-- [`crates/registry-notary`](crates/registry-notary/README.md):
-  process startup, config loading, bind address, tracing, graceful shutdown, and
-  OpenAPI generation.
-- [`crates/registry-notary-source-adapter-sidecar`](crates/registry-notary-source-adapter-sidecar/README.md):
-  transitional Registry Data API-shaped sidecar retained only for existing
-  governed HTTP JSON, HTTP flow, and FHIR migration paths.
-- [`bindings/python`](bindings/python): `registry-notary` sync and async
-  dictionary-friendly Python wrapper.
-- [`bindings/node`](bindings/node): `@registry-notary/client` Promise client
-  with TypeScript declarations.
-- [`docs/`](docs/README.md): guides, tutorials, and references for integrators,
-  operators, and maintainers, sorted by reader. Demo configs live in
-  `demo/config/`.
-- [`specs/`](specs/README.md): design specifications and implementation traces for
-  self-attestation, static-peer federation, manifest-backed federation,
-  the `/v1` REST route cleanup, OpenID4VCI wallet facade, source adapter
-  sidecar integration, and scalability.
+- `crates/registry-notary-core`: domain, configuration, claim, disclosure,
+  audit, and credential contracts.
+- `crates/registry-notary-server`: HTTP routes, strict Relay client, claim
+  evaluation, credential issuance, federation, and operational surfaces.
+- `crates/registry-notary-client`: typed Rust client and local credential verification.
+- `crates/registry-notary`: process startup, diagnostics, config verification,
+  and OpenAPI generation.
+- `bindings/python` and `bindings/node`: application client bindings.
+- `docs`: integrator and operator references.
+- `specs`: implementation records and design history.
 
-## Credential Conformance
+## Local run
 
-Registry Notary issues SD-JWT VC credentials using `application/dc+sd-jwt`,
-EdDSA over named Ed25519 signing keys, and `did:jwk` holder binding. The
-supported wire contract and explicit non-support list are in
-[`docs/sd-jwt-vc-conformance-profile.md`](docs/sd-jwt-vc-conformance-profile.md).
-Signing key configuration and rotation are covered in
-[`docs/signing-key-provider.md`](docs/signing-key-provider.md).
-
-## Federated Evaluation
-
-Registry Notary includes a static-peer delegated evaluation slice. Wire
-profile, config shape, replay limitation, and rollout checklist are in
-[`docs/federated-evaluation-operator-guide.md`](docs/federated-evaluation-operator-guide.md)
-and the design record at
-[`specs/federated-evaluation-mvp-spec.md`](specs/federated-evaluation-mvp-spec.md).
-
-## Local Run
-
-Use the task runner for the normal local path:
+Generate or build a Registry Stack project first, then pass the resulting
+Notary configuration explicitly:
 
 ```bash
-just setup
-just run
+just run config=/absolute/path/to/generated/notary.yaml
 ```
 
-If `just` is not available, use the raw Cargo fallback:
-
-```bash
-export REGISTRY_NOTARY_API_KEY_HASH='sha256:<sha256-hex-of-your-api-key>'
-export REGISTRY_NOTARY_BEARER_TOKEN_HASH='sha256:<sha256-hex-of-your-bearer-token>'
-export REGISTRY_NOTARY_AUDIT_HASH_SECRET='<stable-random-audit-hash-secret>'
-export EVIDENCE_SOURCE_REGISTRY_RELAY_TOKEN='<registry-relay-source-token>'
-export REGISTRY_NOTARY_ISSUER_JWK='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","alg":"EdDSA"}'
-cargo run -p registry-notary -- --config demo/config/registry-notary.yaml
-```
-
-Config-aware commands and server startup also accept `--env-file` for
-env-backed local runs:
-
-```bash
-cargo run -p registry-notary -- \
-  --config demo/config/registry-notary.yaml \
-  --env-file .env.local
-```
-
-The demo config is temporary `transitional_direct` scaffolding and requires a
-source service at the configured `base_url`. It blocks the replacement beta and
-1.0 release. The binary still starts fail-closed: no Registry Notary route is
-served without a configured API key or bearer token.
-
-## Operating Relay And Notary Together
-
-Relay owns authenticated, purpose-aware source acquisition. For a
-Registry-backed claim, Notary verifies one exact Relay consultation profile at
-startup, invokes its closed execute route, and applies its own evaluation and
-disclosure policy to the minimized result. Notary does not configure Relay as
-an ordinary direct HTTP source and does not hold the registry credential.
-Credential wiring, port conventions, replay store, metrics, and audit sink
-configuration: [`docs/operator-config-reference.md`](docs/operator-config-reference.md).
-Credential status states and verifier caveats:
-[`docs/credential-lifecycle-status.md`](docs/credential-lifecycle-status.md).
+The binary fails closed when caller authentication is not configured. A
+Registry-backed configuration also fails startup and readiness when its Relay
+semantic contract or hash does not match the compiled expectation.
 
 ## Verification
 
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test -p registry-notary-server --no-default-features
-cargo test --workspace --all-features
-# cargo-deny is pinned through this wrapper.
-./scripts/cargo-deny-check.sh
-cargo build --workspace --all-features
-cargo run -p registry-notary -- openapi > target/registry-notary.openapi.json
-```
-
-Use the wrapper for dependency policy checks. It installs and runs the pinned
-`cargo-deny` version expected by `deny.toml`, so older global installs do not
-break local or CI verification.
-
-Run the monorepo preflight before opening or updating PRs that touch Rust,
-Cargo features, Dockerfiles, root workflows, or perf config:
+From the Registry Stack monorepo root, use the product preflight and workspace
+gates documented in `AGENTS.md`. Product-local focused checks include:
 
 ```bash
 just ci-preflight
+just openapi-check
+just exposure-check
+python3 -m unittest discover -s tests -p '*_test.py'
 ```
 
-The preflight runs from the registry-stack root, uses the root workspace
-lockfile, and catches `Cargo.lock` drift before the heavyweight CI jobs reach
-Docker, perf, or security scans.
+## Distribution and security
 
-## Docker
-
-The Docker build needs the sibling Platform and Crosswalk workspaces. Build
-with Docker BuildKit and pass both named contexts:
-
-```bash
-docker build \
-  --build-context registry-platform=../registry-platform \
-  --build-context crosswalk=../crosswalk \
-  -t registry-notary .
-```
-
-Default builds compile CEL and PKCS#11 into one release-capable image; runtime
-behavior remains config-gated. Release images publish to
-`ghcr.io/registrystack/registry-notary` from stable `vX.Y.Z` tags and
-`registry-stack-technical-preview-<date-or-version>` tags; deployments should
-consume release tags or immutable digests. The source adapter sidecar image
-builds from `Dockerfile.source-adapter-sidecar` with the same named contexts.
-
-See [`docs/deployment-hardening-runbook.md`](docs/deployment-hardening-runbook.md)
-for listener, admin port, healthcheck, config expansion, and rollback guidance.
-
-## OpenAPI
-
-Registry Notary owns its OpenAPI output. Generate the current document with:
-
-```bash
-cargo run -p registry-notary -- openapi
-```
-
-## Distribution
-
-The workspace crates are not published to crates.io. Consumers should use the
-Docker image or a pinned git tag/revision.
-
-## Security
-
-Report vulnerabilities through GitHub Security Advisories. See
-[`SECURITY.md`](SECURITY.md) for scope and acknowledgement expectations.
-
-## License
+The product crates are not published to crates.io. Consume the Registry Notary
+container using a release tag or immutable digest. Report vulnerabilities
+through GitHub Security Advisories as described in the repository security
+policy.
 
 Apache-2.0. See [`LICENSE`](LICENSE).

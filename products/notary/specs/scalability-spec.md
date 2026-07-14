@@ -1,8 +1,10 @@
 # Registry Notary Scalability Spec
 
-> **Status: Archived (2026-05-31).** Stages 0 through 3 described here have shipped and are tested; the code line-references throughout this document are stale. Do not rely on the line numbers in this document. This file is kept as a
-> design record and is not the source of truth. For current behavior see the code
-> and the perf/ directory and the runtime code.
+> **Status: Archived (2026-07-13).** This direct-source scalability plan was
+> superseded when Registry-backed evidence moved behind Relay. Its connectors,
+> runtime paths, and product-local load harness were removed before 1.0. This
+> file is retained only as historical design context and is not current
+> implementation or operator guidance.
 
 ## Purpose
 

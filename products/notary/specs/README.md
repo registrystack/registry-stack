@@ -27,9 +27,11 @@ that still tracks open work.
   OpenID4VCI wallet facade design and current compatibility profile.
   **[implemented]**
 - [`source-adapter-sidecar-source-spec.md`](source-adapter-sidecar-source-spec.md):
-  source-adapter sidecar source integration contract. **[implemented]**
+  historical source-adapter sidecar integration contract.
+  **[archived: removed before 1.0]**
 - [`scalability-spec.md`](scalability-spec.md):
-  scalability goals, constraints, and performance work plan. **[implemented]**
+  historical direct-source scalability goals and performance work plan.
+  **[archived: superseded by Relay-backed execution]**
 - [`notary-capability-gaps.md`](notary-capability-gaps.md):
   maintainer roadmap of the per-scenario gaps and the rollup of capability gaps
   surfaced by the Notary scenario catalog. **[active: gap register]**

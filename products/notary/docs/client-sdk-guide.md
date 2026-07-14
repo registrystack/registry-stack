@@ -352,7 +352,7 @@ evaluation and batch evaluation.
 ```
 
 The credential behind your auth mode carries a `scopes` list, and every claim
-declares a `required_scope` on its source bindings. Scope strings are
+declares its required scopes as part of the evidence service policy. Scope strings are
 operator-defined `<namespace>:<operation>` values, for example
 `civil_registry:evidence_verification` or `registry_notary:credential_issue`.
 There is no fixed global registry of scope names.

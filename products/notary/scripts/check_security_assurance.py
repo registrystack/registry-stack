@@ -39,7 +39,7 @@ REQUIRED_ENTRY_FIELDS = {
     "waiver",
 }
 
-LISTENERS = {"public", "admin", "internal", "metrics", "demo", "sidecar"}
+LISTENERS = {"public", "admin", "internal", "metrics", "demo"}
 AUDIENCES = {"external", "operator", "platform", "internal", "demo", "health"}
 AUTHS = {"none", "api_key", "oidc", "api_key_or_oidc", "bearer", "jws", "internal", "mTLS"}
 AUDIT = {"required", "optional", "not_applicable", "suppressed"}
@@ -380,7 +380,7 @@ def infer_methods(handler_expr: str) -> set[str]:
 
 
 def check_dockerfile_secret_patterns() -> None:
-    for path in [ROOT / "Dockerfile", ROOT / "Dockerfile.source-adapter-sidecar"]:
+    for path in [ROOT / "Dockerfile"]:
         if not path.is_file():
             fail(f"missing required Dockerfile: {path.relative_to(ROOT)}")
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):

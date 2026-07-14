@@ -4,15 +4,10 @@
 
 Self-attestation lets a citizen use their own OIDC token to evaluate, render, or
 issue only the claims that policy allows. The subject is bound to the token.
-This guide is for operators configuring that flow with an identity provider,
-source registries, and relying-party or wallet clients.
-
-> **Convergence status:** Source-backed citizen claims are available only as
-> explicit `transitional_direct` migration claims while their reviewed Relay
-> profiles are being built. This path must be removed before the replacement
-> beta or 1.0 release. New source-free citizen claims use `self_attested`.
-> Registry-backed citizen consultation and delegated attestation are not
-> available in v1; their configuration fails closed.
+This guide is for operators configuring that source-free flow with an identity
+provider and relying-party or wallet clients. Registry-backed citizen evidence
+requires a separately compiled Relay consultation and service policy; it is not
+configured as self-attestation.
 
 Use [`oid4vci-wallet-interop.md`](oid4vci-wallet-interop.md) when the caller is
 a wallet using the OID4VCI facade. Use this guide for the shared
@@ -26,8 +21,8 @@ authorized by policy, and only for explicitly allowed claims, purposes,
 formats, disclosures, and credential profiles.
 
 Notary validates the token, checks client and audience policy, checks subject
-binding, checks scopes and operation allow-lists, then reads sources. Source
-reads must not happen before those gates pass.
+binding, checks scopes and operation allow-lists, then evaluates only the
+configured source-free claims.
 
 ```mermaid
 flowchart TD
@@ -35,12 +30,10 @@ flowchart TD
   V -- "ok" --> C{"Client and audience policy"}
   C -- "ok" --> S{"Subject binding<br/>derive subject from token claim"}
   S -- "ok" --> Sc{"Scopes and operation allow-lists"}
-  Sc -- "ok" --> M{"Access mode"}
-  M -- "transitional_direct" --> Read["Read configured source for the bound subject"]
-  M -- "self_attested" --> SourceFree["Evaluate source-free declaration"]
-  Read --> Op["Evaluate, render, or issue within the allow-lists"]
+  Sc -- "ok" --> SourceFree["Evaluate source-free declaration"]
   SourceFree --> Op
-  V -- "fail" --> X["Reject before any source read"]
+  Op["Evaluate, render, or issue within the allow-lists"]
+  V -- "fail" --> X["Reject before evaluation"]
   C -- "fail" --> X
   S -- "conflicting caller identity" --> X
   Sc -- "fail" --> X
@@ -48,12 +41,12 @@ flowchart TD
 
 *Self-attestation gates a request through token validation, client and audience
 policy, subject binding, and scope and operation allow-lists. Any gate failure
-rejects the request before a source is read.*
+rejects the request before claim evaluation.*
 
 For `/v1/evaluations`, citizen callers do not need to send their own target
 identity. Registry Notary derives `requester`, `target`, and
 `relationship: self` from the verified subject-binding token claim. Conflicting
-caller-supplied identity context is rejected before any source read.
+caller-supplied identity context is rejected before claim evaluation.
 
 ## When to use it
 
@@ -62,7 +55,7 @@ Use self-attestation when:
 - A citizen portal evaluates eligibility from the citizen's own token.
 - A wallet flow issues a credential for the token-bound subject.
 - The identity provider can provide a stable, reviewed subject-binding claim.
-- The source owner accepts citizen-initiated reads for the configured purpose.
+- The evidence service accepts a token-bound source-free declaration for the configured purpose.
 
 Do not use it when:
 
@@ -239,7 +232,7 @@ Rules:
 
 Delegated self-attestation is unavailable in v1. Setting
 `self_attestation.delegation.enabled: true` fails configuration validation.
-Do not create relationship-proof source bindings or advertise delegated wallet
+Do not advertise delegated wallet
 issuance. A future version needs a separately reviewed Relay-bound subject and
 relationship assertion contract before this mode can return.
 
@@ -295,21 +288,18 @@ All values must be greater than zero. In-process limits are useful guardrails,
 but public deployments should also use gateway and identity-provider controls,
 especially when more than one Notary process is serving traffic.
 
-## Source and purpose review
+## Evidence and purpose review
 
-Only `transitional_direct` self-service claims read configured source
-registries. Source-free `self_attested` claims do not. Before running a
-temporary direct migration deployment:
+`self_attested` claims perform no Relay or registry-source I/O. Confirm that:
 
-- Confirm each source owner accepts citizen-token driven reads.
-- Confirm `required_scope` on source bindings matches the policy.
-- Confirm claim `purpose` or request purpose values are stable and auditable.
-- Confirm source fields are minimized.
-- Confirm missing and ambiguous source records produce acceptable user-facing
-  behavior.
+- every allowed claim and dependency is source-free;
+- claim and request purposes are stable and auditable;
+- caller scopes, client ids, audiences, formats, disclosures, and credential
+  profiles are narrowly allow-listed; and
+- the evidence service does not present self-attestation as registry-verified evidence.
 
-Use [`source-claim-modeling-guide.md`](source-claim-modeling-guide.md) to review
-claim boundaries and source bindings.
+Use [`source-claim-modeling-guide.md`](source-claim-modeling-guide.md) to
+review the evidence boundary.
 
 ## Rollout checklist
 
@@ -335,7 +325,7 @@ claim boundaries and source bindings.
 | Token rejected | Issuer, audience, client id, algorithm, or scope mismatch | Token header and claims, `auth.oidc`, `scope_map` |
 | Subject mismatch | Token claim is missing or caller-supplied identity context conflicts with the derived subject | `subject_binding.token_claim`, token claims, request body identity fields |
 | Userinfo subject not found | `claim_source: userinfo` without a usable endpoint or issuer | `auth.oidc.userinfo_endpoint`, `userinfo_issuers` |
-| Delegation config rejected | Delegated self-attestation is unavailable in v1 | Keep `delegation.enabled: false` and `allowed_relationships: []` |
+| Delegation config rejected | Delegated authorization does not match the compiled service policy | Check requester, target, relationship, purpose, and authorization details |
 | Credential issuance denied | Profile or claim missing from allow-lists | `allowed_claims`, `credential_profiles`, claim/profile cross references |
 | Batch request denied | Batch evaluation is not supported for self-attestation | Keep `batch_evaluate: false` |
 | Works locally but fails active-active | In-process rate limits or replay state are not shared | Add gateway limits and Redis replay storage |

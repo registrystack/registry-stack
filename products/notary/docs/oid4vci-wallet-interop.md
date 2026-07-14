@@ -6,11 +6,9 @@ This guide describes the implemented OpenID4VCI wallet facade for Registry
 Notary adopters. It focuses on what wallet and platform teams need to configure
 and test.
 
-> **Convergence status:** Source-backed wallet issuance currently uses only the
-> explicit `transitional_direct` lane while a reviewed Relay-bound citizen
-> assertion contract is developed. That lane blocks the replacement beta and
-> 1.0 release. Source-free `self_attested` wallet claims remain supported;
-> delegated and Registry-backed citizen claims are unavailable in v1.
+The current wallet facade issues source-free `self_attested` claims. A
+Registry-backed wallet service requires its own compiled Relay consultation and
+citizen authorization policy and is not implied by enabling this facade.
 
 ## Use case
 
@@ -26,8 +24,8 @@ The facade is intentionally narrow:
 - Proof type is JWT.
 - Supported proof algorithm is `EdDSA`.
 - Supported holder binding method is `did:jwk`.
-- Issuance is backed by self-attestation policy and either source-free
-  `self_attested` claims or temporary `transitional_direct` claims.
+- Issuance is backed by self-attestation policy and source-free
+  `self_attested` claims.
 - Delegated attestation transaction tokens are rejected. Delegated wallet
   issuance is not part of this OID4VCI facade version.
 
@@ -64,7 +62,7 @@ login, then use the rendered offer page:
 - let the wallet redeem the offer at the Notary `token_endpoint`;
 - confirm the wallet stores a `dc+sd-jwt` credential.
 
-A successful wallet run leaves these externally visible facts:
+A successful wallet run leaves these externally visible results:
 
 - issuer metadata is reachable at `/.well-known/openid-credential-issuer`;
 - the configured Type Metadata is reachable at
@@ -385,8 +383,7 @@ configuration overrides in your deployment notes.
 
 ## Security and privacy notes
 
-- For temporary `transitional_direct` claims, Notary validates token and policy
-  before source reads. `self_attested` claims perform no source read.
+- `self_attested` claims perform no Relay or registry-source read.
 - Subject binding is exact; do not use normalization that could join different
   civil identifiers.
 - A holder DID can become a correlation handle if reused widely. Wallets should

@@ -30,7 +30,7 @@ sequenceDiagram
   B->>A: POST /federation/v1/evaluations (signed request JWT)
   A->>A: Verify signature, audience, time window, profile, purpose, replay, denylist, body limit
   A->>Src: Source read, only after policy passes
-  Src-->>A: Source facts
+  Src-->>A: Consultation outputs
   A->>Audit: Chained audit record
   A-->>B: Signed response JWT, or signed error, or Problem Details denial
 ```
