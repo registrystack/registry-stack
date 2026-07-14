@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 880" role="img" aria-labelledby="t d" font-family="'Public Sans', system-ui, -apple-system, sans-serif" text-rendering="geometricPrecision">
-<title id="t">Country evidence mesh</title>
-<desc id="d">A country's authoritative registries and health systems (Civil/CRVS, Clinical Health, Public Health, Social Protection, Agriculture, Education) each use Registry Relay to obtain reviewed typed facts and Registry Notary to share minimized claims. A Social Protection MIS (OpenSPP) consumes claims from Civil, Clinical Health through a reviewed FHIR integration, DHIS2 through authored bounded HTTP, and the Agriculture and Education registries, and reads the social registry it owns directly. There is no central broker and no boundary bar.</desc>
+<title id="t">Country evidence mesh with selectable Registry Stack topologies</title>
+<desc id="d">A country's civil, clinical health, public health, social protection, agriculture, and education systems keep their source data. Registry Stack projects can deploy Relay only, source-free Notary only, or both products. Relay returns governed typed outputs, and combined projects turn compiler-pinned consultation outputs into minimized claims. A Social Protection MIS owns the eligibility decision and reads the registry it owns directly. The DHIS2 example uses a reviewed Rhai script rather than a product-specific executor.</desc>
 <style>
   .eyebrow { font: 700 11px 'Public Sans', system-ui, sans-serif; fill: #6a6a6a; letter-spacing: 0.08em; }
   .title { font: 700 25px 'Public Sans', system-ui, sans-serif; fill: #161616; letter-spacing: -0.01em; }
@@ -22,30 +22,30 @@
   .tag { font: 700 11px 'IBM Plex Mono', ui-monospace, monospace; letter-spacing: 0.04em; }
   .edgelbl { font: 400 10.5px 'IBM Plex Mono', ui-monospace, monospace; fill: #6a6a6a; }
   .edgelblb { font: 700 10.5px 'IBM Plex Mono', ui-monospace, monospace; fill: #000091; letter-spacing: 0.04em; }
-  .boundlbl { font: 700 11px 'IBM Plex Mono', ui-monospace, monospace; fill: #9d2c1d; letter-spacing: 0.12em; }
+  .boundlbl { font: 700 11px 'IBM Plex Mono', ui-monospace, monospace; fill: #000091; letter-spacing: 0.12em; }
   .leg { font: 400 13px 'Public Sans', system-ui, sans-serif; fill: #3a3a3a; }
-  .sealcap { font: 700 8px 'IBM Plex Mono', ui-monospace, monospace; fill: #9d2c1d; letter-spacing: 0.1em; }
-  .badgelbl { font: 700 9px 'IBM Plex Mono', ui-monospace, monospace; fill: #9d2c1d; letter-spacing: 0.08em; }
+  .sealcap { font: 700 8px 'IBM Plex Mono', ui-monospace, monospace; fill: #000091; letter-spacing: 0.1em; }
+  .badgelbl { font: 700 9px 'IBM Plex Mono', ui-monospace, monospace; fill: #000091; letter-spacing: 0.08em; }
   .foot { font: 400 11px 'IBM Plex Mono', ui-monospace, monospace; fill: #6a6a6a; }
 </style>
-<rect x="0" y="0" width="1400" height="880" fill="#eef2ec"/>
+<rect x="0" y="0" width="1400" height="880" fill="#ffffff"/>
 <rect x="18" y="18" width="1364" height="844" fill="none" stroke="#161616" stroke-width="1"/>
 <text x="40" y="50" class="eyebrow">COUNTRY DIGITAL PUBLIC INFRASTRUCTURE</text>
 <rect x="40" y="58" width="40" height="2" fill="#000091"/>
-<text x="40" y="90" class="title">Each registry shares the claim, not the row.</text>
-<text x="40" y="116" class="lead">Every authoritative registry keeps Relay and Notary as governed add-ons.</text>
-<text x="40" y="137" class="lead">Relay obtains typed facts; Notary shares minimized claims; a system reads the registry it owns directly.</text>
-<circle cx="1322" cy="78" r="19.5" fill="none" stroke="#9d2c1d" stroke-width="1.3"/>
-<circle cx="1322" cy="78" r="13.5" fill="none" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1336.0" y1="78.0" x2="1341.0" y2="78.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1331.9" y1="87.9" x2="1335.4" y2="91.4" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1322.0" y1="92.0" x2="1322.0" y2="97.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1312.1" y1="87.9" x2="1308.6" y2="91.4" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1308.0" y1="78.0" x2="1303.0" y2="78.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1312.1" y1="68.1" x2="1308.6" y2="64.6" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1322.0" y1="64.0" x2="1322.0" y2="59.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1331.9" y1="68.1" x2="1335.4" y2="64.6" stroke="#9d2c1d" stroke-width="0.8"/>
-<path d="M1322.0 72.0 L1323.9 76.1 L1328.0 78.0 L1323.9 79.9 L1322.0 84.0 L1320.1 79.9 L1316.0 78.0 L1320.1 76.1 Z" fill="#9d2c1d"/>
+<text x="40" y="90" class="title">Each project selects the products its evidence path needs.</text>
+<text x="40" y="116" class="lead">Deploy Relay only, source-free Notary only, or both products in one Registry Stack project.</text>
+<text x="40" y="137" class="lead">Relay returns typed consultation outputs; Notary evaluates minimized claims.</text>
+<circle cx="1322" cy="78" r="19.5" fill="none" stroke="#000091" stroke-width="1.3"/>
+<circle cx="1322" cy="78" r="13.5" fill="none" stroke="#000091" stroke-width="0.8"/>
+<line x1="1336.0" y1="78.0" x2="1341.0" y2="78.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="1331.9" y1="87.9" x2="1335.4" y2="91.4" stroke="#000091" stroke-width="0.8"/>
+<line x1="1322.0" y1="92.0" x2="1322.0" y2="97.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="1312.1" y1="87.9" x2="1308.6" y2="91.4" stroke="#000091" stroke-width="0.8"/>
+<line x1="1308.0" y1="78.0" x2="1303.0" y2="78.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="1312.1" y1="68.1" x2="1308.6" y2="64.6" stroke="#000091" stroke-width="0.8"/>
+<line x1="1322.0" y1="64.0" x2="1322.0" y2="59.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="1331.9" y1="68.1" x2="1335.4" y2="64.6" stroke="#000091" stroke-width="0.8"/>
+<path d="M1322.0 72.0 L1323.9 76.1 L1328.0 78.0 L1323.9 79.9 L1322.0 84.0 L1320.1 79.9 L1316.0 78.0 L1320.1 76.1 Z" fill="#000091"/>
 <text x="1322" y="112" class="sealcap" text-anchor="middle">EVIDENCE</text>
 <line x1="223" y1="542" x2="734.8774073" y2="324.3050107" stroke="#000091" stroke-width="1.4"/>
 <polygon points="745.0,320.0 736.8,328.9 732.9,319.7" fill="#000091"/>
@@ -71,17 +71,17 @@
 <circle cx="58" cy="691" r="2" fill="#000091"/>
 <text x="68" y="695" class="bsm">Date of birth</text>
 <rect x="201" y="542" width="58" height="44" fill="#ffffff" stroke="#161616" stroke-width="1"/>
-<circle cx="230.0" cy="557" r="8.1" fill="none" stroke="#9d2c1d" stroke-width="1.3"/>
-<circle cx="230.0" cy="557" r="5.6" fill="none" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="236.1" y1="557.0" x2="237.6" y2="557.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="234.3" y1="561.3" x2="235.3" y2="562.3" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="230.0" y1="563.1" x2="230.0" y2="564.6" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="225.7" y1="561.3" x2="224.7" y2="562.3" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="223.9" y1="557.0" x2="222.4" y2="557.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="225.7" y1="552.7" x2="224.7" y2="551.7" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="230.0" y1="550.9" x2="230.0" y2="549.4" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="234.3" y1="552.7" x2="235.3" y2="551.7" stroke="#9d2c1d" stroke-width="0.8"/>
-<path d="M230.0 554.5 L230.8 556.2 L232.5 557.0 L230.8 557.8 L230.0 559.5 L229.2 557.8 L227.5 557.0 L229.2 556.2 Z" fill="#9d2c1d"/>
+<circle cx="230.0" cy="557" r="8.1" fill="none" stroke="#000091" stroke-width="1.3"/>
+<circle cx="230.0" cy="557" r="5.6" fill="none" stroke="#000091" stroke-width="0.8"/>
+<line x1="236.1" y1="557.0" x2="237.6" y2="557.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="234.3" y1="561.3" x2="235.3" y2="562.3" stroke="#000091" stroke-width="0.8"/>
+<line x1="230.0" y1="563.1" x2="230.0" y2="564.6" stroke="#000091" stroke-width="0.8"/>
+<line x1="225.7" y1="561.3" x2="224.7" y2="562.3" stroke="#000091" stroke-width="0.8"/>
+<line x1="223.9" y1="557.0" x2="222.4" y2="557.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="225.7" y1="552.7" x2="224.7" y2="551.7" stroke="#000091" stroke-width="0.8"/>
+<line x1="230.0" y1="550.9" x2="230.0" y2="549.4" stroke="#000091" stroke-width="0.8"/>
+<line x1="234.3" y1="552.7" x2="235.3" y2="551.7" stroke="#000091" stroke-width="0.8"/>
+<path d="M230.0 554.5 L230.8 556.2 L232.5 557.0 L230.8 557.8 L230.0 559.5 L229.2 557.8 L227.5 557.0 L229.2 556.2 Z" fill="#000091"/>
 <text x="230" y="579" class="badgelbl" text-anchor="middle">R + N</text>
 <rect x="263" y="560" width="205" height="160" fill="#ffffff" stroke="#161616" stroke-width="1"/>
 <rect x="263" y="560" width="205" height="4" fill="#000091"/>
@@ -95,41 +95,41 @@
 <circle cx="281" cy="691" r="2" fill="#000091"/>
 <text x="291" y="695" class="bsm">Observation / condition</text>
 <rect x="424" y="542" width="58" height="44" fill="#ffffff" stroke="#161616" stroke-width="1"/>
-<circle cx="453.0" cy="557" r="8.1" fill="none" stroke="#9d2c1d" stroke-width="1.3"/>
-<circle cx="453.0" cy="557" r="5.6" fill="none" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="459.1" y1="557.0" x2="460.6" y2="557.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="457.3" y1="561.3" x2="458.3" y2="562.3" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="453.0" y1="563.1" x2="453.0" y2="564.6" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="448.7" y1="561.3" x2="447.7" y2="562.3" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="446.9" y1="557.0" x2="445.4" y2="557.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="448.7" y1="552.7" x2="447.7" y2="551.7" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="453.0" y1="550.9" x2="453.0" y2="549.4" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="457.3" y1="552.7" x2="458.3" y2="551.7" stroke="#9d2c1d" stroke-width="0.8"/>
-<path d="M453.0 554.5 L453.8 556.2 L455.5 557.0 L453.8 557.8 L453.0 559.5 L452.2 557.8 L450.5 557.0 L452.2 556.2 Z" fill="#9d2c1d"/>
-<text x="453" y="579" class="badgelbl" text-anchor="middle">R + N</text>
+<circle cx="453.0" cy="557" r="8.1" fill="none" stroke="#000091" stroke-width="1.3"/>
+<circle cx="453.0" cy="557" r="5.6" fill="none" stroke="#000091" stroke-width="0.8"/>
+<line x1="459.1" y1="557.0" x2="460.6" y2="557.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="457.3" y1="561.3" x2="458.3" y2="562.3" stroke="#000091" stroke-width="0.8"/>
+<line x1="453.0" y1="563.1" x2="453.0" y2="564.6" stroke="#000091" stroke-width="0.8"/>
+<line x1="448.7" y1="561.3" x2="447.7" y2="562.3" stroke="#000091" stroke-width="0.8"/>
+<line x1="446.9" y1="557.0" x2="445.4" y2="557.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="448.7" y1="552.7" x2="447.7" y2="551.7" stroke="#000091" stroke-width="0.8"/>
+<line x1="453.0" y1="550.9" x2="453.0" y2="549.4" stroke="#000091" stroke-width="0.8"/>
+<line x1="457.3" y1="552.7" x2="458.3" y2="551.7" stroke="#000091" stroke-width="0.8"/>
+<path d="M453.0 554.5 L453.8 556.2 L455.5 557.0 L453.8 557.8 L453.0 559.5 L452.2 557.8 L450.5 557.0 L452.2 556.2 Z" fill="#000091"/>
+<text x="453" y="579" class="badgelbl" text-anchor="middle">RELAY</text>
 <rect x="486" y="560" width="205" height="160" fill="#ffffff" stroke="#161616" stroke-width="1"/>
 <rect x="486" y="560" width="205" height="4" fill="#000091"/>
 <text x="500" y="588" class="cardtitle sm">Public Health</text>
 <text x="500" y="606" class="mono">DHIS2</text>
 <line x1="500" y1="618" x2="677" y2="618" stroke="#e5e5e5" stroke-width="1"/>
 <rect x="522.5" y="631.0" width="132" height="22" fill="#ffffff" stroke="#000091" stroke-width="1"/>
-<text x="588.5" y="646" class="tag" fill="#000091" text-anchor="middle">HTTP ADAPTER</text>
+<text x="588.5" y="646" class="tag" fill="#000091" text-anchor="middle">RHAI SCRIPT</text>
 <circle cx="504" cy="672" r="2" fill="#000091"/>
 <text x="514" y="676" class="bsm">Programme enrolment</text>
 <circle cx="504" cy="691" r="2" fill="#000091"/>
 <text x="514" y="695" class="bsm">Service event / coverage</text>
 <rect x="647" y="542" width="58" height="44" fill="#ffffff" stroke="#161616" stroke-width="1"/>
-<circle cx="676.0" cy="557" r="8.1" fill="none" stroke="#9d2c1d" stroke-width="1.3"/>
-<circle cx="676.0" cy="557" r="5.6" fill="none" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="682.1" y1="557.0" x2="683.6" y2="557.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="680.3" y1="561.3" x2="681.3" y2="562.3" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="676.0" y1="563.1" x2="676.0" y2="564.6" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="671.7" y1="561.3" x2="670.7" y2="562.3" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="669.9" y1="557.0" x2="668.4" y2="557.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="671.7" y1="552.7" x2="670.7" y2="551.7" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="676.0" y1="550.9" x2="676.0" y2="549.4" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="680.3" y1="552.7" x2="681.3" y2="551.7" stroke="#9d2c1d" stroke-width="0.8"/>
-<path d="M676.0 554.5 L676.8 556.2 L678.5 557.0 L676.8 557.8 L676.0 559.5 L675.2 557.8 L673.5 557.0 L675.2 556.2 Z" fill="#9d2c1d"/>
+<circle cx="676.0" cy="557" r="8.1" fill="none" stroke="#000091" stroke-width="1.3"/>
+<circle cx="676.0" cy="557" r="5.6" fill="none" stroke="#000091" stroke-width="0.8"/>
+<line x1="682.1" y1="557.0" x2="683.6" y2="557.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="680.3" y1="561.3" x2="681.3" y2="562.3" stroke="#000091" stroke-width="0.8"/>
+<line x1="676.0" y1="563.1" x2="676.0" y2="564.6" stroke="#000091" stroke-width="0.8"/>
+<line x1="671.7" y1="561.3" x2="670.7" y2="562.3" stroke="#000091" stroke-width="0.8"/>
+<line x1="669.9" y1="557.0" x2="668.4" y2="557.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="671.7" y1="552.7" x2="670.7" y2="551.7" stroke="#000091" stroke-width="0.8"/>
+<line x1="676.0" y1="550.9" x2="676.0" y2="549.4" stroke="#000091" stroke-width="0.8"/>
+<line x1="680.3" y1="552.7" x2="681.3" y2="551.7" stroke="#000091" stroke-width="0.8"/>
+<path d="M676.0 554.5 L676.8 556.2 L678.5 557.0 L676.8 557.8 L676.0 559.5 L675.2 557.8 L673.5 557.0 L675.2 556.2 Z" fill="#000091"/>
 <text x="676" y="579" class="badgelbl" text-anchor="middle">R + N</text>
 <rect x="709" y="560" width="205" height="160" fill="#ffffff" stroke="#161616" stroke-width="1"/>
 <rect x="709" y="560" width="205" height="4" fill="#000091"/>
@@ -143,18 +143,18 @@
 <circle cx="727" cy="691" r="2" fill="#000091"/>
 <text x="737" y="695" class="bsm">Programme enrolment</text>
 <rect x="870" y="542" width="58" height="44" fill="#ffffff" stroke="#161616" stroke-width="1"/>
-<circle cx="899.0" cy="557" r="8.1" fill="none" stroke="#9d2c1d" stroke-width="1.3"/>
-<circle cx="899.0" cy="557" r="5.6" fill="none" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="905.1" y1="557.0" x2="906.6" y2="557.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="903.3" y1="561.3" x2="904.3" y2="562.3" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="899.0" y1="563.1" x2="899.0" y2="564.6" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="894.7" y1="561.3" x2="893.7" y2="562.3" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="892.9" y1="557.0" x2="891.4" y2="557.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="894.7" y1="552.7" x2="893.7" y2="551.7" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="899.0" y1="550.9" x2="899.0" y2="549.4" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="903.3" y1="552.7" x2="904.3" y2="551.7" stroke="#9d2c1d" stroke-width="0.8"/>
-<path d="M899.0 554.5 L899.8 556.2 L901.5 557.0 L899.8 557.8 L899.0 559.5 L898.2 557.8 L896.5 557.0 L898.2 556.2 Z" fill="#9d2c1d"/>
-<text x="899" y="579" class="badgelbl" text-anchor="middle">R + N</text>
+<circle cx="899.0" cy="557" r="8.1" fill="none" stroke="#000091" stroke-width="1.3"/>
+<circle cx="899.0" cy="557" r="5.6" fill="none" stroke="#000091" stroke-width="0.8"/>
+<line x1="905.1" y1="557.0" x2="906.6" y2="557.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="903.3" y1="561.3" x2="904.3" y2="562.3" stroke="#000091" stroke-width="0.8"/>
+<line x1="899.0" y1="563.1" x2="899.0" y2="564.6" stroke="#000091" stroke-width="0.8"/>
+<line x1="894.7" y1="561.3" x2="893.7" y2="562.3" stroke="#000091" stroke-width="0.8"/>
+<line x1="892.9" y1="557.0" x2="891.4" y2="557.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="894.7" y1="552.7" x2="893.7" y2="551.7" stroke="#000091" stroke-width="0.8"/>
+<line x1="899.0" y1="550.9" x2="899.0" y2="549.4" stroke="#000091" stroke-width="0.8"/>
+<line x1="903.3" y1="552.7" x2="904.3" y2="551.7" stroke="#000091" stroke-width="0.8"/>
+<path d="M899.0 554.5 L899.8 556.2 L901.5 557.0 L899.8 557.8 L899.0 559.5 L898.2 557.8 L896.5 557.0 L898.2 556.2 Z" fill="#000091"/>
+<text x="899" y="579" class="badgelbl" text-anchor="middle">RELAY</text>
 <rect x="932" y="560" width="205" height="160" fill="#ffffff" stroke="#161616" stroke-width="1"/>
 <rect x="932" y="560" width="205" height="4" fill="#000091"/>
 <text x="946" y="588" class="cardtitle sm">Agriculture</text>
@@ -167,42 +167,42 @@
 <circle cx="950" cy="691" r="2" fill="#000091"/>
 <text x="960" y="695" class="bsm">Landholding</text>
 <rect x="1093" y="542" width="58" height="44" fill="#ffffff" stroke="#161616" stroke-width="1"/>
-<circle cx="1122.0" cy="557" r="8.1" fill="none" stroke="#9d2c1d" stroke-width="1.3"/>
-<circle cx="1122.0" cy="557" r="5.6" fill="none" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1128.1" y1="557.0" x2="1129.6" y2="557.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1126.3" y1="561.3" x2="1127.3" y2="562.3" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1122.0" y1="563.1" x2="1122.0" y2="564.6" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1117.7" y1="561.3" x2="1116.7" y2="562.3" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1115.9" y1="557.0" x2="1114.4" y2="557.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1117.7" y1="552.7" x2="1116.7" y2="551.7" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1122.0" y1="550.9" x2="1122.0" y2="549.4" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1126.3" y1="552.7" x2="1127.3" y2="551.7" stroke="#9d2c1d" stroke-width="0.8"/>
-<path d="M1122.0 554.5 L1122.8 556.2 L1124.5 557.0 L1122.8 557.8 L1122.0 559.5 L1121.2 557.8 L1119.5 557.0 L1121.2 556.2 Z" fill="#9d2c1d"/>
+<circle cx="1122.0" cy="557" r="8.1" fill="none" stroke="#000091" stroke-width="1.3"/>
+<circle cx="1122.0" cy="557" r="5.6" fill="none" stroke="#000091" stroke-width="0.8"/>
+<line x1="1128.1" y1="557.0" x2="1129.6" y2="557.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="1126.3" y1="561.3" x2="1127.3" y2="562.3" stroke="#000091" stroke-width="0.8"/>
+<line x1="1122.0" y1="563.1" x2="1122.0" y2="564.6" stroke="#000091" stroke-width="0.8"/>
+<line x1="1117.7" y1="561.3" x2="1116.7" y2="562.3" stroke="#000091" stroke-width="0.8"/>
+<line x1="1115.9" y1="557.0" x2="1114.4" y2="557.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="1117.7" y1="552.7" x2="1116.7" y2="551.7" stroke="#000091" stroke-width="0.8"/>
+<line x1="1122.0" y1="550.9" x2="1122.0" y2="549.4" stroke="#000091" stroke-width="0.8"/>
+<line x1="1126.3" y1="552.7" x2="1127.3" y2="551.7" stroke="#000091" stroke-width="0.8"/>
+<path d="M1122.0 554.5 L1122.8 556.2 L1124.5 557.0 L1122.8 557.8 L1122.0 559.5 L1121.2 557.8 L1119.5 557.0 L1121.2 556.2 Z" fill="#000091"/>
 <text x="1122" y="579" class="badgelbl" text-anchor="middle">R + N</text>
 <rect x="1155" y="560" width="205" height="160" fill="#ffffff" stroke="#161616" stroke-width="1"/>
 <rect x="1155" y="560" width="205" height="4" fill="#000091"/>
-<text x="1169" y="588" class="cardtitle sm">Education</text>
-<text x="1169" y="606" class="mono">education MIS</text>
+<text x="1169" y="588" class="cardtitle sm">Education service</text>
+<text x="1169" y="606" class="mono">student portal</text>
 <line x1="1169" y1="618" x2="1346" y2="618" stroke="#e5e5e5" stroke-width="1"/>
 <rect x="1197.0" y="631.0" width="121" height="22" fill="#ffffff" stroke="#000091" stroke-width="1"/>
-<text x="1257.5" y="646" class="tag" fill="#000091" text-anchor="middle">VIA RELAY</text>
+<text x="1257.5" y="646" class="tag" fill="#000091" text-anchor="middle">SOURCE-FREE</text>
 <circle cx="1173" cy="672" r="2" fill="#000091"/>
-<text x="1183" y="676" class="bsm">School enrolment</text>
+<text x="1183" y="676" class="bsm">Subject declaration</text>
 <circle cx="1173" cy="691" r="2" fill="#000091"/>
-<text x="1183" y="695" class="bsm">Attendance record</text>
+<text x="1183" y="695" class="bsm">Consent-bound assertion</text>
 <rect x="1316" y="542" width="58" height="44" fill="#ffffff" stroke="#161616" stroke-width="1"/>
-<circle cx="1345.0" cy="557" r="8.1" fill="none" stroke="#9d2c1d" stroke-width="1.3"/>
-<circle cx="1345.0" cy="557" r="5.6" fill="none" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1351.1" y1="557.0" x2="1352.6" y2="557.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1349.3" y1="561.3" x2="1350.3" y2="562.3" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1345.0" y1="563.1" x2="1345.0" y2="564.6" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1340.7" y1="561.3" x2="1339.7" y2="562.3" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1338.9" y1="557.0" x2="1337.4" y2="557.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1340.7" y1="552.7" x2="1339.7" y2="551.7" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1345.0" y1="550.9" x2="1345.0" y2="549.4" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="1349.3" y1="552.7" x2="1350.3" y2="551.7" stroke="#9d2c1d" stroke-width="0.8"/>
-<path d="M1345.0 554.5 L1345.8 556.2 L1347.5 557.0 L1345.8 557.8 L1345.0 559.5 L1344.2 557.8 L1342.5 557.0 L1344.2 556.2 Z" fill="#9d2c1d"/>
-<text x="1345" y="579" class="badgelbl" text-anchor="middle">R + N</text>
+<circle cx="1345.0" cy="557" r="8.1" fill="none" stroke="#000091" stroke-width="1.3"/>
+<circle cx="1345.0" cy="557" r="5.6" fill="none" stroke="#000091" stroke-width="0.8"/>
+<line x1="1351.1" y1="557.0" x2="1352.6" y2="557.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="1349.3" y1="561.3" x2="1350.3" y2="562.3" stroke="#000091" stroke-width="0.8"/>
+<line x1="1345.0" y1="563.1" x2="1345.0" y2="564.6" stroke="#000091" stroke-width="0.8"/>
+<line x1="1340.7" y1="561.3" x2="1339.7" y2="562.3" stroke="#000091" stroke-width="0.8"/>
+<line x1="1338.9" y1="557.0" x2="1337.4" y2="557.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="1340.7" y1="552.7" x2="1339.7" y2="551.7" stroke="#000091" stroke-width="0.8"/>
+<line x1="1345.0" y1="550.9" x2="1345.0" y2="549.4" stroke="#000091" stroke-width="0.8"/>
+<line x1="1349.3" y1="552.7" x2="1350.3" y2="551.7" stroke="#000091" stroke-width="0.8"/>
+<path d="M1345.0 554.5 L1345.8 556.2 L1347.5 557.0 L1345.8 557.8 L1345.0 559.5 L1344.2 557.8 L1342.5 557.0 L1344.2 556.2 Z" fill="#000091"/>
+<text x="1345" y="579" class="badgelbl" text-anchor="middle">NOTARY</text>
 <rect x="730" y="180" width="300" height="140" fill="#ffffff" stroke="#161616" stroke-width="1"/>
 <rect x="730" y="180" width="4" height="140" fill="#000091"/>
 <text x="746" y="208" class="cardtitle">Social Protection MIS</text>
@@ -213,36 +213,36 @@
 <text x="746" y="278" class="b">Combines attestations with its own data.</text>
 <text x="746" y="302" class="bblue">Owns the eligibility decision.</text>
 <text x="56" y="186" class="eyebrow">HOW TO READ IT</text>
-<text x="56" y="216" class="minihead">Each registry keeps Relay and Notary.</text>
-<text x="56" y="236" class="b">It shares the claim, not the row.</text>
-<text x="56" y="266" class="minihead">From a Notary</text>
-<text x="164" y="266" class="b">pull a signed,</text>
-<text x="164" y="284" class="b">minimized attestation.</text>
+<text x="56" y="216" class="minihead">Choose Relay, Notary, or both.</text>
+<text x="56" y="236" class="b">Combined: typed outputs become claims.</text>
+<text x="56" y="266" class="minihead">Notary only</text>
+<text x="164" y="266" class="b">uses source-free or</text>
+<text x="164" y="284" class="b">self-attested inputs.</text>
 <text x="56" y="314" class="minihead">Its own data</text>
 <text x="164" y="314" class="b">a system reads the</text>
 <text x="164" y="332" class="b">registry it owns directly.</text>
-<text x="56" y="368" class="bmut">A shared Notary can serve many relying parties.</text>
-<text x="56" y="384" class="bmut">Federated: no central broker.</text>
+<text x="56" y="368" class="bmut">Relay keeps source credentials private.</text>
+<text x="56" y="384" class="bmut">No product-specific source executor.</text>
 <text x="40" y="760" class="eyebrow">LEGEND</text>
 <rect x="40" y="778" width="30" height="16" fill="#000091"/>
 <text x="80" y="793" class="leg">DCI-native (OpenCRVS, OpenSPP)</text>
 <rect x="370" y="778" width="30" height="16" fill="#ffffff" stroke="#000091" stroke-width="1"/>
-<text x="410" y="793" class="leg">Via Relay: reviewed snapshot, bounded HTTP (including DHIS2), DCI, or FHIR integration</text>
-<circle cx="52" cy="818" r="10.4" fill="none" stroke="#9d2c1d" stroke-width="1.3"/>
-<circle cx="52" cy="818" r="7.2" fill="none" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="59.7" y1="818.0" x2="61.9" y2="818.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="57.4" y1="823.4" x2="59.0" y2="825.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="52.0" y1="825.7" x2="52.0" y2="827.9" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="46.6" y1="823.4" x2="45.0" y2="825.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="44.3" y1="818.0" x2="42.1" y2="818.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="46.6" y1="812.6" x2="45.0" y2="811.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="52.0" y1="810.3" x2="52.0" y2="808.1" stroke="#9d2c1d" stroke-width="0.8"/>
-<line x1="57.4" y1="812.6" x2="59.0" y2="811.0" stroke="#9d2c1d" stroke-width="0.8"/>
-<path d="M52.0 814.8 L53.0 817.0 L55.2 818.0 L53.0 819.0 L52.0 821.2 L51.0 819.0 L48.8 818.0 L51.0 817.0 Z" fill="#9d2c1d"/>
-<text x="74" y="823" class="leg">Relay + Notary: source credentials stay private</text>
+<text x="410" y="793" class="leg">Via Relay: reviewed snapshot, HTTP, DCI, FHIR, or Rhai script integration</text>
+<circle cx="52" cy="818" r="10.4" fill="none" stroke="#000091" stroke-width="1.3"/>
+<circle cx="52" cy="818" r="7.2" fill="none" stroke="#000091" stroke-width="0.8"/>
+<line x1="59.7" y1="818.0" x2="61.9" y2="818.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="57.4" y1="823.4" x2="59.0" y2="825.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="52.0" y1="825.7" x2="52.0" y2="827.9" stroke="#000091" stroke-width="0.8"/>
+<line x1="46.6" y1="823.4" x2="45.0" y2="825.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="44.3" y1="818.0" x2="42.1" y2="818.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="46.6" y1="812.6" x2="45.0" y2="811.0" stroke="#000091" stroke-width="0.8"/>
+<line x1="52.0" y1="810.3" x2="52.0" y2="808.1" stroke="#000091" stroke-width="0.8"/>
+<line x1="57.4" y1="812.6" x2="59.0" y2="811.0" stroke="#000091" stroke-width="0.8"/>
+<path d="M52.0 814.8 L53.0 817.0 L55.2 818.0 L53.0 819.0 L52.0 821.2 L51.0 819.0 L48.8 818.0 L51.0 817.0 Z" fill="#000091"/>
+<text x="74" y="823" class="leg">Badge: Relay only, Notary only, or combined</text>
 <line x1="390" y1="815" x2="409.0" y2="815.0" stroke="#000091" stroke-width="1.4"/>
 <polygon points="420.0,815.0 409.0,810.0 409.0,820.0" fill="#000091"/>
-<text x="430" y="823" class="leg">Attestation (crosses domains)</text>
+<text x="430" y="823" class="leg">Governed output or claim (crosses domains)</text>
 <line x1="720" y1="815" x2="739.0" y2="815.0" stroke="#161616" stroke-width="1.4" stroke-dasharray="6 4"/>
 <polygon points="750.0,815.0 739.0,810.0 739.0,820.0" fill="#161616"/>
 <text x="760" y="823" class="leg">Direct read of its own registry</text>

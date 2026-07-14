@@ -159,13 +159,43 @@ with approved project values:
    necessary by fixtures.
 3. In `integrations/person-record/fixtures/`, replace the synthetic interactions and expected
    outputs and claims. Each fixture proves the canonical request as well as the response.
-4. In `environments/local.yaml`, bind the source version, non-production destination, secret
+4. In `environments/local.yaml`, bind the non-production source destination, secret
    references, caller fingerprints, Relay trust, and deployment services.
 
 The integration fixes the method, path, input placement, minimized output fields, and bounds before
 deployment. The environment binds the one logical source origin and credentials.
 Consultation inputs can populate only declared request values.
 They cannot select an origin, method, credential, capability, projection, or response mapper.
+
+## Add another integration
+
+An existing project can add another protocol view over the same logical source without starting a
+second project or copying generated product configuration. Use a stable integration id such as
+`benefit-record`, then add these authored files and references:
+
+1. Create `integrations/benefit-record/integration.yaml` and
+   `integrations/benefit-record/fixtures/`. Add `adapter.rhai` and any reviewed local modules only
+   when the integration uses `capability.script`.
+2. Add `integrations.benefit-record.file: integrations/benefit-record/integration.yaml` to
+   `registry-stack.yaml`.
+3. Under the consuming evidence service, add a consultation with
+   `integration: benefit-record` and bind every integration input to one typed request path. Add
+   claims that select or derive from that consultation's declared outputs.
+4. Add `integrations.benefit-record.source` to `environments/local.yaml` with its
+   non-production origin, credential reference, and generation. Do not put credential values in
+   the project files.
+
+Run the new fixture first, then the complete offline and generated-config gates:
+
+```sh
+registryctl test --project-dir . --integration benefit-record --fixture <fixture-name> --trace
+registryctl test --project-dir .
+registryctl check --project-dir . --environment local --explain
+registryctl build --project-dir . --environment local
+```
+
+The project model allows multiple integrations only when they are reviewed views over the same
+logical source trust domain. Start a separate project for an independent registry authority.
 
 Use `source.product` as review metadata for the source system.
 It does not select a product executor or runtime capability.

@@ -40,22 +40,28 @@ For how the registry family relates to the wider ecosystem, see the
 
 At country scale, the same pattern can sit next to several domain platforms.
 Clinical health systems can expose bounded outputs through a reviewed FHIR integration,
-public-health program systems such as DHIS2 can use Relay's generic HTTP or script capability, and
-social protection, agriculture, education, and civil
-registration systems can keep their own authoritative stores.
-Relay keeps source credentials and returns only reviewed typed outputs. Registry Notary instances
-turn those outputs into configured claims for consuming systems such as a social-protection
-management information system without turning those consumers into raw-record readers.
+public-health program systems such as DHIS2 can use Relay's product-neutral, reviewed Rhai script
+capability, and social protection, agriculture, education, and civil registration systems can keep
+their own authoritative stores.
+A Registry Stack project can deploy Relay only, Notary only, or both products.
+Relay-only projects expose governed source capabilities. Notary-only projects evaluate source-free
+or self-attested claims. In a combined project, Relay keeps source credentials and returns only
+reviewed typed consultation outputs for Notary to turn into configured claims. Consuming systems
+such as a social-protection management information system do not become raw-record readers.
+
+{/* Evidence: crates/registryctl/tests/project_authoring.rs,
+    project_authoring_schemas_reject_incoherent_product_topologies and
+    relay_only_and_notary_only_projects_emit_only_selected_products. */}
 
 {/* SVG diagram. Essential labels are restated in the paragraph before the figure. */}
 <figure>
   <img src="../../images/registry-country-evidence-mesh.svg"
        alt="Country evidence mesh: civil registration, clinical health over FHIR API,
-            public health through DHIS2 via a bounded Relay integration, social protection, agriculture, and
-            education registries each keep their source systems. Registry Relay and Notary add-ons
-            return signed minimized attestations to a social protection MIS, which owns the
-            eligibility decision and reads the social registry it owns directly.
-            The consuming system receives claims, not full source rows." />
+            public health through DHIS2 via a reviewed Rhai script, social protection, agriculture,
+            and education systems keep their source data. Registry Stack projects can deploy Relay
+            only, source-free Notary only, or both. Relay returns governed typed outputs, combined
+            projects turn consultation outputs into minimized claims, and the social protection MIS
+            owns the eligibility decision and reads the registry it owns directly." />
 </figure>
 
 ## Domain registry platforms
