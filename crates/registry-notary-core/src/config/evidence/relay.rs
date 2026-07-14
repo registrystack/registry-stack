@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::path::{Component, Path};
+use std::path::Path;
 
 use ipnet::IpNet;
 
@@ -136,14 +136,16 @@ fn valid_token_file(path: &Path) -> bool {
     };
     !text.is_empty()
         && text.len() <= MAX_RELAY_TOKEN_FILE_BYTES
-        && path.is_absolute()
-        && path.file_name().is_some()
-        && path.components().all(|component| {
-            matches!(
-                component,
-                Component::Prefix(_) | Component::RootDir | Component::Normal(_)
-            )
-        })
+        && text.starts_with('/')
+        && text != "/"
+        && !text.starts_with("//")
+        && !text.ends_with('/')
+        && !text.contains('\\')
+        && !text.bytes().any(|byte| byte.is_ascii_control())
+        && !text
+            .split('/')
+            .skip(1)
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
 }
 
 fn validate_private_cidrs(cidrs: &[IpNet]) -> Result<(), EvidenceConfigError> {

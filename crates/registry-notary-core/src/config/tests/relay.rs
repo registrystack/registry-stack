@@ -645,9 +645,17 @@ retry_on_5xx: true
 
 #[test]
 fn relay_token_file_and_private_cidrs_are_exact_and_bounded() {
+    relay_connection()
+        .validate()
+        .expect("target POSIX token path is valid on every configuration host");
     for token_file in [
         PathBuf::from("relative/relay.jwt"),
         PathBuf::from("/run/secrets/../relay.jwt"),
+        PathBuf::from("/run/./secrets/relay.jwt"),
+        PathBuf::from("//run/secrets/relay.jwt"),
+        PathBuf::from("/run/secrets/relay.jwt/"),
+        PathBuf::from("/run\\secrets\\relay.jwt"),
+        PathBuf::from("C:\\run\\secrets\\relay.jwt"),
         PathBuf::from("/"),
     ] {
         let mut relay = relay_connection();
