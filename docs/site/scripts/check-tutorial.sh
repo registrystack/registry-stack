@@ -206,7 +206,7 @@ done
 require_literal() {
 	local page="$1"
 	local literal="$2"
-	if ! rg -Fq -- "$literal" "$page"; then
+	if ! grep -Fq -- "$literal" "$page"; then
 		printf 'project-authoring tutorial drift: %s is missing %s\n' "$page" "$literal" >&2
 		exit 1
 	fi
