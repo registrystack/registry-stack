@@ -73,10 +73,6 @@
   "notary": {
     "claim_count": 6,
     "credential_profile_count": 2,
-    "source_connection_counts": {
-      "http": 2,
-      "postgres": 1
-    },
     "replay": {
       "storage": "redis",
       "ready": true

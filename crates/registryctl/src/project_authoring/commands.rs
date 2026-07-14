@@ -513,7 +513,7 @@ fn validate_live_response(
         }
         if result
             .get("provenance")
-            .and_then(|value| value.pointer("/used/source_count"))
+            .and_then(|value| value.pointer("/used/relay_consultation_count"))
             .and_then(Value::as_u64)
             .is_none_or(|count| count == 0)
         {

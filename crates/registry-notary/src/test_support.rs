@@ -186,5 +186,5 @@ evidence:
       formats:
         - application/vnd.registry-notary.claim-result+json
 "#;
-    serde_norway::from_str::<StandaloneRegistryNotaryConfig>(&raw).expect("config parses")
+    serde_norway::from_str::<StandaloneRegistryNotaryConfig>(raw).expect("config parses")
 }

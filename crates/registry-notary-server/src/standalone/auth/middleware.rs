@@ -270,7 +270,7 @@ pub(in super::super) fn build_audit_event(
     let claim_hash = audit.and_then(|context| context.claim_hash.clone());
     let purposes = audit.and_then(|context| context.purposes.clone());
     let row_count = audit.and_then(|context| context.row_count);
-    let source_read_count = audit.and_then(|context| context.source_read_count);
+    let relay_consultation_count = audit.and_then(|context| context.relay_consultation_count);
     let relay_consultation_ids = audit
         .map(|context| context.relay_consultation_ids.clone())
         .unwrap_or_default();
@@ -322,7 +322,7 @@ pub(in super::super) fn build_audit_event(
         claim_hash,
         purposes,
         row_count,
-        source_read_count,
+        relay_consultation_count,
         relay_consultation_ids,
         forwarded,
         error_code,

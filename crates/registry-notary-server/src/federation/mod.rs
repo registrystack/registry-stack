@@ -31,8 +31,8 @@ use crate::{api::RegistryNotaryApiState, replay::require_replay_insert};
 
 use audit::{federation_audit_event, FederationAuditContext, FederationDeniedOutcome};
 use claims::{
-    decode_unverified_jwt_payload, request_subject, request_subject_identifier,
-    source_observation_is_stale, string_claim, string_extra, validate_federation_claims,
+    claim_result_is_stale, decode_unverified_jwt_payload, request_subject,
+    request_subject_identifier, string_claim, string_extra, validate_federation_claims,
 };
 use errors::{apply_denial_latency, federation_problem_response, FederationProblem};
 pub(crate) use runtime::FederationRuntimeState;
@@ -259,7 +259,7 @@ async fn handle_federated_evaluate(
     let evaluation_capability = EvaluationCapability::Machine {
         scopes: peer
             .config
-            .source_scopes
+            .evaluation_scopes
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>(),
@@ -311,7 +311,7 @@ async fn handle_federated_evaluate(
         )
         .await
         .map_err(|error| audit_context.denied(FederationProblem::from_evidence_error(error)))?;
-    if source_observation_is_stale(profile, &results) {
+    if claim_result_is_stale(profile, &results) {
         return Ok(FederationSignedOutcome::evaluation_error(
             &state.federation,
             &peer.config,
@@ -320,8 +320,8 @@ async fn handle_federated_evaluate(
             &purpose,
             &request_jti,
             subject_hash,
-            "urn:registry-notary:problem:federation:stale-source-observation",
-            "Source observation is stale",
+            "urn:registry-notary:problem:federation:stale-claim-result",
+            "Claim result is stale",
         ));
     }
     Ok(FederationSignedOutcome::success(
@@ -411,7 +411,7 @@ fn federation_principal(
     EvidencePrincipal {
         auth_profile_id: EvidenceAuthProfileId::Federation,
         principal_id: peer.node_id.clone(),
-        scopes: peer.source_scopes.clone(),
+        scopes: peer.evaluation_scopes.clone(),
         access_mode: AccessMode::MachineClient,
         verified_claims: None,
         authorization_details: federation_authorization_details(profile),
@@ -507,7 +507,7 @@ mod tests {
         let peer = FederationPeerConfig {
             node_id: "did:web:agency-b.example.gov".to_string(),
             issuer: "https://agency-b.example.gov".to_string(),
-            source_scopes: vec!["farmer_registry:evidence_verification".to_string()],
+            evaluation_scopes: vec!["farmer_registry:evidence_verification".to_string()],
             ..FederationPeerConfig::default()
         };
         let profile = FederationEvaluationProfileConfig {
@@ -524,8 +524,8 @@ mod tests {
             "https://purpose.example.test/eligibility",
             request_jti,
             "hmac-sha256:subject".to_string(),
-            "urn:registry-notary:problem:federation:stale-source-observation",
-            "Source observation is stale",
+            "urn:registry-notary:problem:federation:stale-claim-result",
+            "Claim result is stale",
         );
         let attempts = Arc::new(AtomicUsize::new(0));
         let signer = FederationResponseSigner {
@@ -619,7 +619,7 @@ mod tests {
     fn federation_principal_uses_stable_federation_profile() {
         let peer = FederationPeerConfig {
             node_id: "did:web:agency-b.example.gov".to_string(),
-            source_scopes: vec!["farmer_registry:evidence_verification".to_string()],
+            evaluation_scopes: vec!["farmer_registry:evidence_verification".to_string()],
             ..FederationPeerConfig::default()
         };
         let profile = FederationEvaluationProfileConfig::default();
@@ -628,7 +628,7 @@ mod tests {
 
         assert_eq!(principal.auth_profile_id, EvidenceAuthProfileId::Federation);
         assert_eq!(principal.principal_id, peer.node_id);
-        assert_eq!(principal.scopes, peer.source_scopes);
+        assert_eq!(principal.scopes, peer.evaluation_scopes);
     }
 
     #[test]

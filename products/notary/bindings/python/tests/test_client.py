@@ -516,7 +516,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
                     },
                     None,
                 ),
-                (503, {"code": "source.unavailable", "title": "Source unavailable"}, None),
+                (503, {"code": "evidence.not_available", "title": "Evidence not available"}, None),
                 (200, {"batch_id": "batch-1", "status": "completed"}, None),
                 (200, {"keys": [{"kid": "key-1"}]}, None),
                 (200, {"credential_id": "cred-1"}, None),
@@ -582,7 +582,7 @@ class RegistryNotaryClientTests(unittest.TestCase):
         stable_codes = [
             "target.not_found",
             "target.match_ambiguous",
-            "source.unavailable",
+            "evidence.not_available",
             "claim.not_found",
             "claim.version_not_found",
             "claim.format_not_supported",

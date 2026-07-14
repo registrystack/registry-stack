@@ -1327,10 +1327,10 @@ async fn retry_after_then_claims_handler(State(counter): State<Arc<AtomicUsize>>
             [("retry-after", "0")],
             Json(json!({
                 "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable",
-                "title": "Source unavailable",
+                "title": "Evidence not available",
                 "status": 503,
-                "detail": "source unavailable",
-                "code": "source.unavailable"
+                "detail": "evidence not available",
+                "code": "evidence.not_available"
             })),
         )
             .into_response();
@@ -1351,10 +1351,10 @@ async fn retry_after_http_date_then_claims_handler(
             ],
             Json(json!({
                 "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable",
-                "title": "Source unavailable",
+                "title": "Evidence not available",
                 "status": 503,
-                "detail": "source unavailable",
-                "code": "source.unavailable"
+                "detail": "evidence not available",
+                "code": "evidence.not_available"
             })),
         )
             .into_response();
@@ -1435,10 +1435,10 @@ fn problem(status: StatusCode) -> Response {
         [("content-type", "application/problem+json")],
         Json(json!({
             "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable",
-            "title": "Source unavailable",
+            "title": "Evidence not available",
             "status": status.as_u16(),
-            "detail": "the source registry is unavailable",
-            "code": "source.unavailable"
+            "detail": "the requested evidence is unavailable",
+            "code": "evidence.not_available"
         })),
     )
         .into_response()

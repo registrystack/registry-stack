@@ -52,7 +52,7 @@ impl FederationSignedOutcome {
                 }),
             );
         }
-        let source_observed_at = results.first().map(|result| result.issued_at.clone());
+        let claim_result_issued_at = results.first().map(|result| result.issued_at.clone());
         let subject_ref_hash = subject_hash;
         let body = federation_base_response_claims(
             federation,
@@ -68,7 +68,7 @@ impl FederationSignedOutcome {
                     "hash": subject_ref_hash.clone(),
                     "id_type": subject_id_type,
                 },
-                "source_observed_at": source_observed_at,
+                "claim_result_issued_at": claim_result_issued_at,
                 "claims": Value::Object(claims),
             }),
         );
@@ -78,7 +78,7 @@ impl FederationSignedOutcome {
                 decision: "federated_evaluate".to_string(),
                 verification_id: Some(evaluation_id),
                 claim_ids: vec![profile.claim_id.clone()],
-                scopes_used: peer.source_scopes.clone(),
+                scopes_used: peer.evaluation_scopes.clone(),
                 error_code: None,
                 peer_node_id: Some(peer.node_id.clone()),
                 issuer: Some(peer.issuer.clone()),
@@ -114,7 +114,7 @@ impl FederationSignedOutcome {
             json!({
                 "type": error_type,
                 "title": title,
-                "code": "federation.stale_source_observation",
+                "code": "federation.stale_claim_result",
             }),
         );
         Self {
@@ -123,8 +123,8 @@ impl FederationSignedOutcome {
                 decision: "federated_evaluate_error".to_string(),
                 verification_id: None,
                 claim_ids: vec![profile.claim_id.clone()],
-                scopes_used: peer.source_scopes.clone(),
-                error_code: Some("federation.stale_source_observation".to_string()),
+                scopes_used: peer.evaluation_scopes.clone(),
+                error_code: Some("federation.stale_claim_result".to_string()),
                 peer_node_id: Some(peer.node_id.clone()),
                 issuer: Some(peer.issuer.clone()),
                 profile: Some(profile.id.clone()),

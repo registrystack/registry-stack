@@ -78,9 +78,9 @@ fn registry_backed_api_evidence() -> EvidenceConfig {
     claim.required_scopes = vec!["registry:evidence".to_string()];
     claim.value.value_type = "string".to_string();
     claim.value.nullable = true;
-    claim.rule = registry_notary_core::RuleConfig::Extract {
-        source: "enrollment".to_string(),
-        field: "registration_status".to_string(),
+    claim.rule = registry_notary_core::RuleConfig::ConsultationOutput {
+        consultation: "enrollment".to_string(),
+        output: "registration_status".to_string(),
     };
     evidence
 }
@@ -181,7 +181,7 @@ async fn ambiguous_relay_response_keeps_ids_only_in_restricted_audit_context() {
     assert!(ulid::Ulid::from_string(&evaluation_id).is_ok());
     let consultation_id = ulid::Ulid::from_parts(2, 1).to_string();
     assert_eq!(audit.relay_consultation_ids, vec![consultation_id.clone()]);
-    assert_eq!(audit.source_read_count, Some(1));
+    assert_eq!(audit.relay_consultation_count, Some(1));
     assert_eq!(audit.forwarded, Some(true));
     let audit_debug = format!("{audit:?}");
     assert!(!audit_debug.contains(&evaluation_id));

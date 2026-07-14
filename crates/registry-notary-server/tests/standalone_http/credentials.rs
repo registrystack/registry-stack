@@ -188,7 +188,7 @@ pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_red
         assert_eq!(denied["decision"], json!("credential_denied"), "{name}");
         assert_eq!(denied["status"], json!(status.as_u16()), "{name}");
         assert_eq!(denied["error_code"], json!(audit_code), "{name}");
-        assert_eq!(denied["source_read_count"], json!(0), "{name}");
+        assert_eq!(denied["relay_consultation_count"], json!(0), "{name}");
         assert_eq!(denied["forwarded"], json!(false), "{name}");
         match denial_code {
             Some(denial_code) => assert_eq!(denied["denial_code"], json!(denial_code), "{name}"),
@@ -475,7 +475,7 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
     assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
     assert_eq!(denied["credential_profile"], json!("civil_status_sd_jwt"));
     assert_eq!(denied["holder_binding_mode"], json!("did"));
-    assert_eq!(denied["source_read_count"], json!(0));
+    assert_eq!(denied["relay_consultation_count"], json!(0));
     assert_eq!(denied["forwarded"], json!(false));
     for field in [
         "credential",
@@ -628,7 +628,7 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
         assurance_denied["denial_code"],
         json!("self_attestation.assurance_denied")
     );
-    assert_eq!(assurance_denied["source_read_count"], json!(0));
+    assert_eq!(assurance_denied["relay_consultation_count"], json!(0));
     assert_eq!(assurance_denied["forwarded"], json!(false));
     assert!(!records.iter().any(|record| {
         record["path"] == json!("/v1/credentials")
@@ -725,7 +725,7 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
     assert!(denied["claim_hash"].as_str().is_some());
     assert_eq!(denied["target_type"], json!("Person"));
     assert!(denied["target_ref_hash"].as_str().is_some());
-    assert_eq!(denied["source_read_count"], json!(0));
+    assert_eq!(denied["relay_consultation_count"], json!(0));
     assert_eq!(denied["forwarded"], json!(false));
     for field in [
         "credential",
@@ -886,7 +886,7 @@ pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacte
     assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
     assert_eq!(denied["credential_profile"], json!("civil_status_sd_jwt"));
     assert_eq!(denied["holder_binding_mode"], json!("did"));
-    assert_eq!(denied["source_read_count"], json!(0));
+    assert_eq!(denied["relay_consultation_count"], json!(0));
     assert_eq!(denied["forwarded"], json!(false));
     assert!(denied.get("principal_id").is_none());
     assert!(denied["principal_id_hash"]
@@ -1030,7 +1030,7 @@ pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_bound
     assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
     assert_eq!(denied["credential_profile"], json!("civil_status_sd_jwt"));
     assert_eq!(denied["holder_binding_mode"], json!("did"));
-    assert_eq!(denied["source_read_count"], json!(0));
+    assert_eq!(denied["relay_consultation_count"], json!(0));
     assert_eq!(denied["forwarded"], json!(false));
     assert!(denied.get("principal_id").is_none());
     assert!(denied["principal_id_hash"]
@@ -1157,7 +1157,7 @@ pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_red
     );
     assert_eq!(denied["access_mode"], json!("self_attestation"));
     assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
-    assert_eq!(denied["source_read_count"], json!(0));
+    assert_eq!(denied["relay_consultation_count"], json!(0));
     assert_eq!(denied["forwarded"], json!(false));
     assert!(denied.get("principal_id").is_none());
     assert!(denied["principal_id_hash"]
@@ -1346,7 +1346,7 @@ pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted()
         );
         assert_eq!(denied["access_mode"], json!("self_attestation"));
         assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
-        assert_eq!(denied["source_read_count"], json!(0));
+        assert_eq!(denied["relay_consultation_count"], json!(0));
         assert_eq!(denied["forwarded"], json!(false));
         assert!(denied.get("principal_id").is_none());
         assert!(denied["principal_id_hash"]

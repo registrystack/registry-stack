@@ -65,8 +65,8 @@
     fn claim_summary_advertises_safe_target_inputs_from_relay_consultation() {
         let mut claim = registry_claim(
             "birth-record-exists",
-            RuleConfig::Exists {
-                source: "enrollment".to_string(),
+            RuleConfig::ConsultationMatched {
+                consultation: "enrollment".to_string(),
             },
             "boolean",
         );
@@ -262,7 +262,7 @@
     }
 
     #[test]
-    fn claim_summary_exposes_claim_and_extract_field_semantics() {
+    fn claim_summary_exposes_claim_and_consultation_output_semantics() {
         let mut claim = test_claim("date-of-birth", Vec::new(), true);
         claim.semantics = Some(registry_notary_core::ClaimSemanticConfig {
             concept: Some("https://publicschema.org/Person".to_string()),

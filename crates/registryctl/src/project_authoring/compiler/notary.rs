@@ -355,7 +355,11 @@ fn generated_notary_claim_rule(
             FactType::Presence => bail!("presence cannot be referenced as an output"),
         };
         let nullable = true;
-        let rule = json!({ "type": "extract", "source": notary_consultation_name, "field": fact_name });
+        let rule = json!({
+            "type": "consultation_output",
+            "consultation": notary_consultation_name,
+            "output": fact_name
+        });
         return Ok((value_type.to_string(), nullable, rule));
     }
     let expression = claim

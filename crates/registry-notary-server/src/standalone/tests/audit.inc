@@ -19,7 +19,7 @@
         let mut response = StatusCode::OK.into_response();
         response.extensions_mut().insert(EvidenceAuditContext {
             verification_decision: Some("evaluate".to_string()),
-            source_read_count: Some(1),
+            relay_consultation_count: Some(1),
             relay_consultation_ids: vec![consultation_id.clone()],
             forwarded: Some(true),
             ..EvidenceAuditContext::default()
@@ -36,7 +36,7 @@
         );
 
         assert_eq!(event.relay_consultation_ids, vec![consultation_id]);
-        assert_eq!(event.source_read_count, Some(1));
+        assert_eq!(event.relay_consultation_count, Some(1));
         assert_eq!(event.forwarded, Some(true));
     }
 
@@ -54,7 +54,7 @@
             claim_hash: None,
             purposes: None,
             row_count: None,
-            source_read_count: None,
+            relay_consultation_count: None,
             relay_consultation_ids: Vec::new(),
             forwarded: None,
             error_code: None,
@@ -114,7 +114,7 @@
             claim_hash: Some("sha256:claim-hash".to_string()),
             purposes: None,
             row_count: None,
-            source_read_count: None,
+            relay_consultation_count: None,
             relay_consultation_ids: Vec::new(),
             forwarded: None,
             access_mode: Some(AccessMode::SelfAttestation),

@@ -28,7 +28,7 @@ pub(super) struct FederationAuditContext {
 impl FederationAuditContext {
     pub(super) fn from_verified(peer: &FederationPeerConfig, verified: &VerifiedToken) -> Self {
         Self {
-            scopes_used: peer.source_scopes.clone(),
+            scopes_used: peer.evaluation_scopes.clone(),
             peer_node_id: Some(peer.node_id.clone()),
             issuer: Some(peer.issuer.clone()),
             profile: verified
@@ -151,7 +151,7 @@ pub(super) fn federation_audit_event(
         claim_hash: (!audit.claim_ids.is_empty()).then(|| evidence_claim_hash(&audit.claim_ids)),
         purposes: None,
         row_count: response.status().is_success().then_some(1),
-        source_read_count: None,
+        relay_consultation_count: None,
         relay_consultation_ids: Vec::new(),
         forwarded: None,
         error_code: audit.error_code,

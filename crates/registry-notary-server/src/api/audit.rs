@@ -34,7 +34,7 @@ pub(super) fn attach_evidence_audit_with_purposes(
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
         purposes,
         row_count,
-        source_read_count: row_count,
+        relay_consultation_count: None,
         forwarded: None,
         access_mode: None,
         denial_code: None,
@@ -54,9 +54,9 @@ pub(super) fn attach_evidence_audit_with_purposes(
     });
 }
 
-pub(super) fn attach_zero_source_no_forward_audit(response: &mut Response) {
+pub(super) fn attach_zero_relay_no_forward_audit(response: &mut Response) {
     if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
-        audit.source_read_count = Some(0);
+        audit.relay_consultation_count = Some(0);
         audit.forwarded = Some(false);
     }
 }
@@ -66,7 +66,7 @@ pub(super) fn attach_relay_consultation_audit(response: &mut Response, ids: Vec<
         return;
     }
     if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
-        audit.source_read_count = u64::try_from(ids.len()).ok();
+        audit.relay_consultation_count = u64::try_from(ids.len()).ok();
         audit.relay_consultation_ids = ids;
     }
 }
@@ -312,7 +312,7 @@ pub(super) fn credential_denial_response_without_evaluation(error: EvidenceError
     let denial_code = denial_code_from_error(&error);
     let mut response = evidence_error_response(error);
     attach_evidence_audit(&mut response, "credential_denied", None, &[], None);
-    attach_zero_source_no_forward_audit(&mut response);
+    attach_zero_relay_no_forward_audit(&mut response);
     if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
         audit.denial_code = denial_code;
     }
@@ -357,7 +357,7 @@ pub(super) fn credential_denial_response_for_evaluation(
             }
         }
     }
-    attach_zero_source_no_forward_audit(&mut response);
+    attach_zero_relay_no_forward_audit(&mut response);
     if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
         audit.denial_code = denial_code;
     }

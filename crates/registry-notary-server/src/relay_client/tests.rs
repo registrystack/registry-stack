@@ -749,8 +749,8 @@ evidence:
       purpose: {PURPOSE}
       required_scopes: [registry:evidence:dhis2-enrollment-status]
       rule:
-        type: exists
-        source: enrollment
+        type: consultation_matched
+        consultation: enrollment
       disclosure:
         default: value
         allowed: [value, redacted]
@@ -776,9 +776,9 @@ evidence:
       purpose: {PURPOSE}
       required_scopes: [registry:evidence:dhis2-enrollment-status]
       rule:
-        type: extract
-        source: enrollment
-        field: {OUTPUT_NAME}
+        type: consultation_output
+        consultation: enrollment
+        output: {OUTPUT_NAME}
       disclosure:
         default: value
         allowed: [value, redacted]
@@ -843,7 +843,7 @@ async fn assembled_notary_relay_journey_activates_and_coalesces_two_claims() {
     assert_eq!(status["value"], json!("ACTIVE"));
     assert!(results
         .iter()
-        .all(|result| result["provenance"]["used"]["source_count"] == json!(1)));
+        .all(|result| result["provenance"]["used"]["relay_consultation_count"] == json!(1)));
     let evaluation_id = results[0]["evaluation_id"]
         .as_str()
         .expect("public Notary evaluation id is present");
@@ -881,7 +881,7 @@ async fn assembled_notary_relay_journey_activates_and_coalesces_two_claims() {
         audit_record["relay_consultation_ids"],
         json!([CONSULTATION_ID])
     );
-    assert_eq!(audit_record["source_read_count"], json!(1));
+    assert_eq!(audit_record["relay_consultation_count"], json!(1));
     assert_eq!(audit_record["forwarded"], json!(true));
 
     drop(notary);

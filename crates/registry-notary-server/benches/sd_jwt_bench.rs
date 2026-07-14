@@ -9,7 +9,6 @@
 //! All `issue` benches use holder_binding.mode = "none", holder_id = None,
 //! and a fixed iat (OffsetDateTime::UNIX_EPOCH) to avoid wall-clock noise.
 
-use std::collections::BTreeMap;
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
@@ -82,8 +81,7 @@ fn claim_result(claim_id: &str, value: serde_json::Value) -> ClaimResultView {
             "claim".to_string(),
             "1".to_string(),
             registry_notary_core::ProvenanceUsed {
-                source_count: 1,
-                source_versions: BTreeMap::new(),
+                relay_consultation_count: 1,
             },
         ),
     }

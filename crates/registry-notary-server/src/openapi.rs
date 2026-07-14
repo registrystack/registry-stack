@@ -608,7 +608,7 @@ fn build_openapi_document() -> Value {
                         "406": { "description": "Requested format is not acceptable" },
                         "413": { "description": "Request body or batch is too large" },
                         "429": { "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded" },
-                        "503": { "description": "Source service is unavailable" }
+                        "503": { "description": "Required Relay consultation or operational dependency is unavailable" }
                     }
                 }
             },
@@ -647,7 +647,7 @@ fn build_openapi_document() -> Value {
                         "409": { "description": "Request replay detected" },
                         "413": { "description": "Request body is too large" },
                         "415": { "description": "Content type is not application/jwt" },
-                        "503": { "description": "Source service or peer key service is unavailable" }
+                        "503": { "description": "An operational dependency required for a fail-closed response is unavailable" }
                     }
                 }
             },
@@ -681,7 +681,7 @@ fn build_openapi_document() -> Value {
                         "409": { "description": "Idempotency key conflicts with another request body" },
                         "413": { "description": "Request body or batch is too large" },
                         "429": { "description": "Self-attestation request is rate limited, or the machine evaluation quota was exceeded" },
-                        "503": { "description": "Source service is unavailable" }
+                        "503": { "description": "Required Relay consultation or operational dependency is unavailable" }
                     }
                 }
             },
@@ -713,7 +713,7 @@ fn build_openapi_document() -> Value {
                         "406": { "description": "Requested format is not acceptable" },
                         "413": { "description": "Request body is too large" },
                         "429": { "description": "Self-attestation request is rate limited" },
-                        "503": { "description": "Source service is unavailable" }
+                        "503": { "description": "Required Relay consultation or operational dependency is unavailable" }
                     }
                 }
             },
@@ -738,7 +738,7 @@ fn build_openapi_document() -> Value {
                         "409": { "description": "Holder proof replay or Relay ambiguity conflict" },
                         "413": { "description": "Request body is too large" },
                         "429": { "description": "Self-attestation request is rate limited" },
-                        "503": { "description": "Source service is unavailable" }
+                        "503": { "description": "Required Relay consultation or operational dependency is unavailable" }
                     }
                 }
             },
@@ -2363,12 +2363,12 @@ fn batch_summary_schema() -> Value {
 fn claim_provenance_schema() -> Value {
     json!({
         "type": "object",
-        "description": "Versioned claim provenance (registry-notary-claim-provenance/v1). PROV-mappable but not PROV-O. Requester-side identity (client, actor, subject) is deliberately absent; it lives in restricted audit only.",
+        "description": "Versioned claim provenance (registry-notary-claim-provenance/v2). PROV-mappable but not PROV-O. Requester-side identity (client, actor, subject) is deliberately absent; it lives in restricted audit only.",
         "required": ["schema_version", "generated_by", "used", "derived_from"],
         "properties": {
             "schema_version": {
                 "type": "string",
-                "enum": ["registry-notary-claim-provenance/v1"]
+                "enum": ["registry-notary-claim-provenance/v2"]
             },
             "generated_by": { "$ref": "#/components/schemas/ProvenanceGeneratedBy" },
             "used": { "$ref": "#/components/schemas/ProvenanceUsed" },
@@ -2415,13 +2415,9 @@ fn provenance_generated_by_schema() -> Value {
 fn provenance_used_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["source_count", "source_versions"],
+        "required": ["relay_consultation_count"],
         "properties": {
-            "source_count": { "type": "integer", "minimum": 0 },
-            "source_versions": {
-                "type": "object",
-                "additionalProperties": { "type": "string" }
-            }
+            "relay_consultation_count": { "type": "integer", "minimum": 0 }
         },
         "additionalProperties": false
     })
@@ -2621,9 +2617,9 @@ fn add_runtime_problem_responses(
             ),
             "503" => (
                 503,
-                "source.unavailable",
-                "Source unavailable",
-                "the evidence source is unavailable",
+                "evidence.not_available",
+                "Evidence not available",
+                "the required evidence or operational dependency is unavailable",
             ),
             _ => continue,
         };
@@ -3660,7 +3656,7 @@ fn requester_ref_example() -> Value {
 
 fn provenance_example() -> Value {
     json!({
-        "schema_version": "registry-notary-claim-provenance/v1",
+        "schema_version": "registry-notary-claim-provenance/v2",
         "generated_by": {
             "type": "claim_evaluation",
             "service_id": "demo.registry-notary",
@@ -3672,8 +3668,7 @@ fn provenance_example() -> Value {
             "policy_hash": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
         },
         "used": {
-            "source_count": 1,
-            "source_versions": {}
+            "relay_consultation_count": 1
         },
         "derived_from": []
     })
@@ -3698,7 +3693,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn claim_provenance_schema_is_frozen_v1_contract() {
+    fn claim_provenance_schema_is_v2_relay_consultation_contract() {
         let doc = openapi_document();
         let schemas = &doc["components"]["schemas"];
 
@@ -3716,7 +3711,7 @@ mod tests {
         assert_eq!(provenance["additionalProperties"], json!(false));
         assert_eq!(
             provenance["properties"]["schema_version"]["enum"],
-            json!(["registry-notary-claim-provenance/v1"])
+            json!(["registry-notary-claim-provenance/v2"])
         );
 
         let generated_by = &schemas["ProvenanceGeneratedBy"];
@@ -3737,7 +3732,7 @@ mod tests {
             .iter()
             .map(|value| value.as_str().expect("string"))
             .collect();
-        assert_eq!(used_required, vec!["source_count", "source_versions"]);
+        assert_eq!(used_required, vec!["relay_consultation_count"]);
     }
 
     #[test]

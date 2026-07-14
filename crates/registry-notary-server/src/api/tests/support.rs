@@ -194,7 +194,7 @@
                     "purpose": "dependent_attestation",
                     "required_scopes": ["self_attestation"],
                     "value": { "type": "boolean", "nullable": true },
-                    "rule": { "type": "extract", "source": "guardian_link", "field": "established" },
+                    "rule": { "type": "consultation_output", "consultation": "guardian_link", "output": "established" },
                     "operations": {
                         "evaluate": { "enabled": true },
                         "batch_evaluate": { "enabled": false, "max_subjects": 1 }
@@ -784,7 +784,7 @@ peers:
       - https://purpose.example.test/eligibility
     allowed_profiles:
       - person_alive
-    source_scopes:
+    evaluation_scopes:
       - civil_registry:evidence_verification
 evaluation_profiles:
   - id: person_alive
@@ -862,8 +862,7 @@ evaluation_profiles:
                 "claim".to_string(),
                 "1".to_string(),
                 registry_notary_core::ProvenanceUsed {
-                    source_count: 0,
-                    source_versions: std::collections::BTreeMap::new(),
+                    relay_consultation_count: 0,
                 },
             ),
         }

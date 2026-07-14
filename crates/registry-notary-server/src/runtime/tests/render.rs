@@ -41,8 +41,7 @@
                 "selected".to_string(),
                 "2.0".to_string(),
                 ProvenanceUsed {
-                    source_count: 0,
-                    source_versions: BTreeMap::new(),
+                    relay_consultation_count: 0,
                 },
             ),
         };
@@ -84,8 +83,7 @@
                 "selected".to_string(),
                 "1".to_string(),
                 ProvenanceUsed {
-                    source_count: 0,
-                    source_versions: BTreeMap::new(),
+                    relay_consultation_count: 0,
                 },
             ),
         };
@@ -128,8 +126,7 @@
                 "selected".to_string(),
                 "1".to_string(),
                 ProvenanceUsed {
-                    source_count: 0,
-                    source_versions: BTreeMap::new(),
+                    relay_consultation_count: 0,
                 },
             ),
         };

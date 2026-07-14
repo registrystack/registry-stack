@@ -32,25 +32,9 @@ fn maintained_relay_example_loads_the_complete_hash_pinned_closure() {
 }
 
 #[test]
-fn maintained_notary_example_is_presence_only_and_valid() {
-    let yaml = fs::read_to_string(profile_path("notary-config.example.yaml"))
-        .expect("maintained OpenCRVS Notary example is readable");
-    let config: registry_notary_core::StandaloneRegistryNotaryConfig =
-        serde_norway::from_str(&yaml).expect("maintained OpenCRVS Notary example parses");
-    config
-        .validate()
-        .expect("maintained OpenCRVS Notary example validates");
-
-    assert!(yaml.contains("type: exists"));
-    assert!(!yaml.contains("type: extract"));
-    assert!(!yaml.contains("output_path"));
-}
-
-#[test]
 fn public_profile_artifacts_contain_no_live_binding_or_secret_value() {
     for name in [
         "relay-config.example.yaml",
-        "notary-config.example.yaml",
         "private-binding.example.json",
         "integration-pack.json",
         "public-contract.json",

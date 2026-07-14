@@ -43,17 +43,20 @@ evidence:
           person_status:
             profile:
               id: synthetic.snapshot.person-status.exact
-              version: "1"
               contract_hash: sha256:108759925d30fa99a77e99b9ef9c37c45291acae0431f43d6a2d81f5d2ca72a2
             inputs:
               person_id: target.id
+            outputs:
+              registration_status: { type: string, nullable: false, max_bytes: 32 }
+              source_observed_at: { type: string, nullable: false, max_bytes: 64 }
+              source_revision: { type: string, nullable: false, max_bytes: 32 }
       value:
         type: boolean
       purpose: benefit-status-verification
       required_scopes: [registry:evidence:synthetic-snapshot-person-status]
       rule:
-        type: exists
-        source: person_status
+        type: consultation_matched
+        consultation: person_status
       disclosure:
         default: value
         allowed: [value, redacted]
@@ -69,18 +72,22 @@ evidence:
           person_status:
             profile:
               id: synthetic.snapshot.person-status.exact
-              version: "1"
               contract_hash: sha256:108759925d30fa99a77e99b9ef9c37c45291acae0431f43d6a2d81f5d2ca72a2
             inputs:
               person_id: target.id
+            outputs:
+              registration_status: { type: string, nullable: false, max_bytes: 32 }
+              source_observed_at: { type: string, nullable: false, max_bytes: 64 }
+              source_revision: { type: string, nullable: false, max_bytes: 32 }
       value:
         type: string
+        nullable: true
       purpose: benefit-status-verification
       required_scopes: [registry:evidence:synthetic-snapshot-person-status]
       rule:
-        type: extract
-        source: person_status
-        field: registration_status
+        type: consultation_output
+        consultation: person_status
+        output: registration_status
       disclosure:
         default: value
         allowed: [value, redacted]

@@ -84,7 +84,7 @@ pub(super) struct CelEvaluationContext<'a> {
     pub(super) expression: &'a str,
     pub(super) bindings: &'a CelBindingsConfig,
     pub(super) claims: &'a BTreeMap<String, ClaimResultInternal>,
-    pub(super) sources: &'a BTreeMap<String, Value>,
+    pub(super) consultation_outputs: &'a BTreeMap<String, Value>,
     pub(super) variables: &'a registry_notary_core::RequestVariables,
     pub(super) subject: Option<&'a SubjectRequest>,
     pub(super) target: &'a EvidenceEntity,

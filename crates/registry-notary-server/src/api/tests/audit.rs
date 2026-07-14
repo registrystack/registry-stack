@@ -13,13 +13,13 @@ fn pdp_pre_evaluation_denial_audit_records_zero_consultations_and_no_forward() {
         &["person-is-alive".to_string()],
         None,
     );
-    attach_zero_source_no_forward_audit(&mut response);
+    attach_zero_relay_no_forward_audit(&mut response);
 
     let audit = response
         .extensions()
         .get::<EvidenceAuditContext>()
         .expect("audit context is attached");
-    assert_eq!(audit.source_read_count, Some(0));
+    assert_eq!(audit.relay_consultation_count, Some(0));
     assert_eq!(audit.forwarded, Some(false));
 }
 

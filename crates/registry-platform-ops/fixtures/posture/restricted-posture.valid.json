@@ -106,10 +106,6 @@
   "notary": {
     "claim_count": 6,
     "credential_profile_count": 2,
-    "source_connection_counts": {
-      "http": 2,
-      "postgres": 1
-    },
     "signing_keys": {
       "active": [
         "notary-2026q2"

@@ -182,7 +182,7 @@ pub(super) async fn evaluate(
             None,
             resolved_evaluate_audit_purposes(purpose_header(&headers), request.purpose.as_deref()),
         );
-        attach_zero_source_no_forward_audit(&mut response);
+        attach_zero_relay_no_forward_audit(&mut response);
         if let Err(error) = attach_evaluate_request_audit(
             &mut response,
             &state.self_attestation_rate_keys,
@@ -287,7 +287,7 @@ pub(super) async fn evaluate(
                 override_attestation_audit_access_mode(&mut response, principal.access_mode());
             }
             if zero_source_no_forward {
-                attach_zero_source_no_forward_audit(&mut response);
+                attach_zero_relay_no_forward_audit(&mut response);
             }
             if let Err(error) = attach_evaluate_request_audit(
                 &mut response,
@@ -432,7 +432,7 @@ pub(super) async fn batch_evaluate(
                     None,
                     audit_purposes,
                 );
-                attach_zero_source_no_forward_audit(&mut response);
+                attach_zero_relay_no_forward_audit(&mut response);
             }
             response
         }

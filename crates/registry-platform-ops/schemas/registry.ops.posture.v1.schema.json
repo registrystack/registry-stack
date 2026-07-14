@@ -956,13 +956,6 @@
           "type": "integer",
           "minimum": 0
         },
-        "source_connection_counts": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "integer",
-            "minimum": 0
-          }
-        },
         "signing_keys": {
           "type": "object",
           "additionalProperties": false,

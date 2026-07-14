@@ -458,7 +458,7 @@ outputs:
             "results": [{
                 "claim_id": "eligible",
                 "satisfied": true,
-                "provenance": { "used": { "source_count": 1 } },
+                "provenance": { "used": { "relay_consultation_count": 1 } },
             }],
         });
         assert_eq!(
@@ -467,7 +467,8 @@ outputs:
         );
 
         let mut missing_provenance = response;
-        missing_provenance["results"][0]["provenance"]["used"]["source_count"] = json!(0);
+        missing_provenance["results"][0]["provenance"]["used"]["relay_consultation_count"] =
+            json!(0);
         assert!(
             validate_live_response(&missing_provenance, &claims, &expected)
                 .expect_err("source-free result must fail")

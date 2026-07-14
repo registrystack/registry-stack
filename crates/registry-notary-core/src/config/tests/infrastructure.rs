@@ -135,7 +135,7 @@ pub(super) fn valid_federation_config() -> StandaloneRegistryNotaryConfig {
                 "https://purpose.example.gov/social-protection/service-delivery".to_string(),
             ],
             allowed_profiles: vec!["disability_status_predicate".to_string()],
-            source_scopes: vec!["civil_registry:evidence_verification".to_string()],
+            evaluation_scopes: vec!["civil_registry:evidence_verification".to_string()],
             ..FederationPeerConfig::default()
         }],
         evaluation_profiles: vec![FederationEvaluationProfileConfig {
@@ -144,7 +144,7 @@ pub(super) fn valid_federation_config() -> StandaloneRegistryNotaryConfig {
             claim_id: "disability-status".to_string(),
             subject_id_type: "national_id".to_string(),
             disclosure: Some("predicate".to_string()),
-            max_source_observed_age_seconds: Some(300),
+            max_claim_result_age_seconds: Some(300),
             ..FederationEvaluationProfileConfig::default()
         }],
         ..FederationConfig::default()
@@ -242,7 +242,7 @@ allowed_purposes:
   - https://purpose.example.gov/social-protection/service-delivery
 allowed_profiles:
   - disability_status_predicate
-source_scopes:
+evaluation_scopes:
   - civil_registry:evidence_verification
 "#,
     )
@@ -252,6 +252,35 @@ source_scopes:
     config
         .validate()
         .expect("private-network peer JWKS is accepted only with explicit opt-in");
+}
+
+#[test]
+pub(super) fn federation_rejects_removed_source_named_fields() {
+    let peer_error = serde_norway::from_str::<FederationPeerConfig>(
+        r#"
+node_id: did:web:agency-b.example.gov
+issuer: https://agency-b.example.gov
+jwks_uri: https://agency-b.example.gov/.well-known/jwks.json
+source_scopes:
+  - civil_registry:evidence_verification
+"#,
+    )
+    .expect_err("the unreleased source_scopes field must not remain an alias");
+    assert!(peer_error.to_string().contains("source_scopes"));
+
+    let profile_error = serde_norway::from_str::<FederationEvaluationProfileConfig>(
+        r#"
+id: disability_status_predicate
+ruleset: disability-status-v1
+claim_id: disability-status
+subject_id_type: national_id
+max_source_observed_age_seconds: 300
+"#,
+    )
+    .expect_err("the unreleased source-age field must not remain an alias");
+    assert!(profile_error
+        .to_string()
+        .contains("max_source_observed_age_seconds"));
 }
 
 #[test]
@@ -323,9 +352,9 @@ purpose: benefit-verification
 required_scopes:
   - registry:consult:disability-status
 rule:
-  type: extract
-  source: disability_status
-  field: status
+  type: consultation_output
+  consultation: disability_status
+  output: status
 "#,
     )
     .expect("registry-backed claim parses");

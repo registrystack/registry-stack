@@ -233,7 +233,7 @@ impl ActivatedRelayConsultations for TypedOutputRelay {
 }
 
 fn registry_claim(id: &str, rule: RuleConfig, value_type: &str) -> ClaimDefinition {
-    let nullable = matches!(&rule, RuleConfig::Extract { .. });
+    let nullable = matches!(&rule, RuleConfig::ConsultationOutput { .. });
     let mut claim = test_claim(id, Vec::new(), false);
     claim.evidence_mode = ClaimEvidenceMode::RegistryBacked {
         consultations: BTreeMap::from([(
@@ -270,9 +270,9 @@ fn registry_claim(id: &str, rule: RuleConfig, value_type: &str) -> ClaimDefiniti
 fn delegated_relay_proof_claim() -> ClaimDefinition {
     let mut claim = registry_claim(
         "guardian-link",
-        RuleConfig::Extract {
-            source: "relationship".to_string(),
-            field: "relationship_proven".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "relationship".to_string(),
+            output: "relationship_proven".to_string(),
         },
         "boolean",
     );
@@ -387,9 +387,9 @@ async fn delegated_exact_relay_proof_runs_once_before_the_dependent_claim() {
 async fn delegated_capability_denies_an_unrelated_registry_backed_dependency_before_relay() {
     let mut unrelated = registry_claim(
         "unrelated-registry-claim",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -695,9 +695,9 @@ fn assert_relay_audit(snapshot: EvaluationAuditSnapshot) -> String {
 async fn relay_match_correlation_survives_success_without_public_relay_ids() {
     let claim = registry_claim(
         "enrollment-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -715,12 +715,12 @@ async fn relay_match_correlation_survives_success_without_public_relay_ids() {
 
 #[cfg(feature = "registry-notary-cel")]
 #[tokio::test]
-async fn typed_output_map_is_reused_for_extract_and_date_age_claims() {
+async fn typed_output_map_is_reused_for_direct_output_and_date_age_claims() {
     let date = typed_registry_claim(
         "date-of-birth",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "date_of_birth".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "date_of_birth".to_string(),
         },
         "date",
     );
@@ -876,17 +876,17 @@ fn no_match_builds_only_presence_and_nullable_absence_outputs() {
 async fn no_match_reuses_typed_absence_for_presence_and_nullable_direct_claims() {
     let mut exists = typed_registry_claim(
         "birth-record-exists",
-        RuleConfig::Exists {
-            source: "enrollment".to_string(),
+        RuleConfig::ConsultationMatched {
+            consultation: "enrollment".to_string(),
         },
         "boolean",
     );
     exists.value.nullable = false;
     let date = typed_registry_claim(
         "date-of-birth",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "date_of_birth".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "date_of_birth".to_string(),
         },
         "date",
     );
@@ -921,11 +921,11 @@ async fn no_match_reuses_typed_absence_for_presence_and_nullable_direct_claims()
 }
 
 #[test]
-fn relay_exists_match_materializes_declared_outputs_and_outcome() {
+fn relay_consultation_matched_materializes_declared_outputs_and_outcome() {
     let claim = registry_claim(
         "enrollment-known",
-        RuleConfig::Exists {
-            source: "enrollment".to_string(),
+        RuleConfig::ConsultationMatched {
+            consultation: "enrollment".to_string(),
         },
         "boolean",
     );
@@ -957,12 +957,12 @@ fn relay_exists_match_materializes_declared_outputs_and_outcome() {
 }
 
 #[tokio::test]
-async fn relay_no_match_extract_materializes_explicit_null_with_restricted_correlation() {
+async fn relay_no_match_consultation_output_materializes_null_with_restricted_correlation() {
     let claim = registry_claim(
         "enrollment-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -976,11 +976,11 @@ async fn relay_no_match_extract_materializes_explicit_null_with_restricted_corre
 }
 
 #[tokio::test]
-async fn relay_no_match_exists_remains_false_with_restricted_correlation() {
+async fn relay_no_match_consultation_matched_remains_false_with_restricted_correlation() {
     let claim = registry_claim(
         "enrollment-status",
-        RuleConfig::Exists {
-            source: "enrollment".to_string(),
+        RuleConfig::ConsultationMatched {
+            consultation: "enrollment".to_string(),
         },
         "boolean",
     );
@@ -997,9 +997,9 @@ async fn relay_no_match_exists_remains_false_with_restricted_correlation() {
 async fn relay_ambiguous_failure_retains_restricted_correlation() {
     let claim = registry_claim(
         "enrollment-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -1012,11 +1012,11 @@ async fn relay_ambiguous_failure_retains_restricted_correlation() {
 }
 
 #[tokio::test]
-async fn relay_ambiguous_exists_remains_fail_closed() {
+async fn relay_ambiguous_consultation_matched_remains_fail_closed() {
     let claim = registry_claim(
         "enrollment-status",
-        RuleConfig::Exists {
-            source: "enrollment".to_string(),
+        RuleConfig::ConsultationMatched {
+            consultation: "enrollment".to_string(),
         },
         "boolean",
     );
@@ -1032,9 +1032,9 @@ async fn relay_ambiguous_exists_remains_fail_closed() {
 async fn post_relay_type_failure_retains_restricted_correlation() {
     let claim = registry_claim(
         "enrollment-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "boolean",
     );
@@ -1050,16 +1050,16 @@ async fn post_relay_type_failure_retains_restricted_correlation() {
 async fn registry_backed_claims_share_one_relay_consultation_without_fallback() {
     let exists = registry_claim(
         "enrollment-known",
-        RuleConfig::Exists {
-            source: "enrollment".to_string(),
+        RuleConfig::ConsultationMatched {
+            consultation: "enrollment".to_string(),
         },
         "boolean",
     );
     let extract = registry_claim(
         "enrollment-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -1095,7 +1095,7 @@ async fn registry_backed_claims_share_one_relay_consultation_without_fallback() 
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
     assert!(results
         .iter()
-        .all(|result| result.provenance.used.source_count == 1));
+        .all(|result| result.provenance.used.relay_consultation_count == 1));
     let stored = store
         .get(&results[0].evaluation_id)
         .expect("restricted evaluation record is stored");
@@ -1147,9 +1147,9 @@ fn enable_registry_batch(claim: &mut ClaimDefinition) {
 async fn registry_batch_requires_outer_key_before_relay_work() {
     let mut claim = registry_claim(
         "enrollment-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -1185,9 +1185,9 @@ async fn registry_batch_requires_outer_key_before_relay_work() {
 async fn registry_batch_preflights_every_item_before_first_relay_call() {
     let mut claim = registry_claim(
         "enrollment-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -1228,16 +1228,16 @@ async fn registry_batch_preflights_every_item_before_first_relay_call() {
 async fn registry_batch_coalesces_within_items_never_across_duplicates_and_replays_outer_key() {
     let mut exists = registry_claim(
         "enrollment-known",
-        RuleConfig::Exists {
-            source: "enrollment".to_string(),
+        RuleConfig::ConsultationMatched {
+            consultation: "enrollment".to_string(),
         },
         "boolean",
     );
     let mut extract = registry_claim(
         "enrollment-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -1366,9 +1366,9 @@ async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_wit
 {
     let mut claim = registry_claim(
         "enrollment-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -1467,8 +1467,8 @@ async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_wit
 async fn registry_backed_consultation_reads_a_named_target_identifier() {
     let mut claim = registry_claim(
         "birth-record-known",
-        RuleConfig::Exists {
-            source: "enrollment".to_string(),
+        RuleConfig::ConsultationMatched {
+            consultation: "enrollment".to_string(),
         },
         "boolean",
     );
@@ -1518,9 +1518,9 @@ async fn registry_backed_consultation_reads_a_named_target_identifier() {
 async fn registry_backed_profiles_enforce_purpose_and_scope_independently() {
     let mut first = registry_claim(
         "programme-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -1528,9 +1528,9 @@ async fn registry_backed_profiles_enforce_purpose_and_scope_independently() {
     first.required_scopes = vec!["registry:programme".to_string()];
     let mut second = registry_claim(
         "civil-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -1594,9 +1594,9 @@ async fn registry_backed_profiles_enforce_purpose_and_scope_independently() {
 async fn relay_group_key_ignores_unrelated_principal_scopes() {
     let claim = registry_claim(
         "enrollment-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -1634,9 +1634,9 @@ async fn relay_plan_uses_the_explicitly_selected_claim_version() {
     transitional.version = "1".to_string();
     let mut registry = registry_claim(
         "enrollment-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -1675,9 +1675,9 @@ async fn relay_plan_uses_the_explicitly_selected_claim_version() {
 async fn registry_backed_preflight_denial_makes_zero_relay_calls() {
     let claim = registry_claim(
         "enrollment-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
         },
         "string",
     );
@@ -1729,10 +1729,10 @@ async fn registry_backed_preflight_denial_makes_zero_relay_calls() {
 }
 
 #[tokio::test]
-async fn evaluate_refuses_exists_result_that_violates_declared_value_type() {
+async fn evaluate_refuses_consultation_matched_result_with_wrong_value_type() {
     let mut claim = test_claim("selected", Vec::new(), true);
-    claim.rule = RuleConfig::Exists {
-        source: "src".to_string(),
+    claim.rule = RuleConfig::ConsultationMatched {
+        consultation: "src".to_string(),
     };
     claim.value.value_type = "string".to_string();
     let mut evidence_config = (*test_evidence(vec![claim])).clone();

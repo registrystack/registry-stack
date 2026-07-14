@@ -487,7 +487,7 @@ pub(super) fn cel_root_bindings(
     ctx: &CelEvaluationContext<'_>,
 ) -> Result<BTreeMap<String, Value>, EvidenceError> {
     if ctx.claim.evidence_mode.is_registry_backed() {
-        let mut root_bindings = ctx.sources.clone();
+        let mut root_bindings = ctx.consultation_outputs.clone();
         for (name, declaration) in &ctx.evidence.variables {
             let Some(value) = ctx.variables.get(name) else {
                 continue;
@@ -532,7 +532,7 @@ pub(super) fn cel_root_bindings(
     let root_bindings = BTreeMap::from([
         (
             "source".to_string(),
-            Value::Object(ctx.sources.clone().into_iter().collect()),
+            Value::Object(ctx.consultation_outputs.clone().into_iter().collect()),
         ),
         ("claims".to_string(), Value::Object(claim_values)),
         (

@@ -139,11 +139,11 @@ fn request_object(
         .ok_or_else(|| FederationProblem::invalid_request("request object is required"))
 }
 
-pub(super) fn source_observation_is_stale(
+pub(super) fn claim_result_is_stale(
     profile: &FederationEvaluationProfileConfig,
     results: &[registry_notary_core::ClaimResultView],
 ) -> bool {
-    let Some(max_age) = profile.max_source_observed_age_seconds else {
+    let Some(max_age) = profile.max_claim_result_age_seconds else {
         return false;
     };
     if max_age == 0 {

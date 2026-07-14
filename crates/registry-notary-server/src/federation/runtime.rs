@@ -131,7 +131,7 @@ mod tests {
                 allowed_protocol_versions: vec![FEDERATION_PROTOCOL_V0_1.to_string()],
                 allowed_purposes: vec!["https://purpose.example.test/eligibility".to_string()],
                 allowed_profiles: vec!["farmer_under_4ha".to_string()],
-                source_scopes: vec!["farmer_registry:evidence_verification".to_string()],
+                evaluation_scopes: vec!["farmer_registry:evidence_verification".to_string()],
                 ..FederationPeerConfig::default()
             }],
             evaluation_profiles: vec![FederationEvaluationProfileConfig {

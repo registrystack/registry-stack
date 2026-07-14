@@ -86,7 +86,6 @@
     "/relay/standards_adapters/spdci",
     "/notary/claim_count",
     "/notary/credential_profile_count",
-    "/notary/source_connection_counts/*",
     "/notary/replay/storage",
     "/notary/replay/ready",
     "/notary/credential_status/enabled",

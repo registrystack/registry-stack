@@ -333,16 +333,6 @@ async fn live_dhis2_sandboxed_rhai_consultation_lifecycle() {
     }
 }
 
-/// Run via `scripts/run-live-consultation-journey.sh opencrvs`. A fresh random valid
-/// UIN is used only in memory and is expected to produce a closed `no_match`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires the explicit live OpenCRVS runner and a disposable TLS PostgreSQL 16 instance"]
-async fn live_opencrvs_consultation_no_match_lifecycle() {
-    if let Err(error) = run_live_consultation_lifecycle(JourneyProfile::OpenCrvs).await {
-        panic!("live OpenCRVS consultation lifecycle failed: {error}");
-    }
-}
-
 /// Run via `scripts/run-live-consultation-journey.sh synthetic`. The source fixture is
 /// repository-owned; only the disposable TLS PostgreSQL state plane is external.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -382,11 +372,7 @@ fn maintained_operator_example_stages_through_real_loader() {
 
 #[test]
 fn maintained_notary_example_loads_and_validates() {
-    for profile in [
-        JourneyProfile::Dhis2,
-        JourneyProfile::OpenCrvs,
-        JourneyProfile::SyntheticSnapshot,
-    ] {
+    for profile in [JourneyProfile::Dhis2, JourneyProfile::SyntheticSnapshot] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(profile.directory())
             .join(NOTARY_CONFIG_EXAMPLE_FILE);
@@ -395,9 +381,9 @@ fn maintained_notary_example_loads_and_validates() {
         let config: registry_notary_core::StandaloneRegistryNotaryConfig =
             serde_norway::from_str(&yaml)
                 .unwrap_or_else(|_| panic!("the maintained Notary operator example did not parse"));
-        config
-            .validate()
-            .unwrap_or_else(|_| panic!("the maintained Notary operator example did not validate"));
+        config.validate().unwrap_or_else(|error| {
+            panic!("the maintained Notary operator example did not validate: {error}")
+        });
     }
 }
 
@@ -967,7 +953,7 @@ fn validate_minimized_notary_response(
     if results.iter().any(|result| {
         result.get("evaluation_id").and_then(Value::as_str) != Some(evaluation_id)
             || result
-                .pointer("/provenance/used/source_count")
+                .pointer("/provenance/used/relay_consultation_count")
                 .and_then(Value::as_u64)
                 != Some(1)
     }) {
@@ -1104,7 +1090,10 @@ fn validate_notary_audit(
         return Err(LiveJourneyError::NotaryAudit);
     };
     if record.get("verification_id").and_then(Value::as_str) != Some(expected_evaluation_id)
-        || record.get("source_read_count").and_then(Value::as_u64) != Some(1)
+        || record
+            .get("relay_consultation_count")
+            .and_then(Value::as_u64)
+            != Some(1)
         || record.get("forwarded").and_then(Value::as_bool) != Some(true)
     {
         return Err(LiveJourneyError::NotaryAudit);

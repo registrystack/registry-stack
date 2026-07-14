@@ -50,9 +50,9 @@ fn make_registry_backed(claim: &mut ClaimDefinition, consultation_name: &str) {
     claim.required_scopes = vec!["registry:consult:person-status".to_string()];
     claim.value.value_type = "string".to_string();
     claim.value.nullable = true;
-    claim.rule = RuleConfig::Extract {
-        source: consultation_name.to_string(),
-        field: "registration_status".to_string(),
+    claim.rule = RuleConfig::ConsultationOutput {
+        consultation: consultation_name.to_string(),
+        output: "registration_status".to_string(),
     };
 }
 
@@ -96,6 +96,36 @@ fn expect_self_attestation_closure_error(config: &StandaloneRegistryNotaryConfig
         ),
         "unexpected error: {error:?}"
     );
+}
+
+#[test]
+fn consultation_rules_reject_removed_source_named_variants() {
+    let output: RuleConfig = serde_norway::from_str(
+        r#"
+type: consultation_output
+consultation: person_status
+output: registration_status
+"#,
+    )
+    .expect("consultation output rule parses");
+    assert!(matches!(output, RuleConfig::ConsultationOutput { .. }));
+
+    let matched: RuleConfig = serde_norway::from_str(
+        r#"
+type: consultation_matched
+consultation: person_status
+"#,
+    )
+    .expect("consultation matched rule parses");
+    assert!(matches!(matched, RuleConfig::ConsultationMatched { .. }));
+
+    for removed in [
+        "type: extract\nsource: person_status\nfield: registration_status\n",
+        "type: exists\nsource: person_status\n",
+    ] {
+        serde_norway::from_str::<RuleConfig>(removed)
+            .expect_err("unreleased source-named rule variants must not remain aliases");
+    }
 }
 
 #[test]
@@ -165,8 +195,8 @@ evidence_mode:
         subject_id: target.id
       route: /private/person
 rule:
-  type: exists
-  source: person_status
+  type: consultation_matched
+  consultation: person_status
 "#,
     )
     .expect_err("native routes must not fit the closed consultation schema");
@@ -188,8 +218,8 @@ evidence_mode:
       inputs:
         subject_id: {sensitive_target}
 rule:
-  type: exists
-  source: person_status
+  type: consultation_matched
+  consultation: person_status
 "#
     ))
     .expect_err("only a closed symbolic target mapping is accepted");
@@ -218,8 +248,8 @@ required_scopes: [registry:consult:birth-record]
 value:
   type: boolean
 rule:
-  type: exists
-  source: birth_record
+  type: consultation_matched
+  consultation: birth_record
 "#,
     )
     .expect("named target identifier mapping parses");
@@ -320,14 +350,14 @@ fn relay_activation_allows_independent_profiles_purposes_inputs_and_outputs() {
     let mut exists = config.evidence.claims[0].clone();
     exists.id = "person-status-present".to_string();
     exists.title = "Person status known".to_string();
-    exists.rule = RuleConfig::Exists {
-        source: "person_status".to_string(),
+    exists.rule = RuleConfig::ConsultationMatched {
+        consultation: "person_status".to_string(),
     };
     exists.value.value_type = "boolean".to_string();
     config.evidence.claims.push(exists);
     config
         .validate()
-        .expect("exists and extract claims may share one pinned consultation");
+        .expect("consultation rules may share one pinned consultation");
 
     let mut exists_only = config.clone();
     exists_only.evidence.claims.remove(0);
@@ -357,9 +387,9 @@ fn relay_activation_allows_independent_profiles_purposes_inputs_and_outputs() {
         },
     )]);
     independent.evidence.claims[1].purpose = Some("civil-registration-verification".to_string());
-    independent.evidence.claims[1].rule = RuleConfig::Extract {
-        source: "person_status".to_string(),
-        field: "other_status".to_string(),
+    independent.evidence.claims[1].rule = RuleConfig::ConsultationOutput {
+        consultation: "person_status".to_string(),
+        output: "other_status".to_string(),
     };
     independent.evidence.claims[1].value.value_type = "string".to_string();
     independent
@@ -367,9 +397,9 @@ fn relay_activation_allows_independent_profiles_purposes_inputs_and_outputs() {
         .expect("independent Relay client identities may coexist");
 
     let mut different_output = config.clone();
-    different_output.evidence.claims[1].rule = RuleConfig::Extract {
-        source: "person_status".to_string(),
-        field: "other_status".to_string(),
+    different_output.evidence.claims[1].rule = RuleConfig::ConsultationOutput {
+        consultation: "person_status".to_string(),
+        output: "other_status".to_string(),
     };
     different_output.evidence.claims[1].value.value_type = "string".to_string();
     expect_mode_error(
@@ -502,10 +532,10 @@ fn registry_backed_claim_enforces_gates_cardinality_and_rule_binding() {
     expect_mode_error(&config, "exactly one named consultation");
 
     let mut config = valid_registry_backed_config();
-    config.evidence.claims[0].rule = RuleConfig::Exists {
-        source: "other_status".to_string(),
+    config.evidence.claims[0].rule = RuleConfig::ConsultationMatched {
+        consultation: "other_status".to_string(),
     };
-    expect_mode_error(&config, "rule.source must match");
+    expect_mode_error(&config, "rule.consultation must match");
 
     let mut config = valid_registry_backed_config();
     config.evidence.claims[0].rule = RuleConfig::Cel {
@@ -546,24 +576,27 @@ fn registry_backed_claim_matches_relay_identifier_and_scalar_contract() {
     expect_mode_error(&config, "one to sixteen typed request mappings");
 
     let mut config = valid_registry_backed_config();
-    config.evidence.claims[0].rule = RuleConfig::Exists {
-        source: "person_status".to_string(),
+    config.evidence.claims[0].rule = RuleConfig::ConsultationMatched {
+        consultation: "person_status".to_string(),
     };
-    expect_mode_error(&config, "exists claim value.type must be boolean");
+    expect_mode_error(
+        &config,
+        "consultation_matched claim value.type must be boolean",
+    );
 
     let mut config = valid_registry_backed_config();
-    config.evidence.claims[0].rule = RuleConfig::Extract {
-        source: "person_status".to_string(),
-        field: "nested.status".to_string(),
+    config.evidence.claims[0].rule = RuleConfig::ConsultationOutput {
+        consultation: "person_status".to_string(),
+        output: "nested.status".to_string(),
     };
     config.evidence.claims[0].value.value_type = "string".to_string();
     expect_mode_error(&config, "one top-level Relay output name");
 
     for unsupported in ["boolean", "integer", "number", "object"] {
         let mut config = valid_registry_backed_config();
-        config.evidence.claims[0].rule = RuleConfig::Extract {
-            source: "person_status".to_string(),
-            field: "registration_status".to_string(),
+        config.evidence.claims[0].rule = RuleConfig::ConsultationOutput {
+            consultation: "person_status".to_string(),
+            output: "registration_status".to_string(),
         };
         config.evidence.claims[0].value.value_type = unsupported.to_string();
         expect_mode_error(&config, "must match its declared output");
@@ -811,10 +844,10 @@ fn self_attested_claims_are_source_free_across_dependencies() {
     config.validate().expect("source-free CEL claim validates");
 
     let mut source_rule = config.clone();
-    source_rule.evidence.claims[0].rule = RuleConfig::Exists {
-        source: "implicit-source".to_string(),
+    source_rule.evidence.claims[0].rule = RuleConfig::ConsultationMatched {
+        consultation: "implicit-source".to_string(),
     };
-    expect_mode_error(&source_rule, "cannot name an evidence source");
+    expect_mode_error(&source_rule, "cannot name a Relay consultation");
 
     let mut plugin_rule = config.clone();
     plugin_rule.evidence.claims[0].rule = RuleConfig::Plugin {

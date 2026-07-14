@@ -229,7 +229,7 @@
       },
       "ClaimProvenance": {
         "additionalProperties": false,
-        "description": "Versioned claim provenance (registry-notary-claim-provenance/v1). PROV-mappable but not PROV-O. Requester-side identity (client, actor, subject) is deliberately absent; it lives in restricted audit only.",
+        "description": "Versioned claim provenance (registry-notary-claim-provenance/v2). PROV-mappable but not PROV-O. Requester-side identity (client, actor, subject) is deliberately absent; it lives in restricted audit only.",
         "properties": {
           "derived_from": {
             "description": "Upstream provenance records this result was derived from. Always empty in v1; reserved for additive cross-evaluation linking.",
@@ -243,7 +243,7 @@
           },
           "schema_version": {
             "enum": [
-              "registry-notary-claim-provenance/v1"
+              "registry-notary-claim-provenance/v2"
             ],
             "type": "string"
           },
@@ -1302,20 +1302,13 @@
       "ProvenanceUsed": {
         "additionalProperties": false,
         "properties": {
-          "source_count": {
+          "relay_consultation_count": {
             "minimum": 0,
             "type": "integer"
-          },
-          "source_versions": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object"
           }
         },
         "required": [
-          "source_count",
-          "source_versions"
+          "relay_consultation_count"
         ],
         "type": "object"
       },
@@ -2459,10 +2452,6 @@
                       "enabled": true,
                       "rate_limit_mode": "in_process",
                       "wallet_origin_count": 1
-                    },
-                    "source_connection_counts": {
-                      "http": 2,
-                      "postgres": 1
                     }
                   },
                   "observed_at": "2026-06-04T10:00:00Z",
@@ -2801,7 +2790,7 @@
             "description": "Content type is not application/jwt"
           },
           "503": {
-            "description": "Source service or peer key service is unavailable"
+            "description": "An operational dependency required for a fail-closed response is unavailable"
           }
         },
         "security": [],
@@ -3553,10 +3542,9 @@
                               "service_id": "demo.registry-notary",
                               "type": "claim_evaluation"
                             },
-                            "schema_version": "registry-notary-claim-provenance/v1",
+                            "schema_version": "registry-notary-claim-provenance/v2",
                             "used": {
-                              "source_count": 1,
-                              "source_versions": {}
+                              "relay_consultation_count": 1
                             }
                           },
                           "result_id": "01HX7Y5F31M8BZWQ2HY7P6J9FA",
@@ -3730,19 +3718,19 @@
             "content": {
               "application/problem+json": {
                 "example": {
-                  "code": "source.unavailable",
-                  "detail": "the evidence source is unavailable",
+                  "code": "evidence.not_available",
+                  "detail": "the required evidence or operational dependency is unavailable",
                   "request_id": "01J00000000000000000000000",
                   "status": 503,
-                  "title": "Source unavailable",
-                  "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable"
+                  "title": "Evidence not available",
+                  "type": "https://id.registrystack.org/problems/registry-notary/evidence/not_available"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             },
-            "description": "Source service is unavailable"
+            "description": "Required Relay consultation or operational dependency is unavailable"
           }
         },
         "summary": "Evaluate claims for multiple request items inline"
@@ -4190,19 +4178,19 @@
             "content": {
               "application/problem+json": {
                 "example": {
-                  "code": "source.unavailable",
-                  "detail": "the evidence source is unavailable",
+                  "code": "evidence.not_available",
+                  "detail": "the required evidence or operational dependency is unavailable",
                   "request_id": "01J00000000000000000000000",
                   "status": 503,
-                  "title": "Source unavailable",
-                  "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable"
+                  "title": "Evidence not available",
+                  "type": "https://id.registrystack.org/problems/registry-notary/evidence/not_available"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             },
-            "description": "Source service is unavailable"
+            "description": "Required Relay consultation or operational dependency is unavailable"
           }
         },
         "summary": "Issue a credential from a stored evaluation"
@@ -4318,10 +4306,9 @@
                           "service_id": "demo.registry-notary",
                           "type": "claim_evaluation"
                         },
-                        "schema_version": "registry-notary-claim-provenance/v1",
+                        "schema_version": "registry-notary-claim-provenance/v2",
                         "used": {
-                          "source_count": 1,
-                          "source_versions": {}
+                          "relay_consultation_count": 1
                         }
                       },
                       "requester_ref": {
@@ -4465,19 +4452,19 @@
             "content": {
               "application/problem+json": {
                 "example": {
-                  "code": "source.unavailable",
-                  "detail": "the evidence source is unavailable",
+                  "code": "evidence.not_available",
+                  "detail": "the required evidence or operational dependency is unavailable",
                   "request_id": "01J00000000000000000000000",
                   "status": 503,
-                  "title": "Source unavailable",
-                  "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable"
+                  "title": "Evidence not available",
+                  "type": "https://id.registrystack.org/problems/registry-notary/evidence/not_available"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             },
-            "description": "Source service is unavailable"
+            "description": "Required Relay consultation or operational dependency is unavailable"
           }
         },
         "summary": "Evaluate claims for one target"
@@ -4532,10 +4519,9 @@
                           "service_id": "demo.registry-notary",
                           "type": "claim_evaluation"
                         },
-                        "schema_version": "registry-notary-claim-provenance/v1",
+                        "schema_version": "registry-notary-claim-provenance/v2",
                         "used": {
-                          "source_count": 1,
-                          "source_versions": {}
+                          "relay_consultation_count": 1
                         }
                       },
                       "requester_ref": {
@@ -4679,19 +4665,19 @@
             "content": {
               "application/problem+json": {
                 "example": {
-                  "code": "source.unavailable",
-                  "detail": "the evidence source is unavailable",
+                  "code": "evidence.not_available",
+                  "detail": "the required evidence or operational dependency is unavailable",
                   "request_id": "01J00000000000000000000000",
                   "status": 503,
-                  "title": "Source unavailable",
-                  "type": "https://id.registrystack.org/problems/registry-notary/source/unavailable"
+                  "title": "Evidence not available",
+                  "type": "https://id.registrystack.org/problems/registry-notary/evidence/not_available"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
                 }
               }
             },
-            "description": "Source service is unavailable"
+            "description": "Required Relay consultation or operational dependency is unavailable"
           }
         },
         "summary": "Render a stored evaluation"

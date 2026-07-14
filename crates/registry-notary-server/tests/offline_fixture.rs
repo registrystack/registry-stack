@@ -59,7 +59,7 @@ evidence:
       value: { type: boolean, nullable: false }
       purpose: benefit-verification
       required_scopes: [registry:person:read]
-      rule: { type: exists, source: enrollment }
+      rule: { type: consultation_matched, consultation: enrollment }
       formats: &formats [application/vnd.registry-notary.claim-result+json]
       disclosure: &disclosure
         default: value
@@ -79,7 +79,7 @@ evidence:
       value: { type: boolean, nullable: true }
       purpose: benefit-verification
       required_scopes: [registry:person:read]
-      rule: { type: extract, source: enrollment, field: active }
+      rule: { type: consultation_output, consultation: enrollment, output: active }
       formats: *formats
       disclosure: *disclosure
     - id: birth-date
@@ -96,7 +96,7 @@ evidence:
       value: { type: date, nullable: true }
       purpose: benefit-verification
       required_scopes: [registry:person:read]
-      rule: { type: extract, source: enrollment, field: birth_date }
+      rule: { type: consultation_output, consultation: enrollment, output: birth_date }
       formats: *formats
       disclosure: *disclosure
     - id: category
@@ -113,7 +113,7 @@ evidence:
       value: { type: string, nullable: true }
       purpose: benefit-verification
       required_scopes: [registry:person:read]
-      rule: { type: extract, source: enrollment, field: category }
+      rule: { type: consultation_output, consultation: enrollment, output: category }
       formats: *formats
       disclosure: *disclosure
     - id: eligible
@@ -174,7 +174,7 @@ evidence:
       value: { type: string, nullable: true }
       purpose: other-verification
       required_scopes: [registry:other:read]
-      rule: { type: extract, source: other, field: status }
+      rule: { type: consultation_output, consultation: other, output: status }
       formats: *formats
       disclosure: *disclosure
 auth:
@@ -388,7 +388,8 @@ async fn composite_consultation_fixture_binds_the_complete_input_map() {
 }
 
 #[tokio::test]
-async fn production_runtime_evaluates_extract_exists_cel_date_nullable_and_reuses_consultation() {
+async fn production_runtime_evaluates_consultation_rules_cel_date_nullable_and_reuses_consultation()
+{
     let mut evaluation = request(
         Some("person-1"),
         &[

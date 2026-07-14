@@ -53,9 +53,9 @@ evidence:
       purpose: benefit-verification
       required_scopes: [registry:evidence]
       rule:
-        type: extract
-        source: person_status
-        field: status
+        type: consultation_output
+        consultation: person_status
+        output: status
 "#,
         token_file.display()
     ))

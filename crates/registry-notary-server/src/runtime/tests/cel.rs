@@ -43,7 +43,7 @@ fn cel_root_bindings_redact_dependent_object_claim_values() {
         expression: "claims.prior.value.ssn",
         bindings: &bindings,
         claims: &claims,
-        sources: &sources,
+        consultation_outputs: &sources,
         variables: &Default::default(),
         subject: None,
         target: &target,

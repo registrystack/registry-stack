@@ -95,7 +95,7 @@ peers:
       - https://purpose.example.test/eligibility
     allowed_profiles:
       - farmer_under_4ha
-    source_scopes:
+    evaluation_scopes:
       - farmer_registry:evidence_verification
 evaluation_profiles:
   - id: farmer_under_4ha
@@ -748,6 +748,8 @@ pub(super) async fn federation_evaluation_returns_signed_response_and_rejects_re
         .as_str()
         .expect("evaluation id is string")
         .starts_with("eval_"));
+    assert!(claims["result"]["claim_result_issued_at"].is_string());
+    assert!(claims["result"].get("source_observed_at").is_none());
 
     let replay = server
         .post("/federation/v1/evaluations")
@@ -821,6 +823,55 @@ pub(super) async fn federation_evaluation_returns_signed_response_and_rejects_re
     ));
     assert!(!metrics_body.contains("01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6"));
     assert!(!metrics_body.contains("person-1"));
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+pub(super) async fn federation_stale_claim_result_returns_signed_evaluation_error() {
+    set_federation_env();
+    let peer_jwks = MockHttpUpstream::start().await;
+    let (peer_private, _) = fixtures::ed25519_pair();
+    peer_jwks
+        .expect("GET", "/jwks")
+        .respond_json(200, jwks_from_private_jwk(&peer_private))
+        .await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = federation_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &format!("{}/jwks", peer_jwks.url()),
+    );
+    config.federation.evaluation_profiles[0].max_claim_result_age_seconds = Some(0);
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let response = server
+        .post("/federation/v1/evaluations")
+        .add_header("content-type", "application/jwt")
+        .bytes(Bytes::from(federation_request_jwt(
+            "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6R0",
+            "https://purpose.example.test/eligibility",
+        )))
+        .await;
+
+    response.assert_status_ok();
+    let claims = verified_federation_response_claims(&response.text());
+    assert_eq!(
+        claims["error"]["type"],
+        json!("urn:registry-notary:problem:federation:stale-claim-result")
+    );
+    assert_eq!(claims["error"]["title"], json!("Claim result is stale"));
+    assert_eq!(
+        claims["error"]["code"],
+        json!("federation.stale_claim_result")
+    );
+    let records = audit_records(&audit_path);
+    assert!(records.iter().any(|record| {
+        record["decision"] == json!("federated_evaluate_error")
+            && record["error_code"] == json!("federation.stale_claim_result")
+    }));
+    assert_audit_records_do_not_contain(&records, &["person-1"]);
 }
 
 #[tokio::test]

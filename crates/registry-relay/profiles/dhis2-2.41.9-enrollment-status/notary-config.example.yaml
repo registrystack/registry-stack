@@ -44,17 +44,18 @@ evidence:
           enrollment:
             profile:
               id: dhis2.tracker.enrollment-status.exact
-              version: "1"
               contract_hash: sha256:5204b26c004cdeb7530012ee00877e184854ed223cfdaa27fd82925117512a32
             inputs:
               tracked_entity: target.id
+            outputs:
+              status: { type: string, nullable: false, max_bytes: 32 }
       value:
         type: boolean
       purpose: program-enrollment-verification
       required_scopes: [registry:evidence:dhis2-enrollment-status]
       rule:
-        type: exists
-        source: enrollment
+        type: consultation_matched
+        consultation: enrollment
       disclosure:
         default: value
         allowed: [value, redacted]
@@ -70,18 +71,20 @@ evidence:
           enrollment:
             profile:
               id: dhis2.tracker.enrollment-status.exact
-              version: "1"
               contract_hash: sha256:5204b26c004cdeb7530012ee00877e184854ed223cfdaa27fd82925117512a32
             inputs:
               tracked_entity: target.id
+            outputs:
+              status: { type: string, nullable: false, max_bytes: 32 }
       value:
         type: string
+        nullable: true
       purpose: program-enrollment-verification
       required_scopes: [registry:evidence:dhis2-enrollment-status]
       rule:
-        type: extract
-        source: enrollment
-        field: status
+        type: consultation_output
+        consultation: enrollment
+        output: status
       disclosure:
         default: value
         allowed: [value, redacted]

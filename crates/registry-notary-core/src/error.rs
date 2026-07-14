@@ -35,8 +35,6 @@ pub enum EvidenceError {
     ProfileUnsupported,
     #[error("evidence is not available")]
     EvidenceNotAvailable,
-    #[error("upstream source is unavailable")]
-    SourceUnavailable,
     #[error("batch request is too large")]
     BatchTooLarge,
     #[error("evaluation was not found")]
@@ -92,7 +90,6 @@ impl EvidenceError {
             Self::PolicyDenied { code, .. } => code,
             Self::ProfileUnsupported => "profile.unsupported",
             Self::EvidenceNotAvailable => "evidence.not_available",
-            Self::SourceUnavailable => "source.unavailable",
             Self::BatchTooLarge => "batch.too_large",
             Self::EvaluationNotFound => "evaluation.not_found",
             Self::EvaluationBindingMismatch => "evaluation.binding_mismatch",

@@ -294,51 +294,58 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                 .expect("exactly one consultation was checked above");
             validate_consultation(claim, consultation_name, consultation)?;
             match &claim.rule {
-                RuleConfig::Extract { source, field } => {
-                    if source != consultation_name {
+                RuleConfig::ConsultationOutput {
+                    consultation: rule_consultation,
+                    output,
+                } => {
+                    if rule_consultation != consultation_name {
                         return invalid_claim_evidence_mode(
                             claim,
-                            "registry_backed rule.source must match its consultation name",
+                            "registry_backed consultation_output rule.consultation must match its consultation name",
                         );
                     }
-                    if !is_input_name(field) {
+                    if !is_input_name(output) {
                         return invalid_claim_evidence_mode(
                             claim,
-                            "registry_backed extract rule.field must be one top-level Relay output name",
+                            "registry_backed consultation_output rule.output must be one top-level Relay output name",
                         );
                     }
-                    if let Some(output) = consultation.outputs.get(field) {
-                        if claim.value.value_type != output.value_type() || !claim.value.nullable {
+                    if let Some(output_config) = consultation.outputs.get(output) {
+                        if claim.value.value_type != output_config.value_type()
+                            || !claim.value.nullable
+                        {
                             return invalid_claim_evidence_mode(
                                 claim,
-                                "registry_backed extract claim value type must match its declared output and remain nullable for no_match",
+                                "registry_backed consultation_output claim value type must match its declared output and remain nullable for no_match",
                             );
                         }
                     } else if consultation.outputs.is_empty() {
                         if claim.value.value_type != "string" {
                             return invalid_claim_evidence_mode(
                                 claim,
-                                "registry_backed extract claim value.type must be string in v1 unless typed outputs are declared",
+                                "registry_backed consultation_output claim value.type must be string in v1 unless typed outputs are declared",
                             );
                         }
                     } else {
                         return invalid_claim_evidence_mode(
                             claim,
-                            "registry_backed extract rule.field must name a declared consultation output",
+                            "registry_backed consultation_output rule.output must name a declared consultation output",
                         );
                     }
                 }
-                RuleConfig::Exists { source } => {
-                    if source != consultation_name {
+                RuleConfig::ConsultationMatched {
+                    consultation: rule_consultation,
+                } => {
+                    if rule_consultation != consultation_name {
                         return invalid_claim_evidence_mode(
                             claim,
-                            "registry_backed rule.source must match its consultation name",
+                            "registry_backed consultation_matched rule.consultation must match its consultation name",
                         );
                     }
                     if claim.value.value_type != "boolean" {
                         return invalid_claim_evidence_mode(
                             claim,
-                            "registry_backed exists claim value.type must be boolean",
+                            "registry_backed consultation_matched claim value.type must be boolean",
                         );
                     }
                 }
@@ -346,7 +353,7 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                     if consultation.outputs.is_empty() {
                         return invalid_claim_evidence_mode(
                             claim,
-                            "registry_backed supports only exists and extract rules in v1 unless a complete typed consultation output schema is declared",
+                            "registry_backed supports only consultation_matched and consultation_output rules in v1 unless a complete typed consultation output schema is declared",
                         );
                     }
                     if !bindings.claims.is_empty() || !bindings.vars.is_empty() {
@@ -375,10 +382,10 @@ pub(in crate::config) fn validate_claim_evidence_mode(
         }
         ClaimEvidenceMode::SelfAttested => match &claim.rule {
             RuleConfig::Cel { .. } => {}
-            RuleConfig::Extract { .. } | RuleConfig::Exists { .. } => {
+            RuleConfig::ConsultationOutput { .. } | RuleConfig::ConsultationMatched { .. } => {
                 return invalid_claim_evidence_mode(
                     claim,
-                    "self_attested rules cannot name an evidence source",
+                    "self_attested rules cannot name a Relay consultation",
                 );
             }
             RuleConfig::Plugin { .. } => {
@@ -487,8 +494,8 @@ pub(in crate::config) fn validate_relay_activation_shape(
             .outputs
             .is_empty()
             .then(|| match &claim.rule {
-                RuleConfig::Extract { field, .. } => Some(field.clone()),
-                RuleConfig::Exists { .. } => None,
+                RuleConfig::ConsultationOutput { output, .. } => Some(output.clone()),
+                RuleConfig::ConsultationMatched { .. } => None,
                 RuleConfig::Cel { .. } | RuleConfig::Plugin { .. } => None,
             })
             .flatten();
@@ -762,12 +769,12 @@ pub struct ClaimInputConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuleConfig {
-    Extract {
-        source: String,
-        field: String,
+    ConsultationOutput {
+        consultation: String,
+        output: String,
     },
-    Exists {
-        source: String,
+    ConsultationMatched {
+        consultation: String,
     },
     Cel {
         expression: String,

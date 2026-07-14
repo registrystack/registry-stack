@@ -348,7 +348,7 @@ pub struct FederationPeerConfig {
     #[serde(default)]
     pub allowed_profiles: Vec<String>,
     #[serde(default)]
-    pub source_scopes: Vec<String>,
+    pub evaluation_scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -361,7 +361,7 @@ pub struct FederationEvaluationProfileConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disclosure: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_source_observed_age_seconds: Option<u64>,
+    pub max_claim_result_age_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub legal_basis_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

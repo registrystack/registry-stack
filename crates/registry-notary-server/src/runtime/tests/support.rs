@@ -17,8 +17,8 @@ fn test_claim(id: &str, depends_on: Vec<&str>, _has_source: bool) -> ClaimDefini
         depends_on: depends_on.into_iter().map(str::to_string).collect(),
         purpose: None,
         required_scopes: Vec::new(),
-        rule: RuleConfig::Exists {
-            source: "src".to_string(),
+        rule: RuleConfig::ConsultationMatched {
+            consultation: "src".to_string(),
         },
         operations: registry_notary_core::ClaimOperationsConfig::default(),
         disclosure: registry_notary_core::DisclosureConfig {
@@ -64,8 +64,7 @@ fn test_claim_result(
             claim_id.to_string(),
             "1.0".to_string(),
             ProvenanceUsed {
-                source_count: 0,
-                source_versions: BTreeMap::new(),
+                relay_consultation_count: 0,
             },
         ),
         relay_consultation_ids: BTreeSet::new(),

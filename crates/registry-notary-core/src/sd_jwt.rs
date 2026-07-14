@@ -269,7 +269,6 @@ mod tests {
     use base64::Engine;
     use registry_platform_crypto::did_jwk_from_public_jwk;
     use sha2::{Digest, Sha256};
-    use std::collections::BTreeMap;
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 
@@ -1022,8 +1021,7 @@ mod tests {
                 "claim".to_string(),
                 "1".to_string(),
                 crate::model::ProvenanceUsed {
-                    source_count: 0,
-                    source_versions: BTreeMap::new(),
+                    relay_consultation_count: 0,
                 },
             ),
         }

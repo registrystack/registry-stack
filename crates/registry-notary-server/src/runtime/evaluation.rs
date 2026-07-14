@@ -1612,7 +1612,8 @@ pub(super) async fn evaluate_claim_task(
         }
     }
     let delegated_proof_claim = ctx.evaluation_capability.is_delegated_proof_claim(claim_id);
-    let (sources, observed_at, mut relay_consultation_ids) = match &claim.evidence_mode {
+    let (consultation_outputs, observed_at, mut relay_consultation_ids) = match &claim.evidence_mode
+    {
         ClaimEvidenceMode::SelfAttested => (BTreeMap::new(), None, BTreeSet::new()),
         ClaimEvidenceMode::RegistryBacked { .. } => {
             require_relay_consultation_capability(&ctx.evaluation_capability, &claim.id)?;
@@ -1628,16 +1629,16 @@ pub(super) async fn evaluate_claim_task(
                 }
             })?;
             let relay_outcome = result.outcome();
-            let sources_result = match relay_outcome {
+            let consultation_outputs_result = match relay_outcome {
                 RuntimeRelayOutcome::Match => materialize_relay_match(&claim, &result),
                 RuntimeRelayOutcome::NoMatch
-                    if matches!(&claim.rule, RuleConfig::Extract { .. })
+                    if matches!(&claim.rule, RuleConfig::ConsultationOutput { .. })
                         && registry_claim_has_typed_outputs(&claim) =>
                 {
                     materialize_relay_absence(&claim)
                 }
                 RuntimeRelayOutcome::NoMatch
-                    if matches!(&claim.rule, RuleConfig::Extract { .. }) =>
+                    if matches!(&claim.rule, RuleConfig::ConsultationOutput { .. }) =>
                 {
                     Err(EvidenceError::EvidenceNotAvailable)
                 }
@@ -1647,7 +1648,7 @@ pub(super) async fn evaluate_claim_task(
                 RuntimeRelayOutcome::NoMatch => Ok(BTreeMap::new()),
                 RuntimeRelayOutcome::Ambiguous => Err(EvidenceError::EvidenceNotAvailable),
             };
-            let sources = sources_result.map_err(|error| {
+            let consultation_outputs = consultation_outputs_result.map_err(|error| {
                 if delegated_proof_claim {
                     if relay_outcome == RuntimeRelayOutcome::NoMatch {
                         delegated_relationship_unproven()
@@ -1659,7 +1660,7 @@ pub(super) async fn evaluate_claim_task(
                 }
             })?;
             (
-                sources,
+                consultation_outputs,
                 Some(result.acquired_at()),
                 BTreeSet::from([result.consultation_id().to_string()]),
             )
@@ -1668,18 +1669,21 @@ pub(super) async fn evaluate_claim_task(
     // Relay acquisition time pins the result to the consultation evidence.
     let issued_at = observed_at.unwrap_or(ctx.now);
     let value_result = match &claim.rule {
-        RuleConfig::Extract { source, field } => {
-            let record = sources
-                .get(source)
+        RuleConfig::ConsultationOutput {
+            consultation,
+            output,
+        } => {
+            let record = consultation_outputs
+                .get(consultation)
                 .ok_or(EvidenceError::EvidenceNotAvailable)?;
-            let value = get_json_path(record, field)
+            let value = get_json_path(record, output)
                 .cloned()
                 .ok_or(EvidenceError::RuleEvaluationFailed)?;
             validate_claim_value_config(&value, &claim.value)?;
             Ok(value)
         }
-        RuleConfig::Exists { source } => {
-            let value = Value::Bool(sources.contains_key(source));
+        RuleConfig::ConsultationMatched { consultation } => {
+            let value = Value::Bool(consultation_outputs.contains_key(consultation));
             validate_claim_value_config(&value, &claim.value)?;
             Ok(value)
         }
@@ -1706,7 +1710,7 @@ pub(super) async fn evaluate_claim_task(
                 expression,
                 bindings,
                 claims: &snapshot,
-                sources: &sources,
+                consultation_outputs: &consultation_outputs,
                 variables: &ctx.context.variables,
                 subject: target_subject.as_ref(),
                 target: &ctx.context.target,
@@ -1747,8 +1751,7 @@ pub(super) async fn evaluate_claim_task(
         claim.id.clone(),
         claim.version.clone(),
         ProvenanceUsed {
-            source_count: relay_consultation_ids.len(),
-            source_versions: BTreeMap::new(),
+            relay_consultation_count: relay_consultation_ids.len(),
         },
     );
     provenance.generated_by.policy_id = ctx.policy.policy_id.clone();

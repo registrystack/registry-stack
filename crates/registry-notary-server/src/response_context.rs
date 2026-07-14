@@ -13,7 +13,7 @@ pub struct EvidenceAuditContext {
     pub claim_hash: Option<String>,
     pub purposes: Option<Vec<String>>,
     pub row_count: Option<u64>,
-    pub source_read_count: Option<u64>,
+    pub relay_consultation_count: Option<u64>,
     /// Restricted cross-service correlation. Response extensions feed the
     /// audit sink only and are never serialized into the HTTP response body.
     pub relay_consultation_ids: Vec<String>,
@@ -42,7 +42,7 @@ impl std::fmt::Debug for EvidenceAuditContext {
             .debug_struct("EvidenceAuditContext")
             .field("verification_id", &"[REDACTED]")
             .field("verification_decision", &self.verification_decision)
-            .field("source_read_count", &self.source_read_count)
+            .field("relay_consultation_count", &self.relay_consultation_count)
             .field("relay_consultation_ids", &"[REDACTED]")
             .field("forwarded", &self.forwarded)
             .field("access_mode", &self.access_mode)

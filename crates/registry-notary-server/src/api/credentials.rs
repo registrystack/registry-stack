@@ -39,7 +39,7 @@ pub(super) async fn issue_credential(
                     denial_code,
                     Some(state.self_attestation.subject_binding.token_claim.as_str()),
                 );
-                attach_zero_source_no_forward_audit(&mut response);
+                attach_zero_relay_no_forward_audit(&mut response);
                 return response;
             }
         };
@@ -316,7 +316,7 @@ pub(super) async fn issue_credential(
                     .and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok());
             }
             override_attestation_audit_access_mode(&mut response, principal.access_mode());
-            attach_zero_source_no_forward_audit(&mut response);
+            attach_zero_relay_no_forward_audit(&mut response);
             return response;
         }
     }

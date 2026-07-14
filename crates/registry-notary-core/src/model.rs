@@ -1360,18 +1360,19 @@ pub struct EvidenceEntityRef {
     pub profile: Option<String>,
 }
 
-/// `schema_version` value carried by every [`ClaimProvenance`]. Frozen at beta
-/// per the 2026-06-11 evidence-contracts decision record (D3).
-pub const CLAIM_PROVENANCE_SCHEMA_VERSION: &str = "registry-notary-claim-provenance/v1";
+/// `schema_version` value carried by every [`ClaimProvenance`]. V2 names the
+/// consumed boundary as Relay consultations and removes unreleased source
+/// runtime aliases.
+pub const CLAIM_PROVENANCE_SCHEMA_VERSION: &str = "registry-notary-claim-provenance/v2";
 
 /// The `type` value for a claim-evaluation provenance record.
 pub const PROVENANCE_GENERATED_BY_CLAIM_EVALUATION: &str = "claim_evaluation";
 
 /// Versioned claim provenance attached to every public claim result.
 ///
-/// This is the frozen v1 contract: a verifier can answer which evaluation
-/// produced the result, under which policy, and across which source runtime
-/// boundary. The shape is documented as PROV-mappable but is not PROV-O.
+/// This contract lets a verifier answer which evaluation produced the result,
+/// under which policy, and across how many Relay consultations. The shape is
+/// documented as PROV-mappable but is not PROV-O.
 /// Requester-side identity (client, actor, subject) is deliberately absent;
 /// those live in restricted audit, never on the public wire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1380,7 +1381,7 @@ pub struct ClaimProvenance {
     pub generated_by: ProvenanceGeneratedBy,
     pub used: ProvenanceUsed,
     /// Upstream provenance records this result was derived from. Reserved for
-    /// cross-evaluation linking; always empty in v1 but present in the shape so
+    /// cross-evaluation linking; always empty in v2 but present in the shape so
     /// adding entries later is additive.
     pub derived_from: Vec<Value>,
 }
@@ -1449,13 +1450,11 @@ pub struct ProvenanceGeneratedBy {
     pub pack_version: Option<String>,
 }
 
-/// The consumed side of a claim provenance record: how many upstream registry
-/// consultations contributed to the claim and the source versions Relay
-/// reported for them.
+/// The consumed side of a claim provenance record: how many Relay consultations
+/// contributed to the claim.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProvenanceUsed {
-    pub source_count: usize,
-    pub source_versions: BTreeMap<String, String>,
+    pub relay_consultation_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1667,7 +1666,7 @@ pub struct EvidenceAuditEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_count: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_read_count: Option<u64>,
+    pub relay_consultation_count: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relay_consultation_ids: Vec<String>,
     /// Conservative dispatch-attempt marker. `true` means Notary committed to
@@ -2081,8 +2080,7 @@ mod tests {
                 "person-is-alive".to_string(),
                 "1.0.0".to_string(),
                 ProvenanceUsed {
-                    source_count: 1,
-                    source_versions: BTreeMap::new(),
+                    relay_consultation_count: 1,
                 },
             ),
         };
@@ -2094,17 +2092,14 @@ mod tests {
     }
 
     #[test]
-    fn claim_provenance_v1_serializes_merged_contract_shape() {
-        let mut source_versions = BTreeMap::new();
-        source_versions.insert("civil_registry".to_string(), "2026-05".to_string());
+    fn claim_provenance_v2_serializes_relay_consultation_shape() {
         let mut provenance = ClaimProvenance::new(
             "registry-notary".to_string(),
             "eval_01HX".to_string(),
             "person_is_alive".to_string(),
             "1".to_string(),
             ProvenanceUsed {
-                source_count: 1,
-                source_versions,
+                relay_consultation_count: 1,
             },
         );
         provenance.generated_by.policy_id = Some("self-attestation".to_string());
@@ -2115,7 +2110,7 @@ mod tests {
 
         assert_eq!(
             value["schema_version"],
-            json!("registry-notary-claim-provenance/v1")
+            json!("registry-notary-claim-provenance/v2")
         );
         let generated_by = &value["generated_by"];
         assert_eq!(generated_by["type"], json!("claim_evaluation"));
@@ -2128,28 +2123,28 @@ mod tests {
         assert_eq!(generated_by["policy_hash"], json!("sha256:def456"));
 
         let used = &value["used"];
-        assert_eq!(used["source_count"], json!(1));
-        assert_eq!(used["source_versions"]["civil_registry"], json!("2026-05"));
+        assert_eq!(used["relay_consultation_count"], json!(1));
+        assert!(used.get("source_count").is_none());
+        assert!(used.get("source_versions").is_none());
         assert_eq!(value["derived_from"], json!([]));
     }
 
     #[test]
-    fn claim_provenance_v1_round_trips() {
+    fn claim_provenance_v2_round_trips() {
         let provenance = ClaimProvenance::new(
             "registry-notary".to_string(),
             "eval_01HX".to_string(),
             "person_is_alive".to_string(),
             "1".to_string(),
             ProvenanceUsed {
-                source_count: 2,
-                source_versions: BTreeMap::new(),
+                relay_consultation_count: 2,
             },
         );
         let value = serde_json::to_value(&provenance).expect("serializes");
         let parsed: ClaimProvenance =
             serde_json::from_value(value).expect("provenance round-trips");
         assert_eq!(parsed.schema_version, CLAIM_PROVENANCE_SCHEMA_VERSION);
-        assert_eq!(parsed.used.source_count, 2);
+        assert_eq!(parsed.used.relay_consultation_count, 2);
         assert!(parsed.generated_by.policy_id.is_none());
     }
 
@@ -2161,8 +2156,7 @@ mod tests {
             "claim".to_string(),
             "1".to_string(),
             ProvenanceUsed {
-                source_count: 0,
-                source_versions: BTreeMap::new(),
+                relay_consultation_count: 0,
             },
         );
         let value = serde_json::to_value(&provenance).expect("serializes");
@@ -2363,7 +2357,7 @@ mod tests {
             claim_hash: Some("sha256:claims".to_string()),
             purposes: None,
             row_count: None,
-            source_read_count: None,
+            relay_consultation_count: None,
             relay_consultation_ids: vec!["01JRELAYCORRELATIONSENSITIVE".to_string()],
             forwarded: None,
             error_code: Some("self_attestation.denied".to_string()),

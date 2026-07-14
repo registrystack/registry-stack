@@ -237,7 +237,7 @@ impl ConfigBuilder {
             "      allowed_protocol_versions: [registry-notary-federation/v0.1]\n",
             "      allowed_purposes: [https://purpose.example.test/eligibility]\n",
             "      allowed_profiles: [gates]\n",
-            "      source_scopes: [farmer_registry:evidence_verification]\n",
+            "      evaluation_scopes: [farmer_registry:evidence_verification]\n",
             "  evaluation_profiles:\n",
             "    - id: gates\n",
             "      ruleset: gates-v1\n",
@@ -396,9 +396,9 @@ value:
 purpose: benefit-verification
 required_scopes: [farmer_registry:evidence_verification]
 rule:
-  type: extract
-  source: farmer
-  field: total_farmed_area
+  type: consultation_output
+  consultation: farmer
+  output: total_farmed_area
 disclosure:
   default: value
   allowed: [value, redacted]

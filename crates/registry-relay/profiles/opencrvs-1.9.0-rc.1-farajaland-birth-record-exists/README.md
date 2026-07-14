@@ -57,13 +57,13 @@ violation fail closed.
 5. Run `registry-relay doctor`, bootstrap the dedicated PostgreSQL consultation
    state as documented in the operations runbook, and start Relay with only
    its runtime database identity.
-6. Copy `notary-config.example.yaml`, replace the Relay origin and workload
-   credential path, then run `registry-notary explain-config` and
-   `registry-notary doctor`. Notary has no OpenCRVS URL or OAuth credential.
-7. Send one Notary evaluation request for
-   `opencrvs-birth-record-exists`, using the exact UIN as `target.id` and
-   `civil-registration-verification` as both request purpose and
-   `Data-Purpose`.
+6. For a combined Relay and Notary deployment, initialize the maintained
+   OpenCRVS Registry Stack project with `registryctl init --from opencrvs` and
+   build its compiler-pinned product inputs. Do not hand-author a second Notary
+   copy of this Relay profile. Notary receives no OpenCRVS URL or OAuth
+   credential.
+7. Run the project-owned offline fixtures and `registryctl check --explain`
+   before applying deployment-only source and workload bindings.
 
 The example configurations use local deployment posture and placeholder
 identities. Production deployments must use the signed configuration-bundle

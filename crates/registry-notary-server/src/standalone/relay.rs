@@ -429,9 +429,9 @@ evidence:
         type: string
         nullable: true
       rule:
-        type: extract
-        source: enrollment
-        field: registration_status"#,
+        type: consultation_output
+        consultation: enrollment
+        output: registration_status"#,
             &token_file,
         );
 
@@ -516,7 +516,7 @@ evidence:
     }
 
     #[test]
-    fn exists_config_selects_the_declared_output_contract() {
+    fn consultation_matched_config_selects_the_declared_output_contract() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let config = config_with_claim(
             r#"    - id: birth-record-exists
@@ -539,8 +539,8 @@ evidence:
       value:
         type: boolean
       rule:
-        type: exists
-        source: birth_record"#,
+        type: consultation_matched
+        consultation: birth_record"#,
             &directory.path().join("relay.jwt"),
         );
 
@@ -576,7 +576,7 @@ evidence:
       purpose: programme-verification
       required_scopes: [registry:programme]
       value: { type: string }
-      rule: { type: extract, source: enrollment, field: status }
+      rule: { type: consultation_output, consultation: enrollment, output: status }
     - id: enrollment-known
       title: Enrollment known
       version: "1"
@@ -595,7 +595,7 @@ evidence:
       purpose: programme-verification
       required_scopes: [registry:programme]
       value: { type: boolean }
-      rule: { type: exists, source: enrollment }
+      rule: { type: consultation_matched, consultation: enrollment }
     - id: birth-record-known
       title: Birth record known
       version: "1"
@@ -614,7 +614,7 @@ evidence:
       purpose: civil-verification
       required_scopes: [registry:civil]
       value: { type: boolean }
-      rule: { type: exists, source: birth_record }"#,
+      rule: { type: consultation_matched, consultation: birth_record }"#,
             &directory.path().join("relay.jwt"),
         );
 

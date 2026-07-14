@@ -860,8 +860,7 @@ credential_profiles:
                 "claim".to_string(),
                 "1".to_string(),
                 registry_notary_core::ProvenanceUsed {
-                    source_count: 0,
-                    source_versions: BTreeMap::new(),
+                    relay_consultation_count: 0,
                 },
             ),
         }];

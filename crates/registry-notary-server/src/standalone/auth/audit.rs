@@ -20,7 +20,7 @@ pub(in super::super) fn config_boot_audit_event(
         claim_hash: None,
         purposes: None,
         row_count: None,
-        source_read_count: None,
+        relay_consultation_count: None,
         relay_consultation_ids: Vec::new(),
         forwarded: None,
         error_code: None,

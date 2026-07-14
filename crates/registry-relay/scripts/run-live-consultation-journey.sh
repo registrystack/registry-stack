@@ -9,7 +9,7 @@ umask 077
 readonly POSTGRES_IMAGE="postgres:16"
 
 [[ "$#" -le 1 ]] || {
-  printf '%s\n' "usage: $0 [dhis2|rhai|opencrvs|synthetic]" >&2
+  printf '%s\n' "usage: $0 [dhis2|rhai|synthetic]" >&2
   exit 1
 }
 readonly product="${1:-dhis2}"
@@ -22,16 +22,12 @@ case "$product" in
     readonly test_name="live_dhis2_sandboxed_rhai_consultation_lifecycle"
     readonly temporary_label="dhis2-rhai"
     ;;
-  opencrvs)
-    readonly test_name="live_opencrvs_consultation_no_match_lifecycle"
-    readonly temporary_label="opencrvs"
-    ;;
   synthetic)
     readonly test_name="synthetic_snapshot_exact_consultation_lifecycle"
     readonly temporary_label="synthetic-snapshot"
     ;;
   *)
-    printf '%s\n' "usage: $0 [dhis2|rhai|opencrvs|synthetic]" >&2
+    printf '%s\n' "usage: $0 [dhis2|rhai|synthetic]" >&2
     exit 1
     ;;
 esac
@@ -66,7 +62,7 @@ owned_by_current_user() {
   [[ "$owner" == "$(id -u)" ]]
 }
 
-if [[ "$product" == "dhis2" || "$product" == "opencrvs" ]]; then
+if [[ "$product" == "dhis2" ]]; then
   readonly live_env_file="${REGISTRY_RELAY_LIVE_ENV_FILE:-}"
   [[ -n "$live_env_file" ]] || fail \
     "REGISTRY_RELAY_LIVE_ENV_FILE must name the authorized mode-0600 environment file"
@@ -91,15 +87,6 @@ if [[ "$product" == "dhis2" || "$product" == "opencrvs" ]]; then
       selected_principal="$DHIS2_USERNAME"
       selected_secret="$DHIS2_PASSWORD"
       ;;
-    opencrvs)
-      [[ -n "${OPENCRVS_DCI_BASE_URL:-}" ]] || fail "OPENCRVS_DCI_BASE_URL is required"
-      [[ -n "${OPENCRVS_DCI_CLIENT_ID:-}" ]] || fail "OPENCRVS_DCI_CLIENT_ID is required"
-      [[ -n "${OPENCRVS_DCI_CLIENT_SECRET:-}" ]] || fail \
-        "OPENCRVS_DCI_CLIENT_SECRET is required"
-      selected_base_url="$OPENCRVS_DCI_BASE_URL"
-      selected_principal="$OPENCRVS_DCI_CLIENT_ID"
-      selected_secret="$OPENCRVS_DCI_CLIENT_SECRET"
-      ;;
   esac
 
   unset DHIS2_BASE_URL DHIS2_USERNAME DHIS2_PASSWORD
@@ -110,11 +97,6 @@ if [[ "$product" == "dhis2" || "$product" == "opencrvs" ]]; then
       export DHIS2_BASE_URL="$selected_base_url"
       export DHIS2_USERNAME="$selected_principal"
       export DHIS2_PASSWORD="$selected_secret"
-      ;;
-    opencrvs)
-      export OPENCRVS_DCI_BASE_URL="$selected_base_url"
-      export OPENCRVS_DCI_CLIENT_ID="$selected_principal"
-      export OPENCRVS_DCI_CLIENT_SECRET="$selected_secret"
       ;;
   esac
   unset selected_base_url selected_principal selected_secret

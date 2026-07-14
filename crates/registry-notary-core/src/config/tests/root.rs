@@ -723,9 +723,9 @@ token_file: /run/secrets/registry-notary-relay.jwt
         )]),
     };
     proof.value.nullable = true;
-    proof.rule = RuleConfig::Extract {
-        source: "guardian_link".to_string(),
-        field: "established".to_string(),
+    proof.rule = RuleConfig::ConsultationOutput {
+        consultation: "guardian_link".to_string(),
+        output: "established".to_string(),
     };
 
     let mut dependent = config.evidence.claims[0].clone();
