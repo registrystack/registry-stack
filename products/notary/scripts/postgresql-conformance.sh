@@ -171,6 +171,21 @@ role_oid_pair() {
         AND runtime_role.rolname = 'registry_notary_runtime';"
 }
 
+runtime_connection_count() {
+  docker exec "${postgres_container}" psql --tuples-only --no-align \
+    --username postgres --dbname postgres --command \
+    "SELECT pg_catalog.count(*) FROM pg_catalog.pg_stat_activity
+      WHERE datname = 'registry_notary'
+        AND usename = 'registry_notary_runtime';"
+}
+
+database_session_count() {
+  docker exec "${postgres_container}" psql --tuples-only --no-align \
+    --username postgres --dbname postgres --command \
+    "SELECT sessions FROM pg_catalog.pg_stat_database
+      WHERE datname = 'registry_notary';"
+}
+
 provision_roles() {
   local shifted_oids="$1"
   local log_file="$2"
@@ -253,6 +268,7 @@ state:
     root_certificate_path: ${work_dir}/ca.crt
     connect_timeout_ms: 2000
     operation_timeout_ms: 2000
+    max_connections: 1
     sensitive_state_key_env: REGISTRY_NOTARY_SENSITIVE_STATE_KEY
 auth:
   mode: api_key
@@ -383,6 +399,8 @@ start_notary "127.0.0.1:${notary_port_a}" "${work_dir}/notary-a.log" notary_pid_
 start_notary "127.0.0.1:${notary_port_b}" "${work_dir}/notary-b.log" notary_pid_b
 wait_ready "${url_a}" "${notary_pid_a}" || fail "first Notary instance did not become ready"
 wait_ready "${url_b}" "${notary_pid_b}" || fail "second Notary instance did not become ready"
+[[ "$(runtime_connection_count)" == "2" ]] \
+  || fail "per-replica PostgreSQL connection cap was not enforced"
 
 request_a="${work_dir}/request-a.json"
 request_b="${work_dir}/request-b.json"
@@ -407,6 +425,18 @@ evaluation_id="$(jq --exit-status --raw-output '.items[0].evaluation_id | select
 [[ "$(jq --raw-output '.items[0].evaluation_id' "${work_dir}/response-a2.json")" == "${evaluation_id}" ]] \
   || fail "concurrent instances did not observe one evaluation"
 
+sessions_before_reuse="$(database_session_count)"
+for reuse_attempt in {1..4}; do
+  batch_request "${url_a}" "${idempotency_key_a}" "${request_a}" \
+    "${work_dir}/response-reuse-${reuse_attempt}.json" 200 \
+    || fail "sequential pooled state request failed"
+done
+sessions_after_reuse="$(database_session_count)"
+[[ "${sessions_after_reuse}" == "${sessions_before_reuse}" ]] \
+  || fail "sequential state operations did not reuse the physical connection"
+[[ "$(runtime_connection_count)" == "2" ]] \
+  || fail "state traffic exceeded the configured PostgreSQL connection cap"
+
 stop_process "${notary_pid_a}"
 notary_pid_a=""
 start_notary "127.0.0.1:${notary_port_a}" "${work_dir}/notary-a-restart.log" notary_pid_a
@@ -421,7 +451,12 @@ batch_request "${url_b}" "${idempotency_key_b}" "${request_b}" "${work_dir}/resp
 batch_request "${url_a}" "${idempotency_key_c}" "${request_c}" "${work_dir}/response-c-denied.json" 429 \
   || fail "shared machine quota did not reject excess work"
 
-admin_sql postgres 'ALTER DATABASE registry_notary SET default_transaction_read_only = on;'
+admin_sql postgres \
+  "ALTER DATABASE registry_notary SET default_transaction_read_only = on;
+   SELECT pg_catalog.pg_terminate_backend(pid)
+     FROM pg_catalog.pg_stat_activity
+    WHERE datname = 'registry_notary'
+      AND usename = 'registry_notary_runtime';"
 wait_not_ready "${url_a}" || fail "read-only PostgreSQL did not fail readiness"
 if "${notary_bin}" --config "${config_path}" state doctor >"${work_dir}/doctor-read-only.log" 2>&1; then
   fail "state doctor accepted read-only PostgreSQL"
@@ -448,16 +483,25 @@ wait_not_ready "${url_a}" || fail "unavailable PostgreSQL did not fail readiness
 if "${notary_bin}" --config "${config_path}" state doctor >"${work_dir}/doctor-unavailable.log" 2>&1; then
   fail "state doctor accepted unavailable PostgreSQL"
 fi
-stop_process "${notary_pid_a}"
-stop_process "${notary_pid_b}"
-notary_pid_a=""
-notary_pid_b=""
-
 docker start "${postgres_container}" >/dev/null
 for _ in {1..90}; do
   docker exec "${postgres_container}" pg_isready --username postgres --dbname postgres >/dev/null 2>&1 && break
   sleep 1
 done
+wait_ready "${url_a}" "${notary_pid_a}" \
+  || fail "running Notary did not reconnect after PostgreSQL recovery"
+wait_ready "${url_b}" "${notary_pid_b}" \
+  || fail "running peer Notary did not reconnect after PostgreSQL recovery"
+batch_request "${url_a}" "${idempotency_key_a}" "${request_a}" \
+  "${work_dir}/response-a-outage-recovered.json" 200 \
+  || fail "running Notary could not use state after PostgreSQL recovery"
+[[ "$(runtime_connection_count)" == "2" ]] \
+  || fail "outage recovery exceeded the configured PostgreSQL connection cap"
+stop_process "${notary_pid_a}"
+stop_process "${notary_pid_b}"
+notary_pid_a=""
+notary_pid_b=""
+
 source_version="$(docker exec "${postgres_container}" psql --tuples-only --no-align --username postgres --dbname postgres --command 'SHOW server_version_num')"
 [[ "${source_version}" =~ ^[0-9]+$ ]] || fail "source PostgreSQL version is unavailable"
 (( source_version / 10000 == postgresql_major )) || fail "source PostgreSQL major does not match the matrix"

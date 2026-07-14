@@ -19,9 +19,13 @@ use std::{
     time::Duration,
 };
 
+use deadpool::managed::{Manager, Metrics, Object, Pool, PoolError, RecycleError, RecycleResult};
+use hmac::{Hmac, KeyInit, Mac};
 use native_tls::TlsConnector;
 use postgres_native_tls::MakeTlsConnector;
-use registry_notary_core::StatePostgresqlConfig;
+use registry_notary_core::{StatePostgresqlConfig, STATE_POSTGRESQL_MAX_CONNECTIONS};
+use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 use tokio::sync::watch;
 use tokio::task::{AbortHandle, JoinHandle};
@@ -48,6 +52,9 @@ const RETENTION_PRUNE_QUERY: &str =
     "SELECT registry_notary_api.retention_prune_v1($1) AS deleted_count";
 
 type ConnectionDriver = JoinHandle<Result<(), tokio_postgres::Error>>;
+type CredentialGeneration = [u8; 32];
+type PostgresSessionPool = Pool<ConnectionFactory>;
+type PooledPostgresSession = Object<ConnectionFactory>;
 
 /// TLS and timeout policy for the Notary-owned PostgreSQL state plane.
 ///
@@ -59,6 +66,7 @@ pub struct PostgresStatePlaneConfig {
     root_certificate_path: Option<PathBuf>,
     connect_timeout: Duration,
     operation_timeout: Duration,
+    max_connections: usize,
 }
 
 impl PostgresStatePlaneConfig {
@@ -67,6 +75,7 @@ impl PostgresStatePlaneConfig {
         root_certificate_path: Option<PathBuf>,
         connect_timeout: Duration,
         operation_timeout: Duration,
+        max_connections: usize,
     ) -> Result<Self, NotaryPostgresStatePlaneError> {
         let database_url_env = database_url_env.into();
         if database_url_env.trim().is_empty() {
@@ -74,6 +83,9 @@ impl PostgresStatePlaneConfig {
         }
         if connect_timeout.is_zero() || operation_timeout.is_zero() {
             return Err(NotaryPostgresStatePlaneError::InvalidTimeout);
+        }
+        if !(1..=STATE_POSTGRESQL_MAX_CONNECTIONS).contains(&max_connections) {
+            return Err(NotaryPostgresStatePlaneError::InvalidConfiguration);
         }
         if root_certificate_path.as_ref().is_some_and(|path| {
             path.as_os_str().is_empty()
@@ -86,6 +98,7 @@ impl PostgresStatePlaneConfig {
             root_certificate_path,
             connect_timeout,
             operation_timeout,
+            max_connections,
         })
     }
 
@@ -98,6 +111,11 @@ impl PostgresStatePlaneConfig {
     pub fn operation_timeout(&self) -> Duration {
         self.operation_timeout
     }
+
+    #[must_use]
+    pub fn max_connections(&self) -> usize {
+        self.max_connections
+    }
 }
 
 impl TryFrom<&StatePostgresqlConfig> for PostgresStatePlaneConfig {
@@ -109,6 +127,7 @@ impl TryFrom<&StatePostgresqlConfig> for PostgresStatePlaneConfig {
             config.root_certificate_path.clone(),
             Duration::from_millis(config.connect_timeout_ms),
             Duration::from_millis(config.operation_timeout_ms),
+            config.max_connections,
         )
     }
 }
@@ -124,6 +143,7 @@ impl fmt::Debug for PostgresStatePlaneConfig {
             )
             .field("connect_timeout", &self.connect_timeout)
             .field("operation_timeout", &self.operation_timeout)
+            .field("max_connections", &self.max_connections)
             .finish()
     }
 }
@@ -226,12 +246,12 @@ impl NotaryPostgresStatePlaneReadiness {
 
 /// Reconnectable PostgreSQL runtime for Notary-owned correctness state.
 ///
-/// Each domain obtains an independently driven session. New sessions reload
-/// the named URL environment variable, so reconnect and credential rotation do
-/// not depend on a retained URL value. Every session is fully attested before
-/// it is returned.
+/// Each domain obtains a bounded lease from a Notary-specific physical session
+/// pool. Physical connections reload the named URL environment variable and
+/// enter the pool only after complete attestation. A process-keyed generation
+/// tag evicts old connections when the URL changes without retaining its value.
 pub struct NotaryPostgresStatePlaneRuntime {
-    connections: Arc<ConnectionFactory>,
+    connections: PostgresSessionPool,
     sessions: Arc<SessionRegistry>,
     #[cfg(test)]
     retention_attempts: AtomicU64,
@@ -301,9 +321,17 @@ impl NotaryPostgresStatePlaneRuntime {
     pub async fn connect(
         config: &PostgresStatePlaneConfig,
     ) -> Result<Self, NotaryPostgresStatePlaneError> {
+        let sessions = Arc::new(SessionRegistry::default());
+        let manager = ConnectionFactory::new(config, Arc::clone(&sessions))?;
+        let connections = PostgresSessionPool::builder(manager)
+            .max_size(config.max_connections)
+            .wait_timeout(Some(config.operation_timeout))
+            .runtime(deadpool::Runtime::Tokio1)
+            .build()
+            .map_err(|_| NotaryPostgresStatePlaneError::InvalidConfiguration)?;
         let runtime = Self {
-            connections: Arc::new(ConnectionFactory::new(config)?),
-            sessions: Arc::new(SessionRegistry::default()),
+            connections,
+            sessions,
             #[cfg(test)]
             retention_attempts: AtomicU64::new(0),
         };
@@ -311,78 +339,41 @@ impl NotaryPostgresStatePlaneRuntime {
         Ok(runtime)
     }
 
-    /// Open an independently reconnectable, fully attested session for one
-    /// typed state-domain adapter.
+    /// Lease a bounded, fully attested session for one typed state-domain
+    /// adapter. Pool wait time is bounded by the operation timeout.
     pub(crate) async fn open_domain_session(
         &self,
     ) -> Result<NotaryPostgresSession, NotaryPostgresStatePlaneError> {
-        let (session, _attestation) = self.open_attested_domain_session().await?;
-        Ok(session)
-    }
-
-    async fn open_attested_domain_session(
-        &self,
-    ) -> Result<(NotaryPostgresSession, PostgresStatePlaneAttestation), NotaryPostgresStatePlaneError>
-    {
         if self.sessions.is_shutdown() {
             return Err(NotaryPostgresStatePlaneError::Shutdown);
         }
-        let database_url = load_database_url(&self.connections.database_url_env)?;
-        let postgres_config = parse_database_config(database_url.as_str())?;
-        drop(database_url);
-        let connector = MakeTlsConnector::new(self.connections.tls_connector.clone());
-        let (client, connection) = tokio::time::timeout(
-            self.connections.connect_timeout,
-            postgres_config.connect(connector),
-        )
-        .await
-        .map_err(|_| NotaryPostgresStatePlaneError::DatabaseUnavailable)?
-        .map_err(|_| NotaryPostgresStatePlaneError::DatabaseUnavailable)?;
-        drop(postgres_config);
-
-        let driver = tokio::spawn(connection);
-        let session_id = self.sessions.register(driver.abort_handle())?;
-        let session = NotaryPostgresSession {
-            client,
-            driver: Some(driver),
-            session_id,
-            sessions: Arc::clone(&self.sessions),
-            operation_timeout: self.connections.operation_timeout,
-        };
-        session.configure().await?;
-        let attestation = session.attest().await?;
-        if self.sessions.is_shutdown() {
+        let session = self.connections.get().await.map_err(map_pool_error)?;
+        if self.sessions.is_shutdown() || self.connections.is_closed() {
+            session.poisoned.store(true, Ordering::Release);
+            drop(session);
             return Err(NotaryPostgresStatePlaneError::Shutdown);
         }
-        if session
-            .driver
-            .as_ref()
-            .is_none_or(tokio::task::JoinHandle::is_finished)
-        {
-            return Err(NotaryPostgresStatePlaneError::DatabaseUnavailable);
-        }
-        Ok((session, attestation))
+        Ok(NotaryPostgresSession { session })
     }
 
-    /// Open a fresh fully attested runtime session and return the bounded
-    /// version information suitable for operator diagnostics.
+    /// Re-attest a pooled runtime session and return bounded version
+    /// information suitable for operator diagnostics.
     pub async fn attestation(
         &self,
     ) -> Result<PostgresStatePlaneAttestation, NotaryPostgresStatePlaneError> {
-        let (session, attestation) = self.open_attested_domain_session().await?;
-        drop(session);
-        Ok(attestation)
+        let session = self.open_domain_session().await?;
+        session.attest().await
     }
 
-    /// Probe a fresh connection and the complete schema/role contract. Opening
-    /// a new session prevents a stale client from reporting ready after a
-    /// database outage or failover.
+    /// Probe the complete schema and role contract. A failed probe poisons its
+    /// physical session, so recovery must reconnect and re-attest before the
+    /// next probe can report ready.
     pub async fn readiness(&self) -> NotaryPostgresStatePlaneReadiness {
         match self.open_domain_session().await {
-            Ok(session) => {
-                drop(session);
-                NotaryPostgresStatePlaneReadiness::Ready
-            }
+            Ok(session) => match session.attest().await {
+                Ok(_) => NotaryPostgresStatePlaneReadiness::Ready,
+                Err(error) => readiness_from_error(error),
+            },
             Err(error) => readiness_from_error(error),
         }
     }
@@ -413,12 +404,23 @@ impl NotaryPostgresStatePlaneRuntime {
     /// Stop admission of new sessions and abort every active connection
     /// driver. Repeated shutdown calls are safe.
     pub fn shutdown(&self) {
+        self.connections.close();
         self.sessions.shutdown();
     }
 
     #[must_use]
     pub fn is_shutdown(&self) -> bool {
         self.sessions.is_shutdown()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pool_status(&self) -> deadpool::Status {
+        self.connections.status()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn created_session_count(&self) -> u64 {
+        self.sessions.next_session_id.load(Ordering::Acquire)
     }
 }
 
@@ -509,6 +511,7 @@ impl fmt::Debug for NotaryPostgresStatePlaneRuntime {
 
 impl Drop for NotaryPostgresStatePlaneRuntime {
     fn drop(&mut self) {
+        self.connections.close();
         self.sessions.shutdown();
     }
 }
@@ -518,16 +521,53 @@ impl Drop for NotaryPostgresStatePlaneRuntime {
 /// Domain modules use the typed `Client` interface to invoke their fixed API
 /// functions. This wrapper intentionally offers no key-value operations.
 pub(crate) struct NotaryPostgresSession {
+    session: PooledPostgresSession,
+}
+
+/// One physical PostgreSQL connection. It enters the pool only after complete
+/// configuration and attestation, and is discarded after any operation error.
+struct PhysicalPostgresSession {
     client: Client,
     driver: Option<ConnectionDriver>,
     session_id: u64,
     sessions: Arc<SessionRegistry>,
     operation_timeout: Duration,
+    credential_generation: CredentialGeneration,
+    poisoned: AtomicBool,
+}
+
+/// A cancelled adapter future must not return a connection with an in-flight
+/// PostgreSQL request to the pool. Successful completion explicitly disarms
+/// this guard; every other drop path poisons the physical session.
+struct PoisonSessionOnDrop<'a> {
+    poisoned: &'a AtomicBool,
+    armed: bool,
+}
+
+impl<'a> PoisonSessionOnDrop<'a> {
+    fn new(poisoned: &'a AtomicBool) -> Self {
+        Self {
+            poisoned,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for PoisonSessionOnDrop<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.poisoned.store(true, Ordering::Release);
+        }
+    }
 }
 
 impl NotaryPostgresSession {
     pub(crate) fn client(&self) -> &Client {
-        &self.client
+        &self.session.client
     }
 
     /// Apply the runtime operation deadline to a typed client or transaction
@@ -536,12 +576,29 @@ impl NotaryPostgresSession {
         &self,
         operation: impl Future<Output = Result<T, tokio_postgres::Error>>,
     ) -> Result<T, NotaryPostgresStatePlaneError> {
-        tokio::time::timeout(self.operation_timeout, operation)
-            .await
-            .map_err(|_| NotaryPostgresStatePlaneError::OperationUnavailable)?
-            .map_err(|_| NotaryPostgresStatePlaneError::OperationUnavailable)
+        let mut poison_on_drop = PoisonSessionOnDrop::new(&self.session.poisoned);
+        match tokio::time::timeout(self.session.operation_timeout, operation).await {
+            Ok(Ok(value)) => {
+                poison_on_drop.disarm();
+                Ok(value)
+            }
+            Ok(Err(_)) | Err(_) => Err(NotaryPostgresStatePlaneError::OperationUnavailable),
+        }
     }
 
+    async fn attest(&self) -> Result<PostgresStatePlaneAttestation, NotaryPostgresStatePlaneError> {
+        let mut poison_on_drop = PoisonSessionOnDrop::new(&self.session.poisoned);
+        match self.session.attest().await {
+            Ok(attestation) => {
+                poison_on_drop.disarm();
+                Ok(attestation)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl PhysicalPostgresSession {
     async fn configure(&self) -> Result<(), NotaryPostgresStatePlaneError> {
         let timeout = duration_as_postgres_milliseconds(self.operation_timeout);
         tokio::time::timeout(
@@ -585,7 +642,7 @@ impl fmt::Debug for NotaryPostgresSession {
     }
 }
 
-impl Drop for NotaryPostgresSession {
+impl Drop for PhysicalPostgresSession {
     fn drop(&mut self) {
         self.sessions.unregister(self.session_id);
         if let Some(driver) = self.driver.take() {
@@ -599,16 +656,124 @@ struct ConnectionFactory {
     tls_connector: TlsConnector,
     connect_timeout: Duration,
     operation_timeout: Duration,
+    credential_tag_key: Zeroizing<[u8; 32]>,
+    sessions: Arc<SessionRegistry>,
 }
 
 impl ConnectionFactory {
-    fn new(config: &PostgresStatePlaneConfig) -> Result<Self, NotaryPostgresStatePlaneError> {
+    fn new(
+        config: &PostgresStatePlaneConfig,
+        sessions: Arc<SessionRegistry>,
+    ) -> Result<Self, NotaryPostgresStatePlaneError> {
+        let mut credential_tag_key = Zeroizing::new([0_u8; 32]);
+        getrandom::fill(credential_tag_key.as_mut())
+            .map_err(|_| NotaryPostgresStatePlaneError::InvalidConfiguration)?;
         Ok(Self {
             database_url_env: config.database_url_env.clone(),
             tls_connector: build_tls_connector(config.root_certificate_path.as_deref())?,
             connect_timeout: config.connect_timeout,
             operation_timeout: config.operation_timeout,
+            credential_tag_key,
+            sessions,
         })
+    }
+
+    fn credential_generation(
+        &self,
+        database_url: &str,
+    ) -> Result<CredentialGeneration, NotaryPostgresStatePlaneError> {
+        let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(self.credential_tag_key.as_ref())
+            .map_err(|_| NotaryPostgresStatePlaneError::InvalidConfiguration)?;
+        mac.update(b"registry-notary-postgresql-credential-generation-v1\0");
+        mac.update(database_url.as_bytes());
+        let mut generation = [0_u8; 32];
+        generation.copy_from_slice(&mac.finalize().into_bytes());
+        Ok(generation)
+    }
+
+    async fn open_physical_session(
+        &self,
+    ) -> Result<PhysicalPostgresSession, NotaryPostgresStatePlaneError> {
+        if self.sessions.is_shutdown() {
+            return Err(NotaryPostgresStatePlaneError::Shutdown);
+        }
+        let database_url = load_database_url(&self.database_url_env)?;
+        let credential_generation = self.credential_generation(database_url.as_str())?;
+        let postgres_config = parse_database_config(database_url.as_str())?;
+        drop(database_url);
+        let connector = MakeTlsConnector::new(self.tls_connector.clone());
+        let (client, connection) =
+            tokio::time::timeout(self.connect_timeout, postgres_config.connect(connector))
+                .await
+                .map_err(|_| NotaryPostgresStatePlaneError::DatabaseUnavailable)?
+                .map_err(|_| NotaryPostgresStatePlaneError::DatabaseUnavailable)?;
+        drop(postgres_config);
+
+        let driver = tokio::spawn(connection);
+        let session_id = self.sessions.register(driver.abort_handle())?;
+        let session = PhysicalPostgresSession {
+            client,
+            driver: Some(driver),
+            session_id,
+            sessions: Arc::clone(&self.sessions),
+            operation_timeout: self.operation_timeout,
+            credential_generation,
+            poisoned: AtomicBool::new(false),
+        };
+        session.configure().await?;
+        session.attest().await?;
+        if self.sessions.is_shutdown() {
+            return Err(NotaryPostgresStatePlaneError::Shutdown);
+        }
+        if session
+            .driver
+            .as_ref()
+            .is_none_or(tokio::task::JoinHandle::is_finished)
+        {
+            return Err(NotaryPostgresStatePlaneError::DatabaseUnavailable);
+        }
+        Ok(session)
+    }
+}
+
+impl Manager for ConnectionFactory {
+    type Type = PhysicalPostgresSession;
+    type Error = NotaryPostgresStatePlaneError;
+
+    async fn create(&self) -> Result<Self::Type, Self::Error> {
+        self.open_physical_session().await
+    }
+
+    async fn recycle(
+        &self,
+        session: &mut Self::Type,
+        _metrics: &Metrics,
+    ) -> RecycleResult<Self::Error> {
+        if self.sessions.is_shutdown() {
+            return Err(RecycleError::Backend(
+                NotaryPostgresStatePlaneError::Shutdown,
+            ));
+        }
+        if session.poisoned.load(Ordering::Acquire)
+            || session.client.is_closed()
+            || session
+                .driver
+                .as_ref()
+                .is_none_or(tokio::task::JoinHandle::is_finished)
+        {
+            return Err(RecycleError::Backend(
+                NotaryPostgresStatePlaneError::DatabaseUnavailable,
+            ));
+        }
+        let database_url = load_database_url(&self.database_url_env)?;
+        let current_generation = self.credential_generation(database_url.as_str())?;
+        drop(database_url);
+        if !bool::from(session.credential_generation.ct_eq(&current_generation)) {
+            return Err(RecycleError::Backend(
+                NotaryPostgresStatePlaneError::DatabaseUnavailable,
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -730,6 +895,19 @@ fn duration_as_postgres_milliseconds(duration: Duration) -> String {
     format!("{}ms", duration.as_millis())
 }
 
+fn map_pool_error(
+    error: PoolError<NotaryPostgresStatePlaneError>,
+) -> NotaryPostgresStatePlaneError {
+    match error {
+        PoolError::Backend(error) => error,
+        PoolError::Closed => NotaryPostgresStatePlaneError::Shutdown,
+        PoolError::Timeout(_) => NotaryPostgresStatePlaneError::OperationUnavailable,
+        PoolError::NoRuntimeSpecified | PoolError::PostCreateHook(_) => {
+            NotaryPostgresStatePlaneError::InvalidConfiguration
+        }
+    }
+}
+
 const fn map_attestation_error(error: StatePlaneMigrationError) -> NotaryPostgresStatePlaneError {
     match error {
         StatePlaneMigrationError::UnsupportedServerMajor => {
@@ -810,6 +988,7 @@ mod tests {
             Some(PathBuf::from("/sentinel/root.pem")),
             Duration::from_secs(5),
             Duration::from_secs(2),
+            16,
         )
         .expect("test configuration is valid")
     }
@@ -845,6 +1024,44 @@ mod tests {
     }
 
     #[test]
+    fn credential_generation_changes_without_retaining_url_material() {
+        let config = PostgresStatePlaneConfig::new(
+            "SENTINEL_DATABASE_URL",
+            None,
+            Duration::from_secs(5),
+            Duration::from_secs(2),
+            16,
+        )
+        .expect("test configuration is valid");
+        let factory = ConnectionFactory::new(&config, Arc::new(SessionRegistry::default()))
+            .expect("connection factory is valid");
+        let first = factory
+            .credential_generation("postgresql://sentinel:first@localhost/state?sslmode=require")
+            .expect("first generation is available");
+        let second = factory
+            .credential_generation("postgresql://sentinel:second@localhost/state?sslmode=require")
+            .expect("second generation is available");
+        assert_ne!(first, second);
+        let rendered = format!("{first:?} {second:?}");
+        assert!(!rendered.contains("sentinel"));
+        assert!(!rendered.contains("postgresql://"));
+    }
+
+    #[test]
+    fn cancelled_operation_guard_poisons_only_armed_sessions() {
+        let cancelled = AtomicBool::new(false);
+        drop(PoisonSessionOnDrop::new(&cancelled));
+        assert!(cancelled.load(Ordering::Acquire));
+
+        let completed = AtomicBool::new(false);
+        {
+            let mut guard = PoisonSessionOnDrop::new(&completed);
+            guard.disarm();
+        }
+        assert!(!completed.load(Ordering::Acquire));
+    }
+
+    #[test]
     fn zero_timeouts_fail_closed() {
         assert_eq!(
             PostgresStatePlaneConfig::new(
@@ -852,8 +1069,19 @@ mod tests {
                 None,
                 Duration::ZERO,
                 Duration::from_secs(1),
+                16,
             ),
             Err(NotaryPostgresStatePlaneError::InvalidTimeout)
+        );
+        assert_eq!(
+            PostgresStatePlaneConfig::new(
+                "DATABASE_URL",
+                None,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                0,
+            ),
+            Err(NotaryPostgresStatePlaneError::InvalidConfiguration)
         );
     }
 
@@ -900,13 +1128,21 @@ mod tests {
             None,
             Duration::from_millis(10),
             Duration::from_millis(10),
+            1,
         )
         .expect("test configuration is valid");
+        let sessions = Arc::new(SessionRegistry::default());
+        let manager = ConnectionFactory::new(&config, Arc::clone(&sessions))
+            .expect("test connection policy is valid");
+        let connections = PostgresSessionPool::builder(manager)
+            .max_size(config.max_connections())
+            .wait_timeout(Some(config.operation_timeout()))
+            .runtime(deadpool::Runtime::Tokio1)
+            .build()
+            .expect("test connection pool is valid");
         let runtime = Arc::new(NotaryPostgresStatePlaneRuntime {
-            connections: Arc::new(
-                ConnectionFactory::new(&config).expect("test connection policy is valid"),
-            ),
-            sessions: Arc::new(SessionRegistry::default()),
+            connections,
+            sessions,
             retention_attempts: AtomicU64::new(0),
         });
         let maintenance = start_postgres_retention_maintenance_with_cadence(

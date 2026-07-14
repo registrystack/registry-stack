@@ -5,6 +5,7 @@ use super::*;
 
 pub const STATE_STORAGE_IN_MEMORY: &str = "in_memory";
 pub const STATE_STORAGE_POSTGRESQL: &str = "postgresql";
+pub const STATE_POSTGRESQL_MAX_CONNECTIONS: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -41,6 +42,13 @@ impl StateConfig {
                 if self.postgresql.operation_timeout_ms == 0 {
                     return invalid_state(
                         "state.postgresql.operation_timeout_ms must be greater than zero",
+                    );
+                }
+                if !(1..=STATE_POSTGRESQL_MAX_CONNECTIONS)
+                    .contains(&self.postgresql.max_connections)
+                {
+                    return invalid_state(
+                        "state.postgresql.max_connections must be between 1 and 256",
                     );
                 }
                 if self
@@ -90,6 +98,8 @@ pub struct StatePostgresqlConfig {
     pub connect_timeout_ms: u64,
     #[serde(default = "default_state_postgresql_operation_timeout_ms")]
     pub operation_timeout_ms: u64,
+    #[serde(default = "default_state_postgresql_max_connections")]
+    pub max_connections: usize,
     #[serde(default = "default_sensitive_state_key_env")]
     pub sensitive_state_key_env: String,
 }
@@ -101,6 +111,7 @@ impl Default for StatePostgresqlConfig {
             root_certificate_path: None,
             connect_timeout_ms: default_state_postgresql_connect_timeout_ms(),
             operation_timeout_ms: default_state_postgresql_operation_timeout_ms(),
+            max_connections: default_state_postgresql_max_connections(),
             sensitive_state_key_env: default_sensitive_state_key_env(),
         }
     }
@@ -128,6 +139,10 @@ pub(super) const fn default_state_postgresql_connect_timeout_ms() -> u64 {
 
 pub(super) const fn default_state_postgresql_operation_timeout_ms() -> u64 {
     2_000
+}
+
+pub(super) const fn default_state_postgresql_max_connections() -> usize {
+    16
 }
 
 pub(super) fn default_sensitive_state_key_env() -> String {
