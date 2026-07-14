@@ -831,7 +831,7 @@ enum OAuthResponseProfile {
 enum CapabilityDeclaration {
     Http { http: HttpDeclaration },
     Snapshot { snapshot: SnapshotDeclaration },
-    Script { script: ScriptDeclaration },
+    Script { script: Box<ScriptDeclaration> },
 }
 
 #[derive(Debug, Deserialize, Serialize)]

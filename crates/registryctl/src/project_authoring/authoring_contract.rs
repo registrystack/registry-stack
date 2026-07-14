@@ -489,9 +489,7 @@ fn lower_authored_integration(
             calls: if matches!(
                 &authored.capability,
                 AuthoredCapabilityDeclaration::Http { .. }
-            ) {
-                1
-            } else if authored
+            ) || authored
                 .source
                 .as_ref()
                 .and_then(|source| source.protocol.as_ref())
@@ -1260,7 +1258,7 @@ fn lower_script_capability(
     .map_err(|_| anyhow!("source.response.max_bytes exceeds the product range"))?;
     Ok((
         CapabilityDeclaration::Script {
-            script: ScriptDeclaration {
+            script: Box::new(ScriptDeclaration {
                 runtime: ScriptRuntime::RhaiV1,
                 credential: source.auth.clone(),
                 allow: source
@@ -1284,7 +1282,7 @@ fn lower_script_capability(
                 signed_dci: signed_dci.cloned(),
                 script: script.file.clone(),
                 modules: script.modules.clone(),
-            },
+            }),
         },
         outputs,
     ))
