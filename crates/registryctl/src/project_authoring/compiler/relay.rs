@@ -136,6 +136,9 @@ fn generated_relay_config(
     }
     allowed_clients.sort();
     allowed_clients.dedup();
+    let relay_origin = normalize_url_scheme(&relay.origin)?;
+    let relay_issuer = normalize_url_scheme(&relay.issuer)?;
+    let relay_jwks_url = normalize_url_scheme(&relay.jwks_url)?;
     let mut config = json!({
         "instance": {
             "id": relay_service.service,
@@ -144,15 +147,17 @@ fn generated_relay_config(
         "server": { "bind": "127.0.0.1:8080" },
         "catalog": {
             "title": format!("{} governed Registry Relay", loaded.project.registry.id),
-            "base_url": relay.origin,
+            "base_url": relay_origin,
             "publisher": loaded.project.registry.id,
         },
         "auth": {
             "mode": "oidc",
             "oidc": {
-                "issuer": relay.issuer,
+                "issuer": relay_issuer,
                 "audiences": [relay.audience.as_str()],
-                "jwks_url": relay.jwks_url,
+                "jwks_url": relay_jwks_url,
+                "allow_dev_insecure_fetch_urls": url_uses_http(&relay.issuer)
+                    || url_uses_http(&relay.jwks_url),
                 "allowed_clients": allowed_clients,
             },
         },

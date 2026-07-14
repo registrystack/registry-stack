@@ -815,7 +815,6 @@ fn compile_response(
                 name: name.as_str().into(),
                 pointer: compile_json_pointer(&output.pointer)?,
                 shape: compile_prior_scalar_shape(output)?,
-                date: output.output_type == OutputTypeDocument::Date,
             })
         })
         .collect::<Result<Box<[_]>, _>>()?;
@@ -992,6 +991,10 @@ fn compile_closed_json_schema(
             max_bytes,
         }) => ClosedJsonSchema::string(*nullable, *max_bytes)
             .map_err(|_| SourcePlanCompileError::CompilerInvariant),
+        CompiledResponseSchema::Scalar(CompiledScalarShape::Date { nullable }) => {
+            ClosedJsonSchema::string(*nullable, 10)
+                .map_err(|_| SourcePlanCompileError::CompilerInvariant)
+        }
         CompiledResponseSchema::Scalar(CompiledScalarShape::Boolean { nullable }) => {
             Ok(ClosedJsonSchema::boolean(*nullable))
         }
@@ -1043,9 +1046,8 @@ fn compile_prior_scalar_shape(
                 .maximum
                 .ok_or(SourcePlanCompileError::CompilerInvariant)?,
         }),
-        OutputTypeDocument::Date => Ok(CompiledScalarShape::String {
+        OutputTypeDocument::Date => Ok(CompiledScalarShape::Date {
             nullable: output.nullable,
-            max_bytes: 10,
         }),
     }
 }
@@ -1087,6 +1089,11 @@ pub(in crate::source_plan) fn compile_response_schema(
             nullable: *nullable,
             max_bytes: *max_bytes,
         }),
+        ResponseSchemaDocument::Date { nullable } => {
+            CompiledResponseSchema::Scalar(CompiledScalarShape::Date {
+                nullable: *nullable,
+            })
+        }
         ResponseSchemaDocument::Boolean { nullable } => {
             CompiledResponseSchema::Scalar(CompiledScalarShape::Boolean {
                 nullable: *nullable,

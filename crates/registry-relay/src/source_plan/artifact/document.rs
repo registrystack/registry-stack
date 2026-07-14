@@ -327,6 +327,9 @@ pub(in super::super) enum ResponseSchemaDocument {
         nullable: bool,
         max_bytes: u32,
     },
+    Date {
+        nullable: bool,
+    },
     Boolean {
         nullable: bool,
     },
@@ -345,10 +348,8 @@ pub(in super::super) enum ResponseSchemaDocument {
 impl ResponseSchemaDocument {
     pub(super) fn validates_public_output(&self, output: &OutputFieldDocument) -> bool {
         match (self, &output.output_type) {
-            (
-                Self::String { nullable, .. },
-                OutputTypeDocument::String | OutputTypeDocument::Date,
-            )
+            (Self::String { nullable, .. }, OutputTypeDocument::String)
+            | (Self::Date { nullable }, OutputTypeDocument::Date)
             | (Self::Boolean { nullable }, OutputTypeDocument::Boolean)
             | (Self::Integer { nullable, .. }, OutputTypeDocument::Integer) => {
                 *nullable == output.nullable

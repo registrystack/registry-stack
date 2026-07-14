@@ -238,6 +238,17 @@ fn validates_snapshot_value(schema: &CompiledResponseSchema, value: &Value) -> b
             CompiledResponseSchema::Scalar(CompiledScalarShape::String { max_bytes, .. }),
             Value::String(value),
         ) => usize::try_from(*max_bytes).is_ok_and(|limit| value.len() <= limit),
+        (
+            CompiledResponseSchema::Scalar(CompiledScalarShape::Date { .. }),
+            Value::String(value),
+        ) => {
+            value.len() == 10
+                && time::Date::parse(
+                    value,
+                    &time::macros::format_description!("[year]-[month]-[day]"),
+                )
+                .is_ok()
+        }
         (CompiledResponseSchema::Scalar(CompiledScalarShape::Boolean { .. }), Value::Bool(_)) => {
             true
         }
@@ -292,4 +303,28 @@ pub(crate) enum SnapshotExactBackendError {
     CardinalityViolation,
     #[error("snapshot exact row violated the closed response contract")]
     ResponseContractViolation,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_date_requires_a_real_full_date() {
+        let schema = CompiledResponseSchema::Scalar(CompiledScalarShape::Date { nullable: false });
+
+        assert!(validates_snapshot_value(
+            &schema,
+            &Value::String("2024-02-29".into())
+        ));
+        assert!(!validates_snapshot_value(
+            &schema,
+            &Value::String("2023-02-29".into())
+        ));
+        assert!(!validates_snapshot_value(
+            &schema,
+            &Value::String("2024/02/29".into())
+        ));
+        assert!(!validates_snapshot_value(&schema, &Value::Bool(true)));
+    }
 }

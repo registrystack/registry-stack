@@ -30,7 +30,7 @@ pub enum WorkloadBindingError {
     /// A configured workload identifier is outside the closed v1 grammar.
     #[error("invalid consultation workload identifier")]
     InvalidWorkloadId,
-    /// A configured issuer is not a bounded HTTPS issuer URL.
+    /// A configured issuer is not a bounded permitted issuer URL.
     #[error("invalid consultation issuer")]
     InvalidIssuer,
     /// A configured audience is not a bounded visible-ASCII value.
@@ -137,11 +137,48 @@ deployment_id!(
     WorkloadBindingError::InvalidRegistryInstanceId
 );
 
-/// The exact HTTPS issuer accepted for one consultation workload.
+/// The exact issuer accepted for one consultation workload.
+///
+/// Production construction requires HTTPS. The explicit development
+/// constructor additionally accepts HTTP on an IP-loopback host so local
+/// authoring can exercise the same coupled workload binding without weakening
+/// non-local issuer validation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ConfiguredIssuer(Box<str>);
 
 impl ConfiguredIssuer {
+    /// Construct an issuer, optionally admitting HTTP only on an IP-loopback
+    /// host for an explicitly enabled local development deployment.
+    pub(crate) fn try_from_with_local_loopback(
+        value: &str,
+        allow_local_loopback: bool,
+    ) -> Result<Self, WorkloadBindingError> {
+        if !is_visible_ascii(value, MAX_ISSUER_BYTES) {
+            return Err(WorkloadBindingError::InvalidIssuer);
+        }
+        let parsed = reqwest::Url::parse(value).map_err(|_| WorkloadBindingError::InvalidIssuer)?;
+        let secure = parsed.scheme() == "https";
+        let local_loopback = allow_local_loopback
+            && parsed.scheme() == "http"
+            && parsed
+                .host_str()
+                .and_then(|host| {
+                    host.trim_matches(['[', ']'])
+                        .parse::<std::net::IpAddr>()
+                        .ok()
+                })
+                .is_some_and(|host| host.is_loopback());
+        let valid = (secure || local_loopback)
+            && parsed.host_str().is_some()
+            && parsed.username().is_empty()
+            && parsed.password().is_none()
+            && parsed.query().is_none()
+            && parsed.fragment().is_none();
+        valid
+            .then(|| Self(value.into()))
+            .ok_or(WorkloadBindingError::InvalidIssuer)
+    }
+
     /// Return the issuer compared with the verified `iss` claim.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -153,19 +190,7 @@ impl TryFrom<&str> for ConfiguredIssuer {
     type Error = WorkloadBindingError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        if !is_visible_ascii(value, MAX_ISSUER_BYTES) {
-            return Err(WorkloadBindingError::InvalidIssuer);
-        }
-        let parsed = reqwest::Url::parse(value).map_err(|_| WorkloadBindingError::InvalidIssuer)?;
-        let valid = parsed.scheme() == "https"
-            && parsed.host_str().is_some()
-            && parsed.username().is_empty()
-            && parsed.password().is_none()
-            && parsed.query().is_none()
-            && parsed.fragment().is_none();
-        valid
-            .then(|| Self(value.into()))
-            .ok_or(WorkloadBindingError::InvalidIssuer)
+        Self::try_from_with_local_loopback(value, false)
     }
 }
 
@@ -857,6 +882,25 @@ mod tests {
             ConfiguredIssuer::try_from("https://user@issuer.example/realm"),
             Err(WorkloadBindingError::InvalidIssuer)
         );
+        for issuer in ["http://127.0.0.1:8080/realm", "http://[::1]:8080/realm"] {
+            assert!(ConfiguredIssuer::try_from_with_local_loopback(issuer, true).is_ok());
+            assert_eq!(
+                ConfiguredIssuer::try_from_with_local_loopback(issuer, false),
+                Err(WorkloadBindingError::InvalidIssuer)
+            );
+        }
+        for issuer in [
+            "http://localhost:8080/realm",
+            "http://10.42.0.9:8080/realm",
+            "http://user@127.0.0.1:8080/realm",
+            "http://127.0.0.1:8080/realm?tenant=local",
+            "http://127.0.0.1:8080/realm#fragment",
+        ] {
+            assert_eq!(
+                ConfiguredIssuer::try_from_with_local_loopback(issuer, true),
+                Err(WorkloadBindingError::InvalidIssuer)
+            );
+        }
         assert_eq!(
             ConfiguredAudience::try_from("registry relay"),
             Err(WorkloadBindingError::InvalidAudience)

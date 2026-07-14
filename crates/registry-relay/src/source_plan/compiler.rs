@@ -744,6 +744,9 @@ pub enum CompiledScalarShape {
         nullable: bool,
         max_bytes: u32,
     },
+    Date {
+        nullable: bool,
+    },
     Boolean {
         nullable: bool,
     },
@@ -763,6 +766,7 @@ impl CompiledScalarShape {
     pub(crate) const fn nullable(&self) -> bool {
         match self {
             Self::String { nullable, .. }
+            | Self::Date { nullable }
             | Self::Boolean { nullable }
             | Self::Integer { nullable, .. }
             | Self::Number { nullable, .. } => *nullable,
@@ -776,6 +780,7 @@ pub(crate) enum CompiledResponseSchemaKind {
     Object,
     Array,
     String,
+    Date,
     Boolean,
     Integer,
     Number,
@@ -805,6 +810,7 @@ impl CompiledResponseSchema {
             Self::Object { .. } => CompiledResponseSchemaKind::Object,
             Self::Array { .. } => CompiledResponseSchemaKind::Array,
             Self::Scalar(CompiledScalarShape::String { .. }) => CompiledResponseSchemaKind::String,
+            Self::Scalar(CompiledScalarShape::Date { .. }) => CompiledResponseSchemaKind::Date,
             Self::Scalar(CompiledScalarShape::Boolean { .. }) => {
                 CompiledResponseSchemaKind::Boolean
             }
@@ -878,7 +884,6 @@ pub struct CompiledPriorOutputSlot {
     name: Box<str>,
     pointer: CompiledJsonPointer,
     shape: CompiledScalarShape,
-    date: bool,
 }
 
 impl CompiledPriorOutputSlot {
@@ -896,10 +901,6 @@ impl CompiledPriorOutputSlot {
     #[must_use]
     pub const fn shape(&self) -> &CompiledScalarShape {
         &self.shape
-    }
-
-    pub(crate) const fn is_date(&self) -> bool {
-        self.date
     }
 }
 

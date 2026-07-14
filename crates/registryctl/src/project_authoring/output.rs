@@ -1336,6 +1336,76 @@ fn validate_https_origin(value: &str, field: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_https_or_local_loopback_origin(
+    value: &str,
+    field: &str,
+    allow_local_loopback: bool,
+) -> Result<()> {
+    let origin = url::Url::parse(value).with_context(|| format!("{field} is not a URL"))?;
+    let secure = origin.scheme() == "https";
+    let local_loopback = allow_local_loopback
+        && origin.scheme() == "http"
+        && url_host_is_ip_loopback(&origin);
+    if (!secure && !local_loopback)
+        || origin.host().is_none()
+        || !origin.username().is_empty()
+        || origin.password().is_some()
+        || origin.path() != "/"
+        || origin.query().is_some()
+        || origin.fragment().is_some()
+    {
+        bail!(
+            "{field} must be an exact HTTPS origin or an HTTP IP-loopback origin in a local environment"
+        );
+    }
+    Ok(())
+}
+
+fn validate_https_or_local_loopback_resource(
+    value: &str,
+    field: &str,
+    allow_local_loopback: bool,
+) -> Result<()> {
+    let resource = url::Url::parse(value).with_context(|| format!("{field} is invalid"))?;
+    let secure = resource.scheme() == "https";
+    let local_loopback = allow_local_loopback
+        && resource.scheme() == "http"
+        && url_host_is_ip_loopback(&resource);
+    if (!secure && !local_loopback)
+        || resource.host().is_none()
+        || !resource.username().is_empty()
+        || resource.password().is_some()
+        || resource.path() == "/"
+        || resource.query().is_some()
+        || resource.fragment().is_some()
+    {
+        bail!(
+            "{field} must be one exact HTTPS resource or an HTTP IP-loopback resource in a local environment"
+        );
+    }
+    Ok(())
+}
+
+fn url_host_is_ip_loopback(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        Some(url::Host::Domain(_)) | None => false,
+    }
+}
+
+fn url_uses_http(value: &str) -> bool {
+    url::Url::parse(value).is_ok_and(|url| url.scheme() == "http")
+}
+
+fn normalize_url_scheme(value: &str) -> Result<String> {
+    let url = url::Url::parse(value).context("validated environment URL no longer parses")?;
+    let (_, suffix) = value
+        .split_once(':')
+        .ok_or_else(|| anyhow!("validated environment URL has no scheme separator"))?;
+    Ok(format!("{}:{suffix}", url.scheme()))
+}
+
 fn validate_absolute_runtime_path(path: &Path, field: &str) -> Result<()> {
     let value = path
         .to_str()
