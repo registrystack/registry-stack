@@ -113,11 +113,12 @@ is all-or-nothing: Relay refuses startup when OIDC, workload identity, artifact
 closure, state-plane identity, pseudonym material references, source credential
 references, or compiled plan support are incomplete or inconsistent.
 
-The maintained DHIS2 journey includes a complete local example at
-[`profiles/dhis2-2.41.9-enrollment-status/relay-config.example.yaml`](../profiles/dhis2-2.41.9-enrollment-status/relay-config.example.yaml).
-Use that file as the canonical shape instead of copying a partial block from
-this guide. It keeps the exact typed artifact hashes and raw file digests next
-to the maintained profile that owns them.
+Use the generic [Registry Stack project-authoring workflow](https://docs.registrystack.org/tutorials/author-registry-project/)
+to produce the complete Relay input for a deployment. The maintained
+[DHIS2 journey](../profiles/dhis2-2.41.9-enrollment-status/relay-config.example.yaml)
+is one interoperability example, not a source-product or version-specific
+runtime shape. Its generated config keeps exact typed artifact hashes and raw
+file digests next to that example.
 
 `authorized_workload` fixes one OIDC client identity. The issuer comes from
 `auth.oidc`; the audience and selected `azp` or `client_id` must agree with the

@@ -12,11 +12,12 @@ for end-to-end conformance.
 
 ## Definition of Done
 
-- The suite runs against a disposable Notary instance and a disposable source
-  fixture, not a shared operator environment.
+- The suite runs against a disposable Notary instance plus either a disposable
+  Relay consultation fixture for registry-backed claims or a source-free
+  self-attestation fixture, not a shared operator environment.
 - Required credentials are supplied through environment variables or GITB
-  actor/session parameters. No API keys, bearer tokens, issuer keys, source
-  tokens, or replay secrets are committed.
+  actor/session parameters. No API keys, bearer tokens, issuer keys, Relay
+  workload tokens, or replay secrets are committed.
 - Every scenario records the Notary base URL, selected deployment profile,
   configured claim IDs, credential profile IDs, and expected auth mode.
 - At least one positive authenticated evaluation and one negative auth case are
@@ -33,8 +34,8 @@ for end-to-end conformance.
 | `discovery-auth-denied` | unauthenticated `GET /.well-known/evidence-service` returns `401` | runtime auth | The response is RFC 9457-style problem JSON with an auth error code. |
 | `discovery-authenticated` | authenticated `GET /.well-known/evidence-service` returns service metadata | runtime discovery | Response includes `service_id`, configured claims, and credential capabilities. |
 | `claims-authenticated` | authenticated `GET /v1/claims` returns configured claims | runtime discovery | Response includes the configured positive-evaluation claim. |
-| `evaluation-positive` | authenticated `POST /v1/evaluations` succeeds for a fixture source record | runtime evaluation | Response contains the expected claim result and no raw source record spillover. |
-| `evaluation-auth-denied` | unauthenticated `POST /v1/evaluations` returns `401` | runtime auth | No source call is made and no evaluation result is created. |
+| `evaluation-positive` | authenticated `POST /v1/evaluations` succeeds for a compiler-pinned Relay fixture or source-free self-attestation | runtime evaluation | Response contains the expected claim result and no raw Relay output or self-attested input spillover. |
+| `evaluation-auth-denied` | unauthenticated `POST /v1/evaluations` returns `401` | runtime auth | No Relay consultation or claim evaluation is started. |
 | `credential-issue` | authenticated `POST /v1/credentials` issues `application/dc+sd-jwt` | runtime credential | Credential response verifies against the configured public issuer key. |
 | `credential-status` | `GET /v1/credentials/{id}/status` returns the configured status response | runtime status | Enabled status lookup is reachable without exposing unrelated credential data. |
 | `federation-positive` | signed `POST /federation/v1/evaluations` succeeds for one trusted peer | runtime federation | Peer signature, purpose, replay key, and result are checked. |
@@ -53,11 +54,13 @@ The first implementation wave should cover only:
 
 Done for the first slice means:
 
-- a fixture Notary config and source fixture can be started from a clean checkout;
+- a fixture Notary config and either its compiler-pinned Relay fixture or its
+  source-free self-attestation inputs can be started from a clean checkout;
 - `/.well-known/evidence-service` is intentionally authenticated and returns
   `401` without credentials;
 - the same route returns metadata with a configured API key or bearer token;
-- one evaluation succeeds against the fixture source;
+- one evaluation succeeds against the configured Relay consultation or
+  self-attestation fixture;
 - the unauthenticated evaluation attempt returns `401` and produces no positive
   result;
 - the test report includes exact request paths, response status codes, and saved

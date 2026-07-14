@@ -56,7 +56,7 @@ contract.
 | Citizen wallet | Discovers issuer metadata, launches citizen authentication, signs holder proof, stores the credential |
 | eSignet | Authenticates the citizen and provides the verified subject-binding claim |
 | Registry Notary | Publishes OpenID4VCI facade, validates token and proof, enforces self-attestation policy, issues credential |
-| Registry Relay/source | Supplies configured civil registry facts after Notary authorization |
+| Registry Relay | Supplies typed outputs through compiler-pinned consultations after Notary authorization |
 | Registry Platform | Provides reusable cryptographic, OpenID4VCI, SD-JWT, OIDC, and test-fixture primitives |
 | Registry Lab | Orchestrates the optional demo, scripts, artifacts, and wallet smoke checks |
 
