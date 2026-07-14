@@ -11,11 +11,7 @@
     "subject": {
       "mode": "single_subject",
       "selector_provenance": {
-        "type": "trusted_notary_assertion",
-        "assertion_contract": {
-          "id": "registry.notary.subject-binding.v1",
-          "hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        }
+        "type": "workload_selected"
       }
     },
     "inputs": {

@@ -19,11 +19,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::consultation::{
-    AcquiredField, AcquisitionClass, AssertionContractHash, AssertionContractId,
-    AssertionContractIdentity, IntegrationPackHash, IntegrationPackId, IntegrationPackIdentity,
-    OperationBounds, OperationId, PolicyHash, PolicyId, PolicyIdentity, ProfileContractHash,
-    ProfileId, ProfileIdentity, ProfileVersion, RegistryInstanceId, RequiredConsultationScope,
-    SelectorProvenance, TenantId, WorkloadId,
+    AcquiredField, AcquisitionClass, IntegrationPackHash, IntegrationPackId,
+    IntegrationPackIdentity, OperationBounds, OperationId, PolicyHash, PolicyId, PolicyIdentity,
+    ProfileContractHash, ProfileId, ProfileIdentity, ProfileVersion, RegistryInstanceId,
+    RequiredConsultationScope, SelectorProvenance, TenantId, WorkloadId,
 };
 
 use super::identifiers::{

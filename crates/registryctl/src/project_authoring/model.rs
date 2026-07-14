@@ -727,6 +727,8 @@ struct IntegrationDocument {
 struct NotApplicableDeclaration {
     #[serde(default)]
     ambiguity: Option<NotApplicableReason>,
+    #[serde(default)]
+    subject_mismatch: Option<NotApplicableReason>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

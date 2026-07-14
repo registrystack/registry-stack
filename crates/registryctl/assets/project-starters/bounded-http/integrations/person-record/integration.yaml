@@ -29,3 +29,8 @@ outputs:
   active:
     type: boolean
     x-registry-source: /active
+
+not_applicable:
+  subject_mismatch:
+    rationale: The selected response projection contains no identifier that can be compared with the requested person identifier.
+    request_fixture: active-person

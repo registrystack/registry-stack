@@ -25,6 +25,8 @@ struct AuthoredIntegrationDocument {
 struct AuthoredNotApplicableDeclaration {
     #[serde(default)]
     ambiguity: Option<AuthoredNotApplicableReason>,
+    #[serde(default)]
+    subject_mismatch: Option<AuthoredNotApplicableReason>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -508,6 +510,12 @@ fn lower_authored_integration(
                     request_fixture: reason.request_fixture.clone(),
                 }
             }),
+            subject_mismatch: authored.not_applicable.subject_mismatch.as_ref().map(|reason| {
+                NotApplicableReason {
+                    rationale: reason.rationale.clone(),
+                    request_fixture: reason.request_fixture.clone(),
+                }
+            }),
         },
         bounds: BoundsDeclaration {
             calls: if matches!(
@@ -535,15 +543,23 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
         bail!("integration version must be 1 and revision must be positive");
     }
     validate_stable_id(&authored.id, "integration id")?;
-    if let Some(reason) = &authored.not_applicable.ambiguity {
+    for (field, reason) in [
+        ("ambiguity", &authored.not_applicable.ambiguity),
+        ("subject_mismatch", &authored.not_applicable.subject_mismatch),
+    ] {
+        let Some(reason) = reason else {
+            continue;
+        };
         let rationale = reason.rationale.trim();
         let rationale_characters = rationale.chars().count();
         if !(24..=512).contains(&rationale_characters) {
-            bail!("not_applicable.ambiguity.rationale must contain 24 to 512 non-whitespace characters");
+            bail!(
+                "not_applicable.{field}.rationale must contain 24 to 512 non-whitespace characters"
+            );
         }
         validate_stable_id(
             &reason.request_fixture,
-            "not_applicable.ambiguity.request_fixture",
+            &format!("not_applicable.{field}.request_fixture"),
         )?;
     }
     if authored.input.is_empty() || authored.input.len() > 16 {

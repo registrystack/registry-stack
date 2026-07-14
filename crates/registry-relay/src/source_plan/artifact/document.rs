@@ -32,9 +32,6 @@ pub(in super::super) enum SubjectModeDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub(in super::super) enum SelectorProvenanceDocument {
-    TrustedNotaryAssertion {
-        assertion_contract: HashReferenceDocument,
-    },
     WorkloadSelected,
 }
 

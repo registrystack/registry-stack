@@ -29,15 +29,6 @@ pub(super) fn validate_subject(
     subject: &SubjectDocument,
 ) -> Result<SelectorProvenance, SourcePlanArtifactError> {
     match &subject.selector_provenance {
-        SelectorProvenanceDocument::TrustedNotaryAssertion { assertion_contract } => {
-            let id = AssertionContractId::try_from(assertion_contract.id.as_str())
-                .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
-            let hash = AssertionContractHash::try_from(assertion_contract.hash.as_str())
-                .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
-            Ok(SelectorProvenance::TrustedNotaryAssertion(
-                AssertionContractIdentity::new(id, hash),
-            ))
-        }
         SelectorProvenanceDocument::WorkloadSelected => Ok(SelectorProvenance::WorkloadSelected),
     }
 }

@@ -34,3 +34,8 @@ outputs:
     type: [string, "null"]
     maxLength: 20
     x-registry-source: /category
+
+not_applicable:
+  subject_mismatch:
+    rationale: The selected response projection contains no identifier that can be compared with the requested household reference.
+    request_fixture: eligible-household

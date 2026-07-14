@@ -1,0 +1,22 @@
+name: patient-subject-mismatch
+classification: synthetic
+input: { birthdate: 2018-05-12, family: Example, given: Ada }
+interactions:
+  - expect:
+      method: GET
+      path: /fhir/Patient
+      query: { _count: 2, birthdate: 2018-05-12, family: Example, given: Ada }
+    respond:
+      status: 200
+      body:
+        resourceType: Bundle
+        type: searchset
+        total: 1
+        entry:
+          - search: { mode: match }
+            resource:
+              resourceType: Patient
+              id: patient-other
+              birthDate: 2016-09-03
+              name: [{ family: Different, given: [Person] }]
+expect: { error: failure.subject_mismatch, outputs: {}, claims: {} }

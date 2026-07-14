@@ -477,15 +477,24 @@ fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<
                     "    authority: exact local materialized snapshot read"
                 )?;
             }
-            if let Some(ambiguity) = integration.pointer("/not_applicable/ambiguity") {
+            for (field, label) in [
+                ("ambiguity", "ambiguity"),
+                ("subject_mismatch", "subject mismatch"),
+            ] {
+                let Some(reason) = integration
+                    .pointer(&format!("/not_applicable/{field}"))
+                    .and_then(serde_json::Value::as_object)
+                else {
+                    continue;
+                };
                 writeln!(
                     output,
-                    "    ambiguity not applicable: {} [request fixture: {}]",
-                    ambiguity
+                    "    {label} not applicable: {} [request fixture: {}]",
+                    reason
                         .get("rationale")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("missing rationale"),
-                    ambiguity
+                    reason
                         .get("request_fixture")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("missing")
@@ -978,6 +987,8 @@ mod tests {
             assert!(concise.contains(heading), "missing {heading}: {concise}");
         }
         assert!(!concise.contains("Claims and disclosure:"));
+        assert!(concise.contains("subject mismatch not applicable:"));
+        assert!(!concise.contains("ambiguity not applicable: missing rationale"));
         let expanded = render_check_report(&report, true).expect("expanded report renders");
         assert!(expanded.contains("outputs:"));
         assert!(expanded.contains("Claims and disclosure:"));

@@ -2,7 +2,7 @@ version: 1
 starter:
   id: http
   release: 0.9.0
-  content_digest: sha256:e9c247b3a8f56e25c00d3dc6b4b5e69046313bc5a56cb9ae56d778d6d8d2245f
+  content_digest: sha256:3ea45ec2cf9e331a77f604764b3bd9dfcb1e852a9b875ecf29950dd13fbb8719
 
 registry:
   id: fictional-citizen-registry

@@ -1618,13 +1618,6 @@ fn verified_consent_value(
 
 fn selector_provenance_value(provenance: &SelectorProvenance) -> Value {
     match provenance {
-        SelectorProvenance::TrustedNotaryAssertion(assertion) => json!({
-            "type": "trusted_notary_assertion",
-            "assertion_contract": {
-                "id": assertion.id().as_str(),
-                "hash": assertion.hash().as_str(),
-            },
-        }),
         SelectorProvenance::WorkloadSelected => json!({"type": "workload_selected"}),
     }
 }

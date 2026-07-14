@@ -61,7 +61,6 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
             .join(&document.fixtures);
         let fixtures = load_fixtures(&root, &fixture_dir, &mut hasher)?;
         validate_fixture_inputs(alias, &document, &fixtures)?;
-        validate_not_applicable(alias, &document, &fixtures, &entities)?;
         let script = integration_script(&document)
             .map(|script| {
                 let script_path = resolve_relative_to_file(&root, &path, script)?;
@@ -107,6 +106,14 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
                 script_modules.push((module_path, module_bytes.into_boxed_slice()));
             }
         }
+        validate_not_applicable(
+            alias,
+            &document,
+            &fixtures,
+            &entities,
+            script.as_ref(),
+            &script_modules,
+        )?;
         integrations.insert(
             alias.clone(),
             LoadedIntegration {
@@ -349,6 +356,12 @@ fn lower_project_integration(
                     request_fixture: reason.request_fixture.clone(),
                 }
             }),
+            subject_mismatch: authored.not_applicable.subject_mismatch.as_ref().map(|reason| {
+                NotApplicableReason {
+                    rationale: reason.rationale.clone(),
+                    request_fixture: reason.request_fixture.clone(),
+                }
+            }),
         },
         bounds: BoundsDeclaration {
             calls: 0,
@@ -370,33 +383,57 @@ fn validate_not_applicable(
     integration: &IntegrationDocument,
     fixtures: &[(PathBuf, FixtureDocument)],
     entities: &BTreeMap<String, LoadedEntityDefinition>,
+    script: Option<&(PathBuf, Box<[u8]>)>,
+    script_modules: &[(PathBuf, Box<[u8]>)],
 ) -> Result<()> {
     let ambiguous_fixtures = fixtures
         .iter()
         .filter(|(_, fixture)| fixture.expect.outcome.as_deref() == Some("ambiguous"))
         .map(|(_, fixture)| fixture.name.as_str())
         .collect::<Vec<_>>();
-    let Some(reason) = &integration.not_applicable.ambiguity else {
+    if let Some(reason) = &integration.not_applicable.ambiguity {
+        if !ambiguous_fixtures.is_empty() {
+            bail!(
+                "integration {alias} declares ambiguity not applicable but also provides ambiguous fixtures: {}",
+                ambiguous_fixtures.join(", ")
+            );
+        }
+        let _ = validate_not_applicable_evidence(alias, "ambiguity", reason, fixtures)?;
+        if let CapabilityDeclaration::Snapshot { snapshot } = &integration.capability {
+            let entity = entities
+                .get(&snapshot.entity)
+                .ok_or_else(|| anyhow!("snapshot ambiguity evidence references an unknown entity"))?;
+            if !snapshot.exact.contains_key(&entity.document.primary_key) {
+                bail!(
+                    "snapshot ambiguity may be not_applicable only when exact selectors include the entity primary_key"
+                );
+            }
+        }
+    } else {
         if ambiguous_fixtures.is_empty() {
             bail!(
                 "integration {alias} must provide an ambiguous fixture or declare not_applicable.ambiguity with request evidence"
             );
         }
-        return Ok(());
-    };
-    if !ambiguous_fixtures.is_empty() {
-        bail!(
-            "integration {alias} declares ambiguity not applicable but also provides ambiguous fixtures: {}",
-            ambiguous_fixtures.join(", ")
-        );
     }
+
+    validate_subject_mismatch_contract(alias, integration, fixtures, script, script_modules)?;
+    Ok(())
+}
+
+fn validate_not_applicable_evidence<'a>(
+    alias: &str,
+    field: &str,
+    reason: &NotApplicableReason,
+    fixtures: &'a [(PathBuf, FixtureDocument)],
+) -> Result<&'a FixtureDocument> {
     let evidence = fixtures
         .iter()
         .find(|(_, fixture)| fixture.name == reason.request_fixture)
         .map(|(_, fixture)| fixture)
         .ok_or_else(|| {
             anyhow!(
-                "integration {alias} not_applicable.ambiguity.request_fixture references missing fixture {}",
+                "integration {alias} not_applicable.{field}.request_fixture references missing fixture {}",
                 reason.request_fixture
             )
         })?;
@@ -408,20 +445,146 @@ fn validate_not_applicable(
         )
     {
         bail!(
-            "integration {alias} ambiguity request evidence must contain a source request and expect match or no_match"
+            "integration {alias} {field} request evidence must contain a source request and expect match or no_match"
         );
     }
-    if let CapabilityDeclaration::Snapshot { snapshot } = &integration.capability {
-        let entity = entities
-            .get(&snapshot.entity)
-            .ok_or_else(|| anyhow!("snapshot ambiguity evidence references an unknown entity"))?;
-        if !snapshot.exact.contains_key(&entity.document.primary_key) {
+    Ok(evidence)
+}
+
+fn validate_subject_mismatch_contract(
+    alias: &str,
+    integration: &IntegrationDocument,
+    fixtures: &[(PathBuf, FixtureDocument)],
+    script: Option<&(PathBuf, Box<[u8]>)>,
+    script_modules: &[(PathBuf, Box<[u8]>)],
+) -> Result<()> {
+    const SUBJECT_MISMATCH: &str = "failure.subject_mismatch";
+    let mismatch_fixtures = fixtures
+        .iter()
+        .filter(|(_, fixture)| fixture.expect.error.as_deref() == Some(SUBJECT_MISMATCH))
+        .map(|(_, fixture)| fixture.name.as_str())
+        .collect::<Vec<_>>();
+    let script_checks_mismatch = script
+        .into_iter()
+        .map(|(_, bytes)| bytes.as_ref())
+        .chain(script_modules.iter().map(|(_, bytes)| bytes.as_ref()))
+        .any(|bytes| {
+            bytes
+                .windows(SUBJECT_MISMATCH.len())
+                .any(|window| window == SUBJECT_MISMATCH.as_bytes())
+        });
+    let protocol_checks_mismatch = matches!(
+        &integration.capability,
+        CapabilityDeclaration::Script { script } if script.signed_dci.is_some()
+    );
+
+    if script_checks_mismatch {
+        if integration.not_applicable.subject_mismatch.is_some() {
             bail!(
-                "snapshot ambiguity may be not_applicable only when exact selectors include the entity primary_key"
+                "integration {alias} declares subject mismatch not applicable but its reviewed script checks failure.subject_mismatch"
             );
         }
+        if mismatch_fixtures.is_empty() {
+            bail!(
+                "integration {alias} must provide a fixture expecting failure.subject_mismatch because its reviewed script compares an echoed subject identifier"
+            );
+        }
+        return Ok(());
+    }
+    if protocol_checks_mismatch {
+        if integration.not_applicable.subject_mismatch.is_some() {
+            bail!(
+                "integration {alias} cannot declare subject mismatch not applicable because signed DCI binds selectors to comparable response identifiers"
+            );
+        }
+        return Ok(());
+    }
+    if !mismatch_fixtures.is_empty() {
+        bail!(
+            "integration {alias} provides subject mismatch fixtures but its reviewed capability has no failure.subject_mismatch comparison"
+        );
+    }
+
+    let reason = integration
+        .not_applicable
+        .subject_mismatch
+        .as_ref()
+        .ok_or_else(|| {
+            anyhow!(
+                "integration {alias} must provide a fixture expecting failure.subject_mismatch or declare not_applicable.subject_mismatch with request evidence"
+            )
+        })?;
+    let evidence =
+        validate_not_applicable_evidence(alias, "subject_mismatch", reason, fixtures)?;
+    if exposes_comparable_subject(integration) {
+        bail!(
+            "integration {alias} subject mismatch may be not_applicable only when the reviewed response contract has no selector-comparable identifier"
+        );
+    }
+    let selector_values = integration
+        .input
+        .iter()
+        .filter(|(_, declaration)| declaration.role == AuthoredInputRole::Selector)
+        .filter_map(|(name, _)| evidence.input.get(name))
+        .collect::<Vec<_>>();
+    if evidence.interactions.iter().any(|interaction| match &interaction.respond {
+        FixtureSourceResponse::Http { body, .. } => selector_values
+            .iter()
+            .any(|selector| json_contains_scalar(body, selector)),
+        FixtureSourceResponse::Timeout { .. } => false,
+    }) {
+        bail!(
+            "integration {alias} subject mismatch request evidence contains a selector-comparable response identifier"
+        );
     }
     Ok(())
+}
+
+fn exposes_comparable_subject(integration: &IntegrationDocument) -> bool {
+    let selectors = integration
+        .input
+        .iter()
+        .filter(|(_, declaration)| declaration.role == AuthoredInputRole::Selector)
+        .map(|(name, _)| name.as_str())
+        .collect::<BTreeSet<_>>();
+    let snapshot_subject_fields = match &integration.capability {
+        CapabilityDeclaration::Snapshot { snapshot } => snapshot
+            .exact
+            .iter()
+            .filter(|(_, input)| selectors.contains(input.as_str()))
+            .map(|(field, _)| field.as_str())
+            .collect::<BTreeSet<_>>(),
+        CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Script { .. } => {
+            BTreeSet::new()
+        }
+    };
+    integration.outputs.iter().any(|(name, output)| {
+        selectors.contains(name.as_str())
+            || snapshot_subject_fields.contains(name.as_str())
+            || output.from.as_deref().is_some_and(|from| {
+                from.rsplit('.')
+                    .next()
+                    .is_some_and(|field| snapshot_subject_fields.contains(field))
+            })
+            || output.source_pointer.as_deref().is_some_and(|pointer| {
+                pointer
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|segment| selectors.contains(segment))
+            })
+    })
+}
+
+fn json_contains_scalar(value: &Value, expected: &Value) -> bool {
+    match value {
+        Value::Array(values) => values
+            .iter()
+            .any(|value| json_contains_scalar(value, expected)),
+        Value::Object(values) => values
+            .values()
+            .any(|value| json_contains_scalar(value, expected)),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => value == expected,
+    }
 }
 
 fn entity_output_contract(

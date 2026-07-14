@@ -1,0 +1,14 @@
+name: health-subject-mismatch
+classification: synthetic
+input: { tracked_entity: A0000000001 }
+variables: { as_of_date: 2026-01-01 }
+interactions:
+  - expect:
+      method: GET
+      path: /api/tracker/trackedEntities/A0000000001
+      query:
+        fields: trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]
+    respond:
+      status: 200
+      body: { trackedEntity: B0000000002, attributes: [], enrollments: [] }
+expect: { error: failure.subject_mismatch, outputs: {}, claims: {} }

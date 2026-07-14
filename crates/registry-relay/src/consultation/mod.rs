@@ -62,8 +62,7 @@ pub use service::{
     ConsultationServiceShutdownError,
 };
 pub use types::{
-    AcquiredField, AcquisitionClass, AssertionContractHash, AssertionContractId,
-    AssertionContractIdentity, ConsultationOutcome, ConsultationValidationError,
+    AcquiredField, AcquisitionClass, ConsultationOutcome, ConsultationValidationError,
     DeclaredOperationFootprint, IntegrationPackHash, IntegrationPackId, IntegrationPackIdentity,
     OperationBounds, OperationId, ParsedConsultationInputs, ParsedConsultationScalar,
     ParsedPurpose, PolicyHash, PolicyId, PolicyIdentity, PreAuthorizationConsultationCore,

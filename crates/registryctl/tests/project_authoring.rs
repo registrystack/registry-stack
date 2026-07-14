@@ -173,6 +173,33 @@ fn exact_sources_report_reviewable_ambiguity_not_applicable_evidence() {
 }
 
 #[test]
+fn response_contracts_without_comparable_identifiers_report_subject_mismatch_evidence() {
+    for (project, integration, fixture) in [
+        ("custom-system", "eligibility", "eligible-household"),
+        ("openspp-exact", "individual", "social-registry-match"),
+        ("snapshot-exact", "person-snapshot", "snapshot-match"),
+    ] {
+        let report = check_registry_project(&ProjectCheckOptions {
+            project_directory: golden(project),
+            environment: "local".to_string(),
+            explain: true,
+            against: None,
+            anchor: None,
+        })
+        .unwrap_or_else(|error| panic!("{project} check failed: {error:#}"));
+        let reason = &report.explanation.as_ref().expect("explanation")["integrations"]
+            [integration]["not_applicable"]["subject_mismatch"];
+        assert_eq!(reason["request_fixture"], fixture, "{project}");
+        assert!(reason["rationale"]
+            .as_str()
+            .is_some_and(|rationale| rationale.len() >= 24));
+        assert!(!report.fixtures.iter().any(|fixture| {
+            fixture.expected_error.as_deref() == Some("failure.subject_mismatch")
+        }));
+    }
+}
+
+#[test]
 fn ambiguity_not_applicable_requires_a_real_request_fixture() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("openspp-exact", temporary.path());
@@ -216,6 +243,91 @@ fn maintained_script_starter_exercises_explicit_result_fail() {
     );
     assert_eq!(fixture.source_access, Some(true));
     assert!(fixture.passed);
+}
+
+#[test]
+fn maintained_script_starter_rejects_echoed_subject_mismatch() {
+    let report = test_registry_project_selected(
+        &ProjectTestOptions {
+            project_directory: golden("dhis2-tracker"),
+            environment: None,
+            live: false,
+        },
+        &ProjectTestSelection {
+            integration: Some("health-record".to_string()),
+            fixture: Some("health-subject-mismatch".to_string()),
+            trace: true,
+        },
+    )
+    .expect("subject mismatch fixture passes its closed failure assertion");
+    let fixture = report
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.fixture == "health-subject-mismatch")
+        .expect("authored mismatch fixture report");
+    assert_eq!(
+        fixture.expected_error.as_deref(),
+        Some("failure.subject_mismatch")
+    );
+    assert_eq!(fixture.source_access, Some(true));
+    assert!(fixture.passed);
+}
+
+#[test]
+fn script_subject_comparison_requires_a_mismatch_fixture() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("dhis2-tracker", temporary.path());
+    std::fs::remove_file(project.join("integrations/health-record/fixtures/subject-mismatch.yaml"))
+        .expect("mismatch fixture removes");
+    let error = test_registry_project(&ProjectTestOptions {
+        project_directory: project,
+        environment: None,
+        live: false,
+    })
+    .expect_err("reviewed subject comparison without a mismatch fixture must fail");
+    assert!(
+        format!("{error:#}").contains("must provide a fixture expecting failure.subject_mismatch")
+    );
+}
+
+#[test]
+fn subject_mismatch_not_applicable_rejects_comparable_response_evidence() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("openspp-exact", temporary.path());
+    let fixture = project.join("integrations/individual/fixtures/match.yaml");
+    replace_in_file(
+        &fixture,
+        "body: { active: true, programme_code: SUPPORT, household_reference: HH-0001 }",
+        "body: { individual_id: IND-AB12CD34, active: true, programme_code: SUPPORT, household_reference: HH-0001 }",
+    );
+    let error = test_registry_project(&ProjectTestOptions {
+        project_directory: project,
+        environment: None,
+        live: false,
+    })
+    .expect_err("a comparable echoed identifier must make mismatch applicable");
+    assert!(format!("{error:#}").contains(
+        "subject mismatch request evidence contains a selector-comparable response identifier"
+    ));
+}
+
+#[test]
+fn subject_mismatch_not_applicable_rejects_comparable_output_contract() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("snapshot-exact", temporary.path());
+    replace_in_file(
+        &project.join("integrations/person-snapshot/integration.yaml"),
+        "outputs: [registration_status, eligible]",
+        "outputs: [person_id, registration_status, eligible]",
+    );
+    let error = test_registry_project(&ProjectTestOptions {
+        project_directory: project,
+        environment: None,
+        live: false,
+    })
+    .expect_err("a comparable projected identifier must make mismatch applicable");
+    assert!(format!("{error:#}")
+        .contains("reviewed response contract has no selector-comparable identifier"));
 }
 
 #[test]
@@ -803,6 +915,10 @@ capability:
 outputs:
   status: { type: [string, "null"], maxLength: 24, x-registry-source: /record/status }
   category: { type: [string, "null"], maxLength: 32, x-registry-source: /record/category }
+not_applicable:
+  subject_mismatch:
+    rationale: The selected response projection contains no identifier comparable with the requested municipal reference.
+    request_fixture: adapted-active-person
 "#,
     )
     .expect("adapted integration writes");
@@ -2217,7 +2333,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "65938afc5df9ba9f187c0cae28964736399d19aa3c1e6691107efb62c4c04aa0",
+        "bf8265e6a00386d04aba7170ae8b076ec4953c82a992e8f4773839daa6f70d01",
         "project inputs must match the cross-machine golden digest"
     );
 }

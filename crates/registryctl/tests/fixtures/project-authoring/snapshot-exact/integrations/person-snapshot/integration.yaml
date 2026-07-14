@@ -18,3 +18,6 @@ not_applicable:
   ambiguity:
     rationale: The exact snapshot selector is the entity primary key, whose materialized unique-key constraint permits at most one record.
     request_fixture: snapshot-match
+  subject_mismatch:
+    rationale: The selected snapshot output projection omits the primary key, so it contains no identifier comparable with the requested person identifier.
+    request_fixture: snapshot-match

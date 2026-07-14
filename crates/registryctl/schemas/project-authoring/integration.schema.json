@@ -70,7 +70,8 @@
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
-        "ambiguity": { "$ref": "#/$defs/notApplicableReason" }
+        "ambiguity": { "$ref": "#/$defs/notApplicableReason", "description": "Why the reviewed source contract cannot produce more than one matching record." },
+        "subject_mismatch": { "$ref": "#/$defs/notApplicableReason", "description": "Why the reviewed response contract contains no identifier comparable with a requested selector." }
       }
     },
     "notApplicableReason": {
@@ -79,7 +80,7 @@
       "additionalProperties": false,
       "required": ["rationale", "request_fixture"],
       "properties": {
-        "rationale": { "type": "string", "minLength": 24, "maxLength": 512, "description": "Why ambiguity cannot occur for this source contract." },
+        "rationale": { "type": "string", "minLength": 24, "maxLength": 512, "description": "Why the named normally required outcome cannot occur for this source contract." },
         "request_fixture": { "$ref": "#/$defs/stableId", "description": "Fixture name containing the supporting bounded source request." }
       }
     },

@@ -29,13 +29,13 @@
       "name": "public_contract",
       "file": "public-contract.json",
       "domain_label": "registry.relay.consultation-contract.v1",
-      "expected_hash": "sha256:5c55f801cd0a05c3e66d0435d601f9b26f30cc82c68618b61e5c62986ce10fd4"
+      "expected_hash": "sha256:2e0e051c6dc611f89ac837f9f25262c7d6677e677c759bbb43a4065942806cc7"
     },
     {
       "name": "public_contract_utf8_ordering",
       "file": "public-contract-utf8-ordering.json",
       "domain_label": "registry.relay.consultation-contract.v1",
-      "expected_hash": "sha256:f599c2fb5777ace995b8237c29df4ba9d7b7427492489f3c2d6f662c91f007f9"
+      "expected_hash": "sha256:23d0071c313a4e35e767f3c373d7a279c9e5b667527d88910175d7056e3bbcb1"
     },
     {
       "name": "private_binding",

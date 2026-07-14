@@ -137,12 +137,6 @@ stable_id!(
     ConsultationValidationError::InvalidStableIdentifier
 );
 stable_id!(
-    /// A reviewed assertion-contract identifier.
-    AssertionContractId,
-    MAX_STABLE_ID_BYTES,
-    ConsultationValidationError::InvalidStableIdentifier
-);
-stable_id!(
     /// A Relay policy identifier.
     PolicyId,
     MAX_STABLE_ID_BYTES,
@@ -251,11 +245,6 @@ sha256_hash!(
     /// Hash of a Relay policy contract.
     PolicyHash
 );
-sha256_hash!(
-    /// Hash of a Notary subject-assertion contract.
-    AssertionContractHash
-);
-
 /// The complete public identity pinned by a consultation client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileIdentity {
@@ -363,39 +352,9 @@ impl PolicyIdentity {
     }
 }
 
-/// A pinned Notary subject-binding assertion contract.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AssertionContractIdentity {
-    id: AssertionContractId,
-    hash: AssertionContractHash,
-}
-
-impl AssertionContractIdentity {
-    /// Construct an assertion-contract identity from validated parts.
-    #[must_use]
-    pub const fn new(id: AssertionContractId, hash: AssertionContractHash) -> Self {
-        Self { id, hash }
-    }
-
-    /// Return the assertion-contract identifier.
-    #[must_use]
-    pub const fn id(&self) -> &AssertionContractId {
-        &self.id
-    }
-
-    /// Return the assertion-contract hash.
-    #[must_use]
-    pub const fn hash(&self) -> &AssertionContractHash {
-        &self.hash
-    }
-}
-
-/// The only selector provenance classes accepted by consultation v1.
+/// The selector provenance class accepted by consultation v1.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SelectorProvenance {
-    /// The configured consultation workload derives or verifies the subject under a
-    /// hash-pinned assertion contract.
-    TrustedNotaryAssertion(AssertionContractIdentity),
     /// The configured workload selects an exact lookup key under a reviewed
     /// non-consent legal basis.
     WorkloadSelected,
@@ -841,11 +800,7 @@ mod tests {
     fn pre_authorization_core(max_source_matches: u8) -> PreAuthorizationConsultationCore {
         PreAuthorizationConsultationCore::new_for_test(
             profile_identity(),
-            SelectorProvenance::TrustedNotaryAssertion(AssertionContractIdentity::new(
-                AssertionContractId::try_from("registry.notary.subject-binding.v1")
-                    .expect("assertion id"),
-                AssertionContractHash::try_from(HASH).expect("assertion hash"),
-            )),
+            SelectorProvenance::WorkloadSelected,
             ParsedPurpose::try_parse("benefit-verification").expect("purpose"),
             ParsedConsultationInputs::try_parse("subject_id", "12345").expect("input"),
             footprint(max_source_matches),
@@ -929,15 +884,7 @@ mod tests {
     }
 
     #[test]
-    fn selector_provenance_is_closed_to_the_two_v1_classes() {
-        let assertion = SelectorProvenance::TrustedNotaryAssertion(AssertionContractIdentity::new(
-            AssertionContractId::try_from("registry.notary.subject-binding.v1").unwrap(),
-            AssertionContractHash::try_from(HASH).unwrap(),
-        ));
-        assert!(matches!(
-            assertion,
-            SelectorProvenance::TrustedNotaryAssertion(_)
-        ));
+    fn selector_provenance_is_closed_to_workload_selected() {
         assert_eq!(
             SelectorProvenance::WorkloadSelected,
             SelectorProvenance::WorkloadSelected

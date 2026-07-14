@@ -2385,14 +2385,6 @@ fn resolved_core_is_consumed_only_by_its_exact_compiled_plan() {
         ),
         make_core(
             plan.profile().clone(),
-            SelectorProvenance::WorkloadSelected,
-            "benefit-verification",
-            "subject_id",
-            "Person-42",
-            plan.footprint().clone(),
-        ),
-        make_core(
-            plan.profile().clone(),
             plan.runtime_profile()
                 .subject()
                 .selector_provenance()
@@ -3251,6 +3243,27 @@ fn public_contract_rejects_the_retired_integration_pack_alias() {
         .as_object_mut()
         .expect("contract spec")
         .remove("integration");
+    fixture.contract = serde_json::to_vec(&fixture.contract_value).expect("contract JSON");
+    fixture.contract_hash = typed_hash(CONTRACT_DOMAIN, &fixture.contract);
+
+    assert!(matches!(
+        compile(&fixture),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::ClosedSchema
+        ))
+    ));
+}
+
+#[test]
+fn public_contract_rejects_the_retired_trusted_notary_assertion_selector() {
+    let mut fixture = fixture();
+    fixture.contract_value["spec"]["subject"]["selector_provenance"] = json!({
+        "type": "trusted_notary_assertion",
+        "assertion_contract": {
+            "id": "registry.notary.subject-binding.v1",
+            "hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+    });
     fixture.contract = serde_json::to_vec(&fixture.contract_value).expect("contract JSON");
     fixture.contract_hash = typed_hash(CONTRACT_DOMAIN, &fixture.contract);
 

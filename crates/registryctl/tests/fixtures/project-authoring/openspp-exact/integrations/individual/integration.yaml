@@ -42,6 +42,9 @@ not_applicable:
   ambiguity:
     rationale: The individual identifier is resolved by an exact singleton resource endpoint, so the source contract cannot return a collection.
     request_fixture: social-registry-match
+  subject_mismatch:
+    rationale: The selected response projection contains no identifier that can be compared with the requested individual identifier.
+    request_fixture: social-registry-match
 
 limits:
   request_bytes: 2KiB

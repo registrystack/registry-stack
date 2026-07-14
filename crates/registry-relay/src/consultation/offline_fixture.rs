@@ -200,6 +200,8 @@ pub enum OfflineFixtureError {
     SourceResponseMalformed,
     #[error("fixture source cardinality contract was violated")]
     SourceCardinalityViolation,
+    #[error("fixture source echoed a different subject identifier")]
+    SubjectMismatch,
     #[error("fixture execution violated the compiled plan")]
     ExecutionContractViolation,
 }
@@ -1185,7 +1187,7 @@ fn finalize_rhai_observation(
         WorkerOutput::Failure { failure } => Err(match failure {
             ScriptFailure::SourceUnavailable => OfflineFixtureError::SourceUnavailable,
             ScriptFailure::SourceRejected => OfflineFixtureError::SourceStatusRejected,
-            ScriptFailure::SubjectMismatch => OfflineFixtureError::ExecutionContractViolation,
+            ScriptFailure::SubjectMismatch => OfflineFixtureError::SubjectMismatch,
         }),
     }
 }

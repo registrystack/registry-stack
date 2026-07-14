@@ -565,7 +565,7 @@ fn mismatched_optional_map_keys<T: PartialEq>(
 }
 
 fn error_implies_source_access(code: &str) -> bool {
-    code.starts_with("source.")
+    code.starts_with("source.") || code == "failure.subject_mismatch"
 }
 
 fn evaluate_product_claims(
@@ -984,6 +984,7 @@ fn map_offline_relay_error(error: registry_relay::offline_fixture::OfflineFixtur
         OfflineFixtureError::SourceResponseTooLarge => "source.response_too_large",
         OfflineFixtureError::SourceResponseMalformed => "source.response_malformed",
         OfflineFixtureError::SourceCardinalityViolation => "source.cardinality_violation",
+        OfflineFixtureError::SubjectMismatch => "failure.subject_mismatch",
         OfflineFixtureError::ProfileNotFound => "fixture.profile_not_found",
         OfflineFixtureError::ExecutionContractViolation => "fixture.execution_contract_invalid",
     }
