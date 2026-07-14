@@ -927,11 +927,47 @@ fn generated_explanation(
     environment_name: &str,
     profiles: &[GeneratedProfile],
 ) -> Value {
+    let (requires_relay, requires_notary) = project_product_topology(&loaded.project);
+    let topology = match (requires_relay, requires_notary) {
+        (true, false) => "relay_only",
+        (false, true) => "notary_only",
+        (true, true) => "combined",
+        (false, false) => "none",
+    };
+    let records_api_services = loaded
+        .project
+        .services
+        .values()
+        .filter(|service| service.kind == ServiceKind::RecordsApi)
+        .count();
+    let evidence_services = loaded
+        .project
+        .services
+        .values()
+        .filter(|service| service.kind == ServiceKind::Evidence)
+        .collect::<Vec<_>>();
     json!({
         "schema": "registry.project.explanation.v1",
         "registry": loaded.project.registry.id,
         "environment": environment_name,
         "starter": starter_explanation(loaded),
+        "topology": {
+            "deployment": topology,
+            "relay": {
+                "required": requires_relay,
+                "source_integrations": loaded.integrations.len(),
+                "records_api_services": records_api_services,
+                "materialized_entities": loaded.entities.len(),
+            },
+            "notary": {
+                "required": requires_notary,
+                "evidence_services": evidence_services.len(),
+                "self_attested_services": evidence_services.iter()
+                    .filter(|service| service.consultations.is_empty()).count(),
+                "relay_backed_services": evidence_services.iter()
+                    .filter(|service| !service.consultations.is_empty()).count(),
+            },
+        },
         "platform": {
             "defaults_release": env!("CARGO_PKG_VERSION"),
             "script_runtime": "rhai_v1",

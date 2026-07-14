@@ -336,6 +336,22 @@ fn render_test_summary(report: &ProjectCommandReport) -> String {
     output
 }
 
+fn render_limit(value: &serde_json::Value, unit: &str) -> String {
+    let value = value
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| value.to_string());
+    match unit {
+        "" | "duration" => value,
+        "calls" if value == "1" => "1 call".to_string(),
+        _ => format!("{value} {unit}"),
+    }
+}
+
+fn render_count(count: u64, singular: &str, plural: &str) -> String {
+    format!("{count} {}", if count == 1 { singular } else { plural })
+}
+
 fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<String> {
     use std::fmt::Write as _;
 
@@ -401,6 +417,92 @@ fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<
     }
 
     writeln!(output, "Effective authority and limits:")?;
+    if let Some(topology) = explanation
+        .get("topology")
+        .and_then(serde_json::Value::as_object)
+    {
+        let deployment = topology
+            .get("deployment")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        let topology_label = match deployment {
+            "relay_only" => "Relay-only",
+            "notary_only" => "Notary-only",
+            "combined" => "Relay + Notary",
+            _ => "unknown",
+        };
+        writeln!(output, "  topology: {topology_label}")?;
+        if let Some(relay) = topology.get("relay").and_then(serde_json::Value::as_object) {
+            if relay
+                .get("required")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                let integrations = relay
+                    .get("source_integrations")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let records_services = relay
+                    .get("records_api_services")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let entities = relay
+                    .get("materialized_entities")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                writeln!(
+                    output,
+                    "  Relay authority: {}, {}, {}",
+                    render_count(integrations, "source integration", "source integrations"),
+                    render_count(
+                        records_services,
+                        "records API service",
+                        "records API services"
+                    ),
+                    render_count(
+                        entities,
+                        "materialized entity definition",
+                        "materialized entity definitions"
+                    ),
+                )?;
+            } else {
+                writeln!(output, "  Relay source authority: not applicable")?;
+            }
+        }
+        if let Some(notary) = topology
+            .get("notary")
+            .and_then(serde_json::Value::as_object)
+        {
+            if notary
+                .get("required")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                let self_attested = notary
+                    .get("self_attested_services")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                let relay_backed = notary
+                    .get("relay_backed_services")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+                writeln!(
+                    output,
+                    "  Notary authority: {}, {}",
+                    render_count(
+                        self_attested,
+                        "source-free self-attested service",
+                        "source-free self-attested services"
+                    ),
+                    render_count(
+                        relay_backed,
+                        "compiler-pinned Relay-backed service",
+                        "compiler-pinned Relay-backed services"
+                    ),
+                )?;
+            }
+        }
+    }
     if let Some(integrations) = explanation
         .get("integrations")
         .and_then(serde_json::Value::as_object)
@@ -427,7 +529,7 @@ fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<
                             .get("source")
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or("intrinsic");
-                        format!("{name}={value}{unit} ({source})")
+                        format!("{name}={} ({source})", render_limit(value, unit))
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -987,11 +1089,52 @@ mod tests {
             assert!(concise.contains(heading), "missing {heading}: {concise}");
         }
         assert!(!concise.contains("Claims and disclosure:"));
+        assert!(concise.contains("topology: Relay + Notary"));
+        assert!(concise.contains("calls=1 call"));
+        assert!(concise.contains("deadline=15s"));
+        assert!(!concise.contains("1calls"));
+        assert!(!concise.contains("\"15s\"duration"));
         assert!(concise.contains("subject mismatch not applicable:"));
         assert!(!concise.contains("ambiguity not applicable: missing rationale"));
         let expanded = render_check_report(&report, true).expect("expanded report renders");
         assert!(expanded.contains("outputs:"));
         assert!(expanded.contains("Claims and disclosure:"));
+    }
+
+    #[test]
+    fn human_check_report_identifies_single_product_topologies_and_authority() {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/project-authoring");
+        for (project, topology, authority) in [
+            (
+                "relay-only-records",
+                "topology: Relay-only",
+                "Relay authority: 0 source integrations, 1 records API service, 1 materialized entity definition",
+            ),
+            (
+                "notary-only-self-attested",
+                "topology: Notary-only",
+                "Notary authority: 1 source-free self-attested service, 0 compiler-pinned Relay-backed services",
+            ),
+        ] {
+            let report = registryctl::check_registry_project(&ProjectCheckOptions {
+                project_directory: fixtures.join(project),
+                environment: "local".to_string(),
+                explain: true,
+                against: None,
+                anchor: None,
+            })
+            .expect("single-product project checks");
+            let rendered = render_check_report(&report, false).expect("report renders");
+            assert!(rendered.contains(topology), "{rendered}");
+            assert!(rendered.contains(authority), "{rendered}");
+            if project == "notary-only-self-attested" {
+                assert!(
+                    rendered.contains("Relay source authority: not applicable"),
+                    "{rendered}"
+                );
+            }
+        }
     }
 
     #[test]

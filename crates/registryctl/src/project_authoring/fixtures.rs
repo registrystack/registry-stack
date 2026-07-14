@@ -353,9 +353,12 @@ fn derived_fixture_reports(
                 input.clone(),
                 interactions,
                 trace,
+                &mut calls,
             )
             .map(|mut observation| {
-                calls = std::mem::take(&mut observation.calls);
+                if calls.is_empty() {
+                    calls = std::mem::take(&mut observation.calls);
+                }
                 observation
             });
             let actual = result.as_ref().err().map(String::as_str);
@@ -441,6 +444,7 @@ fn derived_fixture_reports(
                     Value::String("ignored".to_owned()),
                 );
                 *body = serde_json::to_vec(&Value::Object(object))?;
+                let mut trace_calls = Vec::new();
                 let result = execute_offline_profiles(
                     compiled,
                     relay_fixture,
@@ -448,6 +452,7 @@ fn derived_fixture_reports(
                     input,
                     minimized,
                     trace,
+                    &mut trace_calls,
                 );
                 let (passed, calls, outputs, outcome, failure) = match result {
                     Ok(observation) => {
@@ -470,7 +475,11 @@ fn derived_fixture_reports(
                                 .is_none_or(|expected| expected == outcome);
                         (
                             passed,
-                            observation.calls,
+                            if trace_calls.is_empty() {
+                                observation.calls
+                            } else {
+                                trace_calls
+                            },
                             observation.outputs.keys().cloned().collect(),
                             Some(outcome.to_owned()),
                             (!passed)
@@ -479,7 +488,7 @@ fn derived_fixture_reports(
                     }
                     Err(error) => (
                         false,
-                        Vec::new(),
+                        trace_calls,
                         Vec::new(),
                         None,
                         Some(format!("derived_output_minimization_failed: {error}")),
@@ -849,8 +858,11 @@ fn execute_compiled_relay_fixture<'a>(
         input,
         interactions,
         trace,
+        calls,
     )?;
-    calls.extend(observation.calls);
+    if calls.is_empty() {
+        calls.extend(observation.calls);
+    }
     let outcome = match observation.outcome {
         OfflineFixtureOutcome::Match => "match",
         OfflineFixtureOutcome::NoMatch => "no_match",
@@ -930,6 +942,7 @@ fn execute_offline_profiles(
     input: BTreeMap<String, String>,
     interactions: Vec<registry_relay::offline_fixture::OfflineInteraction>,
     trace: bool,
+    calls: &mut Vec<String>,
 ) -> std::result::Result<registry_relay::offline_fixture::OfflineFixtureObservation, String> {
     use registry_relay::offline_fixture::{
         OfflineFixtureError, OfflineFixtureRequest, OfflineProfilePin,
@@ -942,7 +955,7 @@ fn execute_offline_profiles(
     let first = selected
         .next()
         .ok_or_else(|| "fixture.product_contract_invalid".to_string())?;
-    let execute = |profile: &FixtureProfile| {
+    let execute = |profile: &FixtureProfile, calls: &mut Vec<String>| {
         let request = OfflineFixtureRequest {
             profile: OfflineProfilePin {
                 id: profile.id.clone(),
@@ -956,14 +969,17 @@ fn execute_offline_profiles(
             interactions: interactions.clone(),
         };
         if trace {
-            relay_fixture.execute_with_trace(request)
+            let report = relay_fixture.execute_with_trace_report(request);
+            calls.extend(report.calls);
+            report.result
         } else {
             relay_fixture.execute(request)
         }
     };
-    let observation = execute(first).map_err(map_offline_relay_error)?;
+    let observation = execute(first, calls).map_err(map_offline_relay_error)?;
     for profile in selected {
-        let sibling = execute(profile).map_err(map_offline_relay_error)?;
+        let mut sibling_calls = Vec::new();
+        let sibling = execute(profile, &mut sibling_calls).map_err(map_offline_relay_error)?;
         if sibling != observation {
             return Err("fixture.product_contract_invalid".to_string());
         }
@@ -1708,6 +1724,7 @@ mod fixture_interface_tests {
         let input = offline_fixture_input(fixture).expect("fixture input is valid");
         let interactions =
             offline_fixture_interactions(fixture).expect("fixture interactions are valid");
+        let mut ordinary_trace = Vec::new();
         let ordinary = execute_offline_profiles(
             &compiled,
             &relay_fixture,
@@ -1715,10 +1732,13 @@ mod fixture_interface_tests {
             input.clone(),
             interactions.clone(),
             false,
+            &mut ordinary_trace,
         )
         .expect("ordinary fixture passes");
         assert_eq!(ordinary.calls, ["script-source-call"]);
+        assert!(ordinary_trace.is_empty());
 
+        let mut traced_calls = Vec::new();
         let traced = execute_offline_profiles(
             &compiled,
             &relay_fixture,
@@ -1726,15 +1746,17 @@ mod fixture_interface_tests {
             input,
             interactions,
             true,
+            &mut traced_calls,
         )
         .expect("traced fixture passes");
-        assert_eq!(traced.calls.len(), 1);
+        assert_eq!(traced.calls, traced_calls);
+        assert_eq!(traced_calls.len(), 1);
         assert_eq!(
-            traced.calls[0],
+            traced_calls[0],
             "call=1 operation=script-source-call method=GET path=/api/tracker/trackedEntities/* query=[fields] headers=[] body=none"
         );
         for sensitive in ["A0000000001", "Nia", "REF-0001"] {
-            assert!(!traced.calls[0].contains(sensitive));
+            assert!(!traced_calls[0].contains(sensitive));
         }
     }
 

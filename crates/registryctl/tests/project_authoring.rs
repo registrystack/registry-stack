@@ -242,6 +242,11 @@ fn maintained_script_starter_exercises_explicit_result_fail() {
         Some("source.status_rejected")
     );
     assert_eq!(fixture.source_access, Some(true));
+    assert_eq!(fixture.calls.len(), 1);
+    assert!(fixture.calls[0].contains("operation=script-source-call"));
+    assert!(fixture.calls[0].contains("method=GET"));
+    assert!(!fixture.calls[0].contains("A0000000001"));
+    assert!(!fixture.calls[0].contains("B0000000002"));
     assert!(fixture.passed);
 }
 
@@ -270,6 +275,11 @@ fn maintained_script_starter_rejects_echoed_subject_mismatch() {
         Some("failure.subject_mismatch")
     );
     assert_eq!(fixture.source_access, Some(true));
+    assert_eq!(fixture.calls.len(), 1);
+    assert!(fixture.calls[0].contains("operation=script-source-call"));
+    assert!(fixture.calls[0].contains("method=GET"));
+    assert!(!fixture.calls[0].contains("A0000000001"));
+    assert!(!fixture.calls[0].contains("B0000000002"));
     assert!(fixture.passed);
 }
 

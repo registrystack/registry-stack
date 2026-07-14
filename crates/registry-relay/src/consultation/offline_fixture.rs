@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use registry_platform_httputil::destination::json::{
@@ -175,6 +176,16 @@ pub struct OfflineFixtureObservation {
     pub calls: Vec<String>,
 }
 
+/// Result plus the value-free calls completed before success or failure.
+///
+/// This is intended for local authoring diagnostics. It never contains source
+/// values, selectors, credentials, response bodies, or rendered header values.
+#[derive(Debug)]
+pub struct OfflineFixtureTraceReport {
+    pub result: Result<OfflineFixtureObservation, OfflineFixtureError>,
+    pub calls: Vec<String>,
+}
+
 /// Stable, value-free fixture failure classes aligned with production failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum OfflineFixtureError {
@@ -238,7 +249,7 @@ impl OfflineRelayFixture {
         &self,
         request: OfflineFixtureRequest,
     ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
-        self.execute_inner(request, false)
+        self.execute_inner(request, false, None)
     }
 
     /// Execute the exact same closed fixture while returning a deterministic,
@@ -247,13 +258,28 @@ impl OfflineRelayFixture {
         &self,
         request: OfflineFixtureRequest,
     ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
-        self.execute_inner(request, true)
+        self.execute_inner(request, true, None)
+    }
+
+    /// Execute a fixture while retaining safe calls completed before an error.
+    pub fn execute_with_trace_report(
+        &self,
+        request: OfflineFixtureRequest,
+    ) -> OfflineFixtureTraceReport {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let result = self.execute_inner(request, true, Some(Arc::clone(&calls)));
+        let calls = calls
+            .lock()
+            .expect("offline trace collector lock poisoned")
+            .clone();
+        OfflineFixtureTraceReport { result, calls }
     }
 
     fn execute_inner(
         &self,
         request: OfflineFixtureRequest,
         trace: bool,
+        trace_calls: Option<Arc<Mutex<Vec<String>>>>,
     ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
         let plan = self
             .plans
@@ -267,15 +293,18 @@ impl OfflineRelayFixture {
         let inputs = OfflineBoundInputs::try_new(plan, request.input)?;
         match plan.kind() {
             SourcePlanKind::SnapshotExact => {
-                execute_snapshot(plan, &inputs, request.interactions, trace)
+                execute_snapshot(plan, &inputs, request.interactions, trace, trace_calls)
             }
-            SourcePlanKind::BoundedHttp => execute_http(plan, &inputs, request.interactions, trace),
+            SourcePlanKind::BoundedHttp => {
+                execute_http(plan, &inputs, request.interactions, trace, trace_calls)
+            }
             SourcePlanKind::Script => execute_rhai(
                 plan,
                 &inputs,
                 request.interactions,
                 self.rhai_worker_program.as_deref(),
                 trace,
+                trace_calls,
             ),
         }
     }
@@ -294,12 +323,14 @@ struct OfflineInteractionQueue {
     interactions: VecDeque<OfflineInteraction>,
     calls: Vec<String>,
     trace: bool,
+    trace_calls: Option<Arc<Mutex<Vec<String>>>>,
 }
 
 impl OfflineInteractionQueue {
     fn new(
         interactions: Vec<OfflineInteraction>,
         trace: bool,
+        trace_calls: Option<Arc<Mutex<Vec<String>>>>,
     ) -> Result<Self, OfflineFixtureError> {
         if interactions.is_empty() || interactions.len() > 16 {
             return Err(OfflineFixtureError::RequestMismatch);
@@ -308,6 +339,7 @@ impl OfflineInteractionQueue {
             interactions: interactions.into(),
             calls: Vec::new(),
             trace,
+            trace_calls,
         })
     }
 
@@ -324,11 +356,18 @@ impl OfflineInteractionQueue {
         if !offline_request_matches(&interaction.request, actual) {
             return Err(OfflineFixtureError::RequestMismatch);
         }
-        self.calls.push(if self.trace {
+        let call = if self.trace {
             safe_interaction_trace(self.calls.len() + 1, operation, canonical_path, actual)
         } else {
             operation.to_owned()
-        });
+        };
+        self.calls.push(call.clone());
+        if let Some(trace_calls) = &self.trace_calls {
+            trace_calls
+                .lock()
+                .expect("offline trace collector lock poisoned")
+                .push(call);
+        }
         Ok(interaction.response)
     }
 
@@ -1133,11 +1172,12 @@ fn execute_rhai(
     interactions: Vec<OfflineInteraction>,
     worker_program: Option<&Path>,
     trace: bool,
+    trace_calls: Option<Arc<Mutex<Vec<String>>>>,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
     let request = build_rhai_request(plan, inputs)?;
     let mut host = OfflineRhaiHost {
         plan,
-        interactions: OfflineInteractionQueue::new(interactions, trace)?,
+        interactions: OfflineInteractionQueue::new(interactions, trace, trace_calls)?,
         credential_used: false,
         request_bytes: 0,
         source_bytes: 0,
@@ -1493,19 +1533,20 @@ fn execute_http(
     inputs: &OfflineBoundInputs,
     interactions: Vec<OfflineInteraction>,
     trace: bool,
+    trace_calls: Option<Arc<Mutex<Vec<String>>>>,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
     if plan
         .operations()
         .any(|operation| operation.dci_exact().is_some())
     {
-        return execute_dci(plan, inputs, interactions, trace);
+        return execute_dci(plan, inputs, interactions, trace, trace_calls);
     }
     validate_bounded_http_activation(plan)
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
     if !inputs.is_bound_to(plan) {
         return Err(OfflineFixtureError::ExecutionContractViolation);
     }
-    let mut interactions = OfflineInteractionQueue::new(interactions, trace)?;
+    let mut interactions = OfflineInteractionQueue::new(interactions, trace, trace_calls)?;
     let operations = plan.operations().collect::<Vec<_>>();
     let mut memory = (0..operations.len()).map(|_| None).collect::<Vec<_>>();
     let mut outputs = Vec::new();
@@ -1645,6 +1686,7 @@ fn execute_dci(
     inputs: &OfflineBoundInputs,
     interactions: Vec<OfflineInteraction>,
     trace: bool,
+    trace_calls: Option<Arc<Mutex<Vec<String>>>>,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
     let operation = plan
         .operations()
@@ -1657,7 +1699,7 @@ fn execute_dci(
     let credential = plan
         .credential_operation()
         .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
-    let mut interactions = OfflineInteractionQueue::new(interactions, trace)?;
+    let mut interactions = OfflineInteractionQueue::new(interactions, trace, trace_calls)?;
     let credential_request = rendered_credential_request_effect(
         credential
             .render_request(
@@ -1964,6 +2006,7 @@ fn execute_snapshot(
     inputs: &OfflineBoundInputs,
     interactions: Vec<OfflineInteraction>,
     trace: bool,
+    trace_calls: Option<Arc<Mutex<Vec<String>>>>,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
     validate_snapshot_exact_activation(plan)
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
@@ -1980,7 +2023,7 @@ fn execute_snapshot(
     {
         return Err(OfflineFixtureError::ExecutionContractViolation);
     }
-    let mut interactions = OfflineInteractionQueue::new(interactions, trace)?;
+    let mut interactions = OfflineInteractionQueue::new(interactions, trace, trace_calls)?;
     let response = interactions.take(
         "snapshot",
         "/snapshot",
@@ -2693,7 +2736,7 @@ mod tests {
             };
             let mut host = OfflineRhaiHost {
                 plan: &plan,
-                interactions: OfflineInteractionQueue::new(vec![interaction], false)
+                interactions: OfflineInteractionQueue::new(vec![interaction], false, None)
                     .expect("one closed interaction"),
                 credential_used: true,
                 request_bytes: 0,
@@ -2739,7 +2782,7 @@ mod tests {
         };
         let mut host = OfflineRhaiHost {
             plan: &plan,
-            interactions: OfflineInteractionQueue::new(vec![interaction], false)
+            interactions: OfflineInteractionQueue::new(vec![interaction], false, None)
                 .expect("one closed interaction"),
             credential_used: false,
             request_bytes: 0,
@@ -2867,7 +2910,8 @@ mod tests {
                 response: OfflineSourceResponse::NoMatch,
             })
             .collect();
-        let mut queue = OfflineInteractionQueue::new(interactions, true).expect("trace queue");
+        let mut queue =
+            OfflineInteractionQueue::new(interactions, true, None).expect("trace queue");
         for (operation, canonical, actual) in [
             ("first", "/first/*", "/first/value-one"),
             ("second", "/second/*", "/second/value-two"),
