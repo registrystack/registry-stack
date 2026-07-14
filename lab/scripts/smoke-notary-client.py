@@ -138,16 +138,13 @@ def assert_boolean_result(response: dict[str, Any], expected_claim: str, expecte
     return result
 
 
-def provenance_source_count(result: dict[str, Any]) -> int:
+def provenance_relay_consultation_count(result: dict[str, Any]) -> int:
     provenance = result.get("provenance")
     if not isinstance(provenance, dict):
         return 0
-    source_count = provenance.get("source_count")
-    if isinstance(source_count, int):
-        return source_count
     used = provenance.get("used")
-    if isinstance(used, dict) and isinstance(used.get("source_count"), int):
-        return used["source_count"]
+    if isinstance(used, dict) and isinstance(used.get("relay_consultation_count"), int):
+        return used["relay_consultation_count"]
     return 0
 
 
@@ -291,7 +288,7 @@ def main() -> None:
                 "claim_id": "person-is-alive",
                 "expected": case["alive"],
                 "observed": civil_result.get("satisfied") if civil_result.get("satisfied") is not None else civil_result.get("value"),
-                "provenance_source_count": provenance_source_count(civil_result),
+                "relay_consultation_count": provenance_relay_consultation_count(civil_result),
             }
         )
 
@@ -329,7 +326,7 @@ def main() -> None:
                     "claim_id": "health-service-available",
                     "expected": case["health"],
                     "observed": health_result.get("satisfied") if health_result.get("satisfied") is not None else health_result.get("value"),
-                    "provenance_source_count": provenance_source_count(health_result),
+                    "relay_consultation_count": provenance_relay_consultation_count(health_result),
                 }
             )
 
@@ -361,16 +358,19 @@ def main() -> None:
             )
             continue
         shared_result = assert_boolean_result(shared_evaluation, "eligible-for-combined-support", case["combined"])
-        source_count = provenance_source_count(shared_result)
-        if case["combined"] and (not isinstance(source_count, int) or source_count < 2):
-            fail(f"shared evaluation expected at least 2 sources for {subject}, got {source_count!r}")
+        relay_consultation_count = provenance_relay_consultation_count(shared_result)
+        if case["combined"] and relay_consultation_count < 2:
+            fail(
+                "shared evaluation expected at least 2 Relay consultations "
+                f"for {subject}, got {relay_consultation_count!r}"
+            )
         matrix_results.append(
             {
                 "subject": subject,
                 "claim_id": "eligible-for-combined-support",
                 "expected": case["combined"],
                 "observed": shared_result.get("satisfied") if shared_result.get("satisfied") is not None else shared_result.get("value"),
-                "provenance_source_count": source_count,
+                "relay_consultation_count": relay_consultation_count,
             }
         )
 

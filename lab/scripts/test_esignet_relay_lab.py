@@ -140,10 +140,12 @@ class EsignetRelayLabTest(unittest.TestCase):
             smoke,
         )
 
-    def test_smoke_accepts_current_notary_provenance_source_count(self) -> None:
+    def test_smoke_accepts_current_notary_relay_consultation_count(self) -> None:
         smoke = text("scripts/smoke-citizen-self-attestation.sh")
 
-        self.assertIn('(provenance.get("used") or {}).get("source_count")', smoke)
+        self.assertIn('provenance.get("schema_version") == "registry-notary-claim-provenance/v2"', smoke)
+        self.assertIn('(provenance.get("used") or {}).get("relay_consultation_count")', smoke)
+        self.assertIn("assert relay_consultation_count == 0", smoke)
 
     def test_smoke_declares_jq_prerequisite(self) -> None:
         smoke = text("scripts/smoke-citizen-self-attestation.sh")

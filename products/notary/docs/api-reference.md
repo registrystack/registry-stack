@@ -42,8 +42,8 @@ The API uses closed problem codes grouped by category, including:
 - `claim.*`, `evaluation.*`, and `evidence.*` for evaluation;
 - `credential.*`, `holder_binding.*`, and `signature.*` for issuance;
 - `idempotency.*`, `batch.*`, and `replay.*` for request state; and
-- `source.*`, `verification.*`, `contract.*`, and `availability.*` for
-  internal Relay consultation failures.
+- `consultation.*` for invalid Relay consultation inputs; and
+- `evidence.*` for unavailable evidence, including Relay consultation failures.
 
 An internal Relay failure does not become a claim result or `no_match`.
 Unknown codes must be handled conservatively by category.

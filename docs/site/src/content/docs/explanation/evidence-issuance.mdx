@@ -116,9 +116,9 @@ evaluation, or receipt.
    results.
 4. Federated delegated evaluation. The caller is another configured Registry Notary. It posts a
    compact signed JWT to `POST /federation/v1/evaluations`; the serving Notary verifies peer
-   policy, replay state, purpose, profile, and audience before Relay consultation or claim
-   evaluation, then returns a compact
-   signed JWT response. This path returns a scoped evaluation result, not a credential.
+   policy, replay state, purpose, profile, and audience before claim evaluation, then returns a
+   compact signed JWT response. Federation profiles are source-free in this version and cannot
+   select a `registry_backed` claim. This path returns a scoped evaluation result, not a credential.
 
 The [credential tour](../../start/credential-tour/) citizen self-attestation scenario uses path 2:
 eSignet provides the access token, Notary evaluates the permitted authenticated context without a

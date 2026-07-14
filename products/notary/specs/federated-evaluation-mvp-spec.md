@@ -144,7 +144,7 @@ federation:
         - https://purpose.example.gov/social-protection/service-delivery
       allowed_profiles:
         - disability_status_predicate
-      source_scopes:
+      evaluation_scopes:
         - disability_registry:evidence_verification
   evaluation_profiles:
     - id: disability_status_predicate
@@ -152,7 +152,7 @@ federation:
       claim_id: disability_status
       subject_id_type: national_id
       disclosure: predicate
-      max_source_observed_age_seconds: 3600
+      max_claim_result_age_seconds: 3600
   response_shaping:
     minimum_denial_latency_ms: 250
   emergency_denylist:
@@ -244,7 +244,9 @@ response while the public evaluation API migrates to `target`, `items`, and
 }
 ```
 
-The serving Notary verifies the JWT before any source read.
+The serving Notary verifies the JWT and applies local peer policy before claim
+evaluation. Federation profiles are source-free and cannot select a
+`registry_backed` claim.
 
 `jti` must be a ULID string. Test fixtures should use deterministic ULIDs so
 replay tests can assert exact values.
@@ -294,7 +296,7 @@ Example payload:
         "disclosure": "predicate"
       }
     },
-    "source_observed_at": "2026-05-27T10:00:00Z",
+    "claim_result_issued_at": "2026-05-27T10:00:00Z",
     "policy": {
       "ruleset": "disability-status-v1",
       "purpose": "https://purpose.example.gov/social-protection/service-delivery"
@@ -308,9 +310,9 @@ Example payload:
 `urn:ulid:<ULID>`, but cross-organization incident reports should redact them if
 timing disclosure is a concern.
 
-Stale source observations are returned as signed evaluation errors, not bare
+Stale claim results are returned as signed evaluation errors, not bare
 HTTP denials. The signed response keeps `request_jti`, `profile`, and `purpose`
-auditable even when the source observation is too old:
+auditable even when the claim result is too old:
 
 ```json
 {
@@ -326,8 +328,9 @@ auditable even when the source observation is too old:
   "action": "evaluate",
   "profile": "disability_status_predicate",
   "error": {
-    "type": "urn:registry-notary:problem:federation:stale-source-observation",
-    "title": "Source observation is stale"
+    "type": "urn:registry-notary:problem:federation:stale-claim-result",
+    "title": "Claim result is stale",
+    "code": "federation.stale_claim_result"
   }
 }
 ```
@@ -439,17 +442,15 @@ The serving Notary must process requests in this order. The federation evaluatio
    size.
 9. Resolve the profile to its public `ruleset`.
 10. Map `ruleset` to local private claim configuration.
-11. Read configured sources.
-12. Evaluate claims.
-13. If `source_observed_at` is stale, prepare a signed evaluation error.
-14. Write the audit event.
-15. Return signed response JWT or signed evaluation error.
+11. Evaluate the admitted source-free claim.
+12. If the claim result `issued_at` is stale, prepare a signed evaluation error.
+13. Write the audit event.
+14. Return signed response JWT or signed evaluation error.
 
-Any failure before step 11 must happen before source reads. Audit is
-write-before-respond: if the audit sink fails after source access or evaluation,
-the Notary must not send a successful signed response. It should return a
-generic `503` denial and emit an operator log without raw subject or token
-material.
+Any failure before step 11 must happen before claim evaluation. Audit is
+write-before-respond: if the audit sink fails after evaluation, the Notary must
+not send a successful signed response. It should return a generic `503` denial
+and emit an operator log without raw subject or token material.
 
 ```mermaid
 flowchart TD
@@ -460,19 +461,18 @@ flowchart TD
   Replay["Check jti replay"]
   Policy["Check static peer policy"]
   Ruleset["Resolve profile to ruleset"]
-  Source["Read configured sources"]
   Eval["Evaluate claims"]
-  Fresh["Check source_observed_at freshness"]
+  Fresh["Check claim result issued_at freshness"]
   Audit["Emit audit event"]
   Sign["Return signed response JWT"]
-  Deny["Deny before source read"]
+  Deny["Deny before claim evaluation"]
 
   Start --> Body --> Jwt --> Bind --> Replay --> Policy
   Jwt -- "invalid" --> Deny
   Bind -- "mismatch" --> Deny
   Replay -- "replayed" --> Deny
   Policy -- "denied" --> Deny
-  Policy -- "allowed" --> Ruleset --> Source --> Eval --> Fresh --> Audit --> Sign
+  Policy -- "allowed" --> Ruleset --> Eval --> Fresh --> Audit --> Sign
 ```
 
 ## Denial Responses
@@ -494,7 +494,7 @@ identifiers in the MVP. The response body must not reveal whether a subject
 exists.
 
 `response_shaping.minimum_denial_latency_ms` should be set at or above the
-observed 95th-percentile latency for allowed source reads on the protected
+observed 95th-percentile latency for allowed claim evaluations on the protected
 profile. Setting it lower is allowed only with an explicit deployment note that
 accepts the residual timing side channel.
 
@@ -539,8 +539,8 @@ until every applicable item below is satisfied and reviewed.
 - A request with unknown peer, unsupported profile, unsupported purpose, bad
   audience, expired token, future `nbf`, denied algorithm, unknown `kid`, bad
   signature, `iss`/`sub` mismatch, replayed `jti`, emergency-denied `kid`, or
-  `exp - iat` above policy is denied before any source read. Tests must assert
-  the source reader was not called.
+  `exp - iat` above policy is denied before claim evaluation. Tests must assert
+  the evaluator was not called.
 - Successful evaluation returns a signed response JWT with required `typ`,
   `alg = EdDSA`, `kid`, `iss`, `sub`, `aud`, `iat`, `nbf`, `exp`, `jti`,
   `request_jti`, `protocol`, `action`, `profile`, and a result body.
@@ -555,9 +555,9 @@ until every applicable item below is satisfied and reviewed.
 - Audit events are emitted for allowed evaluation, policy denial, signature
   denial, and replay denial, and include peer id, profile, purpose, request
   `jti`, decision, and a redacted subject reference.
-- Audit write failure after source access prevents a successful signed response,
-  with a focused test.
-- `source_observed_at` older than `max_source_observed_age_seconds` is returned
+- Audit write failure after claim evaluation prevents a successful signed
+  response, with a focused test.
+- A claim result `issued_at` older than `max_claim_result_age_seconds` is returned
   as a signed evaluation error, with a focused test.
 - In-memory replay storage is bounded for public OID4VCI nonce reservations.
   Redis replay storage is required for active-active deployments and fails
@@ -577,12 +577,12 @@ when behavior changes.
 | `access.ruleset` resolves to an evaluation profile ruleset | `validate_registry_notary_access` checks `evaluation_profiles[*].ruleset` | `validation_rejects_registry_notary_unresolved_ruleset` |
 | Federation disabled by default and route hidden | `standalone_router` mounts federation router only when enabled | `federation_route_is_not_mounted_until_enabled` |
 | Startup validates node/issuer binding and peer policy | `FederationConfig::validate` | `federation_config_validates_enabled_mvp_shape` and negative config tests |
-| Request verification uses compact JWS, EdDSA, `typ`, `kid`, `iss`, `sub`, `aud`, time, and `jti` | `crates/registry-notary-server/src/federation/mod.rs` request handler, with helper logic in `claims.rs`, `signing.rs`, and `runtime.rs` | `federation_denial_happens_before_source_read` |
-| Denials before policy pass do not read sources | `handle_federated_evaluate` orders verification before `evaluate_with_source_capability` | source hit counters in denial tests |
-| Oversized request bodies are rejected before full buffering | `to_bytes(body, inbound_body_limit_bytes)` in federation handler | oversized body case in `federation_denial_happens_before_source_read` |
+| Request verification uses compact JWS, EdDSA, `typ`, `kid`, `iss`, `sub`, `aud`, time, and `jti` | `crates/registry-notary-server/src/federation/mod.rs` request handler, with helper logic in `claims.rs`, `signing.rs`, and `runtime.rs` | focused federation request-verification tests |
+| Denials before policy pass do not evaluate claims | `handle_federated_evaluate` orders verification before `evaluate_with_capability` | focused denial-order tests |
+| Oversized request bodies are rejected before full buffering | `to_bytes(body, inbound_body_limit_bytes)` in federation handler | focused oversized-body test |
 | Replay retains one-time identifiers through protocol expiry and rejects duplicates | `registry-notary-server/src/replay.rs` and `registry-platform-replay` | replay unit tests and `federation_evaluation_returns_signed_response_and_rejects_replay` |
 | Successful response is signed and bound to `request_jti` | `FederationSignedOutcome::success` | `federation_evaluation_returns_signed_response_and_rejects_replay` |
-| Stale source returns signed top-level `error` | `FederationSignedOutcome::evaluation_error` | `federation_stale_source_observation_returns_signed_evaluation_error` |
+| Stale claim result returns signed top-level `error` | `FederationSignedOutcome::evaluation_error` | `signed_outcomes_use_claim_result_terminology` |
 | Audit is write-before-respond | federation audit emission before response return | `federation_audit_write_failure_replaces_signed_success` |
 | Two configured standalone Notaries can complete delegated evaluation | two `standalone_router` instances in one smoke test | `federation_two_standalone_notaries_smoke` |
 
@@ -697,13 +697,13 @@ Wave DoD:
 - Tests cover bad `typ`, denied `alg`, unknown `kid`, bad signature, wrong
   `aud`, `iss`/`sub` mismatch, expired `exp`, future `nbf`, long lifetime,
   emergency-denied `kid`, oversized body, and replayed `jti`.
-- All verification failures happen before source-reader invocation in tests.
+- All verification failures happen before claim-evaluator invocation in tests.
 
 Review checkpoint:
 
 - Security-focused review checks fail-closed order, `kid` scoping, replay
   retention, and absence of token material in logs.
-- Wave 3 cannot start until denial-before-source-read tests are merged.
+- Wave 3 cannot start until denial-before-claim-evaluation tests are merged.
 
 ### Wave 3: Delegated Evaluation Endpoint
 
@@ -713,14 +713,14 @@ Parallel work:
   existing claim evaluation.
 - Worker B: implement signed response JWT generation and response verification
   tests.
-- Worker C: implement audit events, raw-row redaction tests, and stale
-  `source_observed_at` signed-error handling.
+- Worker C: implement audit events, result-redaction tests, and stale claim
+  result signed-error handling.
 
 Wave DoD:
 
 - Allowed peer/profile/purpose returns a signed response JWT.
-- Unknown peer, unsupported profile, unsupported purpose, replay, stale source
-  observation signed error, audit-write failure, and source error have focused
+- Unknown peer, unsupported profile, unsupported purpose, replay, stale claim
+  result signed error, audit-write failure, and evaluation error have focused
   tests.
 - Pairwise subject hash differs across consuming peer and profile test cases.
 - Audit tests cover allow, policy denial, signature denial, and replay denial.

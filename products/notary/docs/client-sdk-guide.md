@@ -997,8 +997,8 @@ Problem detail strings are not exposed by the Python wrapper. The Rust
 `portable()` error envelope is intended for language bindings and FFI. It
 intentionally excludes sensitive detail strings.
 
-The stable application problem `code` values for policy mapping live in the
-[problem code registry in the API reference](api-reference.md#problem-code-registry).
+The stable application problem `code` categories for policy mapping live in the
+[problem categories in the API reference](api-reference.md#problem-categories).
 
 ### Troubleshooting
 
@@ -1181,5 +1181,5 @@ try {
 
 ## API method matrix
 
-The route to client method mapping for each runtime lives in the
-[route to client method matrix in the API reference](api-reference.md#route-to-client-method-matrix).
+The route families used by each runtime are listed under
+[main surfaces in the API reference](api-reference.md#main-surfaces).

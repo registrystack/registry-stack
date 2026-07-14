@@ -17,6 +17,16 @@
 - Relay-only, self-attested Notary-only, and combined project deployments are
   modeled separately. A combined project has one logical Relay connection and
   Notary receives no registry destination or source credential.
+- Registry-backed claim rules now use `consultation_output` and
+  `consultation_matched` with explicit `consultation` and `output` fields.
+  The unreleased source-named rule forms are rejected without aliases.
+- Claim provenance moves atomically to
+  `registry-notary-claim-provenance/v2`, exposing only
+  `relay_consultation_count`; audit records use the same terminology.
+- Federation configuration and signed results use evaluation and claim-result
+  terminology. Federation profiles remain source-free in this version, and
+  Relay-backed federation remains deferred pending cross-service audit
+  correlation.
 - The retired sidecar container, listener inventory, direct-source demo
   configurations, OpenFn caller demo, and direct DCI performance harness are
   removed.

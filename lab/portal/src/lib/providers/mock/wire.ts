@@ -99,11 +99,9 @@ export type ClaimResultView = {
       service_id: string;
       type: 'claim_evaluation';
     };
-    schema_version: 'registry-notary-claim-provenance/v1';
+    schema_version: 'registry-notary-claim-provenance/v2';
     used: {
-      source_count: number;
-      source_runtimes: object[];
-      source_versions: Record<string, string>;
+      relay_consultation_count: number;
     };
   };
   requester_ref: {
@@ -145,10 +143,10 @@ export function buildRawResponse(
     format: CLAIM_RESULT_FORMAT,
     issued_at: issued,
     matching: {
-      confidence: scenario.sourceCount > 1 ? 'medium' : 'high',
+      confidence: scenario.relayConsultationCount > 1 ? 'medium' : 'high',
       method: 'identifier_exact',
       policy_id: 'national-id-exact-v1',
-      score: scenario.sourceCount === 1 ? 1.0 : null
+      score: scenario.relayConsultationCount === 1 ? 1.0 : null
     },
     provenance: {
       derived_from: [],
@@ -163,11 +161,9 @@ export function buildRawResponse(
         service_id: NOTARY_SERVICE_ID[scenario.notary],
         type: 'claim_evaluation'
       },
-      schema_version: 'registry-notary-claim-provenance/v1',
+      schema_version: 'registry-notary-claim-provenance/v2',
       used: {
-        source_count: scenario.sourceCount,
-        source_runtimes: [],
-        source_versions: {}
+        relay_consultation_count: scenario.relayConsultationCount
       }
     },
     requester_ref: {

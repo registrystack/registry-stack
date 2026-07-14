@@ -108,7 +108,7 @@ A claim evaluation moves typed request inputs through one configured evidence mo
 flowchart LR
     subject["Typed request inputs<br/>(from authorized caller)"]
     evidence["Evidence mode<br/>Relay consultation · self-attestation"]
-    rule["Rule<br/>extract · exists · cel"]
+    rule["Rule<br/>consultation output · consultation matched · cel"]
     disclosure["Disclosure mode<br/>value · predicate · redacted"]
     format["Evaluation render format<br/>claim-result JSON · CCCEV JSON-LD"]
     credential["Credential issuance<br/>SD-JWT VC"]
@@ -122,7 +122,7 @@ REQ-PR-NOTARY-005: Claim evaluation MUST be performed by Registry Notary over it
 
 REQ-PR-NOTARY-006: Registry Notary MUST NOT configure or execute a direct registry source connector. A registry-backed claim MUST bind one or more compiler-pinned Registry Relay consultations by profile id and contract hash. The request purpose and typed inputs MUST match the pinned contract before Notary calls Relay. Source origins, credentials, HTTP or script execution, protocol helpers, snapshots, and output minimization belong to Relay.
 
-REQ-PR-NOTARY-007: A claim's rule MUST be one of the implemented rule types: `extract`, `exists`, or `cel`. The `plugin` rule type is declared in configuration but is unimplemented at the reviewed commit; a conforming claim MUST NOT depend on it.
+REQ-PR-NOTARY-007: A claim's rule MUST be one of the implemented rule types: `consultation_output`, `consultation_matched`, or `cel`. The `plugin` rule type is declared in configuration but is unimplemented at the reviewed commit; a conforming claim MUST NOT depend on it.
 
 REQ-PR-NOTARY-025: When a registry-backed claim requires freshness, Registry Notary MUST derive freshness from the verified Relay consultation provenance, not from caller-supplied freshness. Stale, absent, or malformed required provenance MUST deny before disclosure or credential materialization.
 
@@ -208,7 +208,7 @@ REQ-PR-NOTARY-032: The OID4VCI credential endpoint MUST reject delegated-attesta
 
 A configured peer Registry Notary can delegate an evaluation through `POST /federation/v1/evaluations`. The peer posts a compact signed JWT request and receives a compact signed JWT response carrying a scoped evaluation result. This path does not issue a credential.
 
-REQ-PR-NOTARY-018: Delegated evaluation (`POST /federation/v1/evaluations`) MUST accept a compact signed JWT request and return a compact signed JWT response. Before any Relay consultation or claim evaluation, the serving Registry Notary MUST verify peer policy, replay state, purpose, profile, and audience.
+REQ-PR-NOTARY-018: Delegated evaluation (`POST /federation/v1/evaluations`) MUST accept a compact signed JWT request and return a compact signed JWT response. Before claim evaluation, the serving Registry Notary MUST verify peer policy, replay state, purpose, profile, and audience. Federation evaluation profiles MUST be source-free in this version and MUST NOT select a `registry_backed` claim; Relay-backed federation remains deferred until its cross-service audit correlation contract is implemented.
 
 REQ-PR-NOTARY-019: Federation MUST be static-peer only: peers are loaded from configuration at startup, and a request from an unconfigured peer MUST be rejected. Delegated evaluation returns a scoped evaluation result, not a credential. Dynamic trust-chain discovery, shared replay storage, and federated credential issuance are out of scope for this version and MUST NOT be implied by a conformance claim against this specification. This is the protocol-level form of REQ-ARC-G-009.
 
@@ -222,7 +222,7 @@ REQ-PR-NOTARY-021: An audit write failure MUST surface as a request error. Regis
 
 REQ-PR-NOTARY-022: Error responses on the claim, credential, and federation routes MUST use the problem-details media type `application/problem+json` ([RFC 9457](https://www.rfc-editor.org/info/rfc9457)). The OID4VCI routes (`/oid4vci/*`) instead return the OID4VCI error envelope their flow defines.
 
-REQ-PR-NOTARY-028: Public claim results MUST carry claim provenance using the `registry-notary-claim-provenance/v1` shape. Registry-backed provenance MUST identify the verified Relay consultation without exposing source credentials or raw subject identifiers. Audit records for policy-governed evaluations and denials MUST preserve the relevant policy id, hash, and evaluated rule ids when that policy was selected.
+REQ-PR-NOTARY-028: Public claim results MUST carry claim provenance using the `registry-notary-claim-provenance/v2` shape. Registry-backed provenance MUST count the verified Relay consultations without exposing source credentials, consultation identifiers, or raw subject identifiers. Audit records for policy-governed evaluations and denials MUST preserve the relevant policy id, hash, and evaluated rule ids when that policy was selected.
 
 REQ-PR-NOTARY-033: Self-attestation policy denials MUST use the public problem code `self_attestation.denied` while preserving the granular denial reason in audit context. Delegated self-attestation denial reasons are `delegated.relationship_unproven`, `delegated.relationship_not_allowed`, `delegated.claim_denied`, `delegated.subject_not_permitted`, and `delegated.proof_denied`.
 

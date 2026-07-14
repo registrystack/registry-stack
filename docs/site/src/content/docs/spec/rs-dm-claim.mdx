@@ -70,7 +70,7 @@ flowchart TD
     claim["Claim definition<br/>id · subject_type · value type"]
     inputs["Typed inputs<br/>target · requester · declared variables"]
     evidence["Evidence mode<br/>registry-backed consultation · self-attested"]
-    rule["Rule (exactly one)<br/>extract · exists · cel (+ depends_on)"]
+    rule["Rule (exactly one)<br/>consultation output · consultation matched · cel (+ depends_on)"]
     disclosure["Disclosure policy<br/>default and allowed modes"]
     formats["Evaluation render formats<br/>claim-result JSON · CCCEV JSON-LD"]
     creds["Credential profiles<br/>two-way allow-list, issues SD-JWT VC"]
@@ -102,9 +102,9 @@ REQ-DM-CLAIM-005: Relay no-match, ambiguity, contract, and source failures MUST 
 
 ## 5. Rule and dependencies
 
-The rule is the single decision at the center of a claim. Registry Notary implements three rule kinds: `exists` (the presence represented by a consultation result), `extract` (a typed value from a consultation output), and `cel` (a value derived from closed evidence inputs or earlier claim results through a hardened expression).
+The rule is the single decision at the center of a claim. Registry Notary implements three rule kinds: `consultation_matched` (whether the Relay consultation matched), `consultation_output` (a typed value from one named consultation output), and `cel` (a value derived from closed evidence inputs or earlier claim results through a hardened expression).
 
-REQ-DM-CLAIM-006: A claim definition MUST declare exactly one rule, and that rule MUST be one of the implemented kinds `extract`, `exists`, or `cel`. The `plugin` rule kind is declared in configuration but unimplemented; a conforming claim MUST NOT depend on it. This is the data-model form of REQ-PR-NOTARY-007.
+REQ-DM-CLAIM-006: A claim definition MUST declare exactly one rule, and that rule MUST be one of the implemented kinds `consultation_output`, `consultation_matched`, or `cel`. The `plugin` rule kind is declared in configuration but unimplemented; a conforming claim MUST NOT depend on it. This is the data-model form of REQ-PR-NOTARY-007.
 
 REQ-DM-CLAIM-007: A `cel` rule MAY reuse earlier claim results through `depends_on`. Every `depends_on` entry MUST name a claim defined in the same configuration, and the dependency graph MUST be acyclic; a deployment MUST reject a configuration whose `depends_on` names an unknown claim or forms a cycle.
 

@@ -76,8 +76,8 @@ export type ScenarioResult = {
   // stagger so fields land in a believable cascade, never all at once.
   latencyMs: number;
   staggerOrder: number;
-  // an error scenario performs NO source read (used.source_count = 0)
-  sourceCount: number;
+  // an error scenario starts no Relay consultation (used.relay_consultation_count = 0)
+  relayConsultationCount: number;
 };
 
 // Persona ids (already reconciled to real fixtures). These are SUBJECTS the BFF
@@ -115,7 +115,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 900,
     staggerOrder: 0,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
   'farm-holding': {
     notary: 'agri',
@@ -137,7 +137,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 1400,
     staggerOrder: 1,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
   'voucher-eligibility': {
     notary: 'agri',
@@ -163,7 +163,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 1700,
     staggerOrder: 2,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
 
   // ---------------------------------------------------------------------------
@@ -189,7 +189,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 1100,
     staggerOrder: 0,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
   // The Civil reads below are HOP TWO: they are only authorized after the social
   // caregiver-link verify above succeeds. The provider enforces this gate.
@@ -214,7 +214,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 1300,
     staggerOrder: 1,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
   'date-of-birth': {
     notary: 'civil',
@@ -237,7 +237,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 1500,
     staggerOrder: 2,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
   'household-composition': {
     notary: 'social',
@@ -259,7 +259,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 1200,
     staggerOrder: 3,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
 
   // ---------------------------------------------------------------------------
@@ -285,7 +285,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 800,
     staggerOrder: 0,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
   'disability-determination': {
     notary: 'social',
@@ -310,7 +310,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 1000,
     staggerOrder: 1,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
   'functioning-assessment': {
     notary: 'social',
@@ -332,7 +332,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 1350,
     staggerOrder: 2,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
   'household-size': {
     notary: 'social',
@@ -354,7 +354,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 1250,
     staggerOrder: 3,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
   'combined-support-eligibility': {
     notary: 'social',
@@ -381,7 +381,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 2100,
     staggerOrder: 4,
-    sourceCount: 3
+    relayConsultationCount: 3
   },
 
   // ---------------------------------------------------------------------------
@@ -412,12 +412,12 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 1600,
     staggerOrder: 0,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
 
   // ---------------------------------------------------------------------------
   // Denial beat (cross-person, stranger Pedro NID-1010): a real denied
-  // evaluation, 403 subject_mismatch, NO source read.
+  // evaluation, 403 subject_mismatch, and no Relay consultation.
   // ---------------------------------------------------------------------------
   denial: {
     notary: 'civil',
@@ -435,13 +435,13 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     reasonCode: 'subject_mismatch',
     headline: 'Denied by Civil Registry before any record was read',
     answered: 'Civil Registry answered: 403 subject_mismatch, no data returned',
-    notDisclosed: 'Not disclosed: nothing, the boundary held and no source was read',
+    notDisclosed: 'Not disclosed: nothing, the boundary held and no Relay consultation ran',
     status: 'denied',
     httpStatus: 403,
     denial: { code: 'subject_mismatch', message: 'requester is not authorized for this target' },
     latencyMs: 600,
     staggerOrder: 0,
-    sourceCount: 0
+    relayConsultationCount: 0
   },
 
   // ---------------------------------------------------------------------------
@@ -469,10 +469,10 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 7000,
     staggerOrder: 0,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
   // ERROR: a hard failure (503). Scoped to the field, framed as minimization. No
-  // source read, no value.
+  // Relay consultation, no value.
   error: {
     notary: 'social',
     claimId: 'household-composition',
@@ -494,7 +494,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 503,
     latencyMs: 8000,
     staggerOrder: 0,
-    sourceCount: 0
+    relayConsultationCount: 0
   },
   // STALE: fetched but older than the freshness rule (BLUE + AMBER flag).
   stale: {
@@ -517,7 +517,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 1300,
     staggerOrder: 0,
-    sourceCount: 1
+    relayConsultationCount: 1
   },
   // AMBIGUOUS: more than one record matched; never collapses to false.
   ambiguous: {
@@ -541,7 +541,7 @@ export const SCENARIOS: Record<string, ScenarioResult> = {
     httpStatus: 200,
     latencyMs: 1400,
     staggerOrder: 0,
-    sourceCount: 2
+    relayConsultationCount: 2
   }
 };
 

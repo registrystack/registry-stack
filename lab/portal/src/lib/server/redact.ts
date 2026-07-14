@@ -67,9 +67,7 @@ const BODY_VALUE_ALLOWLIST = new Set<string>([
   'policy_hash',
   'policy_version',
   'service_id',
-  'source_count',
-  'source_versions',
-  'source_runtimes',
+  'relay_consultation_count',
   'profile'
 ]);
 

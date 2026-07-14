@@ -112,7 +112,7 @@ export class MockEvidenceProvider implements EvidenceProvider {
   }
 
   // Full evaluation used by the BFF: resolves the scenario, enforces the delegated
-  // gate and the denial (no source read), builds the wire bodies, applies the
+  // gate and the denial (no Relay consultation), builds the wire bodies, applies the
   // deterministic latency, and returns everything the BFF needs to tee a redacted
   // trace.
   async evaluateDetailed(
@@ -125,7 +125,7 @@ export class MockEvidenceProvider implements EvidenceProvider {
 
     // Delegated civil reads (hop two) are only authorized AFTER the social
     // caregiver-link verify (hop one) succeeds. An unproven link is denied
-    // before any dependent source read, proving the relationship-first gate.
+    // before any dependent Relay consultation, proving the relationship-first gate.
     if (scenario.delegated && opts?.guardianLinkVerified !== true) {
       // Deny by default: a delegated dependent read is authorized ONLY with an
       // affirmative proven guardian link. An absent flag is treated as "not proven",
@@ -149,7 +149,7 @@ export class MockEvidenceProvider implements EvidenceProvider {
       delegationRef: scenario.delegated ? 'rnref:v1:REL-1001-MOTHER' : undefined
     });
 
-    // Denial / error scenarios perform NO source read: there is no 200 body.
+    // Denial and error scenarios start no Relay consultation: there is no 200 body.
     if (scenario.httpStatus === 403) {
       return this.#denied(field, scenario, ctx, key, scenario.denial?.code ?? 'subject_mismatch');
     }
@@ -190,7 +190,7 @@ export class MockEvidenceProvider implements EvidenceProvider {
     };
   }
 
-  // A denied evaluation: 403, no source read, no 200 body. The boundary held.
+  // A denied evaluation: 403, no Relay consultation, no 200 body. The boundary held.
   #denied(
     field: Field,
     scenario: ScenarioResult,
@@ -202,7 +202,7 @@ export class MockEvidenceProvider implements EvidenceProvider {
     const evaluationId = makeEvaluationId(seq);
     const issuedAt = new Date();
     // We still show the REQUEST the BFF attempted, with the stranger target, so the
-    // inspector shows what was asked, then the 403 with no source read. The target
+    // inspector shows what was asked, then the 403 with no Relay consultation. The target
     // is redacted before it ever reaches the feed.
     const subject = scenario.denial ? PERSONA.pedro : PERSONA.miguel;
     const rawRequest = buildRawRequest(scenario, subject, {
@@ -250,7 +250,7 @@ export class MockEvidenceProvider implements EvidenceProvider {
   }
 
   // A hard upstream failure (503): scoped to the field, framed as minimization. No
-  // source read, no value.
+  // Relay consultation, no value.
   #errored(
     field: Field,
     scenario: ScenarioResult,

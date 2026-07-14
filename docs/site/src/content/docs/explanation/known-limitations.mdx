@@ -181,7 +181,8 @@ model](../../spec/rs-dm-manifest/).
 
 - The `plugin` rule type is unavailable: The enum remains declared, but configuration validation
   rejects it for both registry-backed and self-attested evidence modes. A conforming claim uses
-  `extract`, `exists`, or `cel` under the constraints of its evidence mode.
+  `consultation_output`, `consultation_matched`, or `cel` under the constraints of its evidence
+  mode.
 - An empty formats list cannot be evaluated: A claim whose `formats` list is empty does not admit
   even the default claim-result JSON format. Project-generated claims declare their supported
   formats explicitly.

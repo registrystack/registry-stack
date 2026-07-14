@@ -25,19 +25,17 @@ returns a signed result.
 sequenceDiagram
   participant B as Agency B (requesting Notary)
   participant A as Agency A (serving Notary)
-  participant Src as Source registry
   participant Audit as Audit sink
 
   B->>A: POST /federation/v1/evaluations (signed request JWT)
   A->>A: Verify signature, audience, time window, profile, purpose, replay, denylist, body limit
-  A->>Src: Source read, only after policy passes
-  Src-->>A: Consultation outputs
+  A->>A: Evaluate admitted source-free claim
   A->>Audit: Chained audit record
   A-->>B: Signed response JWT, or signed error, or Problem Details denial
 ```
 
-*The delegated evaluation exchange. Every check runs before any source read, and
-an audit write failure prevents a successful signed response.*
+*The delegated evaluation exchange. Every check runs before claim evaluation,
+and an audit write failure prevents a successful signed response.*
 
 ## Required environment
 
@@ -47,14 +45,12 @@ Set these before starting the serving Notary:
 export REGISTRY_NOTARY_AUDIT_HASH_SECRET='change-me-audit-hash-secret'
 export REGISTRY_NOTARY_FEDERATION_RESPONSE_JWK='{"kty":"OKP","crv":"Ed25519","d":"...","x":"...","alg":"EdDSA"}'
 export REGISTRY_NOTARY_PAIRWISE_SUBJECT_HASH_SECRET='change-me-pairwise-secret'
-export EVIDENCE_SOURCE_TOKEN='source-token-issued-by-the-registry'
 ```
 
 Do not reuse the pairwise subject hash secret for audit hashing, cookies,
-source tokens, credential signing, or federation response signing. Federation
-response signing references a named key from `evidence.signing_keys`, so the
-same local JWK and PKCS#11 providers are used for evidence and federation
-signatures.
+credential signing, or federation response signing. Federation response
+signing references a named key from `evidence.signing_keys`, so the same local
+JWK and PKCS#11 providers are used for evidence and federation signatures.
 
 ## Minimal config shape
 
@@ -100,18 +96,23 @@ federation:
         - https://purpose.example.gov/social-protection/service-delivery
       allowed_profiles:
         - disability_status_predicate
-      source_scopes:
+      evaluation_scopes:
         - disability_registry:evidence_verification
   evaluation_profiles:
     - id: disability_status_predicate
       ruleset: disability-status-v1
       claim_id: disability_status
       subject_id_type: national_id
-      max_source_observed_age_seconds: 3600
+      max_claim_result_age_seconds: 3600
 ```
 
 The local `peers` block is authoritative. Manifest metadata helps partners
 configure each other, but it does not grant access.
+
+`evaluation_scopes` are the scopes assigned to the authenticated federation
+principal when authorizing the selected local claim. They do not grant registry
+or Relay source access. `max_claim_result_age_seconds` bounds the age of the
+local claim result's `issued_at` timestamp.
 
 The current federation endpoint cannot select a claim with
 `evidence_mode.type: registry_backed`. Startup rejects that composition because
@@ -138,7 +139,7 @@ Send `POST /federation/v1/evaluations` with:
 - payload claims `iss`, `sub`, `aud`, `iat`, `nbf`, `exp`, `jti`, `protocol`,
   `action`, `profile`, `purpose`, and `request`
 
-The serving Notary rejects the request before source reads when signature,
+The serving Notary rejects the request before claim evaluation when signature,
 audience, time window, profile, purpose, replay, emergency denylist, or body
 limit checks fail.
 
@@ -152,9 +153,9 @@ Successful responses are compact signed JWTs with:
 - `request_jti` copied from the request
 - `result.subject_ref.hash` as a pairwise `hmac-sha256:` handle
 
-Stale source observations return HTTP 200 with a signed top-level `error`
-object. Transport denials use RFC 9457 Problem Details JSON and do not prove whether the
-subject exists.
+Stale claim results return HTTP 200 with a signed top-level `error` object.
+Transport denials use RFC 9457 Problem Details JSON and do not prove whether
+the subject exists.
 
 ## Replay store
 
@@ -182,6 +183,6 @@ Also confirm:
 
 - federation routes are absent when `federation.enabled` is false;
 - the peer JWKS contains the request signing `kid`;
-- source tokens and raw subject identifiers do not appear in audit JSONL;
+- raw subject identifiers do not appear in audit JSONL;
 - audit write failure prevents a successful signed response;
 - replaying the same request `jti` returns a denial.

@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Relay-only, self-attested Notary-only, and combined deployments are modeled
   independently. Combined deployments use the project's single Relay
   connection.
+- BREAKING: registry-backed claim rules are now named
+  `consultation_output { consultation, output }` and
+  `consultation_matched { consultation }`. The unreleased `extract`/`exists`
+  and `source`/`field` forms are rejected without aliases.
+- BREAKING: public claim provenance is now
+  `registry-notary-claim-provenance/v2` with one
+  `relay_consultation_count`; the misleading `source_count` and unused
+  `source_versions` fields are removed. Audit records use the same Relay
+  consultation terminology.
+- BREAKING: federation configuration uses `evaluation_scopes` and
+  `max_claim_result_age_seconds`, and signed federation responses use
+  `claim_result_issued_at` plus `federation.stale_claim_result`. Federation
+  profiles remain source-free in this version.
 
 ### Removed
 

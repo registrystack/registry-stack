@@ -14,7 +14,7 @@ such as Inji Wallet and Walt Wallet.
 
 The facade must be wallet-neutral. Inji and Walt are validation clients, not
 special cases. eSignet remains the citizen identity provider. Registry Notary
-remains the authorization, subject-binding, source-read, audit, and credential
+remains the authorization, subject-binding, Relay-consultation, audit, and credential
 issuance authority.
 
 ```text
@@ -23,7 +23,7 @@ Wallet
   -> eSignet citizen authentication
   -> Notary OpenID4VCI credential endpoint
   -> Notary self-attestation guard
-  -> Registry Relay/source read
+  -> Registry Relay consultation
   -> Notary SD-JWT VC issuance
 ```
 
@@ -69,7 +69,7 @@ identifier.
 
 The citizen must not be able to request another person's claim, choose an
 arbitrary subject in the credential request, bypass self-attestation policy, or
-cause a registry source read before subject binding succeeds.
+start a Relay consultation before subject binding succeeds.
 
 ## Non-Goals
 
@@ -318,8 +318,8 @@ Validation rules:
 - The subject used for evaluation is derived only from verified token claims or
   verified UserInfo.
 - The wallet request cannot choose a subject.
-- Subject binding succeeds before any source read.
-- A request for another subject is denied before any source read.
+- Subject binding succeeds before any Relay consultation.
+- A request for another subject is denied before any Relay consultation.
 - A credential configuration id maps to exactly one configured claim and one
   configured credential profile.
 - The wallet proof binds the credential to a wallet-controlled key.
@@ -579,16 +579,16 @@ Required audit fields:
 - hashed subject binding;
 - hashed holder id when available;
 - correlation id;
-- source-read count;
+- Relay consultation count;
 - proof validation result class, without raw proof values.
 
 The audit record must allow an operator to prove:
 
 - metadata was served for a configured credential;
 - the credential endpoint used a citizen token;
-- subject binding happened before source read;
+- subject binding happened before Relay consultation;
 - successful issuance was tied to self-attestation mode;
-- another-subject attempts were denied before source read;
+- another-subject attempts were denied before Relay consultation;
 - proof failures did not issue credentials;
 - identifiers were redacted or hashed.
 
@@ -616,14 +616,14 @@ Required wire mapping:
 | Internal denial code | HTTP status | Client-visible error | Notes |
 | --- | --- | --- | --- |
 | `oid4vci.disabled` | 404 or 403 | `invalid_request` | Do not reveal hidden routes in hardened deployments |
-| `oid4vci.unknown_credential_configuration` | 400 | `unsupported_credential_type` | No source read |
+| `oid4vci.unknown_credential_configuration` | 400 | `unsupported_credential_type` | No Relay consultation |
 | `oid4vci.invalid_request` | 400 | `invalid_request` | Includes malformed JSON and extension fields that try to supply subject |
 | `oid4vci.invalid_token` | 401 | `invalid_token` | Includes expired, wrong issuer, wrong audience, and missing token |
 | `oid4vci.subject_binding_denied` | 401 or 403 | `invalid_token` or `access_denied` | Must collapse with generic auth denial on the wire to avoid subject probing |
 | `oid4vci.proof_required` | 400 | `invalid_proof` | Include `c_nonce` when appropriate |
 | `oid4vci.proof_invalid` | 400 | `invalid_proof` | Include `c_nonce` when appropriate |
 | `oid4vci.proof_replay` | 400 | `invalid_proof` | Never reveal whether the nonce was seen before |
-| `oid4vci.unsupported_format` | 400 | `unsupported_credential_type` | No source read |
+| `oid4vci.unsupported_format` | 400 | `unsupported_credential_type` | No Relay consultation |
 | `oid4vci.policy_denied` | 403 | `access_denied` | Generic denial body |
 | `oid4vci.rate_limited` | 429 | `temporarily_unavailable` | Include `Retry-After` when practical |
 
@@ -770,10 +770,10 @@ The feature is complete only when every item below is true:
   credential response.
 - A malicious request cannot fetch a claim for `NID-1002` when the token binds
   to `NID-1001`.
-- Another-subject attempts are denied before any registry source read.
-- All source reads happen only after OIDC validation, credential configuration
+- Another-subject attempts are denied before any Relay consultation.
+- All Relay consultations happen only after OIDC validation, credential configuration
   validation, proof validation, and self-attestation subject binding.
-- Zero-source-read claims are proven by a mock source read counter or structured
+- Zero-consultation claims are proven by a mock Relay client counter or structured
   audit field assertion, not by log text.
 - The issued credential remains compatible with the existing Notary SD-JWT VC
   profile.
@@ -807,7 +807,7 @@ The feature is complete only when every item below is true:
   unknown credential configuration, disabled facade, wire error mapping, every
   internal denial code, and subject override rejection.
 - Integration tests cover a successful citizen issuance and an attempted
-  other-subject request with zero source reads.
+  other-subject request with zero Relay consultations.
 - Registry Lab has an optional narrated smoke command that writes metadata,
   offer, successful credential response, denied response, audit excerpt, and
   transcript artifacts.
@@ -903,7 +903,7 @@ Exit criteria:
 
 - focused Notary route and config tests pass;
 - successful issuance integration test passes;
-- other-subject denial proves zero source reads;
+- other-subject denial proves zero Relay consultations;
 - wire errors map from internal denial codes without leaking subject-binding
   detail;
 - reviewer signs off before lab work starts.
@@ -931,7 +931,7 @@ Exit criteria:
 Parallel workers:
 
 - Security reviewer: threat-model the facade against subject probing, token
-  confusion, proof replay, source-read ordering, and audit leakage.
+  confusion, proof replay, Relay consultation ordering, and audit leakage.
 - Interop reviewer: compare metadata, offer, and credential responses against
   Inji and Walt expectations.
 - Test reviewer: inspect unit and integration coverage against the Definition

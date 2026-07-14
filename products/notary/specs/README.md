@@ -26,10 +26,10 @@ that still tracks open work.
 - [`openid4vci-wallet-facade-spec.md`](openid4vci-wallet-facade-spec.md):
   OpenID4VCI wallet facade design and current compatibility profile.
   **[implemented]**
-- [`source-adapter-sidecar-source-spec.md`](source-adapter-sidecar-source-spec.md):
+- [`source-adapter-sidecar-source-spec.md`](../archive/specs/source-adapter-sidecar-source-spec.md):
   historical source-adapter sidecar integration contract.
   **[archived: removed before 1.0]**
-- [`scalability-spec.md`](scalability-spec.md):
+- [`scalability-spec.md`](../archive/specs/scalability-spec.md):
   historical direct-source scalability goals and performance work plan.
   **[archived: superseded by Relay-backed execution]**
 - [`notary-capability-gaps.md`](notary-capability-gaps.md):

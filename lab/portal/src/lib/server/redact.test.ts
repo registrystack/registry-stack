@@ -52,6 +52,10 @@ const rawResponse = {
         evaluation_id: '01HX7Y5F2WAJ7ZP0Q4M5K9E8NC',
         expires_at: '2026-05-25T12:00:00Z',
         issued_at: '2026-05-24T12:00:00Z',
+        provenance: {
+          schema_version: 'registry-notary-claim-provenance/v2',
+          used: { relay_consultation_count: 1 }
+        },
         satisfied: true,
         subject_type: 'person',
         target_ref: {
@@ -103,6 +107,7 @@ describe('redactBody / request / response', () => {
     expect(result).toHaveProperty('claim_id', 'person-is-alive');
     expect(result).toHaveProperty('satisfied', true);
     expect(result).toHaveProperty('issued_at', '2026-05-24T12:00:00Z');
+    expect(result).toHaveProperty('provenance.used.relay_consultation_count', 1);
   });
 });
 

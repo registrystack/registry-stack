@@ -185,12 +185,12 @@ public evidence or disposition.
   release sign-off.
 - `NP-27`: Covered.
   Public anchors:
-  `crates/registry-notary-server/src/runtime.rs::evaluate_denies_missing_scope_before_reading_source`,
-  `crates/registry-notary-server/src/api.rs::pdp_pre_source_denial_audit_records_zero_source_and_no_forward`,
-  and `crates/registry-notary-server/tests/standalone_http.rs::evaluate_policy_denial_records_zero_source_and_redacted_audit`.
-  Disposition: the direct runtime path, API audit helper, and standalone
-  `/v1/evaluations` product route now cover pre-source denial, stable PDP
-  problem shape, zero upstream source reads, `source_read_count = 0`,
+  `crates/registry-notary-server/src/runtime/tests/evaluation.rs::registry_backed_preflight_denial_makes_zero_relay_calls`,
+  `crates/registry-notary-server/src/runtime/tests/evaluation.rs::evaluate_denies_missing_scope`,
+  and `crates/registry-notary-server/src/api/tests/audit.rs::pdp_pre_evaluation_denial_audit_records_zero_consultations_and_no_forward`.
+  Disposition: the runtime and API audit boundaries cover pre-evaluation
+  denial, stable PDP problem shape, zero Relay consultations,
+  `relay_consultation_count = 0`,
   `forwarded = false`, and response/audit redaction.
 - `NP-28`: Covered.
   Public anchors:
@@ -218,26 +218,25 @@ public evidence or disposition.
   service errors rather than being relabeled as credential policy denials.
   Tests assert stable problem responses, no unintended
   credential issuance, no credential material, redacted audit records,
-  `source_read_count = 0`, and `forwarded = false` on credential denial paths.
+  `relay_consultation_count = 0`, and `forwarded = false` on credential denial paths.
 - `NP-29`: Covered.
   Public anchors:
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_evaluation_returns_signed_response_and_rejects_replay`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_auth_exempt_route_still_requires_valid_jws`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_denial_happens_before_source_read`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_emergency_kid_denylist_blocks_before_source_read`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_emergency_node_id_denylist_blocks_before_source_read`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_request_claims_must_match_profile_before_source_read`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_policy_context_satisfies_governed_source_matching`,
-  `crates/registry-notary-server/tests/standalone_http.rs::federation_stale_source_observation_returns_signed_evaluation_error`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_evaluation_returns_signed_response_and_rejects_replay`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_auth_exempt_route_still_requires_valid_jws`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_denial_happens_before_claim_evaluation`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_emergency_kid_denylist_blocks_before_claim_evaluation`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_emergency_node_id_denylist_blocks_before_claim_evaluation`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_request_claims_must_match_profile_before_claim_evaluation`,
+  `crates/registry-notary-server/tests/standalone_http/federation.rs::federation_stale_claim_result_returns_signed_evaluation_error`,
   and `crates/registry-notary-server/src/federation/mod.rs::federation_response_signing_failure_emits_denial_audit_with_context`.
   Disposition: pre-verification signature and emergency-denylist denials omit
   untrusted request context. After signature verification, denial records retain
-  the configured issuer and peer source scopes plus the request profile and
+  the configured issuer and peer evaluation scopes plus the request profile and
   purpose, hash the peer id and request JTI, and include a pairwise
   subject-reference hash when the locally allowed profile and subject are
   structurally valid. Tests cover replay,
   policy, claim-mismatch, unknown-key, denylisted-key, denylisted-node, and
-  signed stale-source outcomes; preserve no-source-read ordering; and assert
+  signed stale-claim outcomes; preserve pre-evaluation denial ordering; and assert
   that raw subject ids and request JTIs do not reach audit records.
   Response-signing failures retain the already assembled redacted context.
 

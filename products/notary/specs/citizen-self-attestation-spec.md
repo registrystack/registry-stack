@@ -47,7 +47,7 @@ valid citizen token proves the caller authenticated, but it does not prove the
 caller may request attestations for an arbitrary evaluation target.
 Self-attestation therefore needs an explicit subject-binding policy that
 compares the request target identifier with claims in the verified OIDC token
-before any source read occurs.
+before any Relay consultation occurs.
 
 ## V1 User Story
 
@@ -79,12 +79,12 @@ V1 must be reviewed against at least these threats:
 
 | Threat | Control |
 | --- | --- |
-| Citizen asks about another person | Exact subject binding before source reads |
-| Citizen probes whether another id exists | Subject mismatch denied before source reads, generic denial body, rate limiting |
+| Citizen asks about another person | Exact subject binding before Relay consultations |
+| Citizen probes whether another id exists | Subject mismatch denied before Relay consultations, generic denial body, rate limiting |
 | Machine token is reused as citizen token | Self-attestation requires configured OIDC scopes or client policy distinct from machine access |
 | JWT claim tampering or algorithm confusion | Strict issuer, audience, token type, signature, algorithm, expiry, and key validation |
 | OIDC token lacks a trustworthy subject-binding claim | Config validation and deployment review require a verified stable token claim |
-| Scope escalation | Self-attestation uses a narrow dedicated scope plus internal derived source-read policy after all citizen guards pass |
+| Scope escalation | Self-attestation uses a narrow dedicated scope plus an internal derived consultation policy after all citizen guards pass |
 | Holder proof replay | Existing holder proof replay protection and short proof lifetime |
 | Holder DID is assumed to equal the citizen | V1 does not make that claim; holder binding and subject binding are separate controls |
 | Credential presented after source state changes | Short credential validity and optional status checks when enabled |
@@ -105,7 +105,7 @@ linkability, detectability, and disclosure.
 - A self-attestation request must be allowed only when the server-derived
   subject from a configured verified-token claim is used as the requester and
   target context.
-- Subject binding must run before source reads, claim evaluation, rendering, or
+- Subject binding must run before Relay consultations, claim evaluation, rendering, or
   credential issuance.
 - Self-attestation must allow only configured claims, formats, disclosures, and
   operations.
@@ -116,14 +116,14 @@ linkability, detectability, and disclosure.
   `proof_of_possession = required`, matching the current holder-proof
   validator. Broader DID method support requires a separate validator and proof
   support review.
-- The feature must not expose upstream source tokens, raw Relay rows, or source
-  credentials to the citizen.
+- The feature must not expose Relay source credentials, raw Relay rows, or
+  Notary-to-Relay workload credentials to the citizen.
 - Audit events must identify the caller by the existing redacted principal hash
   path and must add enough bounded context to distinguish self-attestation from
   machine-client evaluation.
 - Every self-attestation allow or deny decision must be auditable without
   recording raw citizen identifiers, raw tokens, holder private material, or
-  source records.
+  Relay outputs.
 - Self-attestation paths must have rate limits that bound subject probing,
   repeated denial attempts, and credential issuance attempts.
 - Self-attestation credentials remain short-lived by default. Optional
@@ -239,7 +239,7 @@ authorization once classified as self-attestation.
 
 After access-mode classification, subject binding, operation allow-list, claim
 allow-list, disclosure allow-list, and format allow-list pass, Notary may
-derive an internal source-read capability for the selected claim only. That
+derive an internal evaluation capability for the selected claim only. That
 derived capability is scoped to `access_mode = self_attestation` and must not
 authorize raw Relay access, batch evaluation, or machine-client evaluation.
 
@@ -247,7 +247,7 @@ The derived capability must be represented as a typed runtime authorization
 value, not as ad hoc scopes:
 
 ```rust
-enum SourceCapability {
+enum EvaluationCapability {
     Machine { scopes: BTreeSet<String> },
     SelfAttestation {
         claim_id: String,
@@ -256,9 +256,9 @@ enum SourceCapability {
 }
 ```
 
-Runtime source reads for citizen requests must require
-`SourceCapability::SelfAttestation` and must reject raw row access, arbitrary
-claim ids, and machine-only source operations by type.
+Runtime Relay consultations for citizen requests must require
+`EvaluationCapability::SelfAttestation` and must reject arbitrary claim ids or
+machine-only consultation operations by type.
 
 ## Token Requirements
 
@@ -353,12 +353,12 @@ claims needed by self-attestation policy:
 
 The raw access token, raw JWT header, full claims object, and unrecognized
 claims must not be stored on `EvidencePrincipal`, written to audit, or passed to
-source connectors. The subject-binding value is used only long enough to run
+Relay clients. The subject-binding value is used only long enough to run
 the exact comparison and compute the stored keyed hash.
 
-Source connectors must not receive citizen OIDC tokens or
-`BoundedVerifiedClaims`. V1 source reads use only the existing machine-to-source
-credentials plus `SourceCapability::SelfAttestation`.
+Relay must not receive citizen OIDC tokens or `BoundedVerifiedClaims`. V1 Relay
+consultations use only the Notary-to-Relay workload credential plus
+`EvaluationCapability::SelfAttestation`.
 
 ## Subject Binding
 
@@ -428,12 +428,12 @@ an allowed citizen client or audience. Scope handling is controlled by
 token carries any scope signal; `disabled` ignores OAuth scopes for the
 self-attestation decision. A self-attestation-classified request must never fall
 back to machine-client authorization. If any self-attestation guard fails, the
-request is denied before source reads.
+request is denied before Relay consultations.
 
 A request is `machine_client` only when it satisfies existing machine-client
 authentication and does not match configured citizen client, audience, issuer,
 or scope policy. If classification is ambiguous, the request fails closed before
-source reads.
+Relay consultations.
 
 ### Evaluation
 
@@ -445,7 +445,7 @@ For `POST /v1/evaluations`:
    verified token.
 4. If the request is classified as `self_attestation`, evaluate the
    self-attestation guard.
-5. Reject the request before any source read if subject binding, claim
+5. Reject the request before any Relay consultation if subject binding, claim
    allow-list, disclosure allow-list, or format allow-list fails.
 6. Continue through the existing claim evaluation pipeline.
 
@@ -453,7 +453,7 @@ The guard placement is part of the contract. In
 `crates/registry-notary-server/src/api.rs::evaluate`, the self-attestation
 guard must run after request parsing, authentication, principal construction,
 and claim selection, but before calling the runtime evaluation path or any code
-that can invoke an upstream source connector. Denials from this guard still
+that can invoke a Relay client. Denials from this guard still
 write bounded audit events and rate-limit state.
 
 The response body should stay compatible with the existing evaluate response.
@@ -569,7 +569,7 @@ Self-attestation purpose comes from the selected claim profile, not from a
 citizen-supplied request field. Each self-attestation-enabled claim profile must
 declare a fixed bounded purpose id that is included in
 `self_attestation.allowed_purposes` and validated at config-load. Missing or
-unallowed purpose values fail at config validation, or before source reads if a
+unallowed purpose values fail at config validation, or before Relay consultations if a
 runtime profile lookup fails. Audit records store only the bounded purpose id,
 not free-form citizen text.
 
@@ -698,7 +698,7 @@ Evidence error response path. Add stable internal error codes for at least:
 | Batch denied | `self_attestation.batch_denied` |
 
 These detailed codes are internal audit codes unless explicitly marked public.
-For callers, pre-source self-attestation denials should use one generic Problem
+For callers, pre-consultation self-attestation denials should use one generic Problem
 Details shape, for example HTTP `403` with public code
 `self_attestation.denied`, without raw identifiers, token claim names,
 configured claim names, profile names, or normalization details. Public
@@ -718,10 +718,10 @@ code must distinguish them from truly missing credentials.
 ## Rate Limiting And Anti-Enumeration
 
 Self-attestation must include rate limiting even though subject binding blocks
-source reads. The goal is to reduce probing, noisy mismatch attempts, and
+Relay consultations. The goal is to reduce probing, noisy mismatch attempts, and
 credential spam.
 
-Rate-limit checks must run before source reads and credential issuance. V1 uses
+Rate-limit checks must run before Relay consultations and credential issuance. V1 uses
 in-Notary in-process buckets for the single-process lab and for basic local
 protection. Keys are derived from the existing `AuditKeyHasher` or an
 equivalent service-held keyed hasher.
@@ -736,7 +736,7 @@ emergency fallback.
 The enforcement order is fixed: unauthenticated client-address limits run
 before OIDC verification or JWKS fetch; authenticated per-principal limits run
 immediately after token verification; subject-mismatch and credential-issuance
-buckets run before source reads or issuance.
+buckets run before Relay consultations or issuance.
 
 V1 must provide at least:
 
@@ -836,8 +836,8 @@ At minimum, the implementation must emit auditable records for:
 The token-claim name is safe to record because it is configuration metadata. The
 token-claim value is not safe to record unless separately hashed with the audit
 hasher. Caller-supplied or derived subject ids, OIDC `sub`, civil id, access
-token, holder proof, SD-JWT disclosures, source records, source tokens, and raw
-Relay response bodies must not appear in audit records, logs, metrics, Problem
+token, holder proof, SD-JWT disclosures, Relay outputs, Relay source
+credentials, and raw Relay response bodies must not appear in audit records, logs, metrics, Problem
 Details, or generated lab artifacts.
 
 For pre-authentication or invalid-token rate-limit denials, `access_mode` may be
@@ -852,7 +852,7 @@ correlation header in audit context and pass the same bounded correlation value
 to upstream source requests. This lets operators trace:
 
 ```text
-citizen request -> Notary self-attestation decision -> Relay source read
+citizen request -> Notary self-attestation decision -> Relay consultation
 ```
 
 without exposing citizen identifiers. If no request id is supplied, Notary may
@@ -879,8 +879,8 @@ non-disclosure:
   logging the holder proof or SD-JWT disclosures;
 - audit sink failure replaces the otherwise authorized response with
   `audit.write_failed`;
-- fixture tokens, civil identifiers, source tokens, holder proofs, and source
-  row values are absent from audit JSONL, service logs, metrics, Problem
+- fixture tokens, civil identifiers, Relay source credentials, holder proofs,
+  and raw Relay output values are absent from audit JSONL, service logs, metrics, Problem
   Details, and lab artifacts.
 
 ## Security Invariants
@@ -889,25 +889,25 @@ non-disclosure:
   a future delegated-access policy explicitly says so.
 - The subject-binding token claim must come from the verified JWT, not from a
   client-supplied header or request body field.
-- The subject-binding check must run before any upstream source connector call.
+- The subject-binding check must run before any Relay consultation.
 - `sub` should not be treated as a civil identifier unless the deployment
   explicitly configures `token_claim: sub` and
   `subject_binding.allow_sub_as_civil_id = true`.
 - Scope authorization is necessary but not sufficient; the subject-binding
   check is mandatory for self-attestation.
-- Citizen tokens must not directly carry machine-client source scopes. Source
-  reads for citizen requests must be authorized through an internal derived
-  `SourceCapability::SelfAttestation` after all citizen guards pass.
+- Citizen tokens must not directly carry machine-client Relay consultation scopes. Relay
+  consultations for citizen requests must be authorized through an internal derived
+  `EvaluationCapability::SelfAttestation` after all citizen guards pass.
 - Holder proof binds a credential to a holder key. It does not replace the
   subject-binding check.
 - Holder proof does not prove the holder DID belongs to the citizen or civil
   subject in v1.
-- Source connectors must not receive citizen access tokens or verified token
+- Relay must not receive citizen access tokens or verified token
   claim context.
 - Audit, logs, metrics, and Problem Details must not contain raw citizen
   identifiers unless the existing audit redaction policy explicitly allows it.
 - Self-attestation mode must not loosen claim profile allow-lists, disclosure
-  allow-lists, internal derived source-read checks, or
+  allow-lists, internal derived consultation checks, or
   evaluation-to-principal binding.
 
 ## Compatibility
@@ -961,8 +961,8 @@ Definition of Done:
 - Stored self-attestation metadata shape finalized for `StoredEvaluation`.
 - `EvidencePrincipal` extension with `BoundedVerifiedClaims` selected as the
   verified-claims transport.
-- `SourceCapability` selected as the runtime representation for machine versus
-  self-attestation source reads.
+- `EvaluationCapability` selected as the runtime representation for machine versus
+  self-attestation Relay consultations.
 - Canonical `policy_hash` input fields finalized.
 - Audit event coverage, redaction requirements, and correlation behavior
   reviewed against the existing chained audit pipeline.
@@ -972,7 +972,7 @@ Definition of Done:
 ### Stage 1: Config And Policy Types
 
 - Add self-attestation config structs, validation, and defaults.
-- Add `AccessMode`, `SourceCapability`, `BoundedVerifiedClaims`, and typed
+- Add `AccessMode`, `EvaluationCapability`, `BoundedVerifiedClaims`, and typed
   audit wrappers such as `Hashed<T>`, `Bounded<N>`, and `ConfigMetadata`.
 - Extend `EvidenceAuditEvent` with the fields required by this spec before
   implementing the evaluation guard.
@@ -993,7 +993,7 @@ Definition of Done:
 - Validate cross-block OIDC policy: when scope policy is not `disabled`,
   `required_scopes` must map only to self-attestation scope, citizen client or
   audience policy must be present, citizen tokens must not map to machine-client
-  source scopes, clock leeway must be bounded, and configured credential
+  Relay consultation scopes, clock leeway must be bounded, and configured credential
   profiles must respect the 600-second citizen validity ceiling.
 - Validate each self-attestation claim profile has a fixed bounded purpose id
   that appears in `self_attestation.allowed_purposes`.
@@ -1040,11 +1040,11 @@ Definition of Done:
 
 ### Stage 3: Evaluation Guard
 
-- Add a self-attestation guard before source reads in evaluate.
+- Add a self-attestation guard before Relay consultations in evaluate.
 - Place the guard in `api.rs::evaluate` after request parsing, authentication,
   principal construction, and claim selection, but before the runtime evaluation
-  path or any upstream source connector call.
-- Add `SourceCapability` to the runtime evaluation context with
+  path or any Relay consultation.
+- Add `EvaluationCapability` to the runtime evaluation context with
   `Machine { scopes }` and `SelfAttestation { claim_id, subject_binding_hash }`
   variants.
 - Enforce subject binding, operation, claims, disclosure, format, and required
@@ -1055,16 +1055,16 @@ Definition of Done:
 Definition of Done:
 
 - A valid self-attestation request evaluates one configured claim.
-- Citizen tokens never receive direct source scopes; source reads use only the
-  internal derived `SourceCapability::SelfAttestation` after all guards pass.
-- Source reads reject raw row access, arbitrary claim ids, and machine-only
-  source operations when the capability is `SelfAttestation`.
+- Citizen tokens never receive direct Relay consultation scopes; Relay consultations use only the
+  internal derived `EvaluationCapability::SelfAttestation` after all guards pass.
+- Relay consultations reject arbitrary claim ids and machine-only operations
+  when the capability is `SelfAttestation`.
 - Ambiguous citizen or machine-client classification fails closed.
 - A supplied identity-context mismatch returns a stable denial before any source
   read.
 - A subject mismatch writes a self-attestation denial audit event without raw
   target identifiers.
-- A claim outside the allow-list is denied before any source read.
+- A claim outside the allow-list is denied before any Relay consultation.
 - A missing self-attestation scope is denied when `scope_policy = required`.
 - With `scope_policy = optional`, a token with no scope signal may proceed, but
   a token with a scope signal that omits the configured self-attestation scope
@@ -1074,7 +1074,7 @@ Definition of Done:
   subject-binding checks.
 - Caller-supplied `target`, `requester`, `relationship`, or `on_behalf_of`
   values that conflict with the token-derived self context are rejected.
-- Missing or unallowed purpose values fail before source reads.
+- Missing or unallowed purpose values fail before Relay consultations.
 - Subject mismatch and repeated denial attempts are rate limited without source
   reads.
 - A successful self-attestation evaluation writes a chained audit event with
@@ -1126,10 +1126,10 @@ Definition of Done:
 
 - The story produces non-secret artifacts for token claims, successful
   evaluation, subject-mismatch denial, and credential issuance.
-- The story never writes raw access tokens, client secrets, source tokens, or
+- The story never writes raw access tokens, client secrets, Relay source credentials, or
   full registry rows to artifacts.
 - The story verifies audit artifacts link the citizen request, Notary decision,
-  and Relay source read by correlation id without exposing raw citizen
+  and Relay consultation by correlation id without exposing raw citizen
   identifiers.
 - The story demonstrates in-Notary subject mismatch rate limiting and
   documents that production hour-window or cross-replica enforcement requires a
@@ -1168,8 +1168,8 @@ Definition of Done:
 - Which production IdPs, if any, must be supported beyond the EdDSA dev issuer
   used by the lab story?
 - What retention expectations apply to rate-limit state and audit artifacts?
-- Will any source connector need citizen context? V1 says no; source connectors
-  receive only `SourceCapability::SelfAttestation` and existing source
+- Will any Relay client need citizen context? V1 says no; Relay clients
+  receive only `EvaluationCapability::SelfAttestation` and existing Relay workload
   credentials.
 - What does "wallet" mean in the lab story: CLI holder proof, browser wallet,
   mobile wallet, or portal-mediated issuance?
@@ -1201,15 +1201,15 @@ The feature is done only when all of the following are true:
   self-attestation scope.
 - `EvidencePrincipal` carries typed `BoundedVerifiedClaims`; raw JWTs, raw
   claim maps, access tokens, and unrecognized claims are not stored, logged, or
-  passed to source connectors.
+  passed to Relay clients.
 - Every OIDC request is classified as exactly one access mode before
   authorization, and ambiguous citizen or machine classification fails closed.
 - Configured assurance policy fails closed when `acr` or `auth_time` is missing
   or unacceptable.
 - The self-attestation guard runs in `api.rs::evaluate` before any runtime
-  evaluation or upstream source connector call.
-- Citizen tokens never receive direct machine-client source scopes; source
-  reads use only `SourceCapability::SelfAttestation` after all citizen guards
+  evaluation or Relay consultation.
+- Citizen tokens never receive direct machine-client Relay consultation scopes; Relay
+  consultations use only `EvaluationCapability::SelfAttestation` after all citizen guards
   pass.
 - Stored evaluations include immutable self-attestation metadata, including
   `access_mode`, principal hash, issuer, client or audience, subject-binding
@@ -1223,7 +1223,7 @@ The feature is done only when all of the following are true:
 - Logs, metrics, audit JSONL, Problem Details, lab artifacts, and credential
   payloads pass non-disclosure tests for tokens, civil identifiers, holder
   proofs, SD-JWT disclosures, source rows, and raw Relay responses.
-- In-Notary rate limits run before source reads and issuance, use keyed hashes,
+- In-Notary rate limits run before Relay consultations and issuance, use keyed hashes,
   apply atomic multi-bucket semantics, audit bounded denial context, and fail
   closed when unavailable unless an explicit emergency fallback is configured.
 - Citizen-facing credentials are holder-bound, do not claim holder-equals-
@@ -1241,7 +1241,7 @@ The feature is done only when all of the following are true:
 Parallel workers:
 
 - Worker A owns config types, validation, defaults, and serialization tests.
-- Worker B owns `AccessMode`, `SourceCapability`, `BoundedVerifiedClaims`, and
+- Worker B owns `AccessMode`, `EvaluationCapability`, `BoundedVerifiedClaims`, and
   OIDC claim extraction.
 - Worker C owns audit schema fields and typed redaction wrappers.
 - Worker D reviews the wave for config cross-block failures, JWT hardening, and
@@ -1261,11 +1261,11 @@ Parallel workers:
   alternate-subject rejection tests.
 - Worker C owns in-Notary rate-limit buckets, keyed rate-limit identifiers,
   and rate-limit audit events.
-- Worker D reviews for BOLA, source-read-before-guard regressions, and generic
+- Worker D reviews for BOLA, consultation-before-guard regressions, and generic
   external denial bodies.
 
 Wave 2 is done when valid self-attestation evaluates one allowed claim, all
-pre-source denials happen before source reads, rate limits are enforced, and
+pre-consultation denials happen before Relay consultations, rate limits are enforced, and
 existing machine-client evaluation tests remain green.
 
 ### Wave 3: Stored Evaluation, Render, And Issuance

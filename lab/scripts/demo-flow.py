@@ -512,7 +512,7 @@ def main() -> int:
         (evidence[1], "social-claim-evaluation", ["program-enrollment-status"], PRIMARY_SUBJECT, "value", CLAIM_RESULT_FORMAT),
         (evidence[1], "social-redacted-household-summary", ["household-summary-redacted"], PRIMARY_SUBJECT, "value", CLAIM_RESULT_FORMAT),
         (evidence[2], "health-claim-evaluation", ["health-service-available"], PRIMARY_SUBJECT, "predicate", CLAIM_RESULT_FORMAT),
-        (evidence[2], "shared-cross-source-evaluation", ["eligible-for-combined-support"], PRIMARY_SUBJECT, "predicate", CLAIM_RESULT_FORMAT),
+        (evidence[2], "shared-consultation-evaluation", ["eligible-for-combined-support"], PRIMARY_SUBJECT, "predicate", CLAIM_RESULT_FORMAT),
     ]
     for service, label, claims, subject, disclosure, fmt in eval_specs:
         result = require(
@@ -584,7 +584,9 @@ def main() -> int:
                     "observed": claim_result.get("satisfied")
                     if claim_result.get("satisfied") is not None
                     else claim_result.get("value"),
-                    "provenance_source_count": claim_result.get("provenance", {}).get("source_count"),
+                    "relay_consultation_count": claim_result.get("provenance", {})
+                    .get("used", {})
+                    .get("relay_consultation_count"),
                 }
             )
     save(
@@ -729,7 +731,7 @@ def main() -> int:
                 "system_lane": [
                     "civil Relay metadata/evidence offering discovery",
                     "civil Evidence Server discovery and OpenAPI",
-                    "DCI-backed civil claim evaluation",
+                    "Relay-backed civil claim evaluation",
                     "CCCEV render",
                     "demo-grade credential issuance",
                 ],
@@ -768,7 +770,7 @@ def main() -> int:
                     "static metadata index/offering/policy discovery",
                     "shared Evidence Server discovery and OpenAPI",
                     "health-backed claim evaluation",
-                    "cross-source CEL evaluation",
+                    "cross-consultation CEL evaluation",
                     "full v1 Notary outcome matrix",
                     "batch evaluation with mixed v1 outcomes",
                     "missing-subject failure",
@@ -780,7 +782,7 @@ def main() -> int:
                     "shared-evidence-discovery",
                     "shared-evidence-openapi",
                     "health-claim-evaluation",
-                    "shared-cross-source-evaluation",
+                    "shared-consultation-evaluation",
                     "v1-notary-outcome-matrix",
                     "batch-evaluation",
                     "missing-subject-evaluation",

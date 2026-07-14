@@ -601,7 +601,7 @@ class ScenarioPayloadTest(unittest.TestCase):
                 return False
 
             def read(self):
-                return b'{"results":[{"claim_id":"person-is-alive","satisfied":true,"provenance":{"source_count":1}}]}'
+                return b'{"results":[{"claim_id":"person-is-alive","satisfied":true,"provenance":{"used":{"relay_consultation_count":1}}}]}'
 
         captured = {}
 
@@ -2287,7 +2287,7 @@ class InternalRequestSourceTest(unittest.TestCase):
                 return False
 
             def read(self):
-                return b'{"results":[{"claim_id":"person-is-alive","satisfied":true,"provenance":{"source_count":1}}]}'
+                return b'{"results":[{"claim_id":"person-is-alive","satisfied":true,"provenance":{"used":{"relay_consultation_count":1}}}]}'
 
         with mock.patch.object(server.urllib.request, "urlopen", lambda req, timeout=None: Resp()):
             result = server.run_scenario_step(

@@ -15,46 +15,49 @@ gap can be traced back to its flow.
 
 ### 1. Civil Alive Predicate
 
-- No product gap for configured local sources.
+- No product gap for a compiler-pinned Relay consultation.
 
 ### 2. Age Or Date-Of-Birth Evidence
 
-- No product gap for configured local sources.
+- No product gap for a compiler-pinned Relay consultation.
 
 ### 3. Program Enrollment Active
 
-- No product gap for configured local sources.
+- No product gap for a compiler-pinned Relay consultation.
 
 ### 4. Health Facility Service Available
 
-- No product gap for configured local sources.
+- No product gap for a compiler-pinned Relay consultation.
 
 ### 5. Agriculture Voucher Eligibility
 
-- No product gap for configured local sources.
+- No product gap for a compiler-pinned Relay consultation.
 
 ### 6. Livestock Movement Permit Eligibility
 
-- No product gap for configured local sources.
+- No product gap for a compiler-pinned Relay consultation.
 
 ### 7. Benefits Agency Asks Civil Notary For Alive Predicate
 
-- Product outbound Notary-to-Notary connector.
+- Relay-backed federation with cross-service audit correlation.
+- Product outbound Notary-to-Notary client.
 - Lab client scenario that signs and verifies the full flow end to end.
 
 ### 8. Benefits Agency Asks Social Notary For Active Beneficiary
 
-- Product requester/runtime connector.
+- Relay-backed federation with cross-service audit correlation.
+- Product requester/runtime client.
 - Demo fixture wiring for social federation profile metadata.
 
 ### 9. Health-Linked Child Support Across Three Authorities
 
-- `registry_notary_federation` source connector.
+- Outbound Notary federation client.
 - Runtime mapping of signed peer responses into CEL inputs.
-- Deterministic failure mapping for peer denial, stale source, and timeout.
+- Deterministic failure mapping for peer denial, stale claim result, and timeout.
 
 ### 10. Municipality Verifies Residency With A National Steward
 
+- Relay-backed federation with cross-service audit correlation.
 - Residency profile fixtures.
 - Outbound requester support in Registry Notary if the municipal service is
   itself a Notary workflow.
@@ -131,7 +134,7 @@ gap can be traced back to its flow.
 
 ## Capability Gaps Surfaced
 
-- Outbound `registry_notary_federation` source connector.
+- Outbound Notary federation client.
 - Mapping verified peer responses into local claim rule inputs.
 - User-presented proof verifier profiles.
 - Representation authority profiles, actor/subject separation, and collective

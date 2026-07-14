@@ -52,16 +52,16 @@ scenario patterns](notary-scenario-patterns.md).
 
 | # | Scenario | Pattern | Status | Main gap |
 | --- | --- | --- | --- | --- |
-| 1 | Civil alive predicate | Local evaluation | Supported | None for configured local sources |
-| 2 | Age or date-of-birth evidence | Local evaluation | Supported | None for configured local sources |
-| 3 | Program enrollment active | Local evaluation | Supported | None for configured local sources |
-| 4 | Health facility service available | Local evaluation | Supported | None for configured local sources |
-| 5 | Agriculture voucher eligibility | Local evaluation | Supported | None for configured local sources |
-| 6 | Livestock movement permit eligibility | Local evaluation | Supported | None for configured local sources |
-| 7 | Benefits agency asks Civil Notary for alive predicate | Delegated evaluation | Partial | Product can serve inbound, but has no outbound Notary connector |
-| 8 | Benefits agency asks Social Notary for active beneficiary predicate | Delegated evaluation | Partial | Product can serve inbound, but has no outbound Notary connector |
-| 9 | Health-linked child support across civil, social, and health | Outbound composition | Planned | No outbound Notary connector or composition runtime ships yet; you cannot chain evidence across civil, social, and health sources in one flow |
-| 10 | Municipality verifies residency with a national registry steward | Delegated evaluation | Partial | No demo/client wiring or metadata publication ships yet; you cannot run this delegated residency check end-to-end |
+| 1 | Civil alive predicate | Relay-backed evaluation | Supported | None for a compiler-pinned Relay consultation |
+| 2 | Age or date-of-birth evidence | Relay-backed evaluation | Supported | None for a compiler-pinned Relay consultation |
+| 3 | Program enrollment active | Relay-backed evaluation | Supported | None for a compiler-pinned Relay consultation |
+| 4 | Health facility service available | Relay-backed evaluation | Supported | None for a compiler-pinned Relay consultation |
+| 5 | Agriculture voucher eligibility | Relay-backed evaluation | Supported | None for a compiler-pinned Relay consultation |
+| 6 | Livestock movement permit eligibility | Relay-backed evaluation | Supported | None for a compiler-pinned Relay consultation |
+| 7 | Benefits agency asks Civil Notary for alive predicate | Delegated evaluation | Planned | Inbound federation is source-free in this version, and no outbound Notary client ships |
+| 8 | Benefits agency asks Social Notary for active beneficiary predicate | Delegated evaluation | Planned | Inbound federation is source-free in this version, and no outbound Notary client ships |
+| 9 | Health-linked child support across civil, social, and health | Outbound composition | Planned | No outbound Notary client or peer-result composition runtime ships yet; you cannot compose signed peer results across authorities in one flow |
+| 10 | Municipality verifies residency with a national registry steward | Delegated evaluation | Planned | Inbound federation is source-free in this version, and no outbound client or demo wiring ships |
 | 11 | Citizen presents civil-status proof to a benefits service | User-presented proof | Planned | No proof profiles or verifier runtime ship yet; you cannot accept this user-presented civil-status proof |
 | 12 | Farmer presents landholding or farmer-registration proof | User-presented proof | Planned | No proof profiles or status/freshness policy ship yet; you cannot accept a user-presented landholding or farmer-registration proof |
 | 13 | Health worker presents professional credential for service eligibility | User-presented proof | Planned | No proof profiles or issuer trust policy ship yet; you cannot accept a presented professional credential for this eligibility check |

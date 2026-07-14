@@ -45,13 +45,13 @@ describe('MockEvidenceProvider.evaluate', () => {
   it('returns a multi-authority decision with reason codes', async () => {
     const ev = await provider.evaluateDetailed(field('combined-support-eligibility'), ctx);
     expect(ev.result.state).toBe('verified');
-    const view = ev.raw.response.body as { results: { provenance: { used: { source_count: number } } }[] };
-    expect(view.results[0].provenance.used.source_count).toBe(3);
+    const view = ev.raw.response.body as { results: { provenance: { used: { relay_consultation_count: number } } }[] };
+    expect(view.results[0].provenance.used.relay_consultation_count).toBe(3);
   });
 });
 
 describe('denial beat (cross-person stranger)', () => {
-  it('produces a 403 subject_mismatch with NO source read', async () => {
+  it('produces a 403 subject_mismatch with no Relay consultation', async () => {
     const ev = await provider.evaluateDetailed(field('denial'), ctx);
     expect(ev.result.state).toBe('error');
     expect(ev.result.reasonCode).toBe('subject_mismatch');
@@ -66,9 +66,9 @@ describe('denial beat (cross-person stranger)', () => {
     expect(target.identifiers[0].value).toBe(PERSONA.pedro);
   });
 
-  it('does not perform a source read (no source_count > 0 on a denial)', async () => {
+  it('starts no Relay consultation on a denial', async () => {
     const ev = await provider.evaluateDetailed(field('denial'), ctx);
-    // there is no 200 results body at all, so no source was read
+    // there is no 200 results body at all, so no Relay consultation ran
     expect(ev.raw.response.body).not.toHaveProperty('results');
   });
 });
@@ -111,7 +111,7 @@ describe('resilience states', () => {
     expect(ev.result.state).toBe('verified');
   });
 
-  it('lands an upstream failure in ERROR with no source read', async () => {
+  it('lands an upstream failure in ERROR with no Relay consultation', async () => {
     const ev = await provider.evaluateDetailed(field('error'), ctx);
     expect(ev.result.state).toBe('error');
     expect(ev.raw.response.status).toBe(503);
@@ -168,7 +168,7 @@ describe('structural match to the Notary OpenAPI', () => {
       expect(view).toHaveProperty(key);
     }
     const prov = view.provenance as Record<string, unknown>;
-    expect(prov).toHaveProperty('schema_version', 'registry-notary-claim-provenance/v1');
+    expect(prov).toHaveProperty('schema_version', 'registry-notary-claim-provenance/v2');
     expect(prov).toHaveProperty('generated_by');
     expect(prov).toHaveProperty('used');
     expect(prov).toHaveProperty('derived_from');

@@ -629,15 +629,14 @@ import sys
 body = json.load(open(sys.argv[1], encoding="utf-8"))
 result = (body.get("results") or [{}])[0]
 provenance = result.get("provenance") or {}
-source_count = provenance.get("source_count")
-if source_count is None:
-    source_count = (provenance.get("used") or {}).get("source_count")
+relay_consultation_count = (provenance.get("used") or {}).get("relay_consultation_count")
 print(
     "    Self claim OK: "
     f"claim={result.get('claim_id', '')}, "
     f"value={result.get('value')}, "
     f"evaluation_id={result.get('evaluation_id', '')}, "
-    f"source_count={source_count if source_count is not None else ''}"
+    "relay_consultation_count="
+    f"{relay_consultation_count if relay_consultation_count is not None else ''}"
 )
 PY
 }
@@ -1362,14 +1361,13 @@ result = results[0]
 assert result.get("claim_id") == "applicant-declaration", body
 assert result.get("value") is True, body
 provenance = result.get("provenance") or {}
-source_count = provenance.get("source_count")
-if source_count is None:
-    source_count = (provenance.get("used") or {}).get("source_count")
-assert source_count in (None, 0), body
+assert provenance.get("schema_version") == "registry-notary-claim-provenance/v2", body
+relay_consultation_count = (provenance.get("used") or {}).get("relay_consultation_count")
+assert relay_consultation_count == 0, body
 PY
 print_self_evaluation_status
 
-step 9 "Prove other-person denial" "Requesting the same claim for ${other_subject}; this must fail before any source read."
+step 9 "Prove other-person denial" "Requesting the same claim for ${other_subject}; this must fail before claim evaluation."
 curl_json POST "http://127.0.0.1:${port}/v1/evaluations" "${other_eval_path}" 403 \
   --data "$(jq -nc --arg subject "${other_subject}" '{target:{type:"Person",identifiers:[{scheme:"national_id",value:$subject}]},claims:["applicant-declaration"],disclosure:"predicate",format:"application/vnd.registry-notary.claim-result+json"}')"
 print_denial_status
@@ -1399,7 +1397,7 @@ What happened:
   1. eSignet authenticated demo citizen ${self_subject}.
   2. Notary bound the request to ${subject_claim_source}.${subject_claim}.
   3. Notary evaluated source-free applicant-declaration for ${self_subject}.
-  4. Notary denied ${other_subject} before a registry source read.
+  4. Notary denied ${other_subject} before claim evaluation or a Relay consultation.
   5. Audit records show self_attestation with hashed identifiers.
 
 Artifacts:

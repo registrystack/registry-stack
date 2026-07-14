@@ -44,7 +44,8 @@ or the [Registry Notary operator configuration reference](../../products/registr
   `pkcs11`) under `evidence.signing_keys`, not as inline YAML values. Startup fails closed if an
   active signing provider cannot be constructed. See the
   [signing key provider reference](../../products/registry-notary/signing-key-provider/).
-- Provision secrets (API-key fingerprints, source tokens, private JWKs, the audit hash secret) only
+- Provision secrets (API-key fingerprints, Relay source credentials, Notary workload tokens,
+  private JWKs, and the audit hash secret) only
   through the environment variables named in config. For local development the binary accepts
   `--env-file`; for shared environments use the platform secret store and do not check dotenv files
   into the repository.

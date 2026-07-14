@@ -112,8 +112,7 @@ The current wallet-facing flow is:
 4. Wallet requests a nonce when nonce support is enabled.
 5. Wallet sends a credential request with `format: "dc+sd-jwt"` and a JWT proof.
 6. Notary validates the access token, subject binding, self-attestation policy,
-   nonce and proof, evaluates the source-free or temporary direct claim, and
-   issues the SD-JWT VC.
+   nonce and proof, evaluates the self-attested claim, and issues the SD-JWT VC.
 
 The credential request should not carry a raw subject id as a free-form wallet
 choice. The subject comes from the OIDC token claim configured in
@@ -383,7 +382,7 @@ configuration overrides in your deployment notes.
 
 ## Security and privacy notes
 
-- `self_attested` claims perform no Relay or registry-source read.
+- `self_attested` claims perform no Relay consultation.
 - Subject binding is exact; do not use normalization that could join different
   civil identifiers.
 - A holder DID can become a correlation handle if reused widely. Wallets should
