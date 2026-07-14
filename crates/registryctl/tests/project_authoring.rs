@@ -2736,10 +2736,9 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
     .expect("baseline signs");
 
     for relative in ["approval/review.json", "approval/project-state.json"] {
-        let tampered = temporary.path().join(format!(
-            "tampered-{}",
-            relative.replace(['/', '.'], "-")
-        ));
+        let tampered = temporary
+            .path()
+            .join(format!("tampered-{}", relative.replace(['/', '.'], "-")));
         copy_tree(&baseline, &tampered);
         let path = tampered.join(relative);
         let mut bytes = std::fs::read(&path).expect("signed approval payload reads");
