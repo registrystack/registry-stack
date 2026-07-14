@@ -2821,7 +2821,7 @@ fn compile_script_authority(
             })?;
             Ok(CompiledScriptAllowRule {
                 method,
-                audit_path: fixed_path.into(),
+                audit_path: fixed_path,
                 transport_template: template,
             })
         })
