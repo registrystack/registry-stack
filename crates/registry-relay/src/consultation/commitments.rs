@@ -1546,6 +1546,9 @@ fn compiled_scalar_shape_value(shape: &CompiledScalarShape) -> Value {
             nullable,
             max_bytes,
         } => json!({"type": "string", "nullable": nullable, "max_bytes": max_bytes}),
+        CompiledScalarShape::Date { nullable } => {
+            json!({"type": "date", "nullable": nullable})
+        }
         CompiledScalarShape::Boolean { nullable } => {
             json!({"type": "boolean", "nullable": nullable})
         }

@@ -206,12 +206,31 @@ fn generated_notary_config(
     }
     if let (Some(relay), Some(connection)) = (&environment.relay, &environment.notary_relay) {
         evidence["relay"] = json!({
-            "base_url": relay.origin,
+            "base_url": normalize_url_scheme(&relay.origin)?,
             "workload_client_id": connection.workload_client_id,
             "token_file": connection.token_file,
             "allowed_private_cidrs": [],
+            "allow_insecure_localhost": url_uses_http(&relay.origin),
             "max_in_flight": 8,
         });
+    }
+    let mut state = json!({
+        "storage": "postgresql",
+        "postgresql": {
+            "url_env": "REGISTRY_NOTARY_POSTGRES_URL",
+            "connect_timeout_ms": 5_000,
+            "operation_timeout_ms": 2_000,
+            "max_connections": 16,
+        },
+    });
+    if let Some(binding) = &environment.notary_state {
+        state["postgresql"]["root_certificate_path"] = Value::String(
+            binding
+                .postgresql
+                .root_certificate_path
+                .to_string_lossy()
+                .into_owned(),
+        );
     }
     Ok(json!({
         "instance": {
@@ -224,6 +243,7 @@ fn generated_notary_config(
             "sink": "stdout",
             "hash_secret_env": "REGISTRY_NOTARY_AUDIT_HASH_SECRET",
         },
+        "state": state,
         "evidence": evidence,
         "deployment": { "profile": environment.deployment.profile.as_str() },
     }))

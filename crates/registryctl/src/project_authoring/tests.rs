@@ -98,6 +98,62 @@ outputs:
     }
 
     #[test]
+    fn date_outputs_keep_the_typed_contract_without_a_string_bound() {
+        let entity_field: EntityFieldSchema = serde_yaml::from_str(
+            r#"type: string
+format: date
+maxLength: 10
+"#,
+        )
+        .expect("date entity field parses");
+        let (output_type, nullable, max_bytes) =
+            entity_output_contract("birth_date", &entity_field).expect("date field lowers");
+        assert_eq!(output_type, OutputType::Date);
+        assert!(!nullable);
+        assert_eq!(max_bytes, None);
+        validate_snapshot_output(
+            "birth_date",
+            &OutputDeclaration {
+                output_type,
+                nullable,
+                max_bytes,
+                minimum: None,
+                maximum: None,
+                from: Some("snapshot.record.birth_date".to_string()),
+                source_pointer: None,
+            },
+        )
+        .expect("typed snapshot date validates");
+
+        let authored: AuthoredIntegrationDocument = serde_yaml::from_str(
+            r#"
+version: 1
+id: person-birth-date
+revision: 1
+source: { auth: { type: none } }
+input:
+  person_id: { role: selector, type: string, maxLength: 64 }
+capability:
+  http:
+    request: { method: GET, path: '/people/{input.person_id}' }
+outputs:
+  birth_date:
+    type: string
+    format: date
+    maxLength: 10
+    x-registry-source: /birth_date
+"#,
+        )
+        .expect("date HTTP authoring parses");
+        let lowered = lower_authored_integration(&authored).expect("date HTTP authoring lowers");
+        let output = &lowered.outputs["birth_date"];
+        assert_eq!(output.output_type, OutputType::Date);
+        assert_eq!(output.max_bytes, None);
+        validate_output(output, integration_operations(&lowered))
+            .expect("typed HTTP date validates");
+    }
+
+    #[test]
     fn corrected_authoring_rejects_the_superseded_operation_graph() {
         serde_yaml::from_str::<AuthoredIntegrationDocument>(
             r#"

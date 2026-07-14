@@ -1658,6 +1658,71 @@ fn project_schema_accepts_sixteen_consultation_inputs_and_rejects_seventeen() {
 }
 
 #[test]
+fn environment_schema_tracks_local_loopback_signing_kid_and_notary_state() {
+    let schema: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("schemas/project-authoring/environment.schema.json"),
+        )
+        .expect("environment schema reads"),
+    )
+    .expect("environment schema is JSON");
+    let schema = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .expect("environment schema compiles");
+    let local = serde_json::json!({
+        "version": 1,
+        "issuance": {
+            "issuer": "did:web:authority.invalid",
+            "signing_key": { "secret": "NOTARY_ISSUER_JWK" },
+            "signing_kid": "did:web:authority.invalid#issuer-key-1",
+            "generation": 1,
+        },
+        "relay": {
+            "origin": "HTTP://127.0.0.1:8080",
+            "issuer": "HTTP://[::1]:8090",
+            "jwks_url": "HTTP://127.0.0.1:8090/.well-known/jwks.json",
+            "audience": "registry-relay",
+            "allowed_clients": [],
+        },
+        "notary_relay": {
+            "workload_client_id": "authority-notary",
+            "token_file": "/run/secrets/authority-notary-relay-token",
+        },
+        "notary_state": {
+            "postgresql": {
+                "root_certificate_path": "/run/secrets/notary-postgres-ca.pem",
+            },
+        },
+        "deployment": {
+            "profile": "local",
+            "relay": { "service": "authority-relay" },
+            "notary": { "service": "authority-notary" },
+        },
+    });
+    assert!(schema.is_valid(&local));
+
+    let mut hosted_loopback = local.clone();
+    hosted_loopback["deployment"]["profile"] = serde_json::json!("hosted_lab");
+    assert!(!schema.is_valid(&hosted_loopback));
+
+    let mut private_network_http = local.clone();
+    private_network_http["relay"]["origin"] = serde_json::json!("http://10.42.0.8:8080");
+    assert!(!schema.is_valid(&private_network_http));
+
+    let mut relative_root = local.clone();
+    relative_root["notary_state"]["postgresql"]["root_certificate_path"] =
+        serde_json::json!("notary-postgres-ca.pem");
+    assert!(!schema.is_valid(&relative_root));
+
+    let mut whitespace_kid = local.clone();
+    whitespace_kid["issuance"]["signing_kid"] =
+        serde_json::json!("did:web:authority.invalid#bad kid");
+    assert!(!schema.is_valid(&whitespace_kid));
+}
+
+#[test]
 fn project_authoring_schemas_reject_incoherent_product_topologies() {
     let schema_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/project-authoring");
     let compile = |schema_name: &str| {
@@ -2343,7 +2408,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "bf8265e6a00386d04aba7170ae8b076ec4953c82a992e8f4773839daa6f70d01",
+        "a2ee345741c73aac1b45d8b2e4e1222a10765fbde5157c0d9bd333e78e727a49",
         "project inputs must match the cross-machine golden digest"
     );
 }
@@ -2716,6 +2781,141 @@ fn relay_oidc_clients_are_separate_from_the_notary_consultation_workload() {
         relay["consultation"]["authorized_workload"]["client_value"].as_str(),
         Some("household-relay-client")
     );
+}
+
+#[test]
+fn local_loopback_relay_topology_is_explicit_and_nonportable() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let environment_path = project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["relay"]["origin"] =
+        serde_yaml::Value::String("HTTP://127.0.0.1:18080".to_string());
+    environment["relay"]["issuer"] =
+        serde_yaml::Value::String("HTTP://127.0.0.1:18090".to_string());
+    environment["relay"]["jwks_url"] =
+        serde_yaml::Value::String("HTTP://127.0.0.1:18090/jwks.json".to_string());
+    environment["notary_state"] = serde_yaml::from_str(
+        "postgresql:\n  root_certificate_path: /run/secrets/notary-postgres-ca.pem\n",
+    )
+    .expect("Notary state binding parses");
+    write_yaml(&environment_path, &environment);
+
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("local IP-loopback Relay, issuer, and JWKS build");
+    let output = PathBuf::from(build.output.expect("build output"));
+    let relay = read_yaml(&output.join("private/relay/config/relay.yaml"));
+    assert_eq!(
+        relay["auth"]["oidc"]["allow_dev_insecure_fetch_urls"].as_bool(),
+        Some(true)
+    );
+    let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
+    assert_eq!(notary["state"]["storage"].as_str(), Some("postgresql"));
+    assert_eq!(
+        notary["state"]["postgresql"]["url_env"].as_str(),
+        Some("REGISTRY_NOTARY_POSTGRES_URL")
+    );
+    assert_eq!(
+        notary["state"]["postgresql"]["max_connections"].as_u64(),
+        Some(16)
+    );
+    assert_eq!(
+        notary["state"]["postgresql"]["root_certificate_path"].as_str(),
+        Some("/run/secrets/notary-postgres-ca.pem")
+    );
+    assert_eq!(
+        notary["evidence"]["relay"]["allow_insecure_localhost"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        notary["evidence"]["relay"]["base_url"].as_str(),
+        Some("http://127.0.0.1:18080")
+    );
+
+    for (name, profile, origin, issuer, jwks_url, expected) in [
+        (
+            "hosted loopback",
+            "hosted_lab",
+            "http://127.0.0.1:18080",
+            "http://127.0.0.1:18090",
+            "http://127.0.0.1:18090/jwks.json",
+            "Relay origin must be an exact HTTPS origin",
+        ),
+        (
+            "local private-network",
+            "local",
+            "http://10.42.0.8:18080",
+            "http://10.42.0.9:18090",
+            "http://10.42.0.9:18090/jwks.json",
+            "Relay origin must be an exact HTTPS origin",
+        ),
+    ] {
+        let rejected_root = tempfile::tempdir().expect("rejected temporary directory");
+        let rejected = copy_project("custom-system", rejected_root.path());
+        let environment_path = rejected.join("environments/local.yaml");
+        let mut environment = read_yaml(&environment_path);
+        environment["deployment"]["profile"] = serde_yaml::Value::String(profile.to_string());
+        environment["relay"]["origin"] = serde_yaml::Value::String(origin.to_string());
+        environment["relay"]["issuer"] = serde_yaml::Value::String(issuer.to_string());
+        environment["relay"]["jwks_url"] = serde_yaml::Value::String(jwks_url.to_string());
+        write_yaml(&environment_path, &environment);
+        let error = check_registry_project(&ProjectCheckOptions {
+            project_directory: rejected,
+            environment: "local".to_string(),
+            explain: false,
+            against: None,
+            anchor: None,
+        })
+        .unwrap_err();
+        assert!(format!("{error:#}").contains(expected), "{name}: {error:#}");
+    }
+}
+
+#[test]
+fn issuance_accepts_a_full_verification_method_kid() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let environment_path = project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    let kid = "did:web:household-notary.invalid#issuer-key-1";
+    environment["issuance"]["signing_kid"] = serde_yaml::Value::String(kid.to_string());
+    write_yaml(&environment_path, &environment);
+
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("a full verification-method kid builds");
+    let output = PathBuf::from(build.output.expect("build output"));
+    let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
+    assert_eq!(
+        notary["evidence"]["signing_keys"]["project-issuer"]["kid"].as_str(),
+        Some(kid)
+    );
+
+    let rejected_root = tempfile::tempdir().expect("rejected temporary directory");
+    let rejected = copy_project("custom-system", rejected_root.path());
+    let environment_path = rejected.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["issuance"]["signing_kid"] =
+        serde_yaml::Value::String("did:web:issuer.invalid#bad kid".to_string());
+    write_yaml(&environment_path, &environment);
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: rejected,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("issuance signing_kid must be one bounded token"));
 }
 
 #[test]
@@ -3194,6 +3394,14 @@ fn every_required_golden_builds_registry_backed_notary_without_transitional_sour
                     consumer["locator"]
                         .as_str()
                         .is_some_and(|locator| locator.ends_with("_TOKEN_HASH"))
+                })
+            }));
+        assert!(notary_descriptor["consumers"]
+            .as_array()
+            .is_some_and(|consumers| {
+                consumers.iter().any(|consumer| {
+                    consumer["locator"] == "REGISTRY_NOTARY_POSTGRES_URL"
+                        && consumer["config_pointer"] == "/state/postgresql/url_env"
                 })
             }));
     }

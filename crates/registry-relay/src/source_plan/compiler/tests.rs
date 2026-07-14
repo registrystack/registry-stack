@@ -125,6 +125,7 @@ fn vector_expected_hash(name: &str) -> &'static str {
         .expect("vector expected hash")
 }
 
+#[derive(Clone)]
 struct Fixture {
     contract_value: Value,
     pack_value: Value,
@@ -3324,35 +3325,62 @@ fn semantic_output_aliases_are_distinct_from_complete_raw_acquisition() {
 }
 
 #[test]
-fn full_date_fact_requires_an_exact_ten_byte_string_source() {
+fn full_date_fact_preserves_its_type_and_rejects_string_substitution() {
     let mut valid = semantic_alias_fixture();
+    let date_schema = json!({"type": "date", "nullable": false});
     valid.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]["fields"]
-        ["registration_status"]["schema"]["max_bytes"] = json!(10);
-    valid.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"]
-        ["max_bytes"] = json!(10);
-    valid.pack_value["spec"]["acquisition"]["fields"]["registration_status"]["max_bytes"] =
-        json!(10);
-    valid.contract_value["spec"]["acquisition"]["fields"]["registration_status"]["max_bytes"] =
-        json!(10);
+        ["registration_status"]["schema"] = date_schema.clone();
+    valid.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"] =
+        date_schema.clone();
+    valid.pack_value["spec"]["acquisition"]["fields"]["registration_status"] = date_schema.clone();
+    valid.contract_value["spec"]["acquisition"]["fields"]["registration_status"] = date_schema;
     valid.pack_value["spec"]["output"]["status"]["type"] = json!("date");
     valid.pack_value["spec"]["output"]["status"]["max_bytes"] = json!(10);
     valid.contract_value["spec"]["output"]["status"]["type"] = json!("date");
     valid.contract_value["spec"]["output"]["status"]["max_bytes"] = json!(10);
     valid.refresh_all();
-    compile(&valid).expect("ten-byte string backs a full-date output");
-
-    let mut invalid = valid;
-    invalid.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]["fields"]
-        ["registration_status"]["schema"]["max_bytes"] = json!(11);
-    invalid.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"]
-        ["max_bytes"] = json!(11);
-    invalid.pack_value["spec"]["acquisition"]["fields"]["registration_status"]["max_bytes"] =
-        json!(11);
-    invalid.contract_value["spec"]["acquisition"]["fields"]["registration_status"]["max_bytes"] =
-        json!(11);
-    invalid.refresh_all();
+    let registry = compile(&valid).expect("typed full-date output compiles");
+    let plan = registry.iter().next().expect("compiled date plan");
     assert!(matches!(
-        compile(&invalid),
+        plan.runtime_profile()
+            .acquisition()
+            .field("registration_status")
+            .expect("date acquisition field")
+            .schema(),
+        CompiledResponseSchema::Scalar(CompiledScalarShape::Date { nullable: false })
+    ));
+    assert_eq!(
+        completion_seed_value(&valid)["acquisition"]["schema"]["fields"]["registration_status"]
+            ["type"],
+        "date"
+    );
+
+    let mut string_source = valid.clone();
+    let string_schema = json!({"type": "string", "nullable": false, "max_bytes": 10});
+    string_source.pack_value["spec"]["plan"]["operations"][0]["response"]["schema"]["items"]
+        ["fields"]["registration_status"]["schema"] = string_schema.clone();
+    string_source.pack_value["spec"]["reviewed_acquisition"]["fields"]["registration_status"] =
+        string_schema.clone();
+    string_source.pack_value["spec"]["acquisition"]["fields"]["registration_status"] =
+        string_schema.clone();
+    string_source.contract_value["spec"]["acquisition"]["fields"]["registration_status"] =
+        string_schema;
+    string_source.refresh_all();
+    assert!(matches!(
+        compile(&string_source),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::InvalidAcquisition
+        ))
+    ));
+
+    let mut string_output = valid;
+    string_output.pack_value["spec"]["output"]["status"] =
+        json!({"type": "string", "nullable": false, "max_bytes": 10});
+    string_output.contract_value["spec"]["output"]["status"] =
+        json!({"type": "string", "nullable": false, "max_bytes": 10});
+    string_output.refresh_all();
+    assert!(matches!(
+        compile(&string_output),
         Err(SourcePlanCompileError::Artifact(
             SourcePlanArtifactError::InvalidAcquisition
         ))

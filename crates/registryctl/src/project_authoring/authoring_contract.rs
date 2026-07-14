@@ -1453,8 +1453,6 @@ fn lower_output_map(
                         .checked_mul(4)
                         .ok_or_else(|| anyhow!("outputs.{name}.maxLength exceeds byte limits"))?,
                 )
-            } else if output_type == OutputType::Date {
-                Some(10)
             } else {
                 None
             };

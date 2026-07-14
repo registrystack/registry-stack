@@ -999,9 +999,8 @@ fn relay_acquisition_schema_for_output(output: &OutputDeclaration) -> Result<Val
             "max_bytes": output.max_bytes.context("string output max_bytes is absent")?,
         }),
         OutputType::Date => json!({
-            "type": "string",
+            "type": "date",
             "nullable": output.nullable,
-            "max_bytes": 10,
         }),
         OutputType::Boolean | OutputType::Presence => json!({
             "type": "boolean",
@@ -1054,7 +1053,7 @@ fn generated_snapshot_pack_semantics(
                 "max_bytes": entity_field.max_length.and_then(|value| value.checked_mul(4)).ok_or_else(|| anyhow!("snapshot String entity bound is absent"))?,
             }),
             (AuthoredScalarType::String, Some(AuthoredStringFormat::Date)) => {
-                json!({ "type": "string", "nullable": nullable, "max_bytes": 10 })
+                json!({ "type": "date", "nullable": nullable })
             }
             _ => bail!("snapshot entity field has an unsupported scalar contract"),
         };
@@ -1220,9 +1219,7 @@ fn relay_schema_node(schema: &SchemaNode, nullable: bool) -> Value {
             "maximum": max,
         }),
         SchemaNode::Boolean => json!({ "type": "boolean", "nullable": nullable }),
-        SchemaNode::Date => {
-            json!({ "type": "string", "nullable": nullable, "max_bytes": 10 })
-        }
+        SchemaNode::Date => json!({ "type": "date", "nullable": nullable }),
     }
 }
 
@@ -1259,9 +1256,7 @@ fn relay_projection_schema_node(schema: &SchemaNode, nullable: bool) -> Value {
             "maximum": max,
         }),
         SchemaNode::Boolean => json!({ "type": "boolean", "nullable": nullable }),
-        SchemaNode::Date => {
-            json!({ "type": "string", "nullable": nullable, "max_bytes": 10 })
-        }
+        SchemaNode::Date => json!({ "type": "date", "nullable": nullable }),
     }
 }
 
@@ -1292,9 +1287,7 @@ fn relay_retained_projection_schema_node(schema: &SchemaNode, nullable: bool) ->
             "maximum": max,
         }),
         SchemaNode::Boolean => json!({ "type": "boolean", "nullable": nullable }),
-        SchemaNode::Date => {
-            json!({ "type": "string", "nullable": nullable, "max_bytes": 10 })
-        }
+        SchemaNode::Date => json!({ "type": "date", "nullable": nullable }),
     }
 }
 
@@ -2489,6 +2482,36 @@ fn private_binding_document(
 #[cfg(test)]
 mod artifact_projection_tests {
     use super::*;
+
+    #[test]
+    fn date_acquisition_schema_is_not_a_bounded_string() {
+        let date = relay_acquisition_schema_for_output(&OutputDeclaration {
+            output_type: OutputType::Date,
+            nullable: false,
+            max_bytes: None,
+            minimum: None,
+            maximum: None,
+            from: None,
+            source_pointer: None,
+        })
+        .expect("date schema compiles");
+        let string = relay_acquisition_schema_for_output(&OutputDeclaration {
+            output_type: OutputType::String,
+            nullable: false,
+            max_bytes: Some(10),
+            minimum: None,
+            maximum: None,
+            from: None,
+            source_pointer: None,
+        })
+        .expect("string schema compiles");
+
+        assert_eq!(date, json!({"type": "date", "nullable": false}));
+        assert_eq!(
+            string,
+            json!({"type": "string", "nullable": false, "max_bytes": 10})
+        );
+    }
 
     #[test]
     fn raw_projection_schema_preserves_recursive_additional_field_policy() {

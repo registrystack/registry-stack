@@ -1734,9 +1734,8 @@ fn validate_http_operation(
             .get(field.as_str())
             .ok_or(SourcePlanArtifactError::InvalidAcquisition)?;
         let type_matches = match declared.output_type {
-            OutputTypeDocument::Date => matches!(raw_schema, ResponseSchemaDocument::String {
+            OutputTypeDocument::Date => matches!(raw_schema, ResponseSchemaDocument::Date {
                 nullable,
-                max_bytes: 10,
             } if !*nullable || declared.nullable),
             OutputTypeDocument::String => matches!(raw_schema, ResponseSchemaDocument::String {
                 nullable,
@@ -1849,7 +1848,7 @@ fn validate_operation_response_schema(
         {
             Ok(1)
         }
-        ResponseSchemaDocument::Boolean { .. } => Ok(1),
+        ResponseSchemaDocument::Date { .. } | ResponseSchemaDocument::Boolean { .. } => Ok(1),
         _ => Err(SourcePlanArtifactError::InvalidLimits),
     }
 }
@@ -1999,6 +1998,7 @@ pub(super) fn resolve_response_pointer<'a>(
     }
     match current {
         ResponseSchemaDocument::String { .. }
+        | ResponseSchemaDocument::Date { .. }
         | ResponseSchemaDocument::Boolean { .. }
         | ResponseSchemaDocument::Integer { .. }
         | ResponseSchemaDocument::Number { .. } => Ok(current),
@@ -2044,13 +2044,7 @@ pub(super) fn prior_output_matches_schema(
                 && output.minimum.is_none()
                 && output.maximum.is_none()
         }
-        (
-            OutputTypeDocument::Date,
-            ResponseSchemaDocument::String {
-                nullable,
-                max_bytes: 10,
-            },
-        ) => {
+        (OutputTypeDocument::Date, ResponseSchemaDocument::Date { nullable }) => {
             output.nullable == *nullable
                 && output.max_bytes == Some(10)
                 && output.minimum.is_none()

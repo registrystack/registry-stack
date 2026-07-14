@@ -1225,23 +1225,9 @@ fn validate_snapshot_config_bindings(
             let configured = declared
                 .field(physical)
                 .ok_or(ConsultationServiceActivationError::UnsupportedPlan)?;
-            let compatible_type = matches!(
-                (acquired.schema(), configured.ty),
-                (
-                    CompiledResponseSchema::Scalar(CompiledScalarShape::String { .. }),
-                    FieldType::String
-                ) | (
-                    CompiledResponseSchema::Scalar(CompiledScalarShape::Boolean { .. }),
-                    FieldType::Boolean
-                ) | (
-                    CompiledResponseSchema::Scalar(CompiledScalarShape::Integer { .. }),
-                    FieldType::Integer
-                ) | (
-                    CompiledResponseSchema::Scalar(CompiledScalarShape::Number { .. }),
-                    FieldType::Number
-                )
-            );
-            if !compatible_type || acquired.schema().nullable() != configured.nullable {
+            if !snapshot_field_type_compatible(acquired.schema(), configured.ty)
+                || acquired.schema().nullable() != configured.nullable
+            {
                 return Err(ConsultationServiceActivationError::UnsupportedPlan);
             }
         }
@@ -1283,6 +1269,28 @@ fn validate_snapshot_config_bindings(
     Ok(())
 }
 
+fn snapshot_field_type_compatible(schema: &CompiledResponseSchema, field_type: FieldType) -> bool {
+    matches!(
+        (schema, field_type),
+        (
+            CompiledResponseSchema::Scalar(CompiledScalarShape::String { .. }),
+            FieldType::String
+        ) | (
+            CompiledResponseSchema::Scalar(CompiledScalarShape::Date { .. }),
+            FieldType::Date
+        ) | (
+            CompiledResponseSchema::Scalar(CompiledScalarShape::Boolean { .. }),
+            FieldType::Boolean
+        ) | (
+            CompiledResponseSchema::Scalar(CompiledScalarShape::Integer { .. }),
+            FieldType::Integer
+        ) | (
+            CompiledResponseSchema::Scalar(CompiledScalarShape::Number { .. }),
+            FieldType::Number
+        )
+    )
+}
+
 fn compile_fixed_workload_identity(
     config: &Config,
     consultation: &ConsultationConfig,
@@ -1316,8 +1324,11 @@ fn compile_fixed_workload_identity(
     let selector = ClientClaimSelector::try_from(configured.client_claim_selector.as_str())
         .map_err(|_| ConsultationServiceActivationError::InvalidWorkloadBinding)?;
     Ok(ConfiguredOidcWorkloadProof::new(
-        ConfiguredIssuer::try_from(oidc.issuer.as_str())
-            .map_err(|_| ConsultationServiceActivationError::InvalidWorkloadBinding)?,
+        ConfiguredIssuer::try_from_with_local_loopback(
+            oidc.issuer.as_str(),
+            oidc.allow_dev_insecure_fetch_urls,
+        )
+        .map_err(|_| ConsultationServiceActivationError::InvalidWorkloadBinding)?,
         ConfiguredAudience::try_from(configured.audience.as_str())
             .map_err(|_| ConsultationServiceActivationError::InvalidWorkloadBinding)?,
         ConfiguredClientBinding::new(
@@ -1545,6 +1556,20 @@ mod tests {
             validate_production_rhai_worker_requirement(true),
             Err(ConsultationServiceActivationError::UnsupportedPlan)
         );
+    }
+
+    #[test]
+    fn snapshot_date_binding_requires_the_typed_date_field() {
+        let date = CompiledResponseSchema::Scalar(CompiledScalarShape::Date { nullable: false });
+        let string = CompiledResponseSchema::Scalar(CompiledScalarShape::String {
+            nullable: false,
+            max_bytes: 10,
+        });
+
+        assert!(snapshot_field_type_compatible(&date, FieldType::Date));
+        assert!(!snapshot_field_type_compatible(&date, FieldType::String));
+        assert!(!snapshot_field_type_compatible(&string, FieldType::Date));
+        assert!(snapshot_field_type_compatible(&string, FieldType::String));
     }
 
     #[test]

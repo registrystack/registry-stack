@@ -597,7 +597,7 @@ fn entity_output_contract(
             if field.max_length != Some(10) {
                 bail!("entity field {name} date format requires maxLength: 10");
             }
-            (OutputType::Date, Some(40))
+            (OutputType::Date, None)
         }
         (AuthoredScalarType::String, None) => {
             let max_length = field
@@ -836,6 +836,7 @@ fn semantic_digests(
             "issuance": environment.issuance,
             "relay": environment.relay,
             "notary_relay": environment.notary_relay,
+            "notary_state": environment.notary_state,
             "deployment": environment.deployment,
         })
     });
@@ -1967,14 +1968,15 @@ fn validate_environment(
     if let Some(issuance) = &environment.issuance {
         validate_secret_reference(&issuance.signing_key)?;
         validate_token(&issuance.issuer, "issuance issuer", 2048)?;
-        validate_stable_id(&issuance.signing_kid, "issuance signing_kid")?;
+        validate_token(&issuance.signing_kid, "issuance signing_kid", 2048)?;
         if issuance.generation == 0 {
             bail!("issuance generation must be positive");
         }
     }
     if let Some(relay) = &environment.relay {
-        validate_https_origin(&relay.origin, "Relay origin")?;
-        validate_https_origin(&relay.issuer, "Relay OIDC issuer")?;
+        let local = matches!(environment.deployment.profile, DeploymentProfile::Local);
+        validate_https_or_local_loopback_origin(&relay.origin, "Relay origin", local)?;
+        validate_https_or_local_loopback_origin(&relay.issuer, "Relay OIDC issuer", local)?;
         validate_token(&relay.audience, "Relay OIDC audience", 256)?;
         if relay.allowed_clients.len() > 64 {
             bail!("Relay allowed_clients exceeds the supported bound");
@@ -1996,18 +1998,11 @@ fn validate_environment(
         if relay.allowed_clients.is_empty() && environment.notary_relay.is_none() {
             bail!("a Relay environment must admit at least one OIDC client");
         }
-        let jwks =
-            url::Url::parse(&relay.jwks_url).context("Relay OIDC JWKS URL is invalid")?;
-        if jwks.scheme() != "https"
-            || jwks.host().is_none()
-            || !jwks.username().is_empty()
-            || jwks.password().is_some()
-            || jwks.path() == "/"
-            || jwks.query().is_some()
-            || jwks.fragment().is_some()
-        {
-            bail!("Relay OIDC JWKS URL must be one exact HTTPS resource");
-        }
+        validate_https_or_local_loopback_resource(
+            &relay.jwks_url,
+            "Relay OIDC JWKS URL",
+            local,
+        )?;
     }
     if let Some(connection) = &environment.notary_relay {
         validate_token(
@@ -2016,6 +2011,15 @@ fn validate_environment(
             256,
         )?;
         validate_absolute_runtime_path(&connection.token_file, "Relay workload token file")?;
+    }
+    if let Some(state) = &environment.notary_state {
+        if !requires_notary {
+            bail!("notary_state is valid only when the project deploys a Notary");
+        }
+        validate_absolute_runtime_path(
+            &state.postgresql.root_certificate_path,
+            "Notary PostgreSQL root_certificate_path",
+        )?;
     }
     if let Some(relay) = &environment.deployment.relay {
         validate_stable_id(&relay.service, "Relay service id")?;

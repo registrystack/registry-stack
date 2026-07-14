@@ -116,11 +116,16 @@ fn validate_consultation(config: &Config) -> Result<(), ConfigError> {
         );
         ConfigError::ValidationError
     })?;
-    if ConfiguredIssuer::try_from(oidc.issuer.as_str()).is_err() {
+    if ConfiguredIssuer::try_from_with_local_loopback(
+        oidc.issuer.as_str(),
+        oidc.allow_dev_insecure_fetch_urls,
+    )
+    .is_err()
+    {
         tracing::error!(
             code = "config.validation_error",
             field = "auth.oidc.issuer",
-            "consultation activation requires a bounded HTTPS OIDC issuer"
+            "consultation activation requires a bounded HTTPS OIDC issuer or an explicitly enabled HTTP IP-loopback issuer"
         );
         return Err(ConfigError::ValidationError);
     }
@@ -4756,10 +4761,8 @@ datasets: []
                 .expect("OIDC config is present"),
         )
         .expect("generic OIDC permits explicit loopback development issuers");
-        assert!(matches!(
-            run(&dev_http_issuer),
-            Err(Error::Config(ConfigError::ValidationError))
-        ));
+        run(&dev_http_issuer)
+            .expect("consultation activation permits the explicitly enabled loopback issuer");
 
         let without_artifacts = r#"
 consultation:
