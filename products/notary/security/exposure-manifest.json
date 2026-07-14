@@ -372,7 +372,7 @@
       "audience": "external",
       "auth": "none",
       "scopes": [],
-      "rate_limit": "self_attestation",
+      "rate_limit": "subject_access",
       "audit": "not_applicable",
       "openapi": true,
       "stability": "beta",
@@ -393,15 +393,13 @@
       "feature": null,
       "audience": "external",
       "auth": "bearer",
-      "scopes": [
-        "self_attestation"
-      ],
-      "rate_limit": "self_attestation",
+      "scopes": [],
+      "rate_limit": "subject_access",
       "audit": "required",
       "openapi": true,
       "stability": "beta",
       "data_classification": "credential",
-      "notes": "Protected OID4VCI credential endpoint. The proof precheck validates holder proof shape before bearer-token self-attestation auth.",
+      "notes": "Protected OID4VCI credential endpoint. The proof precheck validates holder proof shape before bearer-token subject-bound auth, and issuance requires the selected credential configuration's exact scope.",
       "source": "manual",
       "enforcement_tests": [
         "crates/registry-notary-server/tests/standalone_http/oid4vci.rs::oid4vci_malformed_proof_is_rejected_before_oidc_auth",
@@ -552,7 +550,7 @@
       "scopes": [
         "credential:issue"
       ],
-      "rate_limit": "self_attestation",
+      "rate_limit": "subject_access",
       "audit": "required",
       "openapi": true,
       "stability": "beta",

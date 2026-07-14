@@ -2,8 +2,8 @@
 //! Redacted Registry Ops posture for standalone Registry Notary.
 
 use registry_notary_core::{
-    DeploymentEvidenceConfig, EvidenceAuditConfig, SelfAttestationConfig,
-    SelfAttestationRateLimitMode, SigningKeyStatus, StandaloneRegistryNotaryConfig,
+    DeploymentEvidenceConfig, EvidenceAuditConfig, SigningKeyStatus,
+    StandaloneRegistryNotaryConfig, SubjectAccessConfig,
     MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS, STATE_STORAGE_IN_MEMORY, STATE_STORAGE_POSTGRESQL,
 };
 use registry_platform_ops::{
@@ -27,6 +27,7 @@ use crate::{
 pub(crate) struct PostureContext {
     instance: InstancePosture,
     auth_mode: String,
+    auth_methods: Vec<String>,
     config_hash: String,
     state_storage: String,
     credential_status_enabled: bool,
@@ -34,7 +35,7 @@ pub(crate) struct PostureContext {
     audit: AuditPosture,
     signing_keys: SigningKeyPosture,
     oid4vci: Oid4vciPosture,
-    self_attestation: SelfAttestationPosture,
+    subject_access: SubjectAccessPosture,
 }
 
 #[derive(Clone, Debug)]
@@ -95,7 +96,7 @@ struct Oid4vciPosture {
 }
 
 #[derive(Clone, Debug)]
-struct SelfAttestationPosture {
+struct SubjectAccessPosture {
     enabled: bool,
     allowed_claim_count: usize,
     allowed_purpose_count: usize,
@@ -112,6 +113,7 @@ impl PostureContext {
         // Runtime posture replaces this boot-time placeholder with one bounded
         // cursor sample bound to the live audit tail.
         let audit_observation = registry_platform_ops::AckObservation::unverified();
+        let auth_methods = configured_auth_methods(config);
         Ok(Self {
             instance: InstancePosture {
                 id: config.instance.id.clone(),
@@ -120,7 +122,12 @@ impl PostureContext {
                 jurisdiction: config.instance.jurisdiction.clone(),
                 public_base_url: config.instance.public_base_url.clone(),
             },
-            auth_mode: config.auth.mode.as_str().to_string(),
+            auth_mode: if auth_methods.len() == 1 {
+                auth_methods[0].clone()
+            } else {
+                "mixed".to_string()
+            },
+            auth_methods,
             config_hash: config_hash(config),
             state_storage: classify_state_storage(config.state.storage.as_str()),
             credential_status_enabled: config.credential_status.enabled,
@@ -134,7 +141,10 @@ impl PostureContext {
             ),
             signing_keys: signing_key_posture(config)?,
             oid4vci: oid4vci_posture(config),
-            self_attestation: self_attestation_posture(&config.self_attestation),
+            subject_access: subject_access_posture(
+                &config.subject_access,
+                config.state.storage.as_str(),
+            ),
         })
     }
 }
@@ -272,6 +282,7 @@ pub(crate) async fn posture_document(
         },
         "runtime": {
             "auth_mode": context.auth_mode,
+            "auth_methods": context.auth_methods,
             "admin_enabled": true,
             "readiness": readiness,
         },
@@ -301,13 +312,13 @@ pub(crate) async fn posture_document(
                 "enabled": state.oid4vci.enabled,
                 "credential_configuration_count": state.oid4vci.credential_configurations.len(),
             },
-            "self_attestation": {
-                "enabled": context.self_attestation.enabled,
-                "allowed_claim_count": context.self_attestation.allowed_claim_count,
-                "allowed_purpose_count": context.self_attestation.allowed_purpose_count,
-                "credential_profile_count": context.self_attestation.credential_profile_count,
-                "wallet_origin_count": context.self_attestation.wallet_origin_count,
-                "rate_limit_mode": context.self_attestation.rate_limit_mode,
+            "subject_access": {
+                "enabled": context.subject_access.enabled,
+                "allowed_claim_count": context.subject_access.allowed_claim_count,
+                "allowed_purpose_count": context.subject_access.allowed_purpose_count,
+                "credential_profile_count": context.subject_access.credential_profile_count,
+                "wallet_origin_count": context.subject_access.wallet_origin_count,
+                "rate_limit_mode": context.subject_access.rate_limit_mode,
             },
         },
         "posture": {
@@ -442,6 +453,7 @@ fn default_posture_context() -> PostureContext {
             public_base_url: None,
         },
         auth_mode: "unknown".to_string(),
+        auth_methods: vec!["unknown".to_string()],
         config_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
             .to_string(),
         state_storage: STATE_STORAGE_IN_MEMORY.to_string(),
@@ -462,7 +474,7 @@ fn default_posture_context() -> PostureContext {
             tx_code_required: true,
             offer_security_mode: "disabled".to_string(),
         },
-        self_attestation: SelfAttestationPosture {
+        subject_access: SubjectAccessPosture {
             enabled: false,
             allowed_claim_count: 0,
             allowed_purpose_count: 0,
@@ -476,6 +488,23 @@ fn default_posture_context() -> PostureContext {
 fn config_hash(config: &StandaloneRegistryNotaryConfig) -> String {
     let value = serde_json::to_value(config).expect("notary config serializes to JSON");
     posture_safe_runtime_config_hash(&value)
+}
+
+fn configured_auth_methods(config: &StandaloneRegistryNotaryConfig) -> Vec<String> {
+    let mut methods = Vec::with_capacity(4);
+    if !config.auth.api_keys.is_empty() {
+        methods.push("api_key".to_string());
+    }
+    if !config.auth.bearer_tokens.is_empty() {
+        methods.push("static_bearer".to_string());
+    }
+    if config.auth.oidc.is_some() {
+        methods.push("oidc".to_string());
+    }
+    if config.auth.access_token_signing.enabled {
+        methods.push("notary_access_token".to_string());
+    }
+    methods
 }
 
 fn classify_state_storage(storage: &str) -> String {
@@ -662,24 +691,21 @@ fn oid4vci_posture(config: &StandaloneRegistryNotaryConfig) -> Oid4vciPosture {
     }
 }
 
-fn self_attestation_posture(config: &SelfAttestationConfig) -> SelfAttestationPosture {
-    SelfAttestationPosture {
+fn subject_access_posture(
+    config: &SubjectAccessConfig,
+    state_storage: &str,
+) -> SubjectAccessPosture {
+    SubjectAccessPosture {
         enabled: config.enabled,
         allowed_claim_count: config.allowed_claims.len(),
         allowed_purpose_count: config.allowed_purposes.len(),
         credential_profile_count: config.credential_profiles.len(),
         wallet_origin_count: config.allowed_wallet_origins.len(),
         rate_limit_mode: if config.enabled {
-            rate_limit_mode_label(config.rate_limits.mode).to_string()
+            classify_state_storage(state_storage)
         } else {
             "disabled".to_string()
         },
-    }
-}
-
-fn rate_limit_mode_label(mode: SelfAttestationRateLimitMode) -> &'static str {
-    match mode {
-        SelfAttestationRateLimitMode::InProcess => "in_process",
     }
 }
 

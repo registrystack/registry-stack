@@ -26,23 +26,22 @@ pub(super) async fn issue_credential(
         Ok(evidence) => evidence,
         Err(error) => return evidence_error_response(error),
     };
-    let mut principal =
-        match classify_self_attestation_principal(&state.self_attestation, &principal) {
-            Ok(principal) => principal,
-            Err(error) => {
-                let denial_code = denial_code_from_error(&error);
-                let mut response = evidence_error_response(error);
-                attach_self_attestation_audit(
-                    &mut response,
-                    "credential_denied",
-                    &[],
-                    denial_code,
-                    Some(state.self_attestation.subject_binding.token_claim.as_str()),
-                );
-                attach_zero_relay_no_forward_audit(&mut response);
-                return response;
-            }
-        };
+    let mut principal = match classify_subject_access_principal(&state.subject_access, &principal) {
+        Ok(principal) => principal,
+        Err(error) => {
+            let denial_code = denial_code_from_error(&error);
+            let mut response = evidence_error_response(error);
+            attach_subject_access_audit(
+                &mut response,
+                "credential_denied",
+                &[],
+                denial_code,
+                Some(state.subject_access.subject_binding.token_claim.as_str()),
+            );
+            attach_zero_relay_no_forward_audit(&mut response);
+            return response;
+        }
+    };
     let lookup_client_id = match stored_evaluation_client_id(&state, &principal) {
         Ok(client_id) => client_id,
         Err(error) => return credential_denial_response_without_evaluation(error),
@@ -60,10 +59,9 @@ pub(super) async fn issue_credential(
         }
         Err(error) => return credential_denial_response_without_evaluation(error),
     };
-    if let Some(metadata) = evaluation.self_attestation.as_ref() {
-        if principal.is_self_attestation() {
-            if let Err(error) = apply_stored_self_attestation_access_mode(&mut principal, metadata)
-            {
+    if let Some(metadata) = evaluation.subject_access.as_ref() {
+        if principal.is_subject_access() {
+            if let Err(error) = apply_stored_subject_access_access_mode(&mut principal, metadata) {
                 return credential_denial_response_for_evaluation(
                     &state,
                     error,
@@ -78,7 +76,7 @@ pub(super) async fn issue_credential(
     if !evaluation_client_matches(&state, &principal, &evaluation)
         || evaluation.access_mode() != principal.access_mode()
     {
-        let error = if principal.is_self_attestation() {
+        let error = if principal.is_subject_access() {
             EvidenceError::EvaluationNotFound
         } else {
             EvidenceError::EvaluationBindingMismatch
@@ -168,7 +166,7 @@ pub(super) async fn issue_credential(
             Some((profile_id, profile)),
         );
     }
-    if let Err(error) = require_self_attestation_stored_access(
+    if let Err(error) = require_subject_access_stored_access(
         &state,
         evidence,
         &principal,
@@ -190,28 +188,28 @@ pub(super) async fn issue_credential(
             Some((profile_id, profile)),
         );
     }
-    if principal.is_self_attestation() {
-        if !state.self_attestation.allowed_operations.issue_credential {
+    if principal.is_subject_access() {
+        if !state.subject_access.allowed_operations.issue_credential {
             return credential_denial_response_for_evaluation(
                 &state,
-                self_attestation_denied(SelfAttestationDenialCode::OperationDenied),
+                subject_access_denied(SubjectAccessDenialCode::OperationDenied),
                 &request.evaluation_id,
                 &evaluation,
                 &principal,
                 Some((profile_id, profile)),
             );
         }
-        let profile_policy = match evaluation.self_attestation.as_ref() {
+        let profile_policy = match evaluation.subject_access.as_ref() {
             Some(metadata) if metadata.access_mode == AccessMode::DelegatedAttestation => {
                 require_delegated_attestation_credential_profile_policy(
-                    &state.self_attestation,
+                    &state.subject_access,
                     metadata,
                     profile_id,
                     profile,
                 )
             }
-            _ => require_self_attestation_credential_profile_policy(
-                &state.self_attestation,
+            _ => require_subject_access_credential_profile_policy(
+                &state.subject_access,
                 profile_id,
                 profile,
             ),
@@ -288,30 +286,30 @@ pub(super) async fn issue_credential(
         .holder
         .as_ref()
         .and_then(|holder| holder.id.as_deref());
-    if principal.is_self_attestation() {
+    if principal.is_subject_access() {
         let principal_hash = match state
-            .self_attestation_rate_keys
+            .subject_access_rate_keys
             .principal(&principal.principal_id)
         {
             Ok(hash) => hash,
             Err(error) => return evidence_error_response(error.evidence_error()),
         };
         let holder_hash = match holder_id
-            .map(|holder_id| state.self_attestation_rate_keys.holder(holder_id))
+            .map(|holder_id| state.subject_access_rate_keys.holder(holder_id))
             .transpose()
         {
             Ok(hash) => hash,
             Err(error) => return evidence_error_response(error.evidence_error()),
         };
         if let Err(error) = state
-            .self_attestation_rate_limiter
+            .subject_access_rate_limiter
             .check_credential_issuance(&principal_hash, holder_hash.as_ref())
             .await
         {
             let mut response = evidence_error_response(error.evidence_error());
-            if let Err(audit_error) = attach_self_attestation_credential_denial_audit(
+            if let Err(audit_error) = attach_subject_access_credential_denial_audit(
                 &mut response,
-                &state.self_attestation_rate_keys,
+                &state.subject_access_rate_keys,
                 &request.evaluation_id,
                 &evaluation,
                 Some((profile_id, profile)),
@@ -320,7 +318,7 @@ pub(super) async fn issue_credential(
             }
             if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
                 audit.verification_decision = Some("credential_issue_rate_limited".to_string());
-                audit.denial_code = Some(SelfAttestationDenialCode::RateLimited);
+                audit.denial_code = Some(SubjectAccessDenialCode::RateLimited);
                 audit.rate_limit_bucket = error
                     .bucket()
                     .and_then(|bucket| RateLimitBucket::new(bucket.as_str()).ok());
@@ -339,7 +337,7 @@ pub(super) async fn issue_credential(
     // shared a memoized upstream read, all `issued_at` are equal and the JWT
     // `iat` matches the disclosure timestamps.
     let iat = earliest_issued_at(&evaluation.results).unwrap_or_else(OffsetDateTime::now_utc);
-    let subject_ref = if principal.is_self_attestation() {
+    let subject_ref = if principal.is_subject_access() {
         match holder_id {
             Some(holder_id) => holder_id,
             None => {
@@ -470,15 +468,15 @@ pub(super) async fn issue_credential(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/json"),
     );
-    if let Some(metadata) = evaluation.self_attestation.as_ref() {
-        if let Err(error) = attach_self_attestation_credential_audit(
+    if let Some(metadata) = evaluation.subject_access.as_ref() {
+        if let Err(error) = attach_subject_access_credential_audit(
             &mut response,
-            &state.self_attestation_rate_keys,
+            &state.subject_access_rate_keys,
             &request.evaluation_id,
             &evaluation.claim_ids,
             &evaluation.results,
             evaluation.results.len() as u64,
-            SelfAttestationCredentialAuditDetails {
+            SubjectAccessCredentialAuditDetails {
                 profile_id,
                 holder_binding_mode: &profile.holder_binding.mode,
                 policy_hash: metadata.policy_hash.clone(),
@@ -506,9 +504,9 @@ pub(super) async fn issue_credential(
 /// Pick the earliest `issued_at` from a set of claim results to use as the
 /// signed JWT `iat`. Returns `None` if there are no results or none parse,
 /// in which case the caller falls back to `OffsetDateTime::now_utc()`.
-pub(super) fn self_attestation_policy_hash(
+pub(super) fn subject_access_policy_hash(
     evidence: &EvidenceConfig,
-    config: &SelfAttestationConfig,
+    config: &SubjectAccessConfig,
     claim_ids: &[String],
     disclosure: &str,
     format: &str,

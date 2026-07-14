@@ -44,7 +44,7 @@ pub(in crate::api) async fn oid4vci_credential_offer(
     Json(CredentialOffer::authorization_code(
         state.oid4vci.credential_issuer.clone(),
         credential_configuration_ids,
-        generate_nonce().unwrap_or_else(|_| "registry-notary:self-attestation".to_string()),
+        generate_nonce().unwrap_or_else(|_| "registry-notary:subject-access".to_string()),
         state.oid4vci.authorization_servers.first().cloned(),
     ))
     .into_response()

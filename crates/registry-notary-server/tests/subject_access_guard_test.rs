@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Integration coverage for self-attestation stored-evaluation guards.
+//! Integration coverage for subject-access stored-evaluation guards.
 
 #[cfg(feature = "registry-notary-cel")]
 use std::collections::BTreeSet;
@@ -24,12 +24,12 @@ use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::FORMAT_SD_JWT_VC;
 use registry_notary_core::{
     AccessMode, BoundedVerifiedClaims, EvidenceConfig, EvidenceError, EvidencePrincipal,
-    SelfAttestationConfig, VerifiedClaimName, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
+    SubjectAccessConfig, VerifiedClaimName, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
 };
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_server::cel_worker::{CelWorker, CelWorkerConfig, CelWorkerLimits};
 #[cfg(feature = "registry-notary-cel")]
-use registry_notary_server::SelfAttestationRateLimitKeys;
+use registry_notary_server::SubjectAccessRateLimitKeys;
 use registry_notary_server::{EvidenceIssuerResolver, EvidenceStore, RegistryNotaryApiState};
 use registry_platform_audit::AuditKeyHasher;
 #[cfg(feature = "registry-notary-cel")]
@@ -50,7 +50,7 @@ const HOLDER_PRIV_D_B64: &str = "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw";
 const HOLDER_PUB_X_B64: &str = "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc";
 
 #[cfg(feature = "registry-notary-cel")]
-fn self_attestation_target() -> Value {
+fn subject_access_target() -> Value {
     json!({
         "type": "Person",
         "identifiers": [
@@ -62,7 +62,7 @@ fn self_attestation_target() -> Value {
 #[derive(Debug, Deserialize)]
 struct TestRuntimeConfig {
     evidence: EvidenceConfig,
-    self_attestation: SelfAttestationConfig,
+    subject_access: SubjectAccessConfig,
 }
 
 #[derive(Debug)]
@@ -92,19 +92,19 @@ fn bounded(value: &str) -> VerifiedClaimValue {
     VerifiedClaimValue::new(value).expect("test verified claim value is bounded")
 }
 
-fn self_attestation_principal() -> EvidencePrincipal {
+fn subject_access_principal() -> EvidencePrincipal {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     EvidencePrincipal {
         auth_profile_id: registry_notary_core::EvidenceAuthProfileId::ExternalOidc,
         principal_id: RAW_PRINCIPAL_ID.to_string(),
-        scopes: vec!["self_attestation".to_string()],
+        scopes: vec!["subject_access".to_string()],
         access_mode: AccessMode::MachineClient,
         verified_claims: Some(BoundedVerifiedClaims {
             issuer: bounded("https://idp.example.test"),
             audiences: vec![bounded("registry-notary-citizen")],
             client_id: Some(bounded("azp:citizen-portal")),
             token_type: Some(bounded("JWT")),
-            scopes: vec![bounded("self_attestation")],
+            scopes: vec![bounded("subject_access")],
             subject: Some(bounded(RAW_PRINCIPAL_ID)),
             subject_binding_claim: Some(
                 VerifiedClaimName::new("national_id")
@@ -122,8 +122,8 @@ fn self_attestation_principal() -> EvidencePrincipal {
 }
 
 #[cfg(feature = "registry-notary-cel")]
-fn self_attestation_principal_with_id(raw_id: &str) -> EvidencePrincipal {
-    let mut principal = self_attestation_principal();
+fn subject_access_principal_with_id(raw_id: &str) -> EvidencePrincipal {
+    let mut principal = subject_access_principal();
     principal.principal_id = raw_id.to_string();
     if let Some(claims) = principal.verified_claims.as_mut() {
         claims.subject = Some(bounded(raw_id));
@@ -143,8 +143,8 @@ fn machine_principal() -> EvidencePrincipal {
 }
 
 #[cfg(feature = "registry-notary-cel")]
-fn stored_self_attestation_client_id(raw_principal_id: &str) -> String {
-    SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only())
+fn stored_subject_access_client_id(raw_principal_id: &str) -> String {
+    SubjectAccessRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only())
         .principal(raw_principal_id)
         .expect("test principal identifier hashes")
         .as_str()
@@ -169,7 +169,7 @@ evidence:
       subject_type: person
       evidence_mode:
         type: self_attested
-      purpose: citizen_self_attestation
+      purpose: citizen_subject_access
       value:
         type: boolean
       rule:
@@ -180,7 +180,7 @@ evidence:
         allowed: [value, redacted]
       formats:
         - {FORMAT_CLAIM_RESULT_JSON}
-self_attestation:
+subject_access:
   enabled: true
   subject_binding:
     token_claim: national_id
@@ -202,7 +202,7 @@ self_attestation:
     issue_credential: false
     batch_evaluate: false
   allowed_purposes:
-    - citizen_self_attestation
+    - citizen_subject_access
   allowed_claims:
     - person-is-alive
   allowed_formats:
@@ -210,11 +210,10 @@ self_attestation:
   allowed_disclosures:
 {allowed_disclosures_yaml}
   required_scopes:
-    - self_attestation
+    - subject_access
   allowed_wallet_origins:
     - https://wallet.example.gov
   rate_limits:
-    mode: in_process
     invalid_token_per_client_address_per_minute: 20
     per_principal_per_minute: 10
     subject_mismatch_per_principal_per_hour: 5
@@ -302,7 +301,7 @@ evidence:
       subject_type: person
       evidence_mode:
         type: self_attested
-      purpose: citizen_self_attestation
+      purpose: citizen_subject_access
       value:
         type: boolean
       rule:
@@ -316,7 +315,7 @@ evidence:
         - {FORMAT_SD_JWT_VC}
       credential_profiles:
         - civil_status_sd_jwt
-self_attestation:
+subject_access:
   enabled: true
   subject_binding:
     token_claim: national_id
@@ -338,7 +337,7 @@ self_attestation:
     issue_credential: true
     batch_evaluate: false
   allowed_purposes:
-    - citizen_self_attestation
+    - citizen_subject_access
   allowed_claims:
     - person-is-alive
   allowed_formats:
@@ -347,13 +346,12 @@ self_attestation:
   allowed_disclosures:
     - redacted
   required_scopes:
-    - self_attestation
+    - subject_access
   allowed_wallet_origins:
     - https://wallet.example.gov
   credential_profiles:
     - civil_status_sd_jwt
   rate_limits:
-    mode: in_process
     invalid_token_per_client_address_per_minute: 20
     per_principal_per_minute: 10
     subject_mismatch_per_principal_per_hour: 5
@@ -369,9 +367,9 @@ fn build_server(
     store: Arc<EvidenceStore>,
     principal: EvidencePrincipal,
 ) -> TestServer {
-    let state = RegistryNotaryApiState::new_with_self_attestation_hasher(
+    let state = RegistryNotaryApiState::new_with_subject_access_hasher(
         Arc::new(config.evidence),
-        Arc::new(config.self_attestation),
+        Arc::new(config.subject_access),
         AuditKeyHasher::unkeyed_dev_only(),
         store,
         Arc::new(NoopIssuers),
@@ -393,9 +391,9 @@ fn build_issuance_server(
     principal: EvidencePrincipal,
 ) -> TestServer {
     let state = Arc::new(
-        RegistryNotaryApiState::new_with_self_attestation_hasher(
+        RegistryNotaryApiState::new_with_subject_access_hasher(
             Arc::new(config.evidence),
-            Arc::new(config.self_attestation),
+            Arc::new(config.subject_access),
             AuditKeyHasher::unkeyed_dev_only(),
             store,
             Arc::new(StaticIssuers),
@@ -441,7 +439,7 @@ fn sign_holder_proof(holder_id: &str, evaluation_id: &str) -> String {
         "aud": "evidence.test",
         "iat": now,
         "exp": now + 60,
-        "jti": "self-attestation-jti-1",
+        "jti": "subject-access-jti-1",
         "evaluation_id": evaluation_id,
         "credential_profile": "civil_status_sd_jwt",
         "disclosure": URL_SAFE_NO_PAD.encode(Sha256::digest("redacted".as_bytes())),
@@ -477,7 +475,7 @@ fn jwt_payload(jwt: &str) -> Value {
 }
 
 #[tokio::test]
-async fn self_attestation_discovery_details_require_self_attestation_principal() {
+async fn subject_access_discovery_details_require_subject_access_principal() {
     let store = Arc::new(EvidenceStore::default());
     let machine_server = build_server(
         config_with_allowed_disclosures(&["value", "redacted"]),
@@ -488,40 +486,40 @@ async fn self_attestation_discovery_details_require_self_attestation_principal()
     let machine_response = machine_server.get("/.well-known/evidence-service").await;
     machine_response.assert_status_ok();
     let machine_body: Value = machine_response.json();
-    assert_eq!(machine_body["self_attestation"]["enabled"], json!(true));
-    assert!(machine_body["self_attestation"]["subject_id_type"].is_null());
-    assert!(machine_body["self_attestation"]["token_claim_name"].is_null());
-    assert!(machine_body["self_attestation"]["allowed_claim_ids"].is_null());
+    assert_eq!(machine_body["subject_access"]["enabled"], json!(true));
+    assert!(machine_body["subject_access"]["subject_id_type"].is_null());
+    assert!(machine_body["subject_access"]["token_claim_name"].is_null());
+    assert!(machine_body["subject_access"]["allowed_claim_ids"].is_null());
 
-    let self_attestation_server = build_server(
+    let subject_access_server = build_server(
         config_with_allowed_disclosures(&["value", "redacted"]),
         store,
-        self_attestation_principal(),
+        subject_access_principal(),
     );
-    let self_attestation_response = self_attestation_server
+    let subject_access_response = subject_access_server
         .get("/.well-known/evidence-service")
         .await;
-    self_attestation_response.assert_status_ok();
-    let self_attestation_body: Value = self_attestation_response.json();
+    subject_access_response.assert_status_ok();
+    let subject_access_body: Value = subject_access_response.json();
     assert_eq!(
-        self_attestation_body["self_attestation"]["subject_id_type"],
+        subject_access_body["subject_access"]["subject_id_type"],
         json!("national_id")
     );
     assert_eq!(
-        self_attestation_body["self_attestation"]["token_claim_name"],
+        subject_access_body["subject_access"]["token_claim_name"],
         json!("national_id")
     );
     assert_eq!(
-        self_attestation_body["self_attestation"]["allowed_claim_ids"],
+        subject_access_body["subject_access"]["allowed_claim_ids"],
         json!(["person-is-alive"])
     );
 }
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-async fn self_attestation_stores_hashed_principal_and_render_policy_changes_fail_closed() {
+async fn subject_access_stores_hashed_principal_and_render_policy_changes_fail_closed() {
     let store = Arc::new(EvidenceStore::default());
-    let principal = self_attestation_principal();
+    let principal = subject_access_principal();
     let server = build_server(
         config_with_allowed_disclosures(&["value", "redacted"]),
         Arc::clone(&store),
@@ -531,7 +529,7 @@ async fn self_attestation_stores_hashed_principal_and_render_policy_changes_fail
     let evaluate = server
         .post("/v1/evaluations")
         .json(&json!({
-            "target": self_attestation_target(),
+            "target": subject_access_target(),
             "claims": ["person-is-alive"],
             "disclosure": "value",
             "format": FORMAT_CLAIM_RESULT_JSON
@@ -546,16 +544,16 @@ async fn self_attestation_stores_hashed_principal_and_render_policy_changes_fail
         .to_string();
     assert_eq!(evaluate_body["results"][0]["value"], json!(true));
 
-    let principal_hash = stored_self_attestation_client_id(RAW_PRINCIPAL_ID);
+    let principal_hash = stored_subject_access_client_id(RAW_PRINCIPAL_ID);
     let stored = store
         .get(&evaluation_id, &principal_hash)
         .await
-        .expect("self-attestation evaluation lookup succeeds")
-        .expect("self-attestation evaluation was stored");
+        .expect("subject-access evaluation lookup succeeds")
+        .expect("subject-access evaluation was stored");
     let metadata = stored
-        .self_attestation
+        .subject_access
         .as_ref()
-        .expect("self-attestation metadata was stored");
+        .expect("subject-access metadata was stored");
     assert_ne!(stored.client_id, RAW_PRINCIPAL_ID);
     assert_eq!(stored.client_id, metadata.principal_hash.as_str());
     assert_ne!(metadata.principal_hash.as_str(), RAW_PRINCIPAL_ID);
@@ -580,18 +578,18 @@ async fn self_attestation_stores_hashed_principal_and_render_policy_changes_fail
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-async fn self_attestation_render_rejects_same_evaluation_for_different_principal() {
+async fn subject_access_render_rejects_same_evaluation_for_different_principal() {
     let store = Arc::new(EvidenceStore::default());
     let server = build_server(
         config_with_allowed_disclosures(&["value", "redacted"]),
         Arc::clone(&store),
-        self_attestation_principal_with_id("citizen-raw-principal-a"),
+        subject_access_principal_with_id("citizen-raw-principal-a"),
     );
 
     let evaluate = server
         .post("/v1/evaluations")
         .json(&json!({
-            "target": self_attestation_target(),
+            "target": subject_access_target(),
             "claims": ["person-is-alive"],
             "disclosure": "value",
             "format": FORMAT_CLAIM_RESULT_JSON
@@ -607,7 +605,7 @@ async fn self_attestation_render_rejects_same_evaluation_for_different_principal
     let different_principal_server = build_server(
         config_with_allowed_disclosures(&["value", "redacted"]),
         Arc::clone(&store),
-        self_attestation_principal_with_id("citizen-raw-principal-b"),
+        subject_access_principal_with_id("citizen-raw-principal-b"),
     );
     let render = different_principal_server
         .post(&format!("/v1/evaluations/{evaluation_id}/render"))
@@ -624,18 +622,18 @@ async fn self_attestation_render_rejects_same_evaluation_for_different_principal
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-async fn self_attestation_credential_issuance_hides_other_principal_evaluation_ids() {
+async fn subject_access_credential_issuance_hides_other_principal_evaluation_ids() {
     let store = Arc::new(EvidenceStore::default());
     let server = build_issuance_server(
         credential_issuance_config(),
         Arc::clone(&store),
-        self_attestation_principal_with_id("citizen-raw-principal-a"),
+        subject_access_principal_with_id("citizen-raw-principal-a"),
     );
 
     let evaluate = server
         .post("/v1/evaluations")
         .json(&json!({
-            "target": self_attestation_target(),
+            "target": subject_access_target(),
             "claims": ["person-is-alive"],
             "disclosure": "redacted",
             "format": FORMAT_SD_JWT_VC
@@ -651,7 +649,7 @@ async fn self_attestation_credential_issuance_hides_other_principal_evaluation_i
     let different_principal_server = build_issuance_server(
         credential_issuance_config(),
         Arc::clone(&store),
-        self_attestation_principal_with_id("citizen-raw-principal-b"),
+        subject_access_principal_with_id("citizen-raw-principal-b"),
     );
     let denied = different_principal_server
         .post("/v1/credentials")
@@ -671,9 +669,9 @@ async fn self_attestation_credential_issuance_hides_other_principal_evaluation_i
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-async fn self_attestation_render_rejects_expired_metadata_via_http() {
+async fn subject_access_render_rejects_expired_metadata_via_http() {
     let store = Arc::new(EvidenceStore::default());
-    let principal = self_attestation_principal();
+    let principal = subject_access_principal();
     let server = build_server(
         config_with_allowed_disclosures(&["value", "redacted"]),
         Arc::clone(&store),
@@ -683,7 +681,7 @@ async fn self_attestation_render_rejects_expired_metadata_via_http() {
     let evaluate = server
         .post("/v1/evaluations")
         .json(&json!({
-            "target": self_attestation_target(),
+            "target": subject_access_target(),
             "claims": ["person-is-alive"],
             "disclosure": "value",
             "format": FORMAT_CLAIM_RESULT_JSON
@@ -696,22 +694,22 @@ async fn self_attestation_render_rejects_expired_metadata_via_http() {
         .expect("evaluation id is returned")
         .to_string();
 
-    let principal_hash = stored_self_attestation_client_id(RAW_PRINCIPAL_ID);
+    let principal_hash = stored_subject_access_client_id(RAW_PRINCIPAL_ID);
     let mut stored = store
         .get(&evaluation_id, &principal_hash)
         .await
-        .expect("self-attestation evaluation lookup succeeds")
-        .expect("self-attestation evaluation was stored");
+        .expect("subject-access evaluation lookup succeeds")
+        .expect("subject-access evaluation was stored");
     stored.expires_at = "2999-01-01T00:00:00Z".to_string();
     stored
-        .self_attestation
+        .subject_access
         .as_mut()
-        .expect("self-attestation metadata was stored")
+        .expect("subject-access metadata was stored")
         .evaluation_expires_at = Some("1970-01-01T00:00:00Z".to_string());
     store
         .insert(stored)
         .await
-        .expect("expired self-attestation fixture is updated");
+        .expect("expired subject-access fixture is updated");
 
     let render = server
         .post(&format!("/v1/evaluations/{evaluation_id}/render"))
@@ -728,18 +726,18 @@ async fn self_attestation_render_rejects_expired_metadata_via_http() {
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-async fn self_attestation_credential_issuance_requires_holder_proof_and_hides_civil_id() {
+async fn subject_access_credential_issuance_requires_holder_proof_and_hides_civil_id() {
     let store = Arc::new(EvidenceStore::default());
     let server = build_issuance_server(
         credential_issuance_config(),
         Arc::clone(&store),
-        self_attestation_principal(),
+        subject_access_principal(),
     );
 
     let evaluate = server
         .post("/v1/evaluations")
         .json(&json!({
-            "target": self_attestation_target(),
+            "target": subject_access_target(),
             "claims": ["person-is-alive"],
             "disclosure": "redacted",
             "format": FORMAT_SD_JWT_VC
@@ -803,7 +801,7 @@ async fn self_attestation_credential_issuance_requires_holder_proof_and_hides_ci
     let exp = payload["exp"].as_i64().expect("exp is an integer");
     assert!(
         exp - iat <= 600,
-        "self-attestation credential validity must not exceed 600 seconds"
+        "subject-access credential validity must not exceed 600 seconds"
     );
 
     let replay = server
@@ -828,7 +826,7 @@ async fn self_attestation_credential_issuance_requires_holder_proof_and_hides_ci
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-async fn self_attestation_credential_issuance_rejects_disallowed_profile() {
+async fn subject_access_credential_issuance_rejects_disallowed_profile() {
     let mut config = credential_issuance_config();
     let machine_profile = config
         .evidence
@@ -845,12 +843,12 @@ async fn self_attestation_credential_issuance_rejects_disallowed_profile() {
         .push("machine_only_sd_jwt".to_string());
 
     let store = Arc::new(EvidenceStore::default());
-    let server = build_issuance_server(config, Arc::clone(&store), self_attestation_principal());
+    let server = build_issuance_server(config, Arc::clone(&store), subject_access_principal());
 
     let evaluate = server
         .post("/v1/evaluations")
         .json(&json!({
-            "target": self_attestation_target(),
+            "target": subject_access_target(),
             "claims": ["person-is-alive"],
             "disclosure": "redacted",
             "format": FORMAT_SD_JWT_VC
@@ -876,5 +874,5 @@ async fn self_attestation_credential_issuance_rejects_disallowed_profile() {
 
     denied.assert_status(StatusCode::FORBIDDEN);
     let denied_body: Value = denied.json();
-    assert_eq!(denied_body["code"], json!("self_attestation.denied"));
+    assert_eq!(denied_body["code"], json!("subject_access.denied"));
 }

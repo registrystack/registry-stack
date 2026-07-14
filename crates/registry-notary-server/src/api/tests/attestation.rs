@@ -4,24 +4,24 @@
 use super::*;
 
 #[test]
-fn self_attestation_authorization_details_allow_exact_transaction() {
-    let config = self_attestation_config();
+fn subject_access_authorization_details_allow_exact_transaction() {
+    let config = subject_access_config();
     let evidence = evidence_config();
     let principal = classified_transaction_principal(&config, &evidence);
     let mut request = evaluate_request("NAT-123");
     request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
 
-    require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+    require_subject_access_evaluate(&evidence, &config, &principal, &request)
         .expect("exact transaction details authorize request");
 }
 
 #[test]
-fn self_attestation_authorization_details_required_for_transaction_token() {
-    let config = self_attestation_config();
+fn subject_access_authorization_details_required_for_transaction_token() {
+    let config = subject_access_config();
     let evidence = evidence_config();
-    let mut principal = classify_self_attestation_principal(
+    let mut principal = classify_subject_access_principal(
         &config,
-        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen principal classifies");
     principal.authorization_details = None;
@@ -35,38 +35,38 @@ fn self_attestation_authorization_details_required_for_transaction_token() {
     let mut request = evaluate_request("NAT-123");
     request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
 
-    let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+    let err = require_subject_access_evaluate(&evidence, &config, &principal, &request)
         .expect_err("transaction tokens must carry authorization_details");
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::OperationDenied
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::OperationDenied
         }
     ));
 }
 
 #[test]
-fn self_attestation_authorization_details_reject_omitted_claim_version() {
-    let config = self_attestation_config();
+fn subject_access_authorization_details_reject_omitted_claim_version() {
+    let config = subject_access_config();
     let evidence = evidence_config();
     let principal = classified_transaction_principal(&config, &evidence);
     let request = evaluate_request("NAT-123");
 
-    let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+    let err = require_subject_access_evaluate(&evidence, &config, &principal, &request)
         .expect_err("omitting a versioned authorized claim broadens the request");
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::ClaimDenied
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::ClaimDenied
         }
     ));
 }
 
 #[test]
-fn self_attestation_authorization_details_reject_broadened_claims() {
-    let config = self_attestation_config();
+fn subject_access_authorization_details_reject_broadened_claims() {
+    let config = subject_access_config();
     let evidence = evidence_config();
     let mut principal = classified_transaction_principal(&config, &evidence);
     principal
@@ -78,20 +78,20 @@ fn self_attestation_authorization_details_reject_broadened_claims() {
     let mut request = evaluate_request("NAT-123");
     request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
 
-    let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+    let err = require_subject_access_evaluate(&evidence, &config, &principal, &request)
         .expect_err("broadened transaction claims must be denied");
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::ClaimDenied
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::ClaimDenied
         }
     ));
 }
 
 #[test]
-fn self_attestation_authorization_details_reject_duplicate_action() {
-    let config = self_attestation_config();
+fn subject_access_authorization_details_reject_duplicate_action() {
+    let config = subject_access_config();
     let evidence = evidence_config();
     let mut principal = classified_transaction_principal(&config, &evidence);
     principal
@@ -103,38 +103,38 @@ fn self_attestation_authorization_details_reject_duplicate_action() {
     let mut request = evaluate_request("NAT-123");
     request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
 
-    let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+    let err = require_subject_access_evaluate(&evidence, &config, &principal, &request)
         .expect_err("duplicate transaction action must be denied");
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::OperationDenied
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::OperationDenied
         }
     ));
 }
 
 #[test]
-fn self_attestation_authorization_details_reject_empty_claims_without_panic() {
-    let config = self_attestation_config();
+fn subject_access_authorization_details_reject_empty_claims_without_panic() {
+    let config = subject_access_config();
     let evidence = evidence_config();
     let principal = classified_transaction_principal(&config, &evidence);
     let mut request = evaluate_request("NAT-123");
     request.claims = Vec::new();
 
-    let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+    let err = require_subject_access_evaluate(&evidence, &config, &principal, &request)
         .expect_err("empty claim array must deny instead of panicking");
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::ClaimDenied
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::ClaimDenied
         }
     ));
 }
 
 #[test]
-fn self_attestation_authorization_details_tolerate_future_fields() {
+fn subject_access_authorization_details_tolerate_future_fields() {
     let details: EvidenceAuthorizationDetails = serde_json::from_value(serde_json::json!({
         "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
         "schema_version": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
@@ -165,8 +165,8 @@ fn self_attestation_authorization_details_tolerate_future_fields() {
 }
 
 #[test]
-fn self_attestation_authorization_details_reject_wrong_notary_location() {
-    let config = self_attestation_config();
+fn subject_access_authorization_details_reject_wrong_notary_location() {
+    let config = subject_access_config();
     let evidence = evidence_config();
     let mut principal = classified_transaction_principal(&config, &evidence);
     principal
@@ -177,20 +177,20 @@ fn self_attestation_authorization_details_reject_wrong_notary_location() {
     let mut request = evaluate_request("NAT-123");
     request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
 
-    let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+    let err = require_subject_access_evaluate(&evidence, &config, &principal, &request)
         .expect_err("wrong Notary audience broadens the transaction");
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::OperationDenied
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::OperationDenied
         }
     ));
 }
 
 #[test]
-fn self_attestation_authorization_details_reject_wrong_subject_binding_metadata() {
-    let config = self_attestation_config();
+fn subject_access_authorization_details_reject_wrong_subject_binding_metadata() {
+    let config = subject_access_config();
     let evidence = evidence_config();
     let mut principal = classified_transaction_principal(&config, &evidence);
     principal
@@ -202,96 +202,95 @@ fn self_attestation_authorization_details_reject_wrong_subject_binding_metadata(
     let mut request = evaluate_request("NAT-123");
     request.claims = vec![ClaimRef::with_version("person-is-alive", "1")];
 
-    let err = require_self_attestation_evaluate(&evidence, &config, &principal, &request)
+    let err = require_subject_access_evaluate(&evidence, &config, &principal, &request)
         .expect_err("wrong subject binding metadata broadens the transaction");
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::SubjectMismatch
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::SubjectMismatch
         }
     ));
 }
 
 #[test]
-fn self_attestation_classification_requires_citizen_client_and_scope() {
-    let config = self_attestation_config();
+fn subject_access_classification_requires_citizen_client_and_scope() {
+    let config = subject_access_config();
 
-    let classified = classify_self_attestation_principal(
+    let classified = classify_subject_access_principal(
         &config,
-        &oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen client and scope classify");
-    assert!(classified.is_self_attestation());
+    assert!(classified.is_subject_access());
 
-    let missing_scope = classify_self_attestation_principal(
+    let missing_scope = classify_subject_access_principal(
         &config,
         &oidc_principal(Some("client_id:citizen-portal"), &[]),
     )
     .expect_err("citizen client without scope fails closed");
     assert!(matches!(
         missing_scope,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::InvalidToken
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::InvalidToken
         }
     ));
 
     let mut no_citizen_client_or_audience =
-        oidc_principal(Some("client_id:other"), &["self_attestation"]);
+        oidc_principal(Some("client_id:other"), &["subject_access"]);
     no_citizen_client_or_audience
         .verified_claims
         .as_mut()
         .expect("test principal has claims")
         .audiences
         .clear();
-    let missing_client =
-        classify_self_attestation_principal(&config, &no_citizen_client_or_audience)
-            .expect_err("scope without citizen client or audience fails closed");
+    let missing_client = classify_subject_access_principal(&config, &no_citizen_client_or_audience)
+        .expect_err("scope without citizen client or audience fails closed");
     assert!(matches!(
         missing_client,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::InvalidToken
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::InvalidToken
         }
     ));
 }
 
 #[test]
-fn self_attestation_optional_scope_policy_allows_absent_scope_only() {
-    let mut config = self_attestation_config();
-    config.scope_policy = SelfAttestationScopePolicy::Optional;
+fn subject_access_optional_scope_policy_allows_absent_scope_only() {
+    let mut config = subject_access_config();
+    config.scope_policy = SubjectAccessScopePolicy::Optional;
 
-    let no_scope = classify_self_attestation_principal(
+    let no_scope = classify_subject_access_principal(
         &config,
         &oidc_principal(Some("client_id:citizen-portal"), &[]),
     )
     .expect("optional policy accepts a scoped-out citizen token when no scope claim is present");
-    assert!(no_scope.is_self_attestation());
+    assert!(no_scope.is_subject_access());
 
-    let wrong_scope = classify_self_attestation_principal(
+    let wrong_scope = classify_subject_access_principal(
         &config,
         &oidc_principal(Some("client_id:citizen-portal"), &["openid"]),
     )
     .expect_err("optional policy still rejects a present but insufficient scope claim");
     assert!(matches!(
         wrong_scope,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::InvalidToken
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::InvalidToken
         }
     ));
 }
 
 #[test]
-fn self_attestation_disabled_scope_policy_uses_client_and_audience_only() {
-    let mut config = self_attestation_config();
-    config.scope_policy = SelfAttestationScopePolicy::Disabled;
+fn subject_access_disabled_scope_policy_uses_client_and_audience_only() {
+    let mut config = subject_access_config();
+    config.scope_policy = SubjectAccessScopePolicy::Disabled;
     config.required_scopes.clear();
 
-    let classified = classify_self_attestation_principal(
+    let classified = classify_subject_access_principal(
         &config,
         &oidc_principal(Some("client_id:citizen-portal"), &[]),
     )
     .expect("disabled policy classifies by verified citizen client and audience");
-    assert!(classified.is_self_attestation());
+    assert!(classified.is_subject_access());
 
     let mut wrong_client = oidc_principal(Some("client_id:other"), &[]);
     wrong_client
@@ -300,45 +299,45 @@ fn self_attestation_disabled_scope_policy_uses_client_and_audience_only() {
         .expect("test principal has claims")
         .audiences
         .clear();
-    let denied = classify_self_attestation_principal(&config, &wrong_client)
+    let denied = classify_subject_access_principal(&config, &wrong_client)
         .expect("non-citizen token remains a machine-client candidate");
-    assert!(!denied.is_self_attestation());
+    assert!(!denied.is_subject_access());
 }
 
 #[test]
-fn self_attestation_scope_without_verified_claims_fails_closed() {
-    let config = self_attestation_config();
+fn subject_access_scope_without_verified_claims_fails_closed() {
+    let config = subject_access_config();
     let principal = EvidencePrincipal {
         auth_profile_id: registry_notary_core::EvidenceAuthProfileId::ExternalOidc,
         principal_id: "citizen-subject".to_string(),
-        scopes: vec!["self_attestation".to_string()],
+        scopes: vec!["subject_access".to_string()],
         access_mode: AccessMode::MachineClient,
         verified_claims: None,
         authorization_details: None,
     };
 
-    let err = classify_self_attestation_principal(&config, &principal)
+    let err = classify_subject_access_principal(&config, &principal)
         .expect_err("citizen scope without verified claims must not fall back to machine mode");
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::InvalidToken
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::InvalidToken
         }
     ));
 }
 
 #[test]
-fn self_attestation_evaluate_guard_rejects_subject_mismatch() {
-    let config = self_attestation_config();
+fn subject_access_evaluate_guard_rejects_subject_mismatch() {
+    let config = subject_access_config();
     let evidence = evidence_config();
-    let principal = classify_self_attestation_principal(
+    let principal = classify_subject_access_principal(
         &config,
-        &oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen principal classifies");
 
-    let err = require_self_attestation_evaluate(
+    let err = require_subject_access_evaluate(
         &evidence,
         &config,
         &principal,
@@ -347,18 +346,18 @@ fn self_attestation_evaluate_guard_rejects_subject_mismatch() {
     .expect_err("mismatched subject must be denied before runtime");
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::SubjectMismatch
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::SubjectMismatch
         }
     ));
 }
 
 #[test]
-fn self_attestation_derives_missing_request_identity_from_token_binding() {
-    let config = self_attestation_config();
-    let principal = classify_self_attestation_principal(
+fn subject_access_derives_missing_request_identity_from_token_binding() {
+    let config = subject_access_config();
+    let principal = classify_subject_access_principal(
         &config,
-        &oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen principal classifies");
     let mut request = EvaluateRequest {
@@ -373,7 +372,7 @@ fn self_attestation_derives_missing_request_identity_from_token_binding() {
         purpose: None,
     };
 
-    derive_self_attestation_request_context(&config, &principal, &mut request)
+    derive_subject_access_request_context(&config, &principal, &mut request)
         .expect("request identity is derived");
 
     let target_subject = request
@@ -400,36 +399,36 @@ fn self_attestation_derives_missing_request_identity_from_token_binding() {
 }
 
 #[test]
-fn self_attestation_derivation_rejects_conflicting_request_identity() {
-    let config = self_attestation_config();
-    let principal = classify_self_attestation_principal(
+fn subject_access_derivation_rejects_conflicting_request_identity() {
+    let config = subject_access_config();
+    let principal = classify_subject_access_principal(
         &config,
-        &oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen principal classifies");
     let mut request = evaluate_request("NAT-999");
 
-    let err = derive_self_attestation_request_context(&config, &principal, &mut request)
+    let err = derive_subject_access_request_context(&config, &principal, &mut request)
         .expect_err("conflicting target must be denied before runtime");
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::SubjectMismatch
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::SubjectMismatch
         }
     ));
 }
 
 #[test]
-fn self_attestation_prepare_pins_claim_purpose_and_metadata() {
-    let config = self_attestation_config();
+fn subject_access_prepare_pins_claim_purpose_and_metadata() {
+    let config = subject_access_config();
     let evidence = evidence_config();
-    let principal = classify_self_attestation_principal(
+    let principal = classify_subject_access_principal(
         &config,
-        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen principal classifies");
-    let state = RegistryNotaryApiState::new_with_self_attestation(
+    let state = RegistryNotaryApiState::new_with_subject_access(
         Arc::new(evidence.clone()),
         Arc::new(config),
         AuditKeyHasher::unkeyed_dev_only(),
@@ -437,35 +436,68 @@ fn self_attestation_prepare_pins_claim_purpose_and_metadata() {
         Arc::new(NoopIssuerResolver),
     );
 
-    let context = prepare_self_attestation_evaluate(
+    let context = prepare_subject_access_evaluate(
         &state,
         &evidence,
         &principal,
         &evaluate_request("NAT-123"),
     )
-    .expect("self-attestation evaluate context prepares");
+    .expect("subject-access evaluate context prepares");
 
-    assert_eq!(context.purpose, "citizen_self_attestation");
-    assert_eq!(context.metadata.access_mode, AccessMode::SelfAttestation);
+    assert_eq!(context.purpose, "citizen_subject_access");
+    assert_eq!(context.metadata.access_mode, AccessMode::SubjectBound);
     assert_eq!(context.metadata.subject_id_type.as_str(), "national_id");
     assert!(context.metadata.policy_hash.is_some());
     assert!(
         context.metadata.evaluation_expires_at.is_some(),
-        "self-attestation evaluation must carry its capped expiry"
+        "subject-access evaluation must carry its capped expiry"
     );
     assert!(matches!(
         context.evaluation_capability,
-        EvaluationCapability::SelfAttestation { .. }
+        EvaluationCapability::SubjectBound { .. }
     ));
 }
 
 #[test]
-fn self_attestation_external_standard_at_jwt_uses_scope_without_notary_details() {
-    let config = self_attestation_config();
+fn credential_issuance_can_evaluate_internally_without_enabling_public_evaluate() {
+    let mut config = subject_access_config();
+    config.allowed_operations.evaluate = false;
+    config.allowed_operations.issue_credential = true;
     let evidence = evidence_config();
-    let mut principal = classify_self_attestation_principal(
+    let principal = classify_subject_access_principal(
         &config,
-        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
+    )
+    .expect("citizen principal classifies");
+    let state = RegistryNotaryApiState::new_with_subject_access(
+        Arc::new(evidence.clone()),
+        Arc::new(config),
+        AuditKeyHasher::unkeyed_dev_only(),
+        Arc::new(EvidenceStore::default()),
+        Arc::new(NoopIssuerResolver),
+    );
+    let request = evaluate_request("NAT-123");
+
+    let public_error = prepare_subject_access_evaluate(&state, &evidence, &principal, &request)
+        .expect_err("the public evaluate operation remains disabled");
+    assert!(matches!(
+        public_error,
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::OperationDenied
+        }
+    ));
+
+    prepare_subject_access_credential_evaluation(&state, &evidence, &principal, &request)
+        .expect("credential issuance may run its policy-bound internal evaluation");
+}
+
+#[test]
+fn subject_access_external_standard_at_jwt_uses_scope_without_notary_details() {
+    let config = subject_access_config();
+    let evidence = evidence_config();
+    let mut principal = classify_subject_access_principal(
+        &config,
+        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen principal classifies");
     let claims = principal
@@ -476,7 +508,7 @@ fn self_attestation_external_standard_at_jwt_uses_scope_without_notary_details()
     claims.token_type = Some(bounded(
         registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP,
     ));
-    let state = RegistryNotaryApiState::new_with_self_attestation(
+    let state = RegistryNotaryApiState::new_with_subject_access(
         Arc::new(evidence.clone()),
         Arc::new(config),
         AuditKeyHasher::unkeyed_dev_only(),
@@ -485,17 +517,17 @@ fn self_attestation_external_standard_at_jwt_uses_scope_without_notary_details()
     )
     .with_runtime_config(Arc::new(runtime_config_with_custom_access_token_typ()));
 
-    prepare_self_attestation_evaluate(&state, &evidence, &principal, &evaluate_request("NAT-123"))
-        .expect("external standard at+jwt can rely on configured self-attestation scope");
+    prepare_subject_access_evaluate(&state, &evidence, &principal, &evaluate_request("NAT-123"))
+        .expect("external standard at+jwt can rely on configured subject-access scope");
 }
 
 #[test]
-fn self_attestation_notary_standard_at_jwt_still_requires_transaction_details() {
-    let config = self_attestation_config();
+fn subject_access_notary_standard_at_jwt_still_requires_transaction_details() {
+    let config = subject_access_config();
     let evidence = evidence_config();
-    let mut principal = classify_self_attestation_principal(
+    let mut principal = classify_subject_access_principal(
         &config,
-        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen principal classifies");
     let claims = principal
@@ -506,7 +538,7 @@ fn self_attestation_notary_standard_at_jwt_still_requires_transaction_details() 
     claims.token_type = Some(bounded(
         registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP,
     ));
-    let state = RegistryNotaryApiState::new_with_self_attestation(
+    let state = RegistryNotaryApiState::new_with_subject_access(
         Arc::new(evidence.clone()),
         Arc::new(config),
         AuditKeyHasher::unkeyed_dev_only(),
@@ -515,7 +547,7 @@ fn self_attestation_notary_standard_at_jwt_still_requires_transaction_details() 
     )
     .with_runtime_config(Arc::new(runtime_config_with_custom_access_token_typ()));
 
-    let err = prepare_self_attestation_evaluate(
+    let err = prepare_subject_access_evaluate(
         &state,
         &evidence,
         &principal,
@@ -525,18 +557,18 @@ fn self_attestation_notary_standard_at_jwt_still_requires_transaction_details() 
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::OperationDenied
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::OperationDenied
         }
     ));
 }
 
 #[test]
 fn delegated_attestation_derives_requester_and_pins_metadata() {
-    let config = delegated_self_attestation_config();
+    let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let principal = delegated_transaction_principal(&config, &evidence);
-    let state = RegistryNotaryApiState::new_with_self_attestation(
+    let state = RegistryNotaryApiState::new_with_subject_access(
         Arc::new(evidence.clone()),
         Arc::new(config),
         delegated_test_audit_hasher(),
@@ -546,13 +578,13 @@ fn delegated_attestation_derives_requester_and_pins_metadata() {
     let mut request = delegated_request();
 
     derive_delegated_attestation_request_context(
-        &state.self_attestation,
-        &state.self_attestation_rate_keys,
+        &state.subject_access,
+        &state.subject_access_rate_keys,
         &principal,
         &mut request,
     )
     .expect("delegated request context derives");
-    let context = prepare_self_attestation_evaluate(&state, &evidence, &principal, &request)
+    let context = prepare_subject_access_evaluate(&state, &evidence, &principal, &request)
         .expect("delegated evaluate context prepares");
 
     assert_eq!(
@@ -614,10 +646,10 @@ fn delegated_attestation_derives_requester_and_pins_metadata() {
 
 #[test]
 fn delegated_attestation_rejects_spoofed_requester_context() {
-    let config = delegated_self_attestation_config();
+    let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let principal = delegated_transaction_principal(&config, &evidence);
-    let state = RegistryNotaryApiState::new_with_self_attestation(
+    let state = RegistryNotaryApiState::new_with_subject_access(
         Arc::new(evidence),
         Arc::new(config),
         delegated_test_audit_hasher(),
@@ -634,8 +666,8 @@ fn delegated_attestation_rejects_spoofed_requester_context() {
     ));
 
     let err = derive_delegated_attestation_request_context(
-        &state.self_attestation,
-        &state.self_attestation_rate_keys,
+        &state.subject_access,
+        &state.subject_access_rate_keys,
         &principal,
         &mut request,
     )
@@ -643,18 +675,18 @@ fn delegated_attestation_rejects_spoofed_requester_context() {
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::DelegatedSubjectNotPermitted
         }
     ));
 }
 
 #[test]
 fn delegated_attestation_canonicalizes_target_to_validated_subject() {
-    let config = delegated_self_attestation_config();
+    let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let principal = delegated_transaction_principal(&config, &evidence);
-    let state = RegistryNotaryApiState::new_with_self_attestation(
+    let state = RegistryNotaryApiState::new_with_subject_access(
         Arc::new(evidence),
         Arc::new(config),
         delegated_test_audit_hasher(),
@@ -684,8 +716,8 @@ fn delegated_attestation_canonicalizes_target_to_validated_subject() {
     target.profile = Some("smuggled-profile".to_string());
 
     derive_delegated_attestation_request_context(
-        &state.self_attestation,
-        &state.self_attestation_rate_keys,
+        &state.subject_access,
+        &state.subject_access_rate_keys,
         &principal,
         &mut request,
     )
@@ -730,7 +762,7 @@ fn delegated_attestation_canonicalizes_target_to_validated_subject() {
 
 #[test]
 fn delegated_attestation_requires_transaction_details_to_cover_proof_claim() {
-    let config = delegated_self_attestation_config();
+    let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let mut principal = delegated_transaction_principal(&config, &evidence);
     principal
@@ -738,7 +770,7 @@ fn delegated_attestation_requires_transaction_details_to_cover_proof_claim() {
         .as_mut()
         .expect("delegated details exist")
         .claims = vec![ClaimRef::with_version("dependent-person-is-alive", "1")];
-    let state = RegistryNotaryApiState::new_with_self_attestation(
+    let state = RegistryNotaryApiState::new_with_subject_access(
         Arc::new(evidence.clone()),
         Arc::new(config),
         delegated_test_audit_hasher(),
@@ -747,27 +779,27 @@ fn delegated_attestation_requires_transaction_details_to_cover_proof_claim() {
     );
     let mut request = delegated_request();
     derive_delegated_attestation_request_context(
-        &state.self_attestation,
-        &state.self_attestation_rate_keys,
+        &state.subject_access,
+        &state.subject_access_rate_keys,
         &principal,
         &mut request,
     )
     .expect("relationship context still derives");
 
-    let err = prepare_self_attestation_evaluate(&state, &evidence, &principal, &request)
+    let err = prepare_subject_access_evaluate(&state, &evidence, &principal, &request)
         .expect_err("missing proof claim authorization must fail closed");
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::DelegatedClaimDenied
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::DelegatedClaimDenied
         }
     ));
 }
 
 #[test]
 fn delegated_attestation_requires_transaction_details_target() {
-    let config = delegated_self_attestation_config();
+    let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let mut principal = delegated_transaction_principal(&config, &evidence);
     principal
@@ -775,7 +807,7 @@ fn delegated_attestation_requires_transaction_details_target() {
         .as_mut()
         .expect("delegated details exist")
         .target = None;
-    let state = RegistryNotaryApiState::new_with_self_attestation(
+    let state = RegistryNotaryApiState::new_with_subject_access(
         Arc::new(evidence.clone()),
         Arc::new(config),
         delegated_test_audit_hasher(),
@@ -784,30 +816,30 @@ fn delegated_attestation_requires_transaction_details_target() {
     );
     let mut request = delegated_request();
     derive_delegated_attestation_request_context(
-        &state.self_attestation,
-        &state.self_attestation_rate_keys,
+        &state.subject_access,
+        &state.subject_access_rate_keys,
         &principal,
         &mut request,
     )
     .expect("relationship context still derives before target-scoped authorization check");
 
-    let err = prepare_self_attestation_evaluate(&state, &evidence, &principal, &request)
+    let err = prepare_subject_access_evaluate(&state, &evidence, &principal, &request)
         .expect_err("delegated target must be explicit in authorization_details");
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::DelegatedSubjectNotPermitted
         }
     ));
 }
 
 #[test]
 fn stored_delegated_attestation_rechecks_current_authorization_details() {
-    let config = delegated_self_attestation_config();
+    let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let principal = delegated_transaction_principal(&config, &evidence);
-    let state = RegistryNotaryApiState::new_with_self_attestation(
+    let state = RegistryNotaryApiState::new_with_subject_access(
         Arc::new(evidence.clone()),
         Arc::new(config),
         delegated_test_audit_hasher(),
@@ -816,13 +848,13 @@ fn stored_delegated_attestation_rechecks_current_authorization_details() {
     );
     let mut request = delegated_request();
     derive_delegated_attestation_request_context(
-        &state.self_attestation,
-        &state.self_attestation_rate_keys,
+        &state.subject_access,
+        &state.subject_access_rate_keys,
         &principal,
         &mut request,
     )
     .expect("delegated request context derives");
-    let context = prepare_self_attestation_evaluate(&state, &evidence, &principal, &request)
+    let context = prepare_subject_access_evaluate(&state, &evidence, &principal, &request)
         .expect("delegated context prepares");
     let mut evaluation = evaluation_for_proof();
     evaluation.client_id = context.metadata.principal_hash.as_str().to_string();
@@ -831,7 +863,7 @@ fn stored_delegated_attestation_rechecks_current_authorization_details() {
     evaluation.claim_refs = request.claims.clone();
     evaluation.disclosure = context.metadata.disclosure.as_str().to_string();
     evaluation.format = context.metadata.result_format.as_str().to_string();
-    evaluation.self_attestation = Some(context.metadata);
+    evaluation.subject_access = Some(context.metadata);
     let mut narrowed = principal.clone();
     narrowed
         .authorization_details
@@ -839,7 +871,7 @@ fn stored_delegated_attestation_rechecks_current_authorization_details() {
         .expect("delegated authorization details exist")
         .claims = vec![ClaimRef::with_version("dependent-person-is-alive", "1")];
 
-    let err = require_self_attestation_stored_access(
+    let err = require_subject_access_stored_access(
         &state,
         &evidence,
         &narrowed,
@@ -853,18 +885,18 @@ fn stored_delegated_attestation_rechecks_current_authorization_details() {
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::DelegatedClaimDenied
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::DelegatedClaimDenied
         }
     ));
 }
 
 #[test]
 fn stored_delegated_attestation_rechecks_current_target_binding() {
-    let config = delegated_self_attestation_config();
+    let config = delegated_subject_access_config();
     let evidence = delegated_evidence_config();
     let principal = delegated_transaction_principal(&config, &evidence);
-    let state = RegistryNotaryApiState::new_with_self_attestation(
+    let state = RegistryNotaryApiState::new_with_subject_access(
         Arc::new(evidence.clone()),
         Arc::new(config),
         delegated_test_audit_hasher(),
@@ -873,13 +905,13 @@ fn stored_delegated_attestation_rechecks_current_target_binding() {
     );
     let mut request = delegated_request();
     derive_delegated_attestation_request_context(
-        &state.self_attestation,
-        &state.self_attestation_rate_keys,
+        &state.subject_access,
+        &state.subject_access_rate_keys,
         &principal,
         &mut request,
     )
     .expect("delegated request context derives");
-    let context = prepare_self_attestation_evaluate(&state, &evidence, &principal, &request)
+    let context = prepare_subject_access_evaluate(&state, &evidence, &principal, &request)
         .expect("delegated context prepares");
     let mut evaluation = evaluation_for_proof();
     evaluation.client_id = context.metadata.principal_hash.as_str().to_string();
@@ -888,7 +920,7 @@ fn stored_delegated_attestation_rechecks_current_target_binding() {
     evaluation.claim_refs = request.claims.clone();
     evaluation.disclosure = context.metadata.disclosure.as_str().to_string();
     evaluation.format = context.metadata.result_format.as_str().to_string();
-    evaluation.self_attestation = Some(context.metadata);
+    evaluation.subject_access = Some(context.metadata);
     let mut different_target = principal.clone();
     different_target
         .authorization_details
@@ -897,7 +929,7 @@ fn stored_delegated_attestation_rechecks_current_target_binding() {
         .expect("delegated authorization target exists")
         .id = "OTHER-CHILD".to_string();
 
-    let err = require_self_attestation_stored_access(
+    let err = require_subject_access_stored_access(
         &state,
         &evidence,
         &different_target,
@@ -913,11 +945,11 @@ fn stored_delegated_attestation_rechecks_current_target_binding() {
 }
 
 #[test]
-fn self_attestation_token_policy_fails_closed_without_auth_time() {
-    let config = self_attestation_config();
-    let mut principal = classify_self_attestation_principal(
+fn subject_access_token_policy_fails_closed_without_auth_time() {
+    let config = subject_access_config();
+    let mut principal = classify_subject_access_principal(
         &config,
-        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen principal classifies");
     principal
@@ -926,19 +958,19 @@ fn self_attestation_token_policy_fails_closed_without_auth_time() {
         .expect("test principal has claims")
         .auth_time = None;
 
-    let err = require_self_attestation_token_policy(&config, &principal)
+    let err = require_subject_access_token_policy(&config, &principal)
         .expect_err("missing auth_time fails closed");
 
-    assert!(matches!(err, EvidenceError::SelfAttestationAssuranceDenied));
+    assert!(matches!(err, EvidenceError::SubjectAccessAssuranceDenied));
 }
 
 #[test]
-fn self_attestation_token_policy_fails_closed_without_required_acr() {
-    let mut config = self_attestation_config();
+fn subject_access_token_policy_fails_closed_without_required_acr() {
+    let mut config = subject_access_config();
     config.token_policy.required_acr_values = vec!["urn:example:loa:substantial".to_string()];
-    let mut principal = classify_self_attestation_principal(
+    let mut principal = classify_subject_access_principal(
         &config,
-        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen principal classifies");
     principal
@@ -947,18 +979,18 @@ fn self_attestation_token_policy_fails_closed_without_required_acr() {
         .expect("test principal has claims")
         .acr = None;
 
-    let err = require_self_attestation_token_policy(&config, &principal)
+    let err = require_subject_access_token_policy(&config, &principal)
         .expect_err("missing acr fails closed when required");
 
-    assert!(matches!(err, EvidenceError::SelfAttestationAssuranceDenied));
+    assert!(matches!(err, EvidenceError::SubjectAccessAssuranceDenied));
 }
 
 #[test]
-fn self_attestation_token_policy_rejects_stale_auth_time() {
-    let config = self_attestation_config();
-    let mut principal = classify_self_attestation_principal(
+fn subject_access_token_policy_rejects_stale_auth_time() {
+    let config = subject_access_config();
+    let mut principal = classify_subject_access_principal(
         &config,
-        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen principal classifies");
     let now = OffsetDateTime::now_utc().unix_timestamp();
@@ -972,18 +1004,18 @@ fn self_attestation_token_policy_rejects_stale_auth_time() {
             - 1,
     );
 
-    let err = require_self_attestation_token_policy(&config, &principal)
+    let err = require_subject_access_token_policy(&config, &principal)
         .expect_err("stale auth_time fails closed");
 
-    assert!(matches!(err, EvidenceError::SelfAttestationAssuranceDenied));
+    assert!(matches!(err, EvidenceError::SubjectAccessAssuranceDenied));
 }
 
 #[test]
-fn self_attestation_token_policy_rejects_future_iat_and_auth_time() {
-    let config = self_attestation_config();
-    let principal = classify_self_attestation_principal(
+fn subject_access_token_policy_rejects_future_iat_and_auth_time() {
+    let config = subject_access_config();
+    let principal = classify_subject_access_principal(
         &config,
-        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen principal classifies");
 
@@ -994,8 +1026,8 @@ fn self_attestation_token_policy_rejects_future_iat_and_auth_time() {
         .expect("test principal has claims")
         .auth_time = Some(OffsetDateTime::now_utc().unix_timestamp() + 3_600);
     assert!(matches!(
-        require_self_attestation_token_policy(&config, &future_auth_time),
-        Err(EvidenceError::SelfAttestationAssuranceDenied)
+        require_subject_access_token_policy(&config, &future_auth_time),
+        Err(EvidenceError::SubjectAccessAssuranceDenied)
     ));
 
     let mut future_iat = principal;
@@ -1005,40 +1037,40 @@ fn self_attestation_token_policy_rejects_future_iat_and_auth_time() {
         .expect("test principal has claims")
         .iat = Some(OffsetDateTime::now_utc().unix_timestamp() + 3_600);
     assert!(matches!(
-        require_self_attestation_token_policy(&config, &future_iat),
-        Err(EvidenceError::SelfAttestationAssuranceDenied)
+        require_subject_access_token_policy(&config, &future_iat),
+        Err(EvidenceError::SubjectAccessAssuranceDenied)
     ));
 }
 
 #[test]
-fn stored_self_attestation_rechecks_issuer_client_and_audience() {
-    let config = self_attestation_config();
+fn stored_subject_access_rechecks_issuer_client_and_audience() {
+    let config = subject_access_config();
     let evidence = evidence_config();
-    let principal = classify_self_attestation_principal(
+    let principal = classify_subject_access_principal(
         &config,
-        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen principal classifies");
-    let state = RegistryNotaryApiState::new_with_self_attestation(
+    let state = RegistryNotaryApiState::new_with_subject_access(
         Arc::new(evidence.clone()),
         Arc::new(config),
         AuditKeyHasher::unkeyed_dev_only(),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
-    let context = prepare_self_attestation_evaluate(
+    let context = prepare_subject_access_evaluate(
         &state,
         &evidence,
         &principal,
         &evaluate_request("NAT-123"),
     )
-    .expect("self-attestation context prepares");
+    .expect("subject-access context prepares");
     let mut evaluation = evaluation_for_proof();
     evaluation.client_id = principal.principal_id.clone();
     evaluation.claim_ids = vec!["person-is-alive".to_string()];
     evaluation.disclosure = "predicate".to_string();
     evaluation.format = FORMAT_CLAIM_RESULT_JSON.to_string();
-    evaluation.self_attestation = Some(context.metadata);
+    evaluation.subject_access = Some(context.metadata);
 
     let mut changed_client = principal.clone();
     changed_client
@@ -1047,7 +1079,7 @@ fn stored_self_attestation_rechecks_issuer_client_and_audience() {
         .expect("test principal has claims")
         .client_id = Some(bounded("client_id:other-portal"));
 
-    let err = require_self_attestation_stored_access(
+    let err = require_subject_access_stored_access(
         &state,
         &evidence,
         &changed_client,
@@ -1063,28 +1095,28 @@ fn stored_self_attestation_rechecks_issuer_client_and_audience() {
 }
 
 #[test]
-fn stored_self_attestation_rejects_expired_metadata_even_with_future_store_ttl() {
-    let config = self_attestation_config();
+fn stored_subject_access_rejects_expired_metadata_even_with_future_store_ttl() {
+    let config = subject_access_config();
     let evidence = evidence_config();
-    let principal = classify_self_attestation_principal(
+    let principal = classify_subject_access_principal(
         &config,
-        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+        &fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
     )
     .expect("citizen principal classifies");
-    let state = RegistryNotaryApiState::new_with_self_attestation(
+    let state = RegistryNotaryApiState::new_with_subject_access(
         Arc::new(evidence.clone()),
         Arc::new(config),
         AuditKeyHasher::unkeyed_dev_only(),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
-    let mut context = prepare_self_attestation_evaluate(
+    let mut context = prepare_subject_access_evaluate(
         &state,
         &evidence,
         &principal,
         &evaluate_request("NAT-123"),
     )
-    .expect("self-attestation context prepares");
+    .expect("subject-access context prepares");
     context.metadata.evaluation_expires_at = Some("1970-01-01T00:00:00Z".to_string());
     let mut evaluation = evaluation_for_proof();
     evaluation.client_id = context.metadata.principal_hash.as_str().to_string();
@@ -1092,9 +1124,9 @@ fn stored_self_attestation_rejects_expired_metadata_even_with_future_store_ttl()
     evaluation.disclosure = "predicate".to_string();
     evaluation.format = FORMAT_CLAIM_RESULT_JSON.to_string();
     evaluation.expires_at = "2999-01-01T00:00:00Z".to_string();
-    evaluation.self_attestation = Some(context.metadata);
+    evaluation.subject_access = Some(context.metadata);
 
-    let err = require_self_attestation_stored_access(
+    let err = require_subject_access_stored_access(
         &state,
         &evidence,
         &principal,
@@ -1104,42 +1136,42 @@ fn stored_self_attestation_rejects_expired_metadata_even_with_future_store_ttl()
         &evaluation.format,
         None,
     )
-    .expect_err("expired self-attestation metadata must fail closed");
+    .expect_err("expired subject-access metadata must fail closed");
 
     assert!(matches!(err, EvidenceError::EvaluationNotFound));
 }
 
 #[test]
-fn self_attestation_public_problem_codes_remain_generic() {
+fn subject_access_public_problem_codes_remain_generic() {
     assert_eq!(
-        EvidenceError::SelfAttestationInvalidToken.code(),
-        "self_attestation.denied"
+        EvidenceError::SubjectAccessInvalidToken.code(),
+        "subject_access.denied"
     );
     assert_eq!(
-        EvidenceError::SelfAttestationInvalidToken.audit_code(),
-        "self_attestation.invalid_token"
+        EvidenceError::SubjectAccessInvalidToken.audit_code(),
+        "subject_access.invalid_token"
     );
     assert_eq!(
-        evidence_status(&EvidenceError::SelfAttestationInvalidToken),
+        evidence_status(&EvidenceError::SubjectAccessInvalidToken),
         StatusCode::UNAUTHORIZED
     );
     assert_eq!(
-        EvidenceError::SelfAttestationAssuranceDenied.code(),
-        "self_attestation.denied"
+        EvidenceError::SubjectAccessAssuranceDenied.code(),
+        "subject_access.denied"
     );
     assert_eq!(
-        EvidenceError::SelfAttestationAssuranceDenied.audit_code(),
-        "self_attestation.assurance_denied"
+        EvidenceError::SubjectAccessAssuranceDenied.audit_code(),
+        "subject_access.assurance_denied"
     );
     assert_eq!(
-        evidence_status(&EvidenceError::SelfAttestationAssuranceDenied),
+        evidence_status(&EvidenceError::SubjectAccessAssuranceDenied),
         StatusCode::FORBIDDEN
     );
 }
 
 #[test]
-fn self_attestation_policy_hash_includes_credential_profile_policy() {
-    let config = self_attestation_config();
+fn subject_access_policy_hash_includes_credential_profile_policy() {
+    let config = subject_access_config();
     let mut evidence = evidence_config();
     evidence.credential_profiles.insert(
         "civil_status_sd_jwt".to_string(),
@@ -1160,7 +1192,7 @@ fn self_attestation_policy_hash_includes_credential_profile_policy() {
         .expect("profile parses"),
     );
     let claims = vec!["person-is-alive".to_string()];
-    let original = self_attestation_policy_hash(
+    let original = subject_access_policy_hash(
         &evidence,
         &config,
         &claims,
@@ -1175,7 +1207,7 @@ fn self_attestation_policy_hash_includes_credential_profile_policy() {
         .expect("profile exists")
         .holder_binding
         .proof_of_possession = None;
-    let changed = self_attestation_policy_hash(
+    let changed = subject_access_policy_hash(
         &evidence,
         &config,
         &claims,
@@ -1188,10 +1220,10 @@ fn self_attestation_policy_hash_includes_credential_profile_policy() {
 }
 
 #[tokio::test]
-async fn self_attestation_batch_evaluate_is_rejected_before_evaluation() {
-    let state = Arc::new(RegistryNotaryApiState::new_with_self_attestation(
+async fn subject_access_batch_evaluate_is_rejected_before_evaluation() {
+    let state = Arc::new(RegistryNotaryApiState::new_with_subject_access(
         Arc::new(evidence_config()),
-        Arc::new(self_attestation_config()),
+        Arc::new(subject_access_config()),
         AuditKeyHasher::unkeyed_dev_only(),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
@@ -1215,7 +1247,7 @@ async fn self_attestation_batch_evaluate_is_rejected_before_evaluation() {
         Some(Extension(state)),
         Some(Extension(oidc_principal(
             Some("client_id:citizen-portal"),
-            &["self_attestation"],
+            &["subject_access"],
         ))),
         None,
         Ok(Json(request)),
@@ -1226,10 +1258,10 @@ async fn self_attestation_batch_evaluate_is_rejected_before_evaluation() {
     let audit = response
         .extensions()
         .get::<EvidenceAuditContext>()
-        .expect("self-attestation denial audit context is attached");
-    assert_eq!(audit.access_mode, Some(AccessMode::SelfAttestation));
+        .expect("subject-access denial audit context is attached");
+    assert_eq!(audit.access_mode, Some(AccessMode::SubjectBound));
     assert_eq!(
         audit.denial_code,
-        Some(SelfAttestationDenialCode::BatchDenied)
+        Some(SubjectAccessDenialCode::BatchDenied)
     );
 }

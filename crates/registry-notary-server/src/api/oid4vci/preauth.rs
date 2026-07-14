@@ -103,7 +103,7 @@ pub(in crate::api) async fn oid4vci_offer_callback(
             path,
             "GET",
             None,
-            SelfAttestationDenialCode::InvalidToken,
+            SubjectAccessDenialCode::InvalidToken,
             Oid4vciWireError::InvalidRequest,
         )
         .await;
@@ -122,7 +122,7 @@ pub(in crate::api) async fn oid4vci_offer_callback(
                 path,
                 "GET",
                 None,
-                SelfAttestationDenialCode::InvalidToken,
+                SubjectAccessDenialCode::InvalidToken,
                 Oid4vciWireError::InvalidRequest,
             )
             .await;
@@ -133,13 +133,13 @@ pub(in crate::api) async fn oid4vci_offer_callback(
                 path,
                 "GET",
                 None,
-                SelfAttestationDenialCode::OperationDenied,
+                SubjectAccessDenialCode::OperationDenied,
                 Oid4vciWireError::ServerError,
             )
             .await;
         }
     };
-    let subject_binding_claim = state.self_attestation.subject_binding.token_claim.clone();
+    let subject_binding_claim = state.subject_access.subject_binding.token_claim.clone();
     let subject = match preauth
         .exchange_code_for_subject(
             code,
@@ -156,7 +156,7 @@ pub(in crate::api) async fn oid4vci_offer_callback(
                 path,
                 "GET",
                 Some(&stored.credential_configuration_id),
-                SelfAttestationDenialCode::InvalidToken,
+                SubjectAccessDenialCode::InvalidToken,
                 Oid4vciWireError::InvalidToken,
             )
             .await;
@@ -316,7 +316,7 @@ pub(in crate::api) async fn oid4vci_token(
                 &preauth,
                 path,
                 None,
-                SelfAttestationDenialCode::OperationDenied,
+                SubjectAccessDenialCode::OperationDenied,
                 error,
             )
             .await;
@@ -327,7 +327,7 @@ pub(in crate::api) async fn oid4vci_token(
             &preauth,
             path,
             None,
-            SelfAttestationDenialCode::OperationDenied,
+            SubjectAccessDenialCode::OperationDenied,
             TokenWireError::UnsupportedGrantType,
         )
         .await;
@@ -341,7 +341,7 @@ pub(in crate::api) async fn oid4vci_token(
             &preauth,
             path,
             None,
-            SelfAttestationDenialCode::OperationDenied,
+            SubjectAccessDenialCode::OperationDenied,
             TokenWireError::InvalidRequest,
         )
         .await;
@@ -356,7 +356,7 @@ pub(in crate::api) async fn oid4vci_token(
             &preauth,
             path,
             None,
-            SelfAttestationDenialCode::RateLimited,
+            SubjectAccessDenialCode::RateLimited,
             TokenWireError::SlowDown,
         )
         .await;
@@ -455,7 +455,7 @@ pub(in crate::api) async fn oid4vci_token(
                     &preauth,
                     path,
                     configuration_id.as_deref(),
-                    SelfAttestationDenialCode::OperationDenied,
+                    SubjectAccessDenialCode::OperationDenied,
                     TokenWireError::ServerError,
                 )
                 .await;
@@ -505,7 +505,7 @@ pub(in crate::api) async fn oid4vci_token(
     add_scope_if_missing(&mut bound_subject.scopes, &configuration.scope);
     let authorization_details = match oid4vci_issuance_authorization_details(
         &state.evidence,
-        &state.self_attestation,
+        &state.subject_access,
         configuration,
     )
     .and_then(|details| {
@@ -517,7 +517,7 @@ pub(in crate::api) async fn oid4vci_token(
                 &preauth,
                 path,
                 Some(configuration_id),
-                SelfAttestationDenialCode::OperationDenied,
+                SubjectAccessDenialCode::OperationDenied,
                 TokenWireError::ServerError,
             )
             .await;
@@ -530,7 +530,7 @@ pub(in crate::api) async fn oid4vci_token(
                 &preauth,
                 path,
                 Some(configuration_id),
-                SelfAttestationDenialCode::OperationDenied,
+                SubjectAccessDenialCode::OperationDenied,
                 TokenWireError::ServerError,
             )
             .await;
@@ -558,7 +558,7 @@ pub(in crate::api) async fn oid4vci_token(
                 &preauth,
                 path,
                 Some(configuration_id),
-                SelfAttestationDenialCode::OperationDenied,
+                SubjectAccessDenialCode::OperationDenied,
                 TokenWireError::ServerError,
             )
             .await;
@@ -591,7 +591,7 @@ pub(in crate::api) async fn oid4vci_token(
                 &preauth,
                 path,
                 Some(configuration_id),
-                SelfAttestationDenialCode::OperationDenied,
+                SubjectAccessDenialCode::OperationDenied,
                 TokenWireError::ServerError,
             )
             .await;
@@ -604,7 +604,7 @@ pub(in crate::api) async fn oid4vci_token(
                 &preauth,
                 path,
                 Some(configuration_id),
-                SelfAttestationDenialCode::OperationDenied,
+                SubjectAccessDenialCode::OperationDenied,
                 TokenWireError::ServerError,
             )
             .await;
@@ -762,7 +762,7 @@ pub(in crate::api) fn bound_subject_from_code(
     verified: &registry_notary_core::tokens::VerifiedNotaryToken,
     state: &RegistryNotaryApiState,
 ) -> Option<BoundSubject> {
-    let subject_binding_claim = state.self_attestation.subject_binding.token_claim.clone();
+    let subject_binding_claim = state.subject_access.subject_binding.token_claim.clone();
     Some(BoundSubject {
         subject: verified.claim_str("sub")?.to_string(),
         subject_binding_value: verified.claim_str(&subject_binding_claim)?.to_string(),
@@ -787,7 +787,7 @@ pub(in crate::api) async fn issue_c_nonce(
     }
     let nonce = generate_nonce().ok()?;
     let key = state
-        .self_attestation_rate_keys
+        .subject_access_rate_keys
         .oid4vci_nonce(&state.oid4vci.credential_issuer, configuration_id, &nonce)
         .ok()?;
     let scope = oid4vci_nonce_replay_scope(state, configuration_id).ok()?;
@@ -870,12 +870,12 @@ pub(in crate::api) fn forwarded_client_ip(headers: &HeaderMap) -> Option<IpAddr>
 pub(in crate::api) async fn check_token_client_address_rate_limit(
     state: &RegistryNotaryApiState,
     client_address: &str,
-) -> Result<(), SelfAttestationRateLimitError> {
+) -> Result<(), SubjectAccessRateLimitError> {
     let hashed = state
-        .self_attestation_rate_keys
+        .subject_access_rate_keys
         .client_address(client_address)?;
     state
-        .self_attestation_rate_limiter
+        .subject_access_rate_limiter
         .check_invalid_token_for_client_address_available(&hashed)
         .await
 }
@@ -883,12 +883,12 @@ pub(in crate::api) async fn check_token_client_address_rate_limit(
 pub(in crate::api) async fn consume_public_client_address_rate_limit(
     state: &RegistryNotaryApiState,
     client_address: &str,
-) -> Result<(), SelfAttestationRateLimitError> {
+) -> Result<(), SubjectAccessRateLimitError> {
     let hashed = state
-        .self_attestation_rate_keys
+        .subject_access_rate_keys
         .client_address(client_address)?;
     state
-        .self_attestation_rate_limiter
+        .subject_access_rate_limiter
         .check_invalid_token_for_client_address(&hashed)
         .await
 }
@@ -906,12 +906,12 @@ pub(in crate::api) fn replay_store_error_is_capacity(error: &ReplayStoreError) -
 pub(in crate::api) async fn check_tx_code_attempt(
     state: &RegistryNotaryApiState,
     pre_authorized_code: &str,
-) -> Result<(), SelfAttestationRateLimitError> {
+) -> Result<(), SubjectAccessRateLimitError> {
     let hashed = state
-        .self_attestation_rate_keys
+        .subject_access_rate_keys
         .pre_authorized_code(pre_authorized_code)?;
     state
-        .self_attestation_rate_limiter
+        .subject_access_rate_limiter
         .check_tx_code_attempt(&hashed)
         .await
 }
@@ -923,7 +923,7 @@ pub(in crate::api) async fn preauth_denied(
     path: &str,
     method: &str,
     credential_configuration_id: Option<&str>,
-    denial_code: SelfAttestationDenialCode,
+    denial_code: SubjectAccessDenialCode,
     wire_error: Oid4vciWireError,
 ) -> Response {
     let response = oid4vci_error_response(wire_error);
@@ -981,11 +981,11 @@ pub(in crate::api) async fn token_error_after_invalid_attempt(
     error: TokenWireError,
 ) -> Response {
     if let Ok(hashed) = state
-        .self_attestation_rate_keys
+        .subject_access_rate_keys
         .client_address(client_address)
     {
         let _ = state
-            .self_attestation_rate_limiter
+            .subject_access_rate_limiter
             .check_invalid_token_for_client_address(&hashed)
             .await;
     }
@@ -993,7 +993,7 @@ pub(in crate::api) async fn token_error_after_invalid_attempt(
         preauth,
         path,
         credential_configuration_id,
-        SelfAttestationDenialCode::InvalidToken,
+        SubjectAccessDenialCode::InvalidToken,
         error,
     )
     .await
@@ -1003,7 +1003,7 @@ pub(in crate::api) async fn token_error_with_audit(
     preauth: &PreAuthRuntime,
     path: &str,
     credential_configuration_id: Option<&str>,
-    denial_code: SelfAttestationDenialCode,
+    denial_code: SubjectAccessDenialCode,
     error: TokenWireError,
 ) -> Response {
     let response = token_error_response(error);
@@ -1034,7 +1034,7 @@ pub(in crate::api) fn token_error_audit_event(
     path: &str,
     status: u16,
     credential_configuration_id: Option<&str>,
-    denial_code: SelfAttestationDenialCode,
+    denial_code: SubjectAccessDenialCode,
 ) -> EvidenceAuditEvent {
     pre_auth_audit_event(
         "POST",

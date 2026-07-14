@@ -264,7 +264,6 @@ impl ConfigBuilder {
         let raw = format!(
             r#"
 {server}{state}auth:
-  mode: api_key
   api_keys:
     - id: caseworker
       fingerprint:

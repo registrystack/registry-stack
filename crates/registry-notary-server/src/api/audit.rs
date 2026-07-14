@@ -103,7 +103,7 @@ pub(super) fn attach_redacted_fields_audit(response: &mut Response, results: &[C
 
 pub(super) fn attach_evaluate_request_audit(
     response: &mut Response,
-    keys: &SelfAttestationRateLimitKeys,
+    keys: &SubjectAccessRateLimitKeys,
     request: &EvaluateRequest,
     result: Option<&ClaimResultView>,
 ) -> Result<(), EvidenceError> {
@@ -165,7 +165,7 @@ pub(super) fn attach_evaluate_request_audit(
 
 pub(super) fn attach_batch_evaluate_response_audit(
     response: &mut Response,
-    keys: &SelfAttestationRateLimitKeys,
+    keys: &SubjectAccessRateLimitKeys,
     _evidence: &EvidenceConfig,
     _request: &BatchEvaluateRequest,
     result: &registry_notary_core::BatchEvaluateResponse,
@@ -219,7 +219,7 @@ pub(super) fn attach_batch_evaluate_response_audit(
 }
 
 pub(super) fn hash_audit_handle(
-    keys: &SelfAttestationRateLimitKeys,
+    keys: &SubjectAccessRateLimitKeys,
     role: &str,
     entity_type: &str,
     purpose_scope: Option<&str>,
@@ -232,7 +232,7 @@ pub(super) fn hash_audit_handle(
 }
 
 pub(super) fn hash_audit_matching_attempt(
-    _keys: &SelfAttestationRateLimitKeys,
+    _keys: &SubjectAccessRateLimitKeys,
     role: &str,
     purpose_scope: Option<&str>,
     entity: &EvidenceEntity,
@@ -329,10 +329,10 @@ pub(super) fn credential_denial_response_for_evaluation(
 ) -> Response {
     let denial_code = denial_code_from_error(&error);
     let mut response = evidence_error_response(error);
-    if evaluation.self_attestation.is_some() || principal.is_self_attestation() {
-        if let Err(error) = attach_self_attestation_credential_denial_audit(
+    if evaluation.subject_access.is_some() || principal.is_subject_access() {
+        if let Err(error) = attach_subject_access_credential_denial_audit(
             &mut response,
-            &state.self_attestation_rate_keys,
+            &state.subject_access_rate_keys,
             evaluation_id,
             evaluation,
             profile,
@@ -364,7 +364,7 @@ pub(super) fn credential_denial_response_for_evaluation(
     response
 }
 
-pub(super) struct SelfAttestationCredentialAuditDetails<'a> {
+pub(super) struct SubjectAccessCredentialAuditDetails<'a> {
     pub(super) profile_id: &'a str,
     pub(super) holder_binding_mode: &'a str,
     pub(super) policy_hash: Option<Hashed<PolicyIdentifier>>,
@@ -373,9 +373,9 @@ pub(super) struct SelfAttestationCredentialAuditDetails<'a> {
     pub(super) credential_configuration_id: Option<&'a str>,
 }
 
-pub(super) fn attach_self_attestation_credential_denial_audit(
+pub(super) fn attach_subject_access_credential_denial_audit(
     response: &mut Response,
-    keys: &SelfAttestationRateLimitKeys,
+    keys: &SubjectAccessRateLimitKeys,
     evaluation_id: &str,
     evaluation: &registry_notary_core::StoredEvaluation,
     profile: Option<(&str, &CredentialProfileConfig)>,
@@ -419,7 +419,7 @@ pub(super) fn attach_self_attestation_credential_denial_audit(
             .then(|| evidence_claim_hash(&evaluation.claim_ids)),
         purposes: Some(vec![evaluation.purpose.clone()]),
         row_count: None,
-        access_mode: Some(AccessMode::SelfAttestation),
+        access_mode: Some(AccessMode::SubjectBound),
         denial_code: None,
         token_claim_name: None,
         credential_profile: profile_id.and_then(|value| ConfigMetadata::new(value).ok()),
@@ -428,7 +428,7 @@ pub(super) fn attach_self_attestation_credential_denial_audit(
         holder_binding_mode: holder_binding_mode.and_then(|value| ConfigMetadata::new(value).ok()),
         rate_limit_bucket: None,
         policy_hash: evaluation
-            .self_attestation
+            .subject_access
             .as_ref()
             .and_then(|metadata| metadata.policy_hash.clone()),
         target_type,
@@ -441,14 +441,14 @@ pub(super) fn attach_self_attestation_credential_denial_audit(
     Ok(())
 }
 
-pub(super) fn attach_self_attestation_credential_audit(
+pub(super) fn attach_subject_access_credential_audit(
     response: &mut Response,
-    keys: &SelfAttestationRateLimitKeys,
+    keys: &SubjectAccessRateLimitKeys,
     evaluation_id: &str,
     claim_ids: &[String],
     results: &[ClaimResultView],
     row_count: u64,
-    details: SelfAttestationCredentialAuditDetails<'_>,
+    details: SubjectAccessCredentialAuditDetails<'_>,
 ) -> Result<(), EvidenceError> {
     let first_result = results.first();
     let target_type = first_result
@@ -486,7 +486,7 @@ pub(super) fn attach_self_attestation_credential_audit(
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
         purposes: details.purposes,
         row_count: Some(row_count),
-        access_mode: Some(AccessMode::SelfAttestation),
+        access_mode: Some(AccessMode::SubjectBound),
         denial_code: None,
         token_claim_name: None,
         credential_profile: ConfigMetadata::new(details.profile_id).ok(),
@@ -509,7 +509,7 @@ pub(super) fn attach_self_attestation_credential_audit(
     Ok(())
 }
 
-pub(super) fn attach_self_attestation_success_audit(
+pub(super) fn attach_subject_access_success_audit(
     response: &mut Response,
     decision: &str,
     verification_id: Option<String>,
@@ -524,7 +524,7 @@ pub(super) fn attach_self_attestation_success_audit(
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
         purposes,
         row_count,
-        access_mode: Some(AccessMode::SelfAttestation),
+        access_mode: Some(AccessMode::SubjectBound),
         denial_code: None,
         token_claim_name: None,
         credential_profile: None,
@@ -551,11 +551,11 @@ pub(super) fn override_attestation_audit_access_mode(
     }
 }
 
-pub(super) fn attach_self_attestation_audit(
+pub(super) fn attach_subject_access_audit(
     response: &mut Response,
     decision: &str,
     claim_ids: &[String],
-    denial_code: Option<SelfAttestationDenialCode>,
+    denial_code: Option<SubjectAccessDenialCode>,
     token_claim_name: Option<&str>,
 ) {
     response.extensions_mut().insert(EvidenceAuditContext {
@@ -564,7 +564,7 @@ pub(super) fn attach_self_attestation_audit(
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
         purposes: None,
         row_count: None,
-        access_mode: Some(AccessMode::SelfAttestation),
+        access_mode: Some(AccessMode::SubjectBound),
         denial_code,
         token_claim_name: token_claim_name.and_then(|name| ConfigMetadata::new(name).ok()),
         credential_profile: None,
@@ -582,12 +582,12 @@ pub(super) fn attach_self_attestation_audit(
     });
 }
 
-pub(super) fn attach_oid4vci_self_attestation_denial_audit(
+pub(super) fn attach_oid4vci_subject_access_denial_audit(
     response: &mut Response,
     decision: &str,
     claim_ids: &[String],
     credential_configuration_id: &str,
-    denial_code: Option<SelfAttestationDenialCode>,
+    denial_code: Option<SubjectAccessDenialCode>,
     token_claim_name: Option<&str>,
 ) {
     response.extensions_mut().insert(EvidenceAuditContext {
@@ -596,7 +596,7 @@ pub(super) fn attach_oid4vci_self_attestation_denial_audit(
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
         purposes: None,
         row_count: None,
-        access_mode: Some(AccessMode::SelfAttestation),
+        access_mode: Some(AccessMode::SubjectBound),
         denial_code,
         token_claim_name: token_claim_name.and_then(|name| ConfigMetadata::new(name).ok()),
         credential_profile: None,
@@ -614,11 +614,11 @@ pub(super) fn attach_oid4vci_self_attestation_denial_audit(
     });
 }
 
-pub(super) fn attach_self_attestation_rate_limit_audit(
+pub(super) fn attach_subject_access_rate_limit_audit(
     response: &mut Response,
     decision: &str,
     claim_ids: &[String],
-    bucket: Option<SelfAttestationRateLimitBucket>,
+    bucket: Option<SubjectAccessRateLimitBucket>,
 ) {
     response.extensions_mut().insert(EvidenceAuditContext {
         verification_id: None,
@@ -626,8 +626,8 @@ pub(super) fn attach_self_attestation_rate_limit_audit(
         claim_hash: (!claim_ids.is_empty()).then(|| evidence_claim_hash(claim_ids)),
         purposes: None,
         row_count: None,
-        access_mode: Some(AccessMode::SelfAttestation),
-        denial_code: Some(SelfAttestationDenialCode::RateLimited),
+        access_mode: Some(AccessMode::SubjectBound),
+        denial_code: Some(SubjectAccessDenialCode::RateLimited),
         token_claim_name: None,
         credential_profile: None,
         protocol: None,

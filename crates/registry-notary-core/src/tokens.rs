@@ -11,7 +11,7 @@
 //!   the existing credential-endpoint consumers unchanged. Its `iss`/`aud`/`typ`
 //!   and alg pin the second verifier's trust anchor; its claim set reproduces
 //!   what an eSignet token would carry so subject binding, audience, and
-//!   self-attestation classification pass identically.
+//!   subject-access classification pass identically.
 //!
 //! The verify helpers here are sufficient for unit-testing the mint/verify
 //! round-trip. PR3 wires the real middleware verification via the platform
@@ -50,13 +50,13 @@ pub struct BoundSubject {
     /// Token `sub`.
     pub subject: String,
     /// Claim name holding the civil ID (e.g.
-    /// `self_attestation.subject_binding.token_claim`).
+    /// `subject_access.subject_binding.token_claim`).
     pub subject_binding_claim: String,
     /// The civil ID value, reproduced exactly from the eSignet id_token.
     pub subject_binding_value: String,
     /// Citizen `client_id` mapped to an allowed citizen client.
     pub client_id: String,
-    /// OAuth scopes; must include the self-attestation required scopes.
+    /// OAuth scopes; must include the subject-access required scopes.
     pub scopes: Vec<String>,
     /// Assurance level (`acr`), if present.
     pub acr: Option<String>,
@@ -105,7 +105,7 @@ pub struct AccessTokenClaims {
     pub jti: Option<String>,
     /// Accepted audiences (`aud`); must satisfy
     /// `oid4vci.accepted_token_audiences` and
-    /// `self_attestation.citizen_clients.allowed_audiences`.
+    /// `subject_access.citizen_clients.allowed_audiences`.
     pub audiences: Vec<String>,
     /// Token-type claim surfaced to the credential endpoint.
     pub token_type: String,
@@ -521,7 +521,7 @@ mod tests {
             subject_binding_claim: SUBJECT_BINDING_CLAIM.to_string(),
             subject_binding_value: CIVIL_ID.to_string(),
             client_id: "registry-lab-live-client".to_string(),
-            scopes: vec!["openid".to_string(), "self_attestation".to_string()],
+            scopes: vec!["openid".to_string(), "subject_access".to_string()],
             acr: Some("urn:example:loa:substantial".to_string()),
             auth_time: Some(NOW - 30),
         }
@@ -624,14 +624,14 @@ mod tests {
         // bounded_verified_claims_from_oidc (standalone.rs:2437).
         assert_eq!(verified.claim_str("sub"), Some("citizen-subject-1"));
         assert_eq!(verified.claim_str(SUBJECT_BINDING_CLAIM), Some(CIVIL_ID));
-        // client_id + scope: classify_self_attestation_principal (api.rs:2585).
+        // client_id + scope: classify_subject_access_principal (api.rs:2585).
         assert_eq!(
             verified.claim_str("client_id"),
             Some("registry-lab-live-client")
         );
         assert_eq!(
             verified.scopes(),
-            vec!["openid".to_string(), "self_attestation".to_string()]
+            vec!["openid".to_string(), "subject_access".to_string()]
         );
         // token_type, acr, auth_time, exp, iat, nbf: BoundedVerifiedClaims.
         assert_eq!(verified.claim_str("token_type"), Some("Bearer"));
@@ -815,7 +815,7 @@ mod tests {
         let signer = access_token_signer();
         let claims = AccessTokenClaims {
             authorization_details: vec![serde_json::json!({
-                "type": "registry_notary_self_attestation",
+                "type": "registry_notary_subject_access",
                 "schema_version": NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
             })],
             ..transaction_token_claims()

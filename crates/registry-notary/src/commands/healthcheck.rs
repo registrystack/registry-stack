@@ -29,7 +29,7 @@ pub(crate) fn lightweight_schema() -> Value {
             "audit": { "type": "object" },
             "state": { "type": "object" },
             "credential_status": { "type": "object" },
-            "self_attestation": { "type": "object" },
+            "subject_access": { "type": "object" },
             "oid4vci": { "type": "object" },
             "evidence": { "type": "object" },
             "federation": { "type": "object" }

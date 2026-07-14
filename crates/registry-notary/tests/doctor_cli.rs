@@ -150,7 +150,6 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
 server:
   bind: 127.0.0.1:0
 {openapi_requires_auth}{admin_listener}{config_trust}auth:
-  mode: api_key
   api_keys:
     - id: local
       fingerprint:

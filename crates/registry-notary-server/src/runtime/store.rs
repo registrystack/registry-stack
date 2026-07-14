@@ -10,7 +10,11 @@ use crate::state_plane::NotaryStatePlaneHandle;
 const BATCH_IDEMPOTENCY_RETENTION: time::Duration = time::Duration::minutes(15);
 const BATCH_OWNER_LEASE_SECONDS: i32 = 30;
 const BATCH_OWNER_HEARTBEAT_SECONDS: u64 = 10;
-const STORED_RECORD_VERSION: i16 = 1;
+// Version 2 adopts the pre-1.0 subject-access vocabulary in persisted
+// evaluation and idempotency response envelopes. Version 1 used the removed
+// subject-access field and access-mode vocabulary and is intentionally not
+// accepted by the clean 1.0 storage contract.
+const STORED_RECORD_VERSION: i16 = 2;
 
 enum IdempotencyRecord {
     InFlight {

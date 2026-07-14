@@ -7,8 +7,8 @@ pub(in super::super) async fn authenticate_oidc(
     fetch_url_policy: &FetchUrlPolicy,
     principal_claim: &str,
     subject_binding_claim: Option<&str>,
-    subject_binding_claim_source: SelfAttestationClaimSource,
-    assurance_claim_source: SelfAttestationAssuranceClaimSource,
+    subject_binding_claim_source: SubjectAccessClaimSource,
+    assurance_claim_source: SubjectAccessAssuranceClaimSource,
     userinfo_endpoint: Option<&str>,
     userinfo_issuers: &[String],
 ) -> Result<EvidencePrincipal, EvidenceError> {
@@ -17,7 +17,7 @@ pub(in super::super) async fn authenticate_oidc(
     };
     let verified = verifier.verify(token).await.map_err(oidc_auth_error)?;
     let verified_userinfo = match (subject_binding_claim, subject_binding_claim_source) {
-        (Some(_), SelfAttestationClaimSource::Userinfo) => {
+        (Some(_), SubjectAccessClaimSource::Userinfo) => {
             let endpoint = userinfo_endpoint.ok_or(EvidenceError::MissingCredential)?;
             let userinfo_jwt = fetch_userinfo_jwt_with_policy(
                 endpoint,
@@ -53,8 +53,8 @@ pub(in super::super) async fn authenticate_oidc(
         _ => None,
     };
     let verified_id_token = match assurance_claim_source {
-        SelfAttestationAssuranceClaimSource::AccessToken => None,
-        SelfAttestationAssuranceClaimSource::IdToken => {
+        SubjectAccessAssuranceClaimSource::AccessToken => None,
+        SubjectAccessAssuranceClaimSource::IdToken => {
             let Some(id_token) = credentials.id_token.as_deref() else {
                 return Err(EvidenceError::MissingCredential);
             };
@@ -97,8 +97,8 @@ pub(in super::super) fn principal_from_oidc(
     token_type: Option<VerifiedClaimValue>,
     principal_claim: &str,
     subject_binding_claim: Option<&str>,
-    subject_binding_claim_source: SelfAttestationClaimSource,
-    assurance_claim_source: SelfAttestationAssuranceClaimSource,
+    subject_binding_claim_source: SubjectAccessClaimSource,
+    assurance_claim_source: SubjectAccessAssuranceClaimSource,
 ) -> Result<EvidencePrincipal, EvidenceError> {
     let principal_id = if principal_claim == "sub" {
         verified.claims.sub.clone()
@@ -146,8 +146,8 @@ pub(in super::super) fn bounded_verified_claims_from_oidc(
     id_token: Option<&VerifiedToken>,
     token_type: Option<VerifiedClaimValue>,
     subject_binding_claim: Option<&str>,
-    subject_binding_claim_source: SelfAttestationClaimSource,
-    assurance_claim_source: SelfAttestationAssuranceClaimSource,
+    subject_binding_claim_source: SubjectAccessClaimSource,
+    assurance_claim_source: SubjectAccessAssuranceClaimSource,
 ) -> Option<BoundedVerifiedClaims> {
     let issuer = verified
         .claims
@@ -159,8 +159,8 @@ pub(in super::super) fn bounded_verified_claims_from_oidc(
     {
         let claim_name = VerifiedClaimName::new(subject_binding_claim).ok()?;
         let claim_value = match subject_binding_claim_source {
-            SelfAttestationClaimSource::AccessToken => claim_string(verified, claim_name.as_str()),
-            SelfAttestationClaimSource::Userinfo => {
+            SubjectAccessClaimSource::AccessToken => claim_string(verified, claim_name.as_str()),
+            SubjectAccessClaimSource::Userinfo => {
                 userinfo.and_then(|claims| claim_string_from_claims(claims, claim_name.as_str()))
             }
         }
@@ -170,8 +170,8 @@ pub(in super::super) fn bounded_verified_claims_from_oidc(
         (None, None)
     };
     let assurance_claims = match assurance_claim_source {
-        SelfAttestationAssuranceClaimSource::AccessToken => &verified.claims,
-        SelfAttestationAssuranceClaimSource::IdToken => &id_token?.claims,
+        SubjectAccessAssuranceClaimSource::AccessToken => &verified.claims,
+        SubjectAccessAssuranceClaimSource::IdToken => &id_token?.claims,
     };
     Some(BoundedVerifiedClaims {
         issuer,

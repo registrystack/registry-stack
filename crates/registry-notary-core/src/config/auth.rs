@@ -14,8 +14,6 @@ pub struct RegistryNotaryCorsConfig {
 #[serde(deny_unknown_fields)]
 pub struct EvidenceAuthConfig {
     #[serde(default)]
-    pub mode: EvidenceAuthMode,
-    #[serde(default)]
     pub api_keys: Vec<EvidenceCredentialConfig>,
     #[serde(default)]
     pub bearer_tokens: Vec<EvidenceCredentialConfig>,
@@ -26,23 +24,6 @@ pub struct EvidenceAuthConfig {
     /// unchanged.
     #[serde(default)]
     pub access_token_signing: AccessTokenSigningConfig,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum EvidenceAuthMode {
-    #[default]
-    ApiKey,
-    Oidc,
-}
-
-impl EvidenceAuthMode {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ApiKey => "api_key",
-            Self::Oidc => "oidc",
-        }
-    }
 }
 
 /// Self-issued access-token signing configuration.

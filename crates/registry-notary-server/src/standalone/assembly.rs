@@ -25,7 +25,7 @@ pub struct NotaryRuntimeSnapshot {
     auth_state: Arc<AuthAuditState>,
     api_state: Arc<RegistryNotaryApiState>,
     cors_policy: registry_platform_httpsec::CorsPolicy,
-    wallet_cors_policy: SelfAttestationWalletCorsPolicy,
+    wallet_cors_policy: SubjectAccessWalletCorsPolicy,
     http_limits: NotaryHttpLimits,
     federation_enabled: bool,
 }
@@ -162,7 +162,7 @@ fn compile_notary_runtime_with_state_override(
         request_body_timeout: config.server.request_body_timeout,
     };
     let evidence = Arc::new(config.evidence.clone());
-    let self_attestation = Arc::new(config.self_attestation.clone());
+    let subject_access = Arc::new(config.subject_access.clone());
     let oid4vci = Arc::new(config.oid4vci.clone());
     let federation = Arc::new(config.federation.clone());
     let metrics = Arc::new(AppMetrics::default());
@@ -229,14 +229,14 @@ fn compile_notary_runtime_with_state_override(
         allow_credentials: false,
     };
     cors_policy.validate()?;
-    let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
+    let wallet_cors_policy = SubjectAccessWalletCorsPolicy::from_config(&config);
     let auth_state = AuthAuditState::from_config(&config, Arc::clone(&metrics), replay.clone())?;
     let auth_state = Arc::new(if state_plane.is_in_memory() {
         auth_state
     } else {
         auth_state.with_postgres_state_plane(
             Arc::clone(&state_plane),
-            config.self_attestation.rate_limits.clone(),
+            config.subject_access.rate_limits.clone(),
         )
     });
     let posture_context =
@@ -257,7 +257,7 @@ fn compile_notary_runtime_with_state_override(
     .map(Arc::new);
     let api_state = RegistryNotaryApiState::new_with_federation(
         evidence,
-        self_attestation,
+        subject_access,
         oid4vci,
         federation,
         auth_state.audit.profile.key_hasher(),
@@ -413,7 +413,7 @@ fn layer_notary_routes(
     auth_state: Arc<AuthAuditState>,
     api_state: Arc<RegistryNotaryApiState>,
     cors_policy: registry_platform_httpsec::CorsPolicy,
-    wallet_cors_policy: SelfAttestationWalletCorsPolicy,
+    wallet_cors_policy: SubjectAccessWalletCorsPolicy,
     http_limits: NotaryHttpLimits,
 ) -> Router {
     let cors_layer = match cors_policy.try_layer() {
@@ -446,7 +446,7 @@ fn layer_notary_routes(
         .layer(cors_layer)
         .layer(from_fn_with_state(
             wallet_cors_policy,
-            self_attestation_wallet_cors_middleware,
+            subject_access_wallet_cors_middleware,
         ))
         .layer(registry_platform_httpsec::corp_conditional())
         .layer(registry_platform_httpsec::request_body_limit(

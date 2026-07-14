@@ -27,7 +27,7 @@ pub(super) fn require_claim_access(
 }
 
 pub(super) fn evaluation_capability_for_principal(
-    self_attestation_rate_keys: &SelfAttestationRateLimitKeys,
+    subject_access_rate_keys: &SubjectAccessRateLimitKeys,
     principal: &EvidencePrincipal,
     requested_claims: &[String],
 ) -> Result<EvaluationCapability, EvidenceError> {
@@ -35,10 +35,10 @@ pub(super) fn evaluation_capability_for_principal(
         AccessMode::MachineClient => Ok(EvaluationCapability::Machine {
             scopes: principal.scopes.iter().cloned().collect(),
         }),
-        AccessMode::SelfAttestation => {
+        AccessMode::SubjectBound => {
             if requested_claims.is_empty() {
-                return Err(EvidenceError::SelfAttestationDenied {
-                    reason: SelfAttestationDenialCode::ClaimDenied,
+                return Err(EvidenceError::SubjectAccessDenied {
+                    reason: SubjectAccessDenialCode::ClaimDenied,
                 });
             }
             let mut allowed_claim_ids = BTreeSet::new();
@@ -57,25 +57,25 @@ pub(super) fn evaluation_capability_for_principal(
                 principal
                     .verified_claims
                     .as_ref()
-                    .ok_or(EvidenceError::SelfAttestationDenied {
-                        reason: SelfAttestationDenialCode::SubjectClaimMissing,
+                    .ok_or(EvidenceError::SubjectAccessDenied {
+                        reason: SubjectAccessDenialCode::SubjectClaimMissing,
                     })?;
             let subject_binding_value = claims.subject_binding_value.as_ref().ok_or(
-                EvidenceError::SelfAttestationDenied {
-                    reason: SelfAttestationDenialCode::SubjectClaimMissing,
+                EvidenceError::SubjectAccessDenied {
+                    reason: SubjectAccessDenialCode::SubjectClaimMissing,
                 },
             )?;
-            let subject_binding_hash = self_attestation_rate_keys
+            let subject_binding_hash = subject_access_rate_keys
                 .subject_binding(subject_binding_value.as_str())
                 .map_err(|error| error.evidence_error())?;
-            Ok(EvaluationCapability::SelfAttestation {
+            Ok(EvaluationCapability::SubjectBound {
                 claim_id,
                 allowed_claim_ids,
                 subject_binding_hash,
             })
         }
         AccessMode::DelegatedAttestation => Err(delegated_attestation_denied()),
-        AccessMode::Unknown => Err(EvidenceError::SelfAttestationInvalidToken),
+        AccessMode::Unknown => Err(EvidenceError::SubjectAccessInvalidToken),
     }
 }
 
@@ -85,17 +85,17 @@ pub(super) fn ensure_evaluation_capability_matches_principal(
 ) -> Result<(), EvidenceError> {
     match (principal.access_mode(), capability.access_mode()) {
         (AccessMode::MachineClient, AccessMode::MachineClient)
-        | (AccessMode::SelfAttestation, AccessMode::SelfAttestation)
+        | (AccessMode::SubjectBound, AccessMode::SubjectBound)
         | (AccessMode::DelegatedAttestation, AccessMode::DelegatedAttestation) => Ok(()),
-        (AccessMode::SelfAttestation, AccessMode::MachineClient) => {
-            Err(EvidenceError::SelfAttestationDenied {
-                reason: SelfAttestationDenialCode::OperationDenied,
+        (AccessMode::SubjectBound, AccessMode::MachineClient) => {
+            Err(EvidenceError::SubjectAccessDenied {
+                reason: SubjectAccessDenialCode::OperationDenied,
             })
         }
         (AccessMode::DelegatedAttestation, AccessMode::MachineClient) => {
             Err(delegated_attestation_denied())
         }
-        _ => Err(EvidenceError::SelfAttestationInvalidToken),
+        _ => Err(EvidenceError::SubjectAccessInvalidToken),
     }
 }
 
@@ -105,8 +105,8 @@ pub(super) fn require_evaluation_capability(
 ) -> Result<(), EvidenceError> {
     match capability {
         EvaluationCapability::Machine { .. } => Ok(()),
-        EvaluationCapability::SelfAttestation { .. }
-            if capability.allows_self_attestation_claim(claim_id) =>
+        EvaluationCapability::SubjectBound { .. }
+            if capability.allows_subject_access_claim(claim_id) =>
         {
             Ok(())
         }
@@ -115,8 +115,8 @@ pub(super) fn require_evaluation_capability(
         {
             Ok(())
         }
-        EvaluationCapability::SelfAttestation { .. } => Err(EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::ClaimDenied,
+        EvaluationCapability::SubjectBound { .. } => Err(EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::ClaimDenied,
         }),
         EvaluationCapability::DelegatedAttestation { .. } => Err(delegated_attestation_denied()),
     }
@@ -133,28 +133,33 @@ pub(super) fn require_relay_consultation_capability(
         {
             Ok(())
         }
+        EvaluationCapability::SubjectBound { .. }
+            if capability.allows_subject_access_claim(claim_id) =>
+        {
+            Ok(())
+        }
         EvaluationCapability::DelegatedAttestation { .. } => Err(delegated_attestation_denied()),
-        EvaluationCapability::SelfAttestation { .. } => Err(EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::OperationDenied,
+        EvaluationCapability::SubjectBound { .. } => Err(EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::OperationDenied,
         }),
     }
 }
 
 pub(super) fn delegated_attestation_denied() -> EvidenceError {
-    EvidenceError::SelfAttestationDenied {
-        reason: SelfAttestationDenialCode::DelegatedSubjectNotPermitted,
+    EvidenceError::SubjectAccessDenied {
+        reason: SubjectAccessDenialCode::DelegatedSubjectNotPermitted,
     }
 }
 
 pub(super) fn delegated_relationship_unproven() -> EvidenceError {
-    EvidenceError::SelfAttestationDenied {
-        reason: SelfAttestationDenialCode::DelegatedRelationshipUnproven,
+    EvidenceError::SubjectAccessDenied {
+        reason: SubjectAccessDenialCode::DelegatedRelationshipUnproven,
     }
 }
 
 pub(super) fn delegated_proof_denied() -> EvidenceError {
-    EvidenceError::SelfAttestationDenied {
-        reason: SelfAttestationDenialCode::DelegatedProofDenied,
+    EvidenceError::SubjectAccessDenied {
+        reason: SubjectAccessDenialCode::DelegatedProofDenied,
     }
 }
 
@@ -192,11 +197,11 @@ pub(super) fn ensure_delegated_capability_context_binding(
         .as_deref()
         .ok_or_else(delegated_attestation_denied)?;
     let requester_hash = ctx
-        .self_attestation_rate_keys
+        .subject_access_rate_keys
         .delegated_subject_binding(requester_id_type, requester_subject.id.as_str())
         .map_err(|error| error.evidence_error())?;
     let target_hash = ctx
-        .self_attestation_rate_keys
+        .subject_access_rate_keys
         .delegated_subject_binding(target_id_type, target_subject.id.as_str())
         .map_err(|error| error.evidence_error())?;
     if &requester_hash != requester_subject_binding_hash || &target_hash != dependent_target_hash {

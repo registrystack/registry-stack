@@ -34,54 +34,53 @@ pub(super) async fn evaluate(
         Err(error) => return evidence_error_response(error),
     }
     let request_claim_ids = claim_ids(&request.claims);
-    let mut principal =
-        match classify_self_attestation_principal(&state.self_attestation, &principal) {
-            Ok(principal) => principal,
-            Err(error) => {
-                if let Err(rate_error) =
-                    consume_classification_denial_if_keyable(&state, &principal).await
-                {
-                    let mut response = evidence_error_response(rate_error.evidence_error());
-                    attach_self_attestation_rate_limit_audit(
-                        &mut response,
-                        "evaluate_rate_limited",
-                        &request_claim_ids,
-                        rate_error.bucket(),
-                    );
-                    return response;
-                }
-                let mut response = evidence_error_response(error);
-                let denial_code = denial_code_from_response(&response);
-                attach_self_attestation_audit(
+    let mut principal = match classify_subject_access_principal(&state.subject_access, &principal) {
+        Ok(principal) => principal,
+        Err(error) => {
+            if let Err(rate_error) =
+                consume_classification_denial_if_keyable(&state, &principal).await
+            {
+                let mut response = evidence_error_response(rate_error.evidence_error());
+                attach_subject_access_rate_limit_audit(
                     &mut response,
-                    "evaluate_denied",
+                    "evaluate_rate_limited",
                     &request_claim_ids,
-                    denial_code,
-                    Some(state.self_attestation.subject_binding.token_claim.as_str()),
+                    rate_error.bucket(),
                 );
                 return response;
             }
-        };
-    let mut self_attestation_context = None;
-    if principal.is_self_attestation() {
+            let mut response = evidence_error_response(error);
+            let denial_code = denial_code_from_response(&response);
+            attach_subject_access_audit(
+                &mut response,
+                "evaluate_denied",
+                &request_claim_ids,
+                denial_code,
+                Some(state.subject_access.subject_binding.token_claim.as_str()),
+            );
+            return response;
+        }
+    };
+    let mut subject_access_context = None;
+    if principal.is_subject_access() {
         // Classification only proves the caller is a citizen attester. The
         // transaction token authorization details select self vs delegated.
         let attestation_access_mode = requested_attestation_access_mode(&principal);
         principal.access_mode = attestation_access_mode;
         let principal_hash = match state
-            .self_attestation_rate_keys
+            .subject_access_rate_keys
             .principal(&principal.principal_id)
         {
             Ok(hash) => hash,
             Err(error) => return evidence_error_response(error.evidence_error()),
         };
         if let Err(error) = state
-            .self_attestation_rate_limiter
+            .subject_access_rate_limiter
             .check_authenticated_request(&principal_hash)
             .await
         {
             let mut response = evidence_error_response(error.evidence_error());
-            attach_self_attestation_rate_limit_audit(
+            attach_subject_access_rate_limit_audit(
                 &mut response,
                 "evaluate_rate_limited",
                 &request_claim_ids,
@@ -92,17 +91,13 @@ pub(super) async fn evaluate(
         }
         let context_result = if attestation_access_mode == AccessMode::DelegatedAttestation {
             derive_delegated_attestation_request_context(
-                &state.self_attestation,
-                &state.self_attestation_rate_keys,
+                &state.subject_access,
+                &state.subject_access_rate_keys,
                 &principal,
                 &mut request,
             )
         } else {
-            derive_self_attestation_request_context(
-                &state.self_attestation,
-                &principal,
-                &mut request,
-            )
+            derive_subject_access_request_context(&state.subject_access, &principal, &mut request)
         };
         if let Err(error) = context_result {
             if denial_code_from_error(&error).is_some_and(subject_mismatch_denial_code) {
@@ -110,7 +105,7 @@ pub(super) async fn evaluate(
                     consume_subject_mismatch_denial(&state, &principal_hash).await
                 {
                     let mut response = evidence_error_response(rate_error.evidence_error());
-                    attach_self_attestation_rate_limit_audit(
+                    attach_subject_access_rate_limit_audit(
                         &mut response,
                         "evaluate_rate_limited",
                         &request_claim_ids,
@@ -122,20 +117,20 @@ pub(super) async fn evaluate(
             }
             let denial_code = denial_code_from_error(&error);
             let mut response = evidence_error_response(error);
-            attach_self_attestation_audit(
+            attach_subject_access_audit(
                 &mut response,
                 "evaluate_denied",
                 &request_claim_ids,
                 denial_code,
-                Some(state.self_attestation.subject_binding.token_claim.as_str()),
+                Some(state.subject_access.subject_binding.token_claim.as_str()),
             );
             override_attestation_audit_access_mode(&mut response, principal.access_mode());
             return response;
         }
-        match prepare_self_attestation_evaluate(&state, evidence, &principal, &request) {
+        match prepare_subject_access_evaluate(&state, evidence, &principal, &request) {
             Ok(context) => {
                 request.purpose = Some(context.purpose.clone());
-                self_attestation_context = Some(context);
+                subject_access_context = Some(context);
             }
             Err(error) => {
                 if denial_code_from_error(&error).is_some_and(subject_mismatch_denial_code) {
@@ -143,7 +138,7 @@ pub(super) async fn evaluate(
                         consume_subject_mismatch_denial(&state, &principal_hash).await
                     {
                         let mut response = evidence_error_response(rate_error.evidence_error());
-                        attach_self_attestation_rate_limit_audit(
+                        attach_subject_access_rate_limit_audit(
                             &mut response,
                             "evaluate_rate_limited",
                             &request_claim_ids,
@@ -158,12 +153,12 @@ pub(super) async fn evaluate(
                 }
                 let denial_code = denial_code_from_error(&error);
                 let mut response = evidence_error_response(error);
-                attach_self_attestation_audit(
+                attach_subject_access_audit(
                     &mut response,
                     "evaluate_denied",
                     &request_claim_ids,
                     denial_code,
-                    Some(state.self_attestation.subject_binding.token_claim.as_str()),
+                    Some(state.subject_access.subject_binding.token_claim.as_str()),
                 );
                 override_attestation_audit_access_mode(&mut response, principal.access_mode());
                 return response;
@@ -189,7 +184,7 @@ pub(super) async fn evaluate(
         attach_zero_relay_no_forward_audit(&mut response);
         if let Err(error) = attach_evaluate_request_audit(
             &mut response,
-            &state.self_attestation_rate_keys,
+            &state.subject_access_rate_keys,
             &request,
             None,
         ) {
@@ -199,7 +194,7 @@ pub(super) async fn evaluate(
     }
     let runtime = state.runtime();
     let requested_claims = request_claim_ids;
-    let self_attestation_policy_hash = self_attestation_context
+    let subject_access_policy_hash = subject_access_context
         .as_ref()
         .and_then(|context| context.metadata.policy_hash.clone());
     let request_correlation_id = correlation_id
@@ -207,7 +202,7 @@ pub(super) async fn evaluate(
         .map(|Extension(correlation_id)| correlation_id.clone());
     let audit_request = request.clone();
     let evaluation_future = async {
-        if let Some(context) = self_attestation_context {
+        if let Some(context) = subject_access_context {
             runtime
                 .evaluate_with_capability_for_api(
                     Arc::clone(&state.evidence),
@@ -241,15 +236,15 @@ pub(super) async fn evaluate(
         (Ok(results), runtime_audit) => {
             let evaluation_id = runtime_audit.evaluation_id().map(str::to_string);
             let mut response = Json(json!({ "results": results })).into_response();
-            if principal.is_self_attestation() {
-                attach_self_attestation_success_audit(
+            if principal.is_subject_access() {
+                attach_subject_access_success_audit(
                     &mut response,
                     "evaluate",
                     evaluation_id,
                     &requested_claims,
                     Some(1),
                     None,
-                    self_attestation_policy_hash,
+                    subject_access_policy_hash,
                 );
                 override_attestation_audit_access_mode(&mut response, principal.access_mode());
             } else {
@@ -265,7 +260,7 @@ pub(super) async fn evaluate(
             attach_redacted_fields_audit(&mut response, &results);
             if let Err(error) = attach_evaluate_request_audit(
                 &mut response,
-                &state.self_attestation_rate_keys,
+                &state.subject_access_rate_keys,
                 &audit_request,
                 results.first(),
             ) {
@@ -287,7 +282,7 @@ pub(super) async fn evaluate(
                 None,
             );
             attach_runtime_evaluation_audit(&mut response, runtime_audit);
-            if principal.is_self_attestation() {
+            if principal.is_subject_access() {
                 override_attestation_audit_access_mode(&mut response, principal.access_mode());
             }
             if zero_source_no_forward {
@@ -295,7 +290,7 @@ pub(super) async fn evaluate(
             }
             if let Err(error) = attach_evaluate_request_audit(
                 &mut response,
-                &state.self_attestation_rate_keys,
+                &state.subject_access_rate_keys,
                 &audit_request,
                 None,
             ) {
@@ -333,32 +328,32 @@ pub(super) async fn batch_evaluate(
         Err(error) => return evidence_error_response(error),
     }
     let request_claim_ids = claim_ids(&request.claims);
-    let principal = match classify_self_attestation_principal(&state.self_attestation, &principal) {
+    let principal = match classify_subject_access_principal(&state.subject_access, &principal) {
         Ok(principal) => principal,
         Err(error) => {
             let mut response = evidence_error_response(error);
             let denial_code = denial_code_from_response(&response);
-            attach_self_attestation_audit(
+            attach_subject_access_audit(
                 &mut response,
                 "batch_evaluate_denied",
                 &request_claim_ids,
                 denial_code,
-                Some(state.self_attestation.subject_binding.token_claim.as_str()),
+                Some(state.subject_access.subject_binding.token_claim.as_str()),
             );
             return response;
         }
     };
-    if principal.is_self_attestation() {
-        let error = EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::BatchDenied,
+    if principal.is_subject_access() {
+        let error = EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::BatchDenied,
         };
         let mut response = evidence_error_response(error);
-        attach_self_attestation_audit(
+        attach_subject_access_audit(
             &mut response,
             "batch_evaluate_denied",
             &request_claim_ids,
-            Some(SelfAttestationDenialCode::BatchDenied),
-            Some(state.self_attestation.subject_binding.token_claim.as_str()),
+            Some(SubjectAccessDenialCode::BatchDenied),
+            Some(state.subject_access.subject_binding.token_claim.as_str()),
         );
         return response;
     }
@@ -414,7 +409,7 @@ pub(super) async fn batch_evaluate(
             );
             if let Err(error) = attach_batch_evaluate_response_audit(
                 &mut response,
-                &state.self_attestation_rate_keys,
+                &state.subject_access_rate_keys,
                 evidence,
                 &audit_request,
                 &result,
@@ -470,11 +465,10 @@ pub(super) async fn render(
         Ok(evidence) => evidence,
         Err(error) => return evidence_error_response(error),
     };
-    let mut principal =
-        match classify_self_attestation_principal(&state.self_attestation, &principal) {
-            Ok(principal) => principal,
-            Err(error) => return evidence_error_response(error),
-        };
+    let mut principal = match classify_subject_access_principal(&state.subject_access, &principal) {
+        Ok(principal) => principal,
+        Err(error) => return evidence_error_response(error),
+    };
     let lookup_client_id = match stored_evaluation_client_id(&state, &principal) {
         Ok(client_id) => client_id,
         Err(error) => return evidence_error_response(error),
@@ -488,10 +482,9 @@ pub(super) async fn render(
         Ok(None) => return evidence_error_response(EvidenceError::EvaluationNotFound),
         Err(error) => return evidence_error_response(error),
     };
-    if let Some(metadata) = evaluation.self_attestation.as_ref() {
-        if principal.is_self_attestation() {
-            if let Err(error) = apply_stored_self_attestation_access_mode(&mut principal, metadata)
-            {
+    if let Some(metadata) = evaluation.subject_access.as_ref() {
+        if principal.is_subject_access() {
+            if let Err(error) = apply_stored_subject_access_access_mode(&mut principal, metadata) {
                 return evidence_error_response(error);
             }
         }
@@ -501,7 +494,7 @@ pub(super) async fn render(
     {
         return evidence_error_response(EvidenceError::EvaluationNotFound);
     }
-    if let Err(error) = require_self_attestation_stored_access(
+    if let Err(error) = require_subject_access_stored_access(
         &state,
         evidence,
         &principal,
@@ -516,21 +509,21 @@ pub(super) async fn render(
     ) {
         return evidence_error_response(error);
     }
-    if principal.is_self_attestation() {
+    if principal.is_subject_access() {
         let principal_hash = match state
-            .self_attestation_rate_keys
+            .subject_access_rate_keys
             .principal(&principal.principal_id)
         {
             Ok(hash) => hash,
             Err(error) => return evidence_error_response(error.evidence_error()),
         };
         if let Err(error) = state
-            .self_attestation_rate_limiter
+            .subject_access_rate_limiter
             .check_authenticated_request(&principal_hash)
             .await
         {
             let mut response = evidence_error_response(error.evidence_error());
-            attach_self_attestation_rate_limit_audit(
+            attach_subject_access_rate_limit_audit(
                 &mut response,
                 "render_rate_limited",
                 &evaluation.claim_ids,
@@ -551,8 +544,8 @@ pub(super) async fn render(
     {
         Ok(value) => {
             let mut response = Json(value).into_response();
-            if principal.is_self_attestation() {
-                attach_self_attestation_success_audit(
+            if principal.is_subject_access() {
+                attach_subject_access_success_audit(
                     &mut response,
                     "render",
                     Some(evaluation_id),
@@ -560,7 +553,7 @@ pub(super) async fn render(
                     None,
                     Some(vec![evaluation.purpose.clone()]),
                     evaluation
-                        .self_attestation
+                        .subject_access
                         .as_ref()
                         .and_then(|metadata| metadata.policy_hash.clone()),
                 );
@@ -579,8 +572,8 @@ pub(super) async fn render(
         }
         Err(error) => {
             let mut response = evidence_error_response(error);
-            if principal.is_self_attestation() {
-                attach_self_attestation_success_audit(
+            if principal.is_subject_access() {
+                attach_subject_access_success_audit(
                     &mut response,
                     "render_failed",
                     Some(evaluation_id),
@@ -588,7 +581,7 @@ pub(super) async fn render(
                     None,
                     None,
                     evaluation
-                        .self_attestation
+                        .subject_access
                         .as_ref()
                         .and_then(|metadata| metadata.policy_hash.clone()),
                 );
@@ -618,7 +611,7 @@ pub(super) fn require_evaluation_access(
     principal: &EvidencePrincipal,
     evaluation: &registry_notary_core::StoredEvaluation,
 ) -> Result<(), EvidenceError> {
-    if principal.is_self_attestation() {
+    if principal.is_subject_access() {
         return Ok(());
     }
     for claim_ref in evaluation.selected_claim_refs() {
@@ -639,10 +632,10 @@ pub(super) fn evaluation_client_matches(
     principal: &EvidencePrincipal,
     evaluation: &registry_notary_core::StoredEvaluation,
 ) -> bool {
-    if let Some(metadata) = evaluation.self_attestation.as_ref() {
-        principal.is_self_attestation()
+    if let Some(metadata) = evaluation.subject_access.as_ref() {
+        principal.is_subject_access()
             && state
-                .self_attestation_rate_keys
+                .subject_access_rate_keys
                 .principal(&principal.principal_id)
                 .is_ok_and(|hash| {
                     hash == metadata.principal_hash && evaluation.client_id == hash.as_str()
@@ -656,9 +649,9 @@ pub(super) fn stored_evaluation_client_id(
     state: &RegistryNotaryApiState,
     principal: &EvidencePrincipal,
 ) -> Result<String, EvidenceError> {
-    if principal.is_self_attestation() {
+    if principal.is_subject_access() {
         state
-            .self_attestation_rate_keys
+            .subject_access_rate_keys
             .principal(&principal.principal_id)
             .map(|hash| hash.as_str().to_string())
             .map_err(|error| error.evidence_error())
@@ -671,7 +664,7 @@ pub(super) fn runtime_principal_for_stored_evaluation(
     principal: &EvidencePrincipal,
     evaluation: &registry_notary_core::StoredEvaluation,
 ) -> EvidencePrincipal {
-    if evaluation.self_attestation.is_some() {
+    if evaluation.subject_access.is_some() {
         let mut runtime_principal = principal.clone();
         runtime_principal.principal_id = evaluation.client_id.clone();
         runtime_principal

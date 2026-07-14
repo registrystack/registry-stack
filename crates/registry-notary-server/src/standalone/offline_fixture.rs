@@ -8,9 +8,8 @@ use std::sync::Arc;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use registry_notary_core::{
-    ClaimEvidenceMode, ClaimRef, ClaimResultView, EvaluateRequest, EvidenceAuthMode,
-    EvidenceConfig, EvidenceConfigError, EvidenceError, RelayOutputContract,
-    StandaloneRegistryNotaryConfig,
+    ClaimEvidenceMode, ClaimRef, ClaimResultView, EvaluateRequest, EvidenceConfig,
+    EvidenceConfigError, EvidenceError, RelayOutputContract, StandaloneRegistryNotaryConfig,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_authcommon::fingerprint_api_key;
@@ -27,7 +26,7 @@ use crate::runtime::consultation::{
 use crate::runtime::validate_cel_claims_for_startup;
 use crate::{EvidenceStore, RegistryNotaryRuntime};
 
-use super::{authenticate_static, RequestCredentials, ResolvedCredential};
+use super::{authenticate_api_key, RequestCredentials, ResolvedCredential};
 
 /// Closed authentication states accepted by the offline authoring harness.
 ///
@@ -351,9 +350,6 @@ impl OfflineNotaryHarness {
         config
             .validate()
             .map_err(OfflineNotaryHarnessError::InvalidConfig)?;
-        if config.auth.mode != EvidenceAuthMode::ApiKey {
-            return Err(OfflineNotaryHarnessError::UnsupportedAuthentication);
-        }
         let principal_id = config
             .auth
             .api_keys
@@ -421,7 +417,7 @@ impl OfflineNotaryHarness {
             }
             OfflineAuthentication::Missing => None,
         };
-        let principal = authenticate_static(
+        let principal = authenticate_api_key(
             &RequestCredentials {
                 api_key,
                 authorization_present: false,
@@ -429,7 +425,6 @@ impl OfflineNotaryHarness {
                 id_token: None,
             },
             &[credential],
-            &[],
         );
         let principal = match principal {
             Ok(principal) => principal,

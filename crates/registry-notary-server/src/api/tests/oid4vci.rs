@@ -212,18 +212,15 @@ async fn oid4vci_credential_rejects_delegated_transaction_token() {
     let store = Arc::new(EvidenceStore::default());
     let mut oid4vci = oid4vci_config();
     oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
-    let state = Arc::new(
-        RegistryNotaryApiState::new_with_self_attestation_and_oid4vci(
-            Arc::new(oid4vci_evidence_config()),
-            Arc::new(delegated_self_attestation_config()),
-            Arc::new(oid4vci),
-            AuditKeyHasher::unkeyed_dev_only(),
-            Arc::clone(&store),
-            Arc::new(TestIssuerResolver),
-        ),
-    );
-    let mut principal =
-        fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]);
+    let state = Arc::new(RegistryNotaryApiState::new_with_subject_access_and_oid4vci(
+        Arc::new(oid4vci_evidence_config()),
+        Arc::new(delegated_subject_access_config()),
+        Arc::new(oid4vci),
+        AuditKeyHasher::unkeyed_dev_only(),
+        Arc::clone(&store),
+        Arc::new(TestIssuerResolver),
+    ));
+    let mut principal = fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]);
     principal.authorization_details =
         Some(delegated_authorization_details(&delegated_evidence_config()));
     let nonce = "delegated-oid4vci-nonce";
@@ -262,7 +259,7 @@ async fn oid4vci_credential_rejects_delegated_transaction_token() {
 async fn oid4vci_credential_scope_prevents_cross_configuration_issuance_before_nonce_consume() {
     let store = Arc::new(EvidenceStore::default());
     let evidence = Arc::new(oid4vci_evidence_config());
-    let self_attestation = Arc::new(self_attestation_config());
+    let subject_access = Arc::new(subject_access_config());
     let mut oid4vci = oid4vci_config();
     oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
     let mut other_configuration = oid4vci
@@ -277,22 +274,20 @@ async fn oid4vci_credential_scope_prevents_cross_configuration_issuance_before_n
         .insert("date_of_birth_sd_jwt".to_string(), other_configuration);
     let principal = oid4vci_authorized_principal(
         &evidence,
-        &self_attestation,
+        &subject_access,
         &oid4vci,
         "person_is_alive_sd_jwt",
-        &["self_attestation", "person_is_alive"],
+        &["subject_access", "person_is_alive"],
     );
     let oid4vci = Arc::new(oid4vci);
-    let state = Arc::new(
-        RegistryNotaryApiState::new_with_self_attestation_and_oid4vci(
-            Arc::clone(&evidence),
-            Arc::clone(&self_attestation),
-            Arc::clone(&oid4vci),
-            AuditKeyHasher::unkeyed_dev_only(),
-            Arc::clone(&store),
-            Arc::new(TestIssuerResolver),
-        ),
-    );
+    let state = Arc::new(RegistryNotaryApiState::new_with_subject_access_and_oid4vci(
+        Arc::clone(&evidence),
+        Arc::clone(&subject_access),
+        Arc::clone(&oid4vci),
+        AuditKeyHasher::unkeyed_dev_only(),
+        Arc::clone(&store),
+        Arc::new(TestIssuerResolver),
+    ));
     let nonce = "cross-configuration-nonce";
     let (nonce_scope, nonce_key) =
         reserve_oid4vci_test_nonce(&state, "date_of_birth_sd_jwt", nonce).await;
@@ -341,27 +336,25 @@ async fn oid4vci_credential_scope_prevents_cross_configuration_issuance_before_n
 async fn oid4vci_credential_requires_authorization_details_before_nonce_consume() {
     let store = Arc::new(EvidenceStore::default());
     let evidence = Arc::new(oid4vci_evidence_config());
-    let self_attestation = Arc::new(self_attestation_config());
+    let subject_access = Arc::new(subject_access_config());
     let mut oid4vci = oid4vci_config();
     oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
     let oid4vci = Arc::new(oid4vci);
-    let state = Arc::new(
-        RegistryNotaryApiState::new_with_self_attestation_and_oid4vci(
-            Arc::clone(&evidence),
-            Arc::clone(&self_attestation),
-            Arc::clone(&oid4vci),
-            AuditKeyHasher::unkeyed_dev_only(),
-            Arc::clone(&store),
-            Arc::new(TestIssuerResolver),
-        ),
-    );
+    let state = Arc::new(RegistryNotaryApiState::new_with_subject_access_and_oid4vci(
+        Arc::clone(&evidence),
+        Arc::clone(&subject_access),
+        Arc::clone(&oid4vci),
+        AuditKeyHasher::unkeyed_dev_only(),
+        Arc::clone(&store),
+        Arc::new(TestIssuerResolver),
+    ));
     let nonce = "missing-authz-nonce";
     let (nonce_scope, nonce_key) =
         reserve_oid4vci_test_nonce(&state, "person_is_alive_sd_jwt", nonce).await;
     let proof = sign_oid4vci_proof(&state.oid4vci.credential_issuer, nonce);
     let mut principal = fresh_oidc_principal(
         Some("client_id:citizen-portal"),
-        &["self_attestation", "person_is_alive"],
+        &["subject_access", "person_is_alive"],
     );
     let claims = principal
         .verified_claims
@@ -414,15 +407,15 @@ async fn oid4vci_credential_requires_authorization_details_before_nonce_consume(
 async fn oid4vci_credential_requires_custom_notary_typ_details_before_nonce_consume() {
     let store = Arc::new(EvidenceStore::default());
     let evidence = Arc::new(oid4vci_evidence_config());
-    let self_attestation = Arc::new(self_attestation_config());
+    let subject_access = Arc::new(subject_access_config());
     let mut oid4vci = oid4vci_config();
     oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
     let oid4vci = Arc::new(oid4vci);
     let runtime_config = Arc::new(runtime_config_with_custom_access_token_typ());
     let state = Arc::new(
-        RegistryNotaryApiState::new_with_self_attestation_and_oid4vci(
+        RegistryNotaryApiState::new_with_subject_access_and_oid4vci(
             Arc::clone(&evidence),
-            Arc::clone(&self_attestation),
+            Arc::clone(&subject_access),
             Arc::clone(&oid4vci),
             AuditKeyHasher::unkeyed_dev_only(),
             Arc::clone(&store),
@@ -436,7 +429,7 @@ async fn oid4vci_credential_requires_custom_notary_typ_details_before_nonce_cons
     let proof = sign_oid4vci_proof(&state.oid4vci.credential_issuer, nonce);
     let mut principal = fresh_oidc_principal(
         Some("client_id:citizen-portal"),
-        &["self_attestation", "person_is_alive"],
+        &["subject_access", "person_is_alive"],
     );
     let claims = principal
         .verified_claims
@@ -595,7 +588,7 @@ fn oid4vci_token_denial_audit_records_public_token_path() {
         "/oid4vci/token",
         StatusCode::BAD_REQUEST.as_u16(),
         Some("person_is_alive_sd_jwt"),
-        SelfAttestationDenialCode::OperationDenied,
+        SubjectAccessDenialCode::OperationDenied,
     );
 
     assert_eq!(audit.method, "POST");
@@ -604,7 +597,7 @@ fn oid4vci_token_denial_audit_records_public_token_path() {
     assert_eq!(audit.decision, "denied");
     assert_eq!(
         audit.denial_code,
-        Some(SelfAttestationDenialCode::OperationDenied)
+        Some(SubjectAccessDenialCode::OperationDenied)
     );
     assert_eq!(
         audit.protocol.as_ref().map(|value| value.as_str()),
@@ -636,8 +629,8 @@ async fn oid4vci_token_error_fails_closed_when_denial_audit_fails() {
 #[tokio::test]
 async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
     let store = Arc::new(EvidenceStore::default());
-    let mut self_attestation = self_attestation_config();
-    self_attestation
+    let mut subject_access = subject_access_config();
+    subject_access
         .allowed_formats
         .push(FORMAT_SD_JWT_VC.to_string());
     let mut evidence = evidence_config();
@@ -674,23 +667,21 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
     let mut oid4vci = oid4vci_config();
     oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
     let evidence = Arc::new(evidence);
-    let self_attestation = Arc::new(self_attestation);
+    let subject_access = Arc::new(subject_access);
     let oid4vci = Arc::new(oid4vci);
-    let state = Arc::new(
-        RegistryNotaryApiState::new_with_self_attestation_and_oid4vci(
-            Arc::clone(&evidence),
-            Arc::clone(&self_attestation),
-            Arc::clone(&oid4vci),
-            AuditKeyHasher::unkeyed_dev_only(),
-            Arc::clone(&store),
-            Arc::new(StaticIssuerResolver),
-        ),
-    );
+    let state = Arc::new(RegistryNotaryApiState::new_with_subject_access_and_oid4vci(
+        Arc::clone(&evidence),
+        Arc::clone(&subject_access),
+        Arc::clone(&oid4vci),
+        AuditKeyHasher::unkeyed_dev_only(),
+        Arc::clone(&store),
+        Arc::new(StaticIssuerResolver),
+    ));
     let missing_nonce = oid4vci_credential(
         Some(Extension(Arc::clone(&state))),
         Some(Extension(fresh_oidc_principal(
             Some("client_id:citizen-portal"),
-            &["self_attestation"],
+            &["subject_access"],
         ))),
         None,
         Json(Oid4vciCredentialRequest {
@@ -719,10 +710,10 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
         Some(Extension(Arc::clone(&state))),
         Some(Extension(oid4vci_authorized_principal(
             &evidence,
-            &self_attestation,
+            &subject_access,
             &oid4vci,
             "person_is_alive_sd_jwt",
-            &["self_attestation", "person_is_alive"],
+            &["subject_access", "person_is_alive"],
         ))),
         Some(Extension(validated_oid4vci_proof(
             &state,
@@ -753,7 +744,7 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
 
     let nonce = "nonce-1";
     let nonce_key = state
-        .self_attestation_rate_keys
+        .subject_access_rate_keys
         .oid4vci_nonce(
             &state.oid4vci.credential_issuer,
             "person_is_alive_sd_jwt",
@@ -791,10 +782,10 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
         Some(Extension(Arc::clone(&state))),
         Some(Extension(oid4vci_authorized_principal(
             &evidence,
-            &self_attestation,
+            &subject_access,
             &oid4vci,
             "person_is_alive_sd_jwt",
-            &["self_attestation", "person_is_alive"],
+            &["subject_access", "person_is_alive"],
         ))),
         Some(Extension(validated_proof.clone())),
         Json(request.clone()),
@@ -818,10 +809,10 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
         Some(Extension(Arc::clone(&state))),
         Some(Extension(oid4vci_authorized_principal(
             &evidence,
-            &self_attestation,
+            &subject_access,
             &oid4vci,
             "person_is_alive_sd_jwt",
-            &["self_attestation", "person_is_alive"],
+            &["subject_access", "person_is_alive"],
         ))),
         Some(Extension(validated_proof)),
         Json(request),
@@ -838,8 +829,8 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
 #[tokio::test]
 async fn oid4vci_rejects_holder_key_equal_to_issuer_key_before_side_effects() {
     let store = Arc::new(EvidenceStore::default());
-    let mut self_attestation = self_attestation_config();
-    self_attestation
+    let mut subject_access = subject_access_config();
+    subject_access
         .allowed_formats
         .push(FORMAT_SD_JWT_VC.to_string());
     let mut evidence = evidence_config();
@@ -876,21 +867,19 @@ async fn oid4vci_rejects_holder_key_equal_to_issuer_key_before_side_effects() {
     let mut oid4vci = oid4vci_config();
     oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
     let evidence = Arc::new(evidence);
-    let self_attestation = Arc::new(self_attestation);
+    let subject_access = Arc::new(subject_access);
     let oid4vci = Arc::new(oid4vci);
-    let state = Arc::new(
-        RegistryNotaryApiState::new_with_self_attestation_and_oid4vci(
-            Arc::clone(&evidence),
-            Arc::clone(&self_attestation),
-            Arc::clone(&oid4vci),
-            AuditKeyHasher::unkeyed_dev_only(),
-            Arc::clone(&store),
-            Arc::new(HolderIssuerResolver),
-        ),
-    );
+    let state = Arc::new(RegistryNotaryApiState::new_with_subject_access_and_oid4vci(
+        Arc::clone(&evidence),
+        Arc::clone(&subject_access),
+        Arc::clone(&oid4vci),
+        AuditKeyHasher::unkeyed_dev_only(),
+        Arc::clone(&store),
+        Arc::new(HolderIssuerResolver),
+    ));
     let nonce = "nonce-equal-key";
     let nonce_key = state
-        .self_attestation_rate_keys
+        .subject_access_rate_keys
         .oid4vci_nonce(
             &state.oid4vci.credential_issuer,
             "person_is_alive_sd_jwt",
@@ -916,10 +905,10 @@ async fn oid4vci_rejects_holder_key_equal_to_issuer_key_before_side_effects() {
         Some(Extension(Arc::clone(&state))),
         Some(Extension(oid4vci_authorized_principal(
             &evidence,
-            &self_attestation,
+            &subject_access,
             &oid4vci,
             "person_is_alive_sd_jwt",
-            &["self_attestation", "person_is_alive"],
+            &["subject_access", "person_is_alive"],
         ))),
         Some(Extension(validated_oid4vci_proof(
             &state,
@@ -1010,7 +999,7 @@ fn oid4vci_credential_request_rejects_ambiguous_configuration_ids() {
 #[test]
 fn oid4vci_issuance_authorization_details_bind_selected_configuration() {
     let evidence = oid4vci_evidence_config();
-    let config = self_attestation_config();
+    let config = subject_access_config();
     let oid4vci = oid4vci_config();
     let configuration = oid4vci
         .credential_configurations
@@ -1025,8 +1014,8 @@ fn oid4vci_issuance_authorization_details_bind_selected_configuration() {
     assert_eq!(details.claims, vec![ClaimRef::from("person-is-alive")]);
     assert_eq!(details.disclosure.as_deref(), Some("predicate"));
     assert_eq!(details.format.as_deref(), Some(FORMAT_SD_JWT_VC));
-    assert_eq!(details.purpose.as_deref(), Some("citizen_self_attestation"));
-    assert_eq!(details.access_mode, Some(AccessMode::SelfAttestation));
+    assert_eq!(details.purpose.as_deref(), Some("citizen_subject_access"));
+    assert_eq!(details.access_mode, Some(AccessMode::SubjectBound));
     let subject = details.subject.as_ref().expect("subject binding is set");
     assert_eq!(subject.binding_claim, SUBJECT_BINDING_CLAIM);
     assert_eq!(subject.id_type, "national_id");
@@ -1036,7 +1025,7 @@ fn oid4vci_issuance_authorization_details_bind_selected_configuration() {
         &config,
         &oid4vci,
         "person_is_alive_sd_jwt",
-        &["self_attestation", "person_is_alive"],
+        &["subject_access", "person_is_alive"],
     );
     require_oid4vci_issuance_authorization_details(
         &evidence,
@@ -1049,7 +1038,7 @@ fn oid4vci_issuance_authorization_details_bind_selected_configuration() {
 
     let direct_esignet_principal = fresh_oidc_principal(
         Some("client_id:citizen-portal"),
-        &["self_attestation", "person_is_alive"],
+        &["subject_access", "person_is_alive"],
     );
     require_oid4vci_issuance_authorization_details(
         &evidence,
@@ -1064,7 +1053,7 @@ fn oid4vci_issuance_authorization_details_bind_selected_configuration() {
 #[test]
 fn oid4vci_issuance_authorization_details_fail_closed_for_empty_notary_details() {
     let evidence = oid4vci_evidence_config();
-    let config = self_attestation_config();
+    let config = subject_access_config();
     let oid4vci = oid4vci_config();
     let configuration = oid4vci
         .credential_configurations
@@ -1072,7 +1061,7 @@ fn oid4vci_issuance_authorization_details_fail_closed_for_empty_notary_details()
         .expect("configuration exists");
     let mut principal = fresh_oidc_principal(
         Some("client_id:citizen-portal"),
-        &["self_attestation", "person_is_alive"],
+        &["subject_access", "person_is_alive"],
     );
     principal.authorization_details = Some(EvidenceAuthorizationDetails {
         detail_type: registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE.to_string(),
@@ -1102,8 +1091,8 @@ fn oid4vci_issuance_authorization_details_fail_closed_for_empty_notary_details()
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::OperationDenied
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::OperationDenied
         }
     ));
 }
@@ -1113,7 +1102,7 @@ fn oid4vci_requires_authorization_details_for_custom_notary_access_typ() {
     let runtime_config = runtime_config_with_custom_access_token_typ();
     let mut principal = fresh_oidc_principal(
         Some("client_id:citizen-portal"),
-        &["self_attestation", "person_is_alive"],
+        &["subject_access", "person_is_alive"],
     );
     {
         let claims = principal

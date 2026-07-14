@@ -351,7 +351,7 @@ async fn static_api_routes_preserve_listener_and_middleware_security_policy() {
             route.matched_path
         );
         assert_eq!(
-            is_self_attestation_wallet_cors_path(route.sample_path),
+            is_subject_access_wallet_cors_path(route.sample_path),
             route.wallet_cors,
             "{} wallet CORS classification changed",
             route.matched_path

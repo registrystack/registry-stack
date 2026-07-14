@@ -212,7 +212,7 @@ fn runtime_snapshot_read_never_observes_torn_issuer_federation_generation() {
     });
     let state = Arc::new(RegistryNotaryApiState::new_with_runtime_blocks(
         Arc::new(EvidenceConfig::default()),
-        Arc::new(SelfAttestationConfig::default()),
+        Arc::new(SubjectAccessConfig::default()),
         Arc::new(Oid4vciConfig::default()),
         Arc::new(FederationConfig::default()),
         Some(Arc::clone(&old_federation)),

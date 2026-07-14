@@ -64,8 +64,8 @@ use registry_notary_core::{
     Hashed, HolderRequest, Oid4vciConfig, Oid4vciCredentialClaimMode,
     Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig,
     PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RenderEvaluationRequest,
-    SelfAttestationConfig, SelfAttestationDelegatedRelationshipConfig, SelfAttestationDenialCode,
-    SelfAttestationScopePolicy, StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata,
+    StandaloneRegistryNotaryConfig, StoredSubjectAccessMetadata, SubjectAccessConfig,
+    SubjectAccessDelegatedRelationshipConfig, SubjectAccessDenialCode, SubjectAccessScopePolicy,
     SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
@@ -119,8 +119,8 @@ use crate::{
         AuthAuditState, PreAuthAuditFields, PreAuthRuntime, SignerReadiness,
     },
     BatchEvaluateOptions, EvidenceStore, MachineQuotaLimiter, RegistryNotaryRuntime,
-    SelfAttestationRateLimitBucket, SelfAttestationRateLimitError, SelfAttestationRateLimitKeys,
-    SelfAttestationRateLimiter,
+    SubjectAccessRateLimitBucket, SubjectAccessRateLimitError, SubjectAccessRateLimitKeys,
+    SubjectAccessRateLimiter,
 };
 
 pub(crate) use crate::digest::evidence_claim_hash;

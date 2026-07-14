@@ -31,13 +31,13 @@ pub(super) async fn service_document(
         Ok(evidence) => evidence,
         Err(error) => return evidence_error_response(error),
     };
-    let include_self_attestation_details =
-        classify_self_attestation_principal(&state.self_attestation, &principal)
-            .is_ok_and(|principal| principal.is_self_attestation());
-    let mut document = RegistryNotaryRuntime::service_document_with_self_attestation(
+    let include_subject_access_details =
+        classify_subject_access_principal(&state.subject_access, &principal)
+            .is_ok_and(|principal| principal.is_subject_access());
+    let mut document = RegistryNotaryRuntime::service_document_with_subject_access(
         evidence,
-        &state.self_attestation,
-        include_self_attestation_details,
+        &state.subject_access,
+        include_subject_access_details,
     );
     if state.credential_status.is_enabled() {
         advertise_credential_status(&mut document);

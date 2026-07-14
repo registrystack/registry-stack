@@ -211,7 +211,7 @@ this host. Evidence-grade deployments refuse to start when the audit sink is
 
 - The server starts fail-closed when credentials are missing or invalid.
 - SD-JWT VC credential profiles default to 600-second validity when
-  `validity_seconds` is omitted; self-attestation keeps profiles within the
+  `validity_seconds` is omitted; subject-access keeps profiles within the
   configured credential validity ceiling.
 - Federated evaluation routes are not mounted unless `federation.enabled` is
   true, and accepted requests must be signed compact JWS bodies from configured

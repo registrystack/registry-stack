@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Registry Notary stable error taxonomy.
 
-use crate::model::SelfAttestationDenialCode;
+use crate::model::SubjectAccessDenialCode;
 
 use thiserror::Error;
 
@@ -63,14 +63,14 @@ pub enum EvidenceError {
     MultipleCredentials,
     #[error("required scope is missing")]
     ScopeDenied { required: String },
-    #[error("self-attestation request is denied")]
-    SelfAttestationDenied { reason: SelfAttestationDenialCode },
-    #[error("self-attestation request is rate limited")]
-    SelfAttestationRateLimited,
-    #[error("self-attestation token is invalid")]
-    SelfAttestationInvalidToken,
-    #[error("self-attestation assurance policy denied the request")]
-    SelfAttestationAssuranceDenied,
+    #[error("subject-access request is denied")]
+    SubjectAccessDenied { reason: SubjectAccessDenialCode },
+    #[error("subject-access request is rate limited")]
+    SubjectAccessRateLimited,
+    #[error("subject-access token is invalid")]
+    SubjectAccessInvalidToken,
+    #[error("subject-access assurance policy denied the request")]
+    SubjectAccessAssuranceDenied,
     #[error("machine evaluation quota was exceeded")]
     MachineQuotaExceeded { retry_after_seconds: u64 },
 }
@@ -104,10 +104,10 @@ impl EvidenceError {
             Self::MissingCredential => "auth.missing_credential",
             Self::MultipleCredentials => "auth.multiple_credentials",
             Self::ScopeDenied { .. } => "auth.scope_denied",
-            Self::SelfAttestationDenied { .. } => "self_attestation.denied",
-            Self::SelfAttestationRateLimited => "self_attestation.rate_limited",
-            Self::SelfAttestationInvalidToken | Self::SelfAttestationAssuranceDenied => {
-                "self_attestation.denied"
+            Self::SubjectAccessDenied { .. } => "subject_access.denied",
+            Self::SubjectAccessRateLimited => "subject_access.rate_limited",
+            Self::SubjectAccessInvalidToken | Self::SubjectAccessAssuranceDenied => {
+                "subject_access.denied"
             }
             Self::MachineQuotaExceeded { .. } => "evaluation.quota_exceeded",
         }
@@ -116,11 +116,9 @@ impl EvidenceError {
     #[must_use]
     pub fn audit_code(&self) -> &'static str {
         match self {
-            Self::SelfAttestationDenied { reason } => reason.as_str(),
-            Self::SelfAttestationInvalidToken => SelfAttestationDenialCode::InvalidToken.as_str(),
-            Self::SelfAttestationAssuranceDenied => {
-                SelfAttestationDenialCode::AssuranceDenied.as_str()
-            }
+            Self::SubjectAccessDenied { reason } => reason.as_str(),
+            Self::SubjectAccessInvalidToken => SubjectAccessDenialCode::InvalidToken.as_str(),
+            Self::SubjectAccessAssuranceDenied => SubjectAccessDenialCode::AssuranceDenied.as_str(),
             Self::PolicyDenied { code, .. } => code,
             _ => self.code(),
         }
@@ -132,36 +130,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn self_attestation_denial_keeps_generic_public_code_and_specific_audit_code() {
-        let error = EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::SubjectMismatch,
+    fn subject_access_denial_keeps_generic_public_code_and_specific_audit_code() {
+        let error = EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::SubjectMismatch,
         };
 
-        assert_eq!(error.code(), "self_attestation.denied");
-        assert_eq!(error.audit_code(), "self_attestation.subject_mismatch");
+        assert_eq!(error.code(), "subject_access.denied");
+        assert_eq!(error.audit_code(), "subject_access.subject_mismatch");
     }
 
     #[test]
-    fn self_attestation_specific_errors_have_stable_codes() {
+    fn subject_access_specific_errors_have_stable_codes() {
         assert_eq!(
-            EvidenceError::SelfAttestationRateLimited.code(),
-            "self_attestation.rate_limited"
+            EvidenceError::SubjectAccessRateLimited.code(),
+            "subject_access.rate_limited"
         );
         assert_eq!(
-            EvidenceError::SelfAttestationInvalidToken.code(),
-            "self_attestation.denied"
+            EvidenceError::SubjectAccessInvalidToken.code(),
+            "subject_access.denied"
         );
         assert_eq!(
-            EvidenceError::SelfAttestationInvalidToken.audit_code(),
-            "self_attestation.invalid_token"
+            EvidenceError::SubjectAccessInvalidToken.audit_code(),
+            "subject_access.invalid_token"
         );
         assert_eq!(
-            EvidenceError::SelfAttestationAssuranceDenied.code(),
-            "self_attestation.denied"
+            EvidenceError::SubjectAccessAssuranceDenied.code(),
+            "subject_access.denied"
         );
         assert_eq!(
-            EvidenceError::SelfAttestationAssuranceDenied.audit_code(),
-            "self_attestation.assurance_denied"
+            EvidenceError::SubjectAccessAssuranceDenied.audit_code(),
+            "subject_access.assurance_denied"
         );
     }
 

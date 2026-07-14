@@ -151,7 +151,7 @@ pub enum AccessMode {
     Unknown,
     #[default]
     MachineClient,
-    SelfAttestation,
+    SubjectBound,
     DelegatedAttestation,
 }
 
@@ -161,7 +161,7 @@ impl AccessMode {
         match self {
             Self::Unknown => "unknown",
             Self::MachineClient => "machine_client",
-            Self::SelfAttestation => "self_attestation",
+            Self::SubjectBound => "subject_bound",
             Self::DelegatedAttestation => "delegated_attestation",
         }
     }
@@ -171,7 +171,7 @@ impl AccessMode {
         match value {
             "unknown" => Some(Self::Unknown),
             "machine_client" => Some(Self::MachineClient),
-            "self_attestation" => Some(Self::SelfAttestation),
+            "subject_bound" => Some(Self::SubjectBound),
             "delegated_attestation" => Some(Self::DelegatedAttestation),
             _ => None,
         }
@@ -179,7 +179,7 @@ impl AccessMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SelfAttestationDenialCode {
+pub enum SubjectAccessDenialCode {
     Disabled,
     OperationDenied,
     ClaimDenied,
@@ -199,22 +199,22 @@ pub enum SelfAttestationDenialCode {
     DelegatedProofDenied,
 }
 
-impl SelfAttestationDenialCode {
+impl SubjectAccessDenialCode {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Disabled => "self_attestation.disabled",
-            Self::OperationDenied => "self_attestation.operation_denied",
-            Self::ClaimDenied => "self_attestation.claim_denied",
-            Self::DisclosureDenied => "self_attestation.disclosure_denied",
-            Self::FormatDenied => "self_attestation.format_denied",
-            Self::ProfileDenied => "self_attestation.profile_denied",
-            Self::SubjectClaimMissing => "self_attestation.subject_claim_missing",
-            Self::SubjectMismatch => "self_attestation.subject_mismatch",
-            Self::RateLimited => "self_attestation.rate_limited",
-            Self::InvalidToken => "self_attestation.invalid_token",
-            Self::AssuranceDenied => "self_attestation.assurance_denied",
-            Self::BatchDenied => "self_attestation.batch_denied",
+            Self::Disabled => "subject_access.disabled",
+            Self::OperationDenied => "subject_access.operation_denied",
+            Self::ClaimDenied => "subject_access.claim_denied",
+            Self::DisclosureDenied => "subject_access.disclosure_denied",
+            Self::FormatDenied => "subject_access.format_denied",
+            Self::ProfileDenied => "subject_access.profile_denied",
+            Self::SubjectClaimMissing => "subject_access.subject_claim_missing",
+            Self::SubjectMismatch => "subject_access.subject_mismatch",
+            Self::RateLimited => "subject_access.rate_limited",
+            Self::InvalidToken => "subject_access.invalid_token",
+            Self::AssuranceDenied => "subject_access.assurance_denied",
+            Self::BatchDenied => "subject_access.batch_denied",
             Self::DelegatedRelationshipUnproven => "delegated.relationship_unproven",
             Self::DelegatedRelationshipNotAllowed => "delegated.relationship_not_allowed",
             Self::DelegatedClaimDenied => "delegated.claim_denied",
@@ -226,18 +226,18 @@ impl SelfAttestationDenialCode {
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
-            "self_attestation.disabled" => Some(Self::Disabled),
-            "self_attestation.operation_denied" => Some(Self::OperationDenied),
-            "self_attestation.claim_denied" => Some(Self::ClaimDenied),
-            "self_attestation.disclosure_denied" => Some(Self::DisclosureDenied),
-            "self_attestation.format_denied" => Some(Self::FormatDenied),
-            "self_attestation.profile_denied" => Some(Self::ProfileDenied),
-            "self_attestation.subject_claim_missing" => Some(Self::SubjectClaimMissing),
-            "self_attestation.subject_mismatch" => Some(Self::SubjectMismatch),
-            "self_attestation.rate_limited" => Some(Self::RateLimited),
-            "self_attestation.invalid_token" => Some(Self::InvalidToken),
-            "self_attestation.assurance_denied" => Some(Self::AssuranceDenied),
-            "self_attestation.batch_denied" => Some(Self::BatchDenied),
+            "subject_access.disabled" => Some(Self::Disabled),
+            "subject_access.operation_denied" => Some(Self::OperationDenied),
+            "subject_access.claim_denied" => Some(Self::ClaimDenied),
+            "subject_access.disclosure_denied" => Some(Self::DisclosureDenied),
+            "subject_access.format_denied" => Some(Self::FormatDenied),
+            "subject_access.profile_denied" => Some(Self::ProfileDenied),
+            "subject_access.subject_claim_missing" => Some(Self::SubjectClaimMissing),
+            "subject_access.subject_mismatch" => Some(Self::SubjectMismatch),
+            "subject_access.rate_limited" => Some(Self::RateLimited),
+            "subject_access.invalid_token" => Some(Self::InvalidToken),
+            "subject_access.assurance_denied" => Some(Self::AssuranceDenied),
+            "subject_access.batch_denied" => Some(Self::BatchDenied),
             "delegated.relationship_unproven" => Some(Self::DelegatedRelationshipUnproven),
             "delegated.relationship_not_allowed" => Some(Self::DelegatedRelationshipNotAllowed),
             "delegated.claim_denied" => Some(Self::DelegatedClaimDenied),
@@ -248,7 +248,7 @@ impl SelfAttestationDenialCode {
     }
 }
 
-impl Serialize for SelfAttestationDenialCode {
+impl Serialize for SubjectAccessDenialCode {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -257,13 +257,13 @@ impl Serialize for SelfAttestationDenialCode {
     }
 }
 
-impl<'de> Deserialize<'de> for SelfAttestationDenialCode {
+impl<'de> Deserialize<'de> for SubjectAccessDenialCode {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         let value = String::deserialize(deserializer)?;
-        Self::parse(&value).ok_or_else(|| de::Error::custom("unknown self-attestation denial code"))
+        Self::parse(&value).ok_or_else(|| de::Error::custom("unknown subject-access denial code"))
     }
 }
 
@@ -549,7 +549,7 @@ pub enum EvaluationCapability {
         #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
         scopes: BTreeSet<String>,
     },
-    SelfAttestation {
+    SubjectBound {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         claim_id: Option<BoundedClaimId>,
         #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
@@ -571,7 +571,7 @@ impl EvaluationCapability {
     pub fn access_mode(&self) -> AccessMode {
         match self {
             Self::Machine { .. } => AccessMode::MachineClient,
-            Self::SelfAttestation { .. } => AccessMode::SelfAttestation,
+            Self::SubjectBound { .. } => AccessMode::SubjectBound,
             Self::DelegatedAttestation { .. } => AccessMode::DelegatedAttestation,
         }
     }
@@ -580,16 +580,16 @@ impl EvaluationCapability {
     pub fn allows_scope(&self, scope: &str) -> bool {
         match self {
             Self::Machine { scopes } => scopes.contains(scope),
-            Self::SelfAttestation { .. } => false,
+            Self::SubjectBound { .. } => false,
             Self::DelegatedAttestation { .. } => false,
         }
     }
 
     #[must_use]
-    pub fn allows_self_attestation_claim(&self, claim_id: &str) -> bool {
+    pub fn allows_subject_access_claim(&self, claim_id: &str) -> bool {
         match self {
             Self::Machine { .. } => false,
-            Self::SelfAttestation {
+            Self::SubjectBound {
                 claim_id: allowed,
                 allowed_claim_ids,
                 ..
@@ -618,7 +618,7 @@ impl EvaluationCapability {
                         .iter()
                         .any(|allowed| allowed.as_str() == claim_id)
             }
-            Self::Machine { .. } | Self::SelfAttestation { .. } => false,
+            Self::Machine { .. } | Self::SubjectBound { .. } => false,
         }
     }
 
@@ -646,7 +646,7 @@ impl EvaluationCapability {
             Self::DelegatedAttestation { proof_claim_id, .. } => {
                 proof_claim_id.as_str() == claim_id
             }
-            Self::Machine { .. } | Self::SelfAttestation { .. } => false,
+            Self::Machine { .. } | Self::SubjectBound { .. } => false,
         }
     }
 }
@@ -1433,7 +1433,7 @@ pub struct ProvenanceGeneratedBy {
     pub claim_id: String,
     pub claim_version: String,
     /// Evaluation policy identifier. Present for flows evaluated under a named
-    /// policy (e.g. self-attestation); omitted for machine-client flows with no
+    /// policy (e.g. subject-access); omitted for machine-client flows with no
     /// evaluation policy.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy_id: Option<String>,
@@ -1471,13 +1471,13 @@ pub struct StoredEvaluation {
     pub expires_at: String,
     pub request_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub self_attestation: Option<StoredSelfAttestationMetadata>,
+    pub subject_access: Option<StoredSubjectAccessMetadata>,
 }
 
 impl StoredEvaluation {
     #[must_use]
     pub fn access_mode(&self) -> AccessMode {
-        self.self_attestation
+        self.subject_access
             .as_ref()
             .map(|metadata| metadata.access_mode)
             .unwrap_or(AccessMode::MachineClient)
@@ -1498,8 +1498,8 @@ impl StoredEvaluation {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StoredSelfAttestationMetadata {
-    #[serde(default = "self_attestation_access_mode")]
+pub struct StoredSubjectAccessMetadata {
+    #[serde(default = "subject_access_access_mode")]
     pub access_mode: AccessMode,
     pub issuer: VerifiedClaimValue,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1532,8 +1532,8 @@ pub struct StoredSelfAttestationMetadata {
     pub evaluation_expires_at: Option<String>,
 }
 
-const fn self_attestation_access_mode() -> AccessMode {
-    AccessMode::SelfAttestation
+const fn subject_access_access_mode() -> AccessMode {
+    AccessMode::SubjectBound
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -1623,10 +1623,10 @@ impl EvidencePrincipal {
     }
 
     #[must_use]
-    pub const fn is_self_attestation(&self) -> bool {
+    pub const fn is_subject_access(&self) -> bool {
         matches!(
             self.access_mode,
-            AccessMode::SelfAttestation | AccessMode::DelegatedAttestation
+            AccessMode::SubjectBound | AccessMode::DelegatedAttestation
         )
     }
 
@@ -1690,7 +1690,7 @@ pub struct EvidenceAuditEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub federation_subject_ref_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub denial_code: Option<SelfAttestationDenialCode>,
+    pub denial_code: Option<SubjectAccessDenialCode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_claim_name: Option<ConfigMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1819,8 +1819,8 @@ mod tests {
     #[test]
     fn access_mode_serializes_as_stable_snake_case() {
         assert_eq!(
-            serde_json::to_value(AccessMode::SelfAttestation).expect("access mode serializes"),
-            json!("self_attestation")
+            serde_json::to_value(AccessMode::SubjectBound).expect("access mode serializes"),
+            json!("subject_bound")
         );
         assert_eq!(
             AccessMode::parse("machine_client"),
@@ -1970,7 +1970,7 @@ mod tests {
             "claims": ["person-is-alive"],
             "purpose": "https://purpose.example/self"
         }))
-        .expect("target may be omitted when the server derives self-attestation context");
+        .expect("target may be omitted when the server derives subject-access context");
 
         assert!(request.target.is_none());
         assert!(request.target_subject().is_none());
@@ -2102,7 +2102,7 @@ mod tests {
                 relay_consultation_count: 1,
             },
         );
-        provenance.generated_by.policy_id = Some("self-attestation".to_string());
+        provenance.generated_by.policy_id = Some("subject-access".to_string());
         provenance.generated_by.policy_version = Some("v1".to_string());
         provenance.generated_by.policy_hash = Some("sha256:def456".to_string());
 
@@ -2118,7 +2118,7 @@ mod tests {
         assert_eq!(generated_by["evaluation_id"], json!("eval_01HX"));
         assert_eq!(generated_by["claim_id"], json!("person_is_alive"));
         assert_eq!(generated_by["claim_version"], json!("1"));
-        assert_eq!(generated_by["policy_id"], json!("self-attestation"));
+        assert_eq!(generated_by["policy_id"], json!("subject-access"));
         assert_eq!(generated_by["policy_version"], json!("v1"));
         assert_eq!(generated_by["policy_hash"], json!("sha256:def456"));
 
@@ -2277,7 +2277,7 @@ mod tests {
             audiences: vec![bounded("registry-notary-citizen")],
             client_id: Some(bounded("citizen-portal")),
             token_type: Some(bounded("JWT")),
-            scopes: vec![bounded("self_attestation")],
+            scopes: vec![bounded("subject_access")],
             subject: Some(bounded("login-subject")),
             subject_binding_claim: Some(bounded("https://id.example.gov/claims/national_id")),
             subject_binding_value: Some(bounded("NAT-123")),
@@ -2288,7 +2288,7 @@ mod tests {
             nbf: None,
         };
 
-        assert!(claims.has_scope("self_attestation"));
+        assert!(claims.has_scope("subject_access"));
         assert_eq!(claims.claim_value("sub"), Some("login-subject"));
         assert_eq!(claims.claim_value("email"), None);
         assert_eq!(
@@ -2305,7 +2305,7 @@ mod tests {
                 audiences: vec![bounded("registry-notary-citizen")],
                 client_id: Some(bounded("citizen-portal")),
                 token_type: Some(bounded("JWT")),
-                scopes: vec![bounded("self_attestation")],
+                scopes: vec![bounded("subject_access")],
                 subject: Some(bounded("login-subject")),
                 subject_binding_claim: Some(bounded("https://id.example.gov/claims/national_id")),
                 subject_binding_value: Some(bounded(blank)),
@@ -2324,31 +2324,31 @@ mod tests {
     }
 
     #[test]
-    fn evaluation_capability_separates_machine_scopes_from_self_attestation_claims() {
+    fn evaluation_capability_separates_machine_scopes_from_subject_access_claims() {
         let machine = EvaluationCapability::Machine {
             scopes: BTreeSet::from(["civil_registry:evidence_verification".to_string()]),
         };
         assert_eq!(machine.access_mode(), AccessMode::MachineClient);
         assert!(machine.allows_scope("civil_registry:evidence_verification"));
-        assert!(!machine.allows_self_attestation_claim("person-is-alive"));
+        assert!(!machine.allows_subject_access_claim("person-is-alive"));
 
-        let citizen = EvaluationCapability::SelfAttestation {
+        let citizen = EvaluationCapability::SubjectBound {
             claim_id: Some(bounded("person-is-alive")),
             allowed_claim_ids: BTreeSet::new(),
             subject_binding_hash: Hashed::from_hash("sha256:test"),
         };
-        assert_eq!(citizen.access_mode(), AccessMode::SelfAttestation);
+        assert_eq!(citizen.access_mode(), AccessMode::SubjectBound);
         assert!(!citizen.allows_scope("civil_registry:evidence_verification"));
-        assert!(citizen.allows_self_attestation_claim("person-is-alive"));
+        assert!(citizen.allows_subject_access_claim("person-is-alive"));
     }
 
     #[test]
-    fn audit_self_attestation_fields_round_trip_without_raw_values() {
+    fn audit_subject_access_fields_round_trip_without_raw_values() {
         let event = EvidenceAuditEvent {
             event_id: "01HX".to_string(),
             occurred_at: "2026-05-25T00:00:00Z".to_string(),
             principal_id_hash: Some(Hashed::from_hash("hmac-sha256:principal")),
-            scopes_used: vec!["self_attestation".to_string()],
+            scopes_used: vec!["subject_access".to_string()],
             decision: "denied".to_string(),
             method: "POST".to_string(),
             path: "/v1/evaluations".to_string(),
@@ -2360,15 +2360,15 @@ mod tests {
             relay_consultation_count: None,
             relay_consultation_ids: vec!["01JRELAYCORRELATIONSENSITIVE".to_string()],
             forwarded: None,
-            error_code: Some("self_attestation.denied".to_string()),
-            access_mode: Some(AccessMode::SelfAttestation),
+            error_code: Some("subject_access.denied".to_string()),
+            access_mode: Some(AccessMode::SubjectBound),
             federation_peer_id_hash: None,
             federation_issuer: None,
             federation_profile: None,
             federation_purpose: None,
             federation_request_jti_hash: None,
             federation_subject_ref_hash: None,
-            denial_code: Some(SelfAttestationDenialCode::SubjectMismatch),
+            denial_code: Some(SubjectAccessDenialCode::SubjectMismatch),
             token_claim_name: Some(bounded("national_id")),
             correlation_id_hash: Some(Hashed::from_hash("hmac-sha256:req-123")),
             credential_profile: None,
@@ -2401,10 +2401,10 @@ mod tests {
         let debug = format!("{event:?}");
         assert!(!debug.contains("01JRELAYCORRELATIONSENSITIVE"));
         assert!(debug.contains("relay_consultation_ids: \"[REDACTED]\""));
-        assert_eq!(value["access_mode"], json!("self_attestation"));
+        assert_eq!(value["access_mode"], json!("subject_bound"));
         assert_eq!(
             value["denial_code"],
-            json!("self_attestation.subject_mismatch")
+            json!("subject_access.subject_mismatch")
         );
         assert_eq!(value["token_claim_name"], json!("national_id"));
         assert_eq!(value["correlation_id_hash"], json!("hmac-sha256:req-123"));
@@ -2415,7 +2415,7 @@ mod tests {
             json!("person_is_alive_sd_jwt")
         );
         assert_eq!(value["principal_id_hash"], json!("hmac-sha256:principal"));
-        assert_eq!(value["scopes_used"], json!(["self_attestation"]));
+        assert_eq!(value["scopes_used"], json!(["subject_access"]));
         assert!(value.get("principal_id").is_none());
         assert!(value.get("subject_binding_value").is_none());
         assert_eq!(value["target_type"], json!("person"));
@@ -2433,11 +2433,11 @@ mod tests {
         let decoded: EvidenceAuditEvent =
             serde_json::from_value(value).expect("audit event deserializes");
         assert_eq!(decoded.event_id, event.event_id);
-        assert_eq!(decoded.scopes_used, vec!["self_attestation"]);
-        assert_eq!(decoded.access_mode, Some(AccessMode::SelfAttestation));
+        assert_eq!(decoded.scopes_used, vec!["subject_access"]);
+        assert_eq!(decoded.access_mode, Some(AccessMode::SubjectBound));
         assert_eq!(
             decoded.denial_code,
-            Some(SelfAttestationDenialCode::SubjectMismatch)
+            Some(SubjectAccessDenialCode::SubjectMismatch)
         );
         assert_eq!(
             decoded.token_claim_name.as_ref().map(Bounded::as_str),
@@ -2491,7 +2491,7 @@ mod tests {
     }
 
     #[test]
-    fn stored_evaluation_without_self_attestation_defaults_to_machine_client() {
+    fn stored_evaluation_without_subject_access_defaults_to_machine_client() {
         let raw = json!({
             "client_id": "client",
             "purpose": "verification",
@@ -2510,6 +2510,6 @@ mod tests {
             stored.selected_claim_refs(),
             vec![ClaimRef::from("person-is-alive")]
         );
-        assert!(stored.self_attestation.is_none());
+        assert!(stored.subject_access.is_none());
     }
 }

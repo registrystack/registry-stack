@@ -29,7 +29,6 @@
                 "enabled": true
             },
             "auth": {
-                "mode": "api_key",
                 "api_keys": [{
                     "id": "primary-api-key",
                     "fingerprint": {
@@ -70,10 +69,9 @@
         VerifiedClaimValue::new(value).expect("test claim value is bounded")
     }
 
-    fn self_attestation_config() -> SelfAttestationConfig {
+    fn subject_access_config() -> SubjectAccessConfig {
         serde_json::from_value(json!({
             "enabled": true,
-            "requires_auth_mode": "oidc",
             "subject_binding": {
                 "token_claim": SUBJECT_BINDING_CLAIM,
                 "request_field": "SubjectId",
@@ -99,15 +97,14 @@
                 "issue_credential": true,
                 "batch_evaluate": false
             },
-            "allowed_purposes": ["citizen_self_attestation"],
+            "allowed_purposes": ["citizen_subject_access"],
             "allowed_claims": ["person-is-alive"],
             "allowed_formats": [FORMAT_CLAIM_RESULT_JSON],
             "allowed_disclosures": ["predicate"],
-            "required_scopes": ["self_attestation"],
+            "required_scopes": ["subject_access"],
             "allowed_wallet_origins": ["https://wallet.example.gov"],
             "credential_profiles": ["civil_status_sd_jwt"],
             "rate_limits": {
-                "mode": "in_process",
                 "invalid_token_per_client_address_per_minute": 20,
                 "per_principal_per_minute": 10,
                 "subject_mismatch_per_principal_per_hour": 5,
@@ -115,7 +112,7 @@
                 "credential_issuance_per_principal_per_hour": 5
             }
         }))
-        .expect("self-attestation config parses")
+        .expect("subject-access config parses")
     }
 
     fn evidence_config() -> EvidenceConfig {
@@ -127,7 +124,7 @@
                 "version": "1",
                 "subject_type": "person",
                 "evidence_mode": { "type": "self_attested" },
-                "purpose": "citizen_self_attestation",
+                "purpose": "citizen_subject_access",
                 "rule": { "type": "cel", "expression": "true" },
                 "operations": {
                     "evaluate": { "enabled": true },
@@ -144,11 +141,11 @@
         .expect("evidence config parses")
     }
 
-    fn delegated_self_attestation_config() -> SelfAttestationConfig {
-        let mut config = self_attestation_config();
-        config.delegation = registry_notary_core::SelfAttestationDelegationConfig {
+    fn delegated_subject_access_config() -> SubjectAccessConfig {
+        let mut config = subject_access_config();
+        config.delegation = registry_notary_core::SubjectAccessDelegationConfig {
             enabled: true,
-            allowed_relationships: vec![SelfAttestationDelegatedRelationshipConfig {
+            allowed_relationships: vec![SubjectAccessDelegatedRelationshipConfig {
                 relationship_type: "guardian".to_string(),
                 proof_claim: "guardian-link-established".to_string(),
                 target_id_type: Some("civil_registration_id".to_string()),
@@ -191,7 +188,7 @@
                         }
                     },
                     "purpose": "dependent_attestation",
-                    "required_scopes": ["self_attestation"],
+                    "required_scopes": ["subject_access"],
                     "value": { "type": "boolean", "nullable": true },
                     "rule": { "type": "consultation_output", "consultation": "guardian_link", "output": "established" },
                     "operations": {
@@ -303,12 +300,12 @@
     }
 
     fn delegated_transaction_principal(
-        config: &SelfAttestationConfig,
+        config: &SubjectAccessConfig,
         evidence: &EvidenceConfig,
     ) -> EvidencePrincipal {
-        let mut principal = classify_self_attestation_principal(
+        let mut principal = classify_subject_access_principal(
             config,
-            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
         )
         .expect("citizen principal classifies");
         principal.authorization_details = Some(delegated_authorization_details(evidence));
@@ -454,7 +451,7 @@
 
     fn oid4vci_authorized_principal(
         evidence: &EvidenceConfig,
-        config: &SelfAttestationConfig,
+        config: &SubjectAccessConfig,
         oid4vci: &Oid4vciConfig,
         configuration_id: &str,
         scopes: &[&str],
@@ -477,7 +474,7 @@
         nonce: &str,
     ) -> (ReplayScope, ReplayKey) {
         let nonce_key = state
-            .self_attestation_rate_keys
+            .subject_access_rate_keys
             .oid4vci_nonce(&state.oid4vci.credential_issuer, configuration_id, nonce)
             .expect("nonce hashes");
         let nonce_scope = oid4vci_nonce_replay_scope(state, configuration_id).expect("nonce scope");
@@ -525,7 +522,7 @@
             claims: vec![ClaimRef::with_version("person-is-alive", "1")],
             disclosure: Some("predicate".to_string()),
             format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
-            purpose: Some("citizen_self_attestation".to_string()),
+            purpose: Some("citizen_subject_access".to_string()),
             legal_basis_ref: None,
             consent_ref: None,
             jurisdiction: None,
@@ -536,18 +533,18 @@
             }),
             target: None,
             relationship: None,
-            access_mode: Some(AccessMode::SelfAttestation),
+            access_mode: Some(AccessMode::SubjectBound),
             assisted_access_context: None,
         }
     }
 
     fn classified_transaction_principal(
-        config: &SelfAttestationConfig,
+        config: &SubjectAccessConfig,
         evidence: &EvidenceConfig,
     ) -> EvidencePrincipal {
-        let mut principal = classify_self_attestation_principal(
+        let mut principal = classify_subject_access_principal(
             config,
-            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["self_attestation"]),
+            &fresh_oidc_principal(Some("client_id:citizen-portal"), &["subject_access"]),
         )
         .expect("citizen principal classifies");
         principal.authorization_details = Some(transaction_authorization_details(evidence));
@@ -827,7 +824,7 @@ evaluation_profiles:
             created_at: "1970-01-01T00:00:00Z".to_string(),
             expires_at: "1970-01-01T00:00:00Z".to_string(),
             request_hash: "h".to_string(),
-            self_attestation: None,
+            subject_access: None,
         }
     }
 

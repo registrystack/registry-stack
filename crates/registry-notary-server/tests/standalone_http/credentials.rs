@@ -14,7 +14,7 @@ pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_red
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_oidc_config(
+    let app = standalone_router(subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -27,7 +27,7 @@ pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_red
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -96,15 +96,15 @@ pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_red
             None,
         ),
         (
-            "self-attestation classification denial",
+            "subject-access classification denial",
             invalid_classification_authorization.clone(),
             Some(json!({"evaluation_id": CLASSIFICATION_EVALUATION_ID})),
             false,
             StatusCode::FORBIDDEN,
-            "self_attestation.denied",
-            "self_attestation.invalid_token",
-            Some("self_attestation.invalid_token"),
-            Some(("self_attestation", "national_id")),
+            "subject_access.denied",
+            "subject_access.invalid_token",
+            Some("subject_access.invalid_token"),
+            Some(("subject_bound", "national_id")),
         ),
     ];
 
@@ -256,14 +256,14 @@ pub(super) async fn direct_credentials_issue_creates_retrievable_status_record()
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oidc_config(
+    let mut config = subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
     );
     enable_credential_status(&mut config);
-    config.self_attestation.allowed_operations.issue_credential = true;
+    config.subject_access.allowed_operations.issue_credential = true;
     config
         .evidence
         .claims
@@ -278,7 +278,7 @@ pub(super) async fn direct_credentials_issue_creates_retrievable_status_record()
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -373,7 +373,7 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oidc_config(
+    let mut config = subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -386,8 +386,8 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
         .expect("person-is-alive claim exists")
         .formats
         .push("application/dc+sd-jwt".to_string());
-    assert!(config.self_attestation.allowed_operations.evaluate);
-    assert!(!config.self_attestation.allowed_operations.issue_credential);
+    assert!(config.subject_access.allowed_operations.evaluate);
+    assert!(!config.subject_access.allowed_operations.issue_credential);
     let app = standalone_router(config).expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
@@ -395,7 +395,7 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -448,7 +448,7 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
         Some("application/problem+json")
     );
     let body: Value = issue.json();
-    assert_problem_identity(&body, StatusCode::FORBIDDEN, "self_attestation.denied");
+    assert_problem_identity(&body, StatusCode::FORBIDDEN, "subject_access.denied");
     for field in [
         "credential",
         "credential_id",
@@ -464,15 +464,15 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
         "/v1/credentials",
         "credential_denied",
         StatusCode::FORBIDDEN,
-        "self_attestation.operation_denied",
+        "subject_access.operation_denied",
     );
     assert_eq!(
         denied["denial_code"],
-        json!("self_attestation.operation_denied")
+        json!("subject_access.operation_denied")
     );
     assert_eq!(denied["verification_id"], json!(evaluation_id));
-    assert_eq!(denied["access_mode"], json!("self_attestation"));
-    assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
+    assert_eq!(denied["access_mode"], json!("subject_bound"));
+    assert_eq!(denied["scopes_used"], json!(["subject_access"]));
     assert_eq!(denied["credential_profile"], json!("civil_status_sd_jwt"));
     assert_eq!(denied["holder_binding_mode"], json!("did"));
     assert_eq!(denied["relay_consultation_count"], json!(0));
@@ -514,18 +514,18 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oidc_config(
+    let mut config = subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
     );
-    config.self_attestation.allowed_operations.issue_credential = true;
+    config.subject_access.allowed_operations.issue_credential = true;
     config
-        .self_attestation
+        .subject_access
         .rate_limits
         .credential_issuance_per_principal_per_hour = 1;
-    config.self_attestation.token_policy.max_auth_age_seconds = 60;
+    config.subject_access.token_policy.max_auth_age_seconds = 60;
     config
         .evidence
         .claims
@@ -540,7 +540,7 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -552,7 +552,7 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "national_id": "person-1",
         "auth_time": now - 3600,
         "iat": now,
@@ -600,11 +600,7 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
         .await;
     stale.assert_status(StatusCode::FORBIDDEN);
     let stale_body: Value = stale.json();
-    assert_problem_identity(
-        &stale_body,
-        StatusCode::FORBIDDEN,
-        "self_attestation.denied",
-    );
+    assert_problem_identity(&stale_body, StatusCode::FORBIDDEN, "subject_access.denied");
     for field in [
         "credential",
         "credential_id",
@@ -622,11 +618,11 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
         "/v1/credentials",
         "credential_denied",
         StatusCode::FORBIDDEN,
-        "self_attestation.assurance_denied",
+        "subject_access.assurance_denied",
     );
     assert_eq!(
         assurance_denied["denial_code"],
-        json!("self_attestation.assurance_denied")
+        json!("subject_access.assurance_denied")
     );
     assert_eq!(assurance_denied["relay_consultation_count"], json!(0));
     assert_eq!(assurance_denied["forwarded"], json!(false));
@@ -686,7 +682,7 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
     assert_problem_identity(
         &limited_body,
         StatusCode::TOO_MANY_REQUESTS,
-        "self_attestation.rate_limited",
+        "subject_access.rate_limited",
     );
     for field in [
         "credential",
@@ -706,12 +702,9 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
         "/v1/credentials",
         "credential_issue_rate_limited",
         StatusCode::TOO_MANY_REQUESTS,
-        "self_attestation.rate_limited",
+        "subject_access.rate_limited",
     );
-    assert_eq!(
-        denied["denial_code"],
-        json!("self_attestation.rate_limited")
-    );
+    assert_eq!(denied["denial_code"], json!("subject_access.rate_limited"));
     assert_eq!(
         denied["rate_limit_bucket"],
         json!("credential_issuance_per_principal")
@@ -719,9 +712,9 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
     assert_eq!(denied["verification_id"], json!(evaluation_id));
     assert_eq!(denied["credential_profile"], json!("civil_status_sd_jwt"));
     assert_eq!(denied["holder_binding_mode"], json!("did"));
-    assert_eq!(denied["access_mode"], json!("self_attestation"));
-    assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
-    assert_eq!(denied["purposes"], json!(["citizen_self_attestation"]));
+    assert_eq!(denied["access_mode"], json!("subject_bound"));
+    assert_eq!(denied["scopes_used"], json!(["subject_access"]));
+    assert_eq!(denied["purposes"], json!(["citizen_subject_access"]));
     assert!(denied["claim_hash"].as_str().is_some());
     assert_eq!(denied["target_type"], json!("Person"));
     assert!(denied["target_ref_hash"].as_str().is_some());
@@ -776,13 +769,13 @@ pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacte
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oidc_config(
+    let mut config = subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
     );
-    config.self_attestation.allowed_operations.issue_credential = true;
+    config.subject_access.allowed_operations.issue_credential = true;
     config
         .evidence
         .claims
@@ -797,7 +790,7 @@ pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacte
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -882,8 +875,8 @@ pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacte
         StatusCode::CONFLICT,
         "credential.holder_proof_replay",
     );
-    assert_eq!(denied["access_mode"], json!("self_attestation"));
-    assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
+    assert_eq!(denied["access_mode"], json!("subject_bound"));
+    assert_eq!(denied["scopes_used"], json!(["subject_access"]));
     assert_eq!(denied["credential_profile"], json!("civil_status_sd_jwt"));
     assert_eq!(denied["holder_binding_mode"], json!("did"));
     assert_eq!(denied["relay_consultation_count"], json!(0));
@@ -933,13 +926,13 @@ pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_bound
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oidc_config(
+    let mut config = subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
     );
-    config.self_attestation.allowed_operations.issue_credential = true;
+    config.subject_access.allowed_operations.issue_credential = true;
     config
         .evidence
         .claims
@@ -954,7 +947,7 @@ pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_bound
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -1026,8 +1019,8 @@ pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_bound
         StatusCode::BAD_REQUEST,
         "credential.holder_proof_required",
     );
-    assert_eq!(denied["access_mode"], json!("self_attestation"));
-    assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
+    assert_eq!(denied["access_mode"], json!("subject_bound"));
+    assert_eq!(denied["scopes_used"], json!(["subject_access"]));
     assert_eq!(denied["credential_profile"], json!("civil_status_sd_jwt"));
     assert_eq!(denied["holder_binding_mode"], json!("did"));
     assert_eq!(denied["relay_consultation_count"], json!(0));
@@ -1071,13 +1064,13 @@ pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_red
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oidc_config(
+    let mut config = subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
     );
-    config.self_attestation.allowed_operations.issue_credential = true;
+    config.subject_access.allowed_operations.issue_credential = true;
     config
         .evidence
         .claims
@@ -1092,7 +1085,7 @@ pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_red
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -1155,8 +1148,8 @@ pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_red
         StatusCode::FORBIDDEN,
         "evaluation.binding_mismatch",
     );
-    assert_eq!(denied["access_mode"], json!("self_attestation"));
-    assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
+    assert_eq!(denied["access_mode"], json!("subject_bound"));
+    assert_eq!(denied["scopes_used"], json!(["subject_access"]));
     assert_eq!(denied["relay_consultation_count"], json!(0));
     assert_eq!(denied["forwarded"], json!(false));
     assert!(denied.get("principal_id").is_none());
@@ -1197,13 +1190,13 @@ pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted()
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_oidc_config(
+    let mut config = subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
     );
-    config.self_attestation.allowed_operations.issue_credential = true;
+    config.subject_access.allowed_operations.issue_credential = true;
     config
         .evidence
         .claims
@@ -1218,7 +1211,7 @@ pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted()
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -1344,8 +1337,8 @@ pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted()
             json!(*code),
             "{name} audit error code"
         );
-        assert_eq!(denied["access_mode"], json!("self_attestation"));
-        assert_eq!(denied["scopes_used"], json!(["self_attestation"]));
+        assert_eq!(denied["access_mode"], json!("subject_bound"));
+        assert_eq!(denied["scopes_used"], json!(["subject_access"]));
         assert_eq!(denied["relay_consultation_count"], json!(0));
         assert_eq!(denied["forwarded"], json!(false));
         assert!(denied.get("principal_id").is_none());
@@ -1379,14 +1372,14 @@ pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted()
 }
 
 #[tokio::test]
-pub(super) async fn self_attestation_subject_mismatch_audit_names_token_claim_not_value() {
+pub(super) async fn subject_access_subject_mismatch_audit_names_token_claim_not_value() {
     set_audit_secret();
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_oidc_config(
+    let app = standalone_router(subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -1399,7 +1392,7 @@ pub(super) async fn self_attestation_subject_mismatch_audit_names_token_claim_no
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -1420,10 +1413,10 @@ pub(super) async fn self_attestation_subject_mismatch_audit_names_token_claim_no
         .await;
     response.assert_status(StatusCode::FORBIDDEN);
     let body: Value = response.json();
-    assert_eq!(body["code"], json!("self_attestation.denied"));
+    assert_eq!(body["code"], json!("subject_access.denied"));
     assert_eq!(
         body["type"],
-        json!("https://id.registrystack.org/problems/registry-notary/self_attestation/denied")
+        json!("https://id.registrystack.org/problems/registry-notary/subject_access/denied")
     );
 
     let audit = std::fs::read_to_string(&audit_path).expect("audit was written");
@@ -1442,14 +1435,14 @@ pub(super) async fn self_attestation_subject_mismatch_audit_names_token_claim_no
                 && record["status"] == json!(403)
         })
         .expect("denial audit record exists");
-    assert_eq!(denied["access_mode"], json!("self_attestation"));
+    assert_eq!(denied["access_mode"], json!("subject_bound"));
     assert_eq!(
         denied["denial_code"],
-        json!("self_attestation.subject_mismatch")
+        json!("subject_access.subject_mismatch")
     );
     assert_eq!(
         denied["error_code"],
-        json!("self_attestation.subject_mismatch")
+        json!("subject_access.subject_mismatch")
     );
     assert_eq!(denied["token_claim_name"], json!("national_id"));
     assert!(denied.get("correlation_id").is_none());

@@ -7,8 +7,12 @@ use super::{
 };
 
 #[tokio::test]
-pub(super) async fn oidc_mode_verifies_token_from_fixture_idp() {
+pub(super) async fn additive_api_key_and_oidc_authenticate_on_the_same_router() {
     set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
@@ -17,8 +21,6 @@ pub(super) async fn oidc_mode_verifies_token_from_fixture_idp() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
-    config.auth.mode = EvidenceAuthMode::Oidc;
-    config.auth.api_keys.clear();
     config.auth.bearer_tokens.clear();
     config.auth.oidc = Some(EvidenceOidcAuthConfig {
         issuer: idp.issuer(),
@@ -56,6 +58,19 @@ pub(super) async fn oidc_mode_verifies_token_from_fixture_idp() {
     response.assert_status_ok();
     let body: Value = response.json();
     assert_eq!(body["data"][0]["id"], json!("farmer-under-4ha"));
+
+    let api_key_response = server
+        .get("/v1/claims")
+        .add_header("x-api-key", "api-token")
+        .await;
+    api_key_response.assert_status_ok();
+
+    let ambiguous = server
+        .get("/v1/claims")
+        .add_header("x-api-key", "api-token")
+        .add_header("authorization", format!("Bearer {token}"))
+        .await;
+    ambiguous.assert_status(StatusCode::BAD_REQUEST);
 
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let id_token_typ = sign_ed25519_compact_jwt(
@@ -113,7 +128,6 @@ pub(super) async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot
         audit_path.to_str().expect("audit path is UTF-8"),
     );
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
-    config.auth.mode = EvidenceAuthMode::Oidc;
     config.auth.api_keys.clear();
     config.auth.bearer_tokens.clear();
     config.auth.oidc = Some(EvidenceOidcAuthConfig {
@@ -182,7 +196,7 @@ pub(super) async fn jwks_is_public_and_contains_no_private_members() {
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_oidc_config(
+    let app = standalone_router(subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -205,14 +219,14 @@ pub(super) async fn jwks_is_public_and_contains_no_private_members() {
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(super) async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
+pub(super) async fn oidc_subject_access_evaluates_renders_and_audits_access_mode() {
     set_audit_secret();
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_oidc_config(
+    let app = standalone_router(subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -225,7 +239,7 @@ pub(super) async fn oidc_self_attestation_evaluates_renders_and_audits_access_mo
         "sub": "citizen-subject",
         "aud": "registry-notary-citizen",
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -260,11 +274,11 @@ pub(super) async fn oidc_self_attestation_evaluates_renders_and_audits_access_mo
     // Self-attestation flows produce results under the canonical evaluation
     // policy, so generated_by carries the policy triple.
     let generated_by = &evaluate_body["results"][0]["provenance"]["generated_by"];
-    assert_eq!(generated_by["policy_id"], json!("self-attestation"));
+    assert_eq!(generated_by["policy_id"], json!("subject-access"));
     assert!(
         generated_by["policy_hash"]
             .as_str()
-            .expect("self-attestation provenance carries policy_hash")
+            .expect("subject-access provenance carries policy_hash")
             .starts_with("sha256:"),
         "policy_hash must use the sha256:<hex> prefixed format"
     );
@@ -304,7 +318,7 @@ pub(super) async fn oidc_self_attestation_evaluates_renders_and_audits_access_mo
         .expect("evaluate audit record exists");
     assert_eq!(
         evaluate_audit["access_mode"],
-        json!("self_attestation"),
+        json!("subject_bound"),
         "{evaluate_audit}"
     );
     assert!(evaluate_audit["policy_hash"].is_string());
@@ -315,7 +329,7 @@ pub(super) async fn oidc_self_attestation_evaluates_renders_and_audits_access_mo
         .starts_with("hmac-sha256:"));
     assert!(evaluate_audit.get("principal_id").is_none());
     assert!(evaluate_audit.get("principal_id_hash").is_some());
-    assert_eq!(evaluate_audit["scopes_used"], json!(["self_attestation"]));
+    assert_eq!(evaluate_audit["scopes_used"], json!(["subject_access"]));
 
     let render_audit = records
         .iter()
@@ -325,12 +339,9 @@ pub(super) async fn oidc_self_attestation_evaluates_renders_and_audits_access_mo
                 && record["status"] == json!(200)
         })
         .expect("render audit record exists");
-    assert_eq!(render_audit["access_mode"], json!("self_attestation"));
-    assert_eq!(render_audit["scopes_used"], json!(["self_attestation"]));
-    assert_eq!(
-        render_audit["purposes"],
-        json!(["citizen_self_attestation"])
-    );
+    assert_eq!(render_audit["access_mode"], json!("subject_bound"));
+    assert_eq!(render_audit["scopes_used"], json!(["subject_access"]));
+    assert_eq!(render_audit["purposes"], json!(["citizen_subject_access"]));
     assert!(render_audit["policy_hash"].is_string());
     assert!(render_audit.get("correlation_id").is_none());
     assert!(render_audit["correlation_id_hash"]

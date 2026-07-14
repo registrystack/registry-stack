@@ -1,23 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Self-attestation and delegated-attestation configuration.
+//! Subject-bound and delegated subject-access configuration.
 
 use super::*;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct SelfAttestationConfig {
+pub struct SubjectAccessConfig {
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default = "default_self_attestation_required_auth_mode")]
-    pub requires_auth_mode: String,
     #[serde(default)]
-    pub subject_binding: SelfAttestationSubjectBindingConfig,
+    pub subject_binding: SubjectAccessSubjectBindingConfig,
     #[serde(default)]
-    pub citizen_clients: SelfAttestationCitizenClientsConfig,
+    pub citizen_clients: SubjectAccessCitizenClientsConfig,
     #[serde(default)]
-    pub token_policy: SelfAttestationTokenPolicyConfig,
+    pub token_policy: SubjectAccessTokenPolicyConfig,
     #[serde(default)]
-    pub allowed_operations: SelfAttestationOperationsConfig,
+    pub allowed_operations: SubjectAccessOperationsConfig,
     #[serde(default)]
     pub allowed_purposes: Vec<String>,
     #[serde(default)]
@@ -27,7 +25,7 @@ pub struct SelfAttestationConfig {
     #[serde(default)]
     pub allowed_disclosures: Vec<String>,
     #[serde(default)]
-    pub scope_policy: SelfAttestationScopePolicy,
+    pub scope_policy: SubjectAccessScopePolicy,
     #[serde(default)]
     pub required_scopes: Vec<String>,
     #[serde(default)]
@@ -35,43 +33,16 @@ pub struct SelfAttestationConfig {
     #[serde(default)]
     pub credential_profiles: Vec<String>,
     #[serde(default)]
-    pub delegation: SelfAttestationDelegationConfig,
+    pub delegation: SubjectAccessDelegationConfig,
     #[serde(default)]
-    pub rate_limits: SelfAttestationRateLimitsConfig,
+    pub rate_limits: SubjectAccessRateLimitsConfig,
 }
 
-pub(super) fn self_attestation_config_is_default(config: &SelfAttestationConfig) -> bool {
-    config == &SelfAttestationConfig::default()
+pub(super) fn subject_access_config_is_default(config: &SubjectAccessConfig) -> bool {
+    config == &SubjectAccessConfig::default()
 }
 
-impl Default for SelfAttestationConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            requires_auth_mode: default_self_attestation_required_auth_mode(),
-            subject_binding: SelfAttestationSubjectBindingConfig::default(),
-            citizen_clients: SelfAttestationCitizenClientsConfig::default(),
-            token_policy: SelfAttestationTokenPolicyConfig::default(),
-            allowed_operations: SelfAttestationOperationsConfig::default(),
-            allowed_purposes: Vec::new(),
-            allowed_claims: Vec::new(),
-            allowed_formats: Vec::new(),
-            allowed_disclosures: Vec::new(),
-            scope_policy: SelfAttestationScopePolicy::default(),
-            required_scopes: Vec::new(),
-            allowed_wallet_origins: Vec::new(),
-            credential_profiles: Vec::new(),
-            delegation: SelfAttestationDelegationConfig::default(),
-            rate_limits: SelfAttestationRateLimitsConfig::default(),
-        }
-    }
-}
-
-pub(super) fn default_self_attestation_required_auth_mode() -> String {
-    "oidc".to_string()
-}
-
-impl SelfAttestationConfig {
+impl SubjectAccessConfig {
     pub(super) fn validate(
         &self,
         auth: &EvidenceAuthConfig,
@@ -80,21 +51,17 @@ impl SelfAttestationConfig {
         if !self.enabled {
             return Ok(());
         }
-        if self.requires_auth_mode != "oidc" {
-            return self.invalid("requires_auth_mode must be oidc");
-        }
-        if auth.mode != EvidenceAuthMode::Oidc {
-            return self.invalid("enabled self_attestation requires auth.mode = oidc");
-        }
-        let oidc = auth
-            .oidc
-            .as_ref()
-            .ok_or(EvidenceConfigError::MissingOidcConfig)?;
+        let oidc =
+            auth.oidc
+                .as_ref()
+                .ok_or_else(|| EvidenceConfigError::InvalidSubjectAccessConfig {
+                    reason: "enabled subject_access requires auth.oidc".to_string(),
+                })?;
 
         self.subject_binding.validate()?;
         self.citizen_clients.validate(oidc)?;
         self.token_policy.validate(oidc)?;
-        if self.subject_binding.claim_source == SelfAttestationClaimSource::Userinfo
+        if self.subject_binding.claim_source == SubjectAccessClaimSource::Userinfo
             && oidc
                 .userinfo_endpoint
                 .as_deref()
@@ -106,33 +73,32 @@ impl SelfAttestationConfig {
             );
         }
         self.allowed_operations.validate()?;
-        validate_non_empty_entries("self_attestation.allowed_purposes", &self.allowed_purposes)?;
-        validate_non_empty_entries("self_attestation.allowed_claims", &self.allowed_claims)?;
-        validate_non_empty_entries("self_attestation.allowed_formats", &self.allowed_formats)?;
+        validate_non_empty_entries("subject_access.allowed_purposes", &self.allowed_purposes)?;
+        validate_non_empty_entries("subject_access.allowed_claims", &self.allowed_claims)?;
+        validate_non_empty_entries("subject_access.allowed_formats", &self.allowed_formats)?;
         validate_non_empty_entries(
-            "self_attestation.allowed_disclosures",
+            "subject_access.allowed_disclosures",
             &self.allowed_disclosures,
         )?;
-        if self.scope_policy != SelfAttestationScopePolicy::Disabled
+        if self.scope_policy != SubjectAccessScopePolicy::Disabled
             && self.required_scopes.is_empty()
         {
             return self.invalid("scope_policy requires required_scopes unless it is disabled");
         }
-        if self.scope_policy == SelfAttestationScopePolicy::Disabled
+        if self.scope_policy == SubjectAccessScopePolicy::Disabled
             && !self.required_scopes.is_empty()
         {
             return self.invalid("scope_policy = disabled requires required_scopes to be empty");
         }
-        if self.scope_policy != SelfAttestationScopePolicy::Disabled {
-            validate_non_empty_entries("self_attestation.required_scopes", &self.required_scopes)?;
+        if self.scope_policy != SubjectAccessScopePolicy::Disabled {
+            validate_non_empty_entries("subject_access.required_scopes", &self.required_scopes)?;
         } else {
-            validate_entries("self_attestation.required_scopes", &self.required_scopes)?;
+            validate_entries("subject_access.required_scopes", &self.required_scopes)?;
         }
         validate_non_empty_entries(
-            "self_attestation.credential_profiles",
+            "subject_access.credential_profiles",
             &self.credential_profiles,
         )?;
-        validate_self_attestation_evidence_paths(self, evidence)?;
         self.delegation.validate(evidence)?;
         self.rate_limits.validate()?;
         validate_exact_wallet_origins(&self.allowed_wallet_origins)?;
@@ -161,7 +127,7 @@ impl SelfAttestationConfig {
 
         for claim_id in &self.allowed_claims {
             if !claim_ids.contains(claim_id.as_str()) {
-                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
                     reason: format!("allowed_claims references unknown claim '{claim_id}'"),
                 });
             }
@@ -169,7 +135,7 @@ impl SelfAttestationConfig {
 
         for profile_id in &self.credential_profiles {
             if !evidence.credential_profiles.contains_key(profile_id) {
-                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
                     reason: format!(
                         "credential_profiles references unknown profile '{profile_id}'"
                     ),
@@ -184,7 +150,7 @@ impl SelfAttestationConfig {
                 // SAFETY: the preceding credential_profiles loop rejects
                 // every profile id missing from evidence.credential_profiles.
                 .expect("profile id was checked above");
-            validate_self_attestation_profile(
+            validate_subject_access_profile(
                 profile_id,
                 profile,
                 &claim_ids,
@@ -202,7 +168,7 @@ impl SelfAttestationConfig {
                 // SAFETY: the preceding allowed_claims loop rejects every
                 // claim id missing from evidence.claims.
                 .expect("claim id was checked above");
-            validate_self_attestation_claim(
+            validate_subject_access_claim(
                 claim,
                 &allowed_purposes,
                 &allowed_formats,
@@ -210,89 +176,70 @@ impl SelfAttestationConfig {
                 &allowed_profiles,
                 self.allowed_operations.issue_credential,
             )?;
+            validate_subject_bound_registry_inputs(claim, &self.subject_binding.id_type)?;
         }
 
-        validate_self_attestation_allow_lists_are_supported(self, evidence)?;
-        if self.scope_policy != SelfAttestationScopePolicy::Disabled {
+        validate_subject_access_allow_lists_are_supported(self, evidence)?;
+        if self.scope_policy != SubjectAccessScopePolicy::Disabled {
             validate_required_scope_mappings(self, oidc)?;
         }
         Ok(())
     }
 
     fn invalid<T>(&self, reason: impl Into<String>) -> Result<T, EvidenceConfigError> {
-        Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+        Err(EvidenceConfigError::InvalidSubjectAccessConfig {
             reason: reason.into(),
         })
     }
 }
 
-pub(super) fn validate_self_attestation_evidence_paths(
-    config: &SelfAttestationConfig,
-    evidence: &EvidenceConfig,
+fn validate_subject_bound_registry_inputs(
+    claim: &ClaimDefinition,
+    subject_id_type: &str,
 ) -> Result<(), EvidenceConfigError> {
-    for claim_id in &config.allowed_claims {
-        reject_registry_backed_dependency_path(
-            "self_attestation.allowed_claims",
-            claim_id,
-            evidence,
-        )?;
-    }
-    Ok(())
-}
-
-fn reject_registry_backed_dependency_path(
-    context: &str,
-    root_claim_id: &str,
-    evidence: &EvidenceConfig,
-) -> Result<(), EvidenceConfigError> {
-    let mut pending = vec![root_claim_id];
-    let mut visited = HashSet::new();
-    while let Some(claim_id) = pending.pop() {
-        if !visited.insert(claim_id) {
-            continue;
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
+        return Ok(());
+    };
+    let target_path = format!("target.identifiers.{subject_id_type}");
+    let requester_path = format!("requester.identifiers.{subject_id_type}");
+    for consultation in consultations.values() {
+        for input in consultation.inputs.values() {
+            let path = input.request_context_path();
+            if path != target_path && path != requester_path {
+                return invalid_subject_access(format!(
+                    "allowed registry_backed claim '{}' maps Relay input '{}' outside the authenticated subject binding; expected '{}' or '{}'",
+                    claim.id, path, target_path, requester_path
+                ));
+            }
         }
-        let Some(claim) = evidence
-            .claims
-            .iter()
-            .find(|candidate| candidate.id == claim_id)
-        else {
-            continue;
-        };
-        if claim.evidence_mode.is_registry_backed() {
-            return invalid_self_attestation(format!(
-                "{context} path cannot include registry_backed claim '{}'",
-                claim.id
-            ));
-        }
-        pending.extend(claim.depends_on.iter().map(String::as_str));
     }
     Ok(())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct SelfAttestationDelegationConfig {
+pub struct SubjectAccessDelegationConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
-    pub allowed_relationships: Vec<SelfAttestationDelegatedRelationshipConfig>,
+    pub allowed_relationships: Vec<SubjectAccessDelegatedRelationshipConfig>,
 }
 
-impl SelfAttestationDelegationConfig {
+impl SubjectAccessDelegationConfig {
     fn validate(&self, evidence: &EvidenceConfig) -> Result<(), EvidenceConfigError> {
         if !self.enabled {
             if !self.allowed_relationships.is_empty() {
-                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
                     reason:
-                        "self_attestation.delegation.enabled=false requires allowed_relationships to be empty"
+                        "subject_access.delegation.enabled=false requires allowed_relationships to be empty"
                             .to_string(),
                 });
             }
             return Ok(());
         }
         if self.allowed_relationships.is_empty() {
-            return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
-                reason: "self_attestation.delegation.enabled requires allowed_relationships"
+            return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
+                reason: "subject_access.delegation.enabled requires allowed_relationships"
                     .to_string(),
             });
         }
@@ -305,9 +252,9 @@ impl SelfAttestationDelegationConfig {
         for relationship in &self.allowed_relationships {
             relationship.validate(evidence, &claim_ids)?;
             if !relationship_types.insert(relationship.relationship_type.as_str()) {
-                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
                     reason: format!(
-                        "self_attestation.delegation.allowed_relationships contains duplicate relationship_type '{}'",
+                        "subject_access.delegation.allowed_relationships contains duplicate relationship_type '{}'",
                         relationship.relationship_type
                     ),
                 });
@@ -320,7 +267,7 @@ impl SelfAttestationDelegationConfig {
     pub fn relationship(
         &self,
         relationship_type: &str,
-    ) -> Option<&SelfAttestationDelegatedRelationshipConfig> {
+    ) -> Option<&SubjectAccessDelegatedRelationshipConfig> {
         self.allowed_relationships
             .iter()
             .find(|relationship| relationship.relationship_type == relationship_type)
@@ -329,7 +276,7 @@ impl SelfAttestationDelegationConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct SelfAttestationDelegatedRelationshipConfig {
+pub struct SubjectAccessDelegatedRelationshipConfig {
     pub relationship_type: String,
     pub proof_claim: String,
     #[serde(default)]
@@ -346,23 +293,23 @@ pub struct SelfAttestationDelegatedRelationshipConfig {
     pub credential_profiles: Vec<String>,
 }
 
-impl SelfAttestationDelegatedRelationshipConfig {
+impl SubjectAccessDelegatedRelationshipConfig {
     fn validate(
         &self,
         evidence: &EvidenceConfig,
         claim_ids: &HashSet<&str>,
     ) -> Result<(), EvidenceConfigError> {
         if self.relationship_type.trim().is_empty() {
-            return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+            return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
                 reason:
-                    "self_attestation.delegation.allowed_relationships.relationship_type is required"
+                    "subject_access.delegation.allowed_relationships.relationship_type is required"
                         .to_string(),
             });
         }
         if self.proof_claim.trim().is_empty() || !claim_ids.contains(self.proof_claim.as_str()) {
-            return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+            return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
                 reason: format!(
-                    "self_attestation.delegation proof_claim references unknown claim '{}'",
+                    "subject_access.delegation proof_claim references unknown claim '{}'",
                     self.proof_claim
                 ),
             });
@@ -372,9 +319,9 @@ impl SelfAttestationDelegatedRelationshipConfig {
             .iter()
             .find(|claim| claim.id == self.proof_claim)
         else {
-            return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+            return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
                 reason: format!(
-                    "self_attestation.delegation proof_claim references unknown claim '{}'",
+                    "subject_access.delegation proof_claim references unknown claim '{}'",
                     self.proof_claim
                 ),
             });
@@ -382,30 +329,30 @@ impl SelfAttestationDelegatedRelationshipConfig {
         validate_delegated_proof_claim_binding(self, proof_claim)?;
         if let Some(target_id_type) = self.target_id_type.as_deref() {
             if target_id_type.trim().is_empty() {
-                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
-                    reason: "self_attestation.delegation target_id_type must not be blank"
+                return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
+                    reason: "subject_access.delegation target_id_type must not be blank"
                         .to_string(),
                 });
             }
         }
         validate_non_empty_entries(
-            "self_attestation.delegation.allowed_claims",
+            "subject_access.delegation.allowed_claims",
             &self.allowed_claims,
         )?;
         validate_non_empty_entries(
-            "self_attestation.delegation.allowed_purposes",
+            "subject_access.delegation.allowed_purposes",
             &self.allowed_purposes,
         )?;
         validate_non_empty_entries(
-            "self_attestation.delegation.allowed_formats",
+            "subject_access.delegation.allowed_formats",
             &self.allowed_formats,
         )?;
         validate_non_empty_entries(
-            "self_attestation.delegation.allowed_disclosures",
+            "subject_access.delegation.allowed_disclosures",
             &self.allowed_disclosures,
         )?;
         validate_entries(
-            "self_attestation.delegation.credential_profiles",
+            "subject_access.delegation.credential_profiles",
             &self.credential_profiles,
         )?;
         let allowed_purposes: HashSet<&str> =
@@ -424,21 +371,21 @@ impl SelfAttestationDelegatedRelationshipConfig {
             .collect();
         for claim_id in &self.allowed_claims {
             if !claim_ids.contains(claim_id.as_str()) {
-                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
                     reason: format!(
-                        "self_attestation.delegation allowed_claims references unknown claim '{claim_id}'"
+                        "subject_access.delegation allowed_claims references unknown claim '{claim_id}'"
                     ),
                 });
             }
             let Some(claim) = evidence.claims.iter().find(|claim| claim.id == *claim_id) else {
-                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
                     reason: format!(
-                        "self_attestation.delegation allowed_claims references unknown claim '{claim_id}'"
+                        "subject_access.delegation allowed_claims references unknown claim '{claim_id}'"
                     ),
                 });
             };
             if !claim.depends_on.iter().any(|dep| dep == &self.proof_claim) {
-                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
                     reason: format!(
                         "delegated claim '{claim_id}' must depend_on proof_claim '{}'",
                         self.proof_claim
@@ -446,7 +393,7 @@ impl SelfAttestationDelegatedRelationshipConfig {
                 });
             }
             if claim.purpose != proof_claim.purpose {
-                return invalid_self_attestation(format!(
+                return invalid_subject_access(format!(
                     "delegated claim '{claim_id}' and proof_claim '{}' must declare the same purpose",
                     self.proof_claim
                 ));
@@ -462,9 +409,9 @@ impl SelfAttestationDelegatedRelationshipConfig {
         }
         for profile_id in &self.credential_profiles {
             if !evidence.credential_profiles.contains_key(profile_id) {
-                return Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+                return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
                     reason: format!(
-                        "self_attestation.delegation credential_profiles references unknown profile '{profile_id}'"
+                        "subject_access.delegation credential_profiles references unknown profile '{profile_id}'"
                     ),
                 });
             }
@@ -476,7 +423,7 @@ impl SelfAttestationDelegatedRelationshipConfig {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SelfAttestationScopePolicy {
+pub enum SubjectAccessScopePolicy {
     #[default]
     Required,
     Optional,
@@ -485,11 +432,11 @@ pub enum SelfAttestationScopePolicy {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct SelfAttestationSubjectBindingConfig {
+pub struct SubjectAccessSubjectBindingConfig {
     #[serde(default)]
     pub token_claim: String,
     #[serde(default)]
-    pub claim_source: SelfAttestationClaimSource,
+    pub claim_source: SubjectAccessClaimSource,
     #[serde(default)]
     pub request_field: SubjectId,
     #[serde(default)]
@@ -500,30 +447,30 @@ pub struct SelfAttestationSubjectBindingConfig {
     pub allow_sub_as_civil_id: bool,
 }
 
-impl SelfAttestationSubjectBindingConfig {
+impl SubjectAccessSubjectBindingConfig {
     fn validate(&self) -> Result<(), EvidenceConfigError> {
         if self.token_claim.is_empty() {
-            return invalid_self_attestation("subject_binding.token_claim must not be empty");
+            return invalid_subject_access("subject_binding.token_claim must not be empty");
         }
         if !self
             .token_claim
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':' | '/' | '.' | '-'))
         {
-            return invalid_self_attestation(
+            return invalid_subject_access(
                 "subject_binding.token_claim must match [A-Za-z0-9_:/\\.\\-]+",
             );
         }
         if self.token_claim == "sub" && !self.allow_sub_as_civil_id {
-            return invalid_self_attestation(
+            return invalid_subject_access(
                 "subject_binding.token_claim = sub requires allow_sub_as_civil_id = true",
             );
         }
         if self.id_type.trim().is_empty() {
-            return invalid_self_attestation("subject_binding.id_type must not be empty");
+            return invalid_subject_access("subject_binding.id_type must not be empty");
         }
         if self.normalize != SubjectBindingNormalize::Exact {
-            return invalid_self_attestation("subject_binding.normalize must be exact");
+            return invalid_subject_access("subject_binding.normalize must be exact");
         }
         Ok(())
     }
@@ -531,7 +478,7 @@ impl SelfAttestationSubjectBindingConfig {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SelfAttestationClaimSource {
+pub enum SubjectAccessClaimSource {
     #[default]
     AccessToken,
     Userinfo,
@@ -552,31 +499,31 @@ pub enum SubjectBindingNormalize {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct SelfAttestationCitizenClientsConfig {
+pub struct SubjectAccessCitizenClientsConfig {
     #[serde(default)]
     pub allowed_client_ids: Vec<String>,
     #[serde(default)]
     pub allowed_audiences: Vec<String>,
 }
 
-impl SelfAttestationCitizenClientsConfig {
+impl SubjectAccessCitizenClientsConfig {
     fn validate(&self, oidc: &EvidenceOidcAuthConfig) -> Result<(), EvidenceConfigError> {
         if self.allowed_client_ids.is_empty() && self.allowed_audiences.is_empty() {
-            return invalid_self_attestation(
+            return invalid_subject_access(
                 "citizen_clients must list at least one allowed client id or audience",
             );
         }
         validate_entries(
-            "self_attestation.citizen_clients.allowed_client_ids",
+            "subject_access.citizen_clients.allowed_client_ids",
             &self.allowed_client_ids,
         )?;
         validate_entries(
-            "self_attestation.citizen_clients.allowed_audiences",
+            "subject_access.citizen_clients.allowed_audiences",
             &self.allowed_audiences,
         )?;
         for audience in &self.allowed_audiences {
             if !oidc.audiences.iter().any(|accepted| accepted == audience) {
-                return invalid_self_attestation(format!(
+                return invalid_subject_access(format!(
                     "citizen audience '{audience}' is not listed in auth.oidc.audiences"
                 ));
             }
@@ -588,7 +535,7 @@ impl SelfAttestationCitizenClientsConfig {
                     .iter()
                     .any(|accepted| accepted == client_id)
                 {
-                    return invalid_self_attestation(format!(
+                    return invalid_subject_access(format!(
                         "citizen client '{client_id}' is not listed in auth.oidc.allowed_clients"
                     ));
                 }
@@ -600,11 +547,11 @@ impl SelfAttestationCitizenClientsConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct SelfAttestationTokenPolicyConfig {
+pub struct SubjectAccessTokenPolicyConfig {
     #[serde(default)]
     pub required_acr_values: Vec<String>,
     #[serde(default)]
-    pub assurance_claim_source: SelfAttestationAssuranceClaimSource,
+    pub assurance_claim_source: SubjectAccessAssuranceClaimSource,
     #[serde(default)]
     pub max_auth_age_seconds: u64,
     #[serde(default)]
@@ -619,45 +566,45 @@ pub struct SelfAttestationTokenPolicyConfig {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SelfAttestationAssuranceClaimSource {
+pub enum SubjectAccessAssuranceClaimSource {
     #[default]
     AccessToken,
     IdToken,
 }
 
-impl SelfAttestationTokenPolicyConfig {
+impl SubjectAccessTokenPolicyConfig {
     fn validate(&self, oidc: &EvidenceOidcAuthConfig) -> Result<(), EvidenceConfigError> {
         validate_entries(
-            "self_attestation.token_policy.required_acr_values",
+            "subject_access.token_policy.required_acr_values",
             &self.required_acr_values,
         )?;
         if self.max_auth_age_seconds == 0 {
-            return invalid_self_attestation(
+            return invalid_subject_access(
                 "token_policy.max_auth_age_seconds must be greater than zero",
             );
         }
         if self.max_access_token_lifetime_seconds == 0 {
-            return invalid_self_attestation(
+            return invalid_subject_access(
                 "token_policy.max_access_token_lifetime_seconds must be greater than zero",
             );
         }
         if self.max_evaluation_age_seconds == 0 || self.max_evaluation_age_seconds > 600 {
-            return invalid_self_attestation(
+            return invalid_subject_access(
                 "token_policy.max_evaluation_age_seconds must be between 1 and 600",
             );
         }
         if self.max_credential_validity_seconds == 0 {
-            return invalid_self_attestation(
+            return invalid_subject_access(
                 "token_policy.max_credential_validity_seconds must be greater than zero",
             );
         }
         if self.max_clock_leeway_seconds == 0 || self.max_clock_leeway_seconds > 60 {
-            return invalid_self_attestation(
+            return invalid_subject_access(
                 "token_policy.max_clock_leeway_seconds must be between 1 and 60",
             );
         }
         if oidc.leeway > Duration::from_secs(self.max_clock_leeway_seconds) {
-            return invalid_self_attestation(
+            return invalid_subject_access(
                 "auth.oidc.leeway must not exceed token_policy.max_clock_leeway_seconds",
             );
         }
@@ -667,7 +614,7 @@ impl SelfAttestationTokenPolicyConfig {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct SelfAttestationOperationsConfig {
+pub struct SubjectAccessOperationsConfig {
     #[serde(default)]
     pub evaluate: bool,
     #[serde(default)]
@@ -678,16 +625,14 @@ pub struct SelfAttestationOperationsConfig {
     pub batch_evaluate: bool,
 }
 
-impl SelfAttestationOperationsConfig {
+impl SubjectAccessOperationsConfig {
     fn validate(&self) -> Result<(), EvidenceConfigError> {
         if self.batch_evaluate {
-            return invalid_self_attestation(
-                "allowed_operations.batch_evaluate must be false in v1",
-            );
+            return invalid_subject_access("allowed_operations.batch_evaluate must be false in v1");
         }
         if !self.evaluate && !self.render && !self.issue_credential {
-            return invalid_self_attestation(
-                "allowed_operations must enable at least one self-attestation operation",
+            return invalid_subject_access(
+                "allowed_operations must enable at least one subject-access operation",
             );
         }
         Ok(())
@@ -696,9 +641,7 @@ impl SelfAttestationOperationsConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct SelfAttestationRateLimitsConfig {
-    #[serde(default)]
-    pub mode: SelfAttestationRateLimitMode,
+pub struct SubjectAccessRateLimitsConfig {
     #[serde(default)]
     pub invalid_token_per_client_address_per_minute: u32,
     #[serde(default)]
@@ -718,28 +661,18 @@ pub struct SelfAttestationRateLimitsConfig {
     pub tx_code_attempts_per_code_per_minute: u32,
 }
 
-impl SelfAttestationRateLimitsConfig {
+impl SubjectAccessRateLimitsConfig {
     fn validate(&self) -> Result<(), EvidenceConfigError> {
-        if self.mode != SelfAttestationRateLimitMode::InProcess {
-            return invalid_self_attestation("rate_limits.mode must be in_process");
-        }
         if self.invalid_token_per_client_address_per_minute == 0
             || self.per_principal_per_minute == 0
             || self.subject_mismatch_per_principal_per_hour == 0
             || self.per_holder_per_hour == 0
             || self.credential_issuance_per_principal_per_hour == 0
         {
-            return invalid_self_attestation("rate_limits values must all be greater than zero");
+            return invalid_subject_access("rate_limits values must all be greater than zero");
         }
         Ok(())
     }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SelfAttestationRateLimitMode {
-    #[default]
-    InProcess,
 }
 
 pub(super) fn validate_non_empty_entries(
@@ -747,14 +680,14 @@ pub(super) fn validate_non_empty_entries(
     values: &[String],
 ) -> Result<(), EvidenceConfigError> {
     if values.is_empty() {
-        return invalid_self_attestation(format!("{name} must not be empty"));
+        return invalid_subject_access(format!("{name} must not be empty"));
     }
     validate_entries(name, values)
 }
 
 pub(super) fn validate_entries(name: &str, values: &[String]) -> Result<(), EvidenceConfigError> {
     if values.iter().any(|value| value.trim().is_empty()) {
-        return invalid_self_attestation(format!("{name} must not contain blank entries"));
+        return invalid_subject_access(format!("{name} must not contain blank entries"));
     }
     Ok(())
 }
@@ -762,18 +695,18 @@ pub(super) fn validate_entries(name: &str, values: &[String]) -> Result<(), Evid
 pub(super) fn validate_exact_wallet_origins(origins: &[String]) -> Result<(), EvidenceConfigError> {
     for origin in origins {
         if origin == "*" || origin.contains('*') {
-            return invalid_self_attestation(
+            return invalid_subject_access(
                 "allowed_wallet_origins must contain exact origins, not wildcards",
             );
         }
         if !origin.starts_with("https://") {
-            return invalid_self_attestation("allowed_wallet_origins must use https origins");
+            return invalid_subject_access("allowed_wallet_origins must use https origins");
         }
     }
     Ok(())
 }
 
-pub(super) fn validate_self_attestation_claim(
+pub(super) fn validate_subject_access_claim(
     claim: &ClaimDefinition,
     allowed_purposes: &HashSet<&str>,
     allowed_formats: &HashSet<&str>,
@@ -782,18 +715,18 @@ pub(super) fn validate_self_attestation_claim(
     issue_credential: bool,
 ) -> Result<(), EvidenceConfigError> {
     if !claim.operations.evaluate.enabled {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "allowed claim '{}' must enable evaluate",
             claim.id
         ));
     }
     let purpose = claim.purpose.as_deref().ok_or_else(|| {
-        EvidenceConfigError::InvalidSelfAttestationConfig {
+        EvidenceConfigError::InvalidSubjectAccessConfig {
             reason: format!("allowed claim '{}' must declare purpose", claim.id),
         }
     })?;
     if !allowed_purposes.contains(purpose) {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "allowed claim '{}' declares unallowed purpose '{}'",
             claim.id, purpose
         ));
@@ -803,7 +736,7 @@ pub(super) fn validate_self_attestation_claim(
         .iter()
         .any(|format| allowed_formats.contains(format.as_str()))
     {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "allowed claim '{}' must support at least one allowed format",
             claim.id
         ));
@@ -814,7 +747,7 @@ pub(super) fn validate_self_attestation_claim(
         .iter()
         .any(|disclosure| allowed_disclosures.contains(disclosure.as_str()))
     {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "allowed claim '{}' must support at least one allowed disclosure",
             claim.id
         ));
@@ -825,7 +758,7 @@ pub(super) fn validate_self_attestation_claim(
             .iter()
             .any(|profile| allowed_profiles.contains(profile.as_str()))
     {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "allowed claim '{}' must reference an allowed credential profile",
             claim.id
         ));
@@ -833,7 +766,7 @@ pub(super) fn validate_self_attestation_claim(
     Ok(())
 }
 
-pub(super) fn validate_self_attestation_profile(
+pub(super) fn validate_subject_access_profile(
     profile_id: &str,
     profile: &CredentialProfileConfig,
     claim_ids: &HashSet<&str>,
@@ -842,35 +775,35 @@ pub(super) fn validate_self_attestation_profile(
     max_credential_validity_seconds: u64,
 ) -> Result<(), EvidenceConfigError> {
     if profile.validity_seconds <= 0 {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "credential profile '{profile_id}' validity_seconds must be greater than zero"
         ));
     }
     let validity_seconds = u64::try_from(profile.validity_seconds).map_err(|_| {
-        EvidenceConfigError::InvalidSelfAttestationConfig {
+        EvidenceConfigError::InvalidSubjectAccessConfig {
             reason: format!(
                 "credential profile '{profile_id}' validity_seconds must be greater than zero"
             ),
         }
     })?;
     if validity_seconds > max_credential_validity_seconds {
-        return invalid_self_attestation(format!(
-            "credential profile '{profile_id}' validity_seconds must not exceed the self-attestation ceiling"
+        return invalid_subject_access(format!(
+            "credential profile '{profile_id}' validity_seconds must not exceed the subject-access ceiling"
         ));
     }
     if !allowed_formats.contains(profile.format.as_str()) {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "credential profile '{profile_id}' uses unallowed format '{}'",
             profile.format
         ));
     }
     if profile.holder_binding.mode != "did" {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "credential profile '{profile_id}' holder_binding.mode must be did"
         ));
     }
     if profile.holder_binding.proof_of_possession.as_deref() != Some("required") {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "credential profile '{profile_id}' holder_binding.proof_of_possession must be required"
         ));
     }
@@ -881,13 +814,13 @@ pub(super) fn validate_self_attestation_profile(
             .iter()
             .any(|method| method != SD_JWT_VC_HOLDER_BINDING_METHOD)
     {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "credential profile '{profile_id}' holder_binding.allowed_did_methods must only contain did:jwk"
         ));
     }
     for claim_id in &profile.allowed_claims {
         if !claim_ids.contains(claim_id.as_str()) {
-            return invalid_self_attestation(format!(
+            return invalid_subject_access(format!(
                 "credential profile '{profile_id}' references unknown claim '{claim_id}'"
             ));
         }
@@ -897,15 +830,15 @@ pub(super) fn validate_self_attestation_profile(
         .iter()
         .any(|claim_id| allowed_claim_ids.contains(claim_id.as_str()))
     {
-        return invalid_self_attestation(format!(
-            "credential profile '{profile_id}' must allow at least one self-attestation claim"
+        return invalid_subject_access(format!(
+            "credential profile '{profile_id}' must allow at least one subject-access claim"
         ));
     }
     Ok(())
 }
 
-pub(super) fn validate_self_attestation_allow_lists_are_supported(
-    config: &SelfAttestationConfig,
+pub(super) fn validate_subject_access_allow_lists_are_supported(
+    config: &SubjectAccessConfig,
     evidence: &EvidenceConfig,
 ) -> Result<(), EvidenceConfigError> {
     let allowed_claims: Vec<&ClaimDefinition> = config
@@ -924,7 +857,7 @@ pub(super) fn validate_self_attestation_allow_lists_are_supported(
             .iter()
             .any(|claim| claim.purpose.as_deref() == Some(purpose.as_str()))
         {
-            return invalid_self_attestation(format!(
+            return invalid_subject_access(format!(
                 "allowed_purposes entry '{purpose}' is not used by any allowed claim"
             ));
         }
@@ -938,7 +871,7 @@ pub(super) fn validate_self_attestation_allow_lists_are_supported(
             .iter()
             .any(|profile| profile.format == *format);
         if !supported_by_claim && !supported_by_profile {
-            return invalid_self_attestation(format!(
+            return invalid_subject_access(format!(
                 "allowed_formats entry '{format}' is not supported by any allowed claim or profile"
             ));
         }
@@ -960,7 +893,7 @@ pub(super) fn validate_self_attestation_allow_lists_are_supported(
                 .any(|candidate| candidate == disclosure)
         });
         if !supported_by_claim && !supported_by_profile {
-            return invalid_self_attestation(format!(
+            return invalid_subject_access(format!(
                 "allowed_disclosures entry '{disclosure}' is not supported by any allowed claim or profile"
             ));
         }
@@ -970,11 +903,11 @@ pub(super) fn validate_self_attestation_allow_lists_are_supported(
 }
 
 pub(super) fn validate_delegated_proof_claim_binding(
-    relationship: &SelfAttestationDelegatedRelationshipConfig,
+    relationship: &SubjectAccessDelegatedRelationshipConfig,
     proof_claim: &ClaimDefinition,
 ) -> Result<(), EvidenceConfigError> {
     let ClaimEvidenceMode::RegistryBacked { consultations } = &proof_claim.evidence_mode else {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "delegated proof_claim '{}' must be registry_backed",
             relationship.proof_claim
         ));
@@ -983,7 +916,7 @@ pub(super) fn validate_delegated_proof_claim_binding(
         .first_key_value()
         .filter(|_| consultations.len() == 1)
     else {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "delegated proof_claim '{}' must declare exactly one Relay consultation",
             relationship.proof_claim
         ));
@@ -997,19 +930,19 @@ pub(super) fn validate_delegated_proof_claim_binding(
         .values()
         .any(RelayConsultationInput::is_target_derived);
     if !has_requester || !has_target {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "delegated proof_claim '{}' must map both requester-derived and target-derived Relay inputs",
             relationship.proof_claim
         ));
     }
     if proof_claim.value.value_type != "boolean" {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "delegated proof_claim '{}' must produce a boolean result",
             relationship.proof_claim
         ));
     }
     if proof_claim.purpose.as_deref().is_none() {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "delegated proof_claim '{}' must declare purpose",
             relationship.proof_claim
         ));
@@ -1018,7 +951,7 @@ pub(super) fn validate_delegated_proof_claim_binding(
 }
 
 pub(super) fn validate_delegated_attestation_claim(
-    relationship: &SelfAttestationDelegatedRelationshipConfig,
+    relationship: &SubjectAccessDelegatedRelationshipConfig,
     claim: &ClaimDefinition,
     allowed_purposes: &HashSet<&str>,
     allowed_formats: &HashSet<&str>,
@@ -1026,24 +959,24 @@ pub(super) fn validate_delegated_attestation_claim(
     allowed_profiles: &HashSet<&str>,
 ) -> Result<(), EvidenceConfigError> {
     if !claim.operations.evaluate.enabled {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "delegated claim '{}' must enable evaluate",
             claim.id
         ));
     }
     if !claim.evidence_mode.is_self_attested() {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "delegated claim '{}' must be self_attested",
             claim.id
         ));
     }
     let purpose = claim.purpose.as_deref().ok_or_else(|| {
-        EvidenceConfigError::InvalidSelfAttestationConfig {
+        EvidenceConfigError::InvalidSubjectAccessConfig {
             reason: format!("delegated claim '{}' must declare purpose", claim.id),
         }
     })?;
     if !allowed_purposes.contains(purpose) {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "delegated claim '{}' declares unallowed purpose '{}'",
             claim.id, purpose
         ));
@@ -1053,7 +986,7 @@ pub(super) fn validate_delegated_attestation_claim(
         .iter()
         .any(|format| allowed_formats.contains(format.as_str()))
     {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "delegated claim '{}' must support at least one allowed format",
             claim.id
         ));
@@ -1064,7 +997,7 @@ pub(super) fn validate_delegated_attestation_claim(
         .iter()
         .any(|disclosure| allowed_disclosures.contains(disclosure.as_str()))
     {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "delegated claim '{}' must support at least one allowed disclosure",
             claim.id
         ));
@@ -1075,7 +1008,7 @@ pub(super) fn validate_delegated_attestation_claim(
             .iter()
             .any(|profile| allowed_profiles.contains(profile.as_str()))
     {
-        return invalid_self_attestation(format!(
+        return invalid_subject_access(format!(
             "delegated claim '{}' must reference an allowed credential profile",
             claim.id
         ));
@@ -1084,7 +1017,7 @@ pub(super) fn validate_delegated_attestation_claim(
 }
 
 pub(super) fn validate_delegated_attestation_allow_lists_are_supported(
-    relationship: &SelfAttestationDelegatedRelationshipConfig,
+    relationship: &SubjectAccessDelegatedRelationshipConfig,
     evidence: &EvidenceConfig,
 ) -> Result<(), EvidenceConfigError> {
     let allowed_claims: Vec<&ClaimDefinition> = relationship
@@ -1103,8 +1036,8 @@ pub(super) fn validate_delegated_attestation_allow_lists_are_supported(
             .iter()
             .any(|claim| claim.purpose.as_deref() == Some(purpose.as_str()))
         {
-            return invalid_self_attestation(format!(
-                "self_attestation.delegation allowed_purposes entry '{purpose}' is not used by any allowed claim"
+            return invalid_subject_access(format!(
+                "subject_access.delegation allowed_purposes entry '{purpose}' is not used by any allowed claim"
             ));
         }
     }
@@ -1117,8 +1050,8 @@ pub(super) fn validate_delegated_attestation_allow_lists_are_supported(
             .iter()
             .any(|profile| profile.format == *format);
         if !supported_by_claim && !supported_by_profile {
-            return invalid_self_attestation(format!(
-                "self_attestation.delegation allowed_formats entry '{format}' is not supported by any allowed claim or profile"
+            return invalid_subject_access(format!(
+                "subject_access.delegation allowed_formats entry '{format}' is not supported by any allowed claim or profile"
             ));
         }
     }
@@ -1139,8 +1072,8 @@ pub(super) fn validate_delegated_attestation_allow_lists_are_supported(
                 .any(|candidate| candidate == disclosure)
         });
         if !supported_by_claim && !supported_by_profile {
-            return invalid_self_attestation(format!(
-                "self_attestation.delegation allowed_disclosures entry '{disclosure}' is not supported by any allowed claim or profile"
+            return invalid_subject_access(format!(
+                "subject_access.delegation allowed_disclosures entry '{disclosure}' is not supported by any allowed claim or profile"
             ));
         }
     }
@@ -1149,7 +1082,7 @@ pub(super) fn validate_delegated_attestation_allow_lists_are_supported(
 }
 
 pub(super) fn validate_required_scope_mappings(
-    config: &SelfAttestationConfig,
+    config: &SubjectAccessConfig,
     oidc: &EvidenceOidcAuthConfig,
 ) -> Result<(), EvidenceConfigError> {
     let required_scopes: HashSet<&str> =
@@ -1160,7 +1093,7 @@ pub(super) fn validate_required_scope_mappings(
             .values()
             .any(|mapped_scopes| mapped_scopes.iter().any(|mapped| mapped == scope))
         {
-            return invalid_self_attestation(format!(
+            return invalid_subject_access(format!(
                 "required scope '{scope}' must be present in auth.oidc.scope_map"
             ));
         }
@@ -1169,10 +1102,10 @@ pub(super) fn validate_required_scope_mappings(
     Ok(())
 }
 
-pub(super) fn invalid_self_attestation<T>(
+pub(super) fn invalid_subject_access<T>(
     reason: impl Into<String>,
 ) -> Result<T, EvidenceConfigError> {
-    Err(EvidenceConfigError::InvalidSelfAttestationConfig {
+    Err(EvidenceConfigError::InvalidSubjectAccessConfig {
         reason: reason.into(),
     })
 }

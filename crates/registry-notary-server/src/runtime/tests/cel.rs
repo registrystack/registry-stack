@@ -61,7 +61,7 @@ fn cel_root_bindings_redact_dependent_object_claim_values() {
 }
 
 #[tokio::test]
-async fn self_attestation_batch_is_denied_before_evaluation() {
+async fn subject_access_batch_is_denied_before_evaluation() {
     let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
     let store = EvidenceStore::default();
     let request = BatchEvaluateRequest {
@@ -82,17 +82,17 @@ async fn self_attestation_batch_is_denied_before_evaluation() {
         .batch_evaluate(
             evidence,
             &store,
-            &self_attestation_principal(),
+            &subject_access_principal(),
             request,
             BatchEvaluateOptions::default(),
         )
         .await
-        .expect_err("self-attestation batch is not supported");
+        .expect_err("subject-access batch is not supported");
 
     assert!(matches!(
         err,
-        EvidenceError::SelfAttestationDenied {
-            reason: SelfAttestationDenialCode::BatchDenied
+        EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::BatchDenied
         }
     ));
 }

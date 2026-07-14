@@ -172,8 +172,7 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
                 })
             }
         };
-        let has_credential_destination =
-            credential_type == CredentialType::Oauth2ClientCredentials;
+        let has_credential_destination = credential_type == CredentialType::Oauth2ClientCredentials;
         let has_verification_destination = has_authored_signed_dci(&integration.document);
         let credential_path = has_credential_destination
             .then(|| offline_oauth_path(integration))
@@ -286,6 +285,7 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
         }),
         relay_state: None,
         notary_state: None,
+        oid4vci: None,
         deployment: DeploymentBinding {
             profile: DeploymentProfile::Local,
             relay: requires_relay.then(|| ServiceBinding {

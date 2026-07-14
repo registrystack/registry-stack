@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use super::federation::self_attestation_oid4vci_config;
+use super::federation::subject_access_oid4vci_config;
 use super::support::*;
 
 // Dedicated access-token signing key, distinct from the credential key
@@ -47,7 +47,7 @@ pub(super) fn local_jwk_signing_key(private_jwk_env: &str, kid: &str) -> Signing
 /// A pre-auth-enabled config. eSignet `issuer`/`jwks_uri` point at the MockIdp;
 /// the token endpoint points at `token_url` (a wiremock upstream). The
 /// access-token signing key is dedicated (distinct from the credential key).
-pub(super) fn self_attestation_preauth_config(
+pub(super) fn subject_access_preauth_config(
     base_url: &str,
     audit_path: &str,
     esignet_issuer: &str,
@@ -58,11 +58,11 @@ pub(super) fn self_attestation_preauth_config(
     // Reuse the eSignet issuer/jwks as the primary OIDC auth issuer so the
     // credential endpoint still accepts eSignet tokens on the unchanged path.
     let mut config =
-        self_attestation_oid4vci_config(base_url, audit_path, esignet_issuer, esignet_jwks_uri);
+        subject_access_oid4vci_config(base_url, audit_path, esignet_issuer, esignet_jwks_uri);
     config.state.storage = registry_notary_core::STATE_STORAGE_IN_MEMORY.to_string();
     // The credential endpoint must be allowed to issue credentials for the
     // pre-auth happy path.
-    config.self_attestation.allowed_operations.issue_credential = true;
+    config.subject_access.allowed_operations.issue_credential = true;
     // The person-is-alive claim must support the SD-JWT VC format for OID4VCI
     // issuance (the base config only lists the claim-result format).
     for claim in config.evidence.claims.iter_mut() {
@@ -73,17 +73,17 @@ pub(super) fn self_attestation_preauth_config(
         }
     }
     config
-        .self_attestation
+        .subject_access
         .rate_limits
         .tx_code_attempts_per_code_per_minute = 3;
     config
-        .self_attestation
+        .subject_access
         .rate_limits
         .invalid_token_per_client_address_per_minute = 50;
     // The Notary RP client id must be an accepted citizen client + audience so a
-    // Notary-minted token classifies as self-attestation.
+    // Notary-minted token classifies as subject-access.
     config
-        .self_attestation
+        .subject_access
         .citizen_clients
         .allowed_client_ids
         .push(ESIGNET_RP_CLIENT_ID.to_string());
@@ -199,7 +199,7 @@ pub(super) fn esignet_id_token(idp: &MockIdp, nonce: &str, national_id: &str) ->
         "aud": ESIGNET_RP_CLIENT_ID,
         "nonce": nonce,
         "national_id": national_id,
-        "scope": "openid self_attestation",
+        "scope": "openid subject_access",
         "acr": "urn:example:loa:substantial",
         "auth_time": now,
         "iat": now,

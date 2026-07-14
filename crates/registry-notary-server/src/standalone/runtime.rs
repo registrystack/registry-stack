@@ -29,12 +29,11 @@ use registry_notary_core::deployment::{
 use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
     AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, ConfigAuditEvent, EvidenceAuditEvent,
-    EvidenceAuthMode, EvidenceAuthProfileId, EvidenceAuthorizationDetails, EvidenceConfig,
-    EvidenceCredentialConfig, EvidenceError, EvidencePrincipal, Hashed, PrincipalIdentifier,
-    RateLimitBucket, RegistryNotaryAdminListenerMode, RequestIdentifier,
-    SelfAttestationAssuranceClaimSource, SelfAttestationClaimSource, SelfAttestationDenialCode,
-    SigningKeyConfig, SigningKeyProviderConfig, StandaloneRegistryNotaryConfig, VerifiedClaimName,
-    VerifiedClaimValue,
+    EvidenceAuthProfileId, EvidenceAuthorizationDetails, EvidenceConfig, EvidenceCredentialConfig,
+    EvidenceError, EvidencePrincipal, Hashed, PrincipalIdentifier, RateLimitBucket,
+    RegistryNotaryAdminListenerMode, RequestIdentifier, SigningKeyConfig, SigningKeyProviderConfig,
+    StandaloneRegistryNotaryConfig, SubjectAccessAssuranceClaimSource, SubjectAccessClaimSource,
+    SubjectAccessDenialCode, VerifiedClaimName, VerifiedClaimValue,
 };
 use registry_platform_audit::{
     AuditError, AuditKeyHasher, AuditProfile, AuditSink as PlatformAuditSink, ChainState,
@@ -74,7 +73,7 @@ use crate::{
     posture::PostureContext,
     replay::{require_replay_insert, ReplayStores},
     router, EvidenceAuditContext, EvidenceErrorCodeContext, EvidenceIssuerResolver, EvidenceStore,
-    RegistryNotaryApiState, SelfAttestationRateLimitKeys, SelfAttestationRateLimiter,
+    RegistryNotaryApiState, SubjectAccessRateLimitKeys, SubjectAccessRateLimiter,
 };
 
 #[path = "assembly.rs"]

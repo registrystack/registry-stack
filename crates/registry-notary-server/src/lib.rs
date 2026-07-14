@@ -30,9 +30,9 @@ pub(crate) mod replay;
 pub(crate) mod request_context;
 pub(crate) mod response_context;
 pub mod runtime;
-pub mod self_attestation_rate_limit;
 pub mod standalone;
 pub mod state_plane;
+pub mod subject_access_rate_limit;
 
 pub(crate) use problem::PROBLEM_TYPE_BASE_URL;
 
@@ -46,14 +46,14 @@ pub use runtime::{
     claim_summary, credential_profile_for, find_claim, format_time, formats, BatchEvaluateOptions,
     EvidenceStore, RegistryNotaryRuntime,
 };
-pub use self_attestation_rate_limit::{
-    SelfAttestationRateLimitBucket, SelfAttestationRateLimitError, SelfAttestationRateLimitKeys,
-    SelfAttestationRateLimiter,
-};
 pub use standalone::{
     compile_notary_runtime, compile_notary_runtime_with_provenance,
     notary_admin_router_from_runtime, notary_public_router_from_runtime,
     notary_router_from_runtime, notary_routers_from_runtime, standalone_router,
     verify_relay_from_config, EvidenceIssuerRegistry, NotaryRouters, NotaryRuntimeSnapshot,
     StandaloneServerError,
+};
+pub use subject_access_rate_limit::{
+    SubjectAccessRateLimitBucket, SubjectAccessRateLimitError, SubjectAccessRateLimitKeys,
+    SubjectAccessRateLimiter,
 };

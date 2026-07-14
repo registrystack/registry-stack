@@ -242,7 +242,7 @@ pub(super) fn audit_records(path: &std::path::Path) -> Vec<Value> {
         .collect()
 }
 
-pub(super) fn self_attestation_oidc_config(
+pub(super) fn subject_access_oidc_config(
     _base_url: &str,
     audit_path: &str,
     issuer: &str,
@@ -259,7 +259,6 @@ state:
 server:
   bind: 127.0.0.1:0
 auth:
-  mode: oidc
   oidc:
     issuer: "{issuer}"
     jwks_url: "{jwks_uri}"
@@ -277,8 +276,8 @@ auth:
     leeway: 60s
     allow_insecure_localhost: true
     scope_map:
-      self_attestation:
-        - self_attestation
+      subject_access:
+        - subject_access
 audit:
   sink: file
   path: "{audit_path}"
@@ -318,7 +317,7 @@ evidence:
       subject_type: person
       evidence_mode:
         type: self_attested
-      purpose: citizen_self_attestation
+      purpose: citizen_subject_access
       value:
         type: boolean
       rule:
@@ -331,7 +330,7 @@ evidence:
         - application/vnd.registry-notary.claim-result+json
       credential_profiles:
         - civil_status_sd_jwt
-self_attestation:
+subject_access:
   enabled: true
   subject_binding:
     token_claim: national_id
@@ -353,7 +352,7 @@ self_attestation:
     issue_credential: false
     batch_evaluate: false
   allowed_purposes:
-    - citizen_self_attestation
+    - citizen_subject_access
   allowed_claims:
     - person-is-alive
   allowed_formats:
@@ -363,13 +362,12 @@ self_attestation:
     - value
     - redacted
   required_scopes:
-    - self_attestation
+    - subject_access
   credential_profiles:
     - civil_status_sd_jwt
   allowed_wallet_origins:
     - https://wallet.example.gov
   rate_limits:
-    mode: in_process
     invalid_token_per_client_address_per_minute: 20
     per_principal_per_minute: 10
     subject_mismatch_per_principal_per_hour: 5
@@ -377,16 +375,16 @@ self_attestation:
     credential_issuance_per_principal_per_hour: 5
 "#
     );
-    serde_norway::from_str(&raw).expect("self-attestation config deserializes")
+    serde_norway::from_str(&raw).expect("subject-access config deserializes")
 }
 
-pub(super) fn self_attestation_oid4vci_config(
+pub(super) fn subject_access_oid4vci_config(
     base_url: &str,
     audit_path: &str,
     issuer: &str,
     jwks_uri: &str,
 ) -> StandaloneRegistryNotaryConfig {
-    let mut config = self_attestation_oidc_config(base_url, audit_path, issuer, jwks_uri);
+    let mut config = subject_access_oidc_config(base_url, audit_path, issuer, jwks_uri);
     config
         .evidence
         .credential_profiles
@@ -427,7 +425,7 @@ credential_configurations:
 }
 
 #[cfg(feature = "registry-notary-cel")]
-pub(super) fn add_self_attestation_projection_claim(
+pub(super) fn add_subject_access_projection_claim(
     config: &mut StandaloneRegistryNotaryConfig,
     claim_id: &str,
     title: &str,
@@ -439,7 +437,7 @@ pub(super) fn add_self_attestation_projection_claim(
         .claims
         .iter()
         .find(|claim| claim.id == "person-is-alive")
-        .expect("base self-attestation claim exists")
+        .expect("base subject-access claim exists")
         .clone();
     claim.id = claim_id.to_string();
     claim.title = title.to_string();
@@ -460,7 +458,7 @@ pub(super) fn add_self_attestation_projection_claim(
     claim.credential_profiles = vec!["civil_status_sd_jwt".to_string()];
     config.evidence.claims.push(claim);
     config
-        .self_attestation
+        .subject_access
         .allowed_claims
         .push(claim_id.to_string());
     config
@@ -474,21 +472,21 @@ pub(super) fn add_self_attestation_projection_claim(
 
 #[cfg(feature = "registry-notary-cel")]
 pub(super) fn enable_oid4vci_field_projection(config: &mut StandaloneRegistryNotaryConfig) {
-    add_self_attestation_projection_claim(
+    add_subject_access_projection_claim(
         config,
         "person-given-name",
         "Given name",
         "given_name",
         "string",
     );
-    add_self_attestation_projection_claim(
+    add_subject_access_projection_claim(
         config,
         "person-birth-date",
         "Birth date",
         "birth_date",
         "date",
     );
-    config.self_attestation.allowed_operations.issue_credential = true;
+    config.subject_access.allowed_operations.issue_credential = true;
     let credential = config
         .oid4vci
         .credential_configurations

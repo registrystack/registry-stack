@@ -104,7 +104,7 @@ pub(in crate::api) async fn oid4vci_nonce(
         Ok(nonce) => nonce,
         Err(error) => return evidence_error_response(error),
     };
-    let key = match state.self_attestation_rate_keys.oid4vci_nonce(
+    let key = match state.subject_access_rate_keys.oid4vci_nonce(
         &state.oid4vci.credential_issuer,
         configuration_id,
         &nonce,

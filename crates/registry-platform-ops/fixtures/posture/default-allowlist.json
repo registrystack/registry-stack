@@ -12,6 +12,7 @@
     "/build/package",
     "/build/version",
     "/runtime/auth_mode",
+    "/runtime/auth_methods",
     "/runtime/admin_enabled",
     "/runtime/readiness",
     "/configuration/source",
@@ -97,12 +98,12 @@
     "/notary/federation/allowed_purpose_count",
     "/notary/oid4vci/enabled",
     "/notary/oid4vci/credential_configuration_count",
-    "/notary/self_attestation/enabled",
-    "/notary/self_attestation/allowed_claim_count",
-    "/notary/self_attestation/allowed_purpose_count",
-    "/notary/self_attestation/credential_profile_count",
-    "/notary/self_attestation/wallet_origin_count",
-    "/notary/self_attestation/rate_limit_mode"
+    "/notary/subject_access/enabled",
+    "/notary/subject_access/allowed_claim_count",
+    "/notary/subject_access/allowed_purpose_count",
+    "/notary/subject_access/credential_profile_count",
+    "/notary/subject_access/wallet_origin_count",
+    "/notary/subject_access/rate_limit_mode"
   ],
   "restricted_json_pointers_excluded_by_default": [
     "/instance/public_base_url",

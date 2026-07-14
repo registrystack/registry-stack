@@ -5,16 +5,14 @@
 pub enum EvidenceConfigError {
     #[error("evidence.enabled must be true for the standalone Registry Notary")]
     EvidenceDisabled,
-    #[error("at least one API key or bearer token must be configured")]
+    #[error("at least one API key, bearer token, or OIDC authenticator must be configured")]
     NoCredentialsConfigured,
     #[error("invalid auth config: {reason}")]
     InvalidAuthConfig { reason: String },
-    #[error("auth.mode = oidc requires an auth.oidc block")]
-    MissingOidcConfig,
     #[error("invalid auth.oidc config: {reason}")]
     InvalidOidcConfig { reason: String },
-    #[error("invalid self_attestation config: {reason}")]
-    InvalidSelfAttestationConfig { reason: String },
+    #[error("invalid subject_access config: {reason}")]
+    InvalidSubjectAccessConfig { reason: String },
     #[error("invalid oid4vci config: {reason}")]
     InvalidOid4vciConfig { reason: String },
     #[error("invalid auth.access_token_signing config: {reason}")]

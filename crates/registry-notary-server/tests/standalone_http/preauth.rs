@@ -14,7 +14,7 @@ pub(super) async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing()
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_preauth_config(
+    let app = standalone_router(subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -68,7 +68,7 @@ pub(super) async fn preauth_offer_start_returns_429_when_login_state_store_is_fu
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_preauth_config(
+    let app = standalone_router(subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -104,7 +104,7 @@ pub(super) async fn preauth_offer_start_requests_userinfo_subject_binding_claim_
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_preauth_config(
+    let mut config = subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -112,8 +112,8 @@ pub(super) async fn preauth_offer_start_requests_userinfo_subject_binding_claim_
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     );
-    config.self_attestation.subject_binding.claim_source = SelfAttestationClaimSource::Userinfo;
-    config.self_attestation.subject_binding.token_claim = "individual_id".to_string();
+    config.subject_access.subject_binding.claim_source = SubjectAccessClaimSource::Userinfo;
+    config.subject_access.subject_binding.token_claim = "individual_id".to_string();
     config.oid4vci.pre_authorized_code.esignet.userinfo_url =
         format!("{}/userinfo", token_upstream.url());
     config
@@ -160,7 +160,7 @@ pub(super) async fn preauth_offer_start_rejects_unknown_configuration_id() {
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_preauth_config(
+    let app = standalone_router(subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -185,7 +185,7 @@ pub(super) async fn preauth_callback_mints_pre_authorized_offer_with_tx_code() {
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_preauth_config(
+    let app = standalone_router(subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -210,7 +210,7 @@ pub(super) async fn preauth_callback_omits_tx_code_when_optional() {
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_preauth_config(
+    let mut config = subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -224,7 +224,7 @@ pub(super) async fn preauth_callback_omits_tx_code_when_optional() {
         .pre_authorized_code
         .pre_authorized_code_ttl_seconds = 120;
     config
-        .self_attestation
+        .subject_access
         .rate_limits
         .tx_code_attempts_per_code_per_minute = 0;
     let app = standalone_router(config).expect("standalone router builds");
@@ -260,7 +260,7 @@ pub(super) async fn preauth_callback_accepts_esignet_id_token_without_typ_header
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_preauth_config(
+    let app = standalone_router(subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -292,7 +292,7 @@ pub(super) async fn preauth_callback_accepts_esignet_id_token_without_typ_header
         "aud": ESIGNET_RP_CLIENT_ID,
         "nonce": nonce,
         "national_id": "person-1",
-        "scope": "openid self_attestation",
+        "scope": "openid subject_access",
         "acr": "urn:example:loa:substantial",
         "auth_time": now,
         "iat": now,
@@ -364,7 +364,7 @@ pub(super) async fn preauth_client_assertion_is_rs256_signed_when_rp_key_is_rsa(
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_preauth_config(
+    let mut config = subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -446,7 +446,7 @@ pub(super) async fn preauth_token_endpoint_issues_access_token_and_c_nonce() {
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_preauth_config(
+    let app = standalone_router(subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -477,7 +477,7 @@ pub(super) async fn preauth_token_endpoint_issues_access_token_and_c_nonce() {
         .expect("scope claim is present")
         .split(' ')
         .collect();
-    assert!(scopes.contains("self_attestation"));
+    assert!(scopes.contains("subject_access"));
     assert!(scopes.contains("person-is-alive"));
     assert_eq!(
         claims["authorization_details"][0]["type"],
@@ -509,11 +509,11 @@ pub(super) async fn preauth_token_endpoint_issues_access_token_and_c_nonce() {
     );
     assert_eq!(
         claims["authorization_details"][0]["purpose"],
-        json!("citizen_self_attestation")
+        json!("citizen_subject_access")
     );
     assert_eq!(
         claims["authorization_details"][0]["access_mode"],
-        json!("self_attestation")
+        json!("subject_bound")
     );
     assert_eq!(
         claims["authorization_details"][0]["subject"],
@@ -591,7 +591,7 @@ pub(super) async fn preauth_callback_binds_subject_from_userinfo_when_claim_sour
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_preauth_config(
+    let mut config = subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -599,8 +599,8 @@ pub(super) async fn preauth_callback_binds_subject_from_userinfo_when_claim_sour
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     );
-    config.self_attestation.subject_binding.claim_source = SelfAttestationClaimSource::Userinfo;
-    config.self_attestation.subject_binding.token_claim = "individual_id".to_string();
+    config.subject_access.subject_binding.claim_source = SubjectAccessClaimSource::Userinfo;
+    config.subject_access.subject_binding.token_claim = "individual_id".to_string();
     config.oid4vci.pre_authorized_code.esignet.userinfo_url =
         format!("{}/userinfo", token_upstream.url());
     config
@@ -647,7 +647,7 @@ pub(super) async fn preauth_callback_denies_when_userinfo_lacks_subject_binding_
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_preauth_config(
+    let mut config = subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -655,8 +655,8 @@ pub(super) async fn preauth_callback_denies_when_userinfo_lacks_subject_binding_
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     );
-    config.self_attestation.subject_binding.claim_source = SelfAttestationClaimSource::Userinfo;
-    config.self_attestation.subject_binding.token_claim = "individual_id".to_string();
+    config.subject_access.subject_binding.claim_source = SubjectAccessClaimSource::Userinfo;
+    config.subject_access.subject_binding.token_claim = "individual_id".to_string();
     config.oid4vci.pre_authorized_code.esignet.userinfo_url =
         format!("{}/userinfo", token_upstream.url());
     config
@@ -724,7 +724,7 @@ pub(super) async fn preauth_code_is_single_use() {
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_preauth_config(
+    let app = standalone_router(subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -751,7 +751,7 @@ pub(super) async fn preauth_token_rejects_wrong_and_missing_tx_code() {
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_preauth_config(
+    let app = standalone_router(subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -791,7 +791,7 @@ pub(super) async fn preauth_token_accepts_missing_tx_code_when_optional() {
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_preauth_config(
+    let mut config = subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -805,7 +805,7 @@ pub(super) async fn preauth_token_accepts_missing_tx_code_when_optional() {
         .pre_authorized_code
         .pre_authorized_code_ttl_seconds = 120;
     config
-        .self_attestation
+        .subject_access
         .rate_limits
         .tx_code_attempts_per_code_per_minute = 0;
     let app = standalone_router(config).expect("standalone router builds");
@@ -833,7 +833,7 @@ pub(super) async fn preauth_repeated_wrong_pins_lock_the_code() {
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_preauth_config(
+    let mut config = subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -842,7 +842,7 @@ pub(super) async fn preauth_repeated_wrong_pins_lock_the_code() {
         &format!("{}/token", token_upstream.url()),
     );
     config
-        .self_attestation
+        .subject_access
         .rate_limits
         .tx_code_attempts_per_code_per_minute = 2;
     let app = standalone_router(config).expect("standalone router builds");
@@ -872,7 +872,7 @@ pub(super) async fn preauth_token_rejects_wrong_and_missing_grant_cleanly() {
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(self_attestation_preauth_config(
+    let app = standalone_router(subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -914,7 +914,7 @@ pub(super) async fn preauth_random_code_flood_is_throttled_per_client_address() 
     let token_upstream = MockHttpUpstream::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = self_attestation_preauth_config(
+    let mut config = subject_access_preauth_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -923,7 +923,7 @@ pub(super) async fn preauth_random_code_flood_is_throttled_per_client_address() 
         &format!("{}/token", token_upstream.url()),
     );
     config
-        .self_attestation
+        .subject_access
         .rate_limits
         .invalid_token_per_client_address_per_minute = 2;
     let app = standalone_router(config).expect("standalone router builds");
@@ -958,7 +958,7 @@ pub(super) async fn preauth_disabled_returns_404_and_offer_is_authorization_code
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     // Default config: pre-auth disabled.
-    let app = standalone_router(self_attestation_oid4vci_config(
+    let app = standalone_router(subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
@@ -1017,7 +1017,7 @@ pub(super) fn mint_notary_access_token(
         typ,
         issuer,
         national_id,
-        "self_attestation",
+        "subject_access",
         None,
     )
 }
@@ -1095,7 +1095,7 @@ pub(super) fn preauth_test_config(
     idp: &MockIdp,
     token_upstream: &MockHttpUpstream,
 ) -> StandaloneRegistryNotaryConfig {
-    self_attestation_preauth_config(
+    subject_access_preauth_config(
         base_url,
         audit_path,
         &idp.issuer(),
@@ -1195,7 +1195,7 @@ pub(super) async fn preauth_transaction_token_jti_denials_are_stable_and_redacte
         NOTARY_ISSUER,
         "person-1",
         Some("txn-jti-http-replay-1"),
-        "self_attestation",
+        "subject_access",
         Some(json!([{
             "type": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_TYPE,
             "schema_version": registry_notary_core::tokens::NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION,
@@ -1295,7 +1295,7 @@ pub(super) async fn preauth_trust_anchor_isolates_esignet_and_notary_paths() {
         "sub": "esignet-citizen-subject",
         "aud": NOTARY_AUDIENCE,
         "azp": ESIGNET_RP_CLIENT_ID,
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "national_id": "person-1",
         "iat": now,
         "exp": now + 300,
@@ -1335,7 +1335,7 @@ pub(super) async fn preauth_existing_esignet_token_still_authenticates_credentia
         "sub": "citizen-subject",
         "aud": NOTARY_AUDIENCE,
         "azp": "citizen-portal",
-        "scope": "self_attestation",
+        "scope": "subject_access",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -1374,7 +1374,7 @@ pub(super) async fn preauth_notary_access_token_with_empty_authorization_details
         "registry-notary-access+jwt",
         NOTARY_ISSUER,
         "person-1",
-        "self_attestation person-is-alive",
+        "subject_access person-is-alive",
         Some(json!([])),
     );
     let nonce = server
@@ -1585,7 +1585,7 @@ pub(super) async fn preauth_credential_subject_and_evaluation_match_esignet_toke
         "sub": "citizen-subject",
         "aud": NOTARY_AUDIENCE,
         "azp": "citizen-portal",
-        "scope": "self_attestation person-is-alive",
+        "scope": "subject_access person-is-alive",
         "national_id": "person-1",
         "auth_time": now,
         "iat": now,
@@ -1619,7 +1619,7 @@ pub(super) async fn preauth_credential_subject_and_evaluation_match_esignet_toke
     let baseline_audit = credential_issued_audit(&baseline_audit_path);
     assert_eq!(
         baseline_audit["purposes"],
-        json!(["citizen_self_attestation"])
+        json!(["citizen_subject_access"])
     );
     baseline_idp.stop().await;
 
@@ -1679,10 +1679,7 @@ pub(super) async fn preauth_credential_subject_and_evaluation_match_esignet_toke
         .expect("preauth credential issued")
         .to_string();
     let preauth_audit = credential_issued_audit(&preauth_audit_path);
-    assert_eq!(
-        preauth_audit["purposes"],
-        json!(["citizen_self_attestation"])
-    );
+    assert_eq!(preauth_audit["purposes"], json!(["citizen_subject_access"]));
     preauth_idp.stop().await;
 
     // Subject equality: the pre-auth credential is bound to the eSignet subject,

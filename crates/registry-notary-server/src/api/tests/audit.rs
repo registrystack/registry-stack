@@ -115,7 +115,7 @@ fn canonical_audit_identifier_input_sorts_identifiers_and_explicit_empty_fields(
 
 #[test]
 fn credential_audit_context_links_stored_target_and_requester_refs() {
-    let keys = SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
+    let keys = SubjectAccessRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only());
     let mut result = claim_result_view("eval-1", "person-is-alive");
     result.requester_ref = Some(registry_notary_core::EvidenceEntityRef {
         entity_type: "Person".to_string(),
@@ -125,18 +125,18 @@ fn credential_audit_context_links_stored_target_and_requester_refs() {
     });
     let mut response = StatusCode::OK.into_response();
 
-    attach_self_attestation_credential_audit(
+    attach_subject_access_credential_audit(
         &mut response,
         &keys,
         "eval-1",
         &["person-is-alive".to_string()],
         &[result],
         1,
-        SelfAttestationCredentialAuditDetails {
+        SubjectAccessCredentialAuditDetails {
             profile_id: "person_is_alive_sd_jwt",
             holder_binding_mode: "did",
             policy_hash: None,
-            purposes: Some(vec!["citizen_self_attestation".to_string()]),
+            purposes: Some(vec!["citizen_subject_access".to_string()]),
             protocol: Some("openid4vci"),
             credential_configuration_id: Some("person_is_alive_sd_jwt"),
         },

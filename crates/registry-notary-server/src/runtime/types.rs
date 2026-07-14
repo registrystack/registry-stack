@@ -49,7 +49,7 @@ pub struct BatchEvaluateOptions<'a> {
 /// Evaluation policy identity threaded into per-claim provenance
 /// (`generated_by.policy_id` / `policy_version` / `policy_hash`). All optional:
 /// machine-client flows evaluate under no named policy and leave these unset,
-/// while self-attestation flows carry the policy that authorized the result.
+/// while subject-access flows carry the policy that authorized the result.
 #[derive(Clone, Default)]
 pub(super) struct EvaluationPolicy {
     pub(super) policy_id: Option<String>,
@@ -59,7 +59,7 @@ pub(super) struct EvaluationPolicy {
 
 pub(super) struct ClaimEvaluationContext {
     pub(super) evidence: Arc<EvidenceConfig>,
-    pub(super) self_attestation_rate_keys: Arc<SelfAttestationRateLimitKeys>,
+    pub(super) subject_access_rate_keys: Arc<SubjectAccessRateLimitKeys>,
     pub(super) evaluation_capability: EvaluationCapability,
     pub(super) relay_plan: Option<Arc<RequestScopedRelayPlan>>,
     pub(super) context: EvidenceRequestContext,

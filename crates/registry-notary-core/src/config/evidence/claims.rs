@@ -389,7 +389,7 @@ pub(in crate::config) fn validate_claim_evidence_mode(
 
 pub(in crate::config) fn validate_self_attested_dependency_modes(
     claims: &[ClaimDefinition],
-    delegation: &SelfAttestationDelegationConfig,
+    delegation: &SubjectAccessDelegationConfig,
 ) -> Result<(), EvidenceConfigError> {
     for claim in claims
         .iter()

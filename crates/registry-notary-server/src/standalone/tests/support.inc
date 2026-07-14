@@ -15,7 +15,7 @@
             NOTARY_AUTHORIZATION_DETAILS_SCHEMA_VERSION, NOTARY_AUTHORIZATION_DETAILS_TYPE,
             NOTARY_TRANSACTION_TOKEN_JWT_TYP,
         },
-        SelfAttestationDenialCode, SelfAttestationRateLimitsConfig,
+        SubjectAccessDenialCode, SubjectAccessRateLimitsConfig,
     };
     #[cfg(feature = "pkcs11")]
     use registry_notary_core::{ClaimProvenance, ClaimResultView, TargetRefView};

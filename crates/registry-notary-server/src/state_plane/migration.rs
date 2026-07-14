@@ -30,13 +30,13 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "batch=keyed-request-owner-lease-quota-once-takeover-atomic-completion-fifteen-minute-retention-v1\0",
     "credential-status=insert-only-locked-transition-terminal-revocation-expiry-retention-v1\0",
     "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-v1\0",
-    "self-attestation-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1\0",
+    "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1\0",
     "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-v1\0",
     "preauthorization-tx-code=keyed-jti-keyed-pin-verifier-peek-redeem-with-replay-one-winner-expiry-v1\0",
     "retention=bounded-expiry-prune-skip-locked-v1\0",
 );
 pub const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "825938f12563e976ed53b2b62d2f104c8200498f19f666e03c4dee9bd7c45d6d";
+    "2785aacd1ffdc6d005b2b003c7d0afa31405757810b7c6e0fe534c33b99a8968";
 
 const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 0x4e4f_5441_5259_0001;
 const EXPECTED_PRIVATE_TABLE_COUNT_V1: i64 = 10;
@@ -432,8 +432,8 @@ fn state_plane_acl_sql(runtime_role: &RuntimeDatabaseRole) -> String {
          GRANT EXECUTE ON FUNCTION registry_notary_api.credential_status_get_v1(text) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.credential_status_update_v1(text, text) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.machine_quota_debit_v1(bytea, integer, integer) TO {role};\n\
-         GRANT EXECUTE ON FUNCTION registry_notary_api.self_attestation_quota_debit_v1(text[], bytea[], integer[], integer[]) TO {role};\n\
-         GRANT EXECUTE ON FUNCTION registry_notary_api.self_attestation_quota_check_v1(text[], bytea[], integer[], integer[]) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.subject_access_quota_debit_v1(text[], bytea[], integer[], integer[]) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.subject_access_quota_check_v1(text[], bytea[], integer[], integer[]) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_login_reserve_v1(bytea, text, bytea, bytea, bytea, timestamptz) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_login_consume_v1(bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_tx_code_reserve_v1(bytea, bytea, bytea, smallint, timestamptz) TO {role};\n\
@@ -949,7 +949,7 @@ CREATE TABLE registry_notary_private.evaluation (
     client_id_hash bytea NOT NULL CHECK (pg_catalog.octet_length(client_id_hash) = 32),
     request_hash bytea NOT NULL CHECK (pg_catalog.octet_length(request_hash) = 32),
     purpose text NOT NULL CHECK (pg_catalog.length(purpose) BETWEEN 1 AND 256),
-    record_version smallint NOT NULL CHECK (record_version = 1),
+    record_version smallint NOT NULL CHECK (record_version = 2),
     record_json jsonb NOT NULL CHECK (pg_catalog.jsonb_typeof(record_json) = 'object'),
     created_at timestamptz NOT NULL,
     expires_at timestamptz NOT NULL,
@@ -1014,7 +1014,7 @@ CREATE TABLE registry_notary_private.machine_quota (
 CREATE INDEX machine_quota_expiry_idx
     ON registry_notary_private.machine_quota (window_expires_at);
 
-CREATE TABLE registry_notary_private.self_attestation_quota (
+CREATE TABLE registry_notary_private.subject_access_quota (
     bucket_kind text NOT NULL CHECK (bucket_kind IN (
         'invalid_token_per_client_address',
         'per_principal',
@@ -1030,8 +1030,8 @@ CREATE TABLE registry_notary_private.self_attestation_quota (
     PRIMARY KEY (bucket_kind, key_hash),
     CHECK (window_expires_at > window_started_at)
 );
-CREATE INDEX self_attestation_quota_expiry_idx
-    ON registry_notary_private.self_attestation_quota (window_expires_at);
+CREATE INDEX subject_access_quota_expiry_idx
+    ON registry_notary_private.subject_access_quota (window_expires_at);
 
 CREATE TABLE registry_notary_private.preauthorization_login_state (
     state_hash bytea PRIMARY KEY CHECK (pg_catalog.octet_length(state_hash) = 32),
@@ -1710,7 +1710,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.self_attestation_quota_debit_v1(
+CREATE FUNCTION registry_notary_api.subject_access_quota_debit_v1(
     p_bucket_kinds text[],
     p_key_hashes bytea[],
     p_limits integer[],
@@ -1730,7 +1730,7 @@ DECLARE
     v_size integer := pg_catalog.cardinality(p_bucket_kinds);
     v_index integer;
     v_other integer;
-    v_quota registry_notary_private.self_attestation_quota%ROWTYPE;
+    v_quota registry_notary_private.subject_access_quota%ROWTYPE;
 BEGIN
     IF v_size IS NULL OR v_size < 1 OR v_size > 8
        OR pg_catalog.array_ndims(p_bucket_kinds) <> 1
@@ -1782,19 +1782,19 @@ BEGIN
          ORDER BY requested.bucket,
                   pg_catalog.encode(p_key_hashes[requested.ordinality::integer], 'hex')
     LOOP
-        INSERT INTO registry_notary_private.self_attestation_quota (
+        INSERT INTO registry_notary_private.subject_access_quota (
             bucket_kind, key_hash, window_started_at, window_expires_at, used
         ) VALUES (
             p_bucket_kinds[v_index], p_key_hashes[v_index], v_now,
             v_now + pg_catalog.make_interval(secs => p_window_seconds[v_index]), 0
         ) ON CONFLICT (bucket_kind, key_hash) DO NOTHING;
         SELECT * INTO STRICT v_quota
-          FROM registry_notary_private.self_attestation_quota
+          FROM registry_notary_private.subject_access_quota
          WHERE bucket_kind = p_bucket_kinds[v_index]
            AND key_hash = p_key_hashes[v_index]
          FOR UPDATE;
         IF v_quota.window_expires_at <= v_now THEN
-            UPDATE registry_notary_private.self_attestation_quota
+            UPDATE registry_notary_private.subject_access_quota
                SET window_started_at = v_now,
                    window_expires_at = v_now
                        + pg_catalog.make_interval(secs => p_window_seconds[v_index]),
@@ -1807,7 +1807,7 @@ BEGIN
     -- Preserve caller order when selecting the denial bucket.
     FOR v_index IN 1..v_size LOOP
         SELECT * INTO STRICT v_quota
-          FROM registry_notary_private.self_attestation_quota
+          FROM registry_notary_private.subject_access_quota
          WHERE bucket_kind = p_bucket_kinds[v_index]
            AND key_hash = p_key_hashes[v_index];
         IF p_limits[v_index] = 0 OR v_quota.used >= p_limits[v_index] THEN
@@ -1819,7 +1819,7 @@ BEGIN
     END LOOP;
 
     FOR v_index IN 1..v_size LOOP
-        UPDATE registry_notary_private.self_attestation_quota
+        UPDATE registry_notary_private.subject_access_quota
            SET used = used + 1
          WHERE bucket_kind = p_bucket_kinds[v_index]
            AND key_hash = p_key_hashes[v_index];
@@ -1828,7 +1828,7 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.self_attestation_quota_check_v1(
+CREATE FUNCTION registry_notary_api.subject_access_quota_check_v1(
     p_bucket_kinds text[],
     p_key_hashes bytea[],
     p_limits integer[],
@@ -1848,7 +1848,7 @@ DECLARE
     v_size integer := pg_catalog.cardinality(p_bucket_kinds);
     v_index integer;
     v_other integer;
-    v_quota registry_notary_private.self_attestation_quota%ROWTYPE;
+    v_quota registry_notary_private.subject_access_quota%ROWTYPE;
 BEGIN
     IF v_size IS NULL OR v_size < 1 OR v_size > 8
        OR pg_catalog.array_ndims(p_bucket_kinds) <> 1
@@ -1902,7 +1902,7 @@ BEGIN
             RETURN;
         END IF;
         SELECT * INTO v_quota
-          FROM registry_notary_private.self_attestation_quota
+          FROM registry_notary_private.subject_access_quota
          WHERE bucket_kind = p_bucket_kinds[v_index]
            AND key_hash = p_key_hashes[v_index];
         IF FOUND
@@ -2194,12 +2194,12 @@ BEGIN
 
     WITH candidates AS (
         SELECT bucket_kind, key_hash
-          FROM registry_notary_private.self_attestation_quota
+          FROM registry_notary_private.subject_access_quota
          WHERE window_expires_at <= v_now
          ORDER BY window_expires_at, bucket_kind, key_hash
          LIMIT p_batch_size FOR UPDATE SKIP LOCKED
     ), deleted AS (
-        DELETE FROM registry_notary_private.self_attestation_quota AS stored
+        DELETE FROM registry_notary_private.subject_access_quota AS stored
          USING candidates
          WHERE stored.bucket_kind = candidates.bucket_kind
            AND stored.key_hash = candidates.key_hash
@@ -2280,7 +2280,7 @@ mod tests {
             "batch=keyed-request-owner-lease-quota-once-takeover-atomic-completion-fifteen-minute-retention-v1",
             "credential-status=insert-only-locked-transition-terminal-revocation-expiry-retention-v1",
             "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-v1",
-            "self-attestation-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1",
+            "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1",
             "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-v1",
             "preauthorization-tx-code=keyed-jti-keyed-pin-verifier-peek-redeem-with-replay-one-winner-expiry-v1",
             "retention=bounded-expiry-prune-skip-locked-v1",
@@ -2335,7 +2335,7 @@ mod tests {
             "batch_idempotency",
             "credential_status",
             "machine_quota",
-            "self_attestation_quota",
+            "subject_access_quota",
             "preauthorization_login_state",
             "preauthorization_tx_code",
         ] {
@@ -2640,7 +2640,7 @@ mod tests {
         let invalid_token_limits = vec![2];
         let invalid_token_windows = vec![60];
         assert_eq!(
-            self_attestation_quota_decision(
+            subject_access_quota_decision(
                 &runtime,
                 SELF_ATTESTATION_QUOTA_CHECK_SQL,
                 &invalid_token_buckets,
@@ -2652,7 +2652,7 @@ mod tests {
             (true, None)
         );
         assert_eq!(
-            self_attestation_quota_decision(
+            subject_access_quota_decision(
                 &runtime,
                 SELF_ATTESTATION_QUOTA_CHECK_SQL,
                 &invalid_token_buckets,
@@ -2671,7 +2671,7 @@ mod tests {
         let concurrent_limits = vec![1];
         let concurrent_windows = vec![60];
         let (first_instance, second_instance) = tokio::join!(
-            self_attestation_quota_decision(
+            subject_access_quota_decision(
                 &runtime,
                 SELF_ATTESTATION_QUOTA_DEBIT_SQL,
                 &concurrent_buckets,
@@ -2679,7 +2679,7 @@ mod tests {
                 &concurrent_limits,
                 &concurrent_windows,
             ),
-            self_attestation_quota_decision(
+            subject_access_quota_decision(
                 &runtime_peer,
                 SELF_ATTESTATION_QUOTA_DEBIT_SQL,
                 &concurrent_buckets,
@@ -2703,7 +2703,7 @@ mod tests {
         );
 
         assert_eq!(
-            self_attestation_quota_decision(
+            subject_access_quota_decision(
                 &runtime_peer,
                 SELF_ATTESTATION_QUOTA_DEBIT_SQL,
                 &invalid_token_buckets,
@@ -2720,7 +2720,7 @@ mod tests {
         let (runtime_restarted, runtime_restarted_driver) =
             connect_as(&database_url, RUNTIME_ROLE).await?;
         assert_eq!(
-            self_attestation_quota_decision(
+            subject_access_quota_decision(
                 &runtime_restarted,
                 SELF_ATTESTATION_QUOTA_DEBIT_SQL,
                 &invalid_token_buckets,
@@ -2735,7 +2735,7 @@ mod tests {
         drop(runtime_restarted);
         runtime_restarted_driver.abort();
         assert_eq!(
-            self_attestation_quota_decision(
+            subject_access_quota_decision(
                 &runtime,
                 SELF_ATTESTATION_QUOTA_CHECK_SQL,
                 &invalid_token_buckets,
@@ -2756,7 +2756,7 @@ mod tests {
         let grouped_limits = vec![1, 0];
         let grouped_windows = vec![60, 3600];
         assert_eq!(
-            self_attestation_quota_decision(
+            subject_access_quota_decision(
                 &runtime,
                 SELF_ATTESTATION_QUOTA_DEBIT_SQL,
                 &grouped_buckets,
@@ -2768,7 +2768,7 @@ mod tests {
             (false, Some("per_holder_issuance".to_string()))
         );
         assert_eq!(
-            self_attestation_quota_decision(
+            subject_access_quota_decision(
                 &runtime,
                 SELF_ATTESTATION_QUOTA_DEBIT_SQL,
                 &["per_principal".to_string()],
@@ -2924,9 +2924,9 @@ mod tests {
     }
 
     const SELF_ATTESTATION_QUOTA_CHECK_SQL: &str = "SELECT allowed, denied_bucket FROM \
-         registry_notary_api.self_attestation_quota_check_v1($1, $2, $3, $4)";
+         registry_notary_api.subject_access_quota_check_v1($1, $2, $3, $4)";
     const SELF_ATTESTATION_QUOTA_DEBIT_SQL: &str = "SELECT allowed, denied_bucket FROM \
-         registry_notary_api.self_attestation_quota_debit_v1($1, $2, $3, $4)";
+         registry_notary_api.subject_access_quota_debit_v1($1, $2, $3, $4)";
 
     async fn assert_replay_and_nonce_contracts(
         database_url: &str,
@@ -3125,7 +3125,7 @@ mod tests {
         assert!(runtime
             .query_one(
                 "SELECT registry_notary_api.evaluation_insert_v1(\
-                 'evaluation-direct', $1, $2, 'conformance', 1::smallint, \
+                 'evaluation-direct', $1, $2, 'conformance', 2::smallint, \
                  $3::text::jsonb, $4, $5)",
                 &[
                     &client_hash,
@@ -3140,7 +3140,7 @@ mod tests {
         assert!(!runtime
             .query_one(
                 "SELECT registry_notary_api.evaluation_insert_v1(\
-                 'evaluation-direct', $1, $2, 'conformance', 1::smallint, \
+                 'evaluation-direct', $1, $2, 'conformance', 2::smallint, \
                  $3::text::jsonb, $4, $5)",
                 &[
                     &client_hash,
@@ -3255,7 +3255,7 @@ mod tests {
             "evaluation_id": "evaluation-batch",
             "client_id_hash_hex": "7979797979797979797979797979797979797979797979797979797979797979",
             "purpose": "conformance",
-            "record_version": 1,
+            "record_version": 2,
             "record": {"decision": "allow"},
             "created_at": created_at_json,
             "expires_at": expires_at_json
@@ -3279,7 +3279,7 @@ mod tests {
         assert!(runtime
             .query_one(
                 "SELECT registry_notary_api.batch_complete_v1(\
-                 $1, $2, $3, $4::text::jsonb, 1::smallint, $5::text::jsonb)",
+                 $1, $2, $3, $4::text::jsonb, 2::smallint, $5::text::jsonb)",
                 &[
                     &key,
                     &request,
@@ -3300,7 +3300,7 @@ mod tests {
         assert!(runtime
             .query_one(
                 "SELECT registry_notary_api.batch_complete_v1(\
-                 $1, $2, $3, $4::text::jsonb, 1::smallint, $5::text::jsonb)",
+                 $1, $2, $3, $4::text::jsonb, 2::smallint, $5::text::jsonb)",
                 &[&key, &request, &owner_b, &evaluations_json, &response_json],
             )
             .await?
@@ -3792,7 +3792,7 @@ mod tests {
                           registry_notary_private.batch_idempotency,
                           registry_notary_private.credential_status,
                           registry_notary_private.machine_quota,
-                          registry_notary_private.self_attestation_quota,
+                          registry_notary_private.subject_access_quota,
                           registry_notary_private.preauthorization_login_state,
                           registry_notary_private.preauthorization_tx_code;
                  INSERT INTO registry_notary_private.replay_identifier
@@ -3844,7 +3844,7 @@ mod tests {
                         clock_timestamp() - interval '2 minutes', clock_timestamp() + lifetime, 1
                    FROM (VALUES ('9d', interval '-1 second'),
                                 ('9e', interval '5 minutes')) AS rows(marker, lifetime);
-                 INSERT INTO registry_notary_private.self_attestation_quota
+                 INSERT INTO registry_notary_private.subject_access_quota
                     (bucket_kind, key_hash, window_started_at, window_expires_at, used)
                  SELECT 'per_principal', decode(repeat(marker, 32), 'hex'),
                         clock_timestamp() - interval '2 minutes', clock_timestamp() + lifetime, 1
@@ -3885,7 +3885,7 @@ mod tests {
                     (SELECT count(*) FROM registry_notary_private.batch_idempotency) +
                     (SELECT count(*) FROM registry_notary_private.credential_status) +
                     (SELECT count(*) FROM registry_notary_private.machine_quota) +
-                    (SELECT count(*) FROM registry_notary_private.self_attestation_quota) +
+                    (SELECT count(*) FROM registry_notary_private.subject_access_quota) +
                     (SELECT count(*) FROM registry_notary_private.preauthorization_login_state) +
                     (SELECT count(*) FROM registry_notary_private.preauthorization_tx_code)",
                 &[],
@@ -3896,7 +3896,7 @@ mod tests {
         Ok(())
     }
 
-    async fn self_attestation_quota_decision(
+    async fn subject_access_quota_decision(
         client: &Client,
         statement: &'static str,
         bucket_kinds: &[String],

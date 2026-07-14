@@ -15,6 +15,10 @@
   },
   "runtime": {
     "auth_mode": "oidc",
+    "auth_methods": [
+      "oidc",
+      "notary_access_token"
+    ],
     "admin_enabled": true,
     "readiness": "ready"
   },
@@ -94,13 +98,13 @@
       "enabled": true,
       "credential_configuration_count": 1
     },
-    "self_attestation": {
+    "subject_access": {
       "enabled": true,
       "allowed_claim_count": 1,
       "allowed_purpose_count": 1,
       "credential_profile_count": 1,
       "wallet_origin_count": 1,
-      "rate_limit_mode": "in_process"
+      "rate_limit_mode": "postgresql"
     }
   }
 }

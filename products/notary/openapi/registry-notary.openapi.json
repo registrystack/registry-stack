@@ -1273,7 +1273,7 @@
             "type": "string"
           },
           "policy_id": {
-            "description": "Evaluation policy identifier under which this result was produced. Present for flows evaluated under a named policy, such as self-attestation, and omitted for machine-client flows with no evaluation policy.",
+            "description": "Evaluation policy identifier under which this result was produced. Present for flows evaluated under a named policy, such as subject-access, and omitted for machine-client flows with no evaluation policy.",
             "type": "string"
           },
           "policy_version": {
@@ -2441,17 +2441,17 @@
                       "credential_configuration_count": 1,
                       "enabled": true
                     },
-                    "self_attestation": {
+                    "state": {
+                      "ready": true,
+                      "storage": "postgresql"
+                    },
+                    "subject_access": {
                       "allowed_claim_count": 1,
                       "allowed_purpose_count": 1,
                       "credential_profile_count": 1,
                       "enabled": true,
-                      "rate_limit_mode": "in_process",
+                      "rate_limit_mode": "postgresql",
                       "wallet_origin_count": 1
-                    },
-                    "state": {
-                      "ready": true,
-                      "storage": "postgresql"
                     }
                   },
                   "observed_at": "2026-06-04T10:00:00Z",
@@ -2474,6 +2474,10 @@
                   },
                   "runtime": {
                     "admin_enabled": true,
+                    "auth_methods": [
+                      "oidc",
+                      "notary_access_token"
+                    ],
                     "auth_mode": "oidc",
                     "readiness": "ready"
                   },
@@ -2842,7 +2846,7 @@
     },
     "/oid4vci/credential": {
       "post": {
-        "description": "Issues a dc+sd-jwt credential for an authenticated self-attestation principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+        "description": "Issues a dc+sd-jwt credential for an authenticated subject-access principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
         "operationId": "issueOid4vciCredential",
         "requestBody": {
           "content": {
@@ -3537,7 +3541,7 @@
                               "claim_version": "1",
                               "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
                               "policy_hash": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-                              "policy_id": "self-attestation",
+                              "policy_id": "subject-access",
                               "policy_version": "v1",
                               "service_id": "demo.registry-notary",
                               "type": "claim_evaluation"
@@ -3700,12 +3704,12 @@
             "content": {
               "application/problem+json": {
                 "example": {
-                  "code": "self_attestation.rate_limited",
-                  "detail": "self-attestation request is rate limited",
+                  "code": "subject_access.rate_limited",
+                  "detail": "subject-access request is rate limited",
                   "request_id": "01J00000000000000000000000",
                   "status": 429,
                   "title": "Self-attestation rate limited",
-                  "type": "https://id.registrystack.org/problems/registry-notary/self_attestation/rate_limited"
+                  "type": "https://id.registrystack.org/problems/registry-notary/subject_access/rate_limited"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4160,12 +4164,12 @@
             "content": {
               "application/problem+json": {
                 "example": {
-                  "code": "self_attestation.rate_limited",
-                  "detail": "self-attestation request is rate limited",
+                  "code": "subject_access.rate_limited",
+                  "detail": "subject-access request is rate limited",
                   "request_id": "01J00000000000000000000000",
                   "status": 429,
                   "title": "Self-attestation rate limited",
-                  "type": "https://id.registrystack.org/problems/registry-notary/self_attestation/rate_limited"
+                  "type": "https://id.registrystack.org/problems/registry-notary/subject_access/rate_limited"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4301,7 +4305,7 @@
                           "claim_version": "1",
                           "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
                           "policy_hash": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-                          "policy_id": "self-attestation",
+                          "policy_id": "subject-access",
                           "policy_version": "v1",
                           "service_id": "demo.registry-notary",
                           "type": "claim_evaluation"
@@ -4434,12 +4438,12 @@
             "content": {
               "application/problem+json": {
                 "example": {
-                  "code": "self_attestation.rate_limited",
-                  "detail": "self-attestation request is rate limited",
+                  "code": "subject_access.rate_limited",
+                  "detail": "subject-access request is rate limited",
                   "request_id": "01J00000000000000000000000",
                   "status": 429,
                   "title": "Self-attestation rate limited",
-                  "type": "https://id.registrystack.org/problems/registry-notary/self_attestation/rate_limited"
+                  "type": "https://id.registrystack.org/problems/registry-notary/subject_access/rate_limited"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
@@ -4514,7 +4518,7 @@
                           "claim_version": "1",
                           "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
                           "policy_hash": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-                          "policy_id": "self-attestation",
+                          "policy_id": "subject-access",
                           "policy_version": "v1",
                           "service_id": "demo.registry-notary",
                           "type": "claim_evaluation"
@@ -4647,12 +4651,12 @@
             "content": {
               "application/problem+json": {
                 "example": {
-                  "code": "self_attestation.rate_limited",
-                  "detail": "self-attestation request is rate limited",
+                  "code": "subject_access.rate_limited",
+                  "detail": "subject-access request is rate limited",
                   "request_id": "01J00000000000000000000000",
                   "status": 429,
                   "title": "Self-attestation rate limited",
-                  "type": "https://id.registrystack.org/problems/registry-notary/self_attestation/rate_limited"
+                  "type": "https://id.registrystack.org/problems/registry-notary/subject_access/rate_limited"
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ProblemDetails"
