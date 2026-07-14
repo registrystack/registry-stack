@@ -27,7 +27,7 @@ pub(crate) fn lightweight_schema() -> Value {
             "server": { "type": "object" },
             "auth": { "type": "object" },
             "audit": { "type": "object" },
-            "replay": { "type": "object" },
+            "state": { "type": "object" },
             "credential_status": { "type": "object" },
             "self_attestation": { "type": "object" },
             "oid4vci": { "type": "object" },

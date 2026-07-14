@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! In-process rate limiting for citizen self-attestation paths.
+//! Rate limiting for citizen self-attestation paths. Local/test runtimes keep
+//! the existing in-process counters; PostgreSQL runtimes use typed Notary
+//! state-plane operations over already-keyed pseudonyms.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use registry_notary_core::{
     Bounded, EvidenceEntityReference, EvidenceError, Hashed, HolderIdentifier,
@@ -11,6 +13,8 @@ use registry_notary_core::{
 };
 use registry_platform_audit::AuditKeyHasher;
 use time::{Duration, OffsetDateTime};
+
+use crate::state_plane::NotaryStatePlaneHandle;
 
 const MAX_RATE_LIMIT_KEY_LEN: usize = 128;
 
@@ -58,6 +62,18 @@ impl SelfAttestationRateLimitBucket {
             Self::SubjectMismatchPerPrincipal
             | Self::PerHolderIssuance
             | Self::CredentialIssuancePerPrincipal => Duration::hours(1),
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "invalid_token_per_client_address" => Some(Self::InvalidTokenPerClientAddress),
+            "per_principal" => Some(Self::PerPrincipal),
+            "subject_mismatch_per_principal" => Some(Self::SubjectMismatchPerPrincipal),
+            "per_holder_issuance" => Some(Self::PerHolderIssuance),
+            "credential_issuance_per_principal" => Some(Self::CredentialIssuancePerPrincipal),
+            "tx_code_attempt_per_code" => Some(Self::TxCodeAttemptPerCode),
+            _ => None,
         }
     }
 }
@@ -278,6 +294,7 @@ impl SelfAttestationRateLimitKeys {
 #[derive(Debug)]
 pub struct SelfAttestationRateLimiter {
     config: SelfAttestationRateLimitsConfig,
+    state_plane: Option<Arc<NotaryStatePlaneHandle>>,
     counters: Mutex<HashMap<RateLimitKey, Counter>>,
 }
 
@@ -286,66 +303,207 @@ impl SelfAttestationRateLimiter {
     pub fn new(config: SelfAttestationRateLimitsConfig) -> Self {
         Self {
             config,
+            state_plane: None,
             counters: Mutex::new(HashMap::new()),
         }
     }
 
-    pub fn check_invalid_token_for_client_address(
+    #[must_use]
+    pub(crate) fn with_state_plane(
+        config: SelfAttestationRateLimitsConfig,
+        state_plane: Arc<NotaryStatePlaneHandle>,
+    ) -> Self {
+        Self {
+            config,
+            state_plane: Some(state_plane),
+            counters: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub async fn check_invalid_token_for_client_address(
         &self,
         client_address: &Hashed<ClientAddressIdentifier>,
     ) -> SelfAttestationRateLimitResult<()> {
-        self.check_invalid_token_for_client_address_at(client_address, OffsetDateTime::now_utc())
+        let denial = BucketCheck::new(
+            SelfAttestationRateLimitBucket::InvalidTokenPerClientAddress,
+            client_address.as_str(),
+        )?;
+        self.check_and_consume_current(Vec::new(), Some(denial))
+            .await
     }
 
-    pub fn check_invalid_token_for_client_address_available(
+    pub async fn check_invalid_token_for_client_address_available(
         &self,
         client_address: &Hashed<ClientAddressIdentifier>,
     ) -> SelfAttestationRateLimitResult<()> {
-        self.check_invalid_token_for_client_address_available_at(
-            client_address,
-            OffsetDateTime::now_utc(),
-        )
+        let check = BucketCheck::new(
+            SelfAttestationRateLimitBucket::InvalidTokenPerClientAddress,
+            client_address.as_str(),
+        )?;
+        self.check_only_current(&[check]).await
     }
 
-    pub fn check_authenticated_request(
+    pub async fn check_authenticated_request(
         &self,
         principal: &Hashed<PrincipalIdentifier>,
     ) -> SelfAttestationRateLimitResult<()> {
-        self.check_authenticated_request_at(principal, OffsetDateTime::now_utc())
+        let checks = vec![BucketCheck::new(
+            SelfAttestationRateLimitBucket::PerPrincipal,
+            principal.as_str(),
+        )?];
+        self.check_and_consume_current(checks, None).await
     }
 
-    pub fn consume_subject_mismatch_denial(
+    pub async fn consume_subject_mismatch_denial(
         &self,
         principal: &Hashed<PrincipalIdentifier>,
     ) -> SelfAttestationRateLimitResult<()> {
-        self.consume_subject_mismatch_denial_at(principal, OffsetDateTime::now_utc())
+        let checks = vec![BucketCheck::new(
+            SelfAttestationRateLimitBucket::PerPrincipal,
+            principal.as_str(),
+        )?];
+        let denial = BucketCheck::new(
+            SelfAttestationRateLimitBucket::SubjectMismatchPerPrincipal,
+            principal.as_str(),
+        )?;
+        self.check_and_consume_current(checks, Some(denial)).await
     }
 
-    pub fn consume_subject_mismatch_denial_only(
+    pub async fn consume_subject_mismatch_denial_only(
         &self,
         principal: &Hashed<PrincipalIdentifier>,
     ) -> SelfAttestationRateLimitResult<()> {
-        self.consume_subject_mismatch_denial_only_at(principal, OffsetDateTime::now_utc())
+        let denial = BucketCheck::new(
+            SelfAttestationRateLimitBucket::SubjectMismatchPerPrincipal,
+            principal.as_str(),
+        )?;
+        self.check_and_consume_current(Vec::new(), Some(denial))
+            .await
     }
 
-    pub fn check_credential_issuance(
+    pub async fn check_credential_issuance(
         &self,
         principal: &Hashed<PrincipalIdentifier>,
         holder: Option<&Hashed<HolderIdentifier>>,
     ) -> SelfAttestationRateLimitResult<()> {
-        self.check_credential_issuance_at(principal, holder, OffsetDateTime::now_utc())
+        let checks = self.credential_issuance_checks(principal, holder)?;
+        self.check_and_consume_current(checks, None).await
     }
 
     /// Record one `tx_code` attempt against a single (hashed)
     /// `pre-authorized_code`. After `tx_code_attempts_per_code_per_minute`
     /// attempts in the window the code is locked.
-    pub fn check_tx_code_attempt(
+    pub async fn check_tx_code_attempt(
         &self,
         pre_authorized_code: &Hashed<PreAuthorizedCodeIdentifier>,
     ) -> SelfAttestationRateLimitResult<()> {
-        self.check_tx_code_attempt_at(pre_authorized_code, OffsetDateTime::now_utc())
+        let checks = vec![BucketCheck::new(
+            SelfAttestationRateLimitBucket::TxCodeAttemptPerCode,
+            pre_authorized_code.as_str(),
+        )?];
+        self.check_and_consume_current(checks, None).await
     }
 
+    async fn check_and_consume_current(
+        &self,
+        checks: Vec<BucketCheck>,
+        denial: Option<BucketCheck>,
+    ) -> SelfAttestationRateLimitResult<()> {
+        let Some(state_plane) = self
+            .state_plane
+            .as_ref()
+            .filter(|state_plane| !state_plane.is_in_memory())
+        else {
+            return self.check_and_consume(checks, denial, OffsetDateTime::now_utc());
+        };
+        let applicable = if let Some(denial) = denial {
+            let mut applicable = Vec::with_capacity(checks.len() + 1);
+            applicable.push(denial);
+            applicable.extend(checks);
+            applicable
+        } else {
+            checks
+        };
+        self.run_postgres_quota_operation(state_plane, &applicable, true)
+            .await
+    }
+
+    async fn check_only_current(
+        &self,
+        checks: &[BucketCheck],
+    ) -> SelfAttestationRateLimitResult<()> {
+        let Some(state_plane) = self
+            .state_plane
+            .as_ref()
+            .filter(|state_plane| !state_plane.is_in_memory())
+        else {
+            return self.check_only(checks, OffsetDateTime::now_utc());
+        };
+        self.run_postgres_quota_operation(state_plane, checks, false)
+            .await
+    }
+
+    async fn run_postgres_quota_operation(
+        &self,
+        state_plane: &NotaryStatePlaneHandle,
+        checks: &[BucketCheck],
+        consume: bool,
+    ) -> SelfAttestationRateLimitResult<()> {
+        let bucket_kinds = checks
+            .iter()
+            .map(|check| check.bucket.as_str())
+            .collect::<Vec<_>>();
+        let key_hashes = checks
+            .iter()
+            .map(|check| decode_keyed_pseudonym_hash(&check.pseudonym))
+            .collect::<Result<Vec<_>, _>>()?;
+        let limits = checks
+            .iter()
+            .map(|check| {
+                i32::try_from(self.limit_for(check.bucket)).map_err(|_| postgres_unavailable())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let window_seconds = checks
+            .iter()
+            .map(|check| {
+                i32::try_from(check.bucket.window().whole_seconds())
+                    .map_err(|_| postgres_unavailable())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let runtime = state_plane.runtime().map_err(|_| postgres_unavailable())?;
+        let session = runtime
+            .open_domain_session()
+            .await
+            .map_err(|_| postgres_unavailable())?;
+        let statement = if consume {
+            "SELECT allowed, denied_bucket, retry_after_seconds \
+               FROM registry_notary_api.self_attestation_quota_debit_v1($1, $2, $3, $4)"
+        } else {
+            "SELECT allowed, denied_bucket, retry_after_seconds \
+               FROM registry_notary_api.self_attestation_quota_check_v1($1, $2, $3, $4)"
+        };
+        let row = session
+            .run_operation(session.client().query_one(
+                statement,
+                &[&bucket_kinds, &key_hashes, &limits, &window_seconds],
+            ))
+            .await
+            .map_err(|_| postgres_unavailable())?;
+        let allowed: bool = row.try_get("allowed").map_err(|_| postgres_unavailable())?;
+        if allowed {
+            return Ok(());
+        }
+        let denied_bucket: Option<String> = row
+            .try_get("denied_bucket")
+            .map_err(|_| postgres_unavailable())?;
+        let bucket = denied_bucket
+            .as_deref()
+            .and_then(SelfAttestationRateLimitBucket::parse)
+            .ok_or_else(postgres_unavailable)?;
+        Err(SelfAttestationRateLimitError::Limited { bucket })
+    }
+
+    #[cfg(test)]
     fn check_invalid_token_for_client_address_at(
         &self,
         client_address: &Hashed<ClientAddressIdentifier>,
@@ -358,18 +516,7 @@ impl SelfAttestationRateLimiter {
         self.check_and_consume(Vec::new(), Some(denial), now)
     }
 
-    fn check_invalid_token_for_client_address_available_at(
-        &self,
-        client_address: &Hashed<ClientAddressIdentifier>,
-        now: OffsetDateTime,
-    ) -> SelfAttestationRateLimitResult<()> {
-        let check = BucketCheck::new(
-            SelfAttestationRateLimitBucket::InvalidTokenPerClientAddress,
-            client_address.as_str(),
-        )?;
-        self.check_only(&[check], now)
-    }
-
+    #[cfg(test)]
     fn check_authenticated_request_at(
         &self,
         principal: &Hashed<PrincipalIdentifier>,
@@ -382,6 +529,7 @@ impl SelfAttestationRateLimiter {
         self.check_and_consume(checks, None, now)
     }
 
+    #[cfg(test)]
     fn consume_subject_mismatch_denial_at(
         &self,
         principal: &Hashed<PrincipalIdentifier>,
@@ -398,24 +546,22 @@ impl SelfAttestationRateLimiter {
         self.check_and_consume(checks, Some(denial), now)
     }
 
-    fn consume_subject_mismatch_denial_only_at(
-        &self,
-        principal: &Hashed<PrincipalIdentifier>,
-        now: OffsetDateTime,
-    ) -> SelfAttestationRateLimitResult<()> {
-        let denial = BucketCheck::new(
-            SelfAttestationRateLimitBucket::SubjectMismatchPerPrincipal,
-            principal.as_str(),
-        )?;
-        self.check_and_consume(Vec::new(), Some(denial), now)
-    }
-
+    #[cfg(test)]
     fn check_credential_issuance_at(
         &self,
         principal: &Hashed<PrincipalIdentifier>,
         holder: Option<&Hashed<HolderIdentifier>>,
         now: OffsetDateTime,
     ) -> SelfAttestationRateLimitResult<()> {
+        let checks = self.credential_issuance_checks(principal, holder)?;
+        self.check_and_consume(checks, None, now)
+    }
+
+    fn credential_issuance_checks(
+        &self,
+        principal: &Hashed<PrincipalIdentifier>,
+        holder: Option<&Hashed<HolderIdentifier>>,
+    ) -> SelfAttestationRateLimitResult<Vec<BucketCheck>> {
         let mut checks = vec![
             BucketCheck::new(
                 SelfAttestationRateLimitBucket::PerPrincipal,
@@ -432,9 +578,10 @@ impl SelfAttestationRateLimiter {
                 holder.as_str(),
             )?);
         }
-        self.check_and_consume(checks, None, now)
+        Ok(checks)
     }
 
+    #[cfg(test)]
     fn check_tx_code_attempt_at(
         &self,
         pre_authorized_code: &Hashed<PreAuthorizedCodeIdentifier>,
@@ -585,6 +732,7 @@ impl SelfAttestationRateLimiter {
 struct BucketCheck {
     bucket: SelfAttestationRateLimitBucket,
     key: RateLimitKey,
+    pseudonym: String,
 }
 
 impl BucketCheck {
@@ -595,6 +743,7 @@ impl BucketCheck {
         Ok(Self {
             bucket,
             key: bucket_key(bucket, hashed_id)?,
+            pseudonym: hashed_id.to_string(),
         })
     }
 }
@@ -653,6 +802,38 @@ fn ensure_bounded(value: &str) -> SelfAttestationRateLimitResult<()> {
     })
 }
 
+fn decode_keyed_pseudonym_hash(value: &str) -> SelfAttestationRateLimitResult<Vec<u8>> {
+    let encoded = value
+        .strip_prefix("hmac-sha256:")
+        .ok_or_else(postgres_unavailable)?;
+    if encoded.len() != 64 {
+        return Err(postgres_unavailable());
+    }
+    encoded
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let high = hex_nibble(pair[0]).ok_or_else(postgres_unavailable)?;
+            let low = hex_nibble(pair[1]).ok_or_else(postgres_unavailable)?;
+            Ok((high << 4) | low)
+        })
+        .collect()
+}
+
+fn hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
+}
+
+fn postgres_unavailable() -> SelfAttestationRateLimitError {
+    SelfAttestationRateLimitError::Unavailable {
+        reason: "PostgreSQL self-attestation quota operation failed".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -707,6 +888,49 @@ mod tests {
                 .all(|key| !key.contains("203.0.113.10")),
             "raw client address must not be stored in limiter keys"
         );
+    }
+
+    #[tokio::test]
+    async fn invalid_token_availability_precheck_does_not_consume_quota() {
+        let limiter = SelfAttestationRateLimiter::new(config());
+        let client = keys()
+            .client_address("203.0.113.10")
+            .expect("client address hashes");
+
+        for _ in 0..3 {
+            limiter
+                .check_invalid_token_for_client_address_available(&client)
+                .await
+                .expect("availability precheck does not debit quota");
+        }
+        limiter
+            .check_invalid_token_for_client_address(&client)
+            .await
+            .expect("first rejected token is recorded");
+        limiter
+            .check_invalid_token_for_client_address(&client)
+            .await
+            .expect("second rejected token is recorded");
+        let error = limiter
+            .check_invalid_token_for_client_address_available(&client)
+            .await
+            .expect_err("precheck observes the exhausted bucket");
+
+        assert_eq!(
+            error.bucket(),
+            Some(SelfAttestationRateLimitBucket::InvalidTokenPerClientAddress)
+        );
+    }
+
+    #[test]
+    fn postgres_key_decoder_accepts_only_keyed_32_byte_pseudonym_encodings() {
+        let keyed = format!("hmac-sha256:{}", "cd".repeat(32));
+
+        assert_eq!(decode_keyed_pseudonym_hash(&keyed), Ok(vec![0xcd; 32]));
+        assert!(decode_keyed_pseudonym_hash(&format!("hmac-sha256:{}", "ab".repeat(31))).is_err());
+        assert!(decode_keyed_pseudonym_hash(&format!("hmac-sha256:{}", "ag".repeat(32))).is_err());
+        assert!(decode_keyed_pseudonym_hash(&format!("hmac-sha256:{}", "CD".repeat(32))).is_err());
+        assert!(decode_keyed_pseudonym_hash(&format!("sha256:{}", "ab".repeat(32))).is_err());
     }
 
     #[test]

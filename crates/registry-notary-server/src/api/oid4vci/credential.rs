@@ -158,7 +158,7 @@ pub(in crate::api) async fn oid4vci_credential(
     }
     let holder_id = validated_proof.holder_id.as_str();
     if let Err(error) =
-        check_oid4vci_self_attestation_rate_limit(&state, &principal, Some(holder_id))
+        check_oid4vci_self_attestation_rate_limit(&state, &principal, Some(holder_id)).await
     {
         let mut response = oid4vci_error_response(Oid4vciWireError::RateLimited);
         attach_self_attestation_rate_limit_audit(
@@ -254,9 +254,13 @@ pub(in crate::api) async fn oid4vci_credential(
         .first()
         .map(|result| result.evaluation_id.clone())
         .unwrap_or_default();
-    let evaluation = match state.store.get(&evaluation_id) {
-        Some(evaluation) => evaluation,
-        None => return oid4vci_error_response(Oid4vciWireError::ServerError),
+    let lookup_client_id = match stored_evaluation_client_id(&state, &principal) {
+        Ok(client_id) => client_id,
+        Err(error) => return oid4vci_error_response(oid4vci_error_from_evidence(&error)),
+    };
+    let evaluation = match state.store.get(&evaluation_id, &lookup_client_id).await {
+        Ok(Some(evaluation)) => evaluation,
+        Ok(None) | Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
     };
     if let Err(error) = require_self_attestation_stored_access(
         &state,
@@ -843,7 +847,7 @@ pub(in crate::api) fn ensure_optional_entity_matches_subject(
     Ok(())
 }
 
-pub(in crate::api) fn check_oid4vci_self_attestation_rate_limit(
+pub(in crate::api) async fn check_oid4vci_self_attestation_rate_limit(
     state: &RegistryNotaryApiState,
     principal: &EvidencePrincipal,
     holder_id: Option<&str>,
@@ -857,4 +861,5 @@ pub(in crate::api) fn check_oid4vci_self_attestation_rate_limit(
     state
         .self_attestation_rate_limiter
         .check_credential_issuance(&principal_hash, holder_hash.as_ref())
+        .await
 }

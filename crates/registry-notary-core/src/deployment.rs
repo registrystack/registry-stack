@@ -236,7 +236,7 @@ impl DeploymentConfig {
 /// knowledge, which makes the catalog easy to read and test.
 #[derive(Debug, Clone, Default)]
 pub struct GateInput {
-    pub replay_in_memory: bool,
+    pub state_in_memory: bool,
     pub federation_enabled: bool,
     pub oid4vci_preauth_enabled: bool,
     pub holder_proof_required: bool,
@@ -266,10 +266,8 @@ pub struct GateInput {
 }
 
 impl GateInput {
-    /// True when any high-risk replay mode is declared. Federation, OID4VCI
-    /// pre-authorized code, holder proof, wallet-facing flows, and declared
-    /// multi-instance all rely on shared, durable replay decisions.
-    pub fn high_risk_replay_mode(&self) -> bool {
+    /// True when a declared mode relies on shared, durable correctness state.
+    pub fn requires_shared_state(&self) -> bool {
         self.federation_enabled
             || self.oid4vci_preauth_enabled
             || self.holder_proof_required
@@ -301,7 +299,7 @@ impl Gate {
 }
 
 // Finding ids. Stable once shipped; consumers treat unknown ids as opaque.
-pub const FINDING_REPLAY_IN_MEMORY_HIGH_RISK: &str = "notary.replay.in_memory_high_risk";
+pub const FINDING_STATE_IN_MEMORY_HIGH_RISK: &str = "notary.state.in_memory_high_risk";
 pub const FINDING_AUDIT_SINK_MISSING: &str = "notary.audit.sink_missing";
 pub const FINDING_AUDIT_RETENTION_LOCAL_ONLY: &str = "notary.audit.retention_local_only";
 pub const FINDING_AUDIT_SHIPPING_UNVERIFIED: &str = "notary.audit.shipping_unverified";
@@ -339,14 +337,14 @@ pub fn gate_severity_for_profile(
 fn gate_catalog() -> &'static [Gate] {
     use GateSeverity::{FindingError, FindingWarn, ReadinessFail, StartupFail};
     &[
-        // notary.replay.in_memory_high_risk: in-memory replay while a high-risk
-        // mode is declared. (#206)
+        // notary.state.in_memory_high_risk: process-local correctness state
+        // while a mode requiring shared state is declared. (#206)
         Gate {
-            id: FINDING_REPLAY_IN_MEMORY_HIGH_RISK,
+            id: FINDING_STATE_IN_MEMORY_HIGH_RISK,
             hosted_lab: Some(FindingError),
             production: Some(ReadinessFail),
             evidence_grade: Some(StartupFail),
-            condition: |input| input.replay_in_memory && input.high_risk_replay_mode(),
+            condition: |input| input.state_in_memory && input.requires_shared_state(),
         },
         // notary.audit.sink_missing: no durable, retained audit sink. (#207)
         Gate {
@@ -644,7 +642,7 @@ mod tests {
 
     fn high_risk_in_memory_input() -> GateInput {
         GateInput {
-            replay_in_memory: true,
+            state_in_memory: true,
             federation_enabled: true,
             audit_sink_class_durable: true,
             ..GateInput::default()
@@ -685,7 +683,7 @@ mod tests {
         );
         assert!(evaluation
             .startup_failures
-            .contains(&FINDING_REPLAY_IN_MEMORY_HIGH_RISK.to_string()));
+            .contains(&FINDING_STATE_IN_MEMORY_HIGH_RISK.to_string()));
     }
 
     #[test]
@@ -699,7 +697,7 @@ mod tests {
         );
         assert!(evaluation
             .readiness_failures
-            .contains(&FINDING_REPLAY_IN_MEMORY_HIGH_RISK.to_string()));
+            .contains(&FINDING_STATE_IN_MEMORY_HIGH_RISK.to_string()));
         assert!(evaluation.startup_failures.is_empty());
     }
 
@@ -715,7 +713,7 @@ mod tests {
         let finding = evaluation
             .findings
             .iter()
-            .find(|f| f.id == FINDING_REPLAY_IN_MEMORY_HIGH_RISK)
+            .find(|f| f.id == FINDING_STATE_IN_MEMORY_HIGH_RISK)
             .expect("high-risk finding present");
         assert_eq!(finding.severity, GateSeverity::FindingError);
         assert_eq!(finding.status, DeploymentFindingStatus::Active);
@@ -727,13 +725,13 @@ mod tests {
         let evaluation = evaluate_gates(
             Some(DeploymentProfile::HostedLab),
             &input,
-            &[waiver(FINDING_REPLAY_IN_MEMORY_HIGH_RISK, "2099-01-01")],
+            &[waiver(FINDING_STATE_IN_MEMORY_HIGH_RISK, "2099-01-01")],
             "2026-06-13",
         );
         let finding = evaluation
             .findings
             .iter()
-            .find(|f| f.id == FINDING_REPLAY_IN_MEMORY_HIGH_RISK)
+            .find(|f| f.id == FINDING_STATE_IN_MEMORY_HIGH_RISK)
             .expect("waived finding present");
         assert_eq!(finding.status, DeploymentFindingStatus::Waived);
         assert!(finding.waiver.is_some());
@@ -746,13 +744,13 @@ mod tests {
         let evaluation = evaluate_gates(
             Some(DeploymentProfile::Production),
             &input,
-            &[waiver(FINDING_REPLAY_IN_MEMORY_HIGH_RISK, "2020-01-01")],
+            &[waiver(FINDING_STATE_IN_MEMORY_HIGH_RISK, "2020-01-01")],
             "2026-06-13",
         );
         // The gate re-triggers at full severity.
         assert!(evaluation
             .readiness_failures
-            .contains(&FINDING_REPLAY_IN_MEMORY_HIGH_RISK.to_string()));
+            .contains(&FINDING_STATE_IN_MEMORY_HIGH_RISK.to_string()));
         // The expiry diagnostic is emitted.
         assert!(evaluation
             .findings
@@ -768,12 +766,12 @@ mod tests {
         let evaluation = evaluate_gates(
             Some(DeploymentProfile::EvidenceGrade),
             &input,
-            &[waiver(FINDING_REPLAY_IN_MEMORY_HIGH_RISK, "2099-01-01")],
+            &[waiver(FINDING_STATE_IN_MEMORY_HIGH_RISK, "2099-01-01")],
             "2026-06-13",
         );
         assert!(evaluation
             .startup_failures
-            .contains(&FINDING_REPLAY_IN_MEMORY_HIGH_RISK.to_string()));
+            .contains(&FINDING_STATE_IN_MEMORY_HIGH_RISK.to_string()));
     }
 
     #[test]
@@ -782,16 +780,16 @@ mod tests {
         let evaluation = evaluate_gates(
             Some(DeploymentProfile::Production),
             &input,
-            &[waiver(FINDING_REPLAY_IN_MEMORY_HIGH_RISK, "2099-01-01")],
+            &[waiver(FINDING_STATE_IN_MEMORY_HIGH_RISK, "2099-01-01")],
             "2026-06-13",
         );
         assert!(evaluation
             .readiness_failures
-            .contains(&FINDING_REPLAY_IN_MEMORY_HIGH_RISK.to_string()));
+            .contains(&FINDING_STATE_IN_MEMORY_HIGH_RISK.to_string()));
         let finding = evaluation
             .findings
             .iter()
-            .find(|finding| finding.id == FINDING_REPLAY_IN_MEMORY_HIGH_RISK)
+            .find(|finding| finding.id == FINDING_STATE_IN_MEMORY_HIGH_RISK)
             .expect("high-risk replay finding exists");
         assert_eq!(finding.status, DeploymentFindingStatus::Active);
         assert!(evaluation.active_waivers.is_empty());
@@ -817,7 +815,7 @@ mod tests {
         let config = DeploymentConfig {
             profile: Some(DeploymentProfile::Production),
             multi_instance: false,
-            waivers: vec![waiver(FINDING_REPLAY_IN_MEMORY_HIGH_RISK, "2099-01-01")],
+            waivers: vec![waiver(FINDING_STATE_IN_MEMORY_HIGH_RISK, "2099-01-01")],
             evidence: DeploymentEvidenceConfig::default(),
         };
         let error = config

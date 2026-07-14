@@ -7,11 +7,11 @@ use super::{auth::*, credentials::*, infrastructure::*, issuance::*, preauth::*}
 pub(super) fn gate_input_defaults_are_low_risk_for_minimal_config() {
     let config = minimal_config();
     let input = config.gate_input();
-    // A minimal config uses in-memory replay and stdout audit by default.
-    assert!(input.replay_in_memory);
+    // A minimal config uses PostgreSQL state and stdout audit by default.
+    assert!(!input.state_in_memory);
     assert!(!input.audit_sink_class_durable);
     // No high-risk modes are declared.
-    assert!(!input.high_risk_replay_mode());
+    assert!(!input.requires_shared_state());
     // Local YAML config without config_trust is unsigned.
     assert!(input.config_unsigned);
     // Admin listener is disabled by default, so no shared exposure.
@@ -26,7 +26,7 @@ pub(super) fn gate_input_defaults_are_low_risk_for_minimal_config() {
 pub(super) fn gate_input_reports_federation_as_high_risk() {
     let mut config = minimal_config();
     config.federation.enabled = true;
-    assert!(config.gate_input().high_risk_replay_mode());
+    assert!(config.gate_input().requires_shared_state());
 }
 
 #[test]
@@ -889,12 +889,12 @@ pub(super) fn expect_federation_error(config: &StandaloneRegistryNotaryConfig) -
     }
 }
 
-pub(super) fn expect_replay_error(config: &StandaloneRegistryNotaryConfig) -> String {
+pub(super) fn expect_state_error(config: &StandaloneRegistryNotaryConfig) -> String {
     match config
         .validate()
-        .expect_err("replay config must fail validation")
+        .expect_err("state config must fail validation")
     {
-        EvidenceConfigError::InvalidReplayConfig { reason } => reason,
+        EvidenceConfigError::InvalidStateConfig { reason } => reason,
         other => panic!("unexpected error variant: {other}"),
     }
 }

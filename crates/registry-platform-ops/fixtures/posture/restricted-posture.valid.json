@@ -15,7 +15,7 @@
     "version": "0.1.0",
     "git_sha": "abcdef1234567890",
     "features": [
-      "redis-replay",
+      "postgresql-state",
       "federation"
     ]
   },
@@ -119,13 +119,13 @@
         "did:web:notary.example.gov#notary-2026q2": "ready"
       }
     },
-    "replay": {
-      "storage": "redis",
+    "state": {
+      "storage": "postgresql",
       "ready": true
     },
     "credential_status": {
       "enabled": true,
-      "storage": "redis"
+      "storage": "state"
     },
     "federation": {
       "enabled": true,

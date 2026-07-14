@@ -20,6 +20,7 @@ pub fn standalone_router(
 }
 
 pub struct NotaryRuntimeSnapshot {
+    state_plane: Arc<NotaryStatePlaneHandle>,
     metrics: Arc<AppMetrics>,
     auth_state: Arc<AuthAuditState>,
     api_state: Arc<RegistryNotaryApiState>,
@@ -35,6 +36,7 @@ impl NotaryRuntimeSnapshot {
     /// Source-free runtimes complete without reading credentials or performing
     /// network I/O.
     pub async fn activate_relay(self) -> Result<Self, StandaloneServerError> {
+        self.state_plane.activate().await?;
         let config = self
             .api_state
             .runtime_config()
@@ -44,11 +46,17 @@ impl NotaryRuntimeSnapshot {
                 .install_activated_relay(activated)
                 .map_err(|_| StandaloneServerError::RelayAlreadyActivated)?;
         }
+        self.state_plane.start_retention_maintenance()?;
         self.ensure_ready_to_serve()?;
         Ok(self)
     }
 
     fn ensure_ready_to_serve(&self) -> Result<(), StandaloneServerError> {
+        if !self.state_plane.is_activated() {
+            return Err(StandaloneServerError::StatePlane(
+                NotaryPostgresStatePlaneError::DatabaseUnavailable,
+            ));
+        }
         if self.api_state.relay_required() && !self.api_state.relay_activated() {
             return Err(StandaloneServerError::RelayNotActivated);
         }
@@ -99,6 +107,52 @@ pub fn compile_notary_runtime_with_provenance(
     config_source: ConfigSource,
     config_provenance: Option<ConfigProvenance>,
 ) -> Result<NotaryRuntimeSnapshot, StandaloneServerError> {
+    compile_notary_runtime_with_state_override(config, config_source, config_provenance, None)
+}
+
+#[cfg(test)]
+pub(super) fn compile_notary_runtime_for_gate_test(
+    config: StandaloneRegistryNotaryConfig,
+) -> Result<NotaryRuntimeSnapshot, StandaloneServerError> {
+    compile_notary_runtime_with_provenance_for_gate_test(config, ConfigSource::LocalFile, None)
+}
+
+#[cfg(test)]
+pub(super) fn standalone_router_for_gate_test(
+    config: StandaloneRegistryNotaryConfig,
+) -> Result<Router, StandaloneServerError> {
+    let admin_listener_mode = config.server.admin_listener.mode;
+    let runtime = compile_notary_runtime_for_gate_test(config)?;
+    match admin_listener_mode {
+        RegistryNotaryAdminListenerMode::SharedWithPublic => notary_router_from_runtime(runtime),
+        RegistryNotaryAdminListenerMode::Dedicated | RegistryNotaryAdminListenerMode::Disabled => {
+            Ok(notary_routers_from_runtime(runtime)?.public)
+        }
+    }
+}
+
+#[cfg(test)]
+pub(super) fn compile_notary_runtime_with_provenance_for_gate_test(
+    config: StandaloneRegistryNotaryConfig,
+    config_source: ConfigSource,
+    config_provenance: Option<ConfigProvenance>,
+) -> Result<NotaryRuntimeSnapshot, StandaloneServerError> {
+    let mut state = config.state.clone();
+    state.storage = registry_notary_core::STATE_STORAGE_IN_MEMORY.to_string();
+    compile_notary_runtime_with_state_override(
+        config,
+        config_source,
+        config_provenance,
+        Some(state),
+    )
+}
+
+fn compile_notary_runtime_with_state_override(
+    config: StandaloneRegistryNotaryConfig,
+    config_source: ConfigSource,
+    config_provenance: Option<ConfigProvenance>,
+    state_override: Option<registry_notary_core::StateConfig>,
+) -> Result<NotaryRuntimeSnapshot, StandaloneServerError> {
     config.validate()?;
     let deployment_gates = DeploymentGateState::evaluate_with_config_source(&config, config_source);
     deployment_gates.fail_startup_if_blocked()?;
@@ -112,19 +166,38 @@ pub fn compile_notary_runtime_with_provenance(
     let oid4vci = Arc::new(config.oid4vci.clone());
     let federation = Arc::new(config.federation.clone());
     let metrics = Arc::new(AppMetrics::default());
-    let replay = ReplayStores::from_config(&config.replay)?;
-    let credential_status = CredentialStatusStore::from_config(&config.credential_status)?;
+    let preauthorization_enabled =
+        config.oid4vci.enabled && config.oid4vci.pre_authorized_code.enabled;
+    let state_config = state_override.as_ref().unwrap_or(&config.state);
+    let state_plane = Arc::new(NotaryStatePlaneHandle::from_config(
+        state_config,
+        preauthorization_enabled,
+    )?);
+    let replay = if state_plane.is_in_memory() {
+        ReplayStores::configured_in_memory(Arc::clone(&state_plane))
+    } else {
+        ReplayStores::postgres(Arc::clone(&state_plane))
+    };
+    let credential_status = if state_plane.is_in_memory() {
+        CredentialStatusStore::from_config(&config.credential_status)
+    } else {
+        CredentialStatusStore::postgres(&config.credential_status, Arc::clone(&state_plane))
+    };
     let gate_input = config.gate_input();
-    if gate_input.replay_in_memory && gate_input.high_risk_replay_mode() {
+    if gate_input.state_in_memory && gate_input.requires_shared_state() {
         tracing::warn!(
             target: "registry_notary::replay",
-            "replay store is in-memory single-instance only; a high-risk mode \
+            "correctness state is in-memory single-instance only; a mode \
              (federation, OID4VCI pre-authorized code, holder proof, wallet traffic, \
              or declared multi-instance) is active. Do not run active-active without \
-             shared replay storage."
+             shared correctness state."
         );
     }
-    let store = Arc::new(EvidenceStore::default());
+    let store = Arc::new(if state_plane.is_in_memory() {
+        EvidenceStore::default()
+    } else {
+        EvidenceStore::with_state_plane(Arc::clone(&state_plane))
+    });
     let reuse_scoped_key_ids = config.reuse_scoped_signing_key_ids();
     let signing_keys = Arc::new(SigningKeyRegistry::from_config(
         &config.evidence,
@@ -157,11 +230,15 @@ pub fn compile_notary_runtime_with_provenance(
     };
     cors_policy.validate()?;
     let wallet_cors_policy = SelfAttestationWalletCorsPolicy::from_config(&config);
-    let auth_state = Arc::new(AuthAuditState::from_config(
-        &config,
-        Arc::clone(&metrics),
-        replay.clone(),
-    )?);
+    let auth_state = AuthAuditState::from_config(&config, Arc::clone(&metrics), replay.clone())?;
+    let auth_state = Arc::new(if state_plane.is_in_memory() {
+        auth_state
+    } else {
+        auth_state.with_postgres_state_plane(
+            Arc::clone(&state_plane),
+            config.self_attestation.rate_limits.clone(),
+        )
+    });
     let posture_context =
         PostureContext::from_config(&config, &auth_state.audit).map_err(|error| {
             StandaloneServerError::InvalidSigningKey {
@@ -171,9 +248,13 @@ pub fn compile_notary_runtime_with_provenance(
         })?;
     #[cfg(feature = "registry-notary-cel")]
     let cel_worker = build_cel_worker(&config, Arc::clone(&metrics))?;
-    let preauth_runtime =
-        PreAuthRuntime::from_config(&config, &signing_keys, auth_state.audit.clone())?
-            .map(Arc::new);
+    let preauth_runtime = PreAuthRuntime::from_config(
+        &config,
+        &signing_keys,
+        auth_state.audit.clone(),
+        Arc::clone(&state_plane),
+    )?
+    .map(Arc::new);
     let api_state = RegistryNotaryApiState::new_with_federation(
         evidence,
         self_attestation,
@@ -187,15 +268,24 @@ pub fn compile_notary_runtime_with_provenance(
         store,
         issuers,
         federation_signing_provider,
-    )?
-    .with_auth_state(Arc::clone(&auth_state))
-    .with_audit_pipeline(auth_state.audit.clone())
-    .with_preauth_runtime(preauth_runtime)
-    .with_signer_readiness(signer_readiness)
-    .with_posture_context(posture_context)
-    .with_deployment_gates(deployment_gates)
-    .with_config_governance(ConfigGovernanceContext::from_config(&config))
-    .with_runtime_config(Arc::new(config.clone()));
+    )?;
+    let api_state = if state_plane.is_in_memory() {
+        api_state
+    } else {
+        api_state.with_postgres_state_plane(
+            Arc::clone(&state_plane),
+            auth_state.audit.profile.key_hasher(),
+        )
+    };
+    let api_state = api_state
+        .with_auth_state(Arc::clone(&auth_state))
+        .with_audit_pipeline(auth_state.audit.clone())
+        .with_preauth_runtime(preauth_runtime)
+        .with_signer_readiness(signer_readiness)
+        .with_posture_context(posture_context)
+        .with_deployment_gates(deployment_gates)
+        .with_config_governance(ConfigGovernanceContext::from_config(&config))
+        .with_runtime_config(Arc::new(config.clone()));
     if let Some(provenance) = config_provenance {
         api_state.record_config_apply(crate::api::ConfigApplyPosture::from_provenance(provenance));
     }
@@ -205,6 +295,7 @@ pub fn compile_notary_runtime_with_provenance(
         .with_cel_config(Arc::new(config.cel.clone()));
     let api_state = Arc::new(api_state);
     Ok(NotaryRuntimeSnapshot {
+        state_plane,
         metrics,
         auth_state,
         api_state,
@@ -226,6 +317,7 @@ pub fn notary_shared_router_from_runtime(
 ) -> Result<Router, StandaloneServerError> {
     snapshot.ensure_ready_to_serve()?;
     let NotaryRuntimeSnapshot {
+        state_plane: _,
         metrics,
         auth_state,
         api_state,
@@ -259,6 +351,7 @@ pub fn notary_routers_from_runtime(
 ) -> Result<NotaryRouters, StandaloneServerError> {
     snapshot.ensure_ready_to_serve()?;
     let NotaryRuntimeSnapshot {
+        state_plane: _,
         metrics,
         auth_state,
         api_state,
@@ -417,14 +510,14 @@ pub enum StandaloneServerError {
     InvalidAuditSink(String),
     #[error("invalid audit configuration: {0}")]
     InvalidAuditConfig(String),
-    #[error(transparent)]
-    Replay(#[from] ReplayBuildError),
-    #[error(transparent)]
-    CredentialStatus(#[from] CredentialStatusBuildError),
     #[error("invalid OIDC auth configuration: {0}")]
     InvalidOidcConfig(String),
     #[error("invalid federation configuration: {0}")]
     InvalidFederationConfig(String),
+    #[error(transparent)]
+    StatePlane(#[from] NotaryPostgresStatePlaneError),
+    #[error(transparent)]
+    SensitiveState(#[from] crate::state_plane::SensitiveStateError),
     #[cfg(feature = "registry-notary-cel")]
     #[error("invalid CEL worker configuration: {0}")]
     InvalidCelConfig(String),

@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Integration tests for the operator-declared deployment profile gates.
-//!
-//! These exercise the gate framework end to end: startup failures, readiness
-//! failures, posture rendering of the `deployment` and `audit` objects, and
-//! waiver behaviour. They build their own minimal config so they stay
-//! independent of the broader standalone HTTP test fixtures.
+// Crate-internal tests for the operator-declared deployment profile gates.
+//
+// These exercise the gate framework end to end: startup failures, readiness
+// failures, posture rendering of the `deployment` and `audit` objects, and
+// waiver behaviour. They build their own minimal config so they stay
+// independent of the broader standalone HTTP test fixtures.
 
+use super::super::{
+    compile_notary_runtime_for_gate_test as compile_notary_runtime,
+    compile_notary_runtime_with_provenance_for_gate_test as compile_notary_runtime_with_provenance,
+    notary_router_from_runtime, notary_routers_from_runtime,
+    standalone_router_for_gate_test as standalone_router, StandaloneServerError,
+};
 use axum::http::StatusCode;
 use axum_test::TestServer;
 use registry_notary_core::{
     EvidenceCredentialConfig, RegistryNotaryAdminListenerMode, StandaloneRegistryNotaryConfig,
-};
-use registry_notary_server::{
-    compile_notary_runtime, compile_notary_runtime_with_provenance, notary_router_from_runtime,
-    notary_routers_from_runtime, standalone_router, StandaloneServerError,
 };
 use registry_platform_audit::{AuditProfile, JsonlFileSink};
 use registry_platform_authcommon::{CredentialFingerprintProvider, CredentialFingerprintRef};
@@ -49,9 +51,9 @@ enum TestSignerProvider {
 
 /// A minimal but complete config skeleton, parameterised by the knobs the gates
 /// read: whether the audit sink is durable and a YAML `deployment:` block.
-/// Replay storage stays the in-memory default. High-risk replay mode is driven
-/// through the operator-declared `deployment.multi_instance` flag, which keeps
-/// the fixture small and avoids standing up a full federation config.
+/// Serving-state dependencies use the crate-internal in-memory harness. The
+/// operator config itself retains the clean PostgreSQL default so gate and
+/// posture projections exercise deployable configuration.
 struct ConfigBuilder {
     durable_audit: bool,
     /// Overrides `durable_audit` with a specific sink kind ("jsonl" or
@@ -252,9 +254,16 @@ impl ConfigBuilder {
             std::fs::write(&self.signer_path, ED25519_PRIVATE_JWK)
                 .expect("file-watch signer fixture writes");
         }
+        let state = if self.deployment_block.contains("profile: local")
+            && !self.deployment_block.contains("multi_instance: true")
+        {
+            "state:\n  storage: in_memory\n"
+        } else {
+            ""
+        };
         let raw = format!(
             r#"
-{server}auth:
+{server}{state}auth:
   mode: api_key
   api_keys:
     - id: caseworker
@@ -287,6 +296,7 @@ impl ConfigBuilder {
 {claim_credential_profiles}
 {deployment}{federation}"#,
             server = self.server_section(),
+            state = state,
             audit = self.audit_section(),
             signing = self.signing_section(),
             claim_credential_profiles = self.claim_credential_profiles(),
@@ -460,20 +470,17 @@ fn registry_backed_compiled_runtime_cannot_be_routed_before_activation() {
 }
 
 #[test]
-fn evidence_grade_in_memory_high_risk_refuses_startup() {
+fn evidence_grade_postgresql_default_does_not_trigger_in_memory_gate() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
         .deployment("deployment:\n  profile: evidence_grade\n  multi_instance: true\n")
         .build();
 
-    let error = expect_compile_rejected(config, "evidence_grade must refuse startup");
+    let error = expect_compile_rejected(config, "evidence_grade unsigned config must refuse");
     match error {
         StandaloneServerError::DeploymentGateStartupFailure { profile, findings } => {
             assert_eq!(profile, "evidence_grade");
-            assert!(
-                findings.contains("notary.replay.in_memory_high_risk"),
-                "expected the high-risk replay gate in: {findings}"
-            );
+            assert!(!findings.contains("notary.state.in_memory_high_risk"));
         }
         other => panic!("expected a deployment gate startup failure, got: {other:?}"),
     }
@@ -501,14 +508,15 @@ fn production_without_audit_sink_refuses_startup() {
 }
 
 #[test]
-fn local_profile_binds_no_gates_even_when_high_risk() {
+fn local_profile_binds_no_gates_with_postgresql_default() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
         .durable_audit(false)
         .deployment("deployment:\n  profile: local\n  multi_instance: true\n")
         .build();
 
-    // local binds no gates, so an in-memory high-risk deployment still starts.
+    // Local binds no deployment gates. Multi-instance uses the PostgreSQL
+    // default rather than an impossible in-memory fixture.
     compile_notary_runtime(config).expect("local profile binds no gates");
 }
 
@@ -569,20 +577,19 @@ fn waiver_for_startup_fail_gate_is_rejected_at_load() {
 }
 
 #[tokio::test]
-async fn production_high_risk_replay_reports_readiness_failure() {
+async fn production_multi_instance_postgresql_default_is_state_ready() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let mut config = ConfigBuilder::new(&audit_path(&tmp))
         .deployment("deployment:\n  profile: production\n  multi_instance: true\n")
         .build();
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
 
-    let app = standalone_router(config).expect("production high-risk config still starts");
+    let app = standalone_router(config).expect("production PostgreSQL config starts in harness");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
-    // A readiness_fail gate is bound and triggered, so /ready reports not-ready.
-    ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    ready.assert_status_ok();
     let body: Value = ready.json();
-    assert_eq!(body["readiness_status"], "not_ready");
+    assert_eq!(body["status"], "ready");
 }
 
 #[tokio::test]
@@ -751,9 +758,9 @@ async fn production_signer_custody_approval_is_visible_in_readiness() {
     let app = standalone_router(config).expect("approved local signer config starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
-    ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    ready.assert_status_ok();
     let body: Value = ready.json();
-    assert_eq!(body["readiness_status"], "degraded");
+    assert_eq!(body["status"], "ready");
     assert_eq!(body["checks"]["failed"], 0);
     let custody = &body["checks"]["signing_providers"]["custody"];
     assert_eq!(custody["custody_approval_required"], true);
@@ -938,9 +945,9 @@ async fn evidence_grade_readiness_rechecks_cursor_binding_and_recovers() {
     let admin_server = TestServer::builder().http_transport().build(routers.admin);
 
     let ready = server.get("/ready").await;
-    ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    ready.assert_status_ok();
     let body: Value = ready.json();
-    assert_eq!(body["checks"]["failed"], 0);
+    assert_eq!(body["status"], "ready");
 
     let healthy_posture: Value = admin_server
         .get("/admin/v1/posture?tier=restricted")
@@ -1074,8 +1081,9 @@ async fn posture_reports_local_profile_without_findings() {
 async fn posture_reports_waived_finding_with_active_waiver() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
+        .openapi_public(true)
         .deployment(
-            "deployment:\n  profile: hosted_lab\n  multi_instance: true\n  waivers:\n    - finding: notary.replay.in_memory_high_risk\n      reason: \"synthetic single-node lab, ticket TEST-1\"\n      expires: 2999-01-01\n",
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: notary.openapi.public\n      reason: \"synthetic single-node lab, ticket TEST-1\"\n      expires: 2999-01-01\n",
         )
         .build();
 
@@ -1087,8 +1095,8 @@ async fn posture_reports_waived_finding_with_active_waiver() {
         .expect("deployment findings is an array");
     let waived = findings
         .iter()
-        .find(|finding| finding["id"] == "notary.replay.in_memory_high_risk")
-        .expect("high-risk replay finding is present");
+        .find(|finding| finding["id"] == "notary.openapi.public")
+        .expect("public OpenAPI finding is present");
     assert_eq!(waived["status"], "waived");
     assert_eq!(waived["waiver"]["expires"], "2999-01-01");
 
@@ -1098,7 +1106,7 @@ async fn posture_reports_waived_finding_with_active_waiver() {
     assert!(
         waivers
             .iter()
-            .any(|waiver| waiver["finding"] == "notary.replay.in_memory_high_risk"),
+            .any(|waiver| waiver["finding"] == "notary.openapi.public"),
         "active waiver must be echoed in: {waivers:#?}"
     );
 }
@@ -1107,8 +1115,9 @@ async fn posture_reports_waived_finding_with_active_waiver() {
 async fn posture_re_triggers_expired_waiver() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
+        .openapi_public(true)
         .deployment(
-            "deployment:\n  profile: hosted_lab\n  multi_instance: true\n  waivers:\n    - finding: notary.replay.in_memory_high_risk\n      reason: \"synthetic expired waiver\"\n      expires: 2000-01-01\n",
+            "deployment:\n  profile: hosted_lab\n  waivers:\n    - finding: notary.openapi.public\n      reason: \"synthetic expired waiver\"\n      expires: 2000-01-01\n",
         )
         .build();
 
@@ -1118,12 +1127,12 @@ async fn posture_re_triggers_expired_waiver() {
     let findings = posture["deployment"]["findings"]
         .as_array()
         .expect("deployment findings is an array");
-    let replay = findings
+    let openapi = findings
         .iter()
-        .find(|finding| finding["id"] == "notary.replay.in_memory_high_risk")
-        .expect("high-risk replay finding is present");
+        .find(|finding| finding["id"] == "notary.openapi.public")
+        .expect("public OpenAPI finding is present");
     // An expired waiver stops suppressing the finding: it is active again.
-    assert_eq!(replay["status"], "active");
+    assert_eq!(openapi["status"], "active");
     assert!(
         findings
             .iter()

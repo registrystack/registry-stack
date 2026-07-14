@@ -2545,7 +2545,7 @@ fn is_public_runtime_config_path(path: &[&str]) -> bool {
             | ["catalog", "base_url"]
             | ["auth", "mode"]
             | ["audit", "sink"]
-            | ["replay", "storage"]
+            | ["state", "storage"]
             | ["credential_status", "enabled"]
             | ["credential_status", "storage"]
     )
@@ -2566,7 +2566,7 @@ const PUBLIC_RUNTIME_CONFIG_PATHS: &[&[&str]] = &[
     &["catalog", "base_url"],
     &["auth", "mode"],
     &["audit", "sink"],
-    &["replay", "storage"],
+    &["state", "storage"],
     &["credential_status", "enabled"],
     &["credential_status", "storage"],
 ];

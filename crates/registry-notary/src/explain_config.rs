@@ -227,11 +227,11 @@ pub(crate) fn required_env_vars(config: &StandaloneRegistryNotaryConfig) -> BTre
     if let Some(env) = &config.audit.hash_secret_env {
         vars.insert(env.clone());
     }
-    if config.replay.storage == "redis" {
-        vars.insert(config.replay.redis.url_env.clone());
-    }
-    if config.credential_status.enabled && config.credential_status.storage == "redis" {
-        vars.insert(config.credential_status.redis.url_env.clone());
+    if config.state.storage == STATE_STORAGE_POSTGRESQL {
+        vars.insert(config.state.postgresql.url_env.clone());
+        if config.oid4vci.pre_authorized_code.enabled {
+            vars.insert(config.state.postgresql.sensitive_state_key_env.clone());
+        }
     }
     if config.federation.enabled {
         vars.insert(config.federation.pairwise_subject_hash.secret_env.clone());

@@ -17,9 +17,5 @@ registry-platform-cache = { workspace = true }
 thiserror.workspace = true
 time.workspace = true
 
-[features]
-default = []
-redis = ["registry-platform-cache/redis"]
-
 [dev-dependencies]
 tokio.workspace = true

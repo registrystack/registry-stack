@@ -326,6 +326,25 @@ impl RegistryNotaryApiState {
     }
 
     #[must_use]
+    pub(crate) fn with_postgres_state_plane(
+        mut self,
+        state_plane: Arc<crate::state_plane::NotaryStatePlaneHandle>,
+        audit_hasher: AuditKeyHasher,
+    ) -> Self {
+        self.self_attestation_rate_limiter =
+            Arc::new(SelfAttestationRateLimiter::with_state_plane(
+                self.self_attestation.rate_limits.clone(),
+                Arc::clone(&state_plane),
+            ));
+        self.machine_quota_limiter = Arc::new(MachineQuotaLimiter::with_state_plane(
+            self.evidence.machine_quota,
+            state_plane,
+            audit_hasher,
+        ));
+        self
+    }
+
+    #[must_use]
     pub(crate) fn with_audit_pipeline(mut self, audit: crate::standalone::AuditPipeline) -> Self {
         self.audit = Some(audit);
         self

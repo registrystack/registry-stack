@@ -39,7 +39,7 @@ pub(super) async fn evaluate(
             Ok(principal) => principal,
             Err(error) => {
                 if let Err(rate_error) =
-                    consume_classification_denial_if_keyable(&state, &principal)
+                    consume_classification_denial_if_keyable(&state, &principal).await
                 {
                     let mut response = evidence_error_response(rate_error.evidence_error());
                     attach_self_attestation_rate_limit_audit(
@@ -78,6 +78,7 @@ pub(super) async fn evaluate(
         if let Err(error) = state
             .self_attestation_rate_limiter
             .check_authenticated_request(&principal_hash)
+            .await
         {
             let mut response = evidence_error_response(error.evidence_error());
             attach_self_attestation_rate_limit_audit(
@@ -105,7 +106,9 @@ pub(super) async fn evaluate(
         };
         if let Err(error) = context_result {
             if denial_code_from_error(&error).is_some_and(subject_mismatch_denial_code) {
-                if let Err(rate_error) = consume_subject_mismatch_denial(&state, &principal_hash) {
+                if let Err(rate_error) =
+                    consume_subject_mismatch_denial(&state, &principal_hash).await
+                {
                     let mut response = evidence_error_response(rate_error.evidence_error());
                     attach_self_attestation_rate_limit_audit(
                         &mut response,
@@ -137,7 +140,7 @@ pub(super) async fn evaluate(
             Err(error) => {
                 if denial_code_from_error(&error).is_some_and(subject_mismatch_denial_code) {
                     if let Err(rate_error) =
-                        consume_subject_mismatch_denial(&state, &principal_hash)
+                        consume_subject_mismatch_denial(&state, &principal_hash).await
                     {
                         let mut response = evidence_error_response(rate_error.evidence_error());
                         attach_self_attestation_rate_limit_audit(
@@ -169,6 +172,7 @@ pub(super) async fn evaluate(
     } else if let Err(error) = state
         .machine_quota_limiter
         .check_and_consume(&principal.principal_id, 1)
+        .await
     {
         let quota_error = EvidenceError::MachineQuotaExceeded {
             retry_after_seconds: error.retry_after_seconds,
@@ -471,8 +475,18 @@ pub(super) async fn render(
             Ok(principal) => principal,
             Err(error) => return evidence_error_response(error),
         };
-    let Some(evaluation) = state.store.get(&request.evaluation_id) else {
-        return evidence_error_response(EvidenceError::EvaluationNotFound);
+    let lookup_client_id = match stored_evaluation_client_id(&state, &principal) {
+        Ok(client_id) => client_id,
+        Err(error) => return evidence_error_response(error),
+    };
+    let evaluation = match state
+        .store
+        .get(&request.evaluation_id, &lookup_client_id)
+        .await
+    {
+        Ok(Some(evaluation)) => evaluation,
+        Ok(None) => return evidence_error_response(EvidenceError::EvaluationNotFound),
+        Err(error) => return evidence_error_response(error),
     };
     if let Some(metadata) = evaluation.self_attestation.as_ref() {
         if principal.is_self_attestation() {
@@ -513,6 +527,7 @@ pub(super) async fn render(
         if let Err(error) = state
             .self_attestation_rate_limiter
             .check_authenticated_request(&principal_hash)
+            .await
         {
             let mut response = evidence_error_response(error.evidence_error());
             attach_self_attestation_rate_limit_audit(
@@ -530,7 +545,10 @@ pub(super) async fn render(
     }
     let runtime = state.runtime();
     let runtime_principal = runtime_principal_for_stored_evaluation(&principal, &evaluation);
-    match runtime.render(evidence, &state.store, &runtime_principal, request) {
+    match runtime
+        .render(evidence, &state.store, &runtime_principal, request)
+        .await
+    {
         Ok(value) => {
             let mut response = Json(value).into_response();
             if principal.is_self_attestation() {
@@ -631,6 +649,21 @@ pub(super) fn evaluation_client_matches(
                 })
     } else {
         evaluation.client_id == principal.principal_id
+    }
+}
+
+pub(super) fn stored_evaluation_client_id(
+    state: &RegistryNotaryApiState,
+    principal: &EvidencePrincipal,
+) -> Result<String, EvidenceError> {
+    if principal.is_self_attestation() {
+        state
+            .self_attestation_rate_keys
+            .principal(&principal.principal_id)
+            .map(|hash| hash.as_str().to_string())
+            .map_err(|error| error.evidence_error())
+    } else {
+        Ok(principal.principal_id.clone())
     }
 }
 

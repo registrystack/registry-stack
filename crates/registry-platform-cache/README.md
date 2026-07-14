@@ -8,9 +8,7 @@ Small cache-store primitives for registry services.
   `compare_and_set`, `delete`, and readiness checks.
 - `CacheKey`, a redacted-debug key wrapper with helpers for hashed keys derived
   from sensitive scope material.
-- `InMemoryCacheStore` for tests, local development, and single-process
-  deployments.
-- `RedisCacheStore` behind the `redis` feature.
+- `InMemoryCacheStore` for tests and explicit local single-process mode.
 
 ## Security Notes
 
@@ -25,7 +23,7 @@ not accidentally use plain `set` where `set_if_absent` is required.
 ## Testing
 
 ```sh
-cargo test -p registry-platform-cache --all-features
+cargo test -p registry-platform-cache
 ```
 
 ## License

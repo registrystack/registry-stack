@@ -2,10 +2,9 @@
 //! Redacted Registry Ops posture for standalone Registry Notary.
 
 use registry_notary_core::{
-    CredentialStatusConfig, DeploymentEvidenceConfig, EvidenceAuditConfig, SelfAttestationConfig,
+    DeploymentEvidenceConfig, EvidenceAuditConfig, SelfAttestationConfig,
     SelfAttestationRateLimitMode, SigningKeyStatus, StandaloneRegistryNotaryConfig,
-    CREDENTIAL_STATUS_STORAGE_REDIS, MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS,
-    REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
+    MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS, STATE_STORAGE_IN_MEMORY, STATE_STORAGE_POSTGRESQL,
 };
 use registry_platform_ops::{
     audit_shipping_target, filter_posture_for_tier, override_pin_posture,
@@ -29,7 +28,7 @@ pub(crate) struct PostureContext {
     instance: InstancePosture,
     auth_mode: String,
     config_hash: String,
-    replay_storage: String,
+    state_storage: String,
     credential_status_enabled: bool,
     credential_status_storage: String,
     audit: AuditPosture,
@@ -123,7 +122,7 @@ impl PostureContext {
             },
             auth_mode: config.auth.mode.as_str().to_string(),
             config_hash: config_hash(config),
-            replay_storage: classify_replay_storage(config.replay.storage.as_str()),
+            state_storage: classify_state_storage(config.state.storage.as_str()),
             credential_status_enabled: config.credential_status.enabled,
             credential_status_storage: classify_credential_status_storage(
                 &config.credential_status,
@@ -192,23 +191,23 @@ pub(crate) async fn posture_document(
     let mut warnings = Vec::<String>::new();
     let mut findings = Vec::new();
     if production_like(context.instance.environment.as_str())
-        && context.replay_storage == REPLAY_STORAGE_IN_MEMORY
+        && context.state_storage == STATE_STORAGE_IN_MEMORY
     {
         let finding = json!({
-            "id": "notary.replay.in_memory.production",
+            "id": "notary.state.in_memory.production",
             "severity": "high",
-            "title": "Production Notary uses in-memory replay storage",
-            "detail": "Multiple instances cannot share replay decisions.",
+            "title": "Production Notary uses in-memory correctness state",
+            "detail": "Multiple instances cannot share correctness decisions.",
             "evidence": [
                 {
-                    "field": "notary.replay.storage",
+                    "field": "notary.state.storage",
                     "value": "in_memory"
                 }
             ],
             "standards_refs": [],
-            "recommended_action": "Use Redis replay storage before enabling active-active production traffic."
+            "recommended_action": "Use PostgreSQL correctness state before enabling production traffic."
         });
-        warnings.push("notary.replay.in_memory.production".to_string());
+        warnings.push("notary.state.in_memory.production".to_string());
         findings.push(finding);
     }
     if !context.audit.configured {
@@ -289,8 +288,8 @@ pub(crate) async fn posture_document(
                 "readiness": signing_key_readiness_by_kid(state),
             },
             "credential_profile_count": state.evidence.credential_profiles.len(),
-            "replay": {
-                "storage": context.replay_storage,
+            "state": {
+                "storage": context.state_storage,
                 "ready": replay_ready_bool,
             },
             "credential_status": {
@@ -445,7 +444,7 @@ fn default_posture_context() -> PostureContext {
         auth_mode: "unknown".to_string(),
         config_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
             .to_string(),
-        replay_storage: REPLAY_STORAGE_IN_MEMORY.to_string(),
+        state_storage: STATE_STORAGE_IN_MEMORY.to_string(),
         credential_status_enabled: false,
         credential_status_storage: "disabled".to_string(),
         audit: AuditPosture {
@@ -479,20 +478,20 @@ fn config_hash(config: &StandaloneRegistryNotaryConfig) -> String {
     posture_safe_runtime_config_hash(&value)
 }
 
-fn classify_replay_storage(storage: &str) -> String {
+fn classify_state_storage(storage: &str) -> String {
     match storage {
-        REPLAY_STORAGE_REDIS => REPLAY_STORAGE_REDIS.to_string(),
-        _ => REPLAY_STORAGE_IN_MEMORY.to_string(),
+        STATE_STORAGE_POSTGRESQL => STATE_STORAGE_POSTGRESQL.to_string(),
+        _ => STATE_STORAGE_IN_MEMORY.to_string(),
     }
 }
 
-fn classify_credential_status_storage(config: &CredentialStatusConfig) -> String {
+fn classify_credential_status_storage(
+    config: &registry_notary_core::CredentialStatusConfig,
+) -> String {
     if !config.enabled {
         "disabled".to_string()
-    } else if config.storage == CREDENTIAL_STATUS_STORAGE_REDIS {
-        "redis".to_string()
     } else {
-        "in_memory".to_string()
+        "state".to_string()
     }
 }
 

@@ -942,7 +942,7 @@
       "required": [
         "claim_count",
         "credential_profile_count",
-        "replay",
+        "state",
         "credential_status",
         "federation",
         "oid4vci"
@@ -983,7 +983,7 @@
             }
           }
         },
-        "replay": {
+        "state": {
           "type": "object",
           "additionalProperties": false,
           "required": [
@@ -993,7 +993,7 @@
           "properties": {
             "storage": {
               "enum": [
-                "redis",
+                "postgresql",
                 "in_memory",
                 "disabled",
                 "unknown"
@@ -1017,8 +1017,7 @@
             },
             "storage": {
               "enum": [
-                "redis",
-                "in_memory",
+                "state",
                 "disabled",
                 "unknown"
               ]

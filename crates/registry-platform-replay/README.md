@@ -16,8 +16,7 @@ Replay-store primitives for one-time JWT ids and nonce values.
   consumption.
 - `CacheReplayStore` and `ConsumableNonceCacheStore`, adapters over
   `registry-platform-cache`.
-- `InMemoryReplayStore` for tests and single-process development.
-- `RedisReplayStore` behind the `redis` feature.
+- `InMemoryReplayStore` for tests and explicit local single-process mode.
 
 ## Typical Use
 
@@ -85,9 +84,9 @@ application code when a structured `ReplayScope` can carry the same boundaries.
   missing, already-consumed, and store-error cases all deny the operation.
 - Use raw `consume_nonce` only for optional or diagnostic flows. Security
   checks must require `ReplayInsertOutcome::Inserted`.
-- `InMemoryReplayStore` is for tests, local development, and single-process
-  deployments only. Production multi-instance or active-active deployments need
-  a durable shared backend such as Redis or Postgres.
+- The in-memory stores do not provide restart or multi-instance correctness.
+  Production consumers must own durable state implementations that preserve the
+  replay and nonce contracts.
 - Prefer `ReplayStore`, `ConsumableNonceStore`, `require_insert_once`, and
   `require_consume_once` from this crate for replay-sensitive paths. Do not
   call a generic cache directly where security depends on one-time insertion or
@@ -101,7 +100,7 @@ application code when a structured `ReplayScope` can carry the same boundaries.
 ## Testing
 
 ```sh
-cargo test -p registry-platform-replay --all-features
+cargo test -p registry-platform-replay
 ```
 
 ## License

@@ -43,13 +43,22 @@ pub(super) async fn issue_credential(
                 return response;
             }
         };
-    let evaluation = match state.store.get(&request.evaluation_id) {
-        Some(evaluation) => evaluation,
-        None => {
+    let lookup_client_id = match stored_evaluation_client_id(&state, &principal) {
+        Ok(client_id) => client_id,
+        Err(error) => return credential_denial_response_without_evaluation(error),
+    };
+    let evaluation = match state
+        .store
+        .get(&request.evaluation_id, &lookup_client_id)
+        .await
+    {
+        Ok(Some(evaluation)) => evaluation,
+        Ok(None) => {
             return credential_denial_response_without_evaluation(
                 EvidenceError::EvaluationNotFound,
             );
         }
+        Err(error) => return credential_denial_response_without_evaluation(error),
     };
     if let Some(metadata) = evaluation.self_attestation.as_ref() {
         if principal.is_self_attestation() {
@@ -297,6 +306,7 @@ pub(super) async fn issue_credential(
         if let Err(error) = state
             .self_attestation_rate_limiter
             .check_credential_issuance(&principal_hash, holder_hash.as_ref())
+            .await
         {
             let mut response = evidence_error_response(error.evidence_error());
             if let Err(audit_error) = attach_self_attestation_credential_denial_audit(

@@ -3,9 +3,8 @@
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use registry_notary_core::{
-        BoundedVerifiedClaims, CredentialStatusConfig, CredentialStatusRedisConfig,
-        EvidenceAuthorizationDetails, SubjectRequest, VerifiedClaimName,
-        VerifiedClaimValue, CREDENTIAL_STATUS_STORAGE_REDIS,
+        BoundedVerifiedClaims, CredentialStatusConfig, EvidenceAuthorizationDetails,
+        SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
     };
     use registry_platform_crypto::{did_jwk_from_public_jwk, sign, LocalJwkSigner, PrivateJwk};
     use registry_platform_replay::ReplayInsertOutcome;
@@ -767,10 +766,6 @@ signing:
   signing_key: federation-key
 pairwise_subject_hash:
   secret_env: {secret_env}
-replay:
-  storage: in_process_single_instance_only
-  max_entries: 100
-  eviction: expire_oldest
 response_shaping:
   minimum_denial_latency_ms: 1
 peers:

@@ -73,13 +73,13 @@
   "notary": {
     "claim_count": 6,
     "credential_profile_count": 2,
-    "replay": {
-      "storage": "redis",
+    "state": {
+      "storage": "postgresql",
       "ready": true
     },
     "credential_status": {
       "enabled": true,
-      "storage": "redis"
+      "storage": "state"
     },
     "federation": {
       "enabled": true,

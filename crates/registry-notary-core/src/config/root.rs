@@ -29,8 +29,8 @@ pub struct StandaloneRegistryNotaryConfig {
     pub audit: EvidenceAuditConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_trust: Option<ConfigTrustConfig>,
-    #[serde(default, skip_serializing_if = "replay_config_is_default")]
-    pub replay: ReplayConfig,
+    #[serde(default, skip_serializing_if = "state_config_is_default")]
+    pub state: StateConfig,
     #[serde(default, skip_serializing_if = "credential_status_config_is_default")]
     pub credential_status: CredentialStatusConfig,
     #[serde(default, skip_serializing_if = "registry_notary_cel_config_is_default")]
@@ -134,7 +134,8 @@ impl StandaloneRegistryNotaryConfig {
                 });
             }
         }
-        self.replay.validate()?;
+        self.state
+            .validate(&self.deployment, self.oid4vci.pre_authorized_code.enabled)?;
         validate_static_credential_ids(&self.auth.api_keys, &self.auth.bearer_tokens)?;
         match self.auth.mode {
             EvidenceAuthMode::ApiKey => {
@@ -351,7 +352,6 @@ impl StandaloneRegistryNotaryConfig {
         self.validate_oid4vci_cross_block()?;
         self.validate_access_token_signing_cross_block()?;
         self.federation.validate(&self.evidence)?;
-        self.validate_replay_cross_block()?;
         self.validate_signing_key_alg_usage()?;
         self.deployment.validate().map_err(|error| {
             EvidenceConfigError::InvalidDeploymentConfig {
@@ -433,7 +433,7 @@ impl StandaloneRegistryNotaryConfig {
         ack_observation: &registry_platform_ops::AckObservation,
     ) -> crate::deployment::GateInput {
         crate::deployment::GateInput {
-            replay_in_memory: self.replay.storage != REPLAY_STORAGE_REDIS,
+            state_in_memory: self.state.storage == STATE_STORAGE_IN_MEMORY,
             federation_enabled: self.federation.enabled,
             oid4vci_preauth_enabled: self.oid4vci.enabled
                 && self.oid4vci.pre_authorized_code.enabled,
@@ -679,20 +679,6 @@ impl StandaloneRegistryNotaryConfig {
                     ));
                 }
             }
-        }
-        Ok(())
-    }
-
-    fn validate_replay_cross_block(&self) -> Result<(), EvidenceConfigError> {
-        if self.federation.enabled
-            && self.federation.replay.storage == REPLAY_STORAGE_REDIS
-            && self.replay.storage != REPLAY_STORAGE_REDIS
-        {
-            return Err(EvidenceConfigError::InvalidFederationConfig {
-                reason:
-                    "federation.replay.storage = redis requires top-level replay.storage = redis"
-                        .to_string(),
-            });
         }
         Ok(())
     }

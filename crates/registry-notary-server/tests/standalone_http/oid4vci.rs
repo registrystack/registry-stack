@@ -664,12 +664,10 @@ pub(super) async fn public_probe_routes_remain_public_except_metrics() {
 
     server.get("/healthz").await.assert_status_ok();
     let ready = server.get("/ready").await;
-    ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    ready.assert_status_ok();
     let ready_body: Value = ready.json();
-    assert_eq!(ready_body["status"], json!(503));
-    assert_eq!(ready_body["code"], json!("readiness.not_ready"));
-    assert_eq!(ready_body["readiness_status"], json!("degraded"));
-    assert_eq!(ready_body["checks"]["degraded"], json!(1));
+    assert_eq!(ready_body["status"], json!("ready"));
+    assert_eq!(ready_body["checks"]["degraded"], json!(0));
     server
         .get("/.well-known/openid-credential-issuer")
         .await

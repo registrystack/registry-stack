@@ -509,7 +509,7 @@ fn default_posture_excludes_sensitive_runtime_material() {
         "super-secret-db-password",
         "eyJsecret.source.token",
         "oauth-client-secret-value",
-        "redis-secret",
+        "base64url-sensitive-state-key-material",
         "audit-hmac-secret-value",
         "did:example:person:123",
         "national-id-123456789",

@@ -607,19 +607,19 @@ pub(crate) fn local_env_diagnostics(
             "for beta tamper-evidence, ship audit envelopes off-host via stdout/syslog or declare deployment.evidence.audit_offhost_shipping after external shipping is in place",
         ));
     }
-    if config.replay.storage == "redis" {
+    if config.state.storage == STATE_STORAGE_POSTGRESQL {
         diagnostics.push(check_present_env(
-            &config.replay.redis.url_env,
+            &config.state.postgresql.url_env,
             env_report,
-            "replay Redis URL",
+            "Notary PostgreSQL URL",
         ));
-    }
-    if config.credential_status.enabled && config.credential_status.storage == "redis" {
-        diagnostics.push(check_present_env(
-            &config.credential_status.redis.url_env,
-            env_report,
-            "credential status Redis URL",
-        ));
+        if config.oid4vci.pre_authorized_code.enabled {
+            diagnostics.push(check_present_env(
+                &config.state.postgresql.sensitive_state_key_env,
+                env_report,
+                "Notary sensitive-state key",
+            ));
+        }
     }
     if config.federation.enabled {
         diagnostics.push(check_present_env(

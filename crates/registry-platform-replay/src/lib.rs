@@ -8,8 +8,6 @@ use registry_platform_cache::{
     CacheCompareAndSetOutcome, CacheKey, CacheKeyError, CacheSetOutcome, CacheStore,
     CacheStoreError, InMemoryCacheStore,
 };
-#[cfg(feature = "redis")]
-use registry_platform_cache::{RedisCacheBuildError, RedisCacheStore};
 use thiserror::Error;
 use time::OffsetDateTime;
 
@@ -358,10 +356,9 @@ impl ConsumableNonceStore for ConsumableNonceCacheStore {
             )
             .await?
         {
-            CacheCompareAndSetOutcome::Stored => {
-                self.cache.delete(&cache_key).await?;
-                Ok(ReplayInsertOutcome::Inserted)
-            }
+            // Retain the consumed value so an immediate reserve or concurrent
+            // consume cannot treat the nonce as a fresh generation.
+            CacheCompareAndSetOutcome::Stored => Ok(ReplayInsertOutcome::Inserted),
             CacheCompareAndSetOutcome::Mismatch | CacheCompareAndSetOutcome::Missing => {
                 Ok(ReplayInsertOutcome::AlreadySeen)
             }
@@ -484,95 +481,6 @@ impl ConsumableNonceStore for InMemoryConsumableNonceStore {
     }
 }
 
-#[cfg(feature = "redis")]
-#[derive(Clone)]
-pub struct RedisReplayStore {
-    cache: RedisCacheStore,
-    replay: CacheReplayStore,
-    nonces: ConsumableNonceCacheStore,
-}
-
-#[cfg(feature = "redis")]
-impl RedisReplayStore {
-    pub fn new(
-        url: &str,
-        key_prefix: impl Into<String>,
-        connect_timeout: std::time::Duration,
-        operation_timeout: std::time::Duration,
-    ) -> Result<Self, RedisReplayBuildError> {
-        let redis_cache = RedisCacheStore::new(url, connect_timeout, operation_timeout)?;
-        let cache: Arc<dyn CacheStore> = Arc::new(redis_cache.clone());
-        let key_prefix = key_prefix.into();
-        Ok(Self {
-            cache: redis_cache,
-            replay: CacheReplayStore::new(Arc::clone(&cache), key_prefix.clone()),
-            nonces: ConsumableNonceCacheStore::new(cache, key_prefix),
-        })
-    }
-
-    pub async fn check_ready(&self) -> Result<(), ReplayStoreError> {
-        self.cache.check_ready().await.map_err(Into::into)
-    }
-
-    pub fn redis_key(
-        &self,
-        flow: &str,
-        scope: &ReplayScope,
-        key: &ReplayKey,
-    ) -> Result<String, ReplayStoreError> {
-        Ok(self
-            .replay
-            .cache_key(flow, scope, key)?
-            .as_str()
-            .to_string())
-    }
-}
-
-#[cfg(feature = "redis")]
-impl fmt::Debug for RedisReplayStore {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RedisReplayStore")
-            .field("cache", &"<redacted>")
-            .field("replay", &self.replay)
-            .field("nonces", &self.nonces)
-            .finish()
-    }
-}
-
-#[cfg(feature = "redis")]
-#[async_trait]
-impl ReplayStore for RedisReplayStore {
-    async fn insert_once(
-        &self,
-        scope: &ReplayScope,
-        key: &ReplayKey,
-        expires_at: OffsetDateTime,
-    ) -> Result<ReplayInsertOutcome, ReplayStoreError> {
-        self.replay.insert_once(scope, key, expires_at).await
-    }
-}
-
-#[cfg(feature = "redis")]
-#[async_trait]
-impl ConsumableNonceStore for RedisReplayStore {
-    async fn reserve_nonce(
-        &self,
-        scope: &ReplayScope,
-        key: &ReplayKey,
-        expires_at: OffsetDateTime,
-    ) -> Result<(), ReplayStoreError> {
-        self.nonces.reserve_nonce(scope, key, expires_at).await
-    }
-
-    async fn consume_nonce(
-        &self,
-        scope: &ReplayScope,
-        key: &ReplayKey,
-    ) -> Result<ReplayInsertOutcome, ReplayStoreError> {
-        self.nonces.consume_nonce(scope, key).await
-    }
-}
-
 /// Record a replay key when replay protection is required.
 ///
 /// This helper is intentionally fail closed: store errors and duplicate keys are
@@ -651,14 +559,6 @@ impl From<CacheKeyError> for ReplayStoreError {
             message: error.to_string(),
         }
     }
-}
-
-#[cfg(feature = "redis")]
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum RedisReplayBuildError {
-    #[error("redis replay store could not be built: {0}")]
-    Cache(#[from] RedisCacheBuildError),
 }
 
 #[derive(Debug, Error)]
@@ -1033,7 +933,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn consumable_nonce_store_reserves_and_consumes_once() {
+    async fn consumable_nonce_store_retains_tombstone_after_consume() {
         let store = InMemoryConsumableNonceStore::new();
         let scope =
             ReplayScope::oid4vci_nonce("tenant-a", "issuer-a", "profile-a").expect("valid scope");
@@ -1061,7 +961,12 @@ mod tests {
                 .expect("first consume succeeds"),
             ReplayInsertOutcome::Inserted
         );
-        assert!(store.is_empty());
+        assert_eq!(store.len(), 1);
+        let reserve_error = store
+            .reserve_nonce(&scope, &key, future())
+            .await
+            .expect_err("consumed nonce cannot be reserved while its tombstone is live");
+        assert!(reserve_error.to_string().contains("already reserved"));
         assert_eq!(
             store
                 .consume_nonce(&scope, &key)
@@ -1069,7 +974,7 @@ mod tests {
                 .expect("second consume checks cleanly"),
             ReplayInsertOutcome::AlreadySeen
         );
-        assert!(store.is_empty());
+        assert_eq!(store.len(), 1);
     }
 
     #[tokio::test]
@@ -1198,95 +1103,6 @@ mod tests {
         assert!(!rendered.contains("notary.example"));
         assert!(!rendered.contains("profile-sensitive"));
         assert!(!rendered.contains("jti-sensitive-123"));
-    }
-
-    #[cfg(feature = "redis")]
-    #[test]
-    fn redis_replay_store_builds_hashed_keys_without_connecting() {
-        let store = RedisReplayStore::new(
-            "redis://127.0.0.1:6379/",
-            "registry-notary",
-            Duration::from_millis(10),
-            Duration::from_millis(10),
-        )
-        .expect("redis URL is syntactically valid");
-        let scope = ReplayScope::federation_request_jwt(
-            "tenant-secret",
-            "https://peer.example/issuer",
-            "https://notary.example",
-            "profile-sensitive",
-        )
-        .expect("valid scope");
-        let key = key("jti-sensitive-123");
-
-        let redis_key = store
-            .redis_key("one-time", &scope, &key)
-            .expect("redis key builds");
-
-        assert!(redis_key.starts_with("registry-notary:one-time:"));
-        assert!(!redis_key.contains("tenant-secret"));
-        assert!(!redis_key.contains("peer.example"));
-        assert!(!redis_key.contains("notary.example"));
-        assert!(!redis_key.contains("profile-sensitive"));
-        assert!(!redis_key.contains("jti-sensitive-123"));
-    }
-
-    #[cfg(feature = "redis")]
-    #[tokio::test]
-    async fn redis_replay_store_round_trips_when_env_is_set() {
-        let Ok(url) = std::env::var("REGISTRY_PLATFORM_REDIS_TEST_URL") else {
-            return;
-        };
-        let prefix = format!(
-            "registry-platform-replay-test:{}",
-            OffsetDateTime::now_utc().unix_timestamp_nanos()
-        );
-        let store = RedisReplayStore::new(
-            &url,
-            prefix,
-            Duration::from_millis(500),
-            Duration::from_millis(500),
-        )
-        .expect("redis replay store builds");
-        let scope =
-            ReplayScope::oid4vci_nonce("tenant-a", "issuer-a", "profile-a").expect("valid scope");
-        let replay_key = key("nonce-1");
-
-        store.check_ready().await.expect("redis is ready");
-        assert_eq!(
-            store
-                .insert_once(&scope, &replay_key, future())
-                .await
-                .expect("first insert succeeds"),
-            ReplayInsertOutcome::Inserted
-        );
-        assert_eq!(
-            store
-                .insert_once(&scope, &replay_key, future())
-                .await
-                .expect("duplicate insert succeeds"),
-            ReplayInsertOutcome::AlreadySeen
-        );
-
-        let nonce_key = key("nonce-2");
-        store
-            .reserve_nonce(&scope, &nonce_key, future())
-            .await
-            .expect("nonce reserves");
-        assert_eq!(
-            store
-                .consume_nonce(&scope, &nonce_key)
-                .await
-                .expect("first consume succeeds"),
-            ReplayInsertOutcome::Inserted
-        );
-        assert_eq!(
-            store
-                .consume_nonce(&scope, &nonce_key)
-                .await
-                .expect("second consume succeeds"),
-            ReplayInsertOutcome::AlreadySeen
-        );
     }
 
     #[test]

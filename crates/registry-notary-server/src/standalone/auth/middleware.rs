@@ -16,6 +16,7 @@ pub(in super::super) async fn auth_audit_middleware(
     let client_address = client_address_identifier(&request);
     if let Err(rate_error) =
         maybe_rate_limit_auth_rejection_before_auth(&state, &credentials, client_address.as_str())
+            .await
     {
         let mut response = crate::api::evidence_error_response_with_request_id(
             rate_error.evidence_error(),
@@ -60,7 +61,7 @@ pub(in super::super) async fn auth_audit_middleware(
         Ok(principal) => principal,
         Err(error) => {
             if let Err(rate_error) =
-                consume_auth_rejection_after_auth_failure(&state, client_address.as_str())
+                consume_auth_rejection_after_auth_failure(&state, client_address.as_str()).await
             {
                 let mut response = crate::api::evidence_error_response_with_request_id(
                     rate_error.evidence_error(),
@@ -173,7 +174,7 @@ pub(in super::super) fn client_address_identifier(request: &Request) -> String {
         .unwrap_or_else(|| "unknown-client-address".to_string())
 }
 
-pub(in super::super) fn maybe_rate_limit_auth_rejection_before_auth(
+pub(in super::super) async fn maybe_rate_limit_auth_rejection_before_auth(
     state: &AuthAuditState,
     credentials: &RequestCredentials,
     client_address: &str,
@@ -188,10 +189,12 @@ pub(in super::super) fn maybe_rate_limit_auth_rejection_before_auth(
         return Ok(());
     };
     let client_address = keys.client_address(client_address)?;
-    limiter.check_invalid_token_for_client_address_available(&client_address)
+    limiter
+        .check_invalid_token_for_client_address_available(&client_address)
+        .await
 }
 
-pub(in super::super) fn consume_auth_rejection_after_auth_failure(
+pub(in super::super) async fn consume_auth_rejection_after_auth_failure(
     state: &AuthAuditState,
     client_address: &str,
 ) -> Result<(), crate::SelfAttestationRateLimitError> {
@@ -202,7 +205,9 @@ pub(in super::super) fn consume_auth_rejection_after_auth_failure(
         return Ok(());
     };
     let client_address = keys.client_address(client_address)?;
-    limiter.check_invalid_token_for_client_address(&client_address)
+    limiter
+        .check_invalid_token_for_client_address(&client_address)
+        .await
 }
 
 #[derive(Debug, Clone, Copy)]

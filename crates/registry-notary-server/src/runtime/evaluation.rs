@@ -563,19 +563,21 @@ impl RegistryNotaryRuntime {
             .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
             .unwrap_or(now + time::Duration::minutes(15));
         let client_id = stored_evaluation_client_id(principal, self_attestation.as_ref());
-        store.insert(registry_notary_core::StoredEvaluation {
-            client_id,
-            purpose,
-            claim_ids: request_claim_ids,
-            claim_refs: request.claims.clone(),
-            disclosure: stored_disclosure(&views),
-            format,
-            results: views.clone(),
-            created_at: format_time(now),
-            expires_at: format_time(expires_at),
-            request_hash,
-            self_attestation,
-        });
+        store
+            .insert(registry_notary_core::StoredEvaluation {
+                client_id,
+                purpose,
+                claim_ids: request_claim_ids,
+                claim_refs: request.claims.clone(),
+                disclosure: stored_disclosure(&views),
+                format,
+                results: views.clone(),
+                created_at: format_time(now),
+                expires_at: format_time(expires_at),
+                request_hash,
+                self_attestation,
+            })
+            .await?;
         Ok(views)
     }
 
@@ -676,9 +678,19 @@ impl RegistryNotaryRuntime {
             &claim_versions,
             disclosure,
         )?;
-        let idempotency_owner = if let Some(key) = scoped_key {
+        let reservation_key = scoped_key.or_else(|| {
+            store
+                .uses_postgresql()
+                .then(|| format!("notary-internal-batch:{batch_id}"))
+        });
+        let idempotency_owner = if let Some(key) = reservation_key {
             match store
-                .reserve_idempotent_batch(key, request_hash.clone())
+                .reserve_idempotent_batch(
+                    key,
+                    request_hash.clone(),
+                    &principal.principal_id,
+                    options.owner_quota,
+                )
                 .await?
             {
                 BatchIdempotencyReservation::Replay(response) => return Ok(response),
@@ -687,13 +699,21 @@ impl RegistryNotaryRuntime {
         } else {
             None
         };
-        if let Some((quota, cost)) = options.owner_quota {
+        let quota_charged_by_reservation = idempotency_owner
+            .as_ref()
+            .is_some_and(BatchIdempotencyOwner::quota_charged);
+        if let Some((quota, cost)) = options
+            .owner_quota
+            .filter(|_| !quota_charged_by_reservation)
+        {
             quota
                 .check_and_consume(&principal.principal_id, cost)
+                .await
                 .map_err(|error| EvidenceError::MachineQuotaExceeded {
                     retry_after_seconds: error.retry_after_seconds,
                 })?;
         }
+        let mut retained_evaluations = Vec::new();
         let mut join_set: JoinSet<(usize, Result<Vec<ClaimResultView>, EvidenceError>)> =
             JoinSet::new();
         for (input_index, item) in request.items.clone().into_iter().enumerate() {
@@ -771,15 +791,14 @@ impl RegistryNotaryRuntime {
                         .iter()
                         .map(|result| batch_claim_result(&evidence, result))
                         .collect::<Result<Vec<_>, EvidenceError>>()?;
-                    // Surface the per-subject evaluation in the store after we
-                    // have the result. Doing this inside the task would require
-                    // an Arc<EvidenceStore>; instead we walk results here on the
-                    // calling task which still owns the &EvidenceStore.
+                    // Retain per-subject evaluations on the calling task. An
+                    // idempotent batch publishes these and its completed
+                    // response together after all subjects finish.
                     if let Some(first) = results.first() {
                         let now_parsed = OffsetDateTime::parse(&first.issued_at, &Rfc3339)
                             .unwrap_or(OffsetDateTime::now_utc());
                         let expires_at = now_parsed + time::Duration::minutes(15);
-                        store.insert(registry_notary_core::StoredEvaluation {
+                        retained_evaluations.push(registry_notary_core::StoredEvaluation {
                             client_id: principal.principal_id.clone(),
                             purpose: subject_purposes[input_index].clone(),
                             claim_ids: request_claim_ids.clone(),
@@ -861,8 +880,13 @@ impl RegistryNotaryRuntime {
             summary: BatchSummary { succeeded, failed },
         };
         match idempotency_owner {
-            Some(owner) => owner.complete(response),
-            None => Ok(response),
+            Some(owner) => owner.complete(response, retained_evaluations).await,
+            None => {
+                for evaluation in retained_evaluations {
+                    store.insert(evaluation).await?;
+                }
+                Ok(response)
+            }
         }
     }
 
@@ -978,15 +1002,22 @@ impl RegistryNotaryRuntime {
         }
 
         let idempotency_owner = match store
-            .reserve_idempotent_batch(scoped_key, request_hash.clone())
+            .reserve_idempotent_batch(
+                scoped_key,
+                request_hash.clone(),
+                &principal.principal_id,
+                owner_quota,
+            )
             .await?
         {
             BatchIdempotencyReservation::Replay(response) => return Ok(response),
             BatchIdempotencyReservation::Owner(owner) => owner,
         };
-        if let Some((quota, cost)) = owner_quota {
+        let quota_charged_by_reservation = idempotency_owner.quota_charged();
+        if let Some((quota, cost)) = owner_quota.filter(|_| !quota_charged_by_reservation) {
             quota
                 .check_and_consume(&principal.principal_id, cost)
+                .await
                 .map_err(|error| EvidenceError::MachineQuotaExceeded {
                     retry_after_seconds: error.retry_after_seconds,
                 })?;
@@ -1027,6 +1058,7 @@ impl RegistryNotaryRuntime {
         let mut items: Vec<Option<BatchItemResponse>> = (0..subject_count).map(|_| None).collect();
         let mut succeeded = 0usize;
         let mut failed = 0usize;
+        let mut retained_evaluations = Vec::new();
         while let Some(joined) = join_set.join_next().await {
             let (input_index, result) = match joined {
                 Ok(Ok(pair)) => pair,
@@ -1061,7 +1093,7 @@ impl RegistryNotaryRuntime {
                     if let Some(first) = results.first() {
                         let now = OffsetDateTime::parse(&first.issued_at, &Rfc3339)
                             .unwrap_or_else(|_| OffsetDateTime::now_utc());
-                        store.insert(registry_notary_core::StoredEvaluation {
+                        retained_evaluations.push(registry_notary_core::StoredEvaluation {
                             client_id: principal.principal_id.clone(),
                             purpose: subject_purposes[input_index].clone(),
                             claim_ids: claim_ids(&request.claims),
@@ -1109,7 +1141,9 @@ impl RegistryNotaryRuntime {
                 .collect::<Result<Vec<_>, _>>()?,
             summary: BatchSummary { succeeded, failed },
         };
-        idempotency_owner.complete(response)
+        idempotency_owner
+            .complete(response, retained_evaluations)
+            .await
     }
 
     async fn evaluate_prepared_registry_batch_item(
@@ -1343,7 +1377,7 @@ impl RegistryNotaryRuntime {
         Ok(map)
     }
 
-    pub fn render(
+    pub async fn render(
         &self,
         evidence: &EvidenceConfig,
         store: &EvidenceStore,
@@ -1351,7 +1385,8 @@ impl RegistryNotaryRuntime {
         request: RenderRequest,
     ) -> Result<Value, EvidenceError> {
         let evaluation = store
-            .get(&request.evaluation_id)
+            .get(&request.evaluation_id, &principal.principal_id)
+            .await?
             .ok_or(EvidenceError::EvaluationNotFound)?;
         if evaluation.client_id != principal.principal_id {
             return Err(EvidenceError::EvaluationBindingMismatch);
