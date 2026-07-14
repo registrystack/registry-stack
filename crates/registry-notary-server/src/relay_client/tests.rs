@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
 use std::path::PathBuf;
+use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,6 +55,14 @@ const TRANSITION_REPLAY_REDIS_URL_ENV: &str = "REGISTRY_NOTARY_TRANSITION_REPLAY
 const RESTART_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_RESTART_API_KEY_HASH";
 const RESTART_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_RESTART_AUDIT_SECRET";
 const RESTART_REPLAY_REDIS_URL_ENV: &str = "REGISTRY_NOTARY_RESTART_REPLAY_REDIS_URL";
+const ISOLATED_TEST_KIND_ENV: &str = "REGISTRY_NOTARY_RELAY_CLIENT_ISOLATED_TEST_KIND";
+const ASSEMBLED_JOURNEY_KIND: &str = "assembled-notary-relay-journey";
+const BLUE_GREEN_JOURNEY_KIND: &str = "coordinated-blue-green-journey";
+const RESTART_JOURNEY_KIND: &str = "coordinated-restart-journey";
+const ASSEMBLED_JOURNEY_CHILD: &str = "relay_client::tests::assembled_notary_relay_journey_child";
+const BLUE_GREEN_JOURNEY_CHILD: &str = "relay_client::tests::coordinated_blue_green_journey_child";
+const RESTART_JOURNEY_CHILD: &str =
+    "relay_client::tests::coordinated_drain_and_restart_journey_child";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EvaluationIdMode {
@@ -780,39 +789,38 @@ fn all_shape_checks_pass(observation: &Observation) -> bool {
         && observation.forbidden_ambient_headers_absent
 }
 
-struct ScopedEnvironment {
-    previous: Vec<(&'static str, Option<std::ffi::OsString>)>,
+fn isolated_test_requested(kind: &str) -> bool {
+    std::env::var(ISOLATED_TEST_KIND_ENV).is_ok_and(|value| value == kind)
 }
 
-impl ScopedEnvironment {
-    fn set(values: &[(&'static str, &str)]) -> Self {
-        let previous = values
-            .iter()
-            .map(|(name, value)| {
-                let previous = std::env::var_os(name);
-                // SAFETY: these names are unique to this test module and the
-                // guard restores their previous values after the test.
-                unsafe { std::env::set_var(name, value) };
-                (*name, previous)
-            })
-            .collect();
-        Self { previous }
-    }
+async fn run_isolated_test(
+    exact_test_name: &'static str,
+    kind: &'static str,
+    environment: Vec<(&'static str, String)>,
+) -> Output {
+    tokio::task::spawn_blocking(move || {
+        let mut command = Command::new(std::env::current_exe().expect("test executable resolves"));
+        command
+            .arg(exact_test_name)
+            .arg("--exact")
+            .arg("--ignored")
+            .env(ISOLATED_TEST_KIND_ENV, kind)
+            .envs(environment);
+        command.output().expect("isolated test process starts")
+    })
+    .await
+    .expect("isolated test process join succeeds")
 }
 
-impl Drop for ScopedEnvironment {
-    fn drop(&mut self) {
-        for (name, value) in self.previous.drain(..).rev() {
-            // SAFETY: this guard exclusively owns the unique test variables.
-            unsafe {
-                if let Some(value) = value {
-                    std::env::set_var(name, value);
-                } else {
-                    std::env::remove_var(name);
-                }
-            }
-        }
-    }
+fn assert_isolated_test_passed(output: Output, exact_test_name: &str) {
+    assert!(output.status.success(), "isolated test process passes");
+    let stdout = String::from_utf8(output.stdout).expect("isolated test output is UTF-8");
+    assert!(
+        stdout
+            .lines()
+            .any(|line| line == format!("test {exact_test_name} ... ok")),
+        "isolated test process ran the exact expected child"
+    );
 }
 
 fn assembled_notary_config(
@@ -940,11 +948,33 @@ evidence:
 
 #[tokio::test]
 async fn assembled_notary_relay_journey_activates_and_coalesces_two_claims() {
+    let status = run_isolated_test(
+        ASSEMBLED_JOURNEY_CHILD,
+        ASSEMBLED_JOURNEY_KIND,
+        vec![
+            (NOTARY_API_KEY_HASH_ENV, fingerprint_api_key(NOTARY_API_KEY)),
+            (
+                NOTARY_AUDIT_SECRET_ENV,
+                "0123456789abcdef0123456789abcdef".to_string(),
+            ),
+        ],
+    )
+    .await;
+    assert_isolated_test_passed(status, ASSEMBLED_JOURNEY_CHILD);
+}
+
+#[tokio::test]
+#[ignore = "invoked by the isolated parent journey"]
+async fn assembled_notary_relay_journey_child() {
+    if !isolated_test_requested(ASSEMBLED_JOURNEY_KIND) {
+        return;
+    }
     let api_key_fingerprint = fingerprint_api_key(NOTARY_API_KEY);
-    let _environment = ScopedEnvironment::set(&[
-        (NOTARY_API_KEY_HASH_ENV, &api_key_fingerprint),
-        (NOTARY_AUDIT_SECRET_ENV, "0123456789abcdef0123456789abcdef"),
-    ]);
+    assert_eq!(
+        std::env::var(NOTARY_API_KEY_HASH_ENV).as_deref(),
+        Ok(api_key_fingerprint.as_str()),
+        "isolated child receives the expected synthetic API-key fingerprint"
+    );
     let token_file = TestTokenFile::new(&test_token());
     let relay =
         FakeRelay::start_echoing_evaluation_id(metadata_response(), result_response()).await;
@@ -1060,16 +1090,39 @@ async fn assert_generation_ready_and_serving(notary: &TestServer) {
 
 #[tokio::test]
 async fn coordinated_blue_green_never_serves_mixed_contract_generations() {
-    let api_key_fingerprint = fingerprint_api_key(NOTARY_API_KEY);
     let replay = FakeRedis::start().await;
-    let _environment = ScopedEnvironment::set(&[
-        (TRANSITION_API_KEY_HASH_ENV, &api_key_fingerprint),
-        (
-            TRANSITION_AUDIT_SECRET_ENV,
-            "abcdef0123456789abcdef0123456789",
-        ),
-        (TRANSITION_REPLAY_REDIS_URL_ENV, &replay.url),
-    ]);
+    let status = run_isolated_test(
+        BLUE_GREEN_JOURNEY_CHILD,
+        BLUE_GREEN_JOURNEY_KIND,
+        vec![
+            (
+                TRANSITION_API_KEY_HASH_ENV,
+                fingerprint_api_key(NOTARY_API_KEY),
+            ),
+            (
+                TRANSITION_AUDIT_SECRET_ENV,
+                "abcdef0123456789abcdef0123456789".to_string(),
+            ),
+            (TRANSITION_REPLAY_REDIS_URL_ENV, replay.url.clone()),
+        ],
+    )
+    .await;
+    replay.shutdown().await;
+    assert_isolated_test_passed(status, BLUE_GREEN_JOURNEY_CHILD);
+}
+
+#[tokio::test]
+#[ignore = "invoked by the isolated parent journey"]
+async fn coordinated_blue_green_journey_child() {
+    if !isolated_test_requested(BLUE_GREEN_JOURNEY_KIND) {
+        return;
+    }
+    let api_key_fingerprint = fingerprint_api_key(NOTARY_API_KEY);
+    assert_eq!(
+        std::env::var(TRANSITION_API_KEY_HASH_ENV).as_deref(),
+        Ok(api_key_fingerprint.as_str()),
+        "isolated child receives the expected synthetic API-key fingerprint"
+    );
     let token_file = TestTokenFile::new(&test_token());
     let old_contract = contract_value();
     let old_hash = typed_hash(CONTRACT_DOMAIN, &old_contract);
@@ -1174,18 +1227,43 @@ async fn coordinated_blue_green_never_serves_mixed_contract_generations() {
     drop(green_notary);
     blue.shutdown().await;
     green.shutdown().await;
-    replay.shutdown().await;
 }
 
 #[tokio::test]
 async fn coordinated_drain_and_restart_keeps_partial_generation_unavailable() {
-    let api_key_fingerprint = fingerprint_api_key(NOTARY_API_KEY);
     let replay = FakeRedis::start().await;
-    let _environment = ScopedEnvironment::set(&[
-        (RESTART_API_KEY_HASH_ENV, &api_key_fingerprint),
-        (RESTART_AUDIT_SECRET_ENV, "fedcba9876543210fedcba9876543210"),
-        (RESTART_REPLAY_REDIS_URL_ENV, &replay.url),
-    ]);
+    let status = run_isolated_test(
+        RESTART_JOURNEY_CHILD,
+        RESTART_JOURNEY_KIND,
+        vec![
+            (
+                RESTART_API_KEY_HASH_ENV,
+                fingerprint_api_key(NOTARY_API_KEY),
+            ),
+            (
+                RESTART_AUDIT_SECRET_ENV,
+                "fedcba9876543210fedcba9876543210".to_string(),
+            ),
+            (RESTART_REPLAY_REDIS_URL_ENV, replay.url.clone()),
+        ],
+    )
+    .await;
+    replay.shutdown().await;
+    assert_isolated_test_passed(status, RESTART_JOURNEY_CHILD);
+}
+
+#[tokio::test]
+#[ignore = "invoked by the isolated parent journey"]
+async fn coordinated_drain_and_restart_journey_child() {
+    if !isolated_test_requested(RESTART_JOURNEY_KIND) {
+        return;
+    }
+    let api_key_fingerprint = fingerprint_api_key(NOTARY_API_KEY);
+    assert_eq!(
+        std::env::var(RESTART_API_KEY_HASH_ENV).as_deref(),
+        Ok(api_key_fingerprint.as_str()),
+        "isolated child receives the expected synthetic API-key fingerprint"
+    );
     let token_file = TestTokenFile::new(&test_token());
     let old_contract = contract_value();
     let old_hash = typed_hash(CONTRACT_DOMAIN, &old_contract);
@@ -1278,7 +1356,6 @@ async fn coordinated_drain_and_restart_keeps_partial_generation_unavailable() {
 
     drop(successor_notary);
     relay.shutdown().await;
-    replay.shutdown().await;
 }
 
 #[tokio::test]
