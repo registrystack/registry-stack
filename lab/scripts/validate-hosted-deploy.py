@@ -25,17 +25,12 @@ REQUIRED_SERVICES = {
         "config-loader",
         "postgres",
         "redis",
-        "civil-notary",
         "citizen-portal",
-        "citizen-civil-notary",
         "civil-registry-relay",
         "health-registry-relay",
+        "self-attested-notary",
         "static-metadata-publisher",
-        "lab-homepage",
         "zitadel",
-        "openfn-dhis2-sidecar",
-        "dhis2-health-notary",
-        "opencrvs-dci-notary",
     },
     "esignet": {
         "config-loader",
@@ -47,16 +42,11 @@ REQUIRED_SERVICES = {
     },
     "social": {
         "config-loader",
-        "redis",
-        "shared-eligibility-notary",
-        "social-protection-notary",
         "social-protection-registry-relay",
     },
     "agri": {
         "config-loader",
-        "redis",
         "agri-registry-relay",
-        "nagdi-agriculture-notary",
     },
     "walt": {
         "walt-postgres",
@@ -69,27 +59,21 @@ REQUIRED_SERVICES = {
 REQUIRED_DOMAINS = {
     "registry-lab": {
         "citizen-portal": f"portal.{LAB_DOMAIN}",
-        "citizen-civil-notary": f"citizen-notary.{LAB_DOMAIN}",
         "civil-registry-relay": f"civil-relay.{LAB_DOMAIN}",
         "health-registry-relay": f"health-relay.{LAB_DOMAIN}",
+        "self-attested-notary": f"self-attested-notary.{LAB_DOMAIN}",
         "static-metadata-publisher": f"metadata.{LAB_DOMAIN}",
-        "lab-homepage": LAB_DOMAIN,
         "zitadel": f"zitadel.{LAB_DOMAIN}",
-        "dhis2-health-notary": f"dhis2-notary.{LAB_DOMAIN}",
-        "opencrvs-dci-notary": f"opencrvs-notary.{LAB_DOMAIN}",
     },
     "esignet": {
         "esignet": f"esignet.{LAB_DOMAIN}",
         "esignet-ui": f"esignet-ui.{LAB_DOMAIN}",
     },
     "social": {
-        "shared-eligibility-notary": f"shared-notary.{LAB_DOMAIN}",
-        "social-protection-notary": f"social-notary.{LAB_DOMAIN}",
         "social-protection-registry-relay": f"social-relay.{LAB_DOMAIN}",
     },
     "agri": {
         "agri-registry-relay": f"agri-relay.{LAB_DOMAIN}",
-        "nagdi-agriculture-notary": f"agriculture-notary.{LAB_DOMAIN}",
     },
     "walt": {
         "caddy": f"wallet.{LAB_DOMAIN}",
@@ -99,7 +83,6 @@ REQUIRED_DOMAINS = {
 REQUIRED_HOSTED_VARIABLES = {
     "registry-lab": {
         "AGRI_AGGREGATE_READER_RAW",
-        "AGRI_EVIDENCE_CLIENT_BEARER",
         "AGRI_EVIDENCE_ONLY_RAW",
         "AGRI_METADATA_CLIENT_RAW",
         "AGRI_ROW_READER_RAW",
@@ -110,8 +93,6 @@ REQUIRED_HOSTED_VARIABLES = {
         "REGISTRY_NOTARY_ISSUER_JWK",
         "REGISTRY_NOTARY_ACCESS_TOKEN_JWK",
         "REGISTRY_NOTARY_ESIGNET_RP_JWK",
-        "CIVIL_EVIDENCE_CLIENT_BEARER",
-        "CIVIL_EVIDENCE_CLIENT_BEARER_HASH",
         "CIVIL_EVIDENCE_SOURCE_RAW",
         "CIVIL_METADATA_CLIENT_RAW",
         "CIVIL_EVIDENCE_ONLY_RAW",
@@ -119,32 +100,12 @@ REQUIRED_HOSTED_VARIABLES = {
         "CIVIL_ESIGNET_IDENTITY_RELEASE_RAW",
         "SOCIAL_METADATA_CLIENT_RAW",
         "SOCIAL_EVIDENCE_ONLY_RAW",
-        "SOCIAL_EVIDENCE_CLIENT_BEARER",
-        "SOCIAL_EVIDENCE_CLIENT_BEARER_HASH",
-        "SOCIAL_EVIDENCE_CLIENT_TOKEN",
-        "SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH",
         "SOCIAL_EVIDENCE_SOURCE_RAW",
         "SOCIAL_ROW_READER_RAW",
         "SOCIAL_AGGREGATE_READER_RAW",
-        "SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET",
-        "SOCIAL_FEDERATION_RESPONSE_JWK",
         "HEALTH_METADATA_CLIENT_RAW",
         "HEALTH_EVIDENCE_ONLY_RAW",
         "HEALTH_ROW_READER_RAW",
-        "DHIS2_EVIDENCE_CLIENT_TOKEN",
-        "DHIS2_EVIDENCE_CLIENT_BEARER",
-        "OPENCRVS_EVIDENCE_CLIENT_TOKEN",
-        "OPENFN_SIDECAR_TOKEN_HASH",
-        "OPENFN_SIDECAR_TOKEN_RAW",
-        "OPENFN_DHIS2_USERNAME",
-        "OPENFN_DHIS2_PASSWORD",
-        "DHIS2_EVIDENCE_CLIENT_TOKEN_HASH",
-        "DHIS2_EVIDENCE_CLIENT_BEARER_HASH",
-        "OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH",
-        "OPENCRVS_DCI_BASE_URL",
-        "OPENCRVS_DCI_CLIENT_ID",
-        "OPENCRVS_DCI_CLIENT_SECRET",
-        "OPENCRVS_DCI_SHA_SECRET",
         "REGISTRY_RELAY_AUDIT_HASH_SECRET",
         "CIVIL_METADATA_CLIENT_HASH",
         "CIVIL_EVIDENCE_SOURCE_HASH",
@@ -153,9 +114,6 @@ REQUIRED_HOSTED_VARIABLES = {
         "CIVIL_ROW_READER_HASH",
         "SHARED_CIVIL_EVIDENCE_SOURCE_HASH",
         "SHARED_CIVIL_EVIDENCE_SOURCE_RAW",
-        "SHARED_EVIDENCE_CLIENT_BEARER",
-        "SHARED_EVIDENCE_CLIENT_BEARER_HASH",
-        "SHARED_EVIDENCE_CLIENT_TOKEN_HASH",
         "SOCIAL_METADATA_CLIENT_HASH",
         "SOCIAL_EVIDENCE_SOURCE_HASH",
         "SOCIAL_EVIDENCE_ONLY_HASH",
@@ -169,6 +127,7 @@ REQUIRED_HOSTED_VARIABLES = {
         "HEALTH_ROW_READER_HASH",
         "SHARED_HEALTH_EVIDENCE_SOURCE_HASH",
         "SHARED_HEALTH_EVIDENCE_SOURCE_RAW",
+        "SELF_ATTESTED_EVIDENCE_CLIENT_TOKEN_HASH",
     },
     "esignet": {
         "CIVIL_ESIGNET_IDENTITY_RELEASE_RAW",
@@ -181,39 +140,20 @@ REQUIRED_HOSTED_VARIABLES = {
         "REGISTRY_LAB_ESIGNET_CLIENT_REDIRECT_URIS_JSON",
     },
     "social": {
-        "REGISTRY_NOTARY_AUDIT_HASH_SECRET",
-        "REGISTRY_NOTARY_ISSUER_JWK",
         "REGISTRY_RELAY_AUDIT_HASH_SECRET",
-        "SHARED_CIVIL_EVIDENCE_SOURCE_RAW",
-        "SHARED_EVIDENCE_CLIENT_BEARER_HASH",
-        "SHARED_EVIDENCE_CLIENT_TOKEN_HASH",
-        "SHARED_HEALTH_EVIDENCE_SOURCE_RAW",
         "SHARED_SOCIAL_EVIDENCE_SOURCE_HASH",
-        "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW",
         "SOCIAL_AGGREGATE_READER_HASH",
-        "SOCIAL_EVIDENCE_CLIENT_BEARER_HASH",
-        "SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH",
         "SOCIAL_EVIDENCE_ONLY_HASH",
         "SOCIAL_EVIDENCE_SOURCE_HASH",
-        "SOCIAL_EVIDENCE_SOURCE_RAW",
-        "SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET",
-        "SOCIAL_FEDERATION_RESPONSE_JWK",
         "SOCIAL_METADATA_CLIENT_HASH",
         "SOCIAL_ROW_READER_HASH",
     },
     "agri": {
         "AGRI_AGGREGATE_READER_HASH",
-        "AGRI_EVIDENCE_CLIENT_BEARER_HASH",
-        "AGRI_EVIDENCE_CLIENT_TOKEN_HASH",
         "AGRI_EVIDENCE_ONLY_HASH",
         "AGRI_EVIDENCE_SOURCE_HASH",
-        "AGRI_EVIDENCE_SOURCE_RAW",
-        "AGRI_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET",
-        "AGRI_FEDERATION_RESPONSE_JWK",
         "AGRI_METADATA_CLIENT_HASH",
         "AGRI_ROW_READER_HASH",
-        "REGISTRY_NOTARY_AUDIT_HASH_SECRET",
-        "REGISTRY_NOTARY_ISSUER_JWK",
         "REGISTRY_RELAY_AUDIT_HASH_SECRET",
     },
     "walt": {
@@ -230,14 +170,10 @@ ALLOWED_INTERIM_PRODUCT_IMAGES = {
     "registry-lab-citizen-portal:hosted",
     "registry-relay:hosted",
     "registry-notary:hosted",
-    "registry-notary-openfn-sidecar:hosted",
-    "registry-notary-source-adapter-sidecar:hosted",
 }
 
 PRODUCT_IMAGE_NAMES = (
     "registry-lab-citizen-portal",
-    "registry-notary-openfn-sidecar",
-    "registry-notary-source-adapter-sidecar",
     "registry-relay",
     "registry-notary",
 )
@@ -245,8 +181,6 @@ PRODUCT_IMAGE_ENV_BY_NAME = {
     "registry-lab-citizen-portal": "REGISTRY_LAB_CITIZEN_PORTAL_IMAGE",
     "registry-relay": "REGISTRY_RELAY_IMAGE",
     "registry-notary": "REGISTRY_NOTARY_IMAGE",
-    "registry-notary-openfn-sidecar": "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE",
-    "registry-notary-source-adapter-sidecar": "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE",
 }
 
 PUBLIC_KEYWORDS = (
@@ -301,34 +235,7 @@ HOSTED_CONFIG_DIRS = (
     Path("config/coolify/notary"),
     Path("config/coolify/relay"),
 )
-NOTARY_DCI_CONNECTION_KEYS = {
-    "search_path",
-    "sender_id",
-    "receiver_id",
-    "query_type",
-    "records_path",
-    "bulk_records_path",
-    "max_results",
-    "registry_type",
-    "registry_event_type",
-    "record_type",
-    "field_paths",
-    "signature",
-}
-NOTARY_SOURCE_BINDING_CONNECTORS = {
-    "registry_data_api",
-    "dci",
-    "source_adapter_sidecar",
-}
-DHIS2_PROGRAMME_PROFILE = "dhis2_programme_participation_sd_jwt"
-DHIS2_PROGRAMME_CLAIMS = {
-    "dhis2-tracked-entity-first-name",
-    "dhis2-tracked-entity-last-name",
-    "dhis2-child-age-band",
-    "dhis2-programme-code",
-    "dhis2-child-program-active",
-    "dhis2-reconciliation-ref",
-}
+
 ATTESTATION_METADATA_CONTRACT = {
     "civil_child_status_evidence_service": {
         "title": "Vital Status Attestation",
@@ -435,34 +342,12 @@ def validate_artifacts(
             )
         )
         issues.extend(validate_runtime_commands(artifact, services))
-        issues.extend(validate_openfn_sidecar_governance(artifact, services, root))
         issues.extend(validate_repo_output_binds(artifact, services))
         issues.extend(validate_public_urls(artifact, compose, root))
         issues.extend(validate_hosted_openapi_policy(artifact, services, root))
-        issues.extend(
-            validate_civil_alive_scenario_contract(
-                artifact,
-                compose,
-                services,
-                root,
-                artifact_texts.get(artifact, ""),
-            )
-        )
-        issues.extend(
-            validate_hosted_social_combined_scenario_contract(
-                artifact,
-                compose,
-                services,
-                root,
-                artifact_texts.get(artifact, ""),
-            )
-        )
         issues.extend(validate_config_loader_ref(artifact, services))
         issues.extend(validate_lab_homepage_config_ref(artifact, services))
-        issues.extend(validate_config_loader_hosted_outputs(artifact, services))
         issues.extend(validate_hosted_yaml_files(artifact, root))
-        issues.extend(validate_hosted_notary_config_schema_contract(artifact, root))
-        issues.extend(validate_dhis2_programme_vc_contract(artifact, root))
         issues.extend(validate_attestation_metadata_contract(artifact, root))
         if require_secret_values:
             issues.extend(validate_credential_fingerprints(artifact, root, env))
@@ -712,206 +597,6 @@ def validate_runtime_commands(artifact: str, services: dict[str, Any]) -> list[I
     return issues
 
 
-def validate_openfn_sidecar_governance(
-    artifact: str,
-    services: dict[str, Any],
-    root: Path,
-) -> list[Issue]:
-    if artifact != "registry-lab":
-        return []
-    openfn = services.get("openfn-dhis2-sidecar")
-    if not isinstance(openfn, dict):
-        return []
-
-    issues: list[Issue] = []
-    command_text = shell_command_text(openfn.get("command"))
-    if "--allow-unsigned-dev-config" in command_text:
-        issues.append(
-            Issue(
-                "hosted-openfn-unsigned-dev-config",
-                artifact,
-                "services.openfn-dhis2-sidecar.command",
-                "hosted OpenFn sidecar must start from the pinned bootstrap config, not unsigned dev config",
-            )
-        )
-    if "openfn-dhis2-sidecar.bootstrap.yaml" not in command_text:
-        issues.append(
-            Issue(
-                "missing-openfn-governed-bootstrap",
-                artifact,
-                "services.openfn-dhis2-sidecar.command",
-                "hosted OpenFn sidecar must use the governed bootstrap config",
-            )
-        )
-    required_mounts = {
-        "/etc/registry-notary-openfn",
-        "/var/lib/registry-notary-openfn-sidecar/audit",
-    }
-    for target in sorted(required_mounts):
-        if not service_mounts_target(openfn, target):
-            issues.append(
-                Issue(
-                    "missing-openfn-governed-mount",
-                    artifact,
-                    "services.openfn-dhis2-sidecar.volumes",
-                    f"hosted OpenFn sidecar must mount {target}",
-                )
-            )
-
-    bootstrap = root / "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml"
-    notary = root / "config/coolify/notary/dhis2-health-notary.yaml"
-    try:
-        bootstrap_config = load_yaml_mapping(bootstrap)
-        notary_config = load_yaml_mapping(notary)
-    except Exception as exc:
-        issues.append(
-            Issue(
-                "unreadable-openfn-bootstrap-artifact",
-                artifact,
-                "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml",
-                f"could not read hosted OpenFn sidecar artifacts: {exc}",
-            )
-        )
-        return issues
-
-    if "config_trust" in bootstrap_config:
-        issues.append(
-            Issue(
-                "hosted-openfn-legacy-config-trust",
-                artifact,
-                "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml",
-                "hosted OpenFn sidecar bootstrap must not use retired config_trust startup",
-            )
-        )
-    assurance = extract_openfn_assurance_scalars(bootstrap_config)
-    if not assurance:
-        issues.append(
-            Issue(
-                "missing-openfn-assurance-config",
-                artifact,
-                "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml",
-                "hosted OpenFn sidecar bootstrap must expose local assurance for the Notary pin",
-            )
-        )
-    audit = bootstrap_config.get("audit")
-    if (
-        not isinstance(audit, dict)
-        or audit.get("sink") not in ("file", "jsonl")
-        or not audit.get("path")
-        or not audit.get("hash_secret_env")
-    ):
-        issues.append(
-            Issue(
-                "missing-openfn-audit-config",
-                artifact,
-                "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml",
-                "governed OpenFn sidecar bootstrap must include a durable file audit sink",
-            )
-        )
-    limits = bootstrap_config.get("limits")
-    sources = bootstrap_config.get("sources")
-    if (
-        not isinstance(limits, dict)
-        or not isinstance(sources, dict)
-        or "dhis2_health" not in sources
-    ):
-        issues.append(
-            Issue(
-                "missing-openfn-runtime-config",
-                artifact,
-                "config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml",
-                "hosted OpenFn sidecar bootstrap must include the runtime limits and dhis2_health source",
-            )
-        )
-
-    expected = extract_openfn_expected_sidecar_scalars(notary_config)
-    if not expected:
-        issues.append(
-            Issue(
-                "missing-openfn-expected-sidecar",
-                artifact,
-                "config/coolify/notary/dhis2-health-notary.yaml",
-                "hosted DHIS2 Notary must pin expected_sidecar for the OpenFn sidecar",
-            )
-        )
-        return issues
-
-    expected_hash = assurance.get("config_hash")
-    if expected.get("config_hash") != expected_hash:
-        issues.append(
-            Issue(
-                "openfn-sidecar-hash-mismatch",
-                artifact,
-                "config/coolify/notary/dhis2-health-notary.yaml",
-                "hosted DHIS2 Notary expected_sidecar.config_hash must match the sidecar bootstrap assurance",
-            )
-        )
-    for key in (
-        "require_expression_hashes_verified",
-        "require_runtime_verified",
-        "require_smoke_verified",
-    ):
-        if expected.get(key) not in (True, "true"):
-            issues.append(
-                Issue(
-                    "openfn-sidecar-assurance-not-required",
-                    artifact,
-                    f"config/coolify/notary/dhis2-health-notary.yaml:{key}",
-                    "hosted DHIS2 Notary must require expression, runtime, and smoke assurance",
-                )
-            )
-    for key in ("product", "instance_id", "environment", "stream_id"):
-        if expected.get(key) != assurance.get(key):
-            issues.append(
-                Issue(
-                    "openfn-sidecar-identity-mismatch",
-                    artifact,
-                    f"config/coolify/notary/dhis2-health-notary.yaml:{key}",
-                    "hosted DHIS2 Notary expected_sidecar identity must match sidecar assurance",
-                )
-            )
-    for key in ("expression_hashes_verified", "runtime_verified", "smoke_verified"):
-        if assurance.get(key) not in (True, "true"):
-            issues.append(
-                Issue(
-                    "openfn-sidecar-assurance-not-true",
-                    artifact,
-                    f"config/coolify/openfn/openfn-dhis2-sidecar.bootstrap.yaml:{key}",
-                    "hosted OpenFn sidecar assurance must mark expression, runtime, and smoke checks verified",
-                )
-            )
-    return issues
-
-
-def extract_openfn_assurance_scalars(config: dict[str, Any]) -> dict[str, Any]:
-    assurance = config.get("assurance")
-    if not isinstance(assurance, dict):
-        return {}
-    return {
-        key: assurance.get(key)
-        for key in (
-            "product",
-            "instance_id",
-            "environment",
-            "stream_id",
-            "config_hash",
-            "expression_hashes_verified",
-            "runtime_verified",
-            "smoke_verified",
-        )
-        if assurance.get(key) is not None
-    }
-
-
-def extract_openfn_expected_sidecar_scalars(config: dict[str, Any]) -> dict[str, Any]:
-    expected = nested_get(
-        config,
-        ("evidence", "source_connections", "dhis2_openfn", "expected_sidecar"),
-    )
-    if not isinstance(expected, dict):
-        return {}
-    return expected
-
 
 def validate_repo_output_binds(artifact: str, services: dict[str, Any]) -> list[Issue]:
     issues = []
@@ -1007,391 +692,6 @@ def validate_hosted_openapi_policy(
     return issues
 
 
-def validate_hosted_notary_config_schema_contract(
-    artifact: str,
-    root: Path,
-) -> list[Issue]:
-    if artifact != "registry-lab":
-        return []
-    issues: list[Issue] = []
-    directory = root / "config/coolify/notary"
-    if not directory.exists():
-        return issues
-    for config_path in sorted(directory.glob("*.yaml")):
-        try:
-            config = load_yaml_mapping_strict(config_path)
-        except Exception:
-            continue
-        evidence = config.get("evidence")
-        if not isinstance(evidence, dict):
-            continue
-        source_connections = evidence.get("source_connections")
-        if not isinstance(source_connections, dict):
-            continue
-        for connection_name, connection in source_connections.items():
-            if not isinstance(connection, dict):
-                continue
-            dci = connection.get("dci")
-            if not isinstance(dci, dict):
-                continue
-            unsupported_keys = sorted(set(dci) - NOTARY_DCI_CONNECTION_KEYS)
-            for key in unsupported_keys:
-                issues.append(
-                    Issue(
-                        "unsupported-notary-dci-field",
-                        artifact,
-                        f"{config_path.relative_to(root)}:evidence.source_connections.{connection_name}.dci.{key}",
-                        f"hosted Notary DCI connection uses unsupported field {key!r}",
-                    )
-                )
-        claim_purposes: dict[str, str] = {}
-        claims = evidence.get("claims")
-        if isinstance(claims, list):
-            for claim in claims:
-                if not isinstance(claim, dict):
-                    continue
-                claim_id = claim.get("id")
-                purpose = claim.get("purpose")
-                if isinstance(claim_id, str) and isinstance(purpose, str):
-                    claim_purposes[claim_id] = purpose
-                source_bindings = claim.get("source_bindings")
-                if not isinstance(source_bindings, dict):
-                    continue
-                for binding_name, binding in source_bindings.items():
-                    if not isinstance(binding, dict):
-                        continue
-                    connector = binding.get("connector")
-                    if (
-                        isinstance(connector, str)
-                        and connector not in NOTARY_SOURCE_BINDING_CONNECTORS
-                    ):
-                        issues.append(
-                            Issue(
-                                "unsupported-notary-source-connector",
-                                artifact,
-                                f"{config_path.relative_to(root)}:evidence.claims.{claim_id}.source_bindings.{binding_name}.connector",
-                                f"hosted Notary source binding uses unsupported connector {connector!r}",
-                            )
-                        )
-        self_attestation = config.get("self_attestation")
-        if isinstance(self_attestation, dict):
-            allowed_purposes = {
-                purpose
-                for purpose in self_attestation.get("allowed_purposes") or []
-                if isinstance(purpose, str)
-            }
-            allowed_claims = self_attestation.get("allowed_claims")
-            if allowed_purposes and isinstance(allowed_claims, list):
-                for claim_id in allowed_claims:
-                    if not isinstance(claim_id, str):
-                        continue
-                    purpose = claim_purposes.get(claim_id)
-                    if purpose is None or purpose in allowed_purposes:
-                        continue
-                    issues.append(
-                        Issue(
-                            "self-attestation-claim-purpose-unallowed",
-                            artifact,
-                            f"{config_path.relative_to(root)}:self_attestation.allowed_claims.{claim_id}",
-                            (
-                                f"hosted Notary self-attestation allows claim {claim_id!r} "
-                                f"with unallowed purpose {purpose!r}"
-                            ),
-                        )
-                    )
-    return issues
-
-
-def validate_civil_alive_scenario_contract(
-    artifact: str,
-    compose: dict[str, Any],
-    services: dict[str, Any],
-    root: Path,
-    raw_text: str = "",
-) -> list[Issue]:
-    if artifact != "registry-lab":
-        return []
-
-    issues: list[Issue] = []
-    lab_homepage = services.get("lab-homepage")
-    civil_notary = services.get("civil-notary")
-
-    if isinstance(lab_homepage, dict):
-        env = normalize_environment(lab_homepage.get("environment"))
-        if env.get("CIVIL_EVIDENCE_URL") != "http://civil-notary:8080":
-            issues.append(
-                Issue(
-                    "missing-civil-alive-notary-url",
-                    artifact,
-                    "services.lab-homepage.environment.CIVIL_EVIDENCE_URL",
-                    "alive-proof Step 2 must call the internal civil-notary evidence API",
-                )
-            )
-        if not environment_uses_rendered_or_referenced_secret(
-            raw_text,
-            "lab-homepage",
-            env,
-            "CIVIL_EVIDENCE_CLIENT_BEARER",
-        ):
-            issues.append(
-                Issue(
-                    "missing-civil-alive-notary-bearer",
-                    artifact,
-                    "services.lab-homepage.environment.CIVIL_EVIDENCE_CLIENT_BEARER",
-                    "alive-proof Step 2 must receive the hosted civil Notary bearer token",
-                )
-            )
-    if isinstance(civil_notary, dict):
-        env = normalize_environment(civil_notary.get("environment"))
-        if not environment_uses_rendered_or_referenced_secret(
-            raw_text,
-            "civil-notary",
-            env,
-            "CIVIL_EVIDENCE_CLIENT_BEARER_HASH",
-            required_prefix="sha256:",
-        ):
-            issues.append(
-                Issue(
-                    "missing-civil-notary-bearer-hash",
-                    artifact,
-                    "services.civil-notary.environment.CIVIL_EVIDENCE_CLIENT_BEARER_HASH",
-                    "hosted civil-notary must verify the bearer token used by alive-proof Step 2",
-                )
-            )
-        if hosted_notary_config_path(root, civil_notary) != root / "config/coolify/notary/civil-notary.yaml":
-            issues.append(
-                Issue(
-                    "missing-civil-notary-config",
-                    artifact,
-                    "services.civil-notary.command",
-                    "hosted civil-notary must start with config/coolify/notary/civil-notary.yaml",
-                )
-            )
-    return issues
-
-
-def validate_hosted_social_combined_scenario_contract(
-    artifact: str,
-    compose: dict[str, Any],
-    services: dict[str, Any],
-    root: Path,
-    raw_text: str = "",
-) -> list[Issue]:
-    del compose
-    if artifact != "registry-lab":
-        return []
-
-    issues: list[Issue] = []
-    lab_homepage = services.get("lab-homepage")
-    shared_notary = services.get("shared-eligibility-notary")
-
-    if isinstance(lab_homepage, dict):
-        env = normalize_environment(lab_homepage.get("environment"))
-        # The social relay and shared Notary moved to the per-track lab-social
-        # Coolify app, so the monolith homepage reaches them over public HTTPS.
-        expected_homepage_env = {
-            "SOCIAL_RELAY_URL": f"https://social-relay.{LAB_DOMAIN}",
-            "SHARED_EVIDENCE_URL": f"https://shared-notary.{LAB_DOMAIN}",
-        }
-        for variable, expected in sorted(expected_homepage_env.items()):
-            if env.get(variable) != expected:
-                issues.append(
-                    Issue(
-                        "missing-hosted-scenario-url",
-                        artifact,
-                        f"services.lab-homepage.environment.{variable}",
-                        f"hosted scenario runner must set {variable} to {expected}",
-                    )
-                )
-        if not environment_uses_rendered_or_referenced_secret(
-            raw_text,
-            "lab-homepage",
-            env,
-            "SHARED_EVIDENCE_CLIENT_BEARER",
-        ):
-            issues.append(
-                Issue(
-                    "missing-combined-support-bearer",
-                    artifact,
-                    "services.lab-homepage.environment.SHARED_EVIDENCE_CLIENT_BEARER",
-                    "combined-support must receive the hosted shared Notary bearer token",
-                )
-            )
-
-    if isinstance(shared_notary, dict):
-        env = normalize_environment(shared_notary.get("environment"))
-        expected_hashes = (
-            "SHARED_EVIDENCE_CLIENT_TOKEN_HASH",
-            "SHARED_EVIDENCE_CLIENT_BEARER_HASH",
-        )
-        for variable in expected_hashes:
-            if not environment_uses_rendered_or_referenced_secret(
-                raw_text,
-                "shared-eligibility-notary",
-                env,
-                variable,
-                required_prefix="sha256:",
-            ):
-                issues.append(
-                    Issue(
-                        "missing-shared-notary-client-hash",
-                        artifact,
-                        f"services.shared-eligibility-notary.environment.{variable}",
-                        f"hosted shared Notary must verify {variable}",
-                    )
-                )
-        for variable in (
-            "SHARED_CIVIL_EVIDENCE_SOURCE_RAW",
-            "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW",
-            "SHARED_HEALTH_EVIDENCE_SOURCE_RAW",
-        ):
-            if not environment_uses_rendered_or_referenced_secret(
-                raw_text,
-                "shared-eligibility-notary",
-                env,
-                variable,
-            ):
-                issues.append(
-                    Issue(
-                        "missing-shared-notary-source-token",
-                        artifact,
-                        f"services.shared-eligibility-notary.environment.{variable}",
-                        f"hosted shared Notary must receive {variable}",
-                    )
-                )
-        if hosted_notary_config_path(root, shared_notary) != root / "config/coolify/notary/shared-eligibility-notary.yaml":
-            issues.append(
-                Issue(
-                    "missing-shared-notary-config",
-                    artifact,
-                    "services.shared-eligibility-notary.command",
-                    "hosted shared-eligibility-notary must start with config/coolify/notary/shared-eligibility-notary.yaml",
-                )
-            )
-        issues.extend(validate_shared_notary_hosted_config(root))
-        issues.extend(validate_shared_notary_hosted_metadata(root))
-    return issues
-
-
-def validate_shared_notary_hosted_config(root: Path) -> list[Issue]:
-    path = root / "config/coolify/notary/shared-eligibility-notary.yaml"
-    try:
-        config = load_yaml_mapping_strict(path)
-    except Exception as exc:
-        return [
-            Issue(
-                "unreadable-shared-notary-config",
-                "registry-lab",
-                "config/coolify/notary/shared-eligibility-notary.yaml",
-                f"could not read hosted shared Notary config: {exc}",
-            )
-        ]
-
-    issues: list[Issue] = []
-    evidence = config.get("evidence") if isinstance(config.get("evidence"), dict) else {}
-    if evidence.get("api_base_url") != f"https://shared-notary.{LAB_DOMAIN}":
-        issues.append(
-            Issue(
-                "shared-notary-public-url-mismatch",
-                "registry-lab",
-                "config/coolify/notary/shared-eligibility-notary.yaml:evidence.api_base_url",
-                "hosted shared Notary must advertise the shared-notary hosted domain",
-            )
-        )
-    profiles = evidence.get("credential_profiles") if isinstance(evidence.get("credential_profiles"), dict) else {}
-    combined_profile = profiles.get("combined_support_sd_jwt") if isinstance(profiles, dict) else {}
-    if not isinstance(combined_profile, dict) or combined_profile.get("issuer") != f"did:web:shared-notary.{LAB_DOMAIN}":
-        issues.append(
-            Issue(
-                "shared-notary-issuer-mismatch",
-                "registry-lab",
-                "config/coolify/notary/shared-eligibility-notary.yaml:combined_support_sd_jwt.issuer",
-                "hosted combined support credential profile must use did:web for shared-notary.lab.registrystack.org",
-            )
-        )
-    source_connections = evidence.get("source_connections") if isinstance(evidence.get("source_connections"), dict) else {}
-    # shared-eligibility-notary runs in the per-track lab-social Coolify app, whose
-    # docker network is separate from the monolith. civil/health relays live in the
-    # monolith and must be reached over public HTTPS; the social relay is co-located
-    # in lab-social and stays on the internal docker network.
-    expected_sources = {
-        "civil": (f"https://civil-relay.{LAB_DOMAIN}", "SHARED_CIVIL_EVIDENCE_SOURCE_RAW"),
-        "social_protection": ("http://social-protection-registry-relay:8080", "SHARED_SOCIAL_EVIDENCE_SOURCE_RAW"),
-        "health": (f"https://health-relay.{LAB_DOMAIN}", "SHARED_HEALTH_EVIDENCE_SOURCE_RAW"),
-    }
-    for name, (base_url, token_env) in sorted(expected_sources.items()):
-        connection = source_connections.get(name) if isinstance(source_connections, dict) else None
-        if not isinstance(connection, dict) or connection.get("base_url") != base_url or connection.get("token_env") != token_env:
-            issues.append(
-                Issue(
-                    "shared-notary-source-mismatch",
-                    "registry-lab",
-                    f"config/coolify/notary/shared-eligibility-notary.yaml:evidence.source_connections.{name}",
-                    f"hosted shared Notary source {name!r} must use {base_url} with {token_env}",
-                )
-            )
-    return issues
-
-
-def validate_shared_notary_hosted_metadata(root: Path) -> list[Issue]:
-    issues: list[Issue] = []
-    for relative_path in (
-        Path("config/coolify/relay/health-registry-relay.metadata.yaml"),
-    ):
-        path = root / relative_path
-        try:
-            text = path.read_text()
-        except OSError as exc:
-            issues.append(
-                Issue(
-                    "unreadable-shared-notary-metadata",
-                    "registry-lab",
-                    str(relative_path),
-                    f"could not read hosted metadata: {exc}",
-                )
-            )
-            continue
-        if "local-only/shared-eligibility-notary" in text or "https://shared-notary.lab.registrystack.org/.well-known/evidence-service" not in text:
-            issues.append(
-                Issue(
-                    "shared-notary-metadata-url-mismatch",
-                    "registry-lab",
-                    str(relative_path),
-                    "hosted metadata must point shared eligibility evidence at the hosted shared Notary discovery URL",
-                )
-            )
-    return issues
-
-
-def environment_uses_rendered_or_referenced_secret(
-    raw_text: str,
-    service: str,
-    env: dict[str, str],
-    variable: str,
-    *,
-    required_prefix: str | None = None,
-) -> bool:
-    value = env.get(variable)
-    if value == "${" + variable + ":-}":
-        return True
-    if value and usable_secret_value(value):
-        if required_prefix is None or value.startswith(required_prefix):
-            return True
-    return service_block_references_variable(raw_text, service, variable)
-
-
-def service_block_references_variable(raw_text: str, service: str, variable: str) -> bool:
-    if not raw_text:
-        return False
-    service_re = re.compile(
-        rf"(?ms)^  {re.escape(service)}:\n(?P<body>.*?)(?=^  [A-Za-z0-9_.-]+:|\Z)"
-    )
-    match = service_re.search(raw_text)
-    if not match:
-        return False
-    variable_ref_re = r"\$\{" + re.escape(variable) + r"(?::[-?][^}]*)?\}"
-    return re.search(variable_ref_re, match.group("body")) is not None
-
 
 def validate_config_loader_ref(artifact: str, services: dict[str, Any]) -> list[Issue]:
     if artifact not in {"registry-lab", "esignet", "social", "agri", "walt"}:
@@ -1447,122 +747,6 @@ def validate_lab_homepage_config_ref(artifact: str, services: dict[str, Any]) ->
     ]
 
 
-def validate_config_loader_hosted_outputs(
-    artifact: str,
-    services: dict[str, Any],
-) -> list[Issue]:
-    if artifact != "registry-lab":
-        return []
-    config_loader = services.get("config-loader")
-    if not isinstance(config_loader, dict):
-        return []
-
-    command_text = shell_command_text(config_loader.get("command"))
-    volumes = config_loader.get("volumes") or []
-    issues = []
-    if not all(
-        has_service_volume(volumes, source, target)
-        for source, target in (
-            ("civil-registry-cache", "/out/civil-cache"),
-            ("health-registry-cache", "/out/health-cache"),
-            ("openfn-sidecar-audit-state", "/out/openfn-audit-state"),
-        )
-    ) or not all(
-        token in command_text
-        for token in (
-            "chown -R 65532:65532",
-            "civil-cache health-cache",
-            "chown -R 1000:1000",
-            "openfn-audit-state",
-        )
-    ):
-        issues.append(
-            Issue(
-                "runtime-state-not-chowned",
-                artifact,
-                "services.config-loader",
-                "hosted Relay and OpenFn runtime state volumes must be writable by their runtime users",
-            )
-        )
-    if "cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/" not in command_text:
-        issues.append(
-            Issue(
-                "lab-homepage-scenarios-not-copied",
-                artifact,
-                "services.config-loader.command",
-                "hosted config-loader must copy the lab_homepage_scenarios package used by lab-homepage-server.py",
-            )
-        )
-    if "cp -a /tmp/repo/scripts/lab_homepage_explorer /out/static-scripts/" not in command_text:
-        issues.append(
-            Issue(
-                "lab-homepage-explorer-not-copied",
-                artifact,
-                "services.config-loader.command",
-                "hosted config-loader must copy the lab_homepage_explorer package used by lab-homepage-server.py",
-            )
-        )
-    if "cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/" not in command_text:
-        issues.append(
-            Issue(
-                "lab-homepage-static-not-copied",
-                artifact,
-                "services.config-loader.command",
-                "hosted config-loader must copy the lab_homepage_static assets served at /static/ by lab-homepage-server.py",
-            )
-        )
-    if "cp -a /tmp/repo/config/coolify/notary/civil-notary.yaml /out/notary/" not in command_text:
-        issues.append(
-            Issue(
-                "civil-notary-config-not-copied",
-                artifact,
-                "services.config-loader.command",
-                "hosted config-loader must copy the internal civil Notary config",
-            )
-        )
-    for target, config_path in hosted_service_config_copies(services):
-        expected = f"cp -a /tmp/repo/{config_path} {target}"
-        directory = Path(config_path).parent
-        directory_copy = f"cp -a /tmp/repo/{directory}/. {target}"
-        if expected not in command_text and directory_copy not in command_text:
-            issues.append(
-                Issue(
-                    "hosted-config-not-copied",
-                    artifact,
-                    "services.config-loader.command",
-                    f"hosted config-loader must copy {config_path}",
-                )
-            )
-    return issues
-
-
-def hosted_service_config_copies(services: dict[str, Any]) -> set[tuple[str, str]]:
-    copies: set[tuple[str, str]] = set()
-    for service, config in services.items():
-        if not isinstance(config, dict):
-            continue
-        command = config.get("command")
-        if not isinstance(command, list):
-            continue
-        for index, value in enumerate(command[:-1]):
-            if value != "--config":
-                continue
-            mounted_path = Path(str(command[index + 1]))
-            name = mounted_path.name
-            if not name:
-                continue
-            mounted_text = str(mounted_path)
-            if "/registry-notary/" in mounted_text:
-                source = f"config/coolify/notary/{name}"
-                target = "/out/notary/"
-            elif "/registry-relay/" in mounted_text:
-                source = f"config/coolify/relay/{name}"
-                target = "/out/relay/"
-            else:
-                continue
-            copies.add((target, source))
-    return copies
-
 
 def validate_hosted_yaml_files(artifact: str, root: Path) -> list[Issue]:
     if artifact != "registry-lab":
@@ -1595,107 +779,6 @@ def validate_hosted_yaml_files(artifact: str, root: Path) -> list[Issue]:
                 )
     return issues
 
-
-def validate_dhis2_programme_vc_contract(artifact: str, root: Path) -> list[Issue]:
-    if artifact != "registry-lab":
-        return []
-    path = root / "config/coolify/notary/dhis2-health-notary.yaml"
-    try:
-        config = load_yaml_mapping_strict(path)
-    except Exception as exc:
-        return [
-            Issue(
-                "unreadable-dhis2-notary-config",
-                artifact,
-                "config/coolify/notary/dhis2-health-notary.yaml",
-                f"could not read hosted DHIS2 Notary config: {exc}",
-            )
-        ]
-
-    issues: list[Issue] = []
-    evidence = config.get("evidence") if isinstance(config.get("evidence"), dict) else {}
-    if evidence.get("max_credential_validity_seconds") != 31_536_000:
-        issues.append(
-            Issue(
-                "dhis2-programme-validity-ceiling",
-                artifact,
-                "config/coolify/notary/dhis2-health-notary.yaml:evidence.max_credential_validity_seconds",
-                "hosted DHIS2 Notary must allow one-year programme participation credentials",
-            )
-        )
-    profiles = evidence.get("credential_profiles") if isinstance(evidence, dict) else None
-    profile = profiles.get(DHIS2_PROGRAMME_PROFILE) if isinstance(profiles, dict) else None
-    if not isinstance(profile, dict):
-        issues.append(
-            Issue(
-                "missing-dhis2-programme-profile",
-                artifact,
-                "config/coolify/notary/dhis2-health-notary.yaml:evidence.credential_profiles",
-                f"hosted DHIS2 Notary must define {DHIS2_PROGRAMME_PROFILE}",
-            )
-        )
-        return issues
-    if profile.get("validity_seconds") != 31_536_000:
-        issues.append(
-            Issue(
-                "dhis2-programme-profile-validity",
-                artifact,
-                f"config/coolify/notary/dhis2-health-notary.yaml:{DHIS2_PROGRAMME_PROFILE}.validity_seconds",
-                "DHIS2 programme participation VC must be valid for one year",
-            )
-        )
-    allowed_claims = set(profile.get("allowed_claims") or [])
-    missing_claims = sorted(DHIS2_PROGRAMME_CLAIMS - allowed_claims)
-    if missing_claims:
-        issues.append(
-            Issue(
-                "dhis2-programme-claims-missing",
-                artifact,
-                f"config/coolify/notary/dhis2-health-notary.yaml:{DHIS2_PROGRAMME_PROFILE}.allowed_claims",
-                "DHIS2 programme participation VC is missing claims: " + ", ".join(missing_claims),
-            )
-        )
-    holder = profile.get("holder_binding") if isinstance(profile.get("holder_binding"), dict) else {}
-    if (
-        holder.get("mode") != "did"
-        or holder.get("proof_of_possession") != "required"
-        or "did:jwk" not in (holder.get("allowed_did_methods") or [])
-    ):
-        issues.append(
-            Issue(
-                "dhis2-programme-holder-binding",
-                artifact,
-                f"config/coolify/notary/dhis2-health-notary.yaml:{DHIS2_PROGRAMME_PROFILE}.holder_binding",
-                "DHIS2 programme participation VC must require did:jwk proof of possession",
-            )
-        )
-    configured_claims = {
-        claim.get("id"): claim
-        for claim in evidence.get("claims", [])
-        if isinstance(claim, dict) and isinstance(claim.get("id"), str)
-    }
-    for claim_id in sorted(DHIS2_PROGRAMME_CLAIMS):
-        claim = configured_claims.get(claim_id)
-        if not isinstance(claim, dict):
-            issues.append(
-                Issue(
-                    "dhis2-programme-claim-not-configured",
-                    artifact,
-                    "config/coolify/notary/dhis2-health-notary.yaml:evidence.claims",
-                    f"DHIS2 programme claim {claim_id!r} must be configured",
-                )
-            )
-            continue
-        if DHIS2_PROGRAMME_PROFILE not in (claim.get("credential_profiles") or []):
-            issues.append(
-                Issue(
-                    "dhis2-programme-claim-profile-missing",
-                    artifact,
-                    f"config/coolify/notary/dhis2-health-notary.yaml:evidence.claims.{claim_id}",
-                    f"claim {claim_id!r} must allow {DHIS2_PROGRAMME_PROFILE}",
-                )
-            )
-    return issues
 
 
 def validate_attestation_metadata_contract(artifact: str, root: Path) -> list[Issue]:
@@ -2416,7 +1499,7 @@ def is_registry_relay_service(service: str, image: str) -> bool:
 
 
 def is_registry_notary_service(service: str, image: str) -> bool:
-    return "notary" in service and "registry-notary" in image and "openfn-sidecar" not in image
+    return "notary" in service and "registry-notary" in image
 
 
 def service_mounts_target(service_config: dict[str, Any], target: str) -> bool:

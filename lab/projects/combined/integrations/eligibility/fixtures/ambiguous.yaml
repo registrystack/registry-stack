@@ -1,0 +1,10 @@
+name: ambiguous-household
+classification: synthetic
+input: { household_reference: HH-AB12CD34 }
+interactions:
+  - expect:
+      method: GET
+      path: /households/HH-AB12CD34
+      query: { fields: "approved,category" }
+    respond: { status: 409, body: {} }
+expect: { outcome: ambiguous, outputs: {}, claims: {} }

@@ -10,7 +10,6 @@ default_esignet_relay_authenticator_src := "./vendor/esignet-relay-authenticator
 
 relay_src := env_var_or_default("REGISTRY_RELAY_SOURCE_DIR", default_relay_src)
 notary_src := env_var_or_default("REGISTRY_NOTARY_SOURCE_DIR", default_notary_src)
-openfn_notary_src := env_var_or_default("REGISTRY_OPENFN_NOTARY_SOURCE_DIR", notary_src)
 platform_src := env_var_or_default("REGISTRY_PLATFORM_SOURCE_DIR", default_platform_src)
 manifest_src := env_var_or_default("REGISTRY_MANIFEST_REPO", default_manifest_src)
 esignet_relay_authenticator_src := env_var_or_default("ESIGNET_RELAY_AUTHENTICATOR_SOURCE_DIR", default_esignet_relay_authenticator_src)
@@ -26,7 +25,6 @@ relay_features := env_var_or_default("REGISTRY_RELAY_FEATURES", "attribute-relea
 
 export REGISTRY_RELAY_SOURCE_DIR := relay_src
 export REGISTRY_NOTARY_SOURCE_DIR := notary_src
-export REGISTRY_OPENFN_NOTARY_SOURCE_DIR := openfn_notary_src
 export REGISTRY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_RELAY_PLATFORM_SOURCE_DIR := platform_src
 export REGISTRY_NOTARY_PLATFORM_SOURCE_DIR := platform_src
@@ -81,27 +79,13 @@ esignet-logs *services:
 ps:
     docker compose -f compose.yaml ps
 
-# Follow demo service logs. Pass service names after `--`, for example: just logs -- zitadel openfn-civil-notary
+# Follow demo service logs. Pass service names after `--`.
 logs *services:
     docker compose -f compose.yaml logs -f {{services}}
 
 # Run the API-key Relay/Notary smoke.
 smoke:
     scripts/smoke.sh
-
-# Run evidence-gateway pack contract checks and runner unit tests.
-evidence-gateway-test:
-    scripts/check-evidence-gateway-fixtures.py
-    python3 -m unittest scripts.test_evidence_gateway_fixtures scripts.test_evidence_gateway_live_fixtures
-
-# Run live evidence-gateway fixtures for one profile. Pass runner args after the profile.
-evidence-gateway-live profile *args:
-    @python3 scripts/run-evidence-gateway-live-fixtures.py --profile "{{profile}}" {{args}}
-
-# Run local CRVS relay-backed certificate evidence packs against civil-notary.
-evidence-gateway-crvs-live:
-    @mkdir -p output
-    @python3 scripts/run-evidence-gateway-live-fixtures.py --profile birth-certificate-evidence/v1 --profile marriage-certificate-evidence/v1 --output output/evidence-gateway-live-crvs-certificates.json
 
 # Run product doctors against every active Relay and Notary config.
 config-doctor:
@@ -110,6 +94,10 @@ config-doctor:
 # Fail if active configs or docs use removed config/report names.
 config-vocabulary-check:
     scripts/check-stale-config-vocabulary.sh
+
+# Verify combined, Relay-only, Notary-only, and offline fixture project topologies.
+project-topologies:
+    scripts/check-project-topologies.sh
 
 # Run the default signed Notary-to-Notary delegated-evaluation smoke.
 federation:
@@ -122,40 +110,6 @@ client:
 # Run the Registry Notary Python client against the default Notary services.
 notary-client:
     scripts/smoke-notary-client.py
-
-# Run the civil built-in sidecar smoke (http_json engine).
-civil:
-    scripts/smoke-civil.sh
-
-# Alias kept for backwards compatibility: delegates to `civil`.
-openfn: civil
-
-# Run the live DHIS2 built-in sidecar smoke (http_json engine).
-dhis2:
-    scripts/smoke-dhis2.sh
-
-# Alias kept for backwards compatibility: delegates to `dhis2`.
-dhis2-openfn: dhis2
-
-# Build the local deterministic FHIR source-adapter profile.
-fhir-build:
-    docker compose -f compose.yaml --profile fhir build fhir-fixture-server fhir-source-adapter-sidecar fhir-health-notary
-
-# Start the local deterministic FHIR source-adapter profile.
-fhir-up:
-    docker compose -f compose.yaml --profile fhir up -d fhir-fixture-server fhir-source-adapter-sidecar fhir-health-notary
-
-# Run the local deterministic FHIR source-adapter smoke.
-fhir-smoke:
-    scripts/smoke-fhir.sh
-
-# Stop the local deterministic FHIR source-adapter profile.
-fhir-down:
-    docker compose -f compose.yaml --profile fhir rm -sf fhir-fixture-server fhir-source-adapter-sidecar fhir-health-notary
-
-# Run the live OpenCRVS DCI-backed Notary smoke.
-opencrvs-dci:
-    scripts/smoke-opencrvs-dci.sh
 
 # Run Relay's ignored live Postgres integration test against lab Postgres.
 relay-postgres:
@@ -226,15 +180,13 @@ hosted-preflight:
     python3 scripts/test_esignet_relay_lab.py
     python3 scripts/test_lab_homepage_server.py
     python3 scripts/test_static_metadata_server.py
-    python3 scripts/test_dhis2_programme_vc_config.py
     python3 scripts/test_generate_demo_secrets.py
     python3 scripts/test_hosted_smoke.py
     python3 scripts/test_sync_coolify_compose_domains.py
     python3 scripts/test_validate_public_api_workspace.py
     python3 scripts/validate-public-api-workspace.py
 
-# Run public hosted smoke checks. Pass extra args directly, for example: just hosted-smoke --credential-smoke.
-# The credential smoke also requires DHIS2_EVIDENCE_CLIENT_BEARER in the environment.
+# Run public hosted smoke checks. Pass extra args directly.
 hosted-smoke *args:
     python3 scripts/hosted-smoke.py {{args}}
 
@@ -513,7 +465,7 @@ agri-verify-consumer-artifacts-strict:
     bash -lc 'source ../crosswalk/crates/crosswalk-python/.venv/bin/activate && python scripts/check-agri-consumer-artifacts.py --require-crosswalk'
 
 # Generate, build, start, and run core smoke checks.
-quick: generate build up smoke openfn client
+quick: generate build up smoke
 
 # Run the full default release check.
 release:
@@ -524,8 +476,7 @@ release-fast:
     REGISTRY_LAB_CHECK_RELAY_POSTGRES=0 \
     REGISTRY_LAB_CHECK_RELAY_ZITADEL=0 \
     REGISTRY_LAB_CHECK_OIDC_RELAY=0 \
-    REGISTRY_LAB_CHECK_OPENFN=0 \
     scripts/release-check.sh
 
 # Run the standard sequence while leaving containers up for inspection.
-try: generate build up smoke openfn client relay-postgres relay-zitadel oidc-relay
+try: generate build up smoke relay-postgres relay-zitadel oidc-relay

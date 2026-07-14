@@ -2,7 +2,6 @@ import { Counter, Rate } from 'k6/metrics';
 import { sleep } from 'k6';
 
 export const PURPOSE = 'https://demo.example.gov/purpose/decentralized-evidence-demo';
-export const OPENFN_PURPOSE = 'https://demo.example.gov/purpose/openfn-sidecar-demo';
 export const CLAIM_RESULT = 'application/vnd.registry-notary.claim-result+json';
 export const SD_JWT = 'application/dc+sd-jwt';
 

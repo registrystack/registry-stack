@@ -57,7 +57,7 @@ REGISTRIES: dict[str, dict[str, Any]] = {
         "default_entity": "civil_person",
         "default_limit": 1,
         "purpose": PURPOSE,
-        "related_claim_service_ids": ["civil-notary", "shared-eligibility-notary", "opencrvs-notary"],
+        "related_claim_service_ids": ["civil-notary", "shared-eligibility-notary"],
         "datasets": {
             "civil_registry": {
                 "id": "civil_registry",
@@ -401,7 +401,7 @@ REGISTRIES: dict[str, dict[str, Any]] = {
         "default_entity": "health_facility",
         "default_limit": 1,
         "purpose": PURPOSE,
-        "related_claim_service_ids": ["shared-eligibility-notary", "dhis2-notary"],
+        "related_claim_service_ids": ["shared-eligibility-notary"],
         "datasets": {
             "health_registry": {
                 "id": "health_registry",

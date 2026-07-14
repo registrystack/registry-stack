@@ -5,9 +5,6 @@
 !config/
 !config/static-metadata/
 !config/static-metadata/**
-!config/openfn/
-!config/openfn/jobs/
-!config/openfn/jobs/dhis2-*.js
 !scripts/
 !scripts/check-service-first-deps.sh
 !scripts/generate-demo-secrets.py

@@ -9,9 +9,6 @@ on:
       registry_notary_image:
         description: "Digest-pinned REGISTRY_NOTARY_IMAGE value"
         required: true
-      registry_notary_openfn_sidecar_image:
-        description: "Digest-pinned REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE value"
-        required: true
       registry_lab_esignet_relay_image:
         description: "Digest-pinned REGISTRY_LAB_ESIGNET_RELAY_IMAGE value"
         required: true
@@ -33,7 +30,6 @@ jobs:
         env:
           REGISTRY_RELAY_IMAGE: ${{ inputs.registry_relay_image }}
           REGISTRY_NOTARY_IMAGE: ${{ inputs.registry_notary_image }}
-          REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE: ${{ inputs.registry_notary_openfn_sidecar_image }}
           REGISTRY_LAB_ESIGNET_RELAY_IMAGE: ${{ inputs.registry_lab_esignet_relay_image }}
           REGISTRY_LAB_ESIGNET_SEED_IMAGE: ${{ inputs.registry_lab_esignet_seed_image }}
         run: |
@@ -50,7 +46,6 @@ jobs:
 
           validate_image REGISTRY_RELAY_IMAGE "${REGISTRY_RELAY_IMAGE}"
           validate_image REGISTRY_NOTARY_IMAGE "${REGISTRY_NOTARY_IMAGE}"
-          validate_image REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE}"
           validate_image REGISTRY_LAB_ESIGNET_RELAY_IMAGE "${REGISTRY_LAB_ESIGNET_RELAY_IMAGE}"
           validate_image REGISTRY_LAB_ESIGNET_SEED_IMAGE "${REGISTRY_LAB_ESIGNET_SEED_IMAGE}"
 
@@ -64,7 +59,6 @@ jobs:
           COOLIFY_HOSTED_AGRI_APP_UUID: ${{ vars.COOLIFY_HOSTED_AGRI_APP_UUID }}
           REGISTRY_RELAY_IMAGE: ${{ inputs.registry_relay_image }}
           REGISTRY_NOTARY_IMAGE: ${{ inputs.registry_notary_image }}
-          REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE: ${{ inputs.registry_notary_openfn_sidecar_image }}
           REGISTRY_LAB_ESIGNET_RELAY_IMAGE: ${{ inputs.registry_lab_esignet_relay_image }}
           REGISTRY_LAB_ESIGNET_SEED_IMAGE: ${{ inputs.registry_lab_esignet_seed_image }}
         run: |
@@ -109,7 +103,6 @@ jobs:
           }
 
           patch_product_images "${COOLIFY_REGISTRY_LAB_APP_UUID}" monolith
-          patch_env "${COOLIFY_REGISTRY_LAB_APP_UUID}" monolith REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE "${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE}"
           patch_env "${COOLIFY_HOSTED_ESIGNET_APP_UUID}" esignet REGISTRY_LAB_ESIGNET_RELAY_IMAGE "${REGISTRY_LAB_ESIGNET_RELAY_IMAGE}"
           patch_env "${COOLIFY_HOSTED_ESIGNET_APP_UUID}" esignet REGISTRY_LAB_ESIGNET_SEED_IMAGE "${REGISTRY_LAB_ESIGNET_SEED_IMAGE}"
           patch_product_images "${COOLIFY_HOSTED_SOCIAL_APP_UUID}" social

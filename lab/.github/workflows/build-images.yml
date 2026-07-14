@@ -103,27 +103,6 @@ jobs:
           cache-from: type=gha,scope=notary
           cache-to: type=gha,mode=max,scope=notary
 
-      - name: Build & push registry-notary-openfn-sidecar
-        if: ${{ inputs.image_target == 'all' }}
-        id: sidecar
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.registry-notary-openfn-sidecar
-          platforms: linux/amd64
-          provenance: false
-          sbom: false
-          push: true
-          build-contexts: |
-            notary_src=vendor/registry-notary
-            registry_platform_src=vendor/registry-platform
-            crosswalk_src=vendor/crosswalk
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/registry-notary-openfn-sidecar:cel
-            ghcr.io/${{ github.repository_owner }}/registry-notary-openfn-sidecar:sha-${{ github.sha }}
-          cache-from: type=gha,scope=sidecar
-          cache-to: type=gha,mode=max,scope=sidecar
-
       - name: Build & push citizen portal
         if: ${{ inputs.image_target == 'all' || inputs.image_target == 'citizen-portal' }}
         id: citizen_portal
@@ -188,7 +167,6 @@ jobs:
             if [ '${{ inputs.image_target }}' = 'all' ]; then
               echo "REGISTRY_RELAY_IMAGE=ghcr.io/${owner}/registry-relay@${{ steps.relay.outputs.digest }}"
               echo "REGISTRY_NOTARY_IMAGE=ghcr.io/${owner}/registry-notary@${{ steps.notary.outputs.digest }}"
-              echo "REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE=ghcr.io/${owner}/registry-notary-openfn-sidecar@${{ steps.sidecar.outputs.digest }}"
             fi
             if [ '${{ inputs.image_target }}' = 'all' ] || [ '${{ inputs.image_target }}' = 'citizen-portal' ]; then
               echo "REGISTRY_LAB_CITIZEN_PORTAL_IMAGE=ghcr.io/${owner}/registry-lab-citizen-portal@${{ steps.citizen_portal.outputs.digest }}"

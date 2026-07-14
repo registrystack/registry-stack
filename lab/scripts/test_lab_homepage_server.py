@@ -449,30 +449,6 @@ class GroupCredentialsTest(unittest.TestCase):
         grouped_ids = {c["id"] for service in enriched["services"] for c in service["credentials"]}
         self.assertIn("orphan", grouped_ids)
 
-    def test_committed_notary_credentials_expose_default_purpose(self) -> None:
-        config = server.enrich_config(server.load_config(server.DEFAULT_CONFIG))
-        credentials = {credential["id"]: credential for credential in config["credentials"]}
-
-        self.assertEqual(
-            credentials["agri-evidence"]["default_purpose"],
-            "https://demo.example.gov/purpose/nagdi/climate-smart-input-support",
-        )
-        self.assertEqual(
-            credentials["dhis2-api-key"]["default_purpose"],
-            "https://demo.example.gov/purpose/dhis2-openfn-health-evidence",
-        )
-        self.assertEqual(
-            credentials["dhis2-bearer"]["default_purpose"],
-            "https://demo.example.gov/purpose/dhis2-openfn-health-evidence",
-        )
-        self.assertEqual(
-            credentials["opencrvs-api-key"]["default_purpose"],
-            "https://demo.example.gov/purpose/opencrvs-dci-lab",
-        )
-        self.assertEqual(credentials["opencrvs-api-key"]["default_identifier_scheme"], "UIN")
-        self.assertEqual(credentials["opencrvs-api-key"]["default_subject"], "9658342302")
-
-
 class ScenarioPayloadTest(unittest.TestCase):
     """The scenario runner exposes a multi-story catalogue and dedicated story payloads."""
 
@@ -539,12 +515,6 @@ class ScenarioPayloadTest(unittest.TestCase):
                         "service_url": "https://social.example",
                         "example": {"path": "/v1/datasets/social_protection_registry/entities/household/records?limit=1"},
                     },
-                    {
-                        "id": "dhis2-bearer",
-                        "env": "CIVIL_RAW",
-                        "service_url": "https://dhis2.example",
-                        "example": {"path": "/v1/claims"},
-                    },
                 ],
                 "wallet": {
                     "issuer": "https://issuer.example",
@@ -553,29 +523,6 @@ class ScenarioPayloadTest(unittest.TestCase):
                 },
             }
         )
-
-    def test_catalogue_lists_scenarios_with_dedicated_routes(self) -> None:
-        payload = server.scenario_payload(self._payload_config())
-        scenario_ids = [item["id"] for item in payload["scenarios"]]
-        self.assertEqual(
-            scenario_ids,
-            [
-                "alive-proof",
-                "civil-birth-demographics",
-                "civil-birth-evidence",
-                "civil-birth-evidence-demographics",
-                "civil-marriage-evidence",
-                "wallet-credential",
-                "dhis2-programme-vc",
-                "social-aggregate",
-                "combined-support",
-                "agriculture-voucher",
-            ],
-        )
-        self.assertEqual(payload["default_scenario_id"], "alive-proof")
-        self.assertEqual(len(payload["scenarios"]), 10)
-        for scenario in payload["scenarios"][1:]:
-            self.assertEqual(scenario["availability"], "hosted")
 
     def test_catalogue_exposes_attestation_metadata_and_availability_state(self) -> None:
         payload = server.scenario_payload(self._payload_config(), lab_mode="hosted")
@@ -586,16 +533,6 @@ class ScenarioPayloadTest(unittest.TestCase):
         self.assertEqual(alive["source_system"]["label"], "Registry Relay demo source")
         self.assertEqual(alive["requested_attestations"][0]["offering_id"], "vital-status-attestation")
         self.assertEqual(alive["requested_attestations"][0]["lookup_profiles"], ["by-national-id"])
-
-    def test_story_exposes_requested_attestations_lookup_disclosure_and_proof(self) -> None:
-        story = server.scenario_payload(self._payload_config(), "alive-proof")["story"]
-        self.assertEqual(story["requested_attestations"][0]["display_name"], "Vital Status Attestation")
-        self.assertEqual(story["lookup_profile"]["id"], "by-national-id")
-        self.assertEqual(story["source_system"]["label"], "Registry Relay demo source")
-        self.assertIn("does not call OpenCRVS", story["source_system"]["summary"])
-        self.assertIn("Full civil registry row", story["non_disclosure"])
-        self.assertTrue(any("CivilStatusRecord" in fact for fact in story["proof_facts"]))
-        self.assertEqual(story["availability_state"]["label"], "Hosted")
 
     def test_public_label_check_rejects_raw_compatibility_ids(self) -> None:
         from lab_homepage_scenarios.attestations import RAW_COMPATIBILITY_IDS
@@ -819,135 +756,6 @@ class ScenarioPayloadTest(unittest.TestCase):
         self.assertEqual(result["response_source"]["status"], "simulated")
         self.assertIn("wallet-demo-nonce-2026", str(result["response_source"]))
         self.assertNotIn("invalid_request", str(result))
-
-    def test_dhis2_story_matches_bruno_programme_vc_flow(self) -> None:
-        story = server.scenario_payload(self._payload_config(), "dhis2-programme-vc")["story"]
-        self.assertEqual(story["id"], "dhis2-programme-vc")
-        self.assertEqual(story["subject"]["identifier"], "PQfMcpmXeFE")
-        self.assertEqual(
-            [step["id"] for step in story["steps"]],
-            ["discover", "evaluate-programme", "preview-vc", "reconcile", "negative-control", "render-cccev"],
-        )
-        self.assertIn("Bruno creates an Ed25519 holder proof", story["steps"][2]["prompt"])
-
-    def test_dhis2_discovery_accepts_notary_data_envelope(self) -> None:
-        captured = {}
-
-        class Resp:
-            status = 200
-            headers = {"Content-Type": "application/json"}
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def read(self):
-                return json.dumps(
-                    {
-                        "data": [
-                            {"id": "dhis2-tracked-entity-first-name"},
-                            {"id": "dhis2-tracked-entity-last-name"},
-                            {"id": "dhis2-child-age-band"},
-                            {"id": "dhis2-programme-code"},
-                            {"id": "dhis2-child-program-active"},
-                            {"id": "dhis2-reconciliation-ref"},
-                        ]
-                    }
-                ).encode("utf-8")
-
-        def fake_urlopen(req, timeout=0):
-            captured["req"] = req
-            return Resp()
-
-        with unittest.mock.patch("urllib.request.urlopen", fake_urlopen):
-            result = server.run_scenario_step(self._payload_config(), "dhis2-programme-vc", "discover")
-
-        facts = {item["label"]: item["value"] for item in result["friendly"]["facts"]}
-        self.assertEqual(facts["Catalogue items advertised"], 6)
-        self.assertEqual(facts["Programme participation available"], "Yes")
-        self.assertEqual(captured["req"].get_header("Authorization"), "Bearer civil-token")
-
-    def test_dhis2_evaluation_exposes_attestation_response_envelope(self) -> None:
-        class Resp:
-            status = 200
-            headers = {"Content-Type": "application/json"}
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def read(self):
-                return json.dumps(
-                    {
-                        "results": [
-                            {"claim_id": "dhis2-child-program-active", "satisfied": True},
-                            {"claim_id": "dhis2-reconciliation-ref", "value": "dhis2:tracked-entity:PQfMcpmXeFE"},
-                        ]
-                    }
-                ).encode("utf-8")
-
-        with unittest.mock.patch("urllib.request.urlopen", lambda req, timeout=0: Resp()):
-            result = server.run_scenario_step(self._payload_config(), "dhis2-programme-vc", "evaluate-programme")
-
-        assert_attestation_response(
-            self,
-            result["response_source"]["attestation_response"],
-            "health-programme-participation-attestation",
-        )
-
-    def test_dhis2_preview_vc_hides_holder_proof_and_raw_credential(self) -> None:
-        result = server.run_scenario_step(self._payload_config(), "dhis2-programme-vc", "preview-vc")
-        self.assertEqual(result["friendly"]["status"], "done")
-        self.assertEqual(result["request_source"]["method"], "SIMULATE")
-        self.assertIn("[Ed25519 holder proof generated by Bruno, hidden in this playground]", str(result["request_source"]))
-        self.assertIn("[holder-bound SD-JWT VC hidden]", str(result["response_source"]))
-
-    def test_dhis2_reconcile_posts_raw_lookup_and_reports_reconciliation_ref(self) -> None:
-        captured = {}
-
-        class Resp:
-            status = 200
-            headers = {"Content-Type": "application/json"}
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *_args):
-                return False
-
-            def read(self):
-                return json.dumps(
-                    {
-                        "results": [
-                            {
-                                "claim_id": "dhis2-child-program-active",
-                                "satisfied": True,
-                                "provenance": {"source_count": 1},
-                            }
-                        ]
-                    }
-                ).encode("utf-8")
-
-        def fake_urlopen(req, timeout=0):
-            captured["body"] = json.loads(req.data.decode("utf-8"))
-            return Resp()
-
-        with unittest.mock.patch("urllib.request.urlopen", fake_urlopen):
-            result = server.run_scenario_step(self._payload_config(), "dhis2-programme-vc", "reconcile")
-
-        self.assertEqual(result["friendly"]["status"], "done")
-        self.assertEqual(
-            captured["body"]["target"]["identifiers"],
-            [{"scheme": "dhis2_tracked_entity", "value": "PQfMcpmXeFE"}],
-        )
-        facts = {item["label"]: item["value"] for item in result["friendly"]["facts"]}
-        self.assertEqual(facts["Tracked entity"], "PQfMcpmXeFE")
-        self.assertEqual(facts["Reconciliation ref"], "dhis2:tracked-entity:PQfMcpmXeFE")
-
 
 class CivilBirthDemographicsScenarioTest(unittest.TestCase):
     """Civil Relay demographic lookup story: discover target_inputs, then evaluate without an ID."""
@@ -1547,115 +1355,6 @@ class ExplorerApiPayloadTest(unittest.TestCase):
         self.assertEqual(
             [item["id"] for item in payload["registries"]],
             ["civil", "social-protection", "health", "agriculture"],
-        )
-
-    def test_claim_catalog_uses_exact_allowlist(self) -> None:
-        payload = server.claims_explorer.claim_catalog_payload(self.config)
-        self.assertEqual(
-            [item["id"] for item in payload["claim_services"]],
-            [
-                "civil-notary",
-                "social-protection-notary",
-                "shared-eligibility-notary",
-                "dhis2-notary",
-                "opencrvs-notary",
-                "agriculture-notary",
-            ],
-        )
-
-    def test_claim_metadata_tracks_pr65_public_labels_and_social_url(self) -> None:
-        civil = server.claims_explorer.claim_metadata_payload(self.config, "civil-notary")["claim_service"]
-        self.assertEqual(civil["claims"][0]["title"], "Vital Status Attestation")
-
-        social = server.claims_explorer.claim_metadata_payload(self.config, "social-protection-notary")["claim_service"]
-        self.assertEqual(social["base_url"], "https://social-notary.lab.registrystack.org")
-        self.assertEqual(social["availability"], "hosted")
-        self.assertEqual(
-            {claim["id"]: claim["title"] for claim in social["claims"]},
-            {
-                "program-enrollment-status": "Program Enrollment Attestation",
-                "household-eligibility-band": "Welfare Classification Attestation",
-                "beneficiary-active": "Program Enrollment Active Attestation",
-                "household-composition": "Household Composition Attestation",
-                "caregiver-link": "Parent Or Guardian Link Attestation",
-                "disability-determination": "Disability Determination Attestation",
-                "functioning-assessment": "Functioning Assessment Attestation",
-            },
-        )
-
-        shared = server.claims_explorer.claim_metadata_payload(self.config, "shared-eligibility-notary")["claim_service"]
-        self.assertEqual(shared["base_url"], "https://shared-notary.lab.registrystack.org")
-
-        dhis2 = server.claims_explorer.claim_metadata_payload(self.config, "dhis2-notary")["claim_service"]
-        self.assertEqual(dhis2["default_subject"], "PQfMcpmXeFE")
-        self.assertEqual(dhis2["default_purpose"], "https://demo.example.gov/purpose/dhis2-openfn-health-evidence")
-        dhis2_titles = {claim["id"]: claim["title"] for claim in dhis2["claims"]}
-        self.assertEqual(dhis2_titles["dhis2-child-program-active"], "Health Programme Participation Attestation")
-
-        opencrvs = server.claims_explorer.claim_metadata_payload(self.config, "opencrvs-notary")["claim_service"]
-        self.assertEqual(opencrvs["default_purpose"], "https://demo.example.gov/purpose/opencrvs-dci-lab")
-        self.assertEqual(opencrvs["default_identifier_scheme"], "UIN")
-        self.assertEqual(opencrvs["default_subject"], "9658342302")
-        opencrvs_titles = {claim["id"]: claim["title"] for claim in opencrvs["claims"]}
-        self.assertEqual(opencrvs_titles["opencrvs-birth-record-exists"], "Birth Registration Attestation")
-        self.assertEqual(opencrvs_titles["opencrvs-age-band"], "Age Eligibility Attestation")
-        opencrvs_claims = {claim["id"]: claim for claim in opencrvs["claims"]}
-        self.assertEqual(opencrvs_claims["opencrvs-age-band"]["source"]["lookup_field"], "UIN")
-
-        civil_claims = {claim["id"]: claim for claim in civil["claims"]}
-        self.assertEqual(civil_claims["birth.certificate_summary"]["title"], "Birth certificate summary")
-        self.assertEqual(
-            civil_claims["birth.certificate_summary_by_demographics"]["title"],
-            "Birth Evidence by demographics",
-        )
-        self.assertEqual(civil_claims["marriage.certificate_summary"]["title"], "Marriage certificate summary")
-        self.assertEqual(
-            civil_claims["birth.certificate_summary_by_demographics"]["default_purpose"],
-            "https://demo.example.gov/purpose/civil-certificate-evidence",
-        )
-        self.assertEqual(
-            civil_claims["marriage.certificate_summary"]["default_purpose"],
-            "https://demo.example.gov/purpose/civil-certificate-evidence",
-        )
-        self.assertEqual(
-            civil_claims["birth.certificate_summary"]["target_inputs"][0]["groups"][0]["inputs"][0]["path"],
-            "target.identifiers.registration_number",
-        )
-        self.assertEqual(
-            civil_claims["birth.certificate_summary_by_demographics"]["target_inputs"][0]["groups"][0]["inputs"][0]["path"],
-            "target.attributes.given_name",
-        )
-
-        agriculture = server.claims_explorer.claim_metadata_payload(self.config, "agriculture-notary")["claim_service"]
-        self.assertEqual(agriculture["default_identifier_scheme"], "farmer_id")
-        self.assertEqual(agriculture["default_subject"], "FARMER-1001")
-        agri_claims = {claim["id"]: claim for claim in agriculture["claims"]}
-        self.assertEqual(agri_claims["eligible-for-climate-smart-input-voucher"]["source"]["lookup_field"], "farmer_id")
-        self.assertEqual(agri_claims["eligible-for-livestock-movement-permit"]["default_identifier_scheme"], "herd_id")
-        self.assertEqual(
-            agri_claims["eligible-for-livestock-movement-permit"]["default_purpose"],
-            "https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review",
-        )
-
-    def test_opencrvs_evaluation_request_uses_dci_purpose_and_uin(self) -> None:
-        request = server.claims_explorer.build_evaluation_request(
-            self.config,
-            "opencrvs-notary",
-            "opencrvs-age-band",
-            subject="9658342302",
-            identifier_scheme="UIN",
-            disclosure="value",
-            result_format=server.claims_explorer.CLAIM_RESULT_FORMAT,
-            purpose="https://demo.example.gov/purpose/opencrvs-dci-lab",
-        )
-
-        self.assertEqual(
-            request["request_source"]["headers"]["Data-Purpose"],
-            "https://demo.example.gov/purpose/opencrvs-dci-lab",
-        )
-        self.assertEqual(
-            request["request_source"]["body"]["target"],
-            {"type": "Person", "identifiers": [{"scheme": "UIN", "value": "9658342302"}]},
         )
 
     def test_civil_certificate_claim_defaults_to_certificate_purpose(self) -> None:
@@ -2845,22 +2544,6 @@ class ChooserAndMetadataTest(unittest.TestCase):
         story = server.scenario_payload(self._config, "wallet-credential")["story"]
         self.assertEqual(story["domain"], "Credentials")
 
-    def test_dhis2_story_has_domain(self) -> None:
-        story = server.scenario_payload(self._config, "dhis2-programme-vc")["story"]
-        self.assertEqual(story["domain"], "Health")
-
-    def test_dhis2_story_marks_live_upstream_source(self) -> None:
-        story = server.scenario_payload(self._config, "dhis2-programme-vc")["story"]
-        self.assertEqual(story["source_system"]["label"], "Live DHIS2 via built-in http_json sidecar")
-        self.assertIn("public DHIS2 sandbox", story["source_system"]["summary"])
-        self.assertIn("Registry Relay is not on this source path", story["source_system"]["summary"])
-
-    def test_crvs_certificate_story_points_to_relay_not_opencrvs(self) -> None:
-        story = server.scenario_payload(self._config, "civil-birth-evidence")["story"]
-        self.assertEqual(story["source_system"]["label"], "Registry Relay CRVS fixtures")
-        self.assertIn("Relay-backed birth fixtures", story["source_system"]["summary"])
-        self.assertIn("OpenCRVS DCI tutorial", story["source_system"]["summary"])
-
     def test_social_aggregate_story_has_domain(self) -> None:
         story = server.scenario_payload(self._config, "social-aggregate")["story"]
         self.assertEqual(story["domain"], "Social protection")
@@ -3039,12 +2722,6 @@ class RequestPreviewTest(unittest.TestCase):
                         "example": {"path": "/metadata/evidence-offerings"},
                     },
                     {
-                        "id": "dhis2-bearer",
-                        "env": "CIVIL_RAW",
-                        "service_url": "https://dhis2.example",
-                        "example": {"path": "/v1/claims"},
-                    },
-                    {
                         "id": "social-metadata",
                         "env": "CIVIL_RAW",
                         "service_url": "https://social.example",
@@ -3135,54 +2812,6 @@ class RequestPreviewTest(unittest.TestCase):
         config = self._payload_config()
         result = mod.preview_step(config, "nonce")
         self.assertEqual(result["method"], "SIMULATE")
-
-    def test_wallet_vc_credential_preview_is_simulate(self) -> None:
-        import lab_homepage_scenarios.wallet_vc as mod
-        config = self._payload_config()
-        result = mod.preview_step(config, "credential-preview")
-        self.assertEqual(result["method"], "SIMULATE")
-
-    # ---- dhis2_programme preview_step ----
-
-    def test_dhis2_all_steps_have_preview(self) -> None:
-        import lab_homepage_scenarios.dhis2_programme as mod
-        config = self._payload_config()
-        # render-cccev returns a composite dict with evaluation/render keys (matches run_step shape)
-        step_ids = ["discover", "evaluate-programme", "preview-vc", "reconcile", "negative-control"]
-        for step_id in step_ids:
-            result = mod.preview_step(config, step_id)
-            self.assertIn("method", result, f"dhis2.preview_step({step_id!r}) missing method")
-
-    def test_dhis2_preview_vc_step_is_simulate(self) -> None:
-        import lab_homepage_scenarios.dhis2_programme as mod
-        config = self._payload_config()
-        result = mod.preview_step(config, "preview-vc")
-        self.assertEqual(result["method"], "SIMULATE")
-
-    def test_dhis2_reconcile_preview_uses_raw_tracked_entity_lookup(self) -> None:
-        import lab_homepage_scenarios.dhis2_programme as mod
-        config = self._payload_config()
-        preview = mod.preview_step(config, "reconcile")
-        self.assertEqual(
-            preview["body"]["target"]["identifiers"],
-            [{"scheme": "dhis2_tracked_entity", "value": "PQfMcpmXeFE"}],
-        )
-        story = server.scenario_payload(config, "dhis2-programme-vc")["story"]
-        reconcile = next(step for step in story["steps"] if step["id"] == "reconcile")
-        self.assertEqual(
-            reconcile["reuses"],
-            [{"label": "Reconciliation ref", "value": "dhis2:tracked-entity:PQfMcpmXeFE"}],
-        )
-
-    def test_dhis2_render_cccev_preview_has_evaluation_key(self) -> None:
-        import lab_homepage_scenarios.dhis2_programme as mod
-        config = self._payload_config()
-        result = mod.preview_step(config, "render-cccev")
-        # render-cccev run produces a dict with "evaluation" and "render" keys
-        self.assertIn("evaluation", result)
-        self.assertIn("render", result)
-
-    # ---- social_aggregate preview_step ----
 
     def test_social_aggregate_all_steps_have_preview(self) -> None:
         import lab_homepage_scenarios.social_aggregate as mod

@@ -1,0 +1,21 @@
+version: 1
+registry: { id: fictional-declaration-registry }
+services:
+  applicant-declaration:
+    kind: evidence
+    version: 1
+    purpose: application-processing
+    legal_basis: application-processing
+    consent: not_required
+    access: { scopes: ["evidence:declaration:read"] }
+    claims:
+      applicant-declaration:
+        cel: "true"
+        value: { type: boolean }
+        disclosure: predicate
+    credential_profiles:
+      applicant-declaration:
+        format: dc+sd-jwt
+        type: https://credentials.invalid/applicant-declaration/v1
+        validity: 10m
+        claims: [applicant-declaration]

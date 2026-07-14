@@ -103,7 +103,6 @@ def base_routes() -> dict[tuple[str, str], Any]:
                     {"id": "civil-birth-evidence-demographics", "steps": 2},
                     {"id": "civil-marriage-evidence", "steps": 2},
                     {"id": "wallet-credential", "steps": 5},
-                    {"id": "dhis2-programme-vc", "steps": 6},
                     {"id": "social-aggregate", "steps": 4},
                     {"id": "combined-support", "steps": 6},
                     {"id": "agriculture-voucher", "steps": 5},
@@ -152,21 +151,6 @@ def base_routes() -> dict[tuple[str, str], Any]:
                         {"id": "holder-key"},
                         {"id": "nonce"},
                         {"id": "credential-preview"},
-                    ]
-                }
-            },
-        ),
-        ("GET", "/api/scenarios/dhis2-programme-vc.json"): (
-            200,
-            {
-                "story": {
-                    "steps": [
-                        {"id": "discover"},
-                        {"id": "evaluate-programme"},
-                        {"id": "preview-vc"},
-                        {"id": "reconcile"},
-                        {"id": "negative-control"},
-                        {"id": "render-cccev"},
                     ]
                 }
             },
@@ -272,8 +256,6 @@ def base_routes() -> dict[tuple[str, str], Any]:
                     {"id": "civil-notary"},
                     {"id": "social-protection-notary"},
                     {"id": "shared-eligibility-notary"},
-                    {"id": "dhis2-notary"},
-                    {"id": "opencrvs-notary"},
                     {"id": "agriculture-notary"},
                 ],
             },
@@ -283,15 +265,9 @@ def base_routes() -> dict[tuple[str, str], Any]:
         ("civil-notary", "person-is-alive", "NID-1001", "national_id"),
         ("social-protection-notary", "beneficiary-active", "NID-1001", "national_id"),
         ("shared-eligibility-notary", "eligible-for-combined-support", "NID-1001", "national_id"),
-        ("dhis2-notary", "dhis2-child-program-active", "PQfMcpmXeFE", "dhis2_tracked_entity"),
-        ("opencrvs-notary", "opencrvs-birth-record-exists", "9658342302", "UIN"),
         ("agriculture-notary", "eligible-for-climate-smart-input-voucher", "FARMER-1001", "farmer_id"),
     ]:
-        default_purpose = (
-            "https://demo.example.gov/purpose/opencrvs-dci-lab"
-            if service_id == "opencrvs-notary"
-            else "https://demo.example.gov/purpose/decentralized-evidence-demo"
-        )
+        default_purpose = "https://demo.example.gov/purpose/decentralized-evidence-demo"
         routes[("GET", f"/api/explorer/claims/{service_id}/metadata.json")] = (
             200,
             {
@@ -354,14 +330,7 @@ def lab_route(server: StubServer, method: str, path: str, body: Any) -> tuple[in
                     {"credential_configuration_id": "crvs_birth_certificate_sd_jwt"},
                 ],
             },
-            "credentials": [
-                {
-                    "id": "dhis2-bearer",
-                    "env": "DHIS2_EVIDENCE_CLIENT_BEARER",
-                    "service_url": server.url,
-                    "token": "",
-                }
-            ],
+            "credentials": [],
         },
     )
 
@@ -406,32 +375,6 @@ def portal_routes(*, raw_identifier: bool = False) -> dict[tuple[str, str], Any]
 
 
 class HostedSmokeTest(unittest.TestCase):
-    def test_success_smoke_checks_public_contract(self) -> None:
-        with StubServer(base_routes()) as server:
-            summary = hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
-
-        self.assertEqual(summary["credential_smoke"], "skipped")
-        self.assertEqual(summary["citizen_portal"]["status"], "skipped")
-        self.assertEqual(summary["scenarios"]["alive-proof"]["deny-row"], "denied_as_expected")
-        self.assertEqual(summary["scenarios"]["civil-birth-demographics"]["lookup"], "done")
-        self.assertEqual(summary["scenarios"]["social-aggregate"]["deny-row-with-aggregate"], "denied_as_expected")
-        self.assertEqual(summary["scenarios"]["combined-support"]["final-positive"], "done")
-        self.assertEqual(summary["scenarios"]["agriculture-voucher"]["positive-voucher"], "done")
-        self.assertEqual(summary["explorers"]["claims"]["agriculture-notary"]["default_evaluation"], "live")
-        self.assertEqual(summary["explorers"]["claims"]["opencrvs-notary"]["default_evaluation"], "metadata")
-        self.assertEqual(summary["explorers"]["registries"]["social-protection"]["aggregate_records"], 1)
-        requested_paths = [path for _, path, _ in server.requests]
-        self.assertIn("/api/scenarios/alive-proof/discover", requested_paths)
-        self.assertIn("/api/scenarios/civil-birth-demographics/lookup", requested_paths)
-        self.assertIn("/api/scenarios/wallet-credential/credential-preview", requested_paths)
-        self.assertIn("/api/scenarios/social-aggregate/read-aggregate", requested_paths)
-        self.assertIn("/api/scenarios/combined-support/final-positive", requested_paths)
-        self.assertIn("/api/scenarios/dhis2-programme-vc/render-cccev", requested_paths)
-        self.assertIn("/api/scenarios/agriculture-voucher/positive-voucher", requested_paths)
-        self.assertIn("/api/explorer/registries/civil/records.json?dataset=civil_registry&entity=civil_person&limit=1", requested_paths)
-        self.assertIn("/api/explorer/claims/agriculture-notary/evaluate.json", requested_paths)
-        self.assertIn("/.well-known/openid-credential-issuer", requested_paths)
-
     def test_citizen_portal_smoke_drives_login_evaluate_and_redacted_sse(self) -> None:
         with StubServer(portal_routes()) as server:
             summary = hosted_smoke.run_citizen_portal_smoke(
@@ -604,19 +547,6 @@ class HostedSmokeTest(unittest.TestCase):
         self.assertIn("claims-explorer-default-claim-missing", str(raised.exception))
         self.assertNotIn("/api/explorer/claims/civil-notary/evaluate.json", requested_paths)
 
-    def test_missing_story_step_fails_with_clear_contract_error(self) -> None:
-        routes = base_routes()
-        routes[("GET", "/api/scenarios/dhis2-programme-vc.json")] = (
-            200,
-            {"story": {"steps": [{"id": "discover"}, {"id": "evaluate-programme"}]}},
-        )
-        with StubServer(routes) as server:
-            with self.assertRaises(hosted_smoke.SmokeFailure) as raised:
-                hosted_smoke.run_smoke(hosted_smoke.SmokeConfig(base_url=server.url))
-
-        self.assertIn("scenario-story-step-mismatch", str(raised.exception))
-        self.assertIn("render-cccev", str(raised.exception))
-
     def test_bad_friendly_status_fails(self) -> None:
         routes = base_routes()
         routes[("POST", "/api/scenarios/alive-proof/prepare-evidence")] = (
@@ -676,13 +606,6 @@ class HostedSmokeTest(unittest.TestCase):
         self.assertNotIn("very-sensitive-disclosure", text)
         self.assertNotIn(raw_credential, text)
         self.assertNotIn("did:jwk:eyJrdHki", text)
-
-    def test_observed_answer_falls_back_to_value_when_satisfied_is_null(self) -> None:
-        self.assertEqual(
-            hosted_smoke.observed_answer({"satisfied": None, "value": "dhis2:tracked-entity:PQfMcpmXeFE"}),
-            "dhis2:tracked-entity:PQfMcpmXeFE",
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -104,58 +104,24 @@ class EsignetRelayLabTest(unittest.TestCase):
         self.assertIn('rm -f "$keystore_path"', start_script)
         self.assertIn("keytool -genkeypair", start_script)
 
-    def test_self_attestation_purpose_matches_civil_relay_policy(self) -> None:
+    def test_self_attestation_is_source_free_and_uses_application_purpose(self) -> None:
         smoke = text("scripts/smoke-citizen-self-attestation.sh")
-        hosted = text("config/coolify/notary/citizen-civil-notary.yaml")
-        relay = text("config/relay/civil-registry-relay.yaml")
-        purpose = "https://demo.example.gov/purpose/civil-certificate-evidence"
+        hosted = text("config/notary/self-attested-notary.yaml")
+        purpose = "application-processing"
 
         self.assertIn(f"ESIGNET_SELF_ATTESTATION_PURPOSE:-{purpose}", smoke)
-        self.assertIn(f"- {purpose}", relay)
         self.assertIn("purpose: {json.dumps(self_attestation_purpose)}", smoke)
         self.assertIn("- {json.dumps(self_attestation_purpose)}", smoke)
+        self.assertIn("type: self_attested", hosted)
         self.assertIn(f"purpose: {purpose}", hosted)
-        self.assertIn(f"- {purpose}", hosted)
-        self.assertNotIn("purpose: citizen_self_attestation", smoke)
-        self.assertNotIn("- citizen_self_attestation", smoke)
-        self.assertNotIn("purpose: citizen_self_attestation", hosted)
-        self.assertNotIn("- citizen_self_attestation", hosted)
+        self.assertNotIn("consultations:", hosted)
 
-    def test_hosted_citizen_notary_dci_config_uses_supported_fields(self) -> None:
-        hosted = text("config/coolify/notary/citizen-civil-notary.yaml")
-
-        self.assertIn("search_path: /dci/crvs/registry/sync/search", hosted)
-        self.assertNotIn('version: "1.0.0"', hosted)
-
-    def test_hosted_birth_certificate_wallet_claim_keeps_birth_evidence_root(self) -> None:
-        hosted = text("config/coolify/notary/citizen-civil-notary.yaml")
-
-        for expected in (
-            "'type': 'BirthEvidence'",
-            "'display_summary': {'registration_number': source.birth_record.registration_number",
-            "'issue_date': source.birth_certificate.issue_date",
-            "'issuing_authority_name': source.birth_record.authority",
-            "'child_given_name': source.child_person.given_name",
-            "'child_family_name': source.child_person.surname",
-            "'child_birth_date': source.child_person.birth_date",
-            "'child_sex': source.child_person.sex",
-            "'place_of_birth': source.birth_event.place_of_birth",
-            "'mother_given_name': source.mother_person.given_name",
-            "'mother_family_name': source.mother_person.surname",
-            "'father_given_name': source.father_person.given_name",
-            "'father_family_name': source.father_person.surname",
-            "'identifier': source.birth_certificate.id",
-            "'certifies_birth': {'identifier': source.birth_record.registration_number",
-        ):
-            with self.subTest(expected=expected):
-                self.assertIn(expected, hosted)
-        self.assertNotIn("'type': 'CRVSBirthCertificate'", hosted)
-        self.assertNotIn("'birth_evidence': {'type': 'BirthEvidence'", hosted)
-
-    def test_smoke_recreates_civil_relay_after_port_collision(self) -> None:
+    def test_smoke_does_not_start_relay_for_source_free_claim(self) -> None:
         smoke = text("scripts/smoke-citizen-self-attestation.sh")
 
-        self.assertIn('docker compose -f "${compose_file}" up -d --force-recreate civil-registry-relay', smoke)
+        self.assertNotIn('up -d --force-recreate civil-registry-relay', smoke)
+        self.assertNotIn("source_connections", smoke)
+        self.assertNotIn("source_bindings", smoke)
 
     def test_smoke_runs_citizen_notary_with_cel_feature(self) -> None:
         smoke = text("scripts/smoke-citizen-self-attestation.sh")

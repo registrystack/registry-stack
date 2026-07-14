@@ -1,0 +1,10 @@
+name: social-registry-ambiguous
+classification: synthetic
+input: { individual_id: IND-AB12CD34 }
+interactions:
+  - expect:
+      method: GET
+      path: /api/v2/spp/Individual/IND-AB12CD34
+      query: { _elements: "active,programme_code,household_reference" }
+    respond: { status: 409, body: {} }
+expect: { outcome: ambiguous, outputs: {}, claims: {} }

@@ -28,8 +28,7 @@ mkdir -p output/perf/results output/perf/reports
 
 k6 run perf/k6/relay_stack_read.js
 k6 run perf/k6/notary_relay_backed.js
-k6 run perf/k6/openfn_sidecar_saturation.js
-k6 run perf/k6/openfn_credential_issuance.js
+k6 run perf/k6/notary_self_attested.js
 ```
 
 The default profile is `smoke`. It intentionally uses a small VU count and a
@@ -70,7 +69,7 @@ docker run --rm \
   -e HEALTH_RELAY_URL=http://host.docker.internal:4313 \
   -e CIVIL_NOTARY_URL=http://host.docker.internal:4321 \
   -e SHARED_NOTARY_URL=http://host.docker.internal:4323 \
-  -e OPENFN_NOTARY_URL=http://host.docker.internal:4324 \
+  -e SELF_ATTESTED_NOTARY_URL=http://host.docker.internal:4321 \
   -v "$PWD:/workspace" \
   -w /workspace \
   grafana/k6:0.57.0 run perf/k6/notary_relay_backed.js
@@ -108,9 +107,7 @@ Scenario defaults for capacity and breakpoint runs:
 
 - `relay_stack_read`: capacity `1000 req/s`; breakpoint `1000 -> 2000 -> 5000`.
 - `notary_relay_backed`: capacity `200 req/s`; breakpoint `100 -> 200 -> 400`.
-- `openfn_sidecar_saturation`: capacity `25 req/s`; breakpoint `10 -> 25 -> 50`.
-- `openfn_credential_issuance`: capacity `20 iterations/s`; breakpoint
-  `10 -> 20 -> 40`.
+- `notary_self_attested`: capacity `200 req/s`; breakpoint `100 -> 200 -> 400`.
 
 ## Reports
 

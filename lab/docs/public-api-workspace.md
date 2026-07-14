@@ -15,10 +15,9 @@ The public API workspace is done only when all criteria below are satisfied:
   origins target `*.lab.registrystack.org`.
 - The committed `Hosted Lab` environment includes every public demo caller token
   currently listed in `config/lab-homepage/public-demo-credentials.env`.
-- No committed Bruno file contains infrastructure secrets, source connector
+- No committed Bruno file contains infrastructure secrets, Relay consultation
   tokens, signing keys, private keys, database credentials, Redis credentials,
-  Coolify tokens, eSignet admin credentials, DHIS2 upstream credentials, or
-  OpenCRVS DCI client secrets.
+  Coolify tokens, eSignet admin credentials, or upstream system credentials.
 - The token values in the `Hosted Lab` environment are generated or validated
   from `config/lab-homepage/public-demo-credentials.env`; manual drift between
   the homepage credentials and the Bruno environment is caught by a repository
@@ -36,11 +35,8 @@ The public API workspace is done only when all criteria below are satisfied:
 - `20 - Relay Access Boundaries` contains at least one successful authorized
   row or aggregate request and at least two deliberate denial probes proving
   that a public token cannot use a surface outside its intended scope.
-- `30 - Notary Evaluation` contains at least one positive public Notary
-  evaluation, one negative public Notary evaluation, and a public discovery
-  request for another hosted Notary surface. The initial hosted slice uses
-  public DHIS2 and OpenCRVS Notary credentials because the hosted citizen Notary
-  is OIDC-bound and does not expose a static public caller token.
+- `30 - Notary Evaluation` contains source-free self-attested Notary discovery
+  plus positive and negative evaluation examples for generated projects.
 - Every request in the first slice has Bruno tests that assert the expected HTTP
   status and at least one response invariant specific to that request.
 - The collection README explains that the committed hosted tokens are public
@@ -62,11 +58,9 @@ This workspace is a human-operated API workspace for exploring Registry Lab. It
 does not replace smoke scripts, release checks, or hosted deployment validation.
 
 The first implementation covers the public hosted lab and the local Compose
-equivalent for the same surfaces. Service-first discovery, citizen OID4VCI,
-federation, and wallet flows are second-wave or later unless they are needed to
-validate the first-slice boundaries. Hosted Notary evaluation starts with DHIS2
-because that is the public hosted Notary surface with repeatable positive and
-negative evaluations using committed public credentials.
+equivalent for the same surfaces. Relay-only, source-free Notary-only, and
+combined project topologies remain distinct. Combined Notary evaluation uses
+compiler-pinned Relay consultations rather than direct source connectors.
 
 ## Public Credential Boundary
 
@@ -82,14 +76,12 @@ they are intentionally public demo credentials:
 
 The following values must never be committed to the API workspace:
 
-- Source connector tokens used by services to call upstream systems.
-- OpenFn sidecar tokens.
+- Relay consultation tokens used internally by Notary.
 - Notary signing keys or issuer private keys.
 - eSignet client private keys, admin credentials, or seed operator credentials.
 - Zitadel admin or machine-user credentials not already published as public demo
   caller credentials.
-- DHIS2 upstream usernames, passwords, or private integration tokens.
-- OpenCRVS DCI client id, client secret, SHA secret, or upstream OAuth tokens.
+- Upstream system usernames, passwords, or private integration tokens.
 - Database, Redis, Coolify, SSH, webhook, or infrastructure credentials.
 
 ## Collection Shape
@@ -187,8 +179,8 @@ Code-review checkpoint:
 - Worker B implements `10 - Relay Metadata` hosted requests.
 - Worker C implements `20 - Relay Access Boundaries` hosted success and denial
   probes.
-- Worker D implements `30 - Notary Evaluation` hosted DHIS2 evaluations and
-  OpenCRVS discovery requests.
+- Worker D implements `30 - Notary Evaluation` source-free Notary discovery,
+  a positive evaluation, and a service-policy denial probe.
 
 Definition of done:
 

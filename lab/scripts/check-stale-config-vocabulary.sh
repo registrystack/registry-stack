@@ -16,7 +16,16 @@ check_absent() {
   local pattern="$1"
   shift
   local -a paths=("$@")
-  if rg -n --glob '!output/**' --glob '!vendor/**' --glob '!scripts/check-stale-config-vocabulary.sh' "${pattern}" "${paths[@]}"; then
+  if rg -n \
+    --glob '!output/**' \
+    --glob '!vendor/**' \
+    --glob '!CHANGELOG.md' \
+    --glob '!scripts/check-stale-config-vocabulary.sh' \
+    --glob '!scripts/check-project-topologies.sh' \
+    --glob '!scripts/test_validate_hosted_deploy.py' \
+    --glob '!scripts/validate-public-api-workspace.py' \
+    --glob '!scripts/test_validate_public_api_workspace.py' \
+    "${pattern}" "${paths[@]}"; then
     failures=$((failures + 1))
   fi
 }
@@ -28,6 +37,12 @@ check_absent 'connector:[[:space:]]*openfn_sidecar' config docs README.md
 check_absent 'bulk_mode:[[:space:]]*openfn_sidecar_batch' config docs README.md
 check_absent 'allowed_wallet_origins' config docs README.md
 check_absent '^[[:space:]]+max_entries:' config/notary config/coolify/notary
+check_absent 'connector:[[:space:]]*(registry_data_api|dci|source_adapter_sidecar)' .
+check_absent 'source_adapter_sidecar|source-adapter-sidecar' .
+check_absent 'openfn|OPENFN' .
+check_absent '(opencrvs-dci|fhir-health|dhis2-health)-notary' .
+check_absent 'REGISTRY_OPENFN_NOTARY_SOURCE_DIR|FHIR_SIDECAR|OPENCRVS_DCI_' .
+check_absent 'country-dir|country workspace|country authoring' projects docs README.md justfile scripts
 
 if [[ "${failures}" -ne 0 ]]; then
   printf 'stale config vocabulary check failed with %s violation set(s)\n' "${failures}" >&2

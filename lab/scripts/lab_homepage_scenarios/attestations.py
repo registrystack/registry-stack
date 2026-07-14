@@ -9,9 +9,6 @@ from typing import Any
 
 RAW_COMPATIBILITY_IDS = (
     "person-is-alive",
-    "opencrvs-birth-record-exists",
-    "opencrvs-date-of-birth",
-    "opencrvs-age-band",
     "beneficiary-active",
     "program-enrollment-status",
     "household-eligibility-band",
@@ -19,7 +16,6 @@ RAW_COMPATIBILITY_IDS = (
     "health-service-available",
     "social-program-active",
     "eligible-for-combined-support",
-    "dhis2-child-program-active",
     "eligible-for-climate-smart-input-voucher",
     "voucher-eligibility-reason-code",
     "household-composition",
@@ -50,13 +46,13 @@ ATTESTATIONS: dict[str, dict[str, Any]] = {
     "birth-registration-attestation": {
         "offering_id": "birth-registration-attestation",
         "display_name": "Birth Registration Attestation",
-        "source_authority": "OpenCRVS and civil registry",
+        "source_authority": "Civil registry",
         "jurisdiction": "Demo civil registry",
         "lookup_profiles": ["by-national-id", "by-certificate-number"],
         "publicschema_anchor": "Birth",
         "disclosure_profile": "predicate",
         "freshness": {"source_observed_at": "live registry lookup", "as_of": "request time"},
-        "compatibility_claim_aliases": ["opencrvs-birth-record-exists"],
+        "compatibility_claim_aliases": [],
     },
     "birth-certificate-attestation": {
         "offering_id": "birth-certificate-attestation",
@@ -87,13 +83,13 @@ ATTESTATIONS: dict[str, dict[str, Any]] = {
     "health-programme-participation-attestation": {
         "offering_id": "health-programme-participation-attestation",
         "display_name": "Health Programme Participation Attestation",
-        "source_authority": "DHIS2 health programme Notary",
+        "source_authority": "Health programme registry",
         "jurisdiction": "Demo health programme",
         "lookup_profiles": ["by-source-record-id"],
         "publicschema_anchor": "Program",
         "disclosure_profile": "value or predicate",
-        "freshness": {"source_observed_at": "DHIS2-backed Notary evaluation", "as_of": "request time"},
-        "compatibility_claim_aliases": ["dhis2-child-program-active"],
+        "freshness": {"source_observed_at": "Relay consultation", "as_of": "request time"},
+        "compatibility_claim_aliases": [],
     },
     "service-availability-attestation": {
         "offering_id": "service-availability-attestation",

@@ -91,13 +91,8 @@ EVIDENCE_CLIENT_NAMES = [
     "SHARED_EVIDENCE_DENY_JURISDICTION",
     "SHARED_EVIDENCE_DENY_LEGAL_BASIS",
     "SHARED_EVIDENCE_DENY_CONSENT",
-    "OPENCRVS_EVIDENCE_DENY_ASSURANCE",
-    "OPENCRVS_EVIDENCE_DENY_JURISDICTION",
-    "OPENCRVS_EVIDENCE_DENY_LEGAL_BASIS",
-    "OPENCRVS_EVIDENCE_DENY_CONSENT",
-    "DHIS2_EVIDENCE_CLIENT",
     "AGRI_EVIDENCE_CLIENT",
-    "FHIR_EVIDENCE_CLIENT",
+    "SELF_ATTESTED_EVIDENCE_CLIENT",
 ]
 
 
@@ -122,9 +117,6 @@ def generate_env() -> dict[str, str]:
     agri_federation_response_jwk = generate_registry_notary_issuer_jwk()
     access_token_jwk = generate_registry_notary_issuer_jwk()
     esignet_rp_jwk = generate_rs256_jwk("registry-lab-live-client-key-1")
-    openfn_sidecar_token = generate_raw_key()
-    fhir_sidecar_token = generate_raw_key()
-    opencrvs_evidence_client_token = generate_raw_key()
     values: dict[str, str] = {
         "CLAIM_VERIFICATION_BINDING_KEY": generate_raw_key(),
         "REGISTRY_RELAY_AUDIT_HASH_SECRET": generate_raw_key(),
@@ -154,15 +146,6 @@ def generate_env() -> dict[str, str]:
         "AGRI_FEDERATION_CLIENT_JWK": agri_federation_client_jwk,
         "AGRI_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET": generate_raw_key(),
         "AGRI_FEDERATION_RESPONSE_JWK": agri_federation_response_jwk,
-        "OPENFN_SIDECAR_TOKEN_RAW": openfn_sidecar_token,
-        "OPENFN_SIDECAR_TOKEN_HASH": fingerprint(openfn_sidecar_token),
-        "FHIR_SIDECAR_TOKEN_RAW": fhir_sidecar_token,
-        "FHIR_SIDECAR_TOKEN_HASH": fingerprint(fhir_sidecar_token),
-        "OPENFN_MOCK_REGISTRY_TOKEN_RAW": generate_raw_key(),
-        "OPENCRVS_EVIDENCE_CLIENT_TOKEN": opencrvs_evidence_client_token,
-        "OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH": fingerprint(opencrvs_evidence_client_token),
-        "OPENCRVS_DCI_CLIENT_ID": "registry-lab-opencrvs-dci-doctor",
-        "OPENCRVS_DCI_CLIENT_SECRET": generate_raw_key(),
     }
     for name in TOKEN_NAMES:
         raw = generate_raw_key()

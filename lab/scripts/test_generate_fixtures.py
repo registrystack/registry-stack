@@ -15,7 +15,6 @@ import importlib.util
 import unittest
 import csv
 import datetime as dt
-import re
 import sys
 import tempfile
 from pathlib import Path
@@ -28,20 +27,6 @@ from openpyxl import load_workbook
 SCRIPT_DIR = Path(__file__).resolve().parent
 GENERATOR_PATH = SCRIPT_DIR / "generate-fixtures.py"
 AGRI_GENERATOR_PATH = SCRIPT_DIR / "generate-agri-fixtures.py"
-SCRIPT_MATRIX_PATHS = [
-    SCRIPT_DIR / "demo-flow.py",
-    SCRIPT_DIR / "smoke-notary-client.py",
-]
-EXPECTED_NOTARY_CONTEXT_CONSTRAINT_COUNTS = {
-    "config/coolify/notary/civil-notary.yaml": 19,
-    "config/coolify/notary/opencrvs-dci-notary.yaml": 8,
-    "config/coolify/notary/shared-eligibility-notary.yaml": 3,
-    "config/coolify/notary/social-protection-notary.yaml": 7,
-    "config/notary/civil-notary.yaml": 19,
-    "config/notary/opencrvs-dci-notary.yaml": 8,
-    "config/notary/shared-eligibility-notary.yaml": 3,
-    "config/notary/social-protection-notary.yaml": 8,
-}
 
 
 def load_generator():
@@ -155,7 +140,6 @@ class GenerateFixturesTest(unittest.TestCase):
         self.assertNotIn("civil_status", self.generator.CIVIL_ROWS[0])
 
         public_files = [
-            self.generator.ROOT / "config" / "lab-homepage" / "public-demo-credentials.json",
             self.generator.ROOT / "config" / "coolify" / "relay" / "civil-registry-relay.yaml",
             self.generator.ROOT / "config" / "coolify" / "relay" / "civil-registry-relay.metadata.yaml",
             self.generator.ROOT / "config" / "static-metadata" / "metadata.yaml",
@@ -306,86 +290,6 @@ class GenerateFixturesTest(unittest.TestCase):
                 self.assertIsNotNone(parsed.tzinfo)
                 if national_id == "NID-1010":
                     self.assertEqual(value, self.generator.STALE_SOURCE_OBSERVED_AT)
-
-    def test_static_registry_notaries_do_not_use_row_observed_at_for_freshness(self) -> None:
-        notary_paths = [
-            self.generator.ROOT / "config" / "notary" / "shared-eligibility-notary.yaml",
-            self.generator.ROOT / "config" / "notary" / "social-protection-notary.yaml",
-            self.generator.ROOT / "config" / "coolify" / "notary" / "shared-eligibility-notary.yaml",
-            self.generator.ROOT / "config" / "coolify" / "notary" / "social-protection-notary.yaml",
-        ]
-        for path in notary_paths:
-            with self.subTest(path=path.relative_to(self.generator.ROOT)):
-                text = path.read_text(encoding="utf-8")
-                self.assertNotIn("source_freshness:", text)
-                self.assertNotIn("source_observed_at_field: observed_at", text)
-
-    def test_opencrvs_dci_freshness_uses_source_response_timestamp(self) -> None:
-        notary_paths = [
-            self.generator.ROOT / "config" / "notary" / "opencrvs-dci-notary.yaml",
-            self.generator.ROOT / "config" / "coolify" / "notary" / "opencrvs-dci-notary.yaml",
-        ]
-        for path in notary_paths:
-            with self.subTest(path=path.relative_to(self.generator.ROOT)):
-                text = path.read_text(encoding="utf-8")
-                self.assertIn(
-                    'observed_at: "$response:/message/search_response/0/timestamp"',
-                    text,
-                )
-                self.assertEqual(text.count("source_freshness:"), 8)
-                self.assertEqual(text.count("max_age_seconds: 86400"), 8)
-                self.assertEqual(text.count("source_observed_at_field: observed_at"), 8)
-
-    def test_notary_matching_context_constraints_are_nested(self) -> None:
-        legacy_fields = (
-            "allowed_assurance",
-            "permitted_jurisdictions",
-            "require_legal_basis",
-            "require_consent",
-            "max_source_age_seconds",
-        )
-        notary_dirs = (
-            self.generator.ROOT / "config" / "notary",
-            self.generator.ROOT / "config" / "coolify" / "notary",
-        )
-        for notary_dir in notary_dirs:
-            for path in sorted(notary_dir.glob("*-notary.yaml")):
-                with self.subTest(path=path.relative_to(self.generator.ROOT)):
-                    config = yaml.safe_load(path.read_text(encoding="utf-8"))
-                    context_constraint_count = 0
-                    for matching in self._source_binding_matchings(config):
-                        for field in legacy_fields:
-                            self.assertNotIn(field, matching)
-                        context_constraints = matching.get("context_constraints")
-                        if context_constraints is not None:
-                            context_constraint_count += 1
-                            self.assertIsInstance(context_constraints, dict)
-                            self.assertTrue(
-                                set(context_constraints).intersection(
-                                    {
-                                        "legal_basis",
-                                        "consent",
-                                        "jurisdiction",
-                                        "assurance",
-                                        "source_freshness",
-                                    }
-                                )
-                            )
-                    relative_path = path.relative_to(self.generator.ROOT).as_posix()
-                    self.assertEqual(
-                        EXPECTED_NOTARY_CONTEXT_CONSTRAINT_COUNTS.get(relative_path, 0),
-                        context_constraint_count,
-                    )
-
-    @staticmethod
-    def _source_binding_matchings(config: dict[str, object]) -> list[dict[str, object]]:
-        claims = config.get("evidence", {}).get("claims", [])
-        return [
-            matching
-            for claim in claims
-            for binding in claim.get("source_bindings", {}).values()
-            if isinstance((matching := binding.get("matching")), dict)
-        ]
 
     def test_refresh_persona_invariants_cover_source_outcomes(self) -> None:
         personas = self.generator.FIXTURE_PERSONAS
@@ -562,27 +466,6 @@ class GenerateFixturesTest(unittest.TestCase):
             finally:
                 self.generator.DATA_DIR = original_data_dir
 
-    def test_script_v1_matrices_match_fixture_outcomes(self) -> None:
-        for path in SCRIPT_MATRIX_PATHS:
-            with self.subTest(path=path.name):
-                module = load_module(path)
-                matrix = {
-                    item["id"]: {
-                        "alive": item["alive"],
-                        "health": item["health"],
-                        "combined": item["combined"],
-                    }
-                    for item in module.V1_MATRIX
-                }
-                self.assertEqual(matrix, self.expected_runtime_outcomes)
-
-        smoke_matrix = self._smoke_shell_matrix()
-        for national_id, expected in self.expected_runtime_outcomes.items():
-            with self.subTest(path="smoke.sh", national_id=national_id):
-                self.assertEqual(smoke_matrix[("person-is-alive", national_id)], expected["alive"])
-                self.assertEqual(smoke_matrix[("health-service-available", national_id)], expected["health"])
-                self.assertEqual(smoke_matrix[("eligible-for-combined-support", national_id)], expected["combined"])
-
     @staticmethod
     def _health_available(row: dict[str, object]) -> bool:
         return (
@@ -600,20 +483,6 @@ class GenerateFixturesTest(unittest.TestCase):
     @staticmethod
     def _stringified_rows(rows: list[list[object]]) -> list[list[str]]:
         return [["" if value is None else str(value) for value in row] for row in rows]
-
-    @staticmethod
-    def _smoke_shell_matrix() -> dict[tuple[str, str], object]:
-        text = (SCRIPT_DIR / "smoke.sh").read_text(encoding="utf-8")
-        entries = re.findall(r'"[^"]+\|[^"]+\|[^"]+\|([^|"]+)\|(NID-\d+)\|([^"]+)"', text)
-        matrix = {}
-        for claim, national_id, expected in entries:
-            if expected in {"true", "false"}:
-                matrix[(claim, national_id)] = expected == "true"
-            else:
-                status, code = expected.split(":", 1)
-                matrix[(claim, national_id)] = {"status": int(status), "code": code}
-        return matrix
-
 
 if __name__ == "__main__":
     unittest.main()

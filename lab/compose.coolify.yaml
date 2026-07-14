@@ -1,32 +1,23 @@
 name: registry-lab
 
-# The three social-protection services (social-protection-registry-relay,
-# social-protection-notary, shared-eligibility-notary) run in the per-track
-# lab-social Coolify app (compose.social-hosted.yaml). They are intentionally
-# absent here: the monolith's rendered compose exceeded the Linux
-# MAX_ARG_STRLEN limit Coolify v4.1.1 hits when it writes the decoded file, and
-# moving them out keeps the monolith under the limit.
+# Social-protection Relay runs in the per-track lab-social Coolify app. It is
+# intentionally absent here because the monolith's rendered Compose exceeded
+# the Linux MAX_ARG_STRLEN limit in Coolify v4.1.1.
 x-hosted-domains:
-  lab-homepage: lab.registrystack.org
   citizen-portal: portal.lab.registrystack.org
-  citizen-civil-notary: citizen-notary.lab.registrystack.org
+  self-attested-notary: self-attested-notary.lab.registrystack.org
   civil-registry-relay: civil-relay.lab.registrystack.org
   health-registry-relay: health-relay.lab.registrystack.org
   static-metadata-publisher: metadata.lab.registrystack.org
   zitadel: zitadel.lab.registrystack.org
-  dhis2-health-notary: dhis2-notary.lab.registrystack.org
-  opencrvs-dci-notary: opencrvs-notary.lab.registrystack.org
 
 x-coolify-required-env:
   - AGRI_AGGREGATE_READER_RAW
-  - AGRI_EVIDENCE_CLIENT_BEARER
   - AGRI_EVIDENCE_ONLY_RAW
   - AGRI_METADATA_CLIENT_RAW
   - AGRI_ROW_READER_RAW
   - CIVIL_EVIDENCE_ONLY_HASH
   - CIVIL_EVIDENCE_ONLY_RAW
-  - CIVIL_EVIDENCE_CLIENT_BEARER
-  - CIVIL_EVIDENCE_CLIENT_BEARER_HASH
   - CIVIL_EVIDENCE_SOURCE_HASH
   - CIVIL_EVIDENCE_SOURCE_RAW
   - CIVIL_ESIGNET_IDENTITY_RELEASE_HASH
@@ -35,10 +26,6 @@ x-coolify-required-env:
   - CIVIL_METADATA_CLIENT_RAW
   - CIVIL_ROW_READER_HASH
   - CIVIL_ROW_READER_RAW
-  - DHIS2_EVIDENCE_CLIENT_BEARER
-  - DHIS2_EVIDENCE_CLIENT_BEARER_HASH
-  - DHIS2_EVIDENCE_CLIENT_TOKEN
-  - DHIS2_EVIDENCE_CLIENT_TOKEN_HASH
   - HEALTH_EVIDENCE_ONLY_HASH
   - HEALTH_EVIDENCE_ONLY_RAW
   - HEALTH_EVIDENCE_SOURCE_HASH
@@ -46,13 +33,6 @@ x-coolify-required-env:
   - HEALTH_METADATA_CLIENT_RAW
   - HEALTH_ROW_READER_HASH
   - HEALTH_ROW_READER_RAW
-  - OPENCRVS_DCI_CLIENT_ID
-  - OPENCRVS_DCI_CLIENT_SECRET
-  - OPENCRVS_DCI_SHA_SECRET
-  - OPENCRVS_EVIDENCE_CLIENT_TOKEN
-  - OPENCRVS_EVIDENCE_CLIENT_TOKEN_HASH
-  - OPENFN_SIDECAR_TOKEN_HASH
-  - OPENFN_SIDECAR_TOKEN_RAW
   - REGISTRY_NOTARY_ACCESS_TOKEN_JWK
   - REGISTRY_NOTARY_AUDIT_HASH_SECRET
   - REGISTRY_NOTARY_ESIGNET_RP_JWK
@@ -60,19 +40,10 @@ x-coolify-required-env:
   - REGISTRY_RELAY_AUDIT_HASH_SECRET
   - SHARED_CIVIL_EVIDENCE_SOURCE_HASH
   - SHARED_CIVIL_EVIDENCE_SOURCE_RAW
-  - SHARED_EVIDENCE_CLIENT_BEARER
-  - SHARED_EVIDENCE_CLIENT_BEARER_HASH
-  - SHARED_EVIDENCE_CLIENT_TOKEN_HASH
   - SHARED_HEALTH_EVIDENCE_SOURCE_HASH
   - SHARED_HEALTH_EVIDENCE_SOURCE_RAW
   - SHARED_SOCIAL_EVIDENCE_SOURCE_HASH
   - SHARED_SOCIAL_EVIDENCE_SOURCE_RAW
-  - SOCIAL_EVIDENCE_CLIENT_BEARER
-  - SOCIAL_EVIDENCE_CLIENT_BEARER_HASH
-  - SOCIAL_EVIDENCE_CLIENT_TOKEN
-  - SOCIAL_EVIDENCE_CLIENT_TOKEN_HASH
-  - SOCIAL_FEDERATION_PAIRWISE_SUBJECT_HASH_SECRET
-  - SOCIAL_FEDERATION_RESPONSE_JWK
   - SOCIAL_AGGREGATE_READER_HASH
   - SOCIAL_AGGREGATE_READER_RAW
   - SOCIAL_EVIDENCE_ONLY_HASH
@@ -83,6 +54,8 @@ x-coolify-required-env:
   - SOCIAL_METADATA_CLIENT_RAW
   - SOCIAL_ROW_READER_HASH
   - SOCIAL_ROW_READER_RAW
+  - SELF_ATTESTED_EVIDENCE_CLIENT_TOKEN
+  - SELF_ATTESTED_EVIDENCE_CLIENT_TOKEN_HASH
 
 x-relay-common: &relay-common
   image: ${REGISTRY_RELAY_IMAGE:-ghcr.io/registrystack/registry-relay@sha256:da9332ef30ba252d54ba275eb2a9be443a65e95ef78c493b9b0ce30cbc391e71}
@@ -140,45 +113,26 @@ services:
         git -C /tmp/repo remote add origin "$$CONFIG_REPO_URL"
         git -C /tmp/repo fetch --depth 1 origin "$$CONFIG_REPO_REF"
         git -C /tmp/repo -c advice.detachedHead=false checkout FETCH_HEAD
-        for d in relay notary data pginit openfn-tmpl static-scripts lab-homepage; do
+        for d in relay notary data pginit; do
           mkdir -p "/out/$$d"
           find "/out/$$d" -mindepth 1 -delete 2>/dev/null || true
         done
         cp -a /tmp/repo/config/coolify/relay/. /out/relay/
-        cp -a /tmp/repo/config/coolify/notary/civil-notary.yaml /out/notary/
-        cp -a /tmp/repo/config/coolify/notary/citizen-civil-notary.yaml /out/notary/
-        cp -a /tmp/repo/config/coolify/notary/dhis2-health-notary.yaml /out/notary/
-        cp -a /tmp/repo/config/coolify/notary/opencrvs-dci-notary.yaml /out/notary/opencrvs-dci-notary.yaml.template
+        cp -a /tmp/repo/config/notary/self-attested-notary.yaml /out/notary/
         cp -a /tmp/repo/data/. /out/data/
         cp -a /tmp/repo/config/postgres/init.sql /out/pginit/
-        cp -a /tmp/repo/config/coolify/openfn/. /out/openfn-tmpl/
-        cp -a /tmp/repo/scripts/static-metadata-server.py /out/static-scripts/
-        cp -a /tmp/repo/scripts/lab-homepage-server.py /out/static-scripts/
-        cp -a /tmp/repo/scripts/lab_homepage_explorer /out/static-scripts/
-        cp -a /tmp/repo/scripts/lab_homepage_scenarios /out/static-scripts/
-        cp -a /tmp/repo/scripts/lab_homepage_static /out/static-scripts/
-        cp -a /tmp/repo/config/lab-homepage/. /out/lab-homepage/
         for d in civil-cache health-cache; do
           mkdir -p "/out/$$d"
           chown -R 65532:65532 "/out/$$d"
         done
-        for d in openfn-audit-state; do
-          mkdir -p "/out/$$d"
-          chown -R 1000:1000 "/out/$$d"
-        done
-        chown -R 1000:1000 /out/openfn-audit-state
         echo "config-loader: populated config volumes from $$CONFIG_REPO_REF"
     volumes:
       - cfg-relay:/out/relay
       - cfg-notary:/out/notary
       - cfg-data:/out/data
       - cfg-pginit:/out/pginit
-      - cfg-openfn-tmpl:/out/openfn-tmpl
-      - cfg-static-scripts:/out/static-scripts
-      - cfg-lab-homepage:/out/lab-homepage
       - civil-registry-cache:/out/civil-cache
       - health-registry-cache:/out/health-cache
-      - openfn-sidecar-audit-state:/out/openfn-audit-state
 
   postgres:
     image: ${REGISTRY_LAB_POSTGRES_IMAGE:-postgres:16-alpine}
@@ -303,63 +257,6 @@ services:
       retries: 3
       start_period: 10s
 
-  lab-homepage:
-    image: ${REGISTRY_LAB_HOMEPAGE_IMAGE:-python:3.12.3-slim-bookworm}
-    command:
-      - python
-      - /opt/lab-scripts/lab-homepage-server.py
-      - --port
-      - "8080"
-      - --host
-      - 0.0.0.0
-      - --config
-      - /etc/registry-lab-homepage/public-demo-credentials.json
-    restart: unless-stopped
-    expose:
-      - "8080"
-    environment:
-      # lab-homepage-server.py imports lab_homepage_scenarios once at process
-      # start from the config-loader-populated cfg-static-scripts volume. A
-      # refreshed volume alone does not update an already-running process, so the
-      # ref must reach this service's environment too: a changed value makes
-      # `docker compose up` recreate lab-homepage (after config-loader repopulates
-      # the volume), which reimports the deployed scenario code. Without it a
-      # force=false deploy reports success while the homepage keeps serving the
-      # previously imported scenario modules.
-      CONFIG_REPO_REF: ${CONFIG_REPO_REF:?set CONFIG_REPO_REF to the deployed registry-lab git ref}
-      CIVIL_EVIDENCE_URL: http://civil-notary:8080
-      CIVIL_EVIDENCE_CLIENT_BEARER: ${CIVIL_EVIDENCE_CLIENT_BEARER:-}
-      REGISTRY_LAB_UMAMI_WEBSITE_ID: ${REGISTRY_LAB_UMAMI_WEBSITE_ID:-}
-      REGISTRY_LAB_UMAMI_SCRIPT_SRC: ${REGISTRY_LAB_UMAMI_SCRIPT_SRC:-https://stats.registrystack.org/script.js}
-      REGISTRY_LAB_UMAMI_DOMAINS: ${REGISTRY_LAB_UMAMI_DOMAINS:-lab.registrystack.org}
-      # The social relay and shared Notary run in the lab-social Coolify app, on a
-      # separate docker network, so the homepage reaches them over public HTTPS.
-      SOCIAL_RELAY_URL: https://social-relay.lab.registrystack.org
-      SHARED_EVIDENCE_URL: https://shared-notary.lab.registrystack.org
-      SHARED_EVIDENCE_CLIENT_BEARER: ${SHARED_EVIDENCE_CLIENT_BEARER:-}
-      AGRI_EVIDENCE_URL: https://agriculture-notary.lab.registrystack.org
-      AGRI_EVIDENCE_CLIENT_BEARER: ${AGRI_EVIDENCE_CLIENT_BEARER:-}
-      AGRI_METADATA_CLIENT_RAW: ${AGRI_METADATA_CLIENT_RAW:-}
-      AGRI_EVIDENCE_ONLY_RAW: ${AGRI_EVIDENCE_ONLY_RAW:-}
-      AGRI_ROW_READER_RAW: ${AGRI_ROW_READER_RAW:-}
-      AGRI_AGGREGATE_READER_RAW: ${AGRI_AGGREGATE_READER_RAW:-}
-    depends_on:
-      config-loader:
-        condition: service_completed_successfully
-      civil-notary:
-        condition: service_healthy
-    volumes:
-      - cfg-static-scripts:/opt/lab-scripts:ro
-      - cfg-lab-homepage:/etc/registry-lab-homepage:ro
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8080/healthz\", timeout=2).read()'"
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
   citizen-portal:
     image: ${REGISTRY_LAB_CITIZEN_PORTAL_IMAGE:-ghcr.io/jeremi/registry-lab-citizen-portal@sha256:d54b87aea30a69d1e3a83dd883d91b24b89f24f407517b7ce673bc87ab133731}
     restart: unless-stopped
@@ -383,109 +280,19 @@ services:
       retries: 3
       start_period: 10s
 
-  civil-notary:
+  self-attested-notary:
     <<: *notary-common
-    command: ["--config", "/etc/registry-notary/civil-notary.yaml"]
+    command: ["--config", "/etc/registry-notary/self-attested-notary.yaml"]
     environment:
       <<: *notary-env
-      CIVIL_EVIDENCE_CLIENT_BEARER_HASH: ${CIVIL_EVIDENCE_CLIENT_BEARER_HASH:-}
-      CIVIL_EVIDENCE_SOURCE_RAW: ${CIVIL_EVIDENCE_SOURCE_RAW:-}
+      SELF_ATTESTED_EVIDENCE_CLIENT_TOKEN_HASH: ${SELF_ATTESTED_EVIDENCE_CLIENT_TOKEN_HASH:-}
+      REGISTRY_NOTARY_AUDIT_HASH_SECRET: ${REGISTRY_NOTARY_AUDIT_HASH_SECRET:-}
+      REGISTRY_NOTARY_ISSUER_JWK: ${REGISTRY_NOTARY_ISSUER_JWK:-}
     volumes:
       - cfg-notary:/etc/registry-notary:ro
       - notary-config-state:/var/lib/registry-notary/config-state
     depends_on:
       config-loader:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      civil-registry-relay:
-        condition: service_healthy
-
-  citizen-civil-notary:
-    <<: *notary-common
-    command: ["--config", "/etc/registry-notary/citizen-civil-notary.yaml"]
-    volumes:
-      - cfg-notary:/etc/registry-notary:ro
-      - notary-config-state:/var/lib/registry-notary/config-state
-    depends_on:
-      config-loader:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      civil-registry-relay:
-        condition: service_healthy
-
-  openfn-dhis2-sidecar:
-    image: ${REGISTRY_NOTARY_OPENFN_SIDECAR_IMAGE:-ghcr.io/registrystack/registry-notary-source-adapter-sidecar@sha256:da5135846d075cd322a51260556ce875da6e328719a7b5628eb993a0ef876688}
-    command:
-      - --config
-      - /etc/registry-notary-openfn/openfn-dhis2-sidecar.bootstrap.yaml
-    environment:
-      RUST_LOG: ${RUST_LOG:-info}
-      OPENFN_DHIS2_DEMO_CREDENTIAL_JSON: '{"baseUrl":"https://play.im.dhis2.org/stable-2-43-0-1","username":"${OPENFN_DHIS2_USERNAME:-admin}","password":"${OPENFN_DHIS2_PASSWORD:-district}"}'
-    depends_on:
-      config-loader:
-        condition: service_completed_successfully
-    volumes:
-      - cfg-openfn-tmpl:/etc/registry-notary-openfn:ro
-      - openfn-sidecar-audit-state:/var/lib/registry-notary-openfn-sidecar/audit
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - "curl -fsS http://127.0.0.1:8080/ready >/dev/null"
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 30s
-    restart: unless-stopped
-
-  dhis2-health-notary:
-    <<: *notary-common
-    command: ["--config", "/etc/registry-notary/dhis2-health-notary.yaml"]
-    environment:
-      <<: *notary-env
-      DHIS2_EVIDENCE_CLIENT_TOKEN_HASH: ${DHIS2_EVIDENCE_CLIENT_TOKEN_HASH:-}
-      DHIS2_EVIDENCE_CLIENT_BEARER_HASH: ${DHIS2_EVIDENCE_CLIENT_BEARER_HASH:-}
-    volumes:
-      - cfg-notary:/etc/registry-notary:ro
-      - notary-config-state:/var/lib/registry-notary/config-state
-    depends_on:
-      config-loader:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      openfn-dhis2-sidecar:
-        condition: service_started
-
-  opencrvs-dci-notary-config:
-    image: ${REGISTRY_LAB_ALPINE_IMAGE:-alpine:3.20}
-    restart: "no"
-    entrypoint: ["/bin/sh", "-eu", "-c"]
-    command:
-      - |
-        : "$${OPENCRVS_DCI_BASE_URL:?missing OPENCRVS_DCI_BASE_URL}"
-        opencrvs_base_url="$${OPENCRVS_DCI_BASE_URL%/}"
-        escaped="$$(printf '%s' "$${opencrvs_base_url}" | sed 's/[\\&|]/\\&/g')"
-        sed "s|__OPENCRVS_DCI_BASE_URL__|$${escaped}|g" \
-          /etc/registry-notary/opencrvs-dci-notary.yaml.template \
-          > /out/opencrvs-dci-notary.yaml
-    volumes:
-      - cfg-notary:/etc/registry-notary:ro
-      - opencrvs-notary-config:/out
-    depends_on:
-      config-loader:
-        condition: service_completed_successfully
-
-  opencrvs-dci-notary:
-    <<: *notary-common
-    command: ["--config", "/etc/registry-notary-rendered/opencrvs-dci-notary.yaml"]
-    environment:
-      <<: *notary-env
-    volumes:
-      - opencrvs-notary-config:/etc/registry-notary-rendered:ro
-      - notary-config-state:/var/lib/registry-notary/config-state
-    depends_on:
-      opencrvs-dci-notary-config:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
@@ -500,9 +307,4 @@ volumes:
   cfg-notary:
   cfg-data:
   cfg-pginit:
-  cfg-openfn-tmpl:
-  openfn-sidecar-audit-state:
-  cfg-static-scripts:
-  cfg-lab-homepage:
-  opencrvs-notary-config:
   notary-config-state:

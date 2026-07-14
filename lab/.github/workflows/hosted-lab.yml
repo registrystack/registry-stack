@@ -13,7 +13,6 @@ on:
       - "compose.walt-hosted.yaml"
       - "config/coolify/**"
       - "config/static-metadata/**"
-      - "config/evidence-gateway/**"
       - "config/lab-homepage/**"
       - "config/esignet/nginx-hosted.conf"
       - "config/walt/**"
@@ -29,12 +28,6 @@ on:
       - "scripts/lab-homepage-server.py"
       - "scripts/lab_homepage_scenarios/**"
       - "scripts/test_lab_homepage_server.py"
-      - "scripts/check-evidence-gateway-fixtures.py"
-      - "scripts/test_evidence_gateway_fixtures.py"
-      - "scripts/run-evidence-gateway-live-fixtures.py"
-      - "scripts/test_evidence_gateway_live_fixtures.py"
-      - "scripts/summarize-dhis2-programme-vc.py"
-      - "scripts/test_dhis2_programme_vc_config.py"
       - "scripts/hosted-smoke.py"
       - "scripts/test_hosted_smoke.py"
       - "scripts/check-coolify-required-env.py"
@@ -61,7 +54,6 @@ on:
       - "compose.walt-hosted.yaml"
       - "config/coolify/**"
       - "config/static-metadata/**"
-      - "config/evidence-gateway/**"
       - "config/lab-homepage/**"
       - "config/esignet/nginx-hosted.conf"
       - "config/walt/**"
@@ -77,12 +69,6 @@ on:
       - "scripts/lab-homepage-server.py"
       - "scripts/lab_homepage_scenarios/**"
       - "scripts/test_lab_homepage_server.py"
-      - "scripts/check-evidence-gateway-fixtures.py"
-      - "scripts/test_evidence_gateway_fixtures.py"
-      - "scripts/run-evidence-gateway-live-fixtures.py"
-      - "scripts/test_evidence_gateway_live_fixtures.py"
-      - "scripts/summarize-dhis2-programme-vc.py"
-      - "scripts/test_dhis2_programme_vc_config.py"
       - "scripts/hosted-smoke.py"
       - "scripts/test_hosted_smoke.py"
       - "scripts/check-coolify-required-env.py"
@@ -146,7 +132,6 @@ jobs:
             compose.walt-hosted.yaml \
             config/coolify \
             config/static-metadata \
-            config/evidence-gateway \
             config/lab-homepage \
             config/esignet/nginx-hosted.conf \
             config/walt \
@@ -164,12 +149,6 @@ jobs:
             scripts/lab-homepage-server.py \
             scripts/lab_homepage_scenarios \
             scripts/test_lab_homepage_server.py \
-            scripts/check-evidence-gateway-fixtures.py \
-            scripts/test_evidence_gateway_fixtures.py \
-            scripts/run-evidence-gateway-live-fixtures.py \
-            scripts/test_evidence_gateway_live_fixtures.py \
-            scripts/summarize-dhis2-programme-vc.py \
-            scripts/test_dhis2_programme_vc_config.py \
             scripts/hosted-smoke.py \
             scripts/test_hosted_smoke.py \
             scripts/check-coolify-required-env.py \
@@ -220,17 +199,6 @@ jobs:
       - name: Run lab homepage server tests
         run: python3 scripts/test_lab_homepage_server.py
 
-      - name: Run DHIS2 programme VC config tests
-        run: python3 scripts/test_dhis2_programme_vc_config.py
-
-      - name: Run evidence gateway fixture tests
-        run: python3 scripts/test_evidence_gateway_fixtures.py
-
-      - name: Validate evidence gateway fixtures
-        run: python3 scripts/check-evidence-gateway-fixtures.py
-
-      - name: Run evidence gateway live fixture runner tests
-        run: python3 scripts/test_evidence_gateway_live_fixtures.py
 
       - name: Run hosted smoke tests
         run: python3 scripts/test_hosted_smoke.py

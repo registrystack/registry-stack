@@ -35,8 +35,6 @@ CLAIM_SERVICE_ORDER = [
     "civil-notary",
     "social-protection-notary",
     "shared-eligibility-notary",
-    "dhis2-notary",
-    "opencrvs-notary",
     "agriculture-notary",
 ]
 
@@ -50,7 +48,6 @@ DISCLOSURE_LABELS = {
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CivilRow = dict[str, str]
 CERTIFICATE_EVIDENCE_PURPOSE = "https://demo.example.gov/purpose/civil-certificate-evidence"
-OPENCRVS_DCI_PURPOSE = "https://demo.example.gov/purpose/opencrvs-dci-lab"
 AGRI_MARKET_SIZING_PURPOSE = "https://demo.example.gov/purpose/nagdi/agricultural-market-sizing"
 AGRI_LIVESTOCK_PURPOSE = "https://demo.example.gov/purpose/nagdi/livestock-movement-permit-review"
 
@@ -193,7 +190,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 "Birth certificate summary",
                 ["value"],
                 ["record_type", "registration_status"],
-                _source("Civil Registry", "civil_registry", "civil_status_record", "registration_number", "civil_registry:evidence_verification", "registry_data_api"),
+                _source("Civil Registry", "civil_registry", "civil_status_record", "registration_number", "civil_registry:evidence_verification", "relay_consultation"),
                 target_inputs=REGISTRATION_NUMBER_INPUTS,
                 default_subject="B-2016-N-1001",
                 default_identifier_scheme="registration_number",
@@ -204,7 +201,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 "Birth event exists",
                 ["predicate"],
                 ["record_type", "registration_status"],
-                _source("Civil Registry", "civil_registry", "civil_status_record", "registration_number", "civil_registry:evidence_verification", "registry_data_api"),
+                _source("Civil Registry", "civil_registry", "civil_status_record", "registration_number", "civil_registry:evidence_verification", "relay_consultation"),
                 target_inputs=REGISTRATION_NUMBER_INPUTS,
                 default_subject="B-2016-N-1001",
                 default_identifier_scheme="registration_number",
@@ -215,7 +212,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 "Birth Evidence by demographics",
                 ["value"],
                 ["given_name", "surname", "birth_date", "record_type", "certificate_type"],
-                _source("Civil Registry", "civil_registry", "civil_person_detail", "given_name+surname+birth_date", "civil_registry:evidence_verification", "registry_data_api"),
+                _source("Civil Registry", "civil_registry", "civil_person_detail", "given_name+surname+birth_date", "civil_registry:evidence_verification", "relay_consultation"),
                 value_type="object",
                 target_inputs=BIRTH_DEMOGRAPHIC_INPUTS,
                 default_purpose=CERTIFICATE_EVIDENCE_PURPOSE,
@@ -225,7 +222,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 "Marriage certificate summary",
                 ["value"],
                 ["record_type", "registration_status"],
-                _source("Civil Registry", "civil_registry", "civil_status_record", "registration_number", "civil_registry:evidence_verification", "registry_data_api"),
+                _source("Civil Registry", "civil_registry", "civil_status_record", "registration_number", "civil_registry:evidence_verification", "relay_consultation"),
                 target_inputs=MARRIAGE_REGISTRATION_NUMBER_INPUTS,
                 default_subject="MR-2026-2001",
                 default_identifier_scheme="registration_number",
@@ -236,7 +233,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 "Marriage event exists",
                 ["predicate"],
                 ["record_type", "registration_status"],
-                _source("Civil Registry", "civil_registry", "civil_status_record", "registration_number", "civil_registry:evidence_verification", "registry_data_api"),
+                _source("Civil Registry", "civil_registry", "civil_status_record", "registration_number", "civil_registry:evidence_verification", "relay_consultation"),
                 target_inputs=MARRIAGE_REGISTRATION_NUMBER_INPUTS,
                 default_subject="MR-2026-2001",
                 default_identifier_scheme="registration_number",
@@ -265,7 +262,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 "allowed_disclosures": ["value", "redacted"],
                 "formats": [CLAIM_RESULT_FORMAT],
                 "relay_fields_used": ["enrollment_status"],
-                "source": _source("Social Protection Registry", "social_protection_registry", "program_enrollment", "national_id", "social_protection_registry:evidence_verification", "registry_data_api"),
+                "source": _source("Social Protection Registry", "social_protection_registry", "program_enrollment", "national_id", "social_protection_registry:evidence_verification", "relay_consultation"),
             },
             "household-eligibility-band": {
                 "id": "household-eligibility-band",
@@ -275,7 +272,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 "allowed_disclosures": ["value", "redacted"],
                 "formats": [CLAIM_RESULT_FORMAT],
                 "relay_fields_used": ["eligibility_band"],
-                "source": _source("Social Protection Registry", "social_protection_registry", "household", "national_id", "social_protection_registry:evidence_verification", "registry_data_api"),
+                "source": _source("Social Protection Registry", "social_protection_registry", "household", "national_id", "social_protection_registry:evidence_verification", "relay_consultation"),
             },
             "beneficiary-active": {
                 "id": "beneficiary-active",
@@ -285,7 +282,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 "allowed_disclosures": ["predicate", "redacted"],
                 "formats": [CLAIM_RESULT_FORMAT],
                 "relay_fields_used": ["enrollment_status"],
-                "source": _source("Social Protection Registry", "social_protection_registry", "program_enrollment", "national_id", "social_protection_registry:evidence_verification", "registry_data_api"),
+                "source": _source("Social Protection Registry", "social_protection_registry", "program_enrollment", "national_id", "social_protection_registry:evidence_verification", "relay_consultation"),
             },
             "household-composition": {
                 "id": "household-composition",
@@ -295,7 +292,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 "allowed_disclosures": ["value", "redacted"],
                 "formats": [CLAIM_RESULT_FORMAT],
                 "relay_fields_used": ["household_size"],
-                "source": _source("Social Protection Registry", "social_protection_registry", "household", "national_id", "social_protection_registry:evidence_verification", "registry_data_api"),
+                "source": _source("Social Protection Registry", "social_protection_registry", "household", "national_id", "social_protection_registry:evidence_verification", "relay_consultation"),
             },
             "caregiver-link": {
                 "id": "caregiver-link",
@@ -305,7 +302,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 "allowed_disclosures": ["predicate", "redacted"],
                 "formats": [CLAIM_RESULT_FORMAT],
                 "relay_fields_used": ["id", "household_id", "relationship", "alive"],
-                "source": _source("Social Protection Registry", "social_protection_registry", "person", "national_id", "social_protection_registry:evidence_verification", "registry_data_api"),
+                "source": _source("Social Protection Registry", "social_protection_registry", "person", "national_id", "social_protection_registry:evidence_verification", "relay_consultation"),
             },
             "disability-determination": {
                 "id": "disability-determination",
@@ -315,7 +312,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 "allowed_disclosures": ["value", "redacted"],
                 "formats": [CLAIM_RESULT_FORMAT],
                 "relay_fields_used": ["support_category"],
-                "source": _source("Social Protection Registry", "social_protection_registry", "disability_determination", "national_id", "social_protection_registry:evidence_verification", "registry_data_api"),
+                "source": _source("Social Protection Registry", "social_protection_registry", "disability_determination", "national_id", "social_protection_registry:evidence_verification", "relay_consultation"),
             },
             "functioning-assessment": {
                 "id": "functioning-assessment",
@@ -325,7 +322,7 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
                 "allowed_disclosures": ["value", "redacted"],
                 "formats": [CLAIM_RESULT_FORMAT],
                 "relay_fields_used": ["disability_identifier_met"],
-                "source": _source("Social Protection Registry", "social_protection_registry", "functioning_profile", "national_id", "social_protection_registry:evidence_verification", "registry_data_api"),
+                "source": _source("Social Protection Registry", "social_protection_registry", "functioning_profile", "national_id", "social_protection_registry:evidence_verification", "relay_consultation"),
             },
         },
     },
@@ -345,48 +342,13 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
         "availability": "runtime",
         "default_claim": "eligible-for-combined-support",
         "claims": {
-            "civil-record-present": _claim("civil-record-present", "Civil record present", ["predicate", "redacted"], ["national_id"], _source("Civil Registry", "civil_registry", "civil_person", "NATIONAL_ID", "civil_registry:evidence_verification", "registry_data_api")),
-            "social-program-active": _claim("social-program-active", "Program Enrollment Attestation", ["predicate", "redacted"], ["enrollment_status"], _source("Social Protection Registry", "social_protection_registry", "program_enrollment", "national_id", "social_protection_registry:evidence_verification", "registry_data_api")),
-            "health-service-available": _claim("health-service-available", "Service Availability Attestation", ["predicate", "redacted"], ["license_status", "pediatric_service_available", "practitioner_credential_active"], _source("Health Registry", "health_registry", "health_facility", "national_id", "health_registry:evidence_verification", "registry_data_api")),
-            "eligible-for-combined-support": _claim("eligible-for-combined-support", "Combined Support Eligibility Attestation", ["predicate", "redacted"], ["civil-record-present", "social-program-active", "health-service-available"], _source("Combined eligibility sources", "multiple", "multiple", "national_id", "shared:evidence_verification", "registry_data_api")),
+            "civil-record-present": _claim("civil-record-present", "Civil record present", ["predicate", "redacted"], ["national_id"], _source("Civil Registry", "civil_registry", "civil_person", "NATIONAL_ID", "civil_registry:evidence_verification", "relay_consultation")),
+            "social-program-active": _claim("social-program-active", "Program Enrollment Attestation", ["predicate", "redacted"], ["enrollment_status"], _source("Social Protection Registry", "social_protection_registry", "program_enrollment", "national_id", "social_protection_registry:evidence_verification", "relay_consultation")),
+            "health-service-available": _claim("health-service-available", "Service Availability Attestation", ["predicate", "redacted"], ["license_status", "pediatric_service_available", "practitioner_credential_active"], _source("Health Registry", "health_registry", "health_facility", "national_id", "health_registry:evidence_verification", "relay_consultation")),
+            "eligible-for-combined-support": _claim("eligible-for-combined-support", "Combined Support Eligibility Attestation", ["predicate", "redacted"], ["civil-record-present", "social-program-active", "health-service-available"], _source("Combined eligibility sources", "multiple", "multiple", "national_id", "shared:evidence_verification", "relay_consultation")),
         },
     },
-    "dhis2-notary": {
-        "id": "dhis2-notary",
-        "label": "DHIS2 Notary",
-        "service_id": "dhis2-notary",
-        "base_url": "https://dhis2-notary.lab.registrystack.org",
-        "client_credential_id": "dhis2-bearer",
-        "default_subject": "PQfMcpmXeFE",
-        "default_identifier_scheme": "dhis2_tracked_entity",
-        "default_purpose": "https://demo.example.gov/purpose/dhis2-openfn-health-evidence",
-        "related_registry_ids": ["health"],
-        "availability": "hosted",
-        "default_claim": "dhis2-child-program-active",
-        "claims": {
-            "dhis2-child-program-active": _claim("dhis2-child-program-active", "Health Programme Participation Attestation", ["predicate", "redacted"], ["program_status"], _source("DHIS2", "dhis2_tracker", "person", "tracked_entity", "dhis2_health:evidence_verification", "dhis2")),
-            "dhis2-child-age-band": _claim("dhis2-child-age-band", "Child age band", ["value", "redacted"], ["birth_date"], _source("DHIS2", "dhis2_tracker", "person", "tracked_entity", "dhis2_health:evidence_verification", "dhis2"), value_type="string"),
-            "dhis2-programme-code": _claim("dhis2-programme-code", "Programme code", ["value", "redacted"], ["programme_code"], _source("DHIS2", "dhis2_tracker", "person", "tracked_entity", "dhis2_health:evidence_verification", "dhis2"), value_type="string"),
-        },
-    },
-    "opencrvs-notary": {
-        "id": "opencrvs-notary",
-        "label": "OpenCRVS DCI Notary",
-        "service_id": "opencrvs-notary",
-        "base_url": "https://opencrvs-notary.lab.registrystack.org",
-        "client_credential_id": "opencrvs-api-key",
-        "default_subject": "9658342302",
-        "default_identifier_scheme": "UIN",
-        "default_purpose": OPENCRVS_DCI_PURPOSE,
-        "related_registry_ids": ["civil"],
-        "availability": "hosted",
-        "default_claim": "opencrvs-birth-record-exists",
-        "claims": {
-            "opencrvs-birth-record-exists": _claim("opencrvs-birth-record-exists", "Birth Registration Attestation", ["predicate", "redacted"], ["record_id"], _source("OpenCRVS", "civil_registry", "birth_registration", "UIN", "civil_registry:evidence_verification", "dci")),
-            "opencrvs-date-of-birth": _claim("opencrvs-date-of-birth", "Date of birth", ["value", "redacted"], ["birth_date"], _source("OpenCRVS", "civil_registry", "birth_registration", "UIN", "civil_registry:evidence_verification", "dci"), value_type="date"),
-            "opencrvs-age-band": _claim("opencrvs-age-band", "Age Eligibility Attestation", ["value", "redacted"], ["birth_date"], _source("OpenCRVS", "civil_registry", "birth_registration", "UIN", "civil_registry:evidence_verification", "dci"), value_type="string"),
-        },
-    },
+
     "agriculture-notary": {
         "id": "agriculture-notary",
         "label": "Agriculture Notary",
@@ -403,17 +365,17 @@ CLAIM_SERVICES: dict[str, dict[str, Any]] = {
         "availability": "hosted",
         "default_claim": "eligible-for-climate-smart-input-voucher",
         "claims": {
-            "farmer-registered": _claim("farmer-registered", "Farmer registered", ["predicate", "redacted"], ["registration_status"], _source("NAgDI Agricultural Registries", "agri_registry", "farmer", "farmer_id", "agri_registry:evidence_verification", "registry_data_api")),
-            "eligible-for-climate-smart-input-voucher": _claim("eligible-for-climate-smart-input-voucher", "Eligible for climate-smart input voucher", ["predicate", "redacted"], ["farmer-registered", "active-farm-parcel", "voucher-entitlement-current"], _source("NAgDI Agricultural Registries", "agri_registry", "voucher_eligibility_snapshot", "farmer_id", "agri_registry:evidence_verification", "registry_data_api")),
-            "market-sizing-aggregate-controls": _claim("market-sizing-aggregate-controls", "Market sizing aggregate controls", ["predicate", "redacted"], ["minimum_cell_count", "geography_floor", "suppression_policy"], _source("NAgDI Agricultural Registries", "agri_registry", "purpose_policy", "id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="market-sizing-policy", default_identifier_scheme="id", default_purpose=AGRI_MARKET_SIZING_PURPOSE),
-            "registered-livestock-holder": _claim("registered-livestock-holder", "Registered livestock holder", ["predicate", "redacted"], ["registered_livestock_holder"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
-            "registered-herd": _claim("registered-herd", "Registered herd", ["predicate", "redacted"], ["registered_herd"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
-            "herd-vaccination-current": _claim("herd-vaccination-current", "Herd vaccination current", ["predicate", "redacted"], ["herd_vaccination_current"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
-            "origin-district-not-quarantined": _claim("origin-district-not-quarantined", "Origin district not quarantined", ["predicate", "redacted"], ["origin_district_not_quarantined"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
-            "destination-district-open": _claim("destination-district-open", "Destination district open", ["predicate", "redacted"], ["destination_district_open"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
-            "no-conflicting-open-movement-permit": _claim("no-conflicting-open-movement-permit", "No conflicting open movement permit", ["predicate", "redacted"], ["no_conflicting_open_movement_permit"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
-            "livestock-movement-reason-code": _claim("livestock-movement-reason-code", "Livestock movement reason code", ["value", "redacted"], ["reason_code"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), value_type="string", default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
-            "eligible-for-livestock-movement-permit": _claim("eligible-for-livestock-movement-permit", "Eligible for livestock movement permit", ["predicate", "redacted"], ["registered-livestock-holder", "registered-herd", "herd-vaccination-current"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "registry_data_api"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "farmer-registered": _claim("farmer-registered", "Farmer registered", ["predicate", "redacted"], ["registration_status"], _source("NAgDI Agricultural Registries", "agri_registry", "farmer", "farmer_id", "agri_registry:evidence_verification", "relay_consultation")),
+            "eligible-for-climate-smart-input-voucher": _claim("eligible-for-climate-smart-input-voucher", "Eligible for climate-smart input voucher", ["predicate", "redacted"], ["farmer-registered", "active-farm-parcel", "voucher-entitlement-current"], _source("NAgDI Agricultural Registries", "agri_registry", "voucher_eligibility_snapshot", "farmer_id", "agri_registry:evidence_verification", "relay_consultation")),
+            "market-sizing-aggregate-controls": _claim("market-sizing-aggregate-controls", "Market sizing aggregate controls", ["predicate", "redacted"], ["minimum_cell_count", "geography_floor", "suppression_policy"], _source("NAgDI Agricultural Registries", "agri_registry", "purpose_policy", "id", "agri_registry:evidence_verification", "relay_consultation"), default_subject="market-sizing-policy", default_identifier_scheme="id", default_purpose=AGRI_MARKET_SIZING_PURPOSE),
+            "registered-livestock-holder": _claim("registered-livestock-holder", "Registered livestock holder", ["predicate", "redacted"], ["registered_livestock_holder"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "relay_consultation"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "registered-herd": _claim("registered-herd", "Registered herd", ["predicate", "redacted"], ["registered_herd"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "relay_consultation"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "herd-vaccination-current": _claim("herd-vaccination-current", "Herd vaccination current", ["predicate", "redacted"], ["herd_vaccination_current"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "relay_consultation"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "origin-district-not-quarantined": _claim("origin-district-not-quarantined", "Origin district not quarantined", ["predicate", "redacted"], ["origin_district_not_quarantined"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "relay_consultation"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "destination-district-open": _claim("destination-district-open", "Destination district open", ["predicate", "redacted"], ["destination_district_open"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "relay_consultation"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "no-conflicting-open-movement-permit": _claim("no-conflicting-open-movement-permit", "No conflicting open movement permit", ["predicate", "redacted"], ["no_conflicting_open_movement_permit"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "relay_consultation"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "livestock-movement-reason-code": _claim("livestock-movement-reason-code", "Livestock movement reason code", ["value", "redacted"], ["reason_code"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "relay_consultation"), value_type="string", default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
+            "eligible-for-livestock-movement-permit": _claim("eligible-for-livestock-movement-permit", "Eligible for livestock movement permit", ["predicate", "redacted"], ["registered-livestock-holder", "registered-herd", "herd-vaccination-current"], _source("NAgDI Agricultural Registries", "agri_registry", "livestock_movement_snapshot", "herd_id", "agri_registry:evidence_verification", "relay_consultation"), default_subject="HERD-2001", default_identifier_scheme="herd_id", default_purpose=AGRI_LIVESTOCK_PURPOSE),
         },
     },
 }
@@ -845,10 +807,7 @@ def evaluation_url_for_service_id(config: dict[str, Any], service_id: str) -> st
         return evaluation_url(config, claim_service_config_for(config, "social-protection-notary"))
     if service_id == "shared-eligibility-notary":
         return evaluation_url(config, claim_service_config_for(config, "shared-eligibility-notary"))
-    if service_id == "dhis2-health-notary":
-        return evaluation_url(config, claim_service_config_for(config, "dhis2-health-notary"))
-    if service_id == "opencrvs-dci-notary":
-        return evaluation_url(config, claim_service_config_for(config, "opencrvs-dci-notary"))
+
     if service_id == "agriculture-notary":
         return evaluation_url(config, claim_service_config_for(config, "agriculture-notary"))
     raise ExplorerInputError(

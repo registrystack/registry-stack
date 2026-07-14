@@ -1,0 +1,5 @@
+version: 1
+registry: { id: fictional-materialization-registry }
+entities:
+  people: { file: entities/people.yaml }
+services: {}

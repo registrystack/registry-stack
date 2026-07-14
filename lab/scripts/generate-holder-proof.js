@@ -57,7 +57,7 @@ const proof = signJwt(
     aud: arg('audience'),
     iat: now,
     exp: now + 60,
-    jti: `dhis2-holder-proof-${crypto.randomUUID()}`,
+    jti: `registry-notary-holder-proof-${crypto.randomUUID()}`,
     evaluation_id: arg('evaluation-id'),
     credential_profile: arg('credential-profile'),
     disclosure: disclosureHash,

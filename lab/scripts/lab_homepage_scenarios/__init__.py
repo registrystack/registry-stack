@@ -12,7 +12,6 @@ from . import (
     civil_birth_demographics,
     civil_crvs_evidence,
     combined_support,
-    dhis2_programme,
     social_aggregate,
     wallet_vc,
 )
@@ -26,7 +25,6 @@ SCENARIOS = [
     civil_crvs_evidence.BIRTH_DEMOGRAPHICS,
     civil_crvs_evidence.MARRIAGE,
     wallet_vc,
-    dhis2_programme,
     social_aggregate,
     combined_support,
     agriculture_voucher,
@@ -56,10 +54,6 @@ SOURCE_SYSTEM_BY_SCENARIO_ID = {
     wallet_vc.SCENARIO_ID: {
         "label": "Simulated wallet over Relay-backed civil evidence",
         "summary": "Uses hosted issuer endpoints and simulated wallet steps. The vital-status source is civil Relay demo data, not OpenCRVS.",
-    },
-    dhis2_programme.SCENARIO_ID: {
-        "label": "Live DHIS2 via built-in http_json sidecar",
-        "summary": "Calls the hosted DHIS2 Notary, which reads the public DHIS2 sandbox through a private built-in http_json sidecar. Registry Relay is not on this source path.",
     },
     social_aggregate.SCENARIO_ID: {
         "label": "Registry Relay demo source",

@@ -6,8 +6,8 @@ demo_dir="$(cd "${script_dir}/.." && pwd)"
 compose_file="${demo_dir}/compose.yaml"
 notary_dir="${REGISTRY_NOTARY_SOURCE_DIR:-"${demo_dir}/../registry-notary"}"
 output_dir="${demo_dir}/output/citizen-self-attestation"
-config_path="${output_dir}/citizen-civil-notary.yaml"
-log_path="${output_dir}/citizen-civil-notary.log"
+config_path="${output_dir}/citizen-declaration-notary.yaml"
+log_path="${output_dir}/citizen-declaration-notary.log"
 discovery_path="${output_dir}/citizen-notary-discovery.json"
 self_eval_path="${output_dir}/citizen-self-evaluation.json"
 other_eval_path="${output_dir}/citizen-other-subject-denied.json"
@@ -28,7 +28,7 @@ demo_login_id="${ESIGNET_DEMO_LOGIN_ID:-${self_subject}}"
 demo_login_code="${ESIGNET_DEMO_OTP:-111111}"
 self_attestation_scope="${ESIGNET_SELF_ATTESTATION_SCOPE:-self_attestation}"
 self_attestation_scope_policy="${ESIGNET_SELF_ATTESTATION_SCOPE_POLICY:-disabled}"
-self_attestation_purpose="${ESIGNET_SELF_ATTESTATION_PURPOSE:-https://demo.example.gov/purpose/civil-certificate-evidence}"
+self_attestation_purpose="${ESIGNET_SELF_ATTESTATION_PURPOSE:-application-processing}"
 if [[ "${self_attestation_scope_policy}" == "disabled" ]]; then
   authorize_scope="${ESIGNET_AUTHORIZE_SCOPE:-openid}"
 else
@@ -795,7 +795,7 @@ lines = [
     "- Overall: passed",
     f"- Self subject: `{self_subject}`",
     f"- Other-person control: `{other_subject}` denied",
-    f"- Claim: `person-is-alive` = `{self_result.get('value')}`",
+    f"- Claim: `applicant-declaration` = `{self_result.get('value')}`",
     f"- Evaluation id: `{self_result.get('evaluation_id', '')}`",
     "",
     "## Binding Chain",
@@ -818,8 +818,8 @@ lines = [
     "## What Was Proven",
     "",
     "- Notary accepted the citizen token chain and classified the request as `self_attestation`.",
-    "- Notary evaluated `person-is-alive` for the token-bound subject.",
-    f"- Notary denied the `{other_subject}` request as a subject-binding violation before a civil registry read.",
+    "- Notary evaluated `applicant-declaration` for the token-bound subject.",
+    f"- Notary denied the `{other_subject}` request as a subject-binding violation before evaluation.",
     "- Audit output records hashed identifiers, not raw token subject values.",
     "",
     "## Discovery Summary",
@@ -932,17 +932,17 @@ accepted_audiences = json.loads(
     os.environ.get("CITIZEN_OID4VCI_ACCEPTED_TOKEN_AUDIENCES_JSON", json.dumps(accepted_audiences))
 )
 accepted_audience_lines = "\n".join(f"    - {json.dumps(value)}" for value in accepted_audiences)
-oid4vci_config_id = os.environ.get("CITIZEN_OID4VCI_CREDENTIAL_CONFIGURATION_ID", "person_is_alive_sd_jwt")
+oid4vci_config_id = os.environ.get("CITIZEN_OID4VCI_CREDENTIAL_CONFIGURATION_ID", "applicant_declaration_sd_jwt")
 oid4vci_vct = os.environ.get(
     "CITIZEN_OID4VCI_VCT",
-    f"{credential_issuer.rstrip('/')}/credentials/citizen-civil-status/v1",
+    f"{credential_issuer.rstrip('/')}/credentials/applicant-declaration/v1",
 )
-oid4vci_display_name = os.environ.get("CITIZEN_OID4VCI_DISPLAY_NAME", "Person is alive")
+oid4vci_display_name = os.environ.get("CITIZEN_OID4VCI_DISPLAY_NAME", "Applicant declaration")
 oid4vci_display_description = os.environ.get(
     "CITIZEN_OID4VCI_DISPLAY_DESCRIPTION",
-    "Proof that the civil registry currently records this person as alive.",
+    "A source-free declaration made by the authenticated applicant.",
 )
-oid4vci_scope = os.environ.get("CITIZEN_OID4VCI_SCOPE", "person-is-alive")
+oid4vci_scope = os.environ.get("CITIZEN_OID4VCI_SCOPE", "applicant-declaration")
 oid4vci_issue_credential = "true" if oid4vci_enabled else "false"
 oid4vci_block = ""
 if oid4vci_enabled:
@@ -959,7 +959,7 @@ oid4vci:
   offer_endpoint: {json.dumps(offer_endpoint)}
   nonce_endpoint: {json.dumps(nonce_endpoint)}
   display:
-    - name: "Civil Registry Notary"
+    - name: "Applicant Declaration Notary"
       locale: en-US
   nonce:
     enabled: true
@@ -971,8 +971,8 @@ oid4vci:
     max_clock_skew_seconds: 30
   credential_configurations:
     {json.dumps(oid4vci_config_id)}:
-      claim_id: person-is-alive
-      credential_profile: citizen_civil_status_sd_jwt
+      claim_id: applicant-declaration
+      credential_profile: applicant_declaration_sd_jwt
       format: dc+sd-jwt
       scope: {json.dumps(oid4vci_scope)}
       vct: {json.dumps(oid4vci_vct)}
@@ -1020,37 +1020,25 @@ audit:
 
 evidence:
   enabled: true
-  service_id: citizen-civil-notary
+  service_id: citizen-declaration-notary
   api_base_url: http://127.0.0.1:{port}
   inline_batch_limit: 20
-  source_connections:
-    civil:
-      base_url: http://127.0.0.1:4311
-      allow_insecure_localhost: true
-      token_env: CIVIL_EVIDENCE_SOURCE_RAW
-      dci:
-        search_path: /dci/crvs/registry/sync/search
-        query_type: idtype-value
-        records_path: /message/search_response/0/data/reg_records
-        field_paths:
-          national_id: /person/national_id
-          deceased: /person/deceased
   signing_keys:
     citizen-civil-demo:
       provider: local_jwk_env
       private_jwk_env: REGISTRY_NOTARY_ISSUER_JWK
       alg: EdDSA
-      kid: did:web:citizen-civil-notary.demo.example#citizen-civil-demo-key-1
+      kid: did:web:citizen-declaration-notary.demo.example#citizen-civil-demo-key-1
       status: active
   credential_profiles:
-    citizen_civil_status_sd_jwt:
+    applicant_declaration_sd_jwt:
       format: application/dc+sd-jwt
-      issuer: did:web:citizen-civil-notary.demo.example
+      issuer: did:web:citizen-declaration-notary.demo.example
       signing_key: citizen-civil-demo
       vct: {json.dumps(oid4vci_vct)}
       validity_seconds: 600
       allowed_claims:
-        - person-is-alive
+        - applicant-declaration
       holder_binding:
         mode: did
         proof_of_possession: required
@@ -1060,35 +1048,18 @@ evidence:
         allowed:
           - predicate
   claims:
-    - id: person-is-alive
-      title: Person is alive
+    - id: applicant-declaration
+      title: Applicant declaration
       version: 2026-05
       subject_type: person
       evidence_mode:
-        type: transitional_direct
+        type: self_attested
       purpose: {json.dumps(self_attestation_purpose)}
       value:
         type: boolean
-      source_bindings:
-        civil:
-          connector: dci
-          connection: civil
-          required_scope: civil_registry:evidence_verification
-          dataset: civil_registry
-          entity: civil_person
-          lookup:
-            input: target.identifiers.national_id
-            field: NATIONAL_ID
-            op: eq
-            cardinality: one
-          fields:
-            deceased:
-              field: deceased
-              type: boolean
-              required: true
       rule:
         type: cel
-        expression: "source.civil.deceased == false"
+        expression: "true"
       disclosure:
         default: predicate
         allowed:
@@ -1098,7 +1069,7 @@ evidence:
         - application/vnd.registry-notary.claim-result+json
         - application/dc+sd-jwt
       credential_profiles:
-        - citizen_civil_status_sd_jwt
+        - applicant_declaration_sd_jwt
 
 self_attestation:
   enabled: true
@@ -1126,7 +1097,7 @@ self_attestation:
   allowed_purposes:
     - {json.dumps(self_attestation_purpose)}
   allowed_claims:
-    - person-is-alive
+    - applicant-declaration
   allowed_formats:
     - application/vnd.registry-notary.claim-result+json
     - application/dc+sd-jwt
@@ -1136,7 +1107,7 @@ self_attestation:
   scope_policy: {json.dumps(scope_policy)}
 {required_scopes_block.rstrip()}
   credential_profiles:
-    - citizen_civil_status_sd_jwt
+    - applicant_declaration_sd_jwt
   allowed_wallet_origins:
     - https://wallet.example.gov
   rate_limits:
@@ -1214,8 +1185,6 @@ if [[ -f "${demo_dir}/.env" ]]; then
 else
   fail "missing .env; run scripts/generate-demo-secrets.py first"
 fi
-: "${CIVIL_METADATA_CLIENT_RAW:?missing CIVIL_METADATA_CLIENT_RAW; rerun scripts/generate-demo-secrets.py}"
-: "${CIVIL_EVIDENCE_SOURCE_RAW:?missing CIVIL_EVIDENCE_SOURCE_RAW; rerun scripts/generate-demo-secrets.py}"
 : "${REGISTRY_NOTARY_AUDIT_HASH_SECRET:?missing REGISTRY_NOTARY_AUDIT_HASH_SECRET; rerun scripts/generate-demo-secrets.py}"
 
 issuer="${ESIGNET_ISSUER:-}"
@@ -1362,9 +1331,7 @@ print(" ".join(line.strip()[2:].strip() for line in match.group(1).splitlines())
 PY
 )"
 
-step 6 "Start civil Relay and citizen Notary" "Notary listens on http://127.0.0.1:${port}."
-docker compose -f "${compose_file}" up -d --force-recreate civil-registry-relay
-wait_http "civil relay health" "http://127.0.0.1:4311/healthz" "${CIVIL_METADATA_CLIENT_RAW}"
+step 6 "Start citizen Notary" "The source-free Notary listens on http://127.0.0.1:${port}."
 
 rm -f "${log_path}"
 (
@@ -1380,9 +1347,9 @@ step 7 "Call Notary discovery" "Confirming the citizen token can see the self-at
 curl_json GET "http://127.0.0.1:${port}/.well-known/evidence-service" "${discovery_path}" 200
 print_discovery_status
 
-step 8 "Evaluate self claim" "Requesting person-is-alive for ${self_subject}."
+step 8 "Evaluate self claim" "Requesting applicant-declaration for ${self_subject}."
 curl_json POST "http://127.0.0.1:${port}/v1/evaluations" "${self_eval_path}" 200 \
-  --data "$(jq -nc --arg subject "${self_subject}" '{target:{type:"Person",identifiers:[{scheme:"national_id",value:$subject}]},claims:["person-is-alive"],disclosure:"predicate",format:"application/vnd.registry-notary.claim-result+json"}')"
+  --data "$(jq -nc --arg subject "${self_subject}" '{target:{type:"Person",identifiers:[{scheme:"national_id",value:$subject}]},claims:["applicant-declaration"],disclosure:"predicate",format:"application/vnd.registry-notary.claim-result+json"}')"
 
 python3 - "${self_eval_path}" <<'PY'
 import json
@@ -1392,19 +1359,19 @@ body = json.load(open(sys.argv[1], encoding="utf-8"))
 results = body.get("results") or []
 assert len(results) == 1, body
 result = results[0]
-assert result.get("claim_id") == "person-is-alive", body
+assert result.get("claim_id") == "applicant-declaration", body
 assert result.get("value") is True, body
 provenance = result.get("provenance") or {}
 source_count = provenance.get("source_count")
 if source_count is None:
     source_count = (provenance.get("used") or {}).get("source_count")
-assert source_count == 1, body
+assert source_count in (None, 0), body
 PY
 print_self_evaluation_status
 
 step 9 "Prove other-person denial" "Requesting the same claim for ${other_subject}; this must fail before any source read."
 curl_json POST "http://127.0.0.1:${port}/v1/evaluations" "${other_eval_path}" 403 \
-  --data "$(jq -nc --arg subject "${other_subject}" '{target:{type:"Person",identifiers:[{scheme:"national_id",value:$subject}]},claims:["person-is-alive"],disclosure:"predicate",format:"application/vnd.registry-notary.claim-result+json"}')"
+  --data "$(jq -nc --arg subject "${other_subject}" '{target:{type:"Person",identifiers:[{scheme:"national_id",value:$subject}]},claims:["applicant-declaration"],disclosure:"predicate",format:"application/vnd.registry-notary.claim-result+json"}')"
 print_denial_status
 
 sleep 1
@@ -1431,7 +1398,7 @@ Citizen self-attestation smoke passed.
 What happened:
   1. eSignet authenticated demo citizen ${self_subject}.
   2. Notary bound the request to ${subject_claim_source}.${subject_claim}.
-  3. Notary fetched person-is-alive for ${self_subject}.
+  3. Notary evaluated source-free applicant-declaration for ${self_subject}.
   4. Notary denied ${other_subject} before a registry source read.
   5. Audit records show self_attestation with hashed identifiers.
 

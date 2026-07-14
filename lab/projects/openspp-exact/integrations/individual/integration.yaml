@@ -1,0 +1,45 @@
+version: 1
+id: fictional-social-registry-individual-exact
+revision: 1
+
+source:
+  product: openspp
+  versions: { unverified: [fixture-api-v2] }
+  auth: { type: static_bearer }
+  response: { format: json, max_bytes: 16KiB }
+
+input:
+  individual_id:
+    role: selector
+    type: string
+    maxLength: 64
+    pattern: "^IND-[A-Z0-9]{8}$"
+
+capability:
+  http:
+    request:
+      method: GET
+      path: /api/v2/spp/Individual/{input.individual_id}
+      query:
+        _elements: active,programme_code,household_reference
+    response:
+      no_match: [404]
+      ambiguous: [409]
+
+outputs:
+  active:
+    type: [boolean, "null"]
+    x-registry-source: /active
+  programme_code:
+    type: [string, "null"]
+    maxLength: 32
+    x-registry-source: /programme_code
+  household_reference:
+    type: [string, "null"]
+    maxLength: 64
+    x-registry-source: /household_reference
+
+limits:
+  request_bytes: 2KiB
+  source_bytes: 16KiB
+  deadline: 5s
