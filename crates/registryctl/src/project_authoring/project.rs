@@ -847,6 +847,9 @@ fn semantic_digests(
         if let Some(relay_state) = &environment.relay_state {
             operator["relay_state"] = json!(relay_state);
         }
+        if let Some(notary_cel) = &environment.notary_cel {
+            operator["notary_cel"] = json!(notary_cel);
+        }
         operator
     });
     Ok(SemanticDigests {
@@ -2037,6 +2040,14 @@ fn validate_environment(
             &state.postgresql.root_certificate_path,
             "Notary PostgreSQL root_certificate_path",
         )?;
+    }
+    if let Some(cel) = &environment.notary_cel {
+        if !requires_notary {
+            bail!("notary_cel is valid only when the project deploys a Notary");
+        }
+        if !(32 * 1024 * 1024..=1024 * 1024 * 1024).contains(&cel.worker_memory_bytes) {
+            bail!("notary_cel.worker_memory_bytes must be between 33554432 and 1073741824");
+        }
     }
     if let Some(oid4vci) = &environment.oid4vci {
         validate_oid4vci_binding(project, environment, oid4vci)?;

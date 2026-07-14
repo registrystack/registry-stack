@@ -285,6 +285,7 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
         }),
         relay_state: None,
         notary_state: None,
+        notary_cel: None,
         oid4vci: None,
         deployment: DeploymentBinding {
             profile: DeploymentProfile::Local,

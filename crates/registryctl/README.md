@@ -69,6 +69,11 @@ not select the Rhai runtime, source operations, or executor.
 `test --live` requires an explicit non-production environment and uses only the
 governed deployed Notary path. It never contacts a source registry directly.
 
+An environment can set `notary_cel.worker_memory_bytes` when its dedicated CEL
+workers need a platform-specific process limit. The Notary default remains
+128 MiB. The maximum 1 GiB value supports emulated local runtimes and is a
+per-worker data/address-space ceiling, not reserved memory.
+
 The installer defaults to `v0.9.0`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
 

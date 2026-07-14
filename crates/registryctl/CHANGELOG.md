@@ -17,6 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   product startup compilers, and supports explicitly verified signed baselines
   for independent claim, integration, service-policy, and operator-security
   review classification.
+- Environment authoring can set the existing bounded Notary CEL worker memory
+  ceiling, and changes to that operator-controlled limit require an
+  operator-security review.
 - `script` authoring uses the release-gated isolated Rhai worker, fixed source
   authority, bounded host calls, and a hash-covered static local module
   closure. Script availability never depends on source product or version and

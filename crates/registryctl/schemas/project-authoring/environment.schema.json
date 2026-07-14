@@ -54,6 +54,13 @@
         }
       }
     },
+    "notary_cel": {
+      "description": "Optional per-worker data/address-space ceiling for dedicated Notary CEL processes. The Notary default is 134217728 bytes; 1073741824 is the maximum emulation-compatible exception and remains a limit, not an allocation.",
+      "type": "object", "additionalProperties": false, "required": ["worker_memory_bytes"],
+      "properties": {
+        "worker_memory_bytes": { "type": "integer", "minimum": 33554432, "maximum": 1073741824 }
+      }
+    },
     "oid4vci": {
       "description": "Explicit citizen-facing OID4VCI binding for one authored Notary credential profile.",
       "$ref": "#/$defs/oid4vci"
@@ -81,6 +88,10 @@
     },
     {
       "if": { "required": ["notary_state"] },
+      "then": { "properties": { "deployment": { "required": ["notary"] } } }
+    },
+    {
+      "if": { "required": ["notary_cel"] },
       "then": { "properties": { "deployment": { "required": ["notary"] } } }
     },
     {
