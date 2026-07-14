@@ -617,8 +617,8 @@ impl SourceHost for RejectingHost {
 pub enum ScriptProbeCause {
     ContractViolation,
     SyntaxError,
-    UnknownEntrypoint,
-    UnsupportedEntrypointSignature,
+    UnknownFunction,
+    UnsupportedFunctionSignature,
 }
 
 impl ScriptProbeCause {
@@ -627,8 +627,8 @@ impl ScriptProbeCause {
         match self {
             Self::ContractViolation => "closed_contract_violation",
             Self::SyntaxError => "syntax_error",
-            Self::UnknownEntrypoint => "unknown_function",
-            Self::UnsupportedEntrypointSignature => "unsupported_function_signature",
+            Self::UnknownFunction => "unknown_function",
+            Self::UnsupportedFunctionSignature => "unsupported_function_signature",
         }
     }
 }
@@ -637,11 +637,13 @@ impl ScriptProbeCause {
 ///
 /// Source text, inputs, selector values, and credentials are deliberately not
 /// retained in this diagnostic.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ScriptProbeDiagnostic {
     cause: ScriptProbeCause,
     line: Option<usize>,
     column: Option<usize>,
+    function: Option<String>,
+    valid_signatures: Vec<&'static str>,
 }
 
 impl ScriptProbeDiagnostic {
@@ -650,30 +652,42 @@ impl ScriptProbeDiagnostic {
             cause,
             line: None,
             column: None,
+            function: None,
+            valid_signatures: Vec::new(),
         }
     }
 
     #[must_use]
-    pub const fn cause(self) -> ScriptProbeCause {
+    pub const fn cause(&self) -> ScriptProbeCause {
         self.cause
     }
 
     #[must_use]
-    pub const fn line(self) -> Option<usize> {
+    pub const fn line(&self) -> Option<usize> {
         self.line
     }
 
     #[must_use]
-    pub const fn column(self) -> Option<usize> {
+    pub const fn column(&self) -> Option<usize> {
         self.column
     }
 
-    const fn worker_error(self) -> WorkerError {
+    #[must_use]
+    pub fn function(&self) -> Option<&str> {
+        self.function.as_deref()
+    }
+
+    #[must_use]
+    pub fn valid_signatures(&self) -> &[&'static str] {
+        &self.valid_signatures
+    }
+
+    const fn worker_error(&self) -> WorkerError {
         match self.cause {
             ScriptProbeCause::ContractViolation => WorkerError::ContractViolation,
             ScriptProbeCause::SyntaxError
-            | ScriptProbeCause::UnknownEntrypoint
-            | ScriptProbeCause::UnsupportedEntrypointSignature => WorkerError::ScriptRejected,
+            | ScriptProbeCause::UnknownFunction
+            | ScriptProbeCause::UnsupportedFunctionSignature => WorkerError::ScriptRejected,
         }
     }
 }
@@ -717,23 +731,274 @@ pub fn probe_script_diagnostic(
             cause: ScriptProbeCause::SyntaxError,
             line: position.line(),
             column: position.position(),
+            function: None,
+            valid_signatures: Vec::new(),
         }
     })?;
     if ast
         .iter_functions()
         .any(|function| function.name == entrypoint && function.params.len() == 1)
     {
-        return Ok(());
+        return validate_xw_calls(script);
     }
     let cause = if ast
         .iter_functions()
         .any(|function| function.name == entrypoint)
     {
-        ScriptProbeCause::UnsupportedEntrypointSignature
+        ScriptProbeCause::UnsupportedFunctionSignature
     } else {
-        ScriptProbeCause::UnknownEntrypoint
+        ScriptProbeCause::UnknownFunction
     };
-    Err(ScriptProbeDiagnostic::without_position(cause))
+    Err(ScriptProbeDiagnostic {
+        cause,
+        line: None,
+        column: None,
+        function: Some(entrypoint.to_string()),
+        valid_signatures: vec!["consult(context)"],
+    })
+}
+
+struct XwCall {
+    function: String,
+    argument_count: usize,
+    line: usize,
+    column: usize,
+}
+
+fn validate_xw_calls(script: &str) -> Result<(), ScriptProbeDiagnostic> {
+    for call in scan_xw_calls(script) {
+        let candidates = xw::XW_V1_FUNCTIONS
+            .iter()
+            .filter(|candidate| {
+                call.function == format!("{}.{}", candidate.namespace, candidate.name)
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return Err(ScriptProbeDiagnostic {
+                cause: ScriptProbeCause::UnknownFunction,
+                line: Some(call.line),
+                column: Some(call.column),
+                function: Some(call.function.clone()),
+                valid_signatures: closest_xw_signatures(&call.function),
+            });
+        }
+        if !candidates
+            .iter()
+            .any(|candidate| candidate.accepted_types.len() == call.argument_count)
+        {
+            return Err(ScriptProbeDiagnostic {
+                cause: ScriptProbeCause::UnsupportedFunctionSignature,
+                line: Some(call.line),
+                column: Some(call.column),
+                function: Some(call.function),
+                valid_signatures: candidates
+                    .into_iter()
+                    .map(|candidate| candidate.signature)
+                    .collect(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn closest_xw_signatures(function: &str) -> Vec<&'static str> {
+    let mut distance = usize::MAX;
+    let mut signatures = Vec::new();
+    for candidate in xw::XW_V1_FUNCTIONS {
+        let candidate_name = format!("{}.{}", candidate.namespace, candidate.name);
+        let candidate_distance = edit_distance(function, &candidate_name);
+        match candidate_distance.cmp(&distance) {
+            std::cmp::Ordering::Less => {
+                distance = candidate_distance;
+                signatures.clear();
+                signatures.push(candidate.signature);
+            }
+            std::cmp::Ordering::Equal => signatures.push(candidate.signature),
+            std::cmp::Ordering::Greater => {}
+        }
+    }
+    signatures
+}
+
+fn edit_distance(left: &str, right: &str) -> usize {
+    let mut prior = (0..=right.chars().count()).collect::<Vec<_>>();
+    let mut current = vec![0; prior.len()];
+    for (left_index, left) in left.chars().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right) in right.chars().enumerate() {
+            current[right_index + 1] = (prior[right_index + 1] + 1)
+                .min(current[right_index] + 1)
+                .min(prior[right_index] + usize::from(left != right));
+        }
+        std::mem::swap(&mut prior, &mut current);
+    }
+    prior[right.chars().count()]
+}
+
+fn scan_xw_calls(script: &str) -> Vec<XwCall> {
+    let bytes = script.as_bytes();
+    let mut calls = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' | b'\'' | b'`' => {
+                index = skip_quoted_script_value(bytes, index);
+                continue;
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                index = bytes[index + 2..]
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(bytes.len(), |offset| index + 2 + offset + 1);
+                continue;
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index = bytes[index + 2..]
+                    .windows(2)
+                    .position(|pair| pair == b"*/")
+                    .map_or(bytes.len(), |offset| index + 2 + offset + 2);
+                continue;
+            }
+            b'x' if bytes[index..].starts_with(b"xw")
+                && index
+                    .checked_sub(1)
+                    .and_then(|prior| bytes.get(prior))
+                    .is_none_or(|byte| !script_identifier_byte(*byte)) =>
+            {
+                if let Some((function, open_parenthesis)) = parse_xw_function(bytes, index) {
+                    if let Some((argument_count, _end)) =
+                        count_script_call_arguments(bytes, open_parenthesis)
+                    {
+                        let (line, column) = script_position(script, index);
+                        calls.push(XwCall {
+                            function,
+                            argument_count,
+                            line,
+                            column,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    calls
+}
+
+fn parse_xw_function(bytes: &[u8], start: usize) -> Option<(String, usize)> {
+    let mut cursor = start + 2;
+    let mut function = String::from("xw");
+    let mut segments = 0;
+    loop {
+        cursor = skip_ascii_whitespace(bytes, cursor);
+        if bytes.get(cursor) != Some(&b'.') {
+            break;
+        }
+        cursor = skip_ascii_whitespace(bytes, cursor + 1);
+        let segment_start = cursor;
+        while bytes
+            .get(cursor)
+            .is_some_and(|byte| script_identifier_byte(*byte))
+        {
+            cursor += 1;
+        }
+        if cursor == segment_start {
+            return None;
+        }
+        function.push('.');
+        function.push_str(std::str::from_utf8(&bytes[segment_start..cursor]).ok()?);
+        segments += 1;
+    }
+    cursor = skip_ascii_whitespace(bytes, cursor);
+    (segments > 0 && bytes.get(cursor) == Some(&b'(')).then_some((function, cursor))
+}
+
+fn count_script_call_arguments(bytes: &[u8], open: usize) -> Option<(usize, usize)> {
+    let mut cursor = open + 1;
+    let mut parentheses = 1_usize;
+    let mut brackets = 0_usize;
+    let mut braces = 0_usize;
+    let mut commas = 0_usize;
+    let mut has_argument = false;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'"' | b'\'' | b'`' => {
+                has_argument = true;
+                cursor = skip_quoted_script_value(bytes, cursor);
+                continue;
+            }
+            b'/' if bytes.get(cursor + 1) == Some(&b'/') => {
+                cursor = bytes[cursor + 2..]
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(bytes.len(), |offset| cursor + 2 + offset + 1);
+                continue;
+            }
+            b'/' if bytes.get(cursor + 1) == Some(&b'*') => {
+                cursor = bytes[cursor + 2..]
+                    .windows(2)
+                    .position(|pair| pair == b"*/")
+                    .map_or(bytes.len(), |offset| cursor + 2 + offset + 2);
+                continue;
+            }
+            b'(' => parentheses += 1,
+            b')' if parentheses == 1 && brackets == 0 && braces == 0 => {
+                return Some((usize::from(has_argument) + commas, cursor + 1));
+            }
+            b')' => parentheses = parentheses.checked_sub(1)?,
+            b'[' => brackets += 1,
+            b']' => brackets = brackets.checked_sub(1)?,
+            b'{' => braces += 1,
+            b'}' => braces = braces.checked_sub(1)?,
+            b',' if parentheses == 1 && brackets == 0 && braces == 0 => commas += 1,
+            byte if !byte.is_ascii_whitespace() => has_argument = true,
+            _ => {}
+        }
+        cursor += 1;
+    }
+    None
+}
+
+fn skip_quoted_script_value(bytes: &[u8], start: usize) -> usize {
+    let quote = bytes[start];
+    let mut cursor = start + 1;
+    let mut escaped = false;
+    while cursor < bytes.len() {
+        let byte = bytes[cursor];
+        cursor += 1;
+        if escaped {
+            escaped = false;
+        } else if byte == b'\\' {
+            escaped = true;
+        } else if byte == quote {
+            break;
+        }
+    }
+    cursor
+}
+
+fn skip_ascii_whitespace(bytes: &[u8], mut cursor: usize) -> usize {
+    while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+        cursor += 1;
+    }
+    cursor
+}
+
+const fn script_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn script_position(script: &str, byte_index: usize) -> (usize, usize) {
+    let prefix = &script[..byte_index];
+    let line = prefix.bytes().filter(|byte| *byte == b'\n').count() + 1;
+    let column = prefix
+        .rsplit_once('\n')
+        .map_or(prefix, |(_, line)| line)
+        .chars()
+        .count()
+        + 1;
+    (line, column)
 }
 
 /// Closed runtime probe used while compiling source plans. Developer tooling
@@ -743,7 +1008,8 @@ pub fn probe_script(
     entrypoint: &str,
     limits: WorkerLimits,
 ) -> Result<(), WorkerError> {
-    probe_script_diagnostic(script, entrypoint, limits).map_err(ScriptProbeDiagnostic::worker_error)
+    probe_script_diagnostic(script, entrypoint, limits)
+        .map_err(|diagnostic| diagnostic.worker_error())
 }
 
 #[doc(hidden)]
@@ -2162,8 +2428,10 @@ mod tests {
             WorkerLimits::default(),
         )
         .expect_err("missing entrypoint rejects");
-        assert_eq!(unknown.cause(), ScriptProbeCause::UnknownEntrypoint);
+        assert_eq!(unknown.cause(), ScriptProbeCause::UnknownFunction);
         assert_eq!(unknown.line(), None);
+        assert_eq!(unknown.function(), Some("consult"));
+        assert_eq!(unknown.valid_signatures(), ["consult(context)"]);
         assert_eq!(unknown.to_string(), "unknown_function");
 
         let signature = probe_script_diagnostic(
@@ -2174,9 +2442,65 @@ mod tests {
         .expect_err("unsupported signature rejects");
         assert_eq!(
             signature.cause(),
-            ScriptProbeCause::UnsupportedEntrypointSignature
+            ScriptProbeCause::UnsupportedFunctionSignature
         );
+        assert_eq!(signature.function(), Some("consult"));
+        assert_eq!(signature.valid_signatures(), ["consult(context)"]);
         assert_eq!(signature.to_string(), "unsupported_function_signature");
+    }
+
+    #[test]
+    fn script_probe_reports_unknown_xw_helper_with_closest_signature() {
+        let diagnostic = probe_script_diagnostic(
+            "fn consult(ctx) {\n  let value = xw.text.lowercase(\"argument-marker-7766\");\n  result.no_match()\n}",
+            "consult",
+            WorkerLimits::default(),
+        )
+        .expect_err("unknown xw helper rejects during preflight");
+        assert_eq!(diagnostic.cause(), ScriptProbeCause::UnknownFunction);
+        assert_eq!(diagnostic.function(), Some("xw.text.lowercase"));
+        assert_eq!(diagnostic.line(), Some(2));
+        assert!(diagnostic.column().is_some());
+        assert_eq!(
+            diagnostic.valid_signatures(),
+            ["xw.text.lower_ascii(value: string) -> string"]
+        );
+        let rendered = format!("{diagnostic:?} {diagnostic}");
+        assert!(!rendered.contains("argument-marker-7766"));
+    }
+
+    #[test]
+    fn script_probe_reports_wrong_xw_arity_and_ignores_noncode_text() {
+        let diagnostic = probe_script_diagnostic(
+            r#"fn consult(ctx) {
+                let example = "xw.text.lowercase(argument-marker)";
+                // xw.text.lowercase(argument-marker)
+                let value = xw.text.lower_ascii("left", "right");
+                result.no_match()
+            }"#,
+            "consult",
+            WorkerLimits::default(),
+        )
+        .expect_err("wrong xw signature rejects during preflight");
+        assert_eq!(
+            diagnostic.cause(),
+            ScriptProbeCause::UnsupportedFunctionSignature
+        );
+        assert_eq!(diagnostic.function(), Some("xw.text.lower_ascii"));
+        assert_eq!(
+            diagnostic.valid_signatures(),
+            ["xw.text.lower_ascii(value: string) -> string"]
+        );
+
+        probe_script_diagnostic(
+            r#"fn consult(ctx) {
+                let nested = xw.text.trim(xw.text.lower_ascii("ABC"));
+                result.no_match()
+            }"#,
+            "consult",
+            WorkerLimits::default(),
+        )
+        .expect("registered nested xw calls pass preflight");
     }
 
     #[test]

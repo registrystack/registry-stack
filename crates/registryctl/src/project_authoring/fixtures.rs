@@ -35,9 +35,22 @@ fn preflight_project_rhai_scripts(loaded: &LoadedRegistryProject) -> Result<()> 
         let column = diagnostic
             .column()
             .map_or_else(String::new, |column| format!(" column={column}"));
+        let function = diagnostic
+            .function()
+            .map_or_else(String::new, |function| format!(" function={function}"));
+        let signatures = (!diagnostic.valid_signatures().is_empty())
+            .then(|| {
+                format!(
+                    " valid_signatures=[{}]",
+                    diagnostic.valid_signatures().join("|")
+                )
+            })
+            .unwrap_or_default();
         bail!(
-            "integration={alias} field={field} file={relative}{line}{column} cause={} expected=consult(context)",
-            diagnostic.cause().as_str()
+            "integration={alias} field={field} file={relative}{line}{column} cause={}{}{}",
+            diagnostic.cause().as_str(),
+            function,
+            signatures,
         );
     }
     Ok(())
@@ -1759,7 +1772,8 @@ mod fixture_interface_tests {
             .expect_err("wrong signature rejects")
             .to_string();
         assert!(error.contains("cause=unsupported_function_signature"));
-        assert!(error.contains("expected=consult(context)"));
+        assert!(error.contains("function=consult"));
+        assert!(error.contains("valid_signatures=[consult(context)]"));
 
         let integration = loaded
             .integrations
@@ -1775,6 +1789,26 @@ mod fixture_interface_tests {
         assert!(error.contains("field=capability.script.file"));
         assert!(error.contains("file=integrations/health-record/adapter.rhai"));
         assert!(error.contains("cause=unknown_function"));
-        assert!(error.contains("expected=consult(context)"));
+        assert!(error.contains("function=consult"));
+        assert!(error.contains("valid_signatures=[consult(context)]"));
+
+        let integration = loaded
+            .integrations
+            .get_mut("health-record")
+            .expect("integration exists");
+        integration.script.as_mut().expect("script exists").1 =
+            b"fn consult(ctx) {\n  let value = xw.text.lowercase(\"argument-marker-8877\");\n  result.no_match()\n}"
+                .to_vec()
+                .into_boxed_slice();
+        let error = preflight_project_rhai_scripts(&loaded)
+            .expect_err("unknown xw helper rejects")
+            .to_string();
+        assert!(error.contains("field=capability.script.file"));
+        assert!(error.contains("file=integrations/health-record/adapter.rhai"));
+        assert!(error.contains("line=2"));
+        assert!(error.contains("cause=unknown_function"));
+        assert!(error.contains("function=xw.text.lowercase"));
+        assert!(error.contains("valid_signatures=[xw.text.lower_ascii(value: string) -> string]"));
+        assert!(!error.contains("argument-marker-8877"));
     }
 }
