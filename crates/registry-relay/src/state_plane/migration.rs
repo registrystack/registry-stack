@@ -30,7 +30,7 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "audit-pseudonym-keyring=registry.relay.postgres-audit-pseudonym-keyring/v1\0",
     "materialization-publication=registry.relay.postgres-materialization-publication/v1\0",
     "materialization-publication-order=attempt-before-access-atomic-completion-pointer-monotonic-generation-v1\0",
-    "consultation-completion=atomic-intent-sealed-seed-closed-three-outcomes-script-verification-permit-dynamic-ordinal-call-ack-known-unfinished-recovery-v4\0",
+    "consultation-completion=atomic-intent-sealed-seed-closed-three-outcomes-script-verification-permit-dynamic-ordinal-call-ack-known-unfinished-recovery-date-schema-v5\0",
     "consultation-batch-child-replay=authenticated-hmac-binding-reserve-before-quota-atomic-terminal-publication-fixed-retention-v2\0",
     "consultation-authorization=database-expiry-credential-verification-data-order-keyed-request-effect-call-ack-v4\0",
     "consultation-credentials=direct-data-auth-reference-distinct-authored-verification-no-expiry-v3\0",
@@ -38,7 +38,7 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "key-order=utf8-bytewise-key-order-v1\0",
 );
 pub(crate) const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "sha256:311a81754845cd6ab26300b92ecb4787652dda6a9ed15438e346aa5d2ef53097";
+    "sha256:a70a81bb46e49a97d24d8fec0716938639e760ced8834eba7965aa423dc5431b";
 
 pub(super) const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 7_221_091_440;
 const SUPPORTED_POSTGRES_MIN_MAJOR: i32 = 16;
@@ -47,16 +47,16 @@ const SUPPORTED_POSTGRES_MAX_MAJOR: i32 = 18;
 // Filled from the semantic catalog descriptor below on disposable supported
 // PostgreSQL majors. Constraint rendering is explicitly versioned because
 // pg_get_constraintdef is not a cross-major wire contract.
-const CONSTRAINT_FINGERPRINT_PG16: &str = "923e22ecc1106e0a8a6ccd771320b965";
-const CONSTRAINT_FINGERPRINT_PG17: &str = "923e22ecc1106e0a8a6ccd771320b965";
-const CONSTRAINT_FINGERPRINT_PG18: &str = "7dfaf85b762e7e0e2e67505a1cedaed7";
+const CONSTRAINT_FINGERPRINT_PG16: &str = "9496b43b708e2f6358200899c00eaca1";
+const CONSTRAINT_FINGERPRINT_PG17: &str = "9496b43b708e2f6358200899c00eaca1";
+const CONSTRAINT_FINGERPRINT_PG18: &str = "50b7c98eb7274c63d10c7b84a41f33f8";
 const COLUMN_FINGERPRINT_PG16: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
 const COLUMN_FINGERPRINT_PG17: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
 const COLUMN_FINGERPRINT_PG18: &str = "f1cce8b8398fd1b177d3d6b61a112cec";
-const FUNCTION_FINGERPRINT_PG16: &str = "20078d5cdf2d9115c487220827a2b18d";
-const FUNCTION_FINGERPRINT_PG17: &str = "20078d5cdf2d9115c487220827a2b18d";
-const FUNCTION_FINGERPRINT_PG18: &str = "20078d5cdf2d9115c487220827a2b18d";
-const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "57bf8376a1383e4f73483898ecb0a4a1";
+const FUNCTION_FINGERPRINT_PG16: &str = "5c72567f21536f434bfd5f21ab7fddf7";
+const FUNCTION_FINGERPRINT_PG17: &str = "5c72567f21536f434bfd5f21ab7fddf7";
+const FUNCTION_FINGERPRINT_PG18: &str = "5c72567f21536f434bfd5f21ab7fddf7";
+const CAPABILITY_HELPER_BODY_FINGERPRINT_V1: &str = "31835c50f5c67b30e888fa8d6b8270a5";
 
 /// Runtime-forceable session semantics. Server/SUSET state that the runtime
 /// cannot safely repair is rejected by the attested SQL capability instead.
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS relay_state_private.state_plane_metadata (
     ),
     CONSTRAINT state_plane_metadata_fingerprint_check CHECK (
         capability_fingerprint =
-        'sha256:311a81754845cd6ab26300b92ecb4787652dda6a9ed15438e346aa5d2ef53097'
+        'sha256:a70a81bb46e49a97d24d8fec0716938639e760ced8834eba7965aa423dc5431b'
     ),
     CONSTRAINT state_plane_metadata_roles_distinct_check CHECK (
         owner_role_oid <> runtime_role_oid
@@ -855,7 +855,7 @@ BEGIN
         THEN
             RETURN ARRAY[0, 0, 0]::bigint[];
         END IF;
-    ELSIF v_type = 'boolean' THEN
+    ELSIF v_type IN ('boolean', 'date') THEN
         IF relay_state_private.jsonb_object_key_count_v1(p_schema) <> 2
            OR p_schema - ARRAY['type', 'nullable']::text[] <> '{}'::jsonb
            OR jsonb_typeof(p_schema -> 'nullable') <> 'boolean'
@@ -1547,7 +1547,7 @@ WITH metadata AS (
       AND schema_version = 1
       AND capability_id = 'registry.relay.postgres-durable-audit/v1'
       AND capability_fingerprint =
-        'sha256:311a81754845cd6ab26300b92ecb4787652dda6a9ed15438e346aa5d2ef53097'
+        'sha256:a70a81bb46e49a97d24d8fec0716938639e760ced8834eba7965aa423dc5431b'
       AND serving_fence_capability_id = 'registry.relay.postgres-serving-fence/v1'
       AND serving_fence_lock_key <> 0
       AND serving_fence_lock_key <> 7221091440
@@ -2199,9 +2199,9 @@ SELECT
            )
     )
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '923e22ecc1106e0a8a6ccd771320b965'
-            WHEN 17 THEN '923e22ecc1106e0a8a6ccd771320b965'
-            WHEN 18 THEN '7dfaf85b762e7e0e2e67505a1cedaed7'
+            WHEN 16 THEN '9496b43b708e2f6358200899c00eaca1'
+            WHEN 17 THEN '9496b43b708e2f6358200899c00eaca1'
+            WHEN 18 THEN '50b7c98eb7274c63d10c7b84a41f33f8'
             ELSE '' END FROM constraint_fingerprint, server)
     AND (SELECT value = CASE server.major
             WHEN 16 THEN 'f1cce8b8398fd1b177d3d6b61a112cec'
@@ -2209,9 +2209,9 @@ SELECT
             WHEN 18 THEN 'f1cce8b8398fd1b177d3d6b61a112cec'
             ELSE '' END FROM column_fingerprint, server)
     AND (SELECT value = CASE server.major
-            WHEN 16 THEN '20078d5cdf2d9115c487220827a2b18d'
-            WHEN 17 THEN '20078d5cdf2d9115c487220827a2b18d'
-            WHEN 18 THEN '20078d5cdf2d9115c487220827a2b18d'
+            WHEN 16 THEN '5c72567f21536f434bfd5f21ab7fddf7'
+            WHEN 17 THEN '5c72567f21536f434bfd5f21ab7fddf7'
+            WHEN 18 THEN '5c72567f21536f434bfd5f21ab7fddf7'
             ELSE '' END FROM function_fingerprint, server);
 $function$;
 
@@ -8933,7 +8933,7 @@ mod tests {
             PERSISTENT_QUOTA_CAPABILITY_V1,
             AUDIT_PSEUDONYM_KEYRING_CAPABILITY_V1,
             MATERIALIZATION_PUBLICATION_CAPABILITY_V1,
-            "atomic-intent-sealed-seed-closed-three-outcomes-script-verification-permit-dynamic-ordinal-call-ack-known-unfinished-recovery-v4",
+            "atomic-intent-sealed-seed-closed-three-outcomes-script-verification-permit-dynamic-ordinal-call-ack-known-unfinished-recovery-date-schema-v5",
             "authenticated-hmac-binding-reserve-before-quota-atomic-terminal-publication-fixed-retention-v2",
             "database-expiry-credential-verification-data-order-keyed-request-effect-call-ack-v4",
             "direct-data-auth-reference-distinct-authored-verification-no-expiry-v3",

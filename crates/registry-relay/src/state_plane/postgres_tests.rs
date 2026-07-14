@@ -3420,6 +3420,12 @@ WHERE metadata.singleton = true
     let compiler_dhis2_seed = dhis2_completion_seed_fixture();
     let compiler_open_crvs_seed = open_crvs_completion_seed_fixture();
     let compiler_snapshot_seed = snapshot_completion_seed_fixture();
+    let mut compiler_date_seed = compiler_snapshot_seed.clone();
+    compiler_date_seed["acquisition"]["schema"]["fields"]["registration_status"] =
+        json!({"type": "date", "nullable": false});
+    let mut malformed_date_seed = compiler_date_seed.clone();
+    malformed_date_seed["acquisition"]["schema"]["fields"]["registration_status"]["max_bytes"] =
+        json!(10);
     let compiler_semantic_alias_seed = semantic_alias_completion_seed_fixture();
     let compiler_maximum_seed = maximum_completion_seed_fixture();
     let compiler_rhai_seed = rhai_five_operation_two_slot_completion_seed_fixture();
@@ -3467,6 +3473,20 @@ WHERE metadata.singleton = true
         .query_one(
             "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
             &[&serde_json::to_string(&compiler_snapshot_seed)?],
+        )
+        .await?
+        .try_get(0)?;
+    let compiler_date_seed_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&compiler_date_seed)?],
+        )
+        .await?
+        .try_get(0)?;
+    let malformed_date_seed_valid: bool = admin
+        .query_one(
+            "SELECT relay_state_private.consultation_completion_seed_valid_v1($1)",
+            &[&serde_json::to_string(&malformed_date_seed)?],
         )
         .await?
         .try_get(0)?;
@@ -3585,6 +3605,14 @@ WHERE metadata.singleton = true
     assert!(
         compiler_snapshot_seed_valid,
         "the compiler's SnapshotExact seed must satisfy SQL"
+    );
+    assert!(
+        compiler_date_seed_valid,
+        "the compiler's date acquisition schema must satisfy SQL"
+    );
+    assert!(
+        !malformed_date_seed_valid,
+        "date acquisition schemas must reject string-only bounds"
     );
     assert!(
         !open_crvs_positive_lifetime_valid,
