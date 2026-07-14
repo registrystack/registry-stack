@@ -213,7 +213,14 @@ jobs:
       - name: Install Windows native build tools
         if: runner.os == 'Windows'
         shell: pwsh
-        run: choco install nasm --no-progress --yes
+        run: |
+          choco install nasm --no-progress --yes
+          $nasm = Join-Path ${env:ProgramFiles} 'NASM\nasm.exe'
+          if (-not (Test-Path $nasm)) {
+            throw "Chocolatey installed NASM but nasm.exe was not found at $nasm"
+          }
+          Split-Path -Parent $nasm | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & $nasm -v
 
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
