@@ -92,6 +92,8 @@ target_a="synthetic-subject-a-${run_id}"
 target_b="synthetic-subject-b-${run_id}"
 target_c="synthetic-subject-c-${run_id}"
 
+echo "notary PostgreSQL ${postgresql_major} conformance: preparing isolated cluster"
+
 api_key_hash="$(printf '%s\n' "${api_key}" | "${notary_bin}" hash-api-key --stdin --hash-only \
   2>"${work_dir}/hash-api-key.log")"
 [[ "${api_key_hash}" == sha256:* ]] || fail "API key hash output is invalid"
@@ -226,6 +228,7 @@ docker exec "${postgres_container}" sh -ec \
 docker exec "${postgres_container}" psql --username postgres --dbname postgres \
   --command 'SELECT pg_catalog.pg_reload_conf();' \
   >>"${work_dir}/postgres-test-auth.log" 2>&1
+echo "notary PostgreSQL ${postgresql_major} conformance: typed state contracts"
 REGISTRY_NOTARY_STATE_POSTGRES_TEST_URL="postgresql://postgres@localhost:${postgres_port}/postgres?sslmode=require" \
 REGISTRY_NOTARY_STATE_POSTGRES_TEST_CA="${work_dir}/ca.crt" \
   cargo test --locked -p registry-notary-server --lib \
@@ -271,7 +274,6 @@ state:
     max_connections: 1
     sensitive_state_key_env: REGISTRY_NOTARY_SENSITIVE_STATE_KEY
 auth:
-  mode: api_key
   api_keys:
     - id: conformance-client
       fingerprint:
@@ -327,6 +329,8 @@ YAML
   >"${work_dir}/state-install.log" 2>&1 || fail "schema installation failed"
 "${notary_bin}" --config "${config_path}" state doctor \
   >"${work_dir}/state-doctor.log" 2>&1 || fail "schema attestation failed"
+
+echo "notary PostgreSQL ${postgresql_major} conformance: multi-instance and recovery"
 
 start_notary() {
   local bind="$1"
@@ -502,6 +506,8 @@ stop_process "${notary_pid_b}"
 notary_pid_a=""
 notary_pid_b=""
 
+echo "notary PostgreSQL ${postgresql_major} conformance: minor upgrade"
+
 source_version="$(docker exec "${postgres_container}" psql --tuples-only --no-align --username postgres --dbname postgres --command 'SHOW server_version_num')"
 [[ "${source_version}" =~ ^[0-9]+$ ]] || fail "source PostgreSQL version is unavailable"
 (( source_version / 10000 == postgresql_major )) || fail "source PostgreSQL major does not match the matrix"
@@ -532,6 +538,7 @@ render_status="$(curl --silent --show-error --max-time 30 \
 [[ "${render_status}" == "200" ]] || fail "persisted evaluation was unavailable after the minor upgrade"
 
 if [[ "${postgresql_major}" == "18" ]]; then
+  echo "notary PostgreSQL ${postgresql_major} conformance: logical backup and restore"
   stop_process "${notary_pid_a}"
   notary_pid_a=""
   docker exec --env "PGPASSWORD=${migrator_password}" --env PGSSLMODE=require \
