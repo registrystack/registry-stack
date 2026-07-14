@@ -210,6 +210,11 @@ jobs:
           set -euo pipefail
           test "$(uname -m)" = "${{ matrix.expected_uname }}"
 
+      - name: Install Windows native build tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install nasm --no-progress --yes
+
       - name: Cache Cargo registry and build artifacts
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
