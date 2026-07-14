@@ -38,6 +38,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.2.0 | 2026-07-07 | draft | Reworded REQ-DM-CLAIM-005 so the controlled-environment restriction on disabling matching-failure collapse reads as operational guidance rather than a runtime-enforced constraint, and documented the extract/exists value-type-checking gap and the empty-`formats`-list evaluation gap in Limitations. |
 | 0.3.0 | 2026-07-13 | draft | Replaced direct source bindings and Notary matching with registry-backed Relay consultations and self-attested evidence modes. |
 | 0.3.1 | 2026-07-14 | draft | Updated load-time validation limits after duplicate ids, disclosure defaults, evidence-mode rules, and registry-backed output types became startup checks. |
+| 0.3.2 | 2026-07-14 | draft | Aligned credential eligibility with Registry Stack project authoring: profiles declare claims once, and the compiler derives the product-level reverse index. |
 
 ## 1. Scope and references
 
@@ -73,7 +74,7 @@ flowchart TD
     rule["Rule (exactly one)<br/>consultation output · consultation matched · cel (+ depends_on)"]
     disclosure["Disclosure policy<br/>default and allowed modes"]
     formats["Evaluation render formats<br/>claim-result JSON · CCCEV JSON-LD"]
-    creds["Credential profiles<br/>two-way allow-list, issues SD-JWT VC"]
+    creds["Credential profiles<br/>authored claim membership, issues SD-JWT VC"]
     claim --> inputs --> evidence --> rule
     rule --> disclosure
     rule --> formats
@@ -104,7 +105,7 @@ REQ-DM-CLAIM-005: Relay no-match, ambiguity, contract, and source failures MUST 
 
 The rule is the single decision at the center of a claim. Registry Notary implements three rule kinds: `consultation_matched` (whether the Relay consultation matched), `consultation_output` (a typed value from one named consultation output), and `cel` (a value derived from closed evidence inputs or earlier claim results through a hardened expression).
 
-REQ-DM-CLAIM-006: A claim definition MUST declare exactly one rule, and that rule MUST be one of the implemented kinds `consultation_output`, `consultation_matched`, or `cel`. The `plugin` rule kind is declared in configuration but unimplemented; a conforming claim MUST NOT depend on it. This is the data-model form of REQ-PR-NOTARY-007.
+REQ-DM-CLAIM-006: A claim definition MUST declare exactly one rule, and that rule MUST be one of the implemented kinds `consultation_output`, `consultation_matched`, or `cel`. Any other rule kind MUST be rejected as unknown. This is the data-model form of REQ-PR-NOTARY-007.
 
 REQ-DM-CLAIM-007: A `cel` rule MAY reuse earlier claim results through `depends_on`. Every `depends_on` entry MUST name a claim defined in the same configuration, and the dependency graph MUST be acyclic; a deployment MUST reject a configuration whose `depends_on` names an unknown claim or forms a cycle.
 
@@ -122,9 +123,15 @@ REQ-DM-CLAIM-009: A claim MUST be renderable as the claim-result JSON media type
 
 ## 8. Credential eligibility
 
-A claim is not issuable as a credential by default. Issuance is gated by a two-way allow-list between the claim and a credential profile, so neither a claim nor a profile can issue a credential the other was not designed for.
+A claim is not issuable as a credential by default. In a Registry Stack project, the credential
+profile is the single authored direction: it lists the claims it may issue. The compiler derives the
+reverse claim-to-profile index required by Registry Notary's product configuration.
 
-REQ-DM-CLAIM-010: A credential MUST be issuable from a claim only when both sides agree: the claim lists the credential profile in its `credential_profiles`, and the profile lists the claim in its `allowed_claims`. A profile's `allowed_claims` MUST NOT be empty. The issued credential is an SD-JWT VC bound to its holder by `did:jwk`, per REQ-PR-NOTARY-013 and REQ-PR-NOTARY-015.
+REQ-DM-CLAIM-010: A credential profile MUST list at least one claim. The Registry Stack project
+compiler MUST derive each listed claim's product-level `credential_profiles` reverse index from
+that membership and MUST reject unknown claims. Registry Notary MUST issue a claim only when the
+compiled profile membership and derived reverse index agree. The issued credential is an SD-JWT VC
+bound to its holder by `did:jwk`, per REQ-PR-NOTARY-013 and REQ-PR-NOTARY-015.
 
 ## 9. Batch behavior
 
@@ -137,8 +144,6 @@ REQ-DM-CLAIM-011: Batch evaluation MUST be semantically equivalent to evaluating
 These constraints are stated so a reader does not infer a capability from a declared but unusable
 shape.
 
-- Plugin rule: The enum is declared, but configuration validation rejects it for both
-  registry-backed and self-attested evidence modes (REQ-DM-CLAIM-006).
 - Empty formats list: A claim definition whose `formats` list is empty (the default) can never be evaluated, because format checking rejects any format not listed, including the default-requested claim-result JSON format (REQ-DM-CLAIM-009). This is not rejected at configuration load. Tracked in [GH#170](https://github.com/registrystack/registry-stack/issues/170).
 
 ## Conformance
@@ -148,12 +153,12 @@ A claim definition, and the Registry Notary deployment that serves it, conforms 
 - carries a stable identifier by which it is evaluated and named (REQ-DM-CLAIM-001);
 - declares exactly one evidence mode, pins every registry-backed Relay consultation, enforces caller scopes before work, and rejects inputs outside the closed mapping (REQ-DM-CLAIM-002, REQ-DM-CLAIM-003);
 - verifies the complete Relay consultation contract before work and preserves the configured public error posture without source leakage (REQ-DM-CLAIM-004, REQ-DM-CLAIM-005);
-- declares exactly one rule of an implemented kind and never depends on the unimplemented plugin kind (REQ-DM-CLAIM-006);
+- declares exactly one implemented rule kind and rejects every unknown kind (REQ-DM-CLAIM-006);
 - keeps `depends_on` references resolvable and acyclic (REQ-DM-CLAIM-007);
 - applies the default disclosure mode and refuses modes outside the allowed set (REQ-DM-CLAIM-008);
 - renders the claim-result format and produces a value matching its declared type
   (REQ-DM-CLAIM-009);
-- issues a credential only under the two-way claim-and-profile allow-list (REQ-DM-CLAIM-010);
+- issues a credential only under compiler-closed profile membership (REQ-DM-CLAIM-010);
 - treats batch evaluation as equivalent to repeated single evaluation and never as a way around per-evaluation rules (REQ-DM-CLAIM-011).
 
 Conformance to this specification does not imply conformance to any external standard cited in the `standards_referenced` frontmatter field. Each standard's adoption mode and scope are documented in the [standards register](../../reference/standards/).

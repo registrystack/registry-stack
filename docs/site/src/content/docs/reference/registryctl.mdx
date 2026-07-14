@@ -37,16 +37,22 @@ complete workflow and generated trust boundary.
 | `test --project-dir <dir>` | Compile and run every integration fixture through the Relay decoder and configured claim evaluator offline. Defaults to the current directory. |
 | `test --integration <id> --fixture <name>` | Select one integration fixture. `--fixture` requires `--integration`. |
 | `test --trace` | Include the safe synthetic interaction trace in the JSON report. |
-| `test --watch` | Rerun the selected offline scope when an authored project file changes. |
+| `test --watch` | Rerun the selected offline scope when an authored project file changes and print a concise pass/fail summary. Cannot be combined with `--trace` or `--live`. |
 | `test --environment <name>` | Include one explicit environment binding in offline validation. |
 | `test --environment <name> --live` | After offline fixtures pass, send one governed evaluation through a deployed Notary. The environment must be explicitly non-production. |
 | `check --project-dir <dir> --environment <name>` | Validate fixtures and the generated configuration for the project's Relay-only, Notary-only, or combined topology without writing build output. |
 | `check --explain` | Include the redacted acquisition, authorization, output, claim, and disclosure plan. |
+| `check --format json` | Emit the machine-readable check report instead of the default human-readable review report. |
 | `check --against <bundle> --anchor <anchor>` | Verify a signed product baseline and compare against its signed human review plus internal approval state. Both flags are required together. |
+| `authoring xw --format reference` | Print the generated `xw.v1` function reference for Script authors. |
+| `authoring xw --format editor` | Print generated editor metadata for the `xw.v1` function surface. |
+| `authoring schema --kind <kind>` | Print a strict project, environment, integration, fixture, or entity JSON Schema. |
 | `build --project-dir <dir> --environment <name>` | Emit deterministic unsigned Config Bundle input directories for the products in the selected topology. |
 | `build --against <bundle> --anchor <anchor>` | Build against an explicitly verified signed baseline. Both flags are required together. |
 
-The commands print JSON reports.
+`init`, non-watch `test`, and `build` print JSON reports. `check` prints a human-readable review
+report by default and accepts `--format json` for automation. Watch mode prints one concise
+pass/fail summary per run.
 An initialized starter records its starter ID, Registry Stack release, and
 authored-content digest in `registry-stack.yaml`. `init` verifies that digest,
 and `check --explain` reports `matches` or `diverged` together with the current

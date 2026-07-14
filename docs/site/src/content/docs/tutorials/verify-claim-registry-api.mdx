@@ -139,9 +139,10 @@ registryctl check \
   --explain
 ```
 
-The report contains `"status": "valid"`. In the explanation, confirm that Notary names the same
-consultation profile, contract hash, purpose, closed inputs, outcome union, and typed outputs that
-Relay exposes. A mismatch fails validation rather than selecting a fallback source path.
+The human-readable report marks the project `valid`. Confirm that Notary names the same consultation
+profile, contract hash, purpose, closed inputs, outcome union, and typed outputs that Relay exposes.
+A mismatch fails validation rather than selecting a fallback source path. Add `--format json` only
+for machine processing.
 
 ## Build unsigned product inputs
 

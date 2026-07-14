@@ -125,13 +125,13 @@ registryctl test \
   --project-dir registry-project \
   --integration person-record \
   --fixture active-person \
-  --trace \
   --watch
 ```
 
-The command prints the same passing report, waits for an authored file to change, then reruns the
-selected fixture. Press `Ctrl+C` after you confirm the initial pass. The watcher ignores generated
-`.registry-stack` output and never enables live source access.
+The command prints `PASS: 1/1 fixtures passed`, waits for an authored file to change, then reruns
+the selected fixture. Use the preceding non-watch command for the full trace. Press `Ctrl+C` after
+you confirm the initial pass. The watcher ignores generated `.registry-stack` output and never
+enables live source access.
 
 ## Adapt the authored contract
 
@@ -236,15 +236,17 @@ registryctl check \
   --explain
 ```
 
-The JSON report contains:
+The human-readable review report starts with:
 
 ```text
-"status": "valid"
-"baseline": "initial_without_baseline"
+Registry Stack project: fictional-citizen-registry (valid)
+Environment: local
+Baseline: initial_without_baseline
 ```
 
-Review the fixed request authority, input mappings, caller scopes, purpose, outputs, claims, disclosure
-modes, and credential membership in `explanation`.
+Review the fixed request authority, input mappings, caller scopes, purpose, outputs, claims,
+disclosure modes, and credential membership. Use `--format json` only when another tool needs the
+machine-readable report.
 An initial project without an approved baseline requires the `claim`, `integration`,
 `service_policy`, and `operator_security` review classes.
 A valid report is not legal approval, source interoperability evidence, or deployment authority.

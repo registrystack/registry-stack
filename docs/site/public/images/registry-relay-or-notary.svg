@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry Relay or Registry Notary</title>
-  <desc>Decision strip. A caller that needs the records themselves uses Registry Relay: protected, scoped, read-only HTTP routes over existing source data, without giving callers database access. A caller that needs an answer, evidence, or a credential uses Registry Notary: a status, predicate, selected value, or signed credential (SD-JWT VC), instead of the full source record. Both fit together: Registry Notary can call Registry Relay as an HTTP source.</desc>
+  <desc>Decision strip. A caller that needs the records themselves uses Registry Relay: protected, scoped, read-only HTTP routes over existing source data, without giving callers database access. A caller that needs an answer, evidence, or a credential uses Registry Notary: a status, predicate, selected value, or signed credential (SD-JWT VC), instead of the full source record. In a combined project, Registry Notary consumes compiler-pinned consultation results from Registry Relay.</desc>
 
   <line x1="360" y1="16" x2="360" y2="204" stroke="#e5e5e5" stroke-width="1"/>
 
@@ -42,5 +42,6 @@
     <text x="376" y="190">instead of the full source record.</text>
   </g>
 
-  <text x="16" y="232" fill="#6a6a6a" font-size="12">Both fit together: Registry Notary can call Registry Relay as an HTTP source.</text>
+  <text x="16" y="224" fill="#6a6a6a" font-size="12">Combined project: Notary consumes compiler-pinned</text>
+  <text x="16" y="240" fill="#6a6a6a" font-size="12">consultation results from Relay.</text>
 </svg>

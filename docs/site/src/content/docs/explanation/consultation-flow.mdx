@@ -1,5 +1,5 @@
 ---
-title: Consultation flow
+title: Relay protected read flow
 description: How Registry Relay binds a source, applies auth and scopes, serves
   entity-shaped routes, and audits every request at runtime.
 status: current
@@ -14,7 +14,7 @@ standards_referenced:
   - openapi
 ---
 
-Registry Relay is a read-only HTTP consultation gateway that fronts sensitive tabular
+Registry Relay is a read-only HTTP gateway that fronts sensitive tabular
 sources with entity-shaped routes and caller-specific access controls.
 Storage table identifiers stay private; callers see only declared entities, fields,
 filters, and aggregates.

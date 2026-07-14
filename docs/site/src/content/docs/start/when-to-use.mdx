@@ -46,12 +46,14 @@ These docs cover the two products you build against directly:
             protected, scoped, read-only HTTP routes over existing source data, without giving
             callers database access. A caller that needs an answer, evidence, or a credential
             uses Registry Notary: a status, predicate, selected value, or signed credential
-            (SD-JWT VC), instead of the full source record. Both fit together: Registry Notary
-            can call Registry Relay as an HTTP source." />
+            (SD-JWT VC), instead of the full source record. In a combined project, Registry
+            Notary consumes compiler-pinned consultation results from Registry Relay." />
 </figure>
 
-The two patterns also compose: Registry Notary can call a Registry Relay instance as one of its
-HTTP sources when a claim reads a registry that Relay already protects.
+The two patterns also compose. A combined Registry Stack project compiles source access and
+adaptation into Registry Relay, then binds Registry Notary claims to the resulting typed,
+contract-hashed consultation profiles. Registry Notary does not treat Relay as an arbitrary HTTP
+source.
 
 The wider current stack (Registry Manifest for portable metadata, Registry Platform for shared
 primitives, and Registry Lab for a local compose demo) is described at

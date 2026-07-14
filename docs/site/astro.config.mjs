@@ -314,7 +314,7 @@ export default defineConfig({
             { label: 'Architecture', slug: 'explanation/architecture' },
             { label: 'Records stay home', slug: 'explanation/records-stay-home' },
             { label: 'Boundaries and map', slug: 'map/boundaries-and-map' },
-            { label: 'Consultation flow', slug: 'explanation/consultation-flow' },
+            { label: 'Relay protected read flow', slug: 'explanation/consultation-flow' },
             { label: 'Evidence issuance', slug: 'explanation/evidence-issuance' },
             { label: 'Disclosure modes', slug: 'explanation/disclosure-modes-and-computed-answers' },
             { label: 'Data minimization', slug: 'explanation/data-minimization-and-purpose-limitation' },

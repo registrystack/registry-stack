@@ -59,6 +59,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.4.0 | 2026-07-07 | draft | Renamed the static discovery bundle consistently, added the DID issuer-mode security qualifier, corrected signed response credential gating and disclosure profile casing, added SDMX and eight vocabulary entries (matching policy, claim definition, credential profile, source connector, source adapter sidecar, static-peer federation, issuer mode, JWKS), extended `standards_referenced`, and aligned self-attestation terminology with RS-PR-NOTARY. |
 | 0.5.0 | 2026-07-09 | draft | Marked Registry Relay signed response credentials and issuer mode as removed before 1.0. |
 | 0.6.0 | 2026-07-13 | draft | Replaced direct Notary source connectors and sidecars with compiler-pinned Relay consultations and Registry Stack project authoring terms. |
+| 0.6.1 | 2026-07-14 | draft | Added the complete Registry Stack project-authoring vocabulary and clarified compiler-derived credential membership. |
 
 ## 1. Products
 
@@ -124,7 +125,10 @@ The registry stack comprises five related projects. Product names are Title Case
 
 **claim definition**: The Registry Notary configuration artifact that declares a named claim capability: its identity, evidence mode, typed inputs, compiler-pinned Relay consultations where registry-backed, the single rule that decides its value, and the disclosure, format, and credential rules that shape what leaves the service. Registry Stack product term.
 
-**credential profile**: Registry Notary configuration that names which claims may be issued as a credential. A claim is issuable only when both sides agree: the claim lists the profile in its `credential_profiles`, and the profile lists the claim in its `allowed_claims`. Registry Stack product term.
+**credential profile**: Registry Notary configuration that names which claims may be issued as a
+credential. A Registry Stack project authors this membership once on the profile; the compiler
+derives the claim-to-profile reverse index required by Registry Notary's product configuration.
+Registry Stack product term.
 
 **issuer mode**: Removed Registry Relay signed response credentials configuration axis. Registry Relay no longer signs under a gateway DID or a delegated ministry DID. Registry Notary owns issuer configuration for credentials.
 
@@ -133,6 +137,57 @@ The registry stack comprises five related projects. Product names are Title Case
 **Relay consultation**: A compiler-pinned request from Registry Notary to Registry Relay. The binding names a Relay profile id and contract hash, maps only declared typed request inputs, and requires purpose agreement before Relay performs source work. Registry Stack product term.
 
 **Registry Stack project**: The authored root for one registry trust domain. It can describe a Relay-only, Notary-only, or combined deployment, and compiles separate product configuration inputs for the selected topology. Registry Stack product term.
+
+**trust domain**: The institutional boundary whose operators, runtime identities, policy, and
+deployment approval govern one Registry Stack project. A geographic jurisdiction can contain
+several trust domains, and a trust domain does not need to represent a country. Registry Stack
+product term.
+
+**source**: The one logical registry data interface available to Registry Relay, when present,
+inside the project trust domain. An OAuth or JSON Web Key Set endpoint used by a protocol is not
+another data source. Registry Stack product term.
+
+**integration**: A reusable Registry Relay-owned unit that accepts typed inputs, uses `http`,
+`script`, or `snapshot` against the project source, and returns a consultation outcome plus
+declared outputs. Product and version metadata do not select its capability. Registry Stack
+product term.
+
+**entity**: A logical Registry Relay-local schema that can be materialized and queried by
+`snapshot` and can optionally be exposed through a records service. Registry Stack product term.
+
+**service**: An authored, purpose-bound public capability. Use the specific term evidence service
+or records service when the distinction matters. A service is not a Registry Relay or Registry
+Notary process. Registry Stack product term.
+
+**evidence service**: A Registry Notary-owned service containing service policy, claims,
+disclosure, optional Registry Relay consultations, and optional credential profiles. Registry
+Stack product term.
+
+**records service**: A Registry Relay-owned records API exposure of an entity, with its own
+access, purpose, projection, filter, and pagination policy. Registry Stack product term.
+
+**service policy**: The purpose, legal basis, consent, caller access, and disclosure rules
+governing one service. Registry Stack product term.
+
+**consultation**: A named use of one Registry Relay integration by an evidence service. One
+consultation can supply several Registry Notary claims. Registry Stack product term.
+
+**output**: A typed, minimized scalar returned by Registry Relay on a matching consultation.
+Registry Stack product term.
+
+**claim**: A Registry Notary-owned, purpose-specific value or predicate derived from consultation
+outcome and outputs. Registry Stack product term.
+
+**environment**: Private bindings and operational settings for one Registry Stack project
+deployment target, without changing stable project intent. Registry Stack product term.
+
+**deployment bundle**: The generated, signed artifact for one Registry Stack project and
+environment. Its root manifest binds compatible Registry Relay and Registry Notary submanifests
+when both are present. The current authoring command emits unsigned product inputs rather than a
+deployment bundle; signed project-root bundles are deferred. Registry Stack product term.
+
+**deployment**: One activated deployment-bundle generation. Replicas of that generation are one
+logical deployment. Registry Stack product term.
 
 **static-peer federation**: Registry Notary delegated evaluation between peers loaded from configuration at startup; a request from an unconfigured peer is rejected. A configured peer posts a compact signed JWT request through `POST /federation/v1/evaluations` and receives a compact signed JWT response carrying a scoped evaluation result. Dynamic trust-chain discovery and federated credential issuance are out of scope. Registry Stack product term.
 

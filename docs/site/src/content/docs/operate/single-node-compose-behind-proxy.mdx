@@ -73,7 +73,8 @@ registryctl build \
   --environment <environment>
 ```
 
-The reports contain `"status": "passed"`, `"status": "valid"`, and `"status": "built"`.
+The test and build JSON reports contain `"status": "passed"` and `"status": "built"`.
+The human-readable check report marks the project `valid`.
 Confirm the selected topology emits only the expected product inputs. A combined project emits
 separate Relay and Notary inputs with the same approval state. It does not emit a signed
 project-level root.
