@@ -208,11 +208,24 @@ fn main() -> Result<()> {
 }
 
 fn watch_project_tests(options: ProjectTestOptions, selection: ProjectTestSelection) -> Result<()> {
+    watch_project_tests_until(options, selection, |_, _| Ok(false))
+}
+
+fn watch_project_tests_until(
+    options: ProjectTestOptions,
+    selection: ProjectTestSelection,
+    mut should_stop_after_observation: impl FnMut(usize, &std::path::Path) -> Result<bool>,
+) -> Result<()> {
+    let mut completed_runs = 0;
     loop {
         print_json(&registryctl::test_registry_project_selected(
             &options, &selection,
         )?)?;
         let observed = project_watch_fingerprint(&options.project_directory)?;
+        completed_runs += 1;
+        if should_stop_after_observation(completed_runs, &options.project_directory)? {
+            return Ok(());
+        }
         loop {
             std::thread::sleep(std::time::Duration::from_millis(250));
             if project_watch_fingerprint(&options.project_directory)? != observed {
@@ -466,6 +479,34 @@ mod tests {
             } if project_dir == std::path::Path::new("registry-project") && environment == "staging"
         ));
 
+        let watch = Cli::try_parse_from([
+            "registryctl",
+            "test",
+            "--project-dir",
+            "registry-project",
+            "--integration",
+            "person-record",
+            "--fixture",
+            "active-person",
+            "--trace",
+            "--watch",
+        ])
+        .unwrap();
+        assert!(matches!(
+            watch.command,
+            Commands::Test {
+                project_dir,
+                environment: None,
+                live: false,
+                integration: Some(integration),
+                fixture: Some(fixture),
+                trace: true,
+                watch: true,
+            } if project_dir == std::path::Path::new("registry-project")
+                && integration == "person-record"
+                && fixture == "active-person"
+        ));
+
         let check = Cli::try_parse_from([
             "registryctl",
             "check",
@@ -532,6 +573,71 @@ mod tests {
         assert!(
             Cli::try_parse_from(["registryctl", "test", "--project", "registry-project",]).is_err()
         );
+    }
+
+    #[test]
+    fn project_test_watch_reruns_each_maintained_starter_after_an_authored_change() {
+        let starters = [
+            (ProjectStarter::Http, "person-record", "active-person"),
+            (
+                ProjectStarter::Dhis2Tracker,
+                "health-record",
+                "complete-health-match",
+            ),
+            (
+                ProjectStarter::OpencrvsDci,
+                "birth-record",
+                "birth-record-match",
+            ),
+            (ProjectStarter::FhirR4, "coverage", "coverage-active"),
+            (
+                ProjectStarter::Snapshot,
+                "person-snapshot",
+                "snapshot-match",
+            ),
+        ];
+
+        for (starter, integration, fixture) in starters {
+            let temporary = tempfile::tempdir().expect("temporary directory");
+            let project_directory = temporary.path().join("registry-project");
+            registryctl::init_registry_project(&ProjectInitOptions {
+                starter,
+                directory: project_directory.clone(),
+            })
+            .expect("maintained starter initializes");
+
+            let mut observed_runs = 0;
+            watch_project_tests_until(
+                ProjectTestOptions {
+                    project_directory: project_directory.clone(),
+                    environment: None,
+                    live: false,
+                },
+                ProjectTestSelection {
+                    integration: Some(integration.to_string()),
+                    fixture: Some(fixture.to_string()),
+                    trace: true,
+                },
+                |completed_runs, root| {
+                    observed_runs = completed_runs;
+                    if completed_runs == 1 {
+                        use std::io::Write as _;
+
+                        writeln!(
+                            std::fs::OpenOptions::new()
+                                .append(true)
+                                .open(root.join("registry-stack.yaml"))?,
+                            "# deterministic watch smoke"
+                        )?;
+                        Ok(false)
+                    } else {
+                        Ok(true)
+                    }
+                },
+            )
+            .expect("offline watch reruns after an authored project file changes");
+            assert_eq!(observed_runs, 2, "{starter:?}");
+        }
     }
 
     #[test]

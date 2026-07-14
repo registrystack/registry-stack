@@ -180,7 +180,7 @@ jobs:
         run: just exposure-check
 
   project-authoring-determinism:
-    name: Project authoring determinism (${{ matrix.arch }})
+    name: Project authoring portability and determinism (${{ matrix.arch }})
     needs: changes
     if: needs.changes.outputs.rust == 'true'
     runs-on: ${{ matrix.runner }}
@@ -194,6 +194,9 @@ jobs:
           - runner: macos-14
             arch: aarch64-macos
             expected_uname: arm64
+          - runner: windows-2022
+            arch: x86_64-windows
+            expected_uname: x86_64
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -216,6 +219,13 @@ jobs:
         run: >-
           cargo test --locked -p registryctl --test project_authoring
           check_and_build_produce_deterministic_product_inputs -- --exact
+
+      - name: Verify offline Script authoring and compilation
+        env:
+          CARGO_NET_OFFLINE: "true"
+        run: >-
+          cargo test --locked -p registryctl --test project_authoring
+          project_authoring_rhai_commands_are_portable_offline -- --exact
 
   release-tool:
     name: Release tooling

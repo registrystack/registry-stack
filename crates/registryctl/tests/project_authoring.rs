@@ -277,7 +277,6 @@ fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
     assert_eq!(baseline_dispatch, absent_dispatch);
 }
 
-#[cfg(not(target_os = "linux"))]
 #[test]
 fn project_authoring_rhai_commands_are_portable_offline() {
     let temporary = tempfile::tempdir().expect("temporary directory");
