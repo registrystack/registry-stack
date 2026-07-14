@@ -28,7 +28,6 @@
                 identifier_schemes: Vec::new(),
                 profile: None,
             },
-            matching: None,
             value: Some(json!(true)),
             satisfied: Some(true),
             disclosure: "value".to_string(),
@@ -44,7 +43,6 @@
                 ProvenanceUsed {
                     source_count: 0,
                     source_versions: BTreeMap::new(),
-                    source_runtimes: Vec::new(),
                 },
             ),
         };
@@ -73,7 +71,6 @@
                 identifier_schemes: Vec::new(),
                 profile: None,
             },
-            matching: None,
             value: Some(json!(true)),
             satisfied: Some(true),
             disclosure: "predicate".to_string(),
@@ -89,7 +86,6 @@
                 ProvenanceUsed {
                     source_count: 0,
                     source_versions: BTreeMap::new(),
-                    source_runtimes: Vec::new(),
                 },
             ),
         };
@@ -119,7 +115,6 @@
                 identifier_schemes: Vec::new(),
                 profile: None,
             },
-            matching: None,
             value: None,
             satisfied: None,
             disclosure: "redacted".to_string(),
@@ -135,7 +130,6 @@
                 ProvenanceUsed {
                     source_count: 0,
                     source_versions: BTreeMap::new(),
-                    source_runtimes: Vec::new(),
                 },
             ),
         };
@@ -164,10 +158,10 @@ claims:
     version: "1.0"
     subject_type: person
     evidence_mode:
-      type: transitional_direct
+      type: self_attested
     rule:
-      type: exists
-      source: src
+      type: cel
+      expression: "true"
     credential_profiles:
       - profile_a
 signing_keys:

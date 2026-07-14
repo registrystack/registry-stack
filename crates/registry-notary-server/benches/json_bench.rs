@@ -18,7 +18,7 @@ use std::hint::black_box;
 use criterion::{criterion_group, criterion_main, Criterion};
 use registry_notary_core::model::{
     ClaimProvenance, ClaimResultView, EvidenceAuditEvent, EvidenceEntityRef,
-    EvidenceEntityReference, Hashed, MatchingMetadata, PrincipalIdentifier, TargetRefView,
+    EvidenceEntityReference, Hashed, PrincipalIdentifier, TargetRefView,
 };
 use serde_json::{json, Value};
 
@@ -73,19 +73,8 @@ fn build_audit_event() -> EvidenceAuditEvent {
         requester_ref_hash: Some(Hashed::<EvidenceEntityReference>::from_hash(
             "hmac-sha256:requester-bench-001",
         )),
-        matching_policy_id: Some("national-id-exact-v1".to_string()),
-        matching_policy_hash: None,
-        matching_evaluated_rule_ids: None,
-        ecosystem_binding_id: None,
-        ecosystem_binding_version: None,
-        pack_id: None,
-        pack_version: None,
-        matching_method: Some("identifier_exact".to_string()),
-        matching_outcome: Some("matched".to_string()),
-        matching_error_code: None,
         redacted_fields: None,
         batch_items: None,
-        source_sidecar_config_hashes: None,
         config: None,
     }
 }
@@ -111,18 +100,6 @@ fn build_claim_result_view() -> ClaimResultView {
             identifier_schemes: vec!["national_id".to_string()],
             profile: Some("resident".to_string()),
         },
-        matching: Some(MatchingMetadata {
-            policy_id: "national-id-exact-v1".to_string(),
-            method: "identifier_exact".to_string(),
-            confidence: "high".to_string(),
-            score: Some(1.0),
-            policy_hash: None,
-            evaluated_rule_ids: Vec::new(),
-            ecosystem_binding_id: None,
-            ecosystem_binding_version: None,
-            pack_id: None,
-            pack_version: None,
-        }),
         value: Some(json!("1990-01-01")),
         satisfied: Some(true),
         disclosure: "full_disclosure".to_string(),
@@ -138,7 +115,6 @@ fn build_claim_result_view() -> ClaimResultView {
             registry_notary_core::ProvenanceUsed {
                 source_count: 1,
                 source_versions,
-                source_runtimes: Vec::new(),
             },
         ),
     }

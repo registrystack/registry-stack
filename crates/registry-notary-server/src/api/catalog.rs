@@ -86,7 +86,7 @@ pub(super) async fn list_claims(
         Err(error) => return evidence_error_response(error),
     };
     Json(json!({
-        "data": RegistryNotaryRuntime::list_claims(evidence, state.source.as_ref(), &principal),
+        "data": RegistryNotaryRuntime::list_claims(evidence, &principal),
     }))
     .into_response()
 }
@@ -107,10 +107,7 @@ pub(super) async fn get_claim(
         Err(error) => return evidence_error_response(error),
     };
     result_json(RegistryNotaryRuntime::get_claim(
-        evidence,
-        state.source.as_ref(),
-        &principal,
-        &claim_id,
+        evidence, &principal, &claim_id,
     ))
 }
 

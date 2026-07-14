@@ -58,7 +58,7 @@ fn config() -> CelWorkerConfig {
         limits: CelWorkerLimits::default(),
         forbidden_env_names: BTreeSet::from([
             OsString::from("REGISTRY_NOTARY_TEST_HSM_PIN"),
-            OsString::from("REGISTRY_NOTARY_TEST_SOURCE_TOKEN"),
+            OsString::from("REGISTRY_NOTARY_TEST_UNRELATED_SECRET"),
         ]),
     }
 }
@@ -109,7 +109,7 @@ fn fixture_config() -> CelWorkerConfig {
         limits: CelWorkerLimits::default(),
         forbidden_env_names: BTreeSet::from([
             OsString::from("REGISTRY_NOTARY_TEST_HSM_PIN"),
-            OsString::from("REGISTRY_NOTARY_TEST_SOURCE_TOKEN"),
+            OsString::from("REGISTRY_NOTARY_TEST_UNRELATED_SECRET"),
         ]),
     }
 }
@@ -473,7 +473,7 @@ async fn cel_stdio_worker_rejects_regex_helpers_by_default() {
 #[cfg(feature = "cel-worker-fixture")]
 async fn cel_worker_env_is_cleared_except_explicit_allow_list() {
     let _guard = CEL_WORKER_TEST_LOCK.lock().await;
-    std::env::set_var("REGISTRY_NOTARY_TEST_SOURCE_TOKEN", "source-secret");
+    std::env::set_var("REGISTRY_NOTARY_TEST_UNRELATED_SECRET", "unrelated-secret");
     std::env::set_var("REGISTRY_NOTARY_TEST_HSM_PIN", "1234");
     let mut config = fixture_config();
     config.command_envs.push((
@@ -487,7 +487,7 @@ async fn cel_worker_env_is_cleared_except_explicit_allow_list() {
             "fixture.env",
             json!({
                 "env_keys": [
-                    "REGISTRY_NOTARY_TEST_SOURCE_TOKEN",
+                    "REGISTRY_NOTARY_TEST_UNRELATED_SECRET",
                     "REGISTRY_NOTARY_TEST_HSM_PIN",
                     "REGISTRY_NOTARY_TEST_ALLOWED"
                 ]
@@ -496,10 +496,10 @@ async fn cel_worker_env_is_cleared_except_explicit_allow_list() {
         .await
         .expect("fixture reads env");
 
-    assert!(value["REGISTRY_NOTARY_TEST_SOURCE_TOKEN"].is_null());
+    assert!(value["REGISTRY_NOTARY_TEST_UNRELATED_SECRET"].is_null());
     assert!(value["REGISTRY_NOTARY_TEST_HSM_PIN"].is_null());
     assert_eq!(value["REGISTRY_NOTARY_TEST_ALLOWED"], "benign");
-    std::env::remove_var("REGISTRY_NOTARY_TEST_SOURCE_TOKEN");
+    std::env::remove_var("REGISTRY_NOTARY_TEST_UNRELATED_SECRET");
     std::env::remove_var("REGISTRY_NOTARY_TEST_HSM_PIN");
 }
 

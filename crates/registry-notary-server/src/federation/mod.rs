@@ -18,9 +18,9 @@ use axum::routing::post;
 use axum::{Extension, Router};
 use jsonwebtoken::{decode_header, Algorithm};
 use registry_notary_core::{
-    AccessMode, ClaimRef, EvaluateRequest, EvidenceAuthProfileId, EvidenceAuthorizationDetails,
-    EvidenceEntity, EvidencePrincipal, FederationEvaluationProfileConfig, SourceCapability,
-    FEDERATION_REQUEST_JWT_TYP, FORMAT_CLAIM_RESULT_JSON,
+    AccessMode, ClaimRef, EvaluateRequest, EvaluationCapability, EvidenceAuthProfileId,
+    EvidenceAuthorizationDetails, EvidenceEntity, EvidencePrincipal,
+    FederationEvaluationProfileConfig, FEDERATION_REQUEST_JWT_TYP, FORMAT_CLAIM_RESULT_JSON,
 };
 use registry_platform_crypto::pairwise_subject_ref_hash;
 use registry_platform_oidc::VerifiedToken;
@@ -256,7 +256,7 @@ async fn handle_federated_evaluate(
     let subject =
         request_subject(&verified, profile).map_err(|problem| audit_context.denied(problem))?;
     let principal = federation_principal(&peer.config, profile);
-    let source_capability = SourceCapability::Machine {
+    let evaluation_capability = EvaluationCapability::Machine {
         scopes: peer
             .config
             .source_scopes
@@ -299,12 +299,11 @@ async fn handle_federated_evaluate(
     audit_context.subject_ref_hash = Some(subject_hash.clone());
     let runtime_eval = state.runtime();
     let results = runtime_eval
-        .evaluate_with_source_capability(
+        .evaluate_with_capability(
             Arc::clone(&state.evidence),
-            Arc::clone(&state.source),
             &state.store,
             &principal,
-            source_capability,
+            evaluation_capability,
             request,
             None,
             None,

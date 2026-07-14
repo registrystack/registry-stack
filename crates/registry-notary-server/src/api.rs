@@ -58,16 +58,15 @@ use registry_notary_core::{
     signing_key_uses_local_software_custody, AccessMode, BatchEvaluateItemRequest,
     BatchEvaluateRequest, BoundedClaimId, BoundedCorrelationId, ClaimRef, ClaimResultView,
     ClaimSet, ConfigMetadata, CredentialIssueRequest, CredentialProfileConfig, DeploymentProfile,
-    EvaluateRequest, EvidenceActor, EvidenceAuditEvent, EvidenceBatchItemAuditEvent,
-    EvidenceConfig, EvidenceEntity, EvidenceEntityReference, EvidenceError, EvidenceOnBehalfOf,
-    EvidencePrincipal, EvidenceRelationship, FederationConfig, Hashed, HolderRequest,
-    Oid4vciConfig, Oid4vciCredentialClaimMode, Oid4vciCredentialConfigurationConfig,
-    Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig, PolicyIdentifier, RateLimitBucket,
-    RegistryNotaryAdminListenerMode, RenderEvaluationRequest, SelfAttestationConfig,
-    SelfAttestationDelegatedRelationshipConfig, SelfAttestationDenialCode,
-    SelfAttestationScopePolicy, SourceCapability, StandaloneRegistryNotaryConfig,
-    StoredSelfAttestationMetadata, SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
-    FORMAT_SD_JWT_VC,
+    EvaluateRequest, EvaluationCapability, EvidenceActor, EvidenceAuditEvent,
+    EvidenceBatchItemAuditEvent, EvidenceConfig, EvidenceEntity, EvidenceEntityReference,
+    EvidenceError, EvidenceOnBehalfOf, EvidencePrincipal, EvidenceRelationship, FederationConfig,
+    Hashed, HolderRequest, Oid4vciConfig, Oid4vciCredentialClaimMode,
+    Oid4vciCredentialConfigurationConfig, Oid4vciDisplayImageConfig, Oid4vciIssuerDisplayConfig,
+    PolicyIdentifier, RateLimitBucket, RegistryNotaryAdminListenerMode, RenderEvaluationRequest,
+    SelfAttestationConfig, SelfAttestationDelegatedRelationshipConfig, SelfAttestationDenialCode,
+    SelfAttestationScopePolicy, StandaloneRegistryNotaryConfig, StoredSelfAttestationMetadata,
+    SubjectRequest, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_crypto::KeyReadiness;
@@ -113,9 +112,7 @@ use crate::{
     preauth_state::{LoginState, SingleUseReserveError},
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::{
-        claim_ids, claim_semantics_metadata, find_claim, find_claim_version,
-        matching_policy_audit_identity, validate_batch_subject_limit, EvaluationAuditSnapshot,
-        MatchingPolicyAuditIdentity,
+        claim_ids, claim_semantics_metadata, validate_batch_subject_limit, EvaluationAuditSnapshot,
     },
     standalone::{
         constant_time_eq, generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge,
@@ -123,7 +120,7 @@ use crate::{
     },
     BatchEvaluateOptions, EvidenceStore, MachineQuotaLimiter, RegistryNotaryRuntime,
     SelfAttestationRateLimitBucket, SelfAttestationRateLimitError, SelfAttestationRateLimitKeys,
-    SelfAttestationRateLimiter, SourceReader,
+    SelfAttestationRateLimiter,
 };
 
 pub(crate) use crate::digest::evidence_claim_hash;

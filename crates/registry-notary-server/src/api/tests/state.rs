@@ -54,7 +54,6 @@ fn relay_readiness_state() -> RegistryNotaryApiState {
     RegistryNotaryApiState::new(
         Arc::new(evidence),
         AuditKeyHasher::unkeyed_dev_only(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     )
@@ -65,7 +64,6 @@ async fn source_free_state_does_not_require_relay_readiness() {
     let state = RegistryNotaryApiState::new(
         Arc::new(evidence_config()),
         AuditKeyHasher::unkeyed_dev_only(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
@@ -222,7 +220,6 @@ fn runtime_snapshot_read_never_observes_torn_issuer_federation_generation() {
         ReplayStores::memory(),
         CredentialStatusStore::disabled(),
         Arc::new(AppMetrics::default()),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::clone(&old_issuers),
         SignerReadiness::default(),
@@ -327,7 +324,6 @@ async fn readiness_fails_when_signer_readiness_fails() {
         RegistryNotaryApiState::new(
             Arc::new(evidence_config()),
             AuditKeyHasher::unkeyed_dev_only(),
-            Arc::new(CountingSource::default()),
             Arc::new(EvidenceStore::default()),
             Arc::new(NoopIssuerResolver),
         )
@@ -376,32 +372,4 @@ status: active
     let scoped = custody_scoped_signer_counts(&config);
     assert_eq!(scoped.total, 1);
     assert_eq!(scoped.local_software, 1);
-}
-
-#[tokio::test]
-async fn readiness_fails_when_source_readiness_check_fails() {
-    let source = ReadinessSource {
-        ready: Arc::new(AtomicBool::new(false)),
-    };
-    let state = Arc::new(RegistryNotaryApiState::new(
-        Arc::new(evidence_config()),
-        AuditKeyHasher::unkeyed_dev_only(),
-        Arc::new(source),
-        Arc::new(EvidenceStore::default()),
-        Arc::new(NoopIssuerResolver),
-    ));
-
-    let response = ready(Some(Extension(state))).await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = to_bytes(response.into_body(), 1024 * 1024)
-        .await
-        .expect("ready body reads");
-    let value: Value = serde_json::from_slice(&body).expect("ready body is JSON");
-
-    assert_eq!(value["status"], json!(503));
-    assert_eq!(value["code"], "readiness.not_ready");
-    assert_eq!(value["readiness_status"], "not_ready");
-    assert_eq!(value["checks"]["total"], json!(2));
-    assert_eq!(value["checks"]["ok"], json!(0));
-    assert_eq!(value["checks"]["failed"], json!(1));
 }

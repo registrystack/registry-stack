@@ -4,14 +4,12 @@
     use base64::Engine;
     use registry_notary_core::{
         BoundedVerifiedClaims, CredentialStatusConfig, CredentialStatusRedisConfig,
-        EvidenceAuthorizationDetails, SourceBindingConfig, SubjectRequest, VerifiedClaimName,
+        EvidenceAuthorizationDetails, SubjectRequest, VerifiedClaimName,
         VerifiedClaimValue, CREDENTIAL_STATUS_STORAGE_REDIS,
     };
     use registry_platform_crypto::{did_jwk_from_public_jwk, sign, LocalJwkSigner, PrivateJwk};
     use registry_platform_replay::ReplayInsertOutcome;
-    use registry_platform_testing::{assert_json_absent_strings, sign_openid4vci_proof_jwt};
-    use std::future::Future;
-    use std::pin::Pin;
+    use registry_platform_testing::sign_openid4vci_proof_jwt;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -557,94 +555,6 @@
         principal
     }
 
-    #[derive(Default)]
-    struct CountingSource {
-        reads: Arc<AtomicUsize>,
-    }
-
-    impl SourceReader for CountingSource {
-        fn read_one<'a>(
-            &'a self,
-            _binding: &'a SourceBindingConfig,
-            _subject: &'a SubjectRequest,
-            _purpose: &'a str,
-        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
-            Box::pin(async move {
-                self.reads.fetch_add(1, Ordering::SeqCst);
-                Err(EvidenceError::SourceUnavailable)
-            })
-        }
-
-        fn required_scopes(
-            &self,
-            _evidence: &EvidenceConfig,
-            _claim_id: &str,
-        ) -> Result<Vec<String>, EvidenceError> {
-            Ok(vec!["civil_registry:evidence_verification".to_string()])
-        }
-    }
-
-    struct ReadinessSource {
-        ready: Arc<AtomicBool>,
-    }
-
-    impl SourceReader for ReadinessSource {
-        fn has_readiness_check(&self) -> bool {
-            true
-        }
-
-        fn check_ready<'a>(&'a self) -> Pin<Box<dyn Future<Output = bool> + Send + 'a>> {
-            Box::pin(async move { self.ready.load(Ordering::SeqCst) })
-        }
-
-        fn read_one<'a>(
-            &'a self,
-            _binding: &'a SourceBindingConfig,
-            _subject: &'a SubjectRequest,
-            _purpose: &'a str,
-        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
-            Box::pin(async { Err(EvidenceError::SourceUnavailable) })
-        }
-
-        fn required_scopes(
-            &self,
-            _evidence: &EvidenceConfig,
-            _claim_id: &str,
-        ) -> Result<Vec<String>, EvidenceError> {
-            Ok(vec!["civil_registry:evidence_verification".to_string()])
-        }
-    }
-
-    #[derive(Default)]
-    struct VersionScopedSource;
-
-    impl SourceReader for VersionScopedSource {
-        fn read_one<'a>(
-            &'a self,
-            _binding: &'a SourceBindingConfig,
-            _subject: &'a SubjectRequest,
-            _purpose: &'a str,
-        ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
-            Box::pin(async { Err(EvidenceError::SourceUnavailable) })
-        }
-
-        fn required_scopes(
-            &self,
-            _evidence: &EvidenceConfig,
-            claim_id: &str,
-        ) -> Result<Vec<String>, EvidenceError> {
-            Ok(vec![format!("{claim_id}:1.0")])
-        }
-
-        fn required_scopes_for_claim(
-            &self,
-            _evidence: &EvidenceConfig,
-            claim: &registry_notary_core::ClaimDefinition,
-        ) -> Result<Vec<String>, EvidenceError> {
-            Ok(vec![format!("{}:{}", claim.id, claim.version)])
-        }
-    }
-
     struct NoopIssuerResolver;
 
     impl EvidenceIssuerResolver for NoopIssuerResolver {
@@ -939,7 +849,6 @@ evaluation_profiles:
                 identifier_schemes: Vec::new(),
                 profile: None,
             },
-            matching: None,
             value: Some(json!(true)),
             satisfied: Some(true),
             disclosure: "predicate".to_string(),
@@ -955,7 +864,6 @@ evaluation_profiles:
                 registry_notary_core::ProvenanceUsed {
                     source_count: 0,
                     source_versions: std::collections::BTreeMap::new(),
-                    source_runtimes: Vec::new(),
                 },
             ),
         }

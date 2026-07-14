@@ -1,9 +1,5 @@
 use super::*;
 
-mod egress;
-
-pub(super) use egress::*;
-
 /// Outermost response middleware: injects `request_id` into any
 /// `application/problem+json` body and sets the `x-request-id` response header.
 ///
@@ -141,14 +137,6 @@ pub(crate) fn audit_error_response(error: AuditError) -> Response {
         .extensions_mut()
         .insert(EvidenceErrorCodeContext("audit.write_failed".to_string()));
     response
-}
-
-pub(super) fn add_correlation_header(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
-    if let Some(correlation_id) = current_request_correlation_id() {
-        builder.header("x-request-id", correlation_id.as_str())
-    } else {
-        builder
-    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

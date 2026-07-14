@@ -37,7 +37,6 @@ async fn credential_status_list_response_is_signed_status_list_jwt() {
         ReplayStores::memory(),
         credential_status,
         Arc::new(AppMetrics::default()),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(TestIssuerResolver),
         SignerReadiness::default(),
@@ -105,7 +104,6 @@ async fn credential_status_list_response_reuses_cached_signature() {
         ReplayStores::memory(),
         credential_status,
         Arc::new(AppMetrics::default()),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(CountingIssuerResolver {
             sign_count: Arc::clone(&sign_count),

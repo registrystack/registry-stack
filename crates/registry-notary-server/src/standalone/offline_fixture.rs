@@ -2,8 +2,6 @@
 //! Product-owned Notary evidence path for environment-free authoring fixtures.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -11,8 +9,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use registry_notary_core::{
     ClaimEvidenceMode, ClaimRef, ClaimResultView, EvaluateRequest, EvidenceAuthMode,
-    EvidenceConfig, EvidenceConfigError, EvidenceError, RelayOutputContract, SourceBindingConfig,
-    StandaloneRegistryNotaryConfig, SubjectRequest,
+    EvidenceConfig, EvidenceConfigError, EvidenceError, RelayOutputContract,
+    StandaloneRegistryNotaryConfig,
 };
 use registry_platform_audit::AuditKeyHasher;
 use registry_platform_authcommon::fingerprint_api_key;
@@ -27,12 +25,9 @@ use crate::runtime::consultation::{
     RuntimeRelayMatchData, RuntimeRelayOutcome, RuntimeRelayOutputMap,
 };
 use crate::runtime::validate_cel_claims_for_startup;
-use crate::{EvidenceStore, RegistryNotaryRuntime, SourceReader};
+use crate::{EvidenceStore, RegistryNotaryRuntime};
 
-use super::{
-    authenticate_static, collect_claim_required_scopes_for_claim, RequestCredentials,
-    ResolvedCredential,
-};
+use super::{authenticate_static, RequestCredentials, ResolvedCredential};
 
 /// Closed authentication states accepted by the offline authoring harness.
 ///
@@ -181,9 +176,6 @@ pub enum OfflineNotaryErrorClass {
     PurposeDenied,
     InvalidInput,
     DisclosureDenied,
-    NoMatch,
-    Ambiguous,
-    SourceUnavailable,
     EvaluationFailed,
 }
 
@@ -195,9 +187,6 @@ impl OfflineNotaryErrorClass {
             Self::PurposeDenied => "authorization.purpose_denied",
             Self::InvalidInput => "request.invalid",
             Self::DisclosureDenied => "disclosure.denied",
-            Self::NoMatch => "source.not_found",
-            Self::Ambiguous => "source.ambiguous",
-            Self::SourceUnavailable => "source.unavailable",
             Self::EvaluationFailed => "evaluation.failed",
         }
     }
@@ -273,7 +262,6 @@ pub struct OfflineNotaryEvidence {
     error_class: Option<OfflineNotaryErrorClass>,
     product_error_code: Option<&'static str>,
     relay_calls: u64,
-    direct_source_calls: u64,
     consultation_count: usize,
 }
 
@@ -299,11 +287,6 @@ impl OfflineNotaryEvidence {
     }
 
     #[must_use]
-    pub const fn direct_source_calls(&self) -> u64 {
-        self.direct_source_calls
-    }
-
-    #[must_use]
     pub const fn consultation_count(&self) -> usize {
         self.consultation_count
     }
@@ -324,7 +307,6 @@ impl std::fmt::Debug for OfflineNotaryEvidence {
             .field("error_class", &self.error_class)
             .field("product_error_code", &self.product_error_code)
             .field("relay_calls", &self.relay_calls)
-            .field("direct_source_calls", &self.direct_source_calls)
             .field("consultation_count", &self.consultation_count)
             .finish()
     }
@@ -354,7 +336,6 @@ pub enum OfflineNotaryHarnessError {
 pub struct OfflineNotaryHarness {
     evidence: Arc<EvidenceConfig>,
     runtime: RegistryNotaryRuntime,
-    source: Arc<CountingDeniedSource>,
     relay: Arc<OfflineActivatedRelay>,
     store: EvidenceStore,
     principal_id: String,
@@ -389,7 +370,6 @@ impl OfflineNotaryHarness {
             &config.evidence,
             relay_evidence,
         )?);
-        let source = Arc::new(CountingDeniedSource::default());
         let mut random = [0_u8; 48];
         getrandom::fill(&mut random).map_err(|_| OfflineNotaryHarnessError::RandomUnavailable)?;
         let api_key = Zeroizing::new(URL_SAFE_NO_PAD.encode(random));
@@ -403,7 +383,6 @@ impl OfflineNotaryHarness {
         Ok(Self {
             evidence: Arc::new(config.evidence),
             runtime,
-            source,
             relay,
             store: EvidenceStore::default(),
             principal_id,
@@ -413,7 +392,6 @@ impl OfflineNotaryHarness {
 
     pub async fn evaluate(&self, offline: OfflineNotaryRequest) -> OfflineNotaryEvidence {
         let relay_before = self.relay.calls.load(Ordering::SeqCst);
-        let direct_before = self.source.calls.load(Ordering::SeqCst);
         let scopes = match offline.authentication {
             OfflineAuthentication::Valid => required_scopes(&self.evidence, &offline.request),
             OfflineAuthentication::InsufficientScope => {
@@ -425,7 +403,7 @@ impl OfflineNotaryHarness {
         };
         let scopes = match scopes {
             Ok(scopes) => scopes,
-            Err(error) => return self.evidence_from_error(error, relay_before, direct_before, 0),
+            Err(error) => return self.evidence_from_error(error, relay_before, 0),
         };
         let fingerprint = fingerprint_api_key(self.api_key.as_str());
         let credential = ResolvedCredential {
@@ -455,13 +433,12 @@ impl OfflineNotaryHarness {
         );
         let principal = match principal {
             Ok(principal) => principal,
-            Err(error) => return self.evidence_from_error(error, relay_before, direct_before, 0),
+            Err(error) => return self.evidence_from_error(error, relay_before, 0),
         };
         let (result, audit) = self
             .runtime
             .evaluate_for_api(
                 Arc::clone(&self.evidence),
-                Arc::clone(&self.source) as Arc<dyn SourceReader>,
                 &self.store,
                 &principal,
                 offline.request,
@@ -479,16 +456,9 @@ impl OfflineNotaryHarness {
                     .calls
                     .load(Ordering::SeqCst)
                     .saturating_sub(relay_before),
-                direct_source_calls: self
-                    .source
-                    .calls
-                    .load(Ordering::SeqCst)
-                    .saturating_sub(direct_before),
                 consultation_count: consultation_ids.len(),
             },
-            Err(error) => {
-                self.evidence_from_error(error, relay_before, direct_before, consultation_ids.len())
-            }
+            Err(error) => self.evidence_from_error(error, relay_before, consultation_ids.len()),
         }
     }
 
@@ -496,7 +466,6 @@ impl OfflineNotaryHarness {
         &self,
         error: EvidenceError,
         relay_before: u64,
-        direct_before: u64,
         consultation_count: usize,
     ) -> OfflineNotaryEvidence {
         OfflineNotaryEvidence {
@@ -508,11 +477,6 @@ impl OfflineNotaryHarness {
                 .calls
                 .load(Ordering::SeqCst)
                 .saturating_sub(relay_before),
-            direct_source_calls: self
-                .source
-                .calls
-                .load(Ordering::SeqCst)
-                .saturating_sub(direct_before),
             consultation_count,
         }
     }
@@ -524,7 +488,6 @@ impl std::fmt::Debug for OfflineNotaryHarness {
             .debug_struct("OfflineNotaryHarness")
             .field("evidence", &"[COMPILED]")
             .field("runtime", &"[COMPILED]")
-            .field("source", &self.source)
             .field("relay", &self.relay)
             .field("principal_id", &self.principal_id)
             .field("api_key", &"[REDACTED]")
@@ -555,9 +518,6 @@ fn collect_required_scopes(
     }
     let claim = crate::find_claim(evidence, claim_ref.id.as_str())?;
     scopes.extend(claim.required_scopes.iter().cloned());
-    let mut source_scopes = Vec::new();
-    collect_claim_required_scopes_for_claim(evidence, claim, &mut source_scopes)?;
-    scopes.extend(source_scopes);
     for dependency in &claim.depends_on {
         collect_required_scopes(
             evidence,
@@ -577,14 +537,10 @@ fn error_class(error: &EvidenceError) -> OfflineNotaryErrorClass {
         EvidenceError::PurposeNotAllowed | EvidenceError::PurposeRequired => {
             OfflineNotaryErrorClass::PurposeDenied
         }
-        EvidenceError::InvalidRequest
-        | EvidenceError::TargetIdentifierMissing
-        | EvidenceError::TargetAttributesInsufficient
-        | EvidenceError::ProfileUnsupported => OfflineNotaryErrorClass::InvalidInput,
+        EvidenceError::InvalidRequest | EvidenceError::ProfileUnsupported => {
+            OfflineNotaryErrorClass::InvalidInput
+        }
         EvidenceError::DisclosureNotAllowed => OfflineNotaryErrorClass::DisclosureDenied,
-        EvidenceError::SourceNotFound => OfflineNotaryErrorClass::NoMatch,
-        EvidenceError::SourceAmbiguous => OfflineNotaryErrorClass::Ambiguous,
-        EvidenceError::SourceUnavailable => OfflineNotaryErrorClass::SourceUnavailable,
         _ => OfflineNotaryErrorClass::EvaluationFailed,
     }
 }
@@ -747,53 +703,4 @@ fn configured_output_contracts(
             && !consultation.outputs.is_empty())
         .then(|| consultation.outputs.clone())
     })
-}
-
-#[derive(Default)]
-struct CountingDeniedSource {
-    calls: AtomicU64,
-}
-
-impl std::fmt::Debug for CountingDeniedSource {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("CountingDeniedSource")
-            .field("calls", &self.calls.load(Ordering::Relaxed))
-            .finish()
-    }
-}
-
-impl SourceReader for CountingDeniedSource {
-    fn read_one<'a>(
-        &'a self,
-        _binding: &'a SourceBindingConfig,
-        _subject: &'a SubjectRequest,
-        _purpose: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
-        Box::pin(async move {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            Err(EvidenceError::SourceUnavailable)
-        })
-    }
-
-    fn required_scopes(
-        &self,
-        evidence: &EvidenceConfig,
-        claim_id: &str,
-    ) -> Result<Vec<String>, EvidenceError> {
-        let claim = crate::find_claim(evidence, claim_id)?;
-        self.required_scopes_for_claim(evidence, claim)
-    }
-
-    fn required_scopes_for_claim(
-        &self,
-        evidence: &EvidenceConfig,
-        claim: &registry_notary_core::ClaimDefinition,
-    ) -> Result<Vec<String>, EvidenceError> {
-        let mut scopes = Vec::new();
-        collect_claim_required_scopes_for_claim(evidence, claim, &mut scopes)?;
-        scopes.sort();
-        scopes.dedup();
-        Ok(scopes)
-    }
 }

@@ -1,37 +1,53 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Integration coverage for self-attestation stored-evaluation guards.
 
-use std::future::Future;
-use std::pin::Pin;
+#[cfg(feature = "registry-notary-cel")]
+use std::collections::BTreeSet;
+#[cfg(feature = "registry-notary-cel")]
+use std::ffi::OsString;
+#[cfg(feature = "registry-notary-cel")]
+use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(feature = "registry-notary-cel")]
+use std::time::Duration;
 
+#[cfg(feature = "registry-notary-cel")]
 use axum::http::StatusCode;
 use axum::Extension;
 use axum_test::TestServer;
+#[cfg(feature = "registry-notary-cel")]
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+#[cfg(feature = "registry-notary-cel")]
 use base64::Engine;
 use registry_notary_core::sd_jwt::EvidenceIssuer;
+#[cfg(feature = "registry-notary-cel")]
+use registry_notary_core::FORMAT_SD_JWT_VC;
 use registry_notary_core::{
     AccessMode, BoundedVerifiedClaims, EvidenceConfig, EvidenceError, EvidencePrincipal,
-    SelfAttestationConfig, SourceBindingConfig, SubjectRequest, VerifiedClaimName,
-    VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
+    SelfAttestationConfig, VerifiedClaimName, VerifiedClaimValue, FORMAT_CLAIM_RESULT_JSON,
 };
-use registry_notary_server::{
-    EvidenceIssuerResolver, EvidenceStore, RegistryNotaryApiState, SourceReader,
-};
+#[cfg(feature = "registry-notary-cel")]
+use registry_notary_server::cel_worker::{CelWorker, CelWorkerConfig, CelWorkerLimits};
+use registry_notary_server::{EvidenceIssuerResolver, EvidenceStore, RegistryNotaryApiState};
 use registry_platform_audit::AuditKeyHasher;
+#[cfg(feature = "registry-notary-cel")]
 use registry_platform_crypto::{sign, PrivateJwk};
 use serde::Deserialize;
 use serde_json::{json, Value};
+#[cfg(feature = "registry-notary-cel")]
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 const RAW_PRINCIPAL_ID: &str = "citizen-raw-principal";
 const SUBJECT_ID: &str = "person-1";
+#[cfg(feature = "registry-notary-cel")]
 const ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+#[cfg(feature = "registry-notary-cel")]
 const HOLDER_PRIV_D_B64: &str = "2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw";
+#[cfg(feature = "registry-notary-cel")]
 const HOLDER_PUB_X_B64: &str = "1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc";
 
+#[cfg(feature = "registry-notary-cel")]
 fn self_attestation_target() -> Value {
     json!({
         "type": "Person",
@@ -48,32 +64,6 @@ struct TestRuntimeConfig {
 }
 
 #[derive(Debug)]
-struct StaticSource;
-
-impl SourceReader for StaticSource {
-    fn read_one<'a>(
-        &'a self,
-        _binding: &'a SourceBindingConfig,
-        subject: &'a SubjectRequest,
-        purpose: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<Value, EvidenceError>> + Send + 'a>> {
-        Box::pin(async move {
-            assert_eq!(subject.id, SUBJECT_ID);
-            assert_eq!(purpose, "citizen_self_attestation");
-            Ok(json!({ "id": SUBJECT_ID, "alive": true }))
-        })
-    }
-
-    fn required_scopes(
-        &self,
-        _evidence: &EvidenceConfig,
-        _claim_id: &str,
-    ) -> Result<Vec<String>, EvidenceError> {
-        Ok(vec!["people:evidence_verification".to_string()])
-    }
-}
-
-#[derive(Debug)]
 struct NoopIssuers;
 
 impl EvidenceIssuerResolver for NoopIssuers {
@@ -83,8 +73,10 @@ impl EvidenceIssuerResolver for NoopIssuers {
 }
 
 #[derive(Debug)]
+#[cfg(feature = "registry-notary-cel")]
 struct StaticIssuers;
 
+#[cfg(feature = "registry-notary-cel")]
 impl EvidenceIssuerResolver for StaticIssuers {
     fn issuer(&self, profile_id: &str) -> Result<EvidenceIssuer, EvidenceError> {
         if profile_id != "civil_status_sd_jwt" {
@@ -127,6 +119,7 @@ fn self_attestation_principal() -> EvidencePrincipal {
     }
 }
 
+#[cfg(feature = "registry-notary-cel")]
 fn self_attestation_principal_with_id(raw_id: &str) -> EvidencePrincipal {
     let mut principal = self_attestation_principal();
     principal.principal_id = raw_id.to_string();
@@ -158,42 +151,19 @@ fn config_with_allowed_disclosures(allowed_disclosures: &[&str]) -> TestRuntimeC
 evidence:
   enabled: true
   service_id: evidence.test
-  source_connections:
-    people:
-      base_url: http://127.0.0.1:1
-      allow_insecure_localhost: true
-      token_env: TEST_SOURCE_TOKEN
   claims:
     - id: person-is-alive
       title: Person is alive
       version: 2026-05
       subject_type: person
       evidence_mode:
-        type: transitional_direct
+        type: self_attested
       purpose: citizen_self_attestation
       value:
         type: boolean
-      source_bindings:
-        person:
-          connector: registry_data_api
-          connection: people
-          required_scope: people:evidence_verification
-          dataset: people
-          entity: person
-          lookup:
-            input: target.identifiers.national_id
-            field: id
-            op: eq
-            cardinality: one
-          fields:
-            alive:
-              field: alive
-              type: boolean
-              required: true
       rule:
-        type: extract
-        source: person
-        field: alive
+        type: cel
+        expression: "true"
       disclosure:
         default: value
         allowed: [value, redacted]
@@ -244,6 +214,46 @@ self_attestation:
     serde_norway::from_str(&raw).expect("test config deserializes")
 }
 
+#[cfg(feature = "registry-notary-cel")]
+fn cel_worker_bin() -> PathBuf {
+    let env_path = PathBuf::from(env!("CARGO_BIN_EXE_registry-notary-cel-worker"));
+    if env_path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .is_some_and(|file_name| file_name == "deps")
+    {
+        let candidate = env_path
+            .parent()
+            .and_then(|parent| parent.parent())
+            .expect("target debug dir")
+            .join("registry-notary-cel-worker");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    env_path
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn cel_worker() -> Arc<CelWorker> {
+    Arc::new(CelWorker::lazy(CelWorkerConfig {
+        command: cel_worker_bin(),
+        command_args: Vec::new(),
+        command_envs: Vec::new(),
+        current_dir: None,
+        forbidden_env_names: BTreeSet::from([OsString::from("REGISTRY_NOTARY_AUDIT_HASH_SECRET")]),
+        max_workers: 1,
+        request_timeout: Duration::from_secs(5),
+        max_request_bytes: 64 * 1024,
+        max_response_bytes: 16 * 1024,
+        max_stderr_bytes: 1024,
+        max_memory_bytes: None,
+        allow_regex: false,
+        limits: CelWorkerLimits::default(),
+    }))
+}
+
+#[cfg(feature = "registry-notary-cel")]
 fn credential_issuance_config() -> TestRuntimeConfig {
     let raw = format!(
         r#"
@@ -274,42 +284,19 @@ evidence:
       disclosure:
         allowed:
           - redacted
-  source_connections:
-    people:
-      base_url: http://127.0.0.1:1
-      allow_insecure_localhost: true
-      token_env: TEST_SOURCE_TOKEN
   claims:
     - id: person-is-alive
       title: Person is alive
       version: 2026-05
       subject_type: person
       evidence_mode:
-        type: transitional_direct
+        type: self_attested
       purpose: citizen_self_attestation
       value:
         type: boolean
-      source_bindings:
-        person:
-          connector: registry_data_api
-          connection: people
-          required_scope: people:evidence_verification
-          dataset: people
-          entity: person
-          lookup:
-            input: target.identifiers.national_id
-            field: id
-            op: eq
-            cardinality: one
-          fields:
-            alive:
-              field: alive
-              type: boolean
-              required: true
       rule:
-        type: extract
-        source: person
-        field: alive
+        type: cel
+        expression: "true"
       disclosure:
         default: redacted
         allowed: [redacted]
@@ -371,14 +358,16 @@ fn build_server(
     store: Arc<EvidenceStore>,
     principal: EvidencePrincipal,
 ) -> TestServer {
-    let state = Arc::new(RegistryNotaryApiState::new_with_self_attestation_hasher(
+    let state = RegistryNotaryApiState::new_with_self_attestation_hasher(
         Arc::new(config.evidence),
         Arc::new(config.self_attestation),
         AuditKeyHasher::unkeyed_dev_only(),
-        Arc::new(StaticSource),
         store,
         Arc::new(NoopIssuers),
-    ));
+    );
+    #[cfg(feature = "registry-notary-cel")]
+    let state = state.with_cel_worker(Some(cel_worker()));
+    let state = Arc::new(state);
     TestServer::builder().http_transport().build(
         registry_notary_server::router::<()>()
             .layer(Extension(state))
@@ -386,19 +375,22 @@ fn build_server(
     )
 }
 
+#[cfg(feature = "registry-notary-cel")]
 fn build_issuance_server(
     config: TestRuntimeConfig,
     store: Arc<EvidenceStore>,
     principal: EvidencePrincipal,
 ) -> TestServer {
-    let state = Arc::new(RegistryNotaryApiState::new_with_self_attestation_hasher(
-        Arc::new(config.evidence),
-        Arc::new(config.self_attestation),
-        AuditKeyHasher::unkeyed_dev_only(),
-        Arc::new(StaticSource),
-        store,
-        Arc::new(StaticIssuers),
-    ));
+    let state = Arc::new(
+        RegistryNotaryApiState::new_with_self_attestation_hasher(
+            Arc::new(config.evidence),
+            Arc::new(config.self_attestation),
+            AuditKeyHasher::unkeyed_dev_only(),
+            store,
+            Arc::new(StaticIssuers),
+        )
+        .with_cel_worker(Some(cel_worker())),
+    );
     TestServer::builder().http_transport().build(
         registry_notary_server::router::<()>()
             .layer(Extension(state))
@@ -406,6 +398,7 @@ fn build_issuance_server(
     )
 }
 
+#[cfg(feature = "registry-notary-cel")]
 fn holder_did_jwk() -> String {
     let public_jwk = json!({
         "kty": "OKP",
@@ -417,6 +410,7 @@ fn holder_did_jwk() -> String {
     format!("did:jwk:{encoded}")
 }
 
+#[cfg(feature = "registry-notary-cel")]
 fn sign_holder_proof(holder_id: &str, evaluation_id: &str) -> String {
     let holder = PrivateJwk::parse(
         &json!({
@@ -457,6 +451,7 @@ fn sign_holder_proof(holder_id: &str, evaluation_id: &str) -> String {
     format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
 }
 
+#[cfg(feature = "registry-notary-cel")]
 fn jwt_payload(jwt: &str) -> Value {
     let payload = jwt
         .split('.')
@@ -512,6 +507,7 @@ async fn self_attestation_discovery_details_require_self_attestation_principal()
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 async fn self_attestation_stores_hashed_principal_and_render_policy_changes_fail_closed() {
     let store = Arc::new(EvidenceStore::default());
     let principal = self_attestation_principal();
@@ -569,6 +565,7 @@ async fn self_attestation_stores_hashed_principal_and_render_policy_changes_fail
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 async fn self_attestation_render_rejects_same_evaluation_for_different_principal() {
     let store = Arc::new(EvidenceStore::default());
     let server = build_server(
@@ -612,6 +609,7 @@ async fn self_attestation_render_rejects_same_evaluation_for_different_principal
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 async fn self_attestation_credential_issuance_hides_other_principal_evaluation_ids() {
     let store = Arc::new(EvidenceStore::default());
     let server = build_issuance_server(
@@ -658,6 +656,7 @@ async fn self_attestation_credential_issuance_hides_other_principal_evaluation_i
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 async fn self_attestation_render_rejects_expired_metadata_via_http() {
     let store = Arc::new(EvidenceStore::default());
     let principal = self_attestation_principal();
@@ -708,6 +707,7 @@ async fn self_attestation_render_rejects_expired_metadata_via_http() {
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 async fn self_attestation_credential_issuance_requires_holder_proof_and_hides_civil_id() {
     let store = Arc::new(EvidenceStore::default());
     let server = build_issuance_server(
@@ -807,6 +807,7 @@ async fn self_attestation_credential_issuance_requires_holder_proof_and_hides_ci
 }
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
 async fn self_attestation_credential_issuance_rejects_disallowed_profile() {
     let mut config = credential_issuance_config();
     let machine_profile = config

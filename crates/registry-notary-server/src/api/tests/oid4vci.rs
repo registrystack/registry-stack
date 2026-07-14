@@ -209,7 +209,6 @@ fn oid4vci_metadata_advertises_configured_credential_signing_alg() {
 
 #[tokio::test]
 async fn oid4vci_credential_rejects_delegated_transaction_token() {
-    let reads = Arc::new(AtomicUsize::new(0));
     let store = Arc::new(EvidenceStore::default());
     let mut oid4vci = oid4vci_config();
     oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
@@ -219,9 +218,6 @@ async fn oid4vci_credential_rejects_delegated_transaction_token() {
             Arc::new(delegated_self_attestation_config()),
             Arc::new(oid4vci),
             AuditKeyHasher::unkeyed_dev_only(),
-            Arc::new(CountingSource {
-                reads: Arc::clone(&reads),
-            }),
             Arc::clone(&store),
             Arc::new(TestIssuerResolver),
         ),
@@ -260,12 +256,10 @@ async fn oid4vci_credential_rejects_delegated_transaction_token() {
         .expect("body reads");
     let body: Value = serde_json::from_slice(&body).expect("error body parses");
     assert_eq!(body["error"], "access_denied");
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
 async fn oid4vci_credential_scope_prevents_cross_configuration_issuance_before_nonce_consume() {
-    let reads = Arc::new(AtomicUsize::new(0));
     let store = Arc::new(EvidenceStore::default());
     let evidence = Arc::new(oid4vci_evidence_config());
     let self_attestation = Arc::new(self_attestation_config());
@@ -295,9 +289,6 @@ async fn oid4vci_credential_scope_prevents_cross_configuration_issuance_before_n
             Arc::clone(&self_attestation),
             Arc::clone(&oid4vci),
             AuditKeyHasher::unkeyed_dev_only(),
-            Arc::new(CountingSource {
-                reads: Arc::clone(&reads),
-            }),
             Arc::clone(&store),
             Arc::new(TestIssuerResolver),
         ),
@@ -335,7 +326,6 @@ async fn oid4vci_credential_scope_prevents_cross_configuration_issuance_before_n
         .expect("body reads");
     let body: Value = serde_json::from_slice(&body).expect("error body parses");
     assert_eq!(body["error"], "access_denied");
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
     assert!(matches!(
         state
             .replay
@@ -349,7 +339,6 @@ async fn oid4vci_credential_scope_prevents_cross_configuration_issuance_before_n
 
 #[tokio::test]
 async fn oid4vci_credential_requires_authorization_details_before_nonce_consume() {
-    let reads = Arc::new(AtomicUsize::new(0));
     let store = Arc::new(EvidenceStore::default());
     let evidence = Arc::new(oid4vci_evidence_config());
     let self_attestation = Arc::new(self_attestation_config());
@@ -362,9 +351,6 @@ async fn oid4vci_credential_requires_authorization_details_before_nonce_consume(
             Arc::clone(&self_attestation),
             Arc::clone(&oid4vci),
             AuditKeyHasher::unkeyed_dev_only(),
-            Arc::new(CountingSource {
-                reads: Arc::clone(&reads),
-            }),
             Arc::clone(&store),
             Arc::new(TestIssuerResolver),
         ),
@@ -413,7 +399,6 @@ async fn oid4vci_credential_requires_authorization_details_before_nonce_consume(
         .expect("body reads");
     let body: Value = serde_json::from_slice(&body).expect("error body parses");
     assert_eq!(body["error"], "access_denied");
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
     assert!(matches!(
         state
             .replay
@@ -427,7 +412,6 @@ async fn oid4vci_credential_requires_authorization_details_before_nonce_consume(
 
 #[tokio::test]
 async fn oid4vci_credential_requires_custom_notary_typ_details_before_nonce_consume() {
-    let reads = Arc::new(AtomicUsize::new(0));
     let store = Arc::new(EvidenceStore::default());
     let evidence = Arc::new(oid4vci_evidence_config());
     let self_attestation = Arc::new(self_attestation_config());
@@ -441,9 +425,6 @@ async fn oid4vci_credential_requires_custom_notary_typ_details_before_nonce_cons
             Arc::clone(&self_attestation),
             Arc::clone(&oid4vci),
             AuditKeyHasher::unkeyed_dev_only(),
-            Arc::new(CountingSource {
-                reads: Arc::clone(&reads),
-            }),
             Arc::clone(&store),
             Arc::new(TestIssuerResolver),
         )
@@ -492,7 +473,6 @@ async fn oid4vci_credential_requires_custom_notary_typ_details_before_nonce_cons
         .expect("body reads");
     let body: Value = serde_json::from_slice(&body).expect("error body parses");
     assert_eq!(body["error"], "access_denied");
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
     assert!(matches!(
         state
             .replay
@@ -655,7 +635,6 @@ async fn oid4vci_token_error_fails_closed_when_denial_audit_fails() {
 #[cfg(feature = "registry-notary-cel")]
 #[tokio::test]
 async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
-    let reads = Arc::new(AtomicUsize::new(0));
     let store = Arc::new(EvidenceStore::default());
     let mut self_attestation = self_attestation_config();
     self_attestation
@@ -703,9 +682,6 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
             Arc::clone(&self_attestation),
             Arc::clone(&oid4vci),
             AuditKeyHasher::unkeyed_dev_only(),
-            Arc::new(CountingSource {
-                reads: Arc::clone(&reads),
-            }),
             Arc::clone(&store),
             Arc::new(StaticIssuerResolver),
         ),
@@ -737,7 +713,6 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
     let missing_nonce_body: Value =
         serde_json::from_slice(&missing_nonce_body).expect("error body parses");
     assert_eq!(missing_nonce_body["error"], "invalid_proof");
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
 
     let proof_without_nonce = sign_oid4vci_proof_without_nonce(&state.oid4vci.credential_issuer);
     let missing_validated_nonce = oid4vci_credential(
@@ -775,7 +750,6 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
     let missing_validated_nonce_body: Value =
         serde_json::from_slice(&missing_validated_nonce_body).expect("error body parses");
     assert_eq!(missing_validated_nonce_body["error"], "invalid_proof");
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
 
     let nonce = "nonce-1";
     let nonce_key = state
@@ -839,7 +813,6 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
             .is_some_and(|credential| credential.contains('~')),
         "expected compact SD-JWT credential: {body}"
     );
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
 
     let replay = oid4vci_credential(
         Some(Extension(Arc::clone(&state))),
@@ -864,7 +837,6 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
 
 #[tokio::test]
 async fn oid4vci_rejects_holder_key_equal_to_issuer_key_before_side_effects() {
-    let reads = Arc::new(AtomicUsize::new(0));
     let store = Arc::new(EvidenceStore::default());
     let mut self_attestation = self_attestation_config();
     self_attestation
@@ -912,9 +884,6 @@ async fn oid4vci_rejects_holder_key_equal_to_issuer_key_before_side_effects() {
             Arc::clone(&self_attestation),
             Arc::clone(&oid4vci),
             AuditKeyHasher::unkeyed_dev_only(),
-            Arc::new(CountingSource {
-                reads: Arc::clone(&reads),
-            }),
             Arc::clone(&store),
             Arc::new(HolderIssuerResolver),
         ),
@@ -972,7 +941,6 @@ async fn oid4vci_rejects_holder_key_equal_to_issuer_key_before_side_effects() {
     .await;
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
     assert!(matches!(
         state
             .replay

@@ -433,7 +433,6 @@ fn self_attestation_prepare_pins_claim_purpose_and_metadata() {
         Arc::new(evidence.clone()),
         Arc::new(config),
         AuditKeyHasher::unkeyed_dev_only(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
@@ -455,8 +454,8 @@ fn self_attestation_prepare_pins_claim_purpose_and_metadata() {
         "self-attestation evaluation must carry its capped expiry"
     );
     assert!(matches!(
-        context.source_capability,
-        SourceCapability::SelfAttestation { .. }
+        context.evaluation_capability,
+        EvaluationCapability::SelfAttestation { .. }
     ));
 }
 
@@ -481,7 +480,6 @@ fn self_attestation_external_standard_at_jwt_uses_scope_without_notary_details()
         Arc::new(evidence.clone()),
         Arc::new(config),
         AuditKeyHasher::unkeyed_dev_only(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     )
@@ -512,7 +510,6 @@ fn self_attestation_notary_standard_at_jwt_still_requires_transaction_details() 
         Arc::new(evidence.clone()),
         Arc::new(config),
         AuditKeyHasher::unkeyed_dev_only(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     )
@@ -543,7 +540,6 @@ fn delegated_attestation_derives_requester_and_pins_metadata() {
         Arc::new(evidence.clone()),
         Arc::new(config),
         delegated_test_audit_hasher(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
@@ -611,8 +607,8 @@ fn delegated_attestation_derives_requester_and_pins_metadata() {
         .map(|hash| hash.as_str().starts_with("hmac-sha256:"))
         .unwrap_or(false));
     assert!(matches!(
-        context.source_capability,
-        SourceCapability::DelegatedAttestation { .. }
+        context.evaluation_capability,
+        EvaluationCapability::DelegatedAttestation { .. }
     ));
 }
 
@@ -625,7 +621,6 @@ fn delegated_attestation_rejects_spoofed_requester_context() {
         Arc::new(evidence),
         Arc::new(config),
         delegated_test_audit_hasher(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
@@ -663,7 +658,6 @@ fn delegated_attestation_canonicalizes_target_to_validated_subject() {
         Arc::new(evidence),
         Arc::new(config),
         delegated_test_audit_hasher(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
@@ -748,7 +742,6 @@ fn delegated_attestation_requires_transaction_details_to_cover_proof_claim() {
         Arc::new(evidence.clone()),
         Arc::new(config),
         delegated_test_audit_hasher(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
@@ -786,7 +779,6 @@ fn delegated_attestation_requires_transaction_details_target() {
         Arc::new(evidence.clone()),
         Arc::new(config),
         delegated_test_audit_hasher(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
@@ -819,7 +811,6 @@ fn stored_delegated_attestation_rechecks_current_authorization_details() {
         Arc::new(evidence.clone()),
         Arc::new(config),
         delegated_test_audit_hasher(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
@@ -877,7 +868,6 @@ fn stored_delegated_attestation_rechecks_current_target_binding() {
         Arc::new(evidence.clone()),
         Arc::new(config),
         delegated_test_audit_hasher(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
@@ -1033,7 +1023,6 @@ fn stored_self_attestation_rechecks_issuer_client_and_audience() {
         Arc::new(evidence.clone()),
         Arc::new(config),
         AuditKeyHasher::unkeyed_dev_only(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
@@ -1086,7 +1075,6 @@ fn stored_self_attestation_rejects_expired_metadata_even_with_future_store_ttl()
         Arc::new(evidence.clone()),
         Arc::new(config),
         AuditKeyHasher::unkeyed_dev_only(),
-        Arc::new(CountingSource::default()),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     );
@@ -1200,15 +1188,11 @@ fn self_attestation_policy_hash_includes_credential_profile_policy() {
 }
 
 #[tokio::test]
-async fn self_attestation_batch_evaluate_is_rejected_before_source_read() {
-    let reads = Arc::new(AtomicUsize::new(0));
+async fn self_attestation_batch_evaluate_is_rejected_before_evaluation() {
     let state = Arc::new(RegistryNotaryApiState::new_with_self_attestation(
         Arc::new(evidence_config()),
         Arc::new(self_attestation_config()),
         AuditKeyHasher::unkeyed_dev_only(),
-        Arc::new(CountingSource {
-            reads: Arc::clone(&reads),
-        }),
         Arc::new(EvidenceStore::default()),
         Arc::new(NoopIssuerResolver),
     ));
@@ -1239,7 +1223,6 @@ async fn self_attestation_batch_evaluate_is_rejected_before_source_read() {
     .await;
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    assert_eq!(reads.load(Ordering::SeqCst), 0);
     let audit = response
         .extensions()
         .get::<EvidenceAuditContext>()

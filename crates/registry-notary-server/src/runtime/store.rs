@@ -3,6 +3,7 @@
 use std::fmt;
 
 use super::*;
+use std::collections::HashMap;
 
 const BATCH_IDEMPOTENCY_RETENTION: time::Duration = time::Duration::minutes(15);
 

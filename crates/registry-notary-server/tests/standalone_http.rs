@@ -17,7 +17,7 @@ mod http_contracts;
 mod oid4vci;
 #[path = "standalone_http/preauth.rs"]
 mod preauth;
-#[path = "standalone_http/sources.rs"]
-mod sources;
+#[path = "standalone_http/preauth_support.rs"]
+mod preauth_support;
 #[path = "standalone_http/support.rs"]
 mod support;

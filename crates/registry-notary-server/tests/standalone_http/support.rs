@@ -2,15 +2,9 @@
 //! Standalone Registry Notary tests that do not link Registry Relay.
 
 pub(super) use axum::body::Bytes;
-pub(super) use axum::extract::Query;
-#[cfg(feature = "registry-notary-cel")]
-pub(super) use axum::extract::State;
-pub(super) use axum::http::{header, HeaderMap, Method, StatusCode};
-pub(super) use axum::response::{IntoResponse, Response};
+pub(super) use axum::http::{header, Method, StatusCode};
 pub(super) use axum::routing::get;
-#[cfg(feature = "registry-notary-cel")]
-pub(super) use axum::routing::post;
-pub(super) use axum::{Json, Router};
+pub(super) use axum::Router;
 pub(super) use axum_test::TestServer;
 pub(super) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(super) use base64::Engine;
@@ -18,19 +12,15 @@ pub(super) use registry_notary_core::tokens::NOTARY_TRANSACTION_TOKEN_JWT_TYP;
 #[cfg(feature = "registry-notary-cel")]
 pub(super) use registry_notary_core::FEDERATION_RESPONSE_JWT_TYP;
 pub(super) use registry_notary_core::{
-    BulkMode, ConfigTrustConfig, CredentialProfileConfig, EvidenceAuthMode,
-    EvidenceCredentialConfig, EvidenceOidcAuthConfig, Oid4vciConfig,
-    RegistryNotaryAdminListenerMode, SelfAttestationClaimSource, SigningKeyConfig,
-    SigningKeyProviderConfig, SigningKeyStatus, StandaloneRegistryNotaryConfig,
-    SD_JWT_VC_SIGNING_ALG,
+    ConfigTrustConfig, CredentialProfileConfig, EvidenceAuthMode, EvidenceCredentialConfig,
+    EvidenceOidcAuthConfig, Oid4vciConfig, RegistryNotaryAdminListenerMode,
+    SelfAttestationClaimSource, SigningKeyConfig, SigningKeyProviderConfig, SigningKeyStatus,
+    StandaloneRegistryNotaryConfig, SD_JWT_VC_SIGNING_ALG,
 };
 #[cfg(feature = "registry-notary-cel")]
 pub(super) use registry_notary_core::{Oid4vciCredentialClaimConfig, RuleConfig};
-#[cfg(feature = "registry-notary-cel")]
-pub(super) use registry_notary_server::cel_worker::{CelWorker, CelWorkerConfig};
 pub(super) use registry_notary_server::{
     compile_notary_runtime, notary_routers_from_runtime, openapi_document, standalone_router,
-    StandaloneServerError,
 };
 pub(super) use registry_platform_audit::{
     verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope,
@@ -41,7 +31,6 @@ pub(super) use registry_platform_authcommon::{
 #[cfg(feature = "registry-notary-cel")]
 pub(super) use registry_platform_crypto::{did_jwk_from_public_jwk, verify};
 pub(super) use registry_platform_crypto::{sign, PrivateJwk};
-pub(super) use registry_platform_ops::internal_config_hash;
 pub(super) use registry_platform_testing::{
     fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, sign_openid4vci_proof_jwt,
     MockHttpUpstream, MockIdp, FEDERATION_PROTOCOL, FEDERATION_REQUEST_JWT_TYPE,
@@ -52,17 +41,12 @@ pub(super) use serde_json::{json, Value};
 pub(super) use sha2::{Digest, Sha256};
 pub(super) use std::collections::BTreeMap;
 pub(super) use std::collections::BTreeSet;
-pub(super) use std::fs;
 #[cfg(feature = "registry-notary-cel")]
 pub(super) use std::path::PathBuf;
 pub(super) use std::sync::atomic::{AtomicUsize, Ordering};
 pub(super) use std::sync::Arc;
-#[cfg(feature = "registry-notary-cel")]
-pub(super) use std::sync::Mutex;
 pub(super) use std::time::Duration;
 pub(super) use tempfile::TempDir;
-#[cfg(feature = "registry-notary-cel")]
-pub(super) use time::format_description::well_known::Rfc3339;
 pub(super) use time::OffsetDateTime;
 pub(super) use ulid::Ulid;
 
@@ -299,211 +283,15 @@ pub(super) fn sample_manifest_path(path: &str) -> String {
         .replace("{*vct_path}", "civil-status")
 }
 
-pub(super) async fn registry_data_api(
-    headers: HeaderMap,
-    Query(query): Query<BTreeMap<String, String>>,
-) -> Response {
-    if headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        != Some("Bearer source-token")
-    {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    if headers
-        .get("data-purpose")
-        .and_then(|value| value.to_str().ok())
-        != Some("https://purpose.example.test/eligibility")
-    {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    if query.get("id").map(String::as_str) != Some("person-1") {
-        return Json(json!({ "data": [] })).into_response();
-    }
-    Json(json!({
-        "data": [{
-            "id": "person-1",
-            "total_farmed_area": 3.5
-        }]
-    }))
-    .into_response()
-}
-
-pub(super) async fn self_attestation_registry_data_api(
-    headers: HeaderMap,
-    Query(query): Query<BTreeMap<String, String>>,
-) -> Response {
-    if headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        != Some("Bearer source-token")
-    {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    if headers
-        .get("data-purpose")
-        .and_then(|value| value.to_str().ok())
-        != Some("citizen_self_attestation")
-    {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    if query.get("id").map(String::as_str) != Some("person-1") {
-        return Json(json!({ "data": [] })).into_response();
-    }
-    Json(json!({
-        "data": [{
-            "id": "person-1",
-            "alive": true,
-            "given_name": "Miguel",
-            "birth_date": "2016-01-15"
-        }]
-    }))
-    .into_response()
-}
-
-#[cfg(feature = "registry-notary-cel")]
-pub(super) async fn dci_source(
-    State(observed): State<Arc<Mutex<Option<Value>>>>,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
-) -> Response {
-    if headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        != Some("Bearer source-token")
-    {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    if headers
-        .get("data-purpose")
-        .and_then(|value| value.to_str().ok())
-        != Some("https://purpose.example.test/eligibility")
-    {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    *observed.lock().expect("observed request lock") = Some(body.clone());
-    if body["message"]["search_request"][0]["search_criteria"]["query"]["value"]
-        == "openspp-missing"
-    {
-        return Json(json!({
-            "message": {
-                "search_response": [{
-                    "status": "rjct",
-                    "status_reason_code": "REG-ERR-001",
-                    "status_reason_message": "REGISTER_NOT_FOUND: No registrant found for identifier 'openspp-missing'"
-                }]
-            }
-        }))
-        .into_response();
-    }
-    let query_value = body["message"]["search_request"][0]["search_criteria"]["query"]["value"]
-        .as_str()
-        .unwrap_or_default();
-    if !matches!(
-        query_value,
-        "person-1" | "stale-person" | "missing-timestamp"
-    ) {
-        return Json(json!({
-            "message": {
-                "search_response": [{
-                    "data": { "reg_records": [] }
-                }]
-            }
-        }))
-        .into_response();
-    }
-    let mut response = json!({
-        "message": {
-            "search_response": [{
-                "data": {
-                    "reg_records": [{
-                        "farmed_land_size_hectares": 3.5
-                    }]
-                }
-            }]
-        }
-    });
-    if query_value != "missing-timestamp" {
-        let observed_at = if query_value == "stale-person" {
-            OffsetDateTime::now_utc() - time::Duration::days(2)
-        } else {
-            OffsetDateTime::now_utc()
-        };
-        response["message"]["search_response"][0]["timestamp"] =
-            json!(observed_at.format(&Rfc3339).expect("timestamp formats"));
-    }
-    Json(json!({
-        "message": response["message"].clone()
-    }))
-    .into_response()
-}
-
-#[cfg(feature = "registry-notary-cel")]
-pub(super) async fn civil_demographic_dci_source(
-    State(observed): State<Arc<Mutex<Option<Value>>>>,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
-) -> Response {
-    if headers
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        != Some("Bearer source-token")
-    {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    if headers
-        .get("data-purpose")
-        .and_then(|value| value.to_str().ok())
-        != Some("https://purpose.example.test/eligibility")
-    {
-        return StatusCode::BAD_REQUEST.into_response();
-    }
-    *observed.lock().expect("observed request lock") = Some(body.clone());
-    Json(json!({
-        "message": {
-            "search_response": [{
-                "data": {
-                    "reg_records": [{
-                        "person": {
-                            "given_name": "Miguel",
-                            "surname": "Santos",
-                            "birth_date": "2016-01-15",
-                            "deceased": false
-                        }
-                    }]
-                }
-            }]
-        }
-    }))
-    .into_response()
-}
-
-pub(super) fn config(
-    base_url: &str,
+pub(super) fn notary_only_config(
+    _base_url: &str,
     audit_path: &str,
-    connector: &str,
-    source_path: &str,
 ) -> StandaloneRegistryNotaryConfig {
     set_audit_secret();
-    let source_connection = if connector == "dci" {
-        r#"
-      dci:
-        search_path: /dci/fr/registry/sync/search
-        query_type: idtype-value
-        registry_event_type: birth
-        receiver_id: upstream-registry
-        signature: ""
-        records_path: /message/search_response/0/data/reg_records
-        field_paths:
-          farmed_land_size_hectares: /farmed_land_size_hectares"#
-    } else {
-        ""
-    };
     let raw = format!(
         r#"
 deployment:
   profile: local
-
 server:
   bind: 127.0.0.1:0
 auth:
@@ -524,69 +312,21 @@ evidence:
   api_base_url: https://evidence.example.test
   allowed_purposes:
     - https://purpose.example.test/eligibility
-  source_connections:
-    farmer_registry:
-      base_url: "{base_url}"
-      allow_insecure_localhost: true
-      token_env: TEST_EVIDENCE_SOURCE_TOKEN
-{source_connection}
   claims:
-    - id: farmed-land-size
-      title: Farmed land size
-      version: 2026-05
-      subject_type: person
-      evidence_mode:
-        type: transitional_direct
-      value:
-        type: number
-        unit: hectare
-      source_bindings:
-        farmer:
-          connector: {connector}
-          connection: farmer_registry
-          required_scope: farmer_registry:evidence_verification
-          dataset: farmer_registry
-          entity: farmer
-          matching:
-            allowed_purposes:
-              - https://purpose.example.test/eligibility
-          lookup:
-            input: target.id
-            field: id
-            op: eq
-            cardinality: one
-          fields:
-            total_farmed_area:
-              field: {source_path}
-              type: number
-              unit: hectare
-              required: true
-      rule:
-        type: extract
-        source: farmer
-        field: {source_path}
-      disclosure:
-        default: value
-        allowed: [value, predicate, redacted]
-      formats:
-        - application/vnd.registry-notary.claim-result+json
     - id: farmer-under-4ha
       title: Farmer under four hectares
       version: 2026-05
       subject_type: person
       evidence_mode:
-        type: transitional_direct
+        type: self_attested
       value:
         type: boolean
-      depends_on:
-        - farmed-land-size
+      purpose: https://purpose.example.test/eligibility
+      required_scopes:
+        - farmer_registry:evidence_verification
       rule:
         type: cel
-        expression: "claims.farmed_land_size.value < 4.0"
-        bindings:
-          claims:
-            farmed_land_size:
-              claim: farmed-land-size
+        expression: "true"
       disclosure:
         default: predicate
         allowed: [predicate, redacted]
@@ -594,17 +334,5 @@ evidence:
         - application/vnd.registry-notary.claim-result+json
 "#
     );
-    serde_norway::from_str(&raw).expect("config deserializes")
-}
-
-pub(super) fn registry_data_api_config(
-    base_url: &str,
-    audit_path: &str,
-) -> StandaloneRegistryNotaryConfig {
-    config(
-        base_url,
-        audit_path,
-        "registry_data_api",
-        "total_farmed_area",
-    )
+    serde_norway::from_str(&raw).expect("Notary-only config deserializes")
 }

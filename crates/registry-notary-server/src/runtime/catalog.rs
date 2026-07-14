@@ -48,38 +48,6 @@ pub(crate) fn validate_batch_subject_limit(
     Ok(())
 }
 
-pub(super) fn selected_claim_refs(
-    evidence: &EvidenceConfig,
-    claims: &[ClaimRef],
-    claim_versions: &ClaimVersionSelections,
-) -> Result<Vec<ClaimRef>, EvidenceError> {
-    claims
-        .iter()
-        .map(|claim_ref| {
-            let claim = find_claim_for_selection(evidence, claim_ref, claim_versions)?;
-            Ok(ClaimRef::with_version(&claim.id, &claim.version))
-        })
-        .collect()
-}
-
-pub(super) fn scoped_authorization_claim_refs(
-    evidence: &EvidenceConfig,
-    claims: &[ClaimRef],
-    claim_versions: &ClaimVersionSelections,
-    source_capability: &SourceCapability,
-) -> Result<Vec<ClaimRef>, EvidenceError> {
-    let mut claim_refs = selected_claim_refs(evidence, claims, claim_versions)?;
-    if let SourceCapability::DelegatedAttestation { proof_claim_id, .. } = source_capability {
-        let proof_claim =
-            find_claim_for_selection(evidence, proof_claim_id.as_str(), claim_versions)?;
-        let proof_ref = ClaimRef::with_version(&proof_claim.id, &proof_claim.version);
-        if !claim_refs.contains(&proof_ref) {
-            claim_refs.push(proof_ref);
-        }
-    }
-    Ok(claim_refs)
-}
-
 pub(super) fn find_claim_for_selection<'a>(
     config: &'a EvidenceConfig,
     claim_id: &str,
@@ -89,10 +57,6 @@ pub(super) fn find_claim_for_selection<'a>(
         Some(version) => find_claim_version(config, claim_id, version),
         None => find_claim(config, claim_id),
     }
-}
-
-pub(super) fn claim_arc(claim: &ClaimDefinition) -> Arc<ClaimDefinition> {
-    Arc::new(claim.clone())
 }
 
 /// Topological levels of the DAG closure over `requested`. Each level is the
@@ -237,100 +201,38 @@ pub fn claim_summary(claim: &ClaimDefinition) -> Value {
 }
 
 pub(crate) fn claim_semantics_metadata(claim: &ClaimDefinition) -> Option<Value> {
-    let mut semantics = claim
+    let semantics = claim
         .semantics
         .as_ref()
         .and_then(|semantics| serde_json::to_value(semantics).ok())
         .and_then(|value| value.as_object().cloned())
         .unwrap_or_default();
 
-    if !semantics.contains_key("property") && !semantics.contains_key("predicate") {
-        if let RuleConfig::Extract { source, field } = &claim.rule {
-            if let Some(field_term) = claim
-                .source_bindings
-                .get(source)
-                .and_then(|binding| binding.fields.get(field))
-                .and_then(|source_field| source_field.semantic_term.as_deref())
-            {
-                semantics.insert("property".to_string(), json!(field_term));
-            }
-        }
-    }
-
     (!semantics.is_empty()).then_some(Value::Object(semantics))
 }
 
 pub(super) fn claim_target_inputs(claim: &ClaimDefinition) -> Vec<Value> {
-    claim
-        .source_bindings
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode else {
+        return Vec::new();
+    };
+    consultations
         .values()
-        .filter_map(|binding| {
-            let matching = &binding.matching;
-            let configured_matching = matching.policy_id.is_some()
-                || matching.method.is_some()
-                || matching.target_type.is_some()
-                || matching.confidence.is_some()
-                || !matching.sufficient_target_inputs.is_empty()
-                || !matching.allowed_target_inputs.is_empty();
-            if !configured_matching {
-                return None;
-            }
-
-            let groups: Vec<Vec<String>> = if matching.sufficient_target_inputs.is_empty() {
-                let mut paths = if binding.query_fields.is_empty() {
-                    vec![binding.lookup.input.clone()]
-                } else {
-                    binding
-                        .query_fields
-                        .iter()
-                        .map(|query_field| query_field.input.clone())
-                        .collect()
-                };
-                paths.sort();
-                paths.dedup();
-                vec![paths]
-            } else {
-                matching.sufficient_target_inputs.clone()
-            };
-
-            let groups: Vec<Value> = groups
-                .into_iter()
-                .filter_map(|group| {
-                    let inputs: Option<Vec<Value>> = group
-                        .into_iter()
-                        .map(|path| public_target_input(&path))
-                        .collect();
-                    let inputs = inputs?;
-                    if inputs.is_empty() {
-                        None
-                    } else {
-                        Some(json!({ "inputs": inputs }))
-                    }
+        .filter_map(|consultation| {
+            let mut inputs = consultation
+                .inputs
+                .values()
+                .filter_map(|input| public_target_input(input.request_context_path()))
+                .collect::<Vec<_>>();
+            inputs.sort_by_key(ToString::to_string);
+            inputs.dedup();
+            (!inputs.is_empty()).then(|| {
+                json!({
+                    "target_type": claim.subject_type,
+                    "method": "relay_consultation",
+                    "confidence": "contract_pinned",
+                    "groups": [{ "inputs": inputs }],
                 })
-                .collect();
-            if groups.is_empty() {
-                return None;
-            }
-
-            let mut method = json!({
-                "target_type": matching
-                    .target_type
-                    .clone()
-                    .unwrap_or_else(|| claim.subject_type.clone()),
-                "method": matching
-                    .method
-                    .clone()
-                    .unwrap_or_else(|| "configured_lookup".to_string()),
-                "confidence": matching
-                    .confidence
-                    .clone()
-                    .unwrap_or_else(|| "high".to_string()),
-                "groups": groups,
-            });
-            if let Some(policy_id) = &matching.policy_id {
-                method["policy_id"] = json!(policy_id);
-            }
-            Some(method)
+            })
         })
         .collect()
 }

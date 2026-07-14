@@ -40,7 +40,7 @@ pub use machine_quota::{MachineQuotaExceeded, MachineQuotaLimiter};
 pub use openapi::openapi_document;
 pub use runtime::{
     claim_summary, credential_profile_for, find_claim, format_time, formats, BatchEvaluateOptions,
-    EvidenceStore, MemoState, RegistryNotaryRuntime, SourceReader,
+    EvidenceStore, RegistryNotaryRuntime,
 };
 pub use self_attestation_rate_limit::{
     SelfAttestationRateLimitBucket, SelfAttestationRateLimitError, SelfAttestationRateLimitKeys,

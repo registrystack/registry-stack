@@ -124,10 +124,6 @@ pub fn compile_notary_runtime_with_provenance(
              shared replay storage."
         );
     }
-    let source = Arc::new(HttpEvidenceSources::from_config(
-        &config.evidence,
-        Arc::clone(&metrics),
-    )?);
     let store = Arc::new(EvidenceStore::default());
     let reuse_scoped_key_ids = config.reuse_scoped_signing_key_ids();
     let signing_keys = Arc::new(SigningKeyRegistry::from_config(
@@ -188,7 +184,6 @@ pub fn compile_notary_runtime_with_provenance(
         replay,
         credential_status,
         Arc::clone(&metrics),
-        source,
         store,
         issuers,
         federation_signing_provider,
@@ -384,8 +379,6 @@ pub enum StandaloneServerError {
         "configured credential hash environment variable contains an invalid fingerprint: {0}"
     )]
     InvalidCredentialHash(String, #[source] FingerprintFormatError),
-    #[error("configured source token environment variable is missing or empty: {0}")]
-    MissingSourceTokenEnv(String),
     #[error("configured Relay destination is invalid")]
     InvalidRelayDestination,
     #[error("configured Relay consultation activation plan is invalid")]
@@ -406,8 +399,6 @@ pub enum StandaloneServerError {
     RelayProfileMismatch,
     #[error("Relay consultation service is unavailable")]
     RelayUnavailable,
-    #[error("invalid source auth configuration: {0}")]
-    InvalidSourceAuth(String),
     #[error("signing key '{key}' is invalid: {reason}")]
     InvalidSigningKey { key: String, reason: String },
     #[error("signing key provider '{provider}' is not enabled")]
@@ -430,8 +421,6 @@ pub enum StandaloneServerError {
     Replay(#[from] ReplayBuildError),
     #[error(transparent)]
     CredentialStatus(#[from] CredentialStatusBuildError),
-    #[error("failed to build HTTP source client")]
-    HttpClient(#[source] reqwest::Error),
     #[error("invalid OIDC auth configuration: {0}")]
     InvalidOidcConfig(String),
     #[error("invalid federation configuration: {0}")]

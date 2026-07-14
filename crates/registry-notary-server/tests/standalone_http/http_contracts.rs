@@ -2,9 +2,7 @@
 
 use super::support::*;
 #[allow(unused_imports)]
-use super::{
-    admin::*, audit::*, auth::*, credentials::*, federation::*, oid4vci::*, preauth::*, sources::*,
-};
+use super::{admin::*, audit::*, auth::*, credentials::*, federation::*, oid4vci::*, preauth::*};
 
 #[tokio::test]
 pub(super) async fn request_body_limit_returns_413_above_threshold() {
@@ -13,11 +11,10 @@ pub(super) async fn request_body_limit_returns_413_above_threshold() {
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(registry_data_api_config(
+    let app = standalone_router(notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
@@ -63,11 +60,10 @@ pub(super) async fn request_uri_limit_returns_414_problem_details() {
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(registry_data_api_config(
+    let app = standalone_router(notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
@@ -109,11 +105,10 @@ pub(super) async fn error_responses_match_rfc_9457_problem_details_shape() {
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(registry_data_api_config(
+    let app = standalone_router(notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
@@ -151,11 +146,10 @@ pub(super) async fn evaluation_json_rejections_and_unsupported_idempotency_are_p
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(registry_data_api_config(
+    let app = standalone_router(notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
@@ -260,11 +254,10 @@ pub(super) async fn cors_csp_corp_headers_present_and_corp_conditional() {
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -339,7 +332,6 @@ pub(super) async fn cors_csp_corp_headers_present_and_corp_conditional() {
 #[tokio::test]
 pub(super) async fn self_attestation_cors_uses_wallet_origins_on_browser_paths() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
@@ -407,7 +399,6 @@ pub(super) async fn self_attestation_cors_uses_wallet_origins_on_browser_paths()
 #[tokio::test]
 pub(super) async fn self_attestation_preflight_uses_wallet_origin_allow_list() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
@@ -490,11 +481,10 @@ pub(super) async fn standalone_router_hides_admin_and_metrics_when_admin_listene
             "TEST_EVIDENCE_API_KEY_HASH",
             "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
         );
-        std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
         let tmp = TempDir::new().expect("tempdir");
         let audit_path = tmp.path().join("audit.jsonl");
-        let mut config = registry_data_api_config(
+        let mut config = notary_only_config(
             "http://127.0.0.1:1",
             audit_path.to_str().expect("audit path is UTF-8"),
         );
@@ -526,11 +516,10 @@ pub(super) async fn standalone_router_default_config_hides_admin_and_metrics() {
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -559,23 +548,12 @@ pub(super) async fn standalone_server_can_serve_openapi_without_auth_when_config
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/farmer_registry/entities/farmer/records",
-            get(registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
 
-    let mut config = registry_data_api_config(
-        base_url.trim_end_matches('/'),
+    let mut config = notary_only_config(
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
     config.server.openapi_requires_auth = false;
@@ -606,23 +584,12 @@ pub(super) async fn standalone_server_serves_docs_shell_without_auth() {
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/farmer_registry/entities/farmer/records",
-            get(registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
 
-    let config = registry_data_api_config(
-        base_url.trim_end_matches('/'),
+    let config = notary_only_config(
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
     let app = standalone_router(config).expect("standalone router builds");
@@ -656,11 +623,10 @@ pub(super) async fn request_uri_limit_414_carries_server_owned_request_id() {
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(registry_data_api_config(
+    let app = standalone_router(notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
@@ -685,11 +651,10 @@ pub(super) async fn request_body_limit_413_carries_server_owned_request_id() {
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(registry_data_api_config(
+    let app = standalone_router(notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))

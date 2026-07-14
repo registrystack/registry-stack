@@ -20,9 +20,6 @@ pub(crate) struct AppMetrics {
 #[derive(Debug, Default)]
 struct MetricsState {
     http: BTreeMap<HttpKey, HttpDuration>,
-    source: BTreeMap<SourceKey, CountDuration>,
-    source_retries: BTreeMap<ConnectorKey, u64>,
-    source_in_flight: BTreeMap<ConnectorKey, u64>,
     audit: BTreeMap<OutcomeKey, u64>,
     replay: BTreeMap<ReplayKey, u64>,
     credentials: BTreeMap<CredentialKey, u64>,
@@ -37,17 +34,6 @@ struct HttpKey {
     status_code: u16,
     status_class: &'static str,
     error_code: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct SourceKey {
-    connector: &'static str,
-    outcome: &'static str,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct ConnectorKey {
-    connector: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -129,35 +115,6 @@ impl AppMetrics {
                 value.duration_buckets[index] = value.duration_buckets[index].saturating_add(1);
             }
         }
-    }
-
-    pub(crate) fn record_source_request(
-        &self,
-        connector: &'static str,
-        outcome: &'static str,
-        duration_ms: u64,
-    ) {
-        let key = SourceKey { connector, outcome };
-        let mut metrics = self.inner.lock().expect("metrics mutex is healthy");
-        let value = metrics.source.entry(key).or_default();
-        value.count = value.count.saturating_add(1);
-        value.duration_ms_total = value.duration_ms_total.saturating_add(duration_ms);
-    }
-
-    pub(crate) fn record_source_retry(&self, connector: &'static str) {
-        let mut metrics = self.inner.lock().expect("metrics mutex is healthy");
-        let value = metrics
-            .source_retries
-            .entry(ConnectorKey { connector })
-            .or_default();
-        *value = value.saturating_add(1);
-    }
-
-    pub(crate) fn set_source_in_flight(&self, connector: &'static str, value: u64) {
-        let mut metrics = self.inner.lock().expect("metrics mutex is healthy");
-        metrics
-            .source_in_flight
-            .insert(ConnectorKey { connector }, value);
     }
 
     pub(crate) fn record_audit_event(&self, outcome: &'static str) {
@@ -256,32 +213,6 @@ impl AppMetrics {
                 escape_metric_label(key.status_class),
                 escape_metric_label(&key.error_code),
                 value.count
-            ));
-        }
-        body.push_str("# TYPE registry_notary_source_requests_total counter\n");
-        body.push_str("# TYPE registry_notary_source_request_duration_ms_total counter\n");
-        for (key, value) in &metrics.source {
-            body.push_str(&format!(
-                "registry_notary_source_requests_total{{connector=\"{}\",outcome=\"{}\"}} {}\n",
-                key.connector, key.outcome, value.count
-            ));
-            body.push_str(&format!(
-                "registry_notary_source_request_duration_ms_total{{connector=\"{}\",outcome=\"{}\"}} {}\n",
-                key.connector, key.outcome, value.duration_ms_total
-            ));
-        }
-        body.push_str("# TYPE registry_notary_source_retries_total counter\n");
-        for (key, value) in &metrics.source_retries {
-            body.push_str(&format!(
-                "registry_notary_source_retries_total{{connector=\"{}\"}} {}\n",
-                key.connector, value
-            ));
-        }
-        body.push_str("# TYPE registry_notary_source_in_flight gauge\n");
-        for (key, value) in &metrics.source_in_flight {
-            body.push_str(&format!(
-                "registry_notary_source_in_flight{{connector=\"{}\"}} {}\n",
-                key.connector, value
             ));
         }
         body.push_str("# TYPE registry_notary_audit_events_total counter\n");

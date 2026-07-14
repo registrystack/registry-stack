@@ -15,19 +15,12 @@ pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
         EvidenceError::FormatUnsupported => StatusCode::NOT_ACCEPTABLE,
         EvidenceError::ClaimNotFound
         | EvidenceError::ClaimVersionNotFound
-        | EvidenceError::SourceNotFound
-        | EvidenceError::RequesterNotFound
         | EvidenceError::EvaluationNotFound => StatusCode::NOT_FOUND,
         EvidenceError::MissingCredential => StatusCode::UNAUTHORIZED,
         EvidenceError::MultipleCredentials => StatusCode::BAD_REQUEST,
         EvidenceError::SelfAttestationInvalidToken => StatusCode::UNAUTHORIZED,
         EvidenceError::InvalidRequest
         | EvidenceError::ConsultationInvalidRequest
-        | EvidenceError::TargetIdentifierMissing
-        | EvidenceError::TargetAttributesInsufficient
-        | EvidenceError::RequesterIdentifierMissing
-        | EvidenceError::RequesterAttributesInsufficient
-        | EvidenceError::RelationshipAttributesInsufficient
         | EvidenceError::ProfileUnsupported
         | EvidenceError::HolderProofRequired
         | EvidenceError::PurposeRequired => StatusCode::BAD_REQUEST,
@@ -35,25 +28,12 @@ pub(crate) fn evidence_status(error: &EvidenceError) -> StatusCode {
         | EvidenceError::EvaluationBindingMismatch
         | EvidenceError::PurposeNotAllowed
         | EvidenceError::PolicyDenied { .. }
-        | EvidenceError::RequesterReauthenticationRequired
-        | EvidenceError::RequesterMatchingPolicyRejected
-        | EvidenceError::TargetMatchingPolicyRejected
-        | EvidenceError::RelationshipNotEstablished
-        | EvidenceError::RelationshipPurposeNotAllowed
-        | EvidenceError::RelationshipPolicyRejected
         | EvidenceError::ScopeDenied { .. }
         | EvidenceError::SelfAttestationDenied { .. }
         | EvidenceError::SelfAttestationAssuranceDenied => StatusCode::FORBIDDEN,
-        EvidenceError::SourceAmbiguous
-        | EvidenceError::RequesterMatchAmbiguous
-        | EvidenceError::RelationshipMatchAmbiguous
-        | EvidenceError::TargetNotInValidState
-        | EvidenceError::TargetMatchLowConfidence
-        | EvidenceError::EvidenceNotAvailable
-        | EvidenceError::MatchingEvidenceNotAvailable { .. }
+        EvidenceError::EvidenceNotAvailable
         | EvidenceError::IdempotencyConflict
         | EvidenceError::HolderProofReplay => StatusCode::CONFLICT,
-        EvidenceError::SourceUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         EvidenceError::SelfAttestationRateLimited | EvidenceError::MachineQuotaExceeded { .. } => {
             StatusCode::TOO_MANY_REQUESTS
         }
@@ -74,30 +54,10 @@ pub(crate) fn evidence_title(error: &EvidenceError) -> &'static str {
         EvidenceError::InvalidRequest => "Invalid evidence request",
         EvidenceError::ConsultationInvalidRequest => "Invalid consultation request",
         EvidenceError::DisclosureNotAllowed => "Disclosure not allowed",
-        EvidenceError::SourceNotFound => "Target not found",
-        EvidenceError::SourceAmbiguous => "Target match ambiguous",
-        EvidenceError::TargetIdentifierMissing => "Target identifier missing",
-        EvidenceError::TargetAttributesInsufficient => "Target attributes insufficient",
-        EvidenceError::TargetMatchingPolicyRejected => "Target matching policy rejected",
-        EvidenceError::TargetNotInValidState => "Target not in valid state",
-        EvidenceError::TargetMatchLowConfidence => "Target match confidence too low",
-        EvidenceError::RequesterNotFound => "Requester not found",
-        EvidenceError::RequesterMatchAmbiguous => "Requester match ambiguous",
-        EvidenceError::RequesterIdentifierMissing => "Requester identifier missing",
-        EvidenceError::RequesterAttributesInsufficient => "Requester attributes insufficient",
-        EvidenceError::RequesterMatchingPolicyRejected => "Requester matching policy rejected",
-        EvidenceError::RequesterReauthenticationRequired => "Requester reauthentication required",
-        EvidenceError::RelationshipNotEstablished => "Relationship not established",
-        EvidenceError::RelationshipMatchAmbiguous => "Relationship match ambiguous",
-        EvidenceError::RelationshipAttributesInsufficient => "Relationship attributes insufficient",
-        EvidenceError::RelationshipPolicyRejected => "Relationship policy rejected",
-        EvidenceError::RelationshipPurposeNotAllowed => "Relationship purpose not allowed",
         EvidenceError::PurposeNotAllowed => "Purpose not allowed",
         EvidenceError::PolicyDenied { .. } => "Policy decision denied",
         EvidenceError::ProfileUnsupported => "Profile unsupported",
-        EvidenceError::EvidenceNotAvailable
-        | EvidenceError::MatchingEvidenceNotAvailable { .. } => "Evidence not available",
-        EvidenceError::SourceUnavailable => "Source unavailable",
+        EvidenceError::EvidenceNotAvailable => "Evidence not available",
         EvidenceError::BatchTooLarge => "Batch too large",
         EvidenceError::EvaluationNotFound => "Evaluation not found",
         EvidenceError::EvaluationBindingMismatch => "Evaluation binding mismatch",
@@ -132,56 +92,10 @@ pub(crate) fn evidence_detail(error: &EvidenceError) -> &'static str {
             "the registry-backed batch consultation request is invalid"
         }
         EvidenceError::DisclosureNotAllowed => "the requested disclosure profile is not allowed",
-        EvidenceError::SourceNotFound => "the target could not be uniquely matched",
-        EvidenceError::SourceAmbiguous => "the target match is ambiguous",
-        EvidenceError::TargetIdentifierMissing => {
-            "a required target identifier is missing for the configured matching policy"
-        }
-        EvidenceError::TargetAttributesInsufficient => {
-            "the target data is insufficient for the configured matching policy"
-        }
-        EvidenceError::TargetMatchingPolicyRejected => {
-            "the target context is rejected by the configured matching policy"
-        }
-        EvidenceError::TargetNotInValidState => "the target is not in a valid state",
-        EvidenceError::TargetMatchLowConfidence => {
-            "the target match confidence is below the configured threshold"
-        }
-        EvidenceError::RequesterNotFound => "the requester could not be uniquely matched",
-        EvidenceError::RequesterMatchAmbiguous => "the requester match is ambiguous",
-        EvidenceError::RequesterIdentifierMissing => {
-            "a required requester identifier is missing for the configured matching policy"
-        }
-        EvidenceError::RequesterAttributesInsufficient => {
-            "the requester data is insufficient for the configured matching policy"
-        }
-        EvidenceError::RequesterMatchingPolicyRejected => {
-            "the requester context is rejected by the configured matching policy"
-        }
-        EvidenceError::RequesterReauthenticationRequired => {
-            "stronger requester authentication is required"
-        }
-        EvidenceError::RelationshipNotEstablished => {
-            "the required requester-target relationship is missing"
-        }
-        EvidenceError::RelationshipMatchAmbiguous => {
-            "the requester-target relationship match is ambiguous"
-        }
-        EvidenceError::RelationshipAttributesInsufficient => {
-            "the relationship data is insufficient for the configured matching policy"
-        }
-        EvidenceError::RelationshipPolicyRejected => {
-            "the requester-target relationship is not allowed"
-        }
-        EvidenceError::RelationshipPurposeNotAllowed => {
-            "the requester-target relationship is not allowed for the declared purpose"
-        }
         EvidenceError::PurposeNotAllowed => "the declared purpose is not allowed",
         EvidenceError::PolicyDenied { .. } => "the configured policy denied the evidence request",
         EvidenceError::ProfileUnsupported => "the requested profile is not supported",
-        EvidenceError::EvidenceNotAvailable
-        | EvidenceError::MatchingEvidenceNotAvailable { .. } => "the evidence is not available",
-        EvidenceError::SourceUnavailable => "the source registry is unavailable",
+        EvidenceError::EvidenceNotAvailable => "the evidence is not available",
         EvidenceError::BatchTooLarge => "the batch exceeds the configured inline limit",
         EvidenceError::EvaluationNotFound => "the evaluation id is unknown or expired",
         EvidenceError::EvaluationBindingMismatch => {

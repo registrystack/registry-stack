@@ -173,7 +173,6 @@ pub(super) async fn evaluate(
         let quota_error = EvidenceError::MachineQuotaExceeded {
             retry_after_seconds: error.retry_after_seconds,
         };
-        let audit_code = quota_error.audit_code();
         let mut response = evidence_error_response(quota_error);
         attach_evidence_audit_with_purposes(
             &mut response,
@@ -188,8 +187,6 @@ pub(super) async fn evaluate(
             &mut response,
             &state.self_attestation_rate_keys,
             &request,
-            None,
-            Some(audit_code),
             None,
         ) {
             return evidence_error_response(error);
@@ -208,12 +205,11 @@ pub(super) async fn evaluate(
     let evaluation_future = async {
         if let Some(context) = self_attestation_context {
             runtime
-                .evaluate_with_source_capability_for_api(
+                .evaluate_with_capability_for_api(
                     Arc::clone(&state.evidence),
-                    Arc::clone(&state.source),
                     &state.store,
                     &principal,
-                    context.source_capability,
+                    context.evaluation_capability,
                     request,
                     None,
                     Some(context.metadata),
@@ -224,7 +220,6 @@ pub(super) async fn evaluate(
             runtime
                 .evaluate_for_api(
                     Arc::clone(&state.evidence),
-                    Arc::clone(&state.source),
                     &state.store,
                     &principal,
                     request,
@@ -263,35 +258,21 @@ pub(super) async fn evaluate(
                 );
             }
             attach_runtime_evaluation_audit(&mut response, runtime_audit);
-            let sidecar_config_hashes = state
-                .source
-                .observed_sidecar_config_hashes(evidence, &requested_claims)
-                .await;
-            attach_source_sidecar_config_hashes(&mut response, sidecar_config_hashes);
             attach_redacted_fields_audit(&mut response, &results);
             if let Err(error) = attach_evaluate_request_audit(
                 &mut response,
                 &state.self_attestation_rate_keys,
                 &audit_request,
                 results.first(),
-                None,
-                None,
             ) {
                 return evidence_error_response(error);
             }
             response
         }
         (Err(error), runtime_audit) => {
-            let audit_code = error.audit_code();
             let zero_source_no_forward = matches!(
                 &error,
                 EvidenceError::PolicyDenied { code, .. } if *code != registry_platform_pdp::EVIDENCE_STALE
-            );
-            let requested_matching_policy =
-                denied_matching_policy_audit_identity(evidence, &audit_request, Some(audit_code));
-            let denied_matching_policy = merge_matching_policy_audit_identity(
-                matching_policy_audit_identity_from_error(evidence, &error),
-                requested_matching_policy,
             );
             let mut response = evidence_error_response(error);
             attach_evidence_audit(
@@ -313,8 +294,6 @@ pub(super) async fn evaluate(
                 &state.self_attestation_rate_keys,
                 &audit_request,
                 None,
-                Some(audit_code),
-                denied_matching_policy.as_ref(),
             ) {
                 return evidence_error_response(error);
             }
@@ -403,7 +382,6 @@ pub(super) async fn batch_evaluate(
     let runtime = state.runtime();
     let evaluation_future = runtime.batch_evaluate(
         Arc::clone(&state.evidence),
-        Arc::clone(&state.source),
         &state.store,
         &principal,
         request,
@@ -411,7 +389,6 @@ pub(super) async fn batch_evaluate(
             header_purpose: purpose_header(&headers),
             idempotency_key: idempotency_key(&headers),
             owner_quota: Some((&state.machine_quota_limiter, batch_cost)),
-            memo_observer: None,
         },
     );
     let result = if let Some(Extension(correlation_id)) = correlation_id {
@@ -441,11 +418,6 @@ pub(super) async fn batch_evaluate(
             ) {
                 return evidence_error_response(error);
             }
-            let sidecar_config_hashes = state
-                .source
-                .observed_sidecar_config_hashes(evidence, &requested_claims)
-                .await;
-            attach_source_sidecar_config_hashes(&mut response, sidecar_config_hashes);
             response
         }
         Err(error) => {
@@ -553,9 +525,7 @@ pub(super) async fn render(
             return response;
         }
     }
-    if let Err(error) =
-        require_evaluation_access(evidence, state.source.as_ref(), &principal, &evaluation)
-    {
+    if let Err(error) = require_evaluation_access(evidence, &principal, &evaluation) {
         return evidence_error_response(error);
     }
     let runtime = state.runtime();
@@ -627,7 +597,6 @@ pub(super) fn result_json(result: Result<Value, EvidenceError>) -> Response {
 
 pub(super) fn require_evaluation_access(
     evidence: &EvidenceConfig,
-    source: &(impl SourceReader + ?Sized),
     principal: &EvidencePrincipal,
     evaluation: &registry_notary_core::StoredEvaluation,
 ) -> Result<(), EvidenceError> {
@@ -636,9 +605,11 @@ pub(super) fn require_evaluation_access(
     }
     for claim_ref in evaluation.selected_claim_refs() {
         let claim = find_requested_claim(evidence, &claim_ref)?;
-        for scope in source.required_scopes_for_claim(evidence, claim)? {
-            if !principal.has_scope(&scope) {
-                return Err(EvidenceError::ScopeDenied { required: scope });
+        for scope in &claim.required_scopes {
+            if !principal.has_scope(scope) {
+                return Err(EvidenceError::ScopeDenied {
+                    required: scope.clone(),
+                });
             }
         }
     }

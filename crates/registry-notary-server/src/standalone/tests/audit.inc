@@ -79,19 +79,8 @@
             target_ref_hash: None,
             requester_type: None,
             requester_ref_hash: None,
-            matching_policy_id: None,
-            matching_policy_hash: None,
-            matching_evaluated_rule_ids: None,
-            ecosystem_binding_id: None,
-            ecosystem_binding_version: None,
-            pack_id: None,
-            pack_version: None,
-            matching_method: None,
-            matching_outcome: None,
-            matching_error_code: None,
             redacted_fields: None,
             batch_items: None,
-            source_sidecar_config_hashes: None,
             config: None,
         }
     }
@@ -148,14 +137,6 @@
             target_ref_hash: Some(Hashed::from_hash("sha256:target")),
             requester_type: Some("person".to_string()),
             requester_ref_hash: Some(Hashed::from_hash("sha256:requester")),
-            matching_policy_id: Some("civil-registry-v1".to_string()),
-            matching_policy_hash: Some(Hashed::from_hash("sha256:matching-policy")),
-            matching_evaluated_rule_ids: Some(vec!["source-binding-policy:person".to_string()]),
-            ecosystem_binding_id: Some("baseline-dpi/v1".to_string()),
-            ecosystem_binding_version: Some("2026-06-19".to_string()),
-            matching_method: Some("configured_lookup".to_string()),
-            matching_outcome: Some("matched".to_string()),
-            matching_error_code: None,
             batch_items: None,
             ..EvidenceAuditContext::default()
         });
@@ -203,20 +184,6 @@
             event.requester_ref_hash.as_ref().map(Hashed::as_str),
             Some("sha256:requester")
         );
-        assert_eq!(
-            event.matching_policy_id.as_deref(),
-            Some("civil-registry-v1")
-        );
-        assert_eq!(
-            event.ecosystem_binding_id.as_deref(),
-            Some("baseline-dpi/v1")
-        );
-        assert_eq!(
-            event.ecosystem_binding_version.as_deref(),
-            Some("2026-06-19")
-        );
-        assert_eq!(event.matching_method.as_deref(), Some("configured_lookup"));
-        assert_eq!(event.matching_outcome.as_deref(), Some("matched"));
     }
 
     #[tokio::test]

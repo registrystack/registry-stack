@@ -2,34 +2,6 @@
 
 use super::*;
 
-pub(super) fn ensure_redaction_disclosure_allowed(
-    allowed_disclosures: &[String],
-    claim_value_type: &str,
-    disclosure: DisclosureProfile,
-    redaction_fields: &BTreeSet<String>,
-) -> Result<(), EvidenceError> {
-    if redaction_fields.is_empty() {
-        return Ok(());
-    }
-    if disclosure == DisclosureProfile::Predicate {
-        return Err(EvidenceError::DisclosureNotAllowed);
-    }
-    if disclosure != DisclosureProfile::Value {
-        return Ok(());
-    }
-    if supports_object_field_redaction(claim_value_type, redaction_fields) {
-        return Ok(());
-    }
-    if allowed_disclosures
-        .iter()
-        .any(|candidate| candidate == DisclosureProfile::Redacted.as_str())
-    {
-        Ok(())
-    } else {
-        Err(EvidenceError::DisclosureNotAllowed)
-    }
-}
-
 pub(super) fn supports_object_field_redaction(
     claim_value_type: &str,
     redaction_fields: &BTreeSet<String>,
@@ -132,7 +104,6 @@ pub(super) fn view_claim(
             .map(|requester| entity_ref_view(self_attestation_rate_keys, "requester", requester))
             .transpose()?,
         target_ref: target_ref_view(self_attestation_rate_keys, &result.target)?,
-        matching: result.matching.clone(),
         value,
         satisfied,
         disclosure: effective_disclosure.as_str().to_string(),

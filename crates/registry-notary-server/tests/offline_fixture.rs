@@ -385,7 +385,6 @@ async fn composite_consultation_fixture_binds_the_complete_input_map() {
     assert_eq!(evidence.error_class(), None, "{evidence:?}");
     assert_eq!(claim_value(&evidence, "active"), Some(&json!(true)));
     assert_eq!(evidence.relay_calls(), 1);
-    assert_eq!(evidence.direct_source_calls(), 0);
 }
 
 #[tokio::test]
@@ -416,7 +415,6 @@ async fn production_runtime_evaluates_extract_exists_cel_date_nullable_and_reuse
 
     assert_eq!(evidence.error_class(), None, "{evidence:?}");
     assert_eq!(evidence.relay_calls(), 1);
-    assert_eq!(evidence.direct_source_calls(), 0);
     assert_eq!(evidence.consultation_count(), 1);
     assert_eq!(claim_value(&evidence, "record-exists"), Some(&json!(true)));
     assert_eq!(claim_value(&evidence, "active"), Some(&json!(true)));
@@ -475,7 +473,6 @@ async fn guarded_date_age_policy_receives_compiled_request_variable_after_relay(
     assert_eq!(evidence.error_class(), None, "{evidence:?}");
     assert_eq!(claim_value(&evidence, "age-years"), Some(&json!(25)));
     assert_eq!(evidence.relay_calls(), 1);
-    assert_eq!(evidence.direct_source_calls(), 0);
 
     let mut absent_evaluation =
         request(Some("person-none"), &["age-years"], "benefit-verification");
@@ -492,7 +489,6 @@ async fn guarded_date_age_policy_receives_compiled_request_variable_after_relay(
     assert_eq!(absent.error_class(), None, "{absent:?}");
     assert_eq!(claim_value(&absent, "age-years"), Some(&Value::Null));
     assert_eq!(absent.relay_calls(), 1);
-    assert_eq!(absent.direct_source_calls(), 0);
 }
 
 #[tokio::test]
@@ -515,7 +511,6 @@ async fn authentication_scope_purpose_and_input_denials_are_before_all_source_ac
             "{evidence:?}"
         );
         assert_eq!(evidence.relay_calls(), 0);
-        assert_eq!(evidence.direct_source_calls(), 0);
     }
 
     let wrong_purpose = harness
@@ -529,7 +524,6 @@ async fn authentication_scope_purpose_and_input_denials_are_before_all_source_ac
         Some(OfflineNotaryErrorClass::PurposeDenied)
     );
     assert_eq!(wrong_purpose.relay_calls(), 0);
-    assert_eq!(wrong_purpose.direct_source_calls(), 0);
 
     let malformed = harness
         .evaluate(OfflineNotaryRequest::new(
@@ -542,7 +536,6 @@ async fn authentication_scope_purpose_and_input_denials_are_before_all_source_ac
         Some(OfflineNotaryErrorClass::InvalidInput)
     );
     assert_eq!(malformed.relay_calls(), 0);
-    assert_eq!(malformed.direct_source_calls(), 0);
 
     let mut forbidden_disclosure_request =
         request(Some("person-1"), &["active"], "benefit-verification");
@@ -558,7 +551,6 @@ async fn authentication_scope_purpose_and_input_denials_are_before_all_source_ac
         Some(OfflineNotaryErrorClass::InvalidInput)
     );
     assert_eq!(forbidden_disclosure.relay_calls(), 0);
-    assert_eq!(forbidden_disclosure.direct_source_calls(), 0);
 }
 
 #[tokio::test]
@@ -573,7 +565,6 @@ async fn exact_profiles_are_isolated_and_missing_input_or_ambiguous_results_fail
     assert_eq!(other.error_class(), None, "{other:?}");
     assert_eq!(claim_value(&other, "other-status"), Some(&json!("CURRENT")));
     assert_eq!(other.relay_calls(), 1);
-    assert_eq!(other.direct_source_calls(), 0);
 
     let missing_exact_input = harness
         .evaluate(OfflineNotaryRequest::new(
@@ -590,7 +581,6 @@ async fn exact_profiles_are_isolated_and_missing_input_or_ambiguous_results_fail
         Some(OfflineNotaryErrorClass::InvalidInput)
     );
     assert_eq!(missing_exact_input.relay_calls(), 0);
-    assert_eq!(missing_exact_input.direct_source_calls(), 0);
 
     let ambiguous = harness
         .evaluate(OfflineNotaryRequest::new(
@@ -604,10 +594,13 @@ async fn exact_profiles_are_isolated_and_missing_input_or_ambiguous_results_fail
         .await;
     assert_eq!(
         ambiguous.error_class(),
-        Some(OfflineNotaryErrorClass::Ambiguous)
+        Some(OfflineNotaryErrorClass::EvaluationFailed)
+    );
+    assert_eq!(
+        ambiguous.product_error_code(),
+        Some("evidence.not_available")
     );
     assert_eq!(ambiguous.relay_calls(), 1);
-    assert_eq!(ambiguous.direct_source_calls(), 0);
 }
 
 #[tokio::test]
@@ -644,7 +637,6 @@ async fn no_match_nullable_and_redacted_disclosure_use_production_views() {
         redacted.claims()[0].redacted_fields(),
         &["birth-date".to_string()]
     );
-    assert_eq!(redacted.direct_source_calls(), 0);
 
     let mut predicate_request = request(Some("person-1"), &["active"], "benefit-verification");
     predicate_request.disclosure = Some("predicate".to_string());
@@ -658,7 +650,6 @@ async fn no_match_nullable_and_redacted_disclosure_use_production_views() {
     assert_eq!(predicate.claims()[0].value(), Some(&json!(true)));
     assert_eq!(predicate.claims()[0].satisfied(), Some(true));
     assert_eq!(predicate.claims()[0].disclosure(), "predicate");
-    assert_eq!(predicate.direct_source_calls(), 0);
 }
 
 #[test]

@@ -122,9 +122,7 @@ pub(in crate::api) fn oid4vci_error_from_evidence(error: &EvidenceError) -> Oid4
         EvidenceError::FormatUnsupported | EvidenceError::CredentialIssuerNotConfigured => {
             Oid4vciWireError::UnsupportedCredentialType
         }
-        EvidenceError::CredentialIssuanceFailed | EvidenceError::SourceUnavailable => {
-            Oid4vciWireError::ServerError
-        }
+        EvidenceError::CredentialIssuanceFailed => Oid4vciWireError::ServerError,
         _ => Oid4vciWireError::AccessDenied,
     }
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! JSON Pointer and dotted-path lookup shared by sources and evaluation runtime.
+//! JSON Pointer and dotted-path lookup for verified Relay projections and evaluation.
 
 use serde_json::Value;
 

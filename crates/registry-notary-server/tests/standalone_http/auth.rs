@@ -4,18 +4,16 @@ use super::support::*;
 #[allow(unused_imports)]
 use super::{
     admin::*, audit::*, credentials::*, federation::*, http_contracts::*, oid4vci::*, preauth::*,
-    sources::*,
 };
 
 #[tokio::test]
 pub(super) async fn oidc_mode_verifies_token_from_fixture_idp() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -57,7 +55,7 @@ pub(super) async fn oidc_mode_verifies_token_from_fixture_idp() {
         .await;
     response.assert_status_ok();
     let body: Value = response.json();
-    assert_eq!(body["data"][0]["id"], json!("farmed-land-size"));
+    assert_eq!(body["data"][0]["id"], json!("farmer-under-4ha"));
 
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let id_token_typ = sign_ed25519_compact_jwt(
@@ -106,12 +104,11 @@ pub(super) async fn oidc_mode_verifies_token_from_fixture_idp() {
 #[tokio::test]
 pub(super) async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -180,7 +177,6 @@ pub(super) async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot
 #[tokio::test]
 pub(super) async fn jwks_is_public_and_contains_no_private_members() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
@@ -211,34 +207,13 @@ pub(super) async fn jwks_is_public_and_contains_no_private_members() {
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn oidc_self_attestation_evaluates_renders_and_audits_access_mode() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
-    let source_hits = Arc::new(AtomicUsize::new(0));
-    let source_hits_for_route = Arc::clone(&source_hits);
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(
-                move |headers: HeaderMap, query: Query<BTreeMap<String, String>>| {
-                    let source_hits = Arc::clone(&source_hits_for_route);
-                    async move {
-                        source_hits.fetch_add(1, Ordering::SeqCst);
-                        self_attestation_registry_data_api(headers, query).await
-                    }
-                },
-            ),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let app = standalone_router(self_attestation_oidc_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
@@ -315,7 +290,6 @@ pub(super) async fn oidc_self_attestation_evaluates_renders_and_audits_access_mo
     assert!(!audit.contains(&token));
     assert!(!audit.contains("person-1"));
     assert!(!audit.contains("citizen-subject"));
-    assert!(!audit.contains("source-token"));
     let records = audit_envelopes(&audit_path)
         .into_iter()
         .map(|envelope| envelope.record)

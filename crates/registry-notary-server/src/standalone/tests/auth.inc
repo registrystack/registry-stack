@@ -934,20 +934,6 @@
                 ..EvidenceAuthorizationDetails::default()
             }),
         };
-        let connection = ResolvedEvidenceSourceConnection {
-            id: "registry".to_string(),
-            base_url: "https://registry.example.test".to_string(),
-            auth: SourceAuthRuntime::StaticBearer(Arc::from("source-token")),
-            fetch_url_policy: FetchUrlPolicy::strict(),
-            dci: DciSourceConnectionConfig::default(),
-            semaphore: Arc::new(Semaphore::new(8)),
-            max_in_flight: 8,
-            retry_on_5xx: true,
-            bulk_mode: BulkMode::None,
-            bulk_timeout_max: Duration::from_secs(30),
-            expected_sidecar: None,
-        };
-
         let request = RequestCredentials {
             api_key: Some("api-token".to_string()),
             authorization_present: false,
@@ -968,11 +954,10 @@
             &[],
         )
         .expect_err("unknown API key is rejected");
-        let debug = format!("{credential:?} {principal:?} {connection:?}");
+        let debug = format!("{credential:?} {principal:?}");
         let error_output = format!("{error:?} {error}");
 
         assert!(debug.contains("<redacted>"));
         assert!(!debug.contains("api-token"));
-        assert!(!debug.contains("source-token"));
         assert!(!error_output.contains(rejected_secret));
     }

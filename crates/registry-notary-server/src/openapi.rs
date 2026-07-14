@@ -660,7 +660,7 @@ fn build_openapi_document() -> Value {
                             "name": "Idempotency-Key",
                             "in": "header",
                             "required": false,
-                            "description": "Required for every registry-backed batch. Direct-source batches retain the legacy optional contract. The value is caller-bound and may contain 1 to 256 bytes.",
+                            "description": "Required for every registry-backed batch. The value is caller-bound and may contain 1 to 256 bytes.",
                             "schema": { "type": "string", "minLength": 1, "maxLength": 256 }
                         }
                     ],
@@ -735,7 +735,7 @@ fn build_openapi_document() -> Value {
                         "401": { "description": "Missing or invalid credential" },
                         "404": { "description": "Evaluation not found" },
                         "406": { "description": "Requested format is not acceptable" },
-                        "409": { "description": "Holder proof replay or source ambiguity conflict" },
+                        "409": { "description": "Holder proof replay or Relay ambiguity conflict" },
                         "413": { "description": "Request body is too large" },
                         "429": { "description": "Self-attestation request is rate limited" },
                         "503": { "description": "Source service is unavailable" }
@@ -896,11 +896,8 @@ fn build_openapi_document() -> Value {
         ("ClaimProvenance", claim_provenance_schema()),
         ("ProvenanceGeneratedBy", provenance_generated_by_schema()),
         ("ProvenanceUsed", provenance_used_schema()),
-        ("SourceRuntimeSummary", source_runtime_summary_schema()),
-        ("SourceRuntimeAssurance", source_runtime_assurance_schema()),
         ("TargetRefView", target_ref_view_schema()),
         ("EvidenceEntityRef", evidence_entity_ref_schema()),
-        ("MatchingMetadata", matching_metadata_schema()),
     ];
     for (name, schema) in schema_overrides.iter() {
         document_value["components"]["schemas"][*name] = schema.clone();
@@ -2095,7 +2092,7 @@ fn claim_summary_schema() -> Value {
             },
             "target_inputs": {
                 "type": "array",
-                "description": "Safe request-input metadata for building evaluation targets. It exposes target-side paths and matching method labels, never connector, connection, dataset, entity, or source-field details.",
+                "description": "Safe request-input metadata for building evaluation targets. It exposes target-side paths and matching method labels, never upstream connection, dataset, entity, or field details.",
                 "items": { "$ref": "#/components/schemas/ClaimTargetInputMethod" }
             },
             "cccev": {
@@ -2250,7 +2247,6 @@ fn claim_result_view_schema() -> Value {
             "subject_type": { "type": "string" },
             "requester_ref": { "$ref": "#/components/schemas/EvidenceEntityRef" },
             "target_ref": { "$ref": "#/components/schemas/TargetRefView" },
-            "matching": { "$ref": "#/components/schemas/MatchingMetadata" },
             "value": {
                 "type": ["object", "array", "string", "number", "integer", "boolean", "null"],
                 "description": "Claim value. The runtime may return any JSON value."
@@ -2295,7 +2291,6 @@ fn batch_item_response_schema() -> Value {
             "input_index": { "type": "integer", "minimum": 0 },
             "target_ref": { "$ref": "#/components/schemas/TargetRefView" },
             "requester_ref": { "$ref": "#/components/schemas/EvidenceEntityRef" },
-            "matching": { "$ref": "#/components/schemas/MatchingMetadata" },
             "evaluation_id": { "type": "string" },
             "status": { "type": "string", "enum": ["succeeded", "failed"] },
             "claim_results": {
@@ -2405,7 +2400,7 @@ fn provenance_generated_by_schema() -> Value {
             "claim_version": { "type": "string" },
             "policy_id": {
                 "type": "string",
-                "description": "Evaluation policy identifier: the policy under which this result was produced. Distinct from matching.policy_id, which names the target-matching policy for a source binding. Present for flows evaluated under a named policy (e.g. self-attestation); omitted for machine-client flows with no evaluation policy."
+                "description": "Evaluation policy identifier under which this result was produced. Present for flows evaluated under a named policy, such as self-attestation, and omitted for machine-client flows with no evaluation policy."
             },
             "policy_version": { "type": "string" },
             "policy_hash": {
@@ -2420,52 +2415,13 @@ fn provenance_generated_by_schema() -> Value {
 fn provenance_used_schema() -> Value {
     json!({
         "type": "object",
-        "required": ["source_count", "source_versions", "source_runtimes"],
+        "required": ["source_count", "source_versions"],
         "properties": {
             "source_count": { "type": "integer", "minimum": 0 },
             "source_versions": {
                 "type": "object",
                 "additionalProperties": { "type": "string" }
-            },
-            "source_runtimes": {
-                "type": "array",
-                "description": "Minimized summaries for connectors that cross an external execution boundary (the source-adapter sidecar). The full assurance document stays in restricted audit.",
-                "items": { "$ref": "#/components/schemas/SourceRuntimeSummary" }
             }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn source_runtime_summary_schema() -> Value {
-    json!({
-        "type": "object",
-        "required": ["kind", "config_hash", "assurance"],
-        "properties": {
-            "kind": {
-                "type": "string",
-                "description": "Source-adapter sidecar runtime.",
-                "enum": ["source_adapter_sidecar"]
-            },
-            "config_hash": {
-                "type": "string",
-                "description": "sha256:<hex> digest of the runtime configuration."
-            },
-            "assurance": { "$ref": "#/components/schemas/SourceRuntimeAssurance" }
-        },
-        "additionalProperties": false
-    })
-}
-
-fn source_runtime_assurance_schema() -> Value {
-    json!({
-        "type": "object",
-        "required": ["pinned", "expression_hashes_verified", "runtime_verified", "smoke_verified"],
-        "properties": {
-            "pinned": { "type": "boolean" },
-            "expression_hashes_verified": { "type": "boolean" },
-            "runtime_verified": { "type": "boolean" },
-            "smoke_verified": { "type": "boolean" }
         },
         "additionalProperties": false
     })
@@ -2501,32 +2457,6 @@ fn evidence_entity_ref_schema() -> Value {
             },
             "profile": { "type": "string" }
         },
-        "additionalProperties": false
-    })
-}
-
-fn matching_metadata_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "policy_id": {
-                "type": "string",
-                "description": "Target-matching policy identifier for the source binding: the policy that governs how the request target is matched to a source record. Distinct from generated_by.policy_id in claim provenance, which names the evaluation policy under which the result was produced."
-            },
-            "method": {
-                "type": "string",
-                "description": "Configured matching method for the source binding."
-            },
-            "confidence": {
-                "type": "string",
-                "description": "Policy-asserted confidence label configured on the source binding and method. This is returned verbatim for successful matches against that binding; it is not a measured quality score for the individual match."
-            },
-            "score": {
-                "type": ["number", "null"],
-                "description": "Reserved optional per-match score. Current configured-only matching usually omits this field."
-            }
-        },
-        "required": ["policy_id", "method", "confidence"],
         "additionalProperties": false
     })
 }
@@ -3660,7 +3590,6 @@ fn batch_evaluate_example() -> Value {
                 "input_index": 0,
                 "target_ref": target_ref_example("Person"),
                 "requester_ref": requester_ref_example(),
-                "matching": matching_example(),
                 "evaluation_id": "01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
                 "status": "succeeded",
                 "claim_results": [
@@ -3701,7 +3630,6 @@ fn claim_result_example() -> Value {
         "subject_type": "person",
         "requester_ref": requester_ref_example(),
         "target_ref": target_ref_example("Person"),
-        "matching": matching_example(),
         "value": true,
         "satisfied": true,
         "disclosure": "predicate",
@@ -3730,15 +3658,6 @@ fn requester_ref_example() -> Value {
     })
 }
 
-fn matching_example() -> Value {
-    json!({
-        "policy_id": "national-id-exact-v1",
-        "method": "identifier_exact",
-        "confidence": "high",
-        "score": 1.0
-    })
-}
-
 fn provenance_example() -> Value {
     json!({
         "schema_version": "registry-notary-claim-provenance/v1",
@@ -3754,8 +3673,7 @@ fn provenance_example() -> Value {
         },
         "used": {
             "source_count": 1,
-            "source_versions": {},
-            "source_runtimes": []
+            "source_versions": {}
         },
         "derived_from": []
     })
@@ -3819,25 +3737,11 @@ mod tests {
             .iter()
             .map(|value| value.as_str().expect("string"))
             .collect();
-        assert_eq!(
-            used_required,
-            vec!["source_count", "source_versions", "source_runtimes"]
-        );
-
-        let assurance = &schemas["SourceRuntimeAssurance"];
-        assert_eq!(assurance["additionalProperties"], json!(false));
-        for boolean in [
-            "pinned",
-            "expression_hashes_verified",
-            "runtime_verified",
-            "smoke_verified",
-        ] {
-            assert_eq!(assurance["properties"][boolean]["type"], json!("boolean"));
-        }
+        assert_eq!(used_required, vec!["source_count", "source_versions"]);
     }
 
     #[test]
-    fn both_policy_id_descriptions_disambiguate_evaluation_vs_matching() {
+    fn provenance_policy_id_description_names_evaluation_policy() {
         let doc = openapi_document();
         let schemas = &doc["components"]["schemas"];
 
@@ -3848,14 +3752,6 @@ mod tests {
         assert!(
             generated_by_policy.contains("Evaluation policy"),
             "generated_by.policy_id must name the evaluation policy: {generated_by_policy}"
-        );
-
-        let matching_policy = schemas["MatchingMetadata"]["properties"]["policy_id"]["description"]
-            .as_str()
-            .expect("matching.policy_id has a description");
-        assert!(
-            matching_policy.contains("Target-matching policy"),
-            "matching.policy_id must name the target-matching policy: {matching_policy}"
         );
     }
 
@@ -4186,7 +4082,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluation_response_schemas_use_target_requester_and_matching_refs() {
+    fn evaluation_response_schemas_use_target_and_requester_refs() {
         let doc = serde_json::to_value(openapi_document()).expect("document serializes");
 
         assert_eq!(
@@ -4207,17 +4103,12 @@ mod tests {
             doc["components"]["schemas"]["ClaimResultView"]["properties"]["requester_ref"]["$ref"],
             json!("#/components/schemas/EvidenceEntityRef")
         );
-        assert_eq!(
-            doc["components"]["schemas"]["ClaimResultView"]["properties"]["matching"]["$ref"],
-            json!("#/components/schemas/MatchingMetadata")
-        );
-
         let evaluate_example = &doc["paths"]["/v1/evaluations"]["post"]["responses"]["200"]
             ["content"]["application/json"]["example"]["results"][0];
         assert!(evaluate_example.get("subject_ref").is_none());
         assert!(evaluate_example.get("target_ref").is_some());
         assert!(evaluate_example.get("requester_ref").is_some());
-        assert!(evaluate_example.get("matching").is_some());
+        assert!(evaluate_example.get("matching").is_none());
         assert!(evaluate_example["value"].is_boolean());
 
         let batch_item_example = &doc["paths"]["/v1/batch-evaluations"]["post"]["responses"]["200"]
@@ -4225,7 +4116,7 @@ mod tests {
         assert!(batch_item_example.get("subject_ref").is_none());
         assert!(batch_item_example.get("target_ref").is_some());
         assert!(batch_item_example.get("requester_ref").is_some());
-        assert!(batch_item_example.get("matching").is_some());
+        assert!(batch_item_example.get("matching").is_none());
         assert!(batch_item_example["claim_results"][0]["value"].is_boolean());
         assert_eq!(
             doc["components"]["schemas"]["ClaimResultView"]["properties"]["value"]["type"],

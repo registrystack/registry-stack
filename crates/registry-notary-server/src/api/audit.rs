@@ -49,10 +49,6 @@ pub(super) fn attach_evidence_audit_with_purposes(
         target_ref_hash: None,
         requester_type: None,
         requester_ref_hash: None,
-        matching_policy_id: None,
-        matching_method: None,
-        matching_outcome: None,
-        matching_error_code: None,
         batch_items: None,
         ..EvidenceAuditContext::default()
     });
@@ -92,18 +88,6 @@ pub(super) fn attach_runtime_evaluation_audit(
     attach_relay_consultation_audit(response, relay_consultation_ids);
 }
 
-pub(super) fn attach_source_sidecar_config_hashes(
-    response: &mut Response,
-    config_hashes: Vec<String>,
-) {
-    if config_hashes.is_empty() {
-        return;
-    }
-    if let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() {
-        audit.source_sidecar_config_hashes = Some(config_hashes);
-    }
-}
-
 pub(super) fn attach_redacted_fields_audit(response: &mut Response, results: &[ClaimResultView]) {
     let redacted_fields: BTreeSet<String> = results
         .iter()
@@ -122,8 +106,6 @@ pub(super) fn attach_evaluate_request_audit(
     keys: &SelfAttestationRateLimitKeys,
     request: &EvaluateRequest,
     result: Option<&ClaimResultView>,
-    matching_error_code: Option<&str>,
-    denied_matching_policy: Option<&MatchingPolicyAuditIdentity>,
 ) -> Result<(), EvidenceError> {
     let Some(audit) = response.extensions_mut().get_mut::<EvidenceAuditContext>() else {
         return Ok(());
@@ -173,37 +155,6 @@ pub(super) fn attach_evaluate_request_audit(
         audit.requester_ref_hash =
             hash_audit_matching_attempt(keys, "requester", request.purpose.as_deref(), requester)?;
     }
-    if let Some(matching) = result.and_then(|result| result.matching.as_ref()) {
-        audit.matching_policy_id = Some(matching.policy_id.clone());
-        audit.matching_policy_hash = matching
-            .policy_hash
-            .as_ref()
-            .map(|hash| Hashed::<PolicyIdentifier>::from_hash(hash.clone()));
-        audit.matching_evaluated_rule_ids =
-            (!matching.evaluated_rule_ids.is_empty()).then(|| matching.evaluated_rule_ids.clone());
-        audit.ecosystem_binding_id = matching.ecosystem_binding_id.clone();
-        audit.ecosystem_binding_version = matching.ecosystem_binding_version.clone();
-        audit.pack_id = matching.pack_id.clone();
-        audit.pack_version = matching.pack_version.clone();
-        audit.matching_method = Some(matching.method.clone());
-        audit.matching_outcome = Some("matched".to_string());
-    } else if let Some(error_code) = matching_error_code.filter(|code| is_matching_audit_code(code))
-    {
-        if let Some(policy) = denied_matching_policy {
-            audit.matching_policy_id = Some(policy.policy_id.clone());
-            audit.matching_policy_hash = Some(Hashed::<PolicyIdentifier>::from_hash(
-                policy.policy_hash.clone(),
-            ));
-            audit.matching_evaluated_rule_ids =
-                (!policy.evaluated_rule_ids.is_empty()).then(|| policy.evaluated_rule_ids.clone());
-            audit.ecosystem_binding_id = policy.ecosystem_binding_id.clone();
-            audit.ecosystem_binding_version = policy.ecosystem_binding_version.clone();
-            audit.pack_id = policy.pack_id.clone();
-            audit.pack_version = policy.pack_version.clone();
-        }
-        audit.matching_outcome = Some("error".to_string());
-        audit.matching_error_code = Some(error_code.to_string());
-    }
     if audit.redacted_fields.is_none() {
         audit.redacted_fields = result.and_then(|result| {
             (!result.redacted_fields.is_empty()).then(|| result.redacted_fields.clone())
@@ -215,8 +166,8 @@ pub(super) fn attach_evaluate_request_audit(
 pub(super) fn attach_batch_evaluate_response_audit(
     response: &mut Response,
     keys: &SelfAttestationRateLimitKeys,
-    evidence: &EvidenceConfig,
-    request: &BatchEvaluateRequest,
+    _evidence: &EvidenceConfig,
+    _request: &BatchEvaluateRequest,
     result: &registry_notary_core::BatchEvaluateResponse,
     audit_purposes: Option<&[String]>,
 ) -> Result<(), EvidenceError> {
@@ -228,21 +179,6 @@ pub(super) fn attach_batch_evaluate_response_audit(
         let purpose_scope = audit_purposes
             .and_then(|purposes| purposes.get(item.input_index))
             .map(String::as_str);
-        let matching_error_code = item
-            .errors
-            .first()
-            .and_then(|error| error.audit_code.as_deref().or(Some(error.code.as_str())))
-            .filter(|code| is_matching_audit_code(code))
-            .map(str::to_string);
-        let matching = item.matching.as_ref();
-        let denied_matching_policy = matching_error_code.as_deref().and_then(|code| {
-            denied_batch_item_matching_policy_audit_identity(
-                evidence,
-                request,
-                item.input_index,
-                code,
-            )
-        });
         batch_items.push(EvidenceBatchItemAuditEvent {
             input_index: item.input_index,
             target_type: Some(item.target_ref.entity_type.clone())
@@ -276,167 +212,10 @@ pub(super) fn attach_batch_evaluate_response_audit(
                     )
                 })
                 .transpose()?,
-            matching_policy_id: matching
-                .map(|matching| matching.policy_id.clone())
-                .or_else(|| {
-                    denied_matching_policy
-                        .as_ref()
-                        .map(|policy| policy.policy_id.clone())
-                }),
-            matching_policy_hash: matching
-                .and_then(|matching| matching.policy_hash.as_ref())
-                .map(|hash| Hashed::<PolicyIdentifier>::from_hash(hash.clone()))
-                .or_else(|| {
-                    denied_matching_policy.as_ref().map(|policy| {
-                        Hashed::<PolicyIdentifier>::from_hash(policy.policy_hash.clone())
-                    })
-                }),
-            matching_evaluated_rule_ids: matching
-                .map(|matching| matching.evaluated_rule_ids.clone())
-                .filter(|rule_ids| !rule_ids.is_empty())
-                .or_else(|| {
-                    denied_matching_policy
-                        .as_ref()
-                        .map(|policy| policy.evaluated_rule_ids.clone())
-                        .filter(|rule_ids| !rule_ids.is_empty())
-                }),
-            ecosystem_binding_id: matching
-                .and_then(|matching| matching.ecosystem_binding_id.clone())
-                .or_else(|| {
-                    denied_matching_policy
-                        .as_ref()
-                        .and_then(|policy| policy.ecosystem_binding_id.clone())
-                }),
-            ecosystem_binding_version: matching
-                .and_then(|matching| matching.ecosystem_binding_version.clone())
-                .or_else(|| {
-                    denied_matching_policy
-                        .as_ref()
-                        .and_then(|policy| policy.ecosystem_binding_version.clone())
-                }),
-            pack_id: matching
-                .and_then(|matching| matching.pack_id.clone())
-                .or_else(|| {
-                    denied_matching_policy
-                        .as_ref()
-                        .and_then(|policy| policy.pack_id.clone())
-                }),
-            pack_version: matching
-                .and_then(|matching| matching.pack_version.clone())
-                .or_else(|| {
-                    denied_matching_policy
-                        .as_ref()
-                        .and_then(|policy| policy.pack_version.clone())
-                }),
-            matching_method: matching.map(|matching| matching.method.clone()),
-            matching_outcome: if item.errors.is_empty() {
-                Some("matched".to_string())
-            } else if matching_error_code.is_some() {
-                Some("error".to_string())
-            } else {
-                None
-            },
-            matching_error_code,
         });
     }
     audit.batch_items = Some(batch_items);
     Ok(())
-}
-
-pub(super) fn denied_batch_item_matching_policy_audit_identity(
-    evidence: &EvidenceConfig,
-    request: &BatchEvaluateRequest,
-    input_index: usize,
-    matching_error_code: &str,
-) -> Option<MatchingPolicyAuditIdentity> {
-    let item = request.items.get(input_index)?;
-    let evaluate_request = EvaluateRequest {
-        requester: item.requester.clone(),
-        target: Some(item.target.clone()),
-        relationship: item.relationship.clone(),
-        on_behalf_of: item.on_behalf_of.clone(),
-        variables: Default::default(),
-        claims: request.claims.clone(),
-        disclosure: request.disclosure.clone(),
-        format: request.format.clone(),
-        purpose: item.purpose.clone().or_else(|| request.purpose.clone()),
-    };
-    denied_matching_policy_audit_identity(evidence, &evaluate_request, Some(matching_error_code))
-}
-
-pub(super) fn matching_policy_audit_identity_from_error(
-    evidence: &EvidenceConfig,
-    error: &EvidenceError,
-) -> Option<MatchingPolicyAuditIdentity> {
-    let EvidenceError::PolicyDenied {
-        policy_id: Some(policy_id),
-        policy_hash: Some(policy_hash),
-        evaluated_rule_ids,
-        ..
-    } = error
-    else {
-        return None;
-    };
-    let ecosystem_binding = ecosystem_binding_for_policy(evidence, policy_id, policy_hash);
-    Some(MatchingPolicyAuditIdentity {
-        policy_id: policy_id.clone(),
-        policy_hash: policy_hash.clone(),
-        ecosystem_binding_id: ecosystem_binding.clone(),
-        ecosystem_binding_version: ecosystem_binding
-            .as_deref()
-            .and_then(ecosystem_binding_version_from_id),
-        pack_id: ecosystem_binding.clone(),
-        pack_version: ecosystem_binding
-            .as_deref()
-            .and_then(ecosystem_binding_version_from_id),
-        evaluated_rule_ids: evaluated_rule_ids.clone(),
-    })
-}
-
-pub(super) fn ecosystem_binding_for_policy(
-    evidence: &EvidenceConfig,
-    policy_id: &str,
-    policy_hash: &str,
-) -> Option<String> {
-    evidence
-        .ecosystem_bindings
-        .iter()
-        .find(|(_, binding)| binding.policy_id == policy_id && binding.policy_hash == policy_hash)
-        .map(|(id, _)| id.clone())
-}
-
-pub(super) fn ecosystem_binding_version_from_id(id: &str) -> Option<String> {
-    let (_, version) = id.rsplit_once('/')?;
-    let version = version.trim();
-    (!version.is_empty()).then(|| version.to_string())
-}
-
-pub(super) fn merge_matching_policy_audit_identity(
-    primary: Option<MatchingPolicyAuditIdentity>,
-    fallback: Option<MatchingPolicyAuditIdentity>,
-) -> Option<MatchingPolicyAuditIdentity> {
-    match (primary, fallback) {
-        (Some(mut primary), Some(fallback)) => {
-            if primary.ecosystem_binding_id.is_none() {
-                primary.ecosystem_binding_id = fallback.ecosystem_binding_id;
-            }
-            if primary.ecosystem_binding_version.is_none() {
-                primary.ecosystem_binding_version = fallback.ecosystem_binding_version;
-            }
-            if primary.pack_id.is_none() {
-                primary.pack_id = fallback.pack_id;
-            }
-            if primary.pack_version.is_none() {
-                primary.pack_version = fallback.pack_version;
-            }
-            if primary.evaluated_rule_ids.is_empty() {
-                primary.evaluated_rule_ids = fallback.evaluated_rule_ids;
-            }
-            Some(primary)
-        }
-        (Some(primary), None) => Some(primary),
-        (None, fallback) => fallback,
-    }
 }
 
 pub(super) fn hash_audit_handle(
@@ -526,101 +305,6 @@ pub(super) fn canonical_audit_identifier_input(
     }))
     .map(Some)
     .map_err(|_| EvidenceError::InvalidRequest)
-}
-
-pub(super) fn is_matching_audit_code(code: &str) -> bool {
-    code.starts_with("target.")
-        || code.starts_with("requester.")
-        || code.starts_with("relationship.")
-        || code.starts_with("pdp.")
-        || matches!(code, "purpose.not_allowed" | "evidence.not_available")
-}
-
-pub(super) fn denied_matching_policy_audit_identity(
-    evidence: &EvidenceConfig,
-    request: &EvaluateRequest,
-    matching_error_code: Option<&str>,
-) -> Option<MatchingPolicyAuditIdentity> {
-    matching_error_code.filter(|code| is_matching_policy_provenance_code(code))?;
-    let context = request.request_context()?;
-    request.claims.iter().find_map(|claim_ref| {
-        let claim = match claim_ref.version.as_deref() {
-            Some(version) => find_claim_version(evidence, claim_ref.id.as_str(), version).ok()?,
-            None => find_claim(evidence, claim_ref.id.as_str()).ok()?,
-        };
-        if let Some(binding) = claim_rule_source_id(claim)
-            .and_then(|source| claim.source_bindings.get(source))
-            .filter(|binding| source_binding_matches_request(binding, &context))
-        {
-            return Some(matching_policy_audit_identity(evidence, binding));
-        }
-        claim
-            .source_bindings
-            .values()
-            .find(|binding| source_binding_matches_request(binding, &context))
-            .or_else(|| {
-                (claim.source_bindings.len() == 1).then(|| {
-                    claim
-                        .source_bindings
-                        .values()
-                        .next()
-                        .expect("single source binding exists")
-                })
-            })
-            .map(|binding| matching_policy_audit_identity(evidence, binding))
-    })
-}
-
-pub(super) fn claim_rule_source_id(claim: &registry_notary_core::ClaimDefinition) -> Option<&str> {
-    match &claim.rule {
-        registry_notary_core::RuleConfig::Extract { source, .. }
-        | registry_notary_core::RuleConfig::Exists { source } => Some(source.as_str()),
-        registry_notary_core::RuleConfig::Cel { .. }
-        | registry_notary_core::RuleConfig::Plugin { .. } => None,
-    }
-}
-
-pub(super) fn source_binding_matches_request(
-    binding: &registry_notary_core::SourceBindingConfig,
-    context: &registry_notary_core::EvidenceRequestContext,
-) -> bool {
-    if binding.query_fields.is_empty() {
-        return source_lookup_input_matches_request(binding.lookup.input.as_str(), context);
-    }
-    binding
-        .query_fields
-        .iter()
-        .all(|field| source_lookup_input_matches_request(field.input.as_str(), context))
-}
-
-pub(super) fn source_lookup_input_matches_request(
-    input: &str,
-    context: &registry_notary_core::EvidenceRequestContext,
-) -> bool {
-    context.lookup_value(input).is_some() || parse_source_lookup_input(input).is_some()
-}
-
-pub(super) fn parse_source_lookup_input(input: &str) -> Option<(&str, &str)> {
-    let remainder = input
-        .strip_prefix("sources.")
-        .or_else(|| input.strip_prefix("source."))?;
-    let (binding_id, field_path) = remainder.split_once('.')?;
-    if binding_id.is_empty() || field_path.is_empty() {
-        return None;
-    }
-    Some((binding_id, field_path))
-}
-
-pub(super) fn is_matching_policy_provenance_code(code: &str) -> bool {
-    if code.starts_with("pdp.") {
-        return true;
-    }
-    matches!(
-        code,
-        "target.matching_policy_rejected"
-            | "requester.matching_policy_rejected"
-            | "relationship.policy_rejected"
-    )
 }
 
 // Before a stored evaluation is found, keep caller-controlled evaluation ids out of audit data.
@@ -728,7 +412,6 @@ pub(super) fn attach_self_attestation_credential_denial_audit(
         .transpose()?;
     let profile_id = profile.map(|(profile_id, _)| profile_id);
     let holder_binding_mode = profile.map(|(_, profile)| profile.holder_binding.mode.as_str());
-    let matching = first_result.and_then(|result| result.matching.as_ref());
     response.extensions_mut().insert(EvidenceAuditContext {
         verification_id: Some(evaluation_id.to_string()),
         verification_decision: Some("credential_denied".to_string()),
@@ -752,15 +435,6 @@ pub(super) fn attach_self_attestation_credential_denial_audit(
         target_ref_hash,
         requester_type,
         requester_ref_hash,
-        matching_policy_id: matching.map(|matching| matching.policy_id.clone()),
-        ecosystem_binding_id: matching.and_then(|matching| matching.ecosystem_binding_id.clone()),
-        ecosystem_binding_version: matching
-            .and_then(|matching| matching.ecosystem_binding_version.clone()),
-        pack_id: matching.and_then(|matching| matching.pack_id.clone()),
-        pack_version: matching.and_then(|matching| matching.pack_version.clone()),
-        matching_method: matching.map(|matching| matching.method.clone()),
-        matching_outcome: matching.map(|_| "matched".to_string()),
-        matching_error_code: None,
         batch_items: None,
         ..EvidenceAuditContext::default()
     });
@@ -806,7 +480,6 @@ pub(super) fn attach_self_attestation_credential_audit(
             )
         })
         .transpose()?;
-    let matching = first_result.and_then(|result| result.matching.as_ref());
     response.extensions_mut().insert(EvidenceAuditContext {
         verification_id: Some(evaluation_id.to_string()),
         verification_decision: Some("credential_issued".to_string()),
@@ -830,15 +503,6 @@ pub(super) fn attach_self_attestation_credential_audit(
         target_ref_hash,
         requester_type,
         requester_ref_hash,
-        matching_policy_id: matching.map(|matching| matching.policy_id.clone()),
-        ecosystem_binding_id: matching.and_then(|matching| matching.ecosystem_binding_id.clone()),
-        ecosystem_binding_version: matching
-            .and_then(|matching| matching.ecosystem_binding_version.clone()),
-        pack_id: matching.and_then(|matching| matching.pack_id.clone()),
-        pack_version: matching.and_then(|matching| matching.pack_version.clone()),
-        matching_method: matching.map(|matching| matching.method.clone()),
-        matching_outcome: matching.map(|_| "matched".to_string()),
-        matching_error_code: None,
         batch_items: None,
         ..EvidenceAuditContext::default()
     });
@@ -873,10 +537,6 @@ pub(super) fn attach_self_attestation_success_audit(
         target_ref_hash: None,
         requester_type: None,
         requester_ref_hash: None,
-        matching_policy_id: None,
-        matching_method: None,
-        matching_outcome: None,
-        matching_error_code: None,
         batch_items: None,
         ..EvidenceAuditContext::default()
     });
@@ -917,10 +577,6 @@ pub(super) fn attach_self_attestation_audit(
         target_ref_hash: None,
         requester_type: None,
         requester_ref_hash: None,
-        matching_policy_id: None,
-        matching_method: None,
-        matching_outcome: None,
-        matching_error_code: None,
         batch_items: None,
         ..EvidenceAuditContext::default()
     });
@@ -953,10 +609,6 @@ pub(super) fn attach_oid4vci_self_attestation_denial_audit(
         target_ref_hash: None,
         requester_type: None,
         requester_ref_hash: None,
-        matching_policy_id: None,
-        matching_method: None,
-        matching_outcome: None,
-        matching_error_code: None,
         batch_items: None,
         ..EvidenceAuditContext::default()
     });
@@ -987,10 +639,6 @@ pub(super) fn attach_self_attestation_rate_limit_audit(
         target_ref_hash: None,
         requester_type: None,
         requester_ref_hash: None,
-        matching_policy_id: None,
-        matching_method: None,
-        matching_outcome: None,
-        matching_error_code: None,
         batch_items: None,
         ..EvidenceAuditContext::default()
     });

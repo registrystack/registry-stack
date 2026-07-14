@@ -4,72 +4,7 @@ use super::support::*;
 #[allow(unused_imports)]
 use super::{
     admin::*, audit::*, auth::*, credentials::*, http_contracts::*, oid4vci::*, preauth::*,
-    sources::*,
 };
-
-#[test]
-pub(super) fn compile_notary_runtime_is_named_fail_closed_boundary() {
-    set_audit_secret();
-    std::env::set_var(
-        "TEST_EVIDENCE_API_KEY_HASH",
-        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
-    );
-    std::env::remove_var("TEST_COMPILE_BOUNDARY_MISSING_SOURCE_TOKEN");
-
-    let tmp = TempDir::new().expect("tempdir");
-    let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
-        "http://127.0.0.1:1",
-        audit_path.to_str().expect("audit path is UTF-8"),
-    );
-    config
-        .evidence
-        .source_connections
-        .get_mut("farmer_registry")
-        .expect("farmer source connection exists")
-        .token_env = "TEST_COMPILE_BOUNDARY_MISSING_SOURCE_TOKEN".to_string();
-
-    let error = match compile_notary_runtime(config) {
-        Ok(_) => panic!("compile boundary must reject unresolved local env secrets"),
-        Err(error) => error,
-    };
-
-    assert!(matches!(
-        error,
-        StandaloneServerError::MissingSourceTokenEnv(_)
-    ));
-    assert!(error
-        .to_string()
-        .contains("TEST_COMPILE_BOUNDARY_MISSING_SOURCE_TOKEN"));
-}
-
-pub(super) fn registry_data_api_target_identifier_config(
-    base_url: &str,
-    audit_path: &str,
-) -> StandaloneRegistryNotaryConfig {
-    let mut config = registry_data_api_config(base_url, audit_path);
-    let claim = config
-        .evidence
-        .claims
-        .iter_mut()
-        .find(|claim| claim.id == "farmed-land-size")
-        .expect("farmed-land-size claim exists");
-    claim.operations.batch_evaluate.enabled = true;
-    let binding = claim
-        .source_bindings
-        .get_mut("farmer")
-        .expect("farmer source binding exists");
-    binding.lookup.input = "target.identifiers.national_id".to_string();
-    binding.matching.policy_id = Some("http-target-identifier-v1".to_string());
-    binding.matching.method = Some("exact_identifier".to_string());
-    binding.matching.target_type = Some("Person".to_string());
-    binding.matching.allowed_purposes =
-        vec!["https://purpose.example.test/eligibility".to_string()];
-    binding.matching.sufficient_target_inputs =
-        vec![vec!["target.identifiers.national_id".to_string()]];
-    binding.matching.allowed_target_inputs = vec!["target.identifiers.national_id".to_string()];
-    config
-}
 
 pub(super) fn set_federation_env() {
     set_audit_secret();
@@ -77,7 +12,6 @@ pub(super) fn set_federation_env() {
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_FEDERATION_SIGNING_KEY", TEST_ISSUER_JWK);
     std::env::set_var(
         "TEST_FEDERATION_PAIRWISE_SECRET",
@@ -111,18 +45,7 @@ pub(super) fn federation_config_for(
     peer_issuer: &str,
     peer_jwks_uri: &str,
 ) -> StandaloneRegistryNotaryConfig {
-    let mut config = registry_data_api_config(base_url, audit_path);
-    config
-        .evidence
-        .claims
-        .iter_mut()
-        .find(|claim| claim.id == "farmed-land-size")
-        .expect("farmed-land-size claim exists")
-        .source_bindings
-        .get_mut("farmer")
-        .expect("farmer binding exists")
-        .lookup
-        .input = "target.identifiers.national_id".to_string();
+    let mut config = notary_only_config(base_url, audit_path);
     config.evidence.signing_keys.insert(
         "federation-key".to_string(),
         SigningKeyConfig {
@@ -183,37 +106,6 @@ evaluation_profiles:
     ))
     .expect("federation config deserializes");
     config
-}
-
-#[cfg(feature = "registry-notary-cel")]
-pub(super) fn add_governed_federation_policy_context(
-    config: &mut StandaloneRegistryNotaryConfig,
-    profile_jurisdiction: &str,
-) {
-    let binding = config
-        .evidence
-        .claims
-        .iter_mut()
-        .find(|claim| claim.id == "farmed-land-size")
-        .expect("farmed-land-size claim exists")
-        .source_bindings
-        .get_mut("farmer")
-        .expect("farmer binding exists");
-    binding.matching.allowed_assurance = vec!["substantial".to_string()];
-    binding.matching.permitted_jurisdictions = vec!["ZZ".to_string()];
-    binding.matching.require_legal_basis = true;
-    binding.matching.require_consent = true;
-
-    let profile = config
-        .federation
-        .evaluation_profiles
-        .first_mut()
-        .expect("federation profile exists");
-    profile.disclosure = Some("predicate".to_string());
-    profile.legal_basis_ref = Some("demo:benefits-eligibility".to_string());
-    profile.consent_ref = Some("demo:benefits-consent".to_string());
-    profile.jurisdiction = Some(profile_jurisdiction.to_string());
-    profile.assurance_level = Some("substantial".to_string());
 }
 
 pub(super) fn federation_request_jwt(jti: &str, purpose: &str) -> String {
@@ -622,204 +514,6 @@ pub(super) fn enable_oid4vci_field_projection(config: &mut StandaloneRegistryNot
     ];
 }
 
-#[cfg(feature = "registry-notary-cel")]
-pub(super) fn dci_config(base_url: &str, audit_path: &str) -> StandaloneRegistryNotaryConfig {
-    config(base_url, audit_path, "dci", "farmed_land_size_hectares")
-}
-
-#[cfg(feature = "registry-notary-cel")]
-pub(super) fn civil_demographic_dci_config(
-    base_url: &str,
-    audit_path: &str,
-) -> StandaloneRegistryNotaryConfig {
-    set_audit_secret();
-    let raw = format!(
-        r#"
-deployment:
-  profile: local
-
-server:
-  bind: 127.0.0.1:0
-auth:
-  mode: api_key
-  api_keys:
-    - id: caseworker
-      fingerprint:
-        provider: env
-        name: TEST_EVIDENCE_API_KEY_HASH
-      scopes: [civil_registry:evidence_verification]
-audit:
-  sink: file
-  path: "{audit_path}"
-  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
-evidence:
-  enabled: true
-  service_id: evidence.test
-  api_base_url: https://evidence.example.test
-  allowed_purposes:
-    - https://purpose.example.test/eligibility
-  source_connections:
-    civil_registry:
-      base_url: "{base_url}"
-      allow_insecure_localhost: true
-      token_env: TEST_EVIDENCE_SOURCE_TOKEN
-      dci:
-        search_path: /dci/fr/registry/sync/search
-        query_type: predicate
-        registry_event_type: birth
-        records_path: /message/search_response/0/data/reg_records
-        field_paths:
-          given_name: /person/given_name
-          surname: /person/surname
-          birth_date: /person/birth_date
-          deceased: /person/deceased
-  claims:
-    - id: civil-person-is-alive-by-demographics
-      title: Civil person is alive by demographics
-      version: 2026-06
-      subject_type: person
-      evidence_mode:
-        type: transitional_direct
-      value:
-        type: boolean
-      source_bindings:
-        birth_record:
-          connector: dci
-          connection: civil_registry
-          required_scope: civil_registry:evidence_verification
-          dataset: civil_registry
-          entity: birth_record
-          lookup:
-            input: target.attributes.given_name
-            field: given_name
-            op: eq
-            cardinality: one
-          query_fields:
-            - input: target.attributes.given_name
-              field: given_name
-              op: eq
-            - input: target.attributes.surname
-              field: surname
-              op: eq
-            - input: target.attributes.birth_date
-              field: birth_date
-              op: eq
-          fields:
-            given_name:
-              field: given_name
-              type: string
-              required: true
-            surname:
-              field: surname
-              type: string
-              required: true
-            birth_date:
-              field: birth_date
-              type: date
-              required: true
-            deceased:
-              field: deceased
-              type: boolean
-              required: true
-          matching:
-            target_type: Person
-            method: configured_demographic_lookup
-            allowed_purposes:
-              - https://purpose.example.test/eligibility
-            sufficient_target_inputs:
-              - - target.attributes.given_name
-                - target.attributes.surname
-                - target.attributes.birth_date
-            allowed_target_inputs:
-              - target.attributes.given_name
-              - target.attributes.surname
-              - target.attributes.birth_date
-      rule:
-        type: cel
-        expression: source.birth_record.deceased == false
-      disclosure:
-        default: predicate
-        allowed: [predicate, redacted]
-      formats:
-        - application/vnd.registry-notary.claim-result+json
-"#
-    );
-    serde_norway::from_str(&raw).expect("Civil demographic DCI config deserializes")
-}
-
-pub(super) fn no_cel_config(base_url: &str, audit_path: &str) -> StandaloneRegistryNotaryConfig {
-    set_audit_secret();
-    let raw = format!(
-        r#"
-deployment:
-  profile: local
-
-server:
-  bind: 127.0.0.1:0
-auth:
-  mode: api_key
-  api_keys:
-    - id: caseworker
-      fingerprint:
-        provider: env
-        name: TEST_EVIDENCE_API_KEY_HASH
-      scopes: [farmer_registry:evidence_verification]
-audit:
-  sink: file
-  path: "{audit_path}"
-  hash_secret_env: REGISTRY_NOTARY_AUDIT_HASH_SECRET
-evidence:
-  enabled: true
-  service_id: evidence.test
-  allowed_purposes:
-    - https://purpose.example.test/eligibility
-  source_connections:
-    farmer_registry:
-      base_url: "{base_url}"
-      allow_insecure_localhost: true
-      token_env: TEST_EVIDENCE_SOURCE_TOKEN
-  claims:
-    - id: farmed-land-size
-      title: Farmed land size
-      version: 2026-05
-      subject_type: person
-      evidence_mode:
-        type: transitional_direct
-      value:
-        type: number
-        unit: hectare
-      source_bindings:
-        farmer:
-          connector: registry_data_api
-          connection: farmer_registry
-          required_scope: farmer_registry:evidence_verification
-          dataset: farmer_registry
-          entity: farmer
-          lookup:
-            input: target.id
-            field: id
-            op: eq
-            cardinality: one
-          fields:
-            total_farmed_area:
-              field: total_farmed_area
-              type: number
-              unit: hectare
-              required: true
-      rule:
-        type: extract
-        source: farmer
-        field: total_farmed_area
-      disclosure:
-        default: value
-        allowed: [value, redacted]
-      formats:
-        - application/vnd.registry-notary.claim-result+json
-"#
-    );
-    serde_norway::from_str(&raw).expect("config deserializes")
-}
-
 pub(super) fn audit_envelopes(path: &std::path::Path) -> Vec<AuditEnvelope> {
     std::fs::read_to_string(path)
         .expect("audit jsonl is readable")
@@ -985,7 +679,7 @@ pub(super) async fn federation_route_is_not_mounted_until_enabled() {
     set_federation_env();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let app = standalone_router(registry_data_api_config(
+    let app = standalone_router(notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
@@ -1004,16 +698,6 @@ pub(super) async fn federation_route_is_not_mounted_until_enabled() {
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn federation_evaluation_returns_signed_response_and_rejects_replay() {
     set_federation_env();
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/farmer_registry/entities/farmer/records",
-            get(registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let peer_jwks = MockHttpUpstream::start().await;
     let (peer_private, _) = fixtures::ed25519_pair();
     peer_jwks
@@ -1023,7 +707,7 @@ pub(super) async fn federation_evaluation_returns_signed_response_and_rejects_re
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let mut config = federation_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     );
@@ -1122,7 +806,6 @@ pub(super) async fn federation_evaluation_returns_signed_response_and_rejects_re
     );
     assert!(!audit.contains("person-1"));
     assert!(!audit.contains("01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6"));
-    assert!(!audit.contains("source-token"));
 
     let metrics = server
         .get("/metrics")
@@ -1138,128 +821,12 @@ pub(super) async fn federation_evaluation_returns_signed_response_and_rejects_re
     ));
     assert!(!metrics_body.contains("01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6"));
     assert!(!metrics_body.contains("person-1"));
-    assert!(!metrics_body.contains("source-token"));
-}
-
-#[tokio::test]
-#[cfg(feature = "registry-notary-cel")]
-pub(super) async fn federation_policy_context_satisfies_governed_source_matching() {
-    set_federation_env();
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/farmer_registry/entities/farmer/records",
-            get(registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
-    let peer_jwks = MockHttpUpstream::start().await;
-    let (peer_private, _) = fixtures::ed25519_pair();
-    peer_jwks
-        .expect("GET", "/jwks")
-        .respond_json(200, jwks_from_private_jwk(&peer_private))
-        .await;
-    let tmp = TempDir::new().expect("tempdir");
-    let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = federation_config(
-        base_url.trim_end_matches('/'),
-        audit_path.to_str().expect("audit path is UTF-8"),
-        &format!("{}/jwks", peer_jwks.url()),
-    );
-    add_governed_federation_policy_context(&mut config, "ZZ");
-    let app = standalone_router(config).expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
-    let token = federation_request_jwt(
-        "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6G0V1",
-        "https://purpose.example.test/eligibility",
-    );
-
-    let response = server
-        .post("/federation/v1/evaluations")
-        .add_header("content-type", "application/jwt")
-        .bytes(Bytes::from(token))
-        .await;
-
-    response.assert_status_ok();
-    let claims = verified_federation_response_claims(&response.text());
-    assert_eq!(
-        claims["result"]["claims"]["farmer-under-4ha"]["disclosure"],
-        json!("predicate")
-    );
-    assert_eq!(
-        claims["result"]["claims"]["farmer-under-4ha"]["satisfied"],
-        json!(true)
-    );
-    let records = audit_records(&audit_path);
-    assert!(records
-        .iter()
-        .any(|record| record["decision"] == json!("federated_evaluate")));
-
-    let denied_peer_jwks = MockHttpUpstream::start().await;
-    let (denied_peer_private, _) = fixtures::ed25519_pair();
-    denied_peer_jwks
-        .expect("GET", "/jwks")
-        .respond_json(200, jwks_from_private_jwk(&denied_peer_private))
-        .await;
-    let denied_audit_path = tmp.path().join("denied-audit.jsonl");
-    let mut denied_config = federation_config(
-        base_url.trim_end_matches('/'),
-        denied_audit_path.to_str().expect("audit path is UTF-8"),
-        &format!("{}/jwks", denied_peer_jwks.url()),
-    );
-    add_governed_federation_policy_context(&mut denied_config, "XY");
-    let denied_app = standalone_router(denied_config).expect("standalone router builds");
-    let denied_server = TestServer::builder().http_transport().build(denied_app);
-    let denied_token = federation_request_jwt(
-        "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6G0W1",
-        "https://purpose.example.test/eligibility",
-    );
-
-    let denied = denied_server
-        .post("/federation/v1/evaluations")
-        .add_header("content-type", "application/jwt")
-        .bytes(Bytes::from(denied_token))
-        .await;
-
-    denied.assert_status(StatusCode::FORBIDDEN);
-    let body: Value = denied.json();
-    assert_eq!(body["code"], json!("pdp.jurisdiction_not_permitted"));
-    let denied_records = audit_records(&denied_audit_path);
-    let denied_audit = audit_record_with(
-        &denied_records,
-        "/federation/v1/evaluations",
-        "federated_evaluate_denied",
-        StatusCode::FORBIDDEN,
-        "pdp.jurisdiction_not_permitted",
-    );
-    assert_verified_federation_audit_context(
-        denied_audit,
-        "farmer_under_4ha",
-        "https://purpose.example.test/eligibility",
-        true,
-    );
-    assert_audit_records_do_not_contain(
-        &denied_records,
-        &["person-1", "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6G0W1"],
-    );
 }
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn federation_auth_exempt_route_still_requires_valid_jws() {
     set_federation_env();
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/farmer_registry/entities/farmer/records",
-            get(registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let peer_jwks = MockHttpUpstream::start().await;
     let (peer_private, _) = fixtures::ed25519_pair();
     peer_jwks
@@ -1269,7 +836,7 @@ pub(super) async fn federation_auth_exempt_route_still_requires_valid_jws() {
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let config = federation_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     );
@@ -1291,16 +858,6 @@ pub(super) async fn federation_auth_exempt_route_still_requires_valid_jws() {
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn federation_two_standalone_notaries_smoke() {
     set_federation_env();
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/farmer_registry/entities/farmer/records",
-            get(registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let agency_b_jwks = MockHttpUpstream::start().await;
     let (agency_b_private, _) = fixtures::ed25519_pair();
     agency_b_jwks
@@ -1318,7 +875,7 @@ pub(super) async fn federation_two_standalone_notaries_smoke() {
     let agency_b_audit = tmp.path().join("agency-b-audit.jsonl");
     let agency_a = TestServer::builder().http_transport().build(
         standalone_router(federation_config_for(
-            base_url.trim_end_matches('/'),
+            "http://127.0.0.1:1",
             agency_a_audit.to_str().expect("audit path is UTF-8"),
             "did:web:agency-a.example.gov",
             "https://agency-a.example.gov",
@@ -1330,7 +887,7 @@ pub(super) async fn federation_two_standalone_notaries_smoke() {
     );
     let agency_b = TestServer::builder().http_transport().build(
         standalone_router(federation_config_for(
-            base_url.trim_end_matches('/'),
+            "http://127.0.0.1:1",
             agency_b_audit.to_str().expect("audit path is UTF-8"),
             "did:web:agency-b.example.gov",
             "https://agency-b.example.gov",
@@ -1368,26 +925,8 @@ pub(super) async fn federation_two_standalone_notaries_smoke() {
 }
 
 #[tokio::test]
-pub(super) async fn federation_denial_happens_before_source_read() {
+pub(super) async fn federation_denial_happens_before_claim_evaluation() {
     set_federation_env();
-    let source_hits = Arc::new(AtomicUsize::new(0));
-    let source_hits_for_route = Arc::clone(&source_hits);
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/farmer_registry/entities/farmer/records",
-            get(move || {
-                let source_hits = Arc::clone(&source_hits_for_route);
-                async move {
-                    source_hits.fetch_add(1, Ordering::SeqCst);
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-            }),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let peer_jwks = MockHttpUpstream::start().await;
     let (peer_private, _) = fixtures::ed25519_pair();
     peer_jwks
@@ -1397,7 +936,7 @@ pub(super) async fn federation_denial_happens_before_source_read() {
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let app = standalone_router(federation_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     ))
@@ -1415,7 +954,6 @@ pub(super) async fn federation_denial_happens_before_source_read() {
         .await;
 
     response.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
     let records = audit_records(&audit_path);
     let denied = audit_record_with(
         &records,
@@ -1438,7 +976,6 @@ pub(super) async fn federation_denial_happens_before_source_read() {
         .bytes(Bytes::from("{}"))
         .await;
     unsupported_media_type.assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
 
     let oversized_body = server
         .post("/federation/v1/evaluations")
@@ -1446,7 +983,6 @@ pub(super) async fn federation_denial_happens_before_source_read() {
         .bytes(Bytes::from(vec![b'a'; 16 * 1024 + 1]))
         .await;
     oversized_body.assert_status(StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
 
     let bad_audience = federation_request_jwt_with_audience(
         "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7Q1",
@@ -1458,7 +994,6 @@ pub(super) async fn federation_denial_happens_before_source_read() {
         .bytes(Bytes::from(bad_audience))
         .await;
     bad_audience_response.assert_status(StatusCode::UNAUTHORIZED);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
 
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let expired = federation_request_jwt_with_times(
@@ -1473,7 +1008,6 @@ pub(super) async fn federation_denial_happens_before_source_read() {
         .bytes(Bytes::from(expired))
         .await;
     expired_response.assert_status(StatusCode::UNAUTHORIZED);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
 
     let future_nbf =
         federation_request_jwt_with_times("01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7Q3", now, now + 600, now + 900);
@@ -1483,7 +1017,6 @@ pub(super) async fn federation_denial_happens_before_source_read() {
         .bytes(Bytes::from(future_nbf))
         .await;
     future_nbf_response.assert_status(StatusCode::UNAUTHORIZED);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
 
     let long_lived =
         federation_request_jwt_with_times("01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7Q4", now, now, now + 301);
@@ -1493,7 +1026,6 @@ pub(super) async fn federation_denial_happens_before_source_read() {
         .bytes(Bytes::from(long_lived))
         .await;
     long_lived_response.assert_status(StatusCode::UNAUTHORIZED);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
 
     let bad_subject = federation_request_jwt_with_subject(
         "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7Q5",
@@ -1505,7 +1037,6 @@ pub(super) async fn federation_denial_happens_before_source_read() {
         .bytes(Bytes::from(bad_subject))
         .await;
     bad_subject_response.assert_status(StatusCode::UNAUTHORIZED);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
 
     let unknown_kid = federation_request_jwt_with_kid("01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7Q6", "unknown-key");
     let unknown_kid_response = server
@@ -1514,7 +1045,6 @@ pub(super) async fn federation_denial_happens_before_source_read() {
         .bytes(Bytes::from(unknown_kid))
         .await;
     unknown_kid_response.assert_status(StatusCode::UNAUTHORIZED);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
     let records = audit_records(&audit_path);
     let unknown_key_audit = records.last().expect("unknown-key audit record exists");
     assert_eq!(
@@ -1539,7 +1069,6 @@ pub(super) async fn federation_denial_happens_before_source_read() {
         .bytes(Bytes::from(bad_signature))
         .await;
     bad_signature_response.assert_status(StatusCode::UNAUTHORIZED);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
     let records = audit_records(&audit_path);
     assert_eq!(records.len(), audit_count_before_bad_signature + 1);
     let bad_signature_audit = &records[audit_count_before_bad_signature];
@@ -1568,7 +1097,6 @@ pub(super) async fn federation_denial_happens_before_source_read() {
         .bytes(Bytes::from(bad_alg))
         .await;
     bad_alg_response.assert_status(StatusCode::UNAUTHORIZED);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
 
     let bad_typ = federation_jwt_with_header(
         json!({
@@ -1584,39 +1112,22 @@ pub(super) async fn federation_denial_happens_before_source_read() {
         .bytes(Bytes::from(bad_typ))
         .await;
     bad_typ_response.assert_status(StatusCode::UNAUTHORIZED);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
-pub(super) async fn federation_emergency_kid_denylist_blocks_before_source_read() {
-    assert_federation_emergency_denylist_blocks_before_source_read(true).await;
+pub(super) async fn federation_emergency_kid_denylist_blocks_before_claim_evaluation() {
+    assert_federation_emergency_denylist_blocks_before_claim_evaluation(true).await;
 }
 
 #[tokio::test]
-pub(super) async fn federation_emergency_node_id_denylist_blocks_before_source_read() {
-    assert_federation_emergency_denylist_blocks_before_source_read(false).await;
+pub(super) async fn federation_emergency_node_id_denylist_blocks_before_claim_evaluation() {
+    assert_federation_emergency_denylist_blocks_before_claim_evaluation(false).await;
 }
 
-pub(super) async fn assert_federation_emergency_denylist_blocks_before_source_read(deny_kid: bool) {
+pub(super) async fn assert_federation_emergency_denylist_blocks_before_claim_evaluation(
+    deny_kid: bool,
+) {
     set_federation_env();
-    let source_hits = Arc::new(AtomicUsize::new(0));
-    let source_hits_for_route = Arc::clone(&source_hits);
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/farmer_registry/entities/farmer/records",
-            get(move || {
-                let source_hits = Arc::clone(&source_hits_for_route);
-                async move {
-                    source_hits.fetch_add(1, Ordering::SeqCst);
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-            }),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let peer_jwks = MockHttpUpstream::start().await;
     let (peer_private, _) = fixtures::ed25519_pair();
     peer_jwks
@@ -1626,7 +1137,7 @@ pub(super) async fn assert_federation_emergency_denylist_blocks_before_source_re
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let mut config = federation_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     );
@@ -1659,7 +1170,6 @@ pub(super) async fn assert_federation_emergency_denylist_blocks_before_source_re
         .await;
 
     response.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
     let records = audit_records(&audit_path);
     let denied = audit_record_with(
         &records,
@@ -1673,26 +1183,8 @@ pub(super) async fn assert_federation_emergency_denylist_blocks_before_source_re
 }
 
 #[tokio::test]
-pub(super) async fn federation_request_claims_must_match_profile_before_source_read() {
+pub(super) async fn federation_request_claims_must_match_profile_before_claim_evaluation() {
     set_federation_env();
-    let source_hits = Arc::new(AtomicUsize::new(0));
-    let source_hits_for_route = Arc::clone(&source_hits);
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/farmer_registry/entities/farmer/records",
-            get(move || {
-                let source_hits = Arc::clone(&source_hits_for_route);
-                async move {
-                    source_hits.fetch_add(1, Ordering::SeqCst);
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-            }),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let peer_jwks = MockHttpUpstream::start().await;
     let (peer_private, _) = fixtures::ed25519_pair();
     peer_jwks
@@ -1702,7 +1194,7 @@ pub(super) async fn federation_request_claims_must_match_profile_before_source_r
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let app = standalone_router(federation_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     ))
@@ -1721,7 +1213,6 @@ pub(super) async fn federation_request_claims_must_match_profile_before_source_r
         .await;
 
     response.assert_status(StatusCode::FORBIDDEN);
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
     let records = audit_records(&audit_path);
     let denied = audit_record_with(
         &records,
@@ -1741,89 +1232,8 @@ pub(super) async fn federation_request_claims_must_match_profile_before_source_r
 }
 
 #[tokio::test]
-#[cfg(feature = "registry-notary-cel")]
-pub(super) async fn federation_stale_source_observation_returns_signed_evaluation_error() {
-    set_federation_env();
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/farmer_registry/entities/farmer/records",
-            get(registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
-    let peer_jwks = MockHttpUpstream::start().await;
-    let (peer_private, _) = fixtures::ed25519_pair();
-    peer_jwks
-        .expect("GET", "/jwks")
-        .respond_json(200, jwks_from_private_jwk(&peer_private))
-        .await;
-    let tmp = TempDir::new().expect("tempdir");
-    let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = federation_config(
-        base_url.trim_end_matches('/'),
-        audit_path.to_str().expect("audit path is UTF-8"),
-        &format!("{}/jwks", peer_jwks.url()),
-    );
-    config.cel.eval_timeout_ms = 10_000;
-    config.federation.evaluation_profiles[0].max_source_observed_age_seconds = Some(0);
-    let app = standalone_router(config).expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
-    let token = federation_request_jwt(
-        "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q8",
-        "https://purpose.example.test/eligibility",
-    );
-
-    let response = server
-        .post("/federation/v1/evaluations")
-        .add_header("content-type", "application/jwt")
-        .bytes(Bytes::from(token))
-        .await;
-
-    response.assert_status_ok();
-    let claims = verified_federation_response_claims(&response.text());
-    assert_eq!(
-        claims["error"]["type"],
-        json!("urn:registry-notary:problem:federation:stale-source-observation")
-    );
-    assert!(claims.get("result").is_none());
-    let records = audit_records(&audit_path);
-    let error = records
-        .iter()
-        .find(|record| record["decision"] == json!("federated_evaluate_error"))
-        .expect("stale-source audit record exists");
-    assert_eq!(
-        error["error_code"],
-        json!("federation.stale_source_observation")
-    );
-    assert!(error["federation_subject_ref_hash"]
-        .as_str()
-        .expect("subject ref hash is string")
-        .starts_with("hmac-sha256:"));
-    assert_verified_federation_audit_context(
-        error,
-        "farmer_under_4ha",
-        "https://purpose.example.test/eligibility",
-        true,
-    );
-    assert_audit_records_do_not_contain(&records, &["person-1", "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q8"]);
-}
-
-#[tokio::test]
 pub(super) async fn federation_audit_write_failure_replaces_signed_success() {
     set_federation_env();
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/farmer_registry/entities/farmer/records",
-            get(registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let peer_jwks = MockHttpUpstream::start().await;
     let (peer_private, _) = fixtures::ed25519_pair();
     peer_jwks
@@ -1837,7 +1247,7 @@ pub(super) async fn federation_audit_write_failure_replaces_signed_success() {
     let audit_path = tmp.path().join("audit.jsonl");
     std::fs::create_dir(&audit_path).expect("audit target is a directory");
     let app = standalone_router(federation_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     ))

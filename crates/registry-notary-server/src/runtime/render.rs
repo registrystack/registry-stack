@@ -235,7 +235,7 @@ pub(super) fn batch_item_error(error: &EvidenceError) -> BatchItemError {
     BatchItemError {
         code: error.code().to_string(),
         title: evidence_title(error).to_string(),
-        retryable: matches!(error, EvidenceError::SourceUnavailable),
+        retryable: false,
         audit_code: Some(error.audit_code().to_string()),
     }
 }

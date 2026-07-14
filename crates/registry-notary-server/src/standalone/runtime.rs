@@ -1,21 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Standalone Registry Notary assembly, auth, audit, and HTTP source connectors.
-
-#[path = "sidecar_assurance.rs"]
-mod sidecar_assurance;
+//! Standalone Registry Notary assembly, auth, audit, and Relay activation.
 #[path = "signing/mod.rs"]
 mod signing;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
-use std::future::Future;
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
-use tokio::sync::{Mutex, OnceCell, Semaphore};
+use tokio::sync::OnceCell;
 
 use async_trait::async_trait;
 use axum::body::Body;
@@ -33,17 +28,13 @@ use registry_notary_core::deployment::{
 };
 use registry_notary_core::sd_jwt::EvidenceIssuer;
 use registry_notary_core::{
-    AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, BulkMode, ConfigAuditEvent,
-    DciSourceConnectionConfig, EvidenceAuditEvent, EvidenceAuthMode, EvidenceAuthProfileId,
-    EvidenceAuthorizationDetails, EvidenceConfig, EvidenceCredentialConfig, EvidenceEntity,
-    EvidenceError, EvidencePrincipal, EvidenceRequestContext, ExpectedSidecarConfig, Hashed,
-    Oauth2ClientCredentialsSourceAuthConfig, PrincipalIdentifier, RateLimitBucket,
-    RegistryNotaryAdminListenerMode, RequestIdentifier, SelfAttestationAssuranceClaimSource,
-    SelfAttestationClaimSource, SelfAttestationDenialCode, SigningKeyConfig,
-    SigningKeyProviderConfig, SourceAuthConfig, SourceBindingConfig, SourceConnectionConfig,
-    SourceConnectorKind, SourceRuntimeAssurance, SourceRuntimeSummary,
-    StandaloneRegistryNotaryConfig, SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
-    SOURCE_RUNTIME_KIND_SOURCE_ADAPTER_SIDECAR,
+    AccessMode, BoundedCorrelationId, BoundedVerifiedClaims, ConfigAuditEvent, EvidenceAuditEvent,
+    EvidenceAuthMode, EvidenceAuthProfileId, EvidenceAuthorizationDetails, EvidenceConfig,
+    EvidenceCredentialConfig, EvidenceError, EvidencePrincipal, Hashed, PrincipalIdentifier,
+    RateLimitBucket, RegistryNotaryAdminListenerMode, RequestIdentifier,
+    SelfAttestationAssuranceClaimSource, SelfAttestationClaimSource, SelfAttestationDenialCode,
+    SigningKeyConfig, SigningKeyProviderConfig, StandaloneRegistryNotaryConfig, VerifiedClaimName,
+    VerifiedClaimValue,
 };
 use registry_platform_audit::{
     AuditError, AuditKeyHasher, AuditProfile, AuditSink as PlatformAuditSink, ChainState,
@@ -55,16 +46,13 @@ use registry_platform_authcommon::{
 use registry_platform_crypto::{
     sign, verify, KeyReadiness, LocalJwkSigner, PrivateJwk, PublicJwk, SigningProvider,
 };
-use registry_platform_httputil::{
-    read_bounded, url as httputil_url, FetchUrlError, FetchUrlPolicy, ValidatedFetchUrl,
-};
+use registry_platform_httputil::{read_bounded, FetchUrlError, FetchUrlPolicy, ValidatedFetchUrl};
 use registry_platform_oidc::{
     fetch_userinfo_jwt_with_policy, Audience, JwksFetcher, JwksFetcherConfig, OidcError,
     TokenVerifier, TokenVerifierConfig, VerifiedToken,
 };
 use registry_platform_ops::{AckObservation, ConfigProvenance, ConfigSource};
 use registry_platform_replay::{ReplayKey, ReplayScope};
-use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use subtle::ConstantTimeEq;
 use time::format_description::well_known::Rfc3339;
@@ -85,7 +73,7 @@ use crate::{
     posture::PostureContext,
     replay::{require_replay_insert, ReplayBuildError, ReplayStores},
     router, EvidenceAuditContext, EvidenceErrorCodeContext, EvidenceIssuerResolver, EvidenceStore,
-    RegistryNotaryApiState, SelfAttestationRateLimitKeys, SelfAttestationRateLimiter, SourceReader,
+    RegistryNotaryApiState, SelfAttestationRateLimitKeys, SelfAttestationRateLimiter,
 };
 
 #[path = "assembly.rs"]
@@ -94,8 +82,6 @@ mod assembly;
 mod auth;
 #[path = "compat.rs"]
 mod compat;
-#[path = "connectors/mod.rs"]
-mod connectors;
 #[path = "cors.rs"]
 mod cors;
 #[path = "deployment.rs"]
@@ -107,8 +93,6 @@ mod offline_fixture;
 mod preauth;
 #[path = "relay.rs"]
 mod relay;
-#[path = "sources/mod.rs"]
-mod sources;
 #[path = "transport/mod.rs"]
 mod transport;
 
@@ -117,7 +101,6 @@ use auth::*;
 pub use auth::{find_credential, ResolvedCredential};
 pub(crate) use auth::{AuditPipeline, AuthAuditState};
 pub(crate) use compat::*;
-use connectors::*;
 use cors::*;
 pub(crate) use deployment::*;
 #[cfg(feature = "registry-notary-cel")]
@@ -128,19 +111,14 @@ pub(crate) use preauth::{
     pre_auth_audit_event, PreAuthAuditFields, PreAuthRuntime,
 };
 use relay::*;
-use sidecar_assurance::*;
 pub use signing::providers::EvidenceIssuerRegistry;
 use signing::providers::*;
 pub(crate) use signing::providers::{signing_key_public_jwk_from_config, SignerReadiness};
-pub use sources::HttpEvidenceSources;
-use sources::*;
 pub(crate) use transport::audit_error_response;
 use transport::*;
 
-const SOURCE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const FILE_WATCH_METADATA_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_REQUEST_URI_BYTES: usize = 8 * 1024;
-const MAX_SOURCE_JSON_BYTES: usize = 1024 * 1024;
 const MAX_INBOUND_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 const PREAUTH_LOGIN_STATE_MAX_ENTRIES: usize = 4096;
 const SELF_ATTESTATION_CORS_METHODS: &str = "GET,POST,OPTIONS";
@@ -157,5 +135,4 @@ mod tests {
     include!("tests/audit.inc");
     include!("tests/preauth.inc");
     include!("tests/signing.inc");
-    include!("tests/sources_transport.inc");
 }

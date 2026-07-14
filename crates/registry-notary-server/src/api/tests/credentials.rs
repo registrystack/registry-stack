@@ -51,7 +51,6 @@ async fn issue_credential_fails_closed_when_status_record_write_fails() {
             ReplayStores::memory(),
             credential_status,
             Arc::new(AppMetrics::default()),
-            Arc::new(CountingSource::default()),
             Arc::clone(&store),
             Arc::new(TestIssuerResolver),
             None,
@@ -127,7 +126,6 @@ async fn issue_credential_rejects_purpose_mismatch() {
             ReplayStores::memory(),
             CredentialStatusStore::disabled(),
             Arc::new(AppMetrics::default()),
-            Arc::new(CountingSource::default()),
             Arc::clone(&store),
             Arc::new(CountingIssuerResolver {
                 sign_count: Arc::clone(&sign_count),

@@ -83,7 +83,6 @@ pub struct RegistryNotaryApiState {
     pub(crate) credential_status: CredentialStatusStore,
     pub(super) status_list_jwt_cache: Arc<StatusListJwtCache>,
     pub(crate) metrics: Arc<AppMetrics>,
-    pub(crate) source: Arc<dyn SourceReader>,
     pub(crate) activated_relay: Arc<OnceLock<Arc<dyn crate::runtime::ActivatedRelayConsultations>>>,
     relay_readiness: Arc<tokio::sync::Mutex<RelayReadinessCache>>,
     pub(crate) store: Arc<EvidenceStore>,
@@ -120,7 +119,6 @@ impl RegistryNotaryApiState {
     pub fn new(
         evidence: Arc<EvidenceConfig>,
         audit_hasher: AuditKeyHasher,
-        source: Arc<dyn SourceReader>,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
     ) -> Self {
@@ -128,7 +126,6 @@ impl RegistryNotaryApiState {
             evidence,
             Arc::new(SelfAttestationConfig::default()),
             audit_hasher,
-            source,
             store,
             issuers,
         )
@@ -139,7 +136,6 @@ impl RegistryNotaryApiState {
         evidence: Arc<EvidenceConfig>,
         self_attestation: Arc<SelfAttestationConfig>,
         audit_hasher: AuditKeyHasher,
-        source: Arc<dyn SourceReader>,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
     ) -> Self {
@@ -148,7 +144,6 @@ impl RegistryNotaryApiState {
             self_attestation,
             Arc::new(Oid4vciConfig::default()),
             audit_hasher,
-            source,
             store,
             issuers,
         )
@@ -160,7 +155,6 @@ impl RegistryNotaryApiState {
         self_attestation: Arc<SelfAttestationConfig>,
         oid4vci: Arc<Oid4vciConfig>,
         audit_hasher: AuditKeyHasher,
-        source: Arc<dyn SourceReader>,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
     ) -> Self {
@@ -169,7 +163,6 @@ impl RegistryNotaryApiState {
             self_attestation,
             oid4vci,
             audit_hasher,
-            source,
             store,
             issuers,
         )
@@ -180,7 +173,6 @@ impl RegistryNotaryApiState {
         evidence: Arc<EvidenceConfig>,
         self_attestation: Arc<SelfAttestationConfig>,
         audit_hasher: AuditKeyHasher,
-        source: Arc<dyn SourceReader>,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
     ) -> Self {
@@ -189,7 +181,6 @@ impl RegistryNotaryApiState {
             self_attestation,
             Arc::new(Oid4vciConfig::default()),
             audit_hasher,
-            source,
             store,
             issuers,
         )
@@ -201,7 +192,6 @@ impl RegistryNotaryApiState {
         self_attestation: Arc<SelfAttestationConfig>,
         oid4vci: Arc<Oid4vciConfig>,
         audit_hasher: AuditKeyHasher,
-        source: Arc<dyn SourceReader>,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
     ) -> Self {
@@ -215,7 +205,6 @@ impl RegistryNotaryApiState {
             ReplayStores::memory(),
             CredentialStatusStore::disabled(),
             Arc::new(AppMetrics::default()),
-            source,
             store,
             issuers,
             SignerReadiness::default(),
@@ -233,7 +222,6 @@ impl RegistryNotaryApiState {
         replay: ReplayStores,
         credential_status: CredentialStatusStore,
         metrics: Arc<AppMetrics>,
-        source: Arc<dyn SourceReader>,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
         federation_signing_provider: Option<Arc<dyn SigningProvider>>,
@@ -266,7 +254,6 @@ impl RegistryNotaryApiState {
             replay,
             credential_status,
             metrics,
-            source,
             store,
             issuers,
             SignerReadiness::default(),
@@ -284,7 +271,6 @@ impl RegistryNotaryApiState {
         replay: ReplayStores,
         credential_status: CredentialStatusStore,
         metrics: Arc<AppMetrics>,
-        source: Arc<dyn SourceReader>,
         store: Arc<EvidenceStore>,
         issuers: Arc<dyn EvidenceIssuerResolver>,
         signer_readiness: SignerReadiness,
@@ -317,7 +303,6 @@ impl RegistryNotaryApiState {
             credential_status,
             status_list_jwt_cache: Arc::new(StatusListJwtCache::default()),
             metrics,
-            source,
             activated_relay: Arc::new(OnceLock::new()),
             relay_readiness: Arc::new(tokio::sync::Mutex::new(RelayReadinessCache::default())),
             store,
@@ -486,7 +471,7 @@ impl RegistryNotaryApiState {
 
     #[cfg(feature = "registry-notary-cel")]
     #[must_use]
-    pub(crate) fn with_cel_worker(mut self, cel_worker: Option<Arc<CelWorker>>) -> Self {
+    pub fn with_cel_worker(mut self, cel_worker: Option<Arc<CelWorker>>) -> Self {
         self.cel_worker = cel_worker;
         self
     }

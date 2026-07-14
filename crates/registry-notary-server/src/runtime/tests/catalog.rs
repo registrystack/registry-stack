@@ -62,49 +62,26 @@
     }
 
     #[test]
-    fn claim_summary_advertises_safe_target_inputs_for_demographic_matching() {
-        let mut claim = test_claim("birth-record-exists", Vec::new(), true);
-        let binding = claim
-            .source_bindings
-            .get_mut("src")
-            .expect("test claim has a source binding");
-        binding.connector = registry_notary_core::SourceConnectorKind::Dci;
-        binding.connection = Some("opencrvs_private_connection".to_string());
-        binding.dataset = "civil_registry".to_string();
-        binding.entity = "birth_registration".to_string();
-        binding.lookup.input = "target.attributes.given_name".to_string();
-        binding.lookup.field = "childFirstNames".to_string();
-        binding.query_fields = vec![
-            registry_notary_core::SourceQueryFieldConfig {
-                input: "target.attributes.given_name".to_string(),
-                field: "childFirstNames".to_string(),
-                op: "eq".to_string(),
+    fn claim_summary_advertises_safe_target_inputs_from_relay_consultation() {
+        let mut claim = registry_claim(
+            "birth-record-exists",
+            RuleConfig::Exists {
+                source: "enrollment".to_string(),
             },
-            registry_notary_core::SourceQueryFieldConfig {
-                input: "target.attributes.family_name".to_string(),
-                field: "childLastName".to_string(),
-                op: "eq".to_string(),
-            },
-            registry_notary_core::SourceQueryFieldConfig {
-                input: "target.attributes.birthdate".to_string(),
-                field: "childDoB".to_string(),
-                op: "eq".to_string(),
-            },
-        ];
-        binding.matching.policy_id = Some("opencrvs-demographic-v1".to_string());
-        binding.matching.method = Some("exact_name_birthdate".to_string());
-        binding.matching.target_type = Some("Person".to_string());
-        binding.matching.confidence = Some("high".to_string());
-        binding.matching.sufficient_target_inputs = vec![vec![
-            "target.attributes.given_name".to_string(),
-            "target.attributes.family_name".to_string(),
-            "target.attributes.birthdate".to_string(),
-        ]];
-        binding.matching.allowed_target_inputs = vec![
-            "target.attributes.given_name".to_string(),
-            "target.attributes.family_name".to_string(),
-            "target.attributes.birthdate".to_string(),
-        ];
+            "boolean",
+        );
+        let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+            panic!("claim is registry-backed")
+        };
+        let consultation = consultations
+            .get_mut("enrollment")
+            .expect("consultation exists");
+        consultation.inputs = BTreeMap::from([(
+            "national_id".to_string(),
+            RelayConsultationInput::TargetIdentifier(
+                "request.target.identifiers.national_id".to_string(),
+            ),
+        )]);
 
         let summary = claim_summary(&claim);
 
@@ -113,72 +90,11 @@
             .expect("target inputs are advertised");
         assert_eq!(target_inputs.len(), 1);
         let method = &target_inputs[0];
-        assert_eq!(method["policy_id"], "opencrvs-demographic-v1");
-        assert_eq!(method["method"], "exact_name_birthdate");
-        assert_eq!(method["target_type"], "Person");
-        assert_eq!(method["confidence"], "high");
+        assert_eq!(method["method"], "relay_consultation");
+        assert_eq!(method["target_type"], "person");
+        assert_eq!(method["confidence"], "contract_pinned");
         assert_eq!(
             method["groups"][0]["inputs"],
-            json!([
-                {
-                    "path": "target.attributes.given_name",
-                    "kind": "attribute",
-                    "name": "given_name",
-                    "label": "Given name",
-                },
-                {
-                    "path": "target.attributes.family_name",
-                    "kind": "attribute",
-                    "name": "family_name",
-                    "label": "Family name",
-                },
-                {
-                    "path": "target.attributes.birthdate",
-                    "kind": "attribute",
-                    "name": "birthdate",
-                    "label": "Birthdate",
-                }
-            ])
-        );
-        let discovery_text = serde_json::to_string(&summary).expect("summary serializes");
-        for private_detail in [
-            "opencrvs_private_connection",
-            "civil_registry",
-            "birth_registration",
-            "childFirstNames",
-            "childLastName",
-            "childDoB",
-        ] {
-            assert!(
-                !discovery_text.contains(private_detail),
-                "claim discovery leaked {private_detail}"
-            );
-        }
-    }
-
-    #[test]
-    fn claim_summary_advertises_alternate_identifier_and_attribute_input_groups() {
-        let mut claim = test_claim("person-is-alive", Vec::new(), true);
-        let binding = claim
-            .source_bindings
-            .get_mut("src")
-            .expect("test claim has a source binding");
-        binding.matching.policy_id = Some("civil-person-match-v1".to_string());
-        binding.matching.method = Some("identifier_or_demographic".to_string());
-        binding.matching.target_type = Some("Person".to_string());
-        binding.matching.sufficient_target_inputs = vec![
-            vec!["target.identifiers.national_id".to_string()],
-            vec![
-                "target.attributes.given_name".to_string(),
-                "target.attributes.family_name".to_string(),
-                "target.attributes.birthdate".to_string(),
-            ],
-        ];
-
-        let summary = claim_summary(&claim);
-
-        assert_eq!(
-            summary["target_inputs"][0]["groups"][0]["inputs"],
             json!([
                 {
                     "path": "target.identifiers.national_id",
@@ -188,29 +104,11 @@
                 }
             ])
         );
-        assert_eq!(
-            summary["target_inputs"][0]["groups"][1]["inputs"][0],
-            json!({
-                "path": "target.attributes.given_name",
-                "kind": "attribute",
-                "name": "given_name",
-                "label": "Given name",
-            })
-        );
     }
 
     #[test]
-    fn claim_summary_does_not_publish_partial_target_input_groups() {
-        let mut claim = test_claim("person-is-alive", Vec::new(), true);
-        let binding = claim
-            .source_bindings
-            .get_mut("src")
-            .expect("test claim has a source binding");
-        binding.matching.policy_id = Some("mixed-unsupported-v1".to_string());
-        binding.matching.sufficient_target_inputs = vec![vec![
-            "target.attributes.given_name".to_string(),
-            "requester.attributes.case_id".to_string(),
-        ]];
+    fn claim_summary_omits_target_inputs_without_relay_consultation() {
+        let claim = test_claim("date-of-birth", Vec::new(), false);
 
         let summary = claim_summary(&claim);
 
@@ -218,16 +116,7 @@
     }
 
     #[test]
-    fn claim_summary_omits_target_inputs_without_configured_matching_policy() {
-        let claim = test_claim("date-of-birth", Vec::new(), true);
-
-        let summary = claim_summary(&claim);
-
-        assert!(summary.get("target_inputs").is_none());
-    }
-
-    #[test]
-    fn self_attestation_source_capability_uses_keyed_subject_binding_hash() {
+    fn self_attestation_evaluation_capability_uses_keyed_subject_binding_hash() {
         const ENV: &str = "TEST_RUNTIME_AUDIT_HASH_SECRET";
         std::env::set_var(ENV, "0123456789abcdef0123456789abcdef");
         let keys = SelfAttestationRateLimitKeys::new(
@@ -245,9 +134,9 @@
         );
 
         let capability =
-            source_capability_for_principal(&keys, &principal, &["selected".to_string()])
-                .expect("source capability builds");
-        let SourceCapability::SelfAttestation {
+            evaluation_capability_for_principal(&keys, &principal, &["selected".to_string()])
+                .expect("evaluation capability builds");
+        let EvaluationCapability::SelfAttestation {
             subject_binding_hash,
             ..
         } = capability
@@ -394,20 +283,6 @@
         );
         assert_eq!(summary["semantics"]["value_mapping"], json!("publicschema"));
 
-        let mut field_claim = test_claim("field-semantic", Vec::new(), true);
-        field_claim
-            .source_bindings
-            .get_mut("src")
-            .expect("source binding exists")
-            .fields
-            .get_mut("value")
-            .expect("source field exists")
-            .semantic_term = Some("https://publicschema.org/is_enrolled".to_string());
-        let summary = claim_summary(&field_claim);
-        assert_eq!(
-            summary["semantics"]["property"],
-            json!("https://publicschema.org/is_enrolled")
-        );
     }
 
     #[test]

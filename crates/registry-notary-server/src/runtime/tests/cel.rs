@@ -61,8 +61,7 @@ fn cel_root_bindings_redact_dependent_object_claim_values() {
 }
 
 #[tokio::test]
-async fn self_attestation_batch_is_denied_before_source_reads() {
-    let source = Arc::new(CountingSource::default());
+async fn self_attestation_batch_is_denied_before_evaluation() {
     let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
     let store = EvidenceStore::default();
     let request = BatchEvaluateRequest {
@@ -82,7 +81,6 @@ async fn self_attestation_batch_is_denied_before_source_reads() {
     let err = RegistryNotaryRuntime::new()
         .batch_evaluate(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &store,
             &self_attestation_principal(),
             request,
@@ -97,7 +95,6 @@ async fn self_attestation_batch_is_denied_before_source_reads() {
             reason: SelfAttestationDenialCode::BatchDenied
         }
     ));
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[cfg(feature = "registry-notary-cel")]
@@ -163,86 +160,6 @@ fn cel_policy_validation_rejects_invalid_alias_and_unlisted_dependency() {
         ),
         Err(EvidenceError::InvalidRequest)
     ));
-}
-
-#[cfg(feature = "registry-notary-cel")]
-#[test]
-fn cel_startup_validation_accepts_date_source_field_dummy_values() {
-    let mut source_binding = test_source_binding();
-    source_binding.fields.insert(
-        "birth_date".to_string(),
-        registry_notary_core::SourceFieldConfig {
-            field: "birth_date".to_string(),
-            field_type: Some("date".to_string()),
-            unit: None,
-            required: true,
-            semantic_term: None,
-        },
-    );
-
-    let mut claim = test_claim("age-band", Vec::new(), false);
-    claim.source_bindings = BTreeMap::from([("civil".to_string(), source_binding)]);
-    claim.rule = RuleConfig::Cel {
-        expression: "date.age_on(source.civil.birth_date, ctx.today) >= 18".to_string(),
-        bindings: CelBindingsConfig {
-            claims: BTreeMap::new(),
-            vars: BTreeMap::new(),
-        },
-    };
-    let evidence = EvidenceConfig {
-        enabled: true,
-        service_id: "runtime.test".to_string(),
-        claims: vec![claim],
-        ..EvidenceConfig::default()
-    };
-
-    validate_cel_claims_for_startup(&evidence, &RegistryNotaryCelConfig::default())
-        .expect("date-typed CEL bindings should preflight with valid dummy dates");
-}
-
-#[cfg(feature = "registry-notary-cel")]
-#[test]
-fn cel_startup_validation_accepts_numeric_source_field_aliases() {
-    let mut source_binding = test_source_binding();
-    source_binding.fields.insert(
-        "farm_area".to_string(),
-        registry_notary_core::SourceFieldConfig {
-            field: "farm_area".to_string(),
-            field_type: Some("float".to_string()),
-            unit: None,
-            required: true,
-            semantic_term: None,
-        },
-    );
-    source_binding.fields.insert(
-        "risk_score".to_string(),
-        registry_notary_core::SourceFieldConfig {
-            field: "risk_score".to_string(),
-            field_type: Some("double".to_string()),
-            unit: None,
-            required: true,
-            semantic_term: None,
-        },
-    );
-
-    let mut claim = test_claim("small-farm-low-risk", Vec::new(), false);
-    claim.source_bindings = BTreeMap::from([("farm".to_string(), source_binding)]);
-    claim.rule = RuleConfig::Cel {
-        expression: "source.farm.farm_area < 4.0 && source.farm.risk_score <= 1.0".to_string(),
-        bindings: CelBindingsConfig {
-            claims: BTreeMap::new(),
-            vars: BTreeMap::new(),
-        },
-    };
-    let evidence = EvidenceConfig {
-        enabled: true,
-        service_id: "runtime.test".to_string(),
-        claims: vec![claim],
-        ..EvidenceConfig::default()
-    };
-
-    validate_cel_claims_for_startup(&evidence, &RegistryNotaryCelConfig::default())
-        .expect("numeric CEL source field aliases should preflight as numbers");
 }
 
 #[cfg(feature = "registry-notary-cel")]

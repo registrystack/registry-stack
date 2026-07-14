@@ -2,9 +2,7 @@
 
 use super::*;
 
-pub(super) fn principal_can_see_claim<R: SourceReader + ?Sized>(
-    evidence: &EvidenceConfig,
-    source: &R,
+pub(super) fn principal_can_see_claim(
     principal: &EvidencePrincipal,
     claim: &ClaimDefinition,
 ) -> bool {
@@ -12,14 +10,9 @@ pub(super) fn principal_can_see_claim<R: SourceReader + ?Sized>(
         .required_scopes
         .iter()
         .all(|scope| principal.has_scope(scope))
-        && source
-            .required_scopes_for_claim(evidence, claim)
-            .is_ok_and(|scopes| scopes.iter().all(|scope| principal.has_scope(scope)))
 }
 
-pub(super) fn require_claim_access<R: SourceReader + ?Sized>(
-    evidence: &EvidenceConfig,
-    source: &R,
+pub(super) fn require_claim_access(
     principal: &EvidencePrincipal,
     claim: &ClaimDefinition,
 ) -> Result<(), EvidenceError> {
@@ -30,24 +23,16 @@ pub(super) fn require_claim_access<R: SourceReader + ?Sized>(
             });
         }
     }
-    if principal.is_self_attestation() {
-        return Ok(());
-    }
-    for scope in source.required_scopes_for_claim(evidence, claim)? {
-        if !principal.has_scope(&scope) {
-            return Err(EvidenceError::ScopeDenied { required: scope });
-        }
-    }
     Ok(())
 }
 
-pub(super) fn source_capability_for_principal(
+pub(super) fn evaluation_capability_for_principal(
     self_attestation_rate_keys: &SelfAttestationRateLimitKeys,
     principal: &EvidencePrincipal,
     requested_claims: &[String],
-) -> Result<SourceCapability, EvidenceError> {
+) -> Result<EvaluationCapability, EvidenceError> {
     match principal.access_mode() {
-        AccessMode::MachineClient => Ok(SourceCapability::Machine {
+        AccessMode::MachineClient => Ok(EvaluationCapability::Machine {
             scopes: principal.scopes.iter().cloned().collect(),
         }),
         AccessMode::SelfAttestation => {
@@ -83,7 +68,7 @@ pub(super) fn source_capability_for_principal(
             let subject_binding_hash = self_attestation_rate_keys
                 .subject_binding(subject_binding_value.as_str())
                 .map_err(|error| error.evidence_error())?;
-            Ok(SourceCapability::SelfAttestation {
+            Ok(EvaluationCapability::SelfAttestation {
                 claim_id,
                 allowed_claim_ids,
                 subject_binding_hash,
@@ -94,9 +79,9 @@ pub(super) fn source_capability_for_principal(
     }
 }
 
-pub(super) fn ensure_source_capability_matches_principal(
+pub(super) fn ensure_evaluation_capability_matches_principal(
     principal: &EvidencePrincipal,
-    capability: &SourceCapability,
+    capability: &EvaluationCapability,
 ) -> Result<(), EvidenceError> {
     match (principal.access_mode(), capability.access_mode()) {
         (AccessMode::MachineClient, AccessMode::MachineClient)
@@ -114,56 +99,42 @@ pub(super) fn ensure_source_capability_matches_principal(
     }
 }
 
-pub(super) fn require_source_read_capability(
-    capability: &SourceCapability,
+pub(super) fn require_evaluation_capability(
+    capability: &EvaluationCapability,
     claim_id: &str,
 ) -> Result<(), EvidenceError> {
     match capability {
-        SourceCapability::Machine { .. } => Ok(()),
-        SourceCapability::SelfAttestation { .. }
+        EvaluationCapability::Machine { .. } => Ok(()),
+        EvaluationCapability::SelfAttestation { .. }
             if capability.allows_self_attestation_claim(claim_id) =>
         {
             Ok(())
         }
-        SourceCapability::DelegatedAttestation { .. }
+        EvaluationCapability::DelegatedAttestation { .. }
             if capability.allows_delegated_claim(claim_id) =>
         {
             Ok(())
         }
-        SourceCapability::SelfAttestation { .. } => Err(EvidenceError::SelfAttestationDenied {
+        EvaluationCapability::SelfAttestation { .. } => Err(EvidenceError::SelfAttestationDenied {
             reason: SelfAttestationDenialCode::ClaimDenied,
         }),
-        SourceCapability::DelegatedAttestation { .. } => Err(delegated_attestation_denied()),
-    }
-}
-
-pub(super) fn require_machine_source_capability(
-    capability: &SourceCapability,
-) -> Result<(), EvidenceError> {
-    match capability {
-        SourceCapability::Machine { .. } => Ok(()),
-        SourceCapability::SelfAttestation { .. }
-        | SourceCapability::DelegatedAttestation { .. } => {
-            Err(EvidenceError::SelfAttestationDenied {
-                reason: SelfAttestationDenialCode::OperationDenied,
-            })
-        }
+        EvaluationCapability::DelegatedAttestation { .. } => Err(delegated_attestation_denied()),
     }
 }
 
 pub(super) fn require_relay_consultation_capability(
-    capability: &SourceCapability,
+    capability: &EvaluationCapability,
     claim_id: &str,
 ) -> Result<(), EvidenceError> {
     match capability {
-        SourceCapability::Machine { .. } => Ok(()),
-        SourceCapability::DelegatedAttestation { .. }
+        EvaluationCapability::Machine { .. } => Ok(()),
+        EvaluationCapability::DelegatedAttestation { .. }
             if capability.is_delegated_proof_claim(claim_id) =>
         {
             Ok(())
         }
-        SourceCapability::DelegatedAttestation { .. } => Err(delegated_attestation_denied()),
-        SourceCapability::SelfAttestation { .. } => Err(EvidenceError::SelfAttestationDenied {
+        EvaluationCapability::DelegatedAttestation { .. } => Err(delegated_attestation_denied()),
+        EvaluationCapability::SelfAttestation { .. } => Err(EvidenceError::SelfAttestationDenied {
             reason: SelfAttestationDenialCode::OperationDenied,
         }),
     }
@@ -190,11 +161,11 @@ pub(super) fn delegated_proof_denied() -> EvidenceError {
 pub(super) fn ensure_delegated_capability_context_binding(
     ctx: &ClaimEvaluationContext,
 ) -> Result<(), EvidenceError> {
-    let SourceCapability::DelegatedAttestation {
+    let EvaluationCapability::DelegatedAttestation {
         requester_subject_binding_hash,
         dependent_target_hash,
         ..
-    } = &ctx.source_capability
+    } = &ctx.evaluation_capability
     else {
         return Ok(());
     };
@@ -288,7 +259,7 @@ pub(super) fn validate_batch_inputs_and_collect_purposes<'a>(
     let mut unique_purposes = BTreeSet::new();
     for (item, purpose) in subjects.iter().zip(subject_purposes) {
         if !item.target.has_matching_input() {
-            return Err(EvidenceError::TargetAttributesInsufficient);
+            return Err(EvidenceError::InvalidRequest);
         }
         unique_purposes.insert(purpose.as_str());
     }
@@ -303,9 +274,6 @@ pub(super) fn require_purpose_allowed(
 ) -> Result<(), EvidenceError> {
     for claim_ref in claims {
         let claim = find_claim_for_selection(config, claim_ref, claim_versions)?;
-        if !claim.source_bindings.is_empty() {
-            continue;
-        }
         if !config.allowed_purposes.is_empty()
             && !config
                 .allowed_purposes
@@ -323,24 +291,6 @@ pub(super) fn require_purpose_allowed(
         }
     }
     Ok(())
-}
-
-pub(super) fn claim_purpose_constraints(
-    evidence: &EvidenceConfig,
-    claim: &ClaimDefinition,
-) -> PurposeConstraints {
-    let mut constraints = Vec::new();
-    if !evidence.allowed_purposes.is_empty() {
-        constraints.push(evidence.allowed_purposes.clone());
-    }
-    if let Some(purpose) = claim
-        .purpose
-        .as_deref()
-        .filter(|purpose| !purpose.is_empty())
-    {
-        constraints.push(vec![purpose.to_string()]);
-    }
-    constraints
 }
 
 pub(super) fn require_claim_format(
@@ -422,162 +372,4 @@ pub(super) fn max_batch_subjects(
         max = max.min(claim.operations.batch_evaluate.max_subjects);
     }
     Ok(max)
-}
-
-pub(super) struct SourceScopedTrustedPolicyRequest<'a> {
-    pub(super) evidence: &'a EvidenceConfig,
-    pub(super) claim: &'a ClaimDefinition,
-    pub(super) source_capability: &'a SourceCapability,
-    pub(super) context: &'a EvidenceRequestContext,
-    pub(super) trusted_policy: &'a TrustedPolicyContext,
-    pub(super) purpose: &'a str,
-    pub(super) disclosure: DisclosureProfile,
-    pub(super) format: &'a str,
-}
-
-pub(super) fn source_scoped_trusted_policy(
-    request: SourceScopedTrustedPolicyRequest<'_>,
-) -> Result<TrustedPolicyContext, EvidenceError> {
-    if !claim_source_policy_uses_authorization_details(request.claim) {
-        return Ok(request.trusted_policy.clone());
-    }
-    let Some(details) = request.trusted_policy.authorization_details.as_ref() else {
-        return Ok(request.trusted_policy.clone());
-    };
-    if !crate::authz_details::has_transaction_scope(details) {
-        return Ok(request.trusted_policy.clone());
-    }
-    let expected_claims = [ClaimRef::with_version(
-        &request.claim.id,
-        &request.claim.version,
-    )];
-    let subject = source_authorization_subject_expectation(
-        request.trusted_policy,
-        request.context,
-        request.source_capability,
-    )?;
-    let target =
-        source_authorization_target_expectation(request.context, request.source_capability)?;
-    crate::authz_details::validate_scoped_authorization_details(
-        details,
-        &crate::authz_details::ScopedAuthorizationRequest {
-            service_id: &request.evidence.service_id,
-            action: "evaluate",
-            claims: &expected_claims,
-            disclosure: request.disclosure.as_str(),
-            format: request.format,
-            purpose: request.purpose,
-            access_mode: trusted_policy_access_mode(
-                request.trusted_policy,
-                request.source_capability,
-            ),
-            subject,
-            target,
-            allow_subset_claims: true,
-            allowed_claims: Some(&request.trusted_policy.request_claims),
-        },
-    )
-    .map_err(|_| EvidenceError::TargetMatchingPolicyRejected)?;
-    Ok(request.trusted_policy.clone())
-}
-
-pub(super) fn claim_source_policy_uses_authorization_details(claim: &ClaimDefinition) -> bool {
-    claim
-        .source_bindings
-        .values()
-        .any(binding_policy_uses_authorization_details)
-}
-
-pub(super) fn binding_policy_uses_authorization_details(
-    binding: &registry_notary_core::SourceBindingConfig,
-) -> bool {
-    let matching = &binding.matching;
-    !matching.allowed_assurance.is_empty()
-        || matching.minimum_assurance.is_some()
-        || !matching.permitted_jurisdictions.is_empty()
-        || matching.require_legal_basis
-        || matching.require_consent
-        || !matching.allowed_legal_basis_refs.is_empty()
-        || !matching.allowed_consent_refs.is_empty()
-}
-
-pub(super) fn source_authorization_subject_expectation(
-    trusted_policy: &TrustedPolicyContext,
-    context: &EvidenceRequestContext,
-    source_capability: &SourceCapability,
-) -> Result<Option<crate::authz_details::ScopedAuthorizationSubject>, EvidenceError> {
-    let (Some(binding_claim), Some(binding_value)) = (
-        trusted_policy.subject_binding_claim.as_deref(),
-        trusted_policy.subject_binding_value.as_deref(),
-    ) else {
-        return Ok(None);
-    };
-    let expected_subject = if matches!(
-        source_capability.access_mode(),
-        AccessMode::DelegatedAttestation
-    ) {
-        context
-            .requester
-            .as_ref()
-            .and_then(EvidenceEntity::to_subject_request)
-            .ok_or(EvidenceError::TargetMatchingPolicyRejected)?
-    } else {
-        context
-            .target_subject()
-            .ok_or(EvidenceError::TargetMatchingPolicyRejected)?
-    };
-    if expected_subject.id != binding_value {
-        return Err(EvidenceError::TargetMatchingPolicyRejected);
-    }
-    let id_type = expected_subject
-        .id_type
-        .as_deref()
-        .ok_or(EvidenceError::TargetMatchingPolicyRejected)?;
-    Ok(Some(crate::authz_details::ScopedAuthorizationSubject {
-        binding_claim: binding_claim.to_string(),
-        id_type: id_type.to_string(),
-    }))
-}
-
-pub(super) fn source_authorization_target_expectation(
-    context: &EvidenceRequestContext,
-    source_capability: &SourceCapability,
-) -> Result<Option<crate::authz_details::ScopedAuthorizationTarget>, EvidenceError> {
-    if !matches!(
-        source_capability.access_mode(),
-        AccessMode::DelegatedAttestation
-    ) {
-        return Ok(None);
-    }
-    let target_subject = context
-        .target_subject()
-        .ok_or(EvidenceError::TargetMatchingPolicyRejected)?;
-    let id_type = target_subject
-        .id_type
-        .as_deref()
-        .ok_or(EvidenceError::TargetMatchingPolicyRejected)?;
-    if target_subject.id.trim().is_empty() {
-        return Err(EvidenceError::TargetMatchingPolicyRejected);
-    }
-    Ok(Some(crate::authz_details::ScopedAuthorizationTarget {
-        id_type: id_type.to_string(),
-        id: target_subject.id,
-    }))
-}
-
-pub(super) fn trusted_policy_access_mode(
-    trusted_policy: &TrustedPolicyContext,
-    source_capability: &SourceCapability,
-) -> AccessMode {
-    if matches!(
-        source_capability.access_mode(),
-        AccessMode::DelegatedAttestation
-    ) {
-        return AccessMode::DelegatedAttestation;
-    }
-    if trusted_policy.subject_binding_claim.is_some() {
-        AccessMode::SelfAttestation
-    } else {
-        AccessMode::MachineClient
-    }
 }

@@ -1,13 +1,16 @@
 # registry-notary-server
 
-Standalone Registry Notary runtime, API routes, auth, audit, source connectors,
-renderers, and credential issuance wiring.
+Standalone Registry Notary runtime, API routes, auth, audit, Relay
+consultations, renderers, and credential issuance wiring.
 
 ## What It Provides
 
 - Axum routers for the Registry Notary API.
-- Runtime claim evaluation with dependency ordering and batch memoization.
-- HTTP Registry Data API and DCI source connectors.
+- Runtime claim evaluation with dependency ordering and request-scoped Relay
+  consultation coalescing.
+- Hash-pinned, semantically verified Relay consultations for registry-backed
+  evidence.
+- Source-free self-attested evidence and delegated evaluation.
 - API-key and bearer-token auth through `registry-platform` primitives.
 - Redacted audit event emission.
 - JSON, SD-JWT VC, and credential response renderers.
@@ -212,8 +215,9 @@ this host. Evidence-grade deployments refuse to start when the audit sink is
   peers.
 - The default replay store is `in_memory`; active-active deployments need the
   Redis replay backend before privileged federation traffic is enabled.
-- Source connectors send explicit purpose headers and use configured source
-  tokens.
+- Registry-backed evaluation is available only through an authenticated,
+  purpose-bound Relay consultation whose public contract is verified before
+  readiness succeeds.
 - Redis durability for replay protection is provided by `registry-platform-replay`
   and selected through the Notary replay configuration.
 

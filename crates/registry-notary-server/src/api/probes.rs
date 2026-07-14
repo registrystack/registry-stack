@@ -54,14 +54,6 @@ pub(super) async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>)
         let mut ok = usize::from(base_ready) + signer_ok + relay_ok;
         let mut failed = usize::from(!base_ready && !base_degraded) + signer_failed + relay_failed;
         if let Some(Extension(state)) = state.as_ref() {
-            if state.source.has_readiness_check() {
-                total += 1;
-                if state.source.check_ready().await {
-                    ok += 1;
-                } else {
-                    failed += 1;
-                }
-            }
             if let Some(cel_worker) = &state.cel_worker {
                 total += 1;
                 if cel_worker.check_ready().await {
@@ -89,15 +81,7 @@ pub(super) async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>)
         let mut total = 1 + signer_total + relay_total;
         let mut ok = usize::from(base_ready) + signer_ok + relay_ok;
         let mut failed = usize::from(!base_ready && !base_degraded) + signer_failed + relay_failed;
-        if let Some(Extension(state)) = state.as_ref() {
-            if state.source.has_readiness_check() {
-                total += 1;
-                if state.source.check_ready().await {
-                    ok += 1;
-                } else {
-                    failed += 1;
-                }
-            }
+        if state.is_some() {
             if let Some(gates) = current_deployment_gates
                 .as_ref()
                 .filter(|gates| gates.is_bound())

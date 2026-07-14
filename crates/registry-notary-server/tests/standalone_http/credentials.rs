@@ -4,13 +4,11 @@ use super::support::*;
 #[allow(unused_imports)]
 use super::{
     admin::*, audit::*, auth::*, federation::*, http_contracts::*, oid4vci::*, preauth::*,
-    sources::*,
 };
 
 #[tokio::test]
 pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_redacted() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
@@ -243,7 +241,6 @@ pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_red
             "unsupported-idempotency-key",
             "person-1",
             "citizen-subject",
-            "source-token",
         ],
     );
 
@@ -254,24 +251,13 @@ pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_red
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credentials_issue_creates_retrievable_status_record() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(self_attestation_registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let mut config = self_attestation_oidc_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
@@ -382,34 +368,13 @@ pub(super) async fn direct_credentials_issue_creates_retrievable_status_record()
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_denial_code() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
-    let source_hits = Arc::new(AtomicUsize::new(0));
-    let source_hits_for_route = Arc::clone(&source_hits);
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(
-                move |headers: HeaderMap, query: Query<BTreeMap<String, String>>| {
-                    let source_hits = Arc::clone(&source_hits_for_route);
-                    async move {
-                        source_hits.fetch_add(1, Ordering::SeqCst);
-                        self_attestation_registry_data_api(headers, query).await
-                    }
-                },
-            ),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let mut config = self_attestation_oidc_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
@@ -455,7 +420,6 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
         .as_str()
         .expect("evaluation id returned")
         .to_string();
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
     let holder_id = holder_did_jwk();
     let proof = sign_direct_holder_proof(&holder_id, &evaluation_id, "operation-denied-jti-1");
 
@@ -493,11 +457,6 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
     ] {
         assert!(body.get(field).is_none(), "denial has no {field}");
     }
-    assert_eq!(
-        source_hits.load(Ordering::SeqCst),
-        0,
-        "credential denial does not read the source again"
-    );
 
     let records = audit_records_from_envelopes(&audit_path);
     let denied = audit_record_with(
@@ -540,7 +499,6 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
             "operation-denied-jti-1",
             "person-1",
             "citizen-subject",
-            "source-token",
         ],
     );
 
@@ -551,34 +509,13 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
-    let source_hits = Arc::new(AtomicUsize::new(0));
-    let source_hits_for_route = Arc::clone(&source_hits);
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(
-                move |headers: HeaderMap, query: Query<BTreeMap<String, String>>| {
-                    let source_hits = Arc::clone(&source_hits_for_route);
-                    async move {
-                        source_hits.fetch_add(1, Ordering::SeqCst);
-                        self_attestation_registry_data_api(headers, query).await
-                    }
-                },
-            ),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let mut config = self_attestation_oidc_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
@@ -640,7 +577,6 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
         .as_str()
         .expect("evaluation id returned")
         .to_string();
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
     let holder_id = holder_did_jwk();
     let first_proof = sign_direct_holder_proof(&holder_id, &evaluation_id, "rate-limit-first-jti");
     let second_proof =
@@ -694,7 +630,6 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
     );
     assert_eq!(assurance_denied["source_read_count"], json!(0));
     assert_eq!(assurance_denied["forwarded"], json!(false));
-    assert_eq!(source_hits.load(Ordering::SeqCst), 0);
     assert!(!records.iter().any(|record| {
         record["path"] == json!("/v1/credentials")
             && record["decision"] == json!("credential_issued")
@@ -764,11 +699,6 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
             "rate limit has no {field}"
         );
     }
-    assert_eq!(
-        source_hits.load(Ordering::SeqCst),
-        0,
-        "credential requests do not read the source again"
-    );
 
     let records = audit_records_from_envelopes(&audit_path);
     let denied = audit_record_with(
@@ -831,7 +761,6 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
             "rate-limit-second-jti",
             "person-1",
             "citizen-subject",
-            "source-token",
         ],
     );
 
@@ -842,24 +771,13 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacted() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(self_attestation_registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let mut config = self_attestation_oidc_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
@@ -1000,7 +918,6 @@ pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacte
             "direct-replay-jti-1",
             "person-1",
             "citizen-subject",
-            "source-token",
         ],
     );
 
@@ -1011,24 +928,13 @@ pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacte
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(self_attestation_registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let mut config = self_attestation_oidc_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
@@ -1144,7 +1050,6 @@ pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_bound
             &proof,
             "person-1",
             "citizen-subject",
-            "source-token",
             "issuer_signed_jwt",
             "disclosures",
         ],
@@ -1161,24 +1066,13 @@ pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_bound
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_redacted() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(self_attestation_registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let mut config = self_attestation_oidc_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
@@ -1282,7 +1176,6 @@ pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_red
             &authorization,
             "person-1",
             "citizen-subject",
-            "source-token",
             "issuer_signed_jwt",
             "disclosures",
         ],
@@ -1299,24 +1192,13 @@ pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_red
 #[cfg(feature = "registry-notary-cel")]
 pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(self_attestation_registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("HTTP transport exposes upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let mut config = self_attestation_oidc_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
@@ -1484,7 +1366,6 @@ pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted()
             &authorization,
             "person-1",
             "citizen-subject",
-            "source-token",
             "issuer_signed_jwt",
             "disclosures",
         ],
@@ -1500,7 +1381,6 @@ pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted()
 #[tokio::test]
 pub(super) async fn self_attestation_subject_mismatch_audit_names_token_claim_not_value() {
     set_audit_secret();
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
 
     let idp = MockIdp::start().await;

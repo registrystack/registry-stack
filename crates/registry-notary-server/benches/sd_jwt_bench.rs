@@ -17,7 +17,7 @@ use registry_notary_core::config::{
     CredentialDisclosureConfig, CredentialProfileConfig, HolderBindingConfig,
 };
 use registry_notary_core::model::{
-    ClaimProvenance, ClaimResultView, EvidenceEntityRef, MatchingMetadata, TargetRefView,
+    ClaimProvenance, ClaimResultView, EvidenceEntityRef, TargetRefView,
 };
 use registry_notary_core::sd_jwt::{issue, EvidenceIssuer, IssueOptions};
 use time::OffsetDateTime;
@@ -69,18 +69,6 @@ fn claim_result(claim_id: &str, value: serde_json::Value) -> ClaimResultView {
             identifier_schemes: vec!["farmer_id".to_string()],
             profile: Some("smallholder".to_string()),
         },
-        matching: Some(MatchingMetadata {
-            policy_id: "farmer-id-exact-v1".to_string(),
-            method: "identifier_exact".to_string(),
-            confidence: "high".to_string(),
-            score: Some(1.0),
-            policy_hash: None,
-            evaluated_rule_ids: Vec::new(),
-            ecosystem_binding_id: None,
-            ecosystem_binding_version: None,
-            pack_id: None,
-            pack_version: None,
-        }),
         value: Some(value),
         satisfied: Some(true),
         disclosure: "value".to_string(),
@@ -96,7 +84,6 @@ fn claim_result(claim_id: &str, value: serde_json::Value) -> ClaimResultView {
             registry_notary_core::ProvenanceUsed {
                 source_count: 1,
                 source_versions: BTreeMap::new(),
-                source_runtimes: Vec::new(),
             },
         ),
     }

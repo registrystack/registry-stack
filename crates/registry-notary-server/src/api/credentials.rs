@@ -83,9 +83,7 @@ pub(super) async fn issue_credential(
             None,
         );
     }
-    if let Err(error) =
-        require_evaluation_access(evidence, state.source.as_ref(), &principal, &evaluation)
-    {
+    if let Err(error) = require_evaluation_access(evidence, &principal, &evaluation) {
         return credential_denial_response_for_evaluation(
             &state,
             error,

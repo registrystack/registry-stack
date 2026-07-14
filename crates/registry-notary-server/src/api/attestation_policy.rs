@@ -5,7 +5,7 @@ use super::*;
 
 #[derive(Debug)]
 pub(super) struct SelfAttestationEvaluateContext {
-    pub(super) source_capability: SourceCapability,
+    pub(super) evaluation_capability: EvaluationCapability,
     pub(super) metadata: StoredSelfAttestationMetadata,
     pub(super) purpose: String,
 }
@@ -754,7 +754,7 @@ pub(super) fn prepare_self_attestation_evaluate(
         allowed_claim_ids
             .insert(BoundedClaimId::new(claim_id).map_err(|_| EvidenceError::InvalidRequest)?);
     }
-    let source_capability = SourceCapability::SelfAttestation {
+    let evaluation_capability = EvaluationCapability::SelfAttestation {
         claim_id: if allowed_claim_ids.len() == 1 {
             allowed_claim_ids.iter().next().cloned()
         } else {
@@ -765,7 +765,7 @@ pub(super) fn prepare_self_attestation_evaluate(
     };
 
     Ok(SelfAttestationEvaluateContext {
-        source_capability,
+        evaluation_capability,
         metadata,
         purpose,
     })
@@ -893,7 +893,7 @@ pub(super) fn prepare_delegated_attestation_evaluate(
         policy_hash: Some(policy_hash.clone()),
         evaluation_expires_at: Some(format_time(evaluation_expires_at)),
     };
-    let source_capability = SourceCapability::DelegatedAttestation {
+    let evaluation_capability = EvaluationCapability::DelegatedAttestation {
         proof_claim_id,
         allowed_claim_ids: BTreeSet::from([delegated_claim_id]),
         requester_subject_binding_hash,
@@ -902,7 +902,7 @@ pub(super) fn prepare_delegated_attestation_evaluate(
     };
 
     Ok(SelfAttestationEvaluateContext {
-        source_capability,
+        evaluation_capability,
         metadata,
         purpose,
     })

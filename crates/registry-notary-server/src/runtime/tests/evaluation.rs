@@ -353,7 +353,6 @@ async fn delegated_exact_relay_proof_runs_once_before_the_dependent_claim() {
         delegated_relay_proof_claim(),
         delegated_selected_claim(vec!["guardian-link"]),
     ]);
-    let source = Arc::new(CountingSource::default());
     let keys = Arc::new(SelfAttestationRateLimitKeys::new(
         AuditKeyHasher::unkeyed_dev_only(),
     ));
@@ -366,9 +365,8 @@ async fn delegated_exact_relay_proof_runs_once_before_the_dependent_claim() {
     );
 
     let results = runtime
-        .evaluate_with_source_capability(
+        .evaluate_with_capability(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &delegated_relay_principal(),
             delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
@@ -383,7 +381,6 @@ async fn delegated_exact_relay_proof_runs_once_before_the_dependent_claim() {
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].claim_id, "selected");
     assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -402,7 +399,6 @@ async fn delegated_capability_denies_an_unrelated_registry_backed_dependency_bef
         unrelated,
         delegated_selected_claim(vec!["guardian-link", "unrelated-registry-claim"]),
     ]);
-    let source = Arc::new(CountingSource::default());
     let keys = Arc::new(SelfAttestationRateLimitKeys::new(
         AuditKeyHasher::unkeyed_dev_only(),
     ));
@@ -415,9 +411,8 @@ async fn delegated_capability_denies_an_unrelated_registry_backed_dependency_bef
     );
 
     let error = runtime
-        .evaluate_with_source_capability(
+        .evaluate_with_capability(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &delegated_relay_principal(),
             delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
@@ -436,7 +431,6 @@ async fn delegated_capability_denies_an_unrelated_registry_backed_dependency_bef
         }
     ));
     assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -445,7 +439,6 @@ async fn delegated_proof_claim_scope_denial_makes_zero_relay_calls() {
         delegated_relay_proof_claim(),
         delegated_selected_claim(vec!["guardian-link"]),
     ]);
-    let source = Arc::new(CountingSource::default());
     let keys = Arc::new(SelfAttestationRateLimitKeys::new(
         AuditKeyHasher::unkeyed_dev_only(),
     ));
@@ -458,9 +451,8 @@ async fn delegated_proof_claim_scope_denial_makes_zero_relay_calls() {
     );
 
     let error = runtime
-        .evaluate_with_source_capability(
+        .evaluate_with_capability(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &delegated_principal(),
             delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
@@ -477,7 +469,6 @@ async fn delegated_proof_claim_scope_denial_makes_zero_relay_calls() {
         EvidenceError::ScopeDenied { required } if required == "self_attestation"
     ));
     assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -490,7 +481,6 @@ async fn delegated_requester_or_target_binding_mismatch_makes_zero_relay_calls()
             delegated_relay_proof_claim(),
             delegated_selected_claim(vec!["guardian-link"]),
         ]);
-        let source = Arc::new(CountingSource::default());
         let keys = Arc::new(SelfAttestationRateLimitKeys::new(
             AuditKeyHasher::unkeyed_dev_only(),
         ));
@@ -503,9 +493,8 @@ async fn delegated_requester_or_target_binding_mismatch_makes_zero_relay_calls()
         );
 
         let error = runtime
-            .evaluate_with_source_capability(
+            .evaluate_with_capability(
                 evidence,
-                source.clone() as Arc<dyn SourceReader>,
                 &EvidenceStore::default(),
                 &delegated_relay_principal(),
                 delegated_attestation_capability(&keys, requester, target),
@@ -524,7 +513,6 @@ async fn delegated_requester_or_target_binding_mismatch_makes_zero_relay_calls()
             }
         ));
         assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
-        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
     }
 }
 
@@ -538,7 +526,6 @@ async fn delegated_false_or_no_match_relay_proof_is_relationship_unproven() {
             delegated_relay_proof_claim(),
             delegated_selected_claim(vec!["guardian-link"]),
         ]);
-        let source = Arc::new(CountingSource::default());
         let keys = Arc::new(SelfAttestationRateLimitKeys::new(
             AuditKeyHasher::unkeyed_dev_only(),
         ));
@@ -546,9 +533,8 @@ async fn delegated_false_or_no_match_relay_proof_is_relationship_unproven() {
             delegated_runtime_with_relay(&keys, outcome, proof_value, None, None);
 
         let error = runtime
-            .evaluate_with_source_capability(
+            .evaluate_with_capability(
                 evidence,
-                source.clone() as Arc<dyn SourceReader>,
                 &EvidenceStore::default(),
                 &delegated_relay_principal(),
                 delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
@@ -567,7 +553,6 @@ async fn delegated_false_or_no_match_relay_proof_is_relationship_unproven() {
             }
         ));
         assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
-        assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
     }
 }
 
@@ -577,7 +562,6 @@ async fn delegated_relay_execution_failure_is_proof_denied() {
         delegated_relay_proof_claim(),
         delegated_selected_claim(vec!["guardian-link"]),
     ]);
-    let source = Arc::new(CountingSource::default());
     let keys = Arc::new(SelfAttestationRateLimitKeys::new(
         AuditKeyHasher::unkeyed_dev_only(),
     ));
@@ -590,9 +574,8 @@ async fn delegated_relay_execution_failure_is_proof_denied() {
     );
 
     let error = runtime
-        .evaluate_with_source_capability(
+        .evaluate_with_capability(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &delegated_relay_principal(),
             delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
@@ -611,7 +594,6 @@ async fn delegated_relay_execution_failure_is_proof_denied() {
         }
     ));
     assert_eq!(relay.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -620,7 +602,6 @@ async fn delegated_relay_contract_mismatch_is_proof_denied_before_execution() {
         delegated_relay_proof_claim(),
         delegated_selected_claim(vec!["guardian-link"]),
     ]);
-    let source = Arc::new(CountingSource::default());
     let keys = Arc::new(SelfAttestationRateLimitKeys::new(
         AuditKeyHasher::unkeyed_dev_only(),
     ));
@@ -633,9 +614,8 @@ async fn delegated_relay_contract_mismatch_is_proof_denied_before_execution() {
     );
 
     let error = runtime
-        .evaluate_with_source_capability(
+        .evaluate_with_capability(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &delegated_relay_principal(),
             delegated_attestation_capability(&keys, "NAT-123", "CHILD-123"),
@@ -654,7 +634,6 @@ async fn delegated_relay_contract_mismatch_is_proof_denied_before_execution() {
         }
     ));
     assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[cfg(feature = "registry-notary-cel")]
@@ -681,11 +660,9 @@ async fn audited_registry_evaluation(
     Result<Vec<ClaimResultView>, EvidenceError>,
     EvaluationAuditSnapshot,
     Arc<FixedRelayConsultation>,
-    Arc<CountingSource>,
 ) {
     let mut evidence = (*test_evidence(vec![claim])).clone();
     evidence.allowed_purposes = vec!["test".to_string()];
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(FixedRelayConsultation {
         calls: AtomicU64::new(0),
         outcome,
@@ -697,14 +674,13 @@ async fn audited_registry_evaluation(
     let result = runtime
         .evaluate_for_api(
             Arc::new(evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &principal,
             test_request("enrollment-status"),
             None,
         )
         .await;
-    (result.0, result.1, activated, source)
+    (result.0, result.1, activated)
 }
 
 fn assert_relay_audit(snapshot: EvaluationAuditSnapshot) -> String {
@@ -725,7 +701,7 @@ async fn relay_match_correlation_survives_success_without_public_relay_ids() {
         },
         "string",
     );
-    let (result, audit, activated, source) =
+    let (result, audit, activated) =
         audited_registry_evaluation(claim, RuntimeRelayOutcome::Match).await;
     let results = result.expect("match evaluates");
     let evaluation_id = assert_relay_audit(audit);
@@ -733,14 +709,13 @@ async fn relay_match_correlation_survives_success_without_public_relay_ids() {
     assert_eq!(results[0].evaluation_id, evaluation_id);
     assert_eq!(results[0].value, Some(Value::String("ACTIVE".to_string())));
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
     let public = serde_json::to_string(&results).expect("public results serialize");
     assert!(!public.contains(&Ulid::from_parts(2, 1).to_string()));
 }
 
 #[cfg(feature = "registry-notary-cel")]
 #[tokio::test]
-async fn typed_output_map_is_reused_for_direct_and_date_age_on_claims() {
+async fn typed_output_map_is_reused_for_extract_and_date_age_claims() {
     let date = typed_registry_claim(
         "date-of-birth",
         RuleConfig::Extract {
@@ -766,7 +741,6 @@ async fn typed_output_map_is_reused_for_direct_and_date_age_on_claims() {
             value_type: registry_notary_core::RequestVariableType::Date,
         },
     );
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(TypedOutputRelay {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::Match,
@@ -786,7 +760,6 @@ async fn typed_output_map_is_reused_for_direct_and_date_age_on_claims() {
     let results = runtime
         .evaluate_for_api(
             Arc::new(evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &principal,
             request,
@@ -800,12 +773,11 @@ async fn typed_output_map_is_reused_for_direct_and_date_age_on_claims() {
     assert_eq!(results[0].value, Some(json!("2010-06-15")));
     assert_eq!(results[1].value, Some(json!("child")));
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[cfg(feature = "registry-notary-cel")]
 #[tokio::test]
-async fn missing_declared_cel_variable_is_denied_before_relay_or_source() {
+async fn missing_declared_cel_variable_is_denied_before_relay() {
     let age_band = typed_registry_claim(
             "age-band",
             RuleConfig::Cel {
@@ -823,7 +795,6 @@ async fn missing_declared_cel_variable_is_denied_before_relay_or_source() {
             value_type: registry_notary_core::RequestVariableType::Date,
         },
     );
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(TypedOutputRelay {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::Match,
@@ -836,7 +807,6 @@ async fn missing_declared_cel_variable_is_denied_before_relay_or_source() {
     let (result, audit) = runtime
         .evaluate_for_api(
             Arc::new(evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &principal,
             test_request("age-band"),
@@ -849,7 +819,6 @@ async fn missing_declared_cel_variable_is_denied_before_relay_or_source() {
     assert!(evaluation_id.is_none());
     assert!(consultation_ids.is_empty());
     assert_eq!(activated.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 
     let mut request = test_request("age-band");
     request.variables = registry_notary_core::RequestVariables::try_new(BTreeMap::from([(
@@ -867,7 +836,6 @@ async fn missing_declared_cel_variable_is_denied_before_relay_or_source() {
                 },
                 "boolean",
             )]),
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &principal,
             request,
@@ -879,7 +847,6 @@ async fn missing_declared_cel_variable_is_denied_before_relay_or_source() {
     assert!(evaluation_id.is_none());
     assert!(consultation_ids.is_empty());
     assert_eq!(activated.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[cfg(feature = "registry-notary-cel")]
@@ -925,7 +892,6 @@ async fn no_match_reuses_typed_absence_for_presence_and_nullable_direct_claims()
     );
     let mut evidence = (*test_evidence(vec![exists, date])).clone();
     evidence.allowed_purposes = vec!["test".to_string()];
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(TypedOutputRelay {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::NoMatch,
@@ -940,7 +906,6 @@ async fn no_match_reuses_typed_absence_for_presence_and_nullable_direct_claims()
     let results = runtime
         .evaluate_for_api(
             Arc::new(evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &principal,
             request,
@@ -953,7 +918,6 @@ async fn no_match_reuses_typed_absence_for_presence_and_nullable_direct_claims()
     assert_eq!(results[0].value, Some(json!(false)));
     assert_eq!(results[1].value, Some(Value::Null));
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -1002,14 +966,13 @@ async fn relay_no_match_extract_materializes_explicit_null_with_restricted_corre
         },
         "string",
     );
-    let (result, audit, activated, source) =
+    let (result, audit, activated) =
         audited_registry_evaluation(claim, RuntimeRelayOutcome::NoMatch).await;
 
     let results = result.expect("no-match extraction evaluates to its explicit null view");
     assert_eq!(results[0].value, Some(Value::Null));
     assert_relay_audit(audit);
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1021,14 +984,13 @@ async fn relay_no_match_exists_remains_false_with_restricted_correlation() {
         },
         "boolean",
     );
-    let (result, audit, activated, source) =
+    let (result, audit, activated) =
         audited_registry_evaluation(claim, RuntimeRelayOutcome::NoMatch).await;
     let results = result.expect("no-match existence evaluates to false");
 
     assert_eq!(results[0].value, Some(Value::Bool(false)));
     assert_relay_audit(audit);
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1041,13 +1003,12 @@ async fn relay_ambiguous_failure_retains_restricted_correlation() {
         },
         "string",
     );
-    let (result, audit, activated, source) =
+    let (result, audit, activated) =
         audited_registry_evaluation(claim, RuntimeRelayOutcome::Ambiguous).await;
 
-    assert!(matches!(result, Err(EvidenceError::SourceAmbiguous)));
+    assert!(matches!(result, Err(EvidenceError::EvidenceNotAvailable)));
     assert_relay_audit(audit);
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1059,13 +1020,12 @@ async fn relay_ambiguous_exists_remains_fail_closed() {
         },
         "boolean",
     );
-    let (result, audit, activated, source) =
+    let (result, audit, activated) =
         audited_registry_evaluation(claim, RuntimeRelayOutcome::Ambiguous).await;
 
-    assert!(matches!(result, Err(EvidenceError::SourceAmbiguous)));
+    assert!(matches!(result, Err(EvidenceError::EvidenceNotAvailable)));
     assert_relay_audit(audit);
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1078,17 +1038,16 @@ async fn post_relay_type_failure_retains_restricted_correlation() {
         },
         "boolean",
     );
-    let (result, audit, activated, source) =
+    let (result, audit, activated) =
         audited_registry_evaluation(claim, RuntimeRelayOutcome::Match).await;
 
     assert!(matches!(result, Err(EvidenceError::RuleEvaluationFailed)));
     assert_relay_audit(audit);
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
-async fn registry_backed_claims_share_one_relay_consultation_without_source_reader_fallback() {
+async fn registry_backed_claims_share_one_relay_consultation_without_fallback() {
     let exists = registry_claim(
         "enrollment-known",
         RuleConfig::Exists {
@@ -1107,7 +1066,6 @@ async fn registry_backed_claims_share_one_relay_consultation_without_source_read
     let mut evidence = (*test_evidence(vec![exists, extract])).clone();
     evidence.allowed_purposes = vec!["test".to_string()];
     let evidence = Arc::new(evidence);
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(FixedRelayConsultation {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::Match,
@@ -1123,7 +1081,6 @@ async fn registry_backed_claims_share_one_relay_consultation_without_source_read
     let results = runtime
         .evaluate(
             Arc::clone(&evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &store,
             &principal,
             request.clone(),
@@ -1136,7 +1093,6 @@ async fn registry_backed_claims_share_one_relay_consultation_without_source_read
     assert_eq!(results[0].value, Some(Value::Bool(true)));
     assert_eq!(results[1].value, Some(Value::String("ACTIVE".to_string())));
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
     assert!(results
         .iter()
         .all(|result| result.provenance.used.source_count == 1));
@@ -1151,7 +1107,6 @@ async fn registry_backed_claims_share_one_relay_consultation_without_source_read
     runtime
         .evaluate(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &store,
             &principal,
             request,
@@ -1160,7 +1115,6 @@ async fn registry_backed_claims_share_one_relay_consultation_without_source_read
         .await
         .expect("a new evaluation performs a new consultation");
     assert_eq!(activated.calls.load(Ordering::SeqCst), 2);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 fn registry_batch_request(claims: Vec<ClaimRef>) -> BatchEvaluateRequest {
@@ -1190,7 +1144,7 @@ fn enable_registry_batch(claim: &mut ClaimDefinition) {
 }
 
 #[tokio::test]
-async fn registry_batch_requires_outer_key_before_relay_or_source_work() {
+async fn registry_batch_requires_outer_key_before_relay_work() {
     let mut claim = registry_claim(
         "enrollment-status",
         RuleConfig::Extract {
@@ -1203,7 +1157,6 @@ async fn registry_batch_requires_outer_key_before_relay_or_source_work() {
     let mut evidence = (*test_evidence(vec![claim])).clone();
     evidence.allowed_purposes = vec!["test".to_string()];
     evidence.inline_batch_limit = 4;
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(FixedRelayConsultation {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::Match,
@@ -1216,7 +1169,6 @@ async fn registry_batch_requires_outer_key_before_relay_or_source_work() {
     let error = runtime
         .batch_evaluate(
             Arc::new(evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &principal,
             registry_batch_request(vec![ClaimRef::from("enrollment-status")]),
@@ -1227,7 +1179,6 @@ async fn registry_batch_requires_outer_key_before_relay_or_source_work() {
 
     assert!(matches!(error, EvidenceError::ConsultationInvalidRequest));
     assert_eq!(activated.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1244,7 +1195,6 @@ async fn registry_batch_preflights_every_item_before_first_relay_call() {
     let mut evidence = (*test_evidence(vec![claim])).clone();
     evidence.allowed_purposes = vec!["test".to_string()];
     evidence.inline_batch_limit = 4;
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(FixedRelayConsultation {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::Match,
@@ -1259,7 +1209,6 @@ async fn registry_batch_preflights_every_item_before_first_relay_call() {
     let error = runtime
         .batch_evaluate(
             Arc::new(evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &principal,
             request,
@@ -1271,9 +1220,8 @@ async fn registry_batch_preflights_every_item_before_first_relay_call() {
         .await
         .expect_err("an invalid later item fails the whole pure preflight");
 
-    assert!(matches!(error, EvidenceError::TargetAttributesInsufficient));
+    assert!(matches!(error, EvidenceError::InvalidRequest));
     assert_eq!(activated.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1299,7 +1247,6 @@ async fn registry_batch_coalesces_within_items_never_across_duplicates_and_repla
     evidence.allowed_purposes = vec!["test".to_string()];
     evidence.inline_batch_limit = 4;
     let evidence = Arc::new(evidence);
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(BatchIdentityRelay::default());
     let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
     let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
@@ -1323,7 +1270,6 @@ async fn registry_batch_coalesces_within_items_never_across_duplicates_and_repla
     let first = runtime
         .batch_evaluate(
             Arc::clone(&evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &store,
             &principal,
             request.clone(),
@@ -1344,13 +1290,11 @@ async fn registry_batch_coalesces_within_items_never_across_duplicates_and_repla
         .clone();
     assert_eq!(first_children.len(), 2);
     assert_ne!(first_children[0], first_children[1]);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 
     assert!(matches!(
         runtime
             .batch_evaluate(
                 Arc::clone(&evidence),
-                source.clone() as Arc<dyn SourceReader>,
                 &store,
                 &principal,
                 request.clone(),
@@ -1367,7 +1311,6 @@ async fn registry_batch_coalesces_within_items_never_across_duplicates_and_repla
     let replay = runtime
         .batch_evaluate(
             Arc::clone(&evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &store,
             &principal,
             request.clone(),
@@ -1384,7 +1327,6 @@ async fn registry_batch_coalesces_within_items_never_across_duplicates_and_repla
             .len(),
         2
     );
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 
     let mut changed_scope_principal = principal.clone();
     changed_scope_principal
@@ -1394,7 +1336,6 @@ async fn registry_batch_coalesces_within_items_never_across_duplicates_and_repla
         runtime
             .batch_evaluate(
                 Arc::clone(&evidence),
-                source.clone() as Arc<dyn SourceReader>,
                 &store,
                 &changed_scope_principal,
                 request.clone(),
@@ -1410,7 +1351,6 @@ async fn registry_batch_coalesces_within_items_never_across_duplicates_and_repla
         runtime
             .batch_evaluate(
                 Arc::new(changed_config),
-                source as Arc<dyn SourceReader>,
                 &store,
                 &principal,
                 request,
@@ -1437,7 +1377,6 @@ async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_wit
     evidence.allowed_purposes = vec!["test".to_string()];
     evidence.inline_batch_limit = 4;
     let evidence = Arc::new(evidence);
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(CrashRetryBatchRelay::default());
     let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
     let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
@@ -1450,7 +1389,6 @@ async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_wit
     let first = {
         let runtime = runtime.clone();
         let evidence = Arc::clone(&evidence);
-        let source = Arc::clone(&source);
         let store = Arc::clone(&store);
         let principal = principal.clone();
         let request = request.clone();
@@ -1458,7 +1396,6 @@ async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_wit
             runtime
                 .batch_evaluate(
                     evidence,
-                    source as Arc<dyn SourceReader>,
                     store.as_ref(),
                     &principal,
                     request,
@@ -1480,7 +1417,6 @@ async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_wit
     let retry = runtime
         .batch_evaluate(
             Arc::clone(&evidence),
-            source.clone() as Arc<dyn SourceReader>,
             store.as_ref(),
             &principal,
             request.clone(),
@@ -1512,7 +1448,6 @@ async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_wit
     let replay = runtime
         .batch_evaluate(
             Arc::clone(&evidence),
-            source.clone() as Arc<dyn SourceReader>,
             store.as_ref(),
             &principal,
             request,
@@ -1526,7 +1461,6 @@ async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_wit
     assert_eq!(replay.batch_id, retry.batch_id);
     assert_eq!(replay.items[0].evaluation_id, retry.items[0].evaluation_id);
     assert_eq!(activated.attempts.load(Ordering::SeqCst), 2);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1550,7 +1484,6 @@ async fn registry_backed_consultation_reads_a_named_target_identifier() {
     )]);
     let mut evidence = (*test_evidence(vec![claim])).clone();
     evidence.allowed_purposes = vec!["test".to_string()];
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(FixedRelayConsultation {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::Match,
@@ -1569,7 +1502,6 @@ async fn registry_backed_consultation_reads_a_named_target_identifier() {
     let results = runtime
         .evaluate(
             Arc::new(evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &principal,
             request,
@@ -1580,7 +1512,6 @@ async fn registry_backed_consultation_reads_a_named_target_identifier() {
 
     assert_eq!(results[0].value, Some(Value::Bool(true)));
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1619,7 +1550,6 @@ async fn registry_backed_profiles_enforce_purpose_and_scope_independently() {
         "civil-verification".to_string(),
     ];
     let evidence = Arc::new(evidence);
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(FixedRelayConsultation {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::Match,
@@ -1634,7 +1564,6 @@ async fn registry_backed_profiles_enforce_purpose_and_scope_independently() {
     runtime
         .evaluate(
             Arc::clone(&evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &principal,
             request,
@@ -1649,7 +1578,6 @@ async fn registry_backed_profiles_enforce_purpose_and_scope_independently() {
     let error = runtime
         .evaluate(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &principal,
             denied,
@@ -1660,7 +1588,6 @@ async fn registry_backed_profiles_enforce_purpose_and_scope_independently() {
 
     assert!(matches!(error, EvidenceError::ScopeDenied { .. }));
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1675,7 +1602,6 @@ async fn relay_group_key_ignores_unrelated_principal_scopes() {
     );
     let mut evidence = (*test_evidence(vec![claim])).clone();
     evidence.allowed_purposes = vec!["test".to_string()];
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(FixedRelayConsultation {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::Match,
@@ -1690,7 +1616,6 @@ async fn relay_group_key_ignores_unrelated_principal_scopes() {
     let results = runtime
         .evaluate(
             Arc::new(evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &principal,
             test_request("enrollment-status"),
@@ -1701,7 +1626,6 @@ async fn relay_group_key_ignores_unrelated_principal_scopes() {
 
     assert_eq!(results[0].value, Some(Value::String("ACTIVE".to_string())));
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1719,7 +1643,6 @@ async fn relay_plan_uses_the_explicitly_selected_claim_version() {
     registry.version = "2".to_string();
     let mut evidence = (*test_evidence(vec![transitional, registry])).clone();
     evidence.allowed_purposes = vec!["test".to_string()];
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(FixedRelayConsultation {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::Match,
@@ -1734,7 +1657,6 @@ async fn relay_plan_uses_the_explicitly_selected_claim_version() {
     let results = runtime
         .evaluate(
             Arc::new(evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &principal,
             request,
@@ -1747,11 +1669,10 @@ async fn relay_plan_uses_the_explicitly_selected_claim_version() {
     assert_eq!(results[0].claim_version, "2");
     assert_eq!(results[0].value, Some(Value::String("ACTIVE".to_string())));
     assert_eq!(activated.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
-async fn registry_backed_preflight_denial_makes_zero_relay_and_source_calls() {
+async fn registry_backed_preflight_denial_makes_zero_relay_calls() {
     let claim = registry_claim(
         "enrollment-status",
         RuleConfig::Extract {
@@ -1762,7 +1683,6 @@ async fn registry_backed_preflight_denial_makes_zero_relay_and_source_calls() {
     );
     let mut evidence = (*test_evidence(vec![claim])).clone();
     evidence.allowed_purposes = vec!["test".to_string()];
-    let source = Arc::new(CountingSource::default());
     let activated = Arc::new(FixedRelayConsultation {
         calls: AtomicU64::new(0),
         outcome: RuntimeRelayOutcome::Match,
@@ -1774,7 +1694,6 @@ async fn registry_backed_preflight_denial_makes_zero_relay_and_source_calls() {
     let (result, audit) = runtime
         .evaluate_for_api(
             Arc::clone(&evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &machine_principal(),
             test_request("enrollment-status"),
@@ -1788,7 +1707,6 @@ async fn registry_backed_preflight_denial_makes_zero_relay_and_source_calls() {
     assert!(evaluation_id.is_none());
     assert!(consultation_ids.is_empty());
     assert_eq!(activated.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 
     let mut principal = machine_principal();
     principal.scopes = vec!["registry:evidence".to_string()];
@@ -1797,7 +1715,6 @@ async fn registry_backed_preflight_denial_makes_zero_relay_and_source_calls() {
     let (result, audit) = runtime
         .evaluate_for_api(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &EvidenceStore::default(),
             &principal,
             request,
@@ -1809,81 +1726,10 @@ async fn registry_backed_preflight_denial_makes_zero_relay_and_source_calls() {
     assert!(evaluation_id.is_none());
     assert!(consultation_ids.is_empty());
     assert_eq!(activated.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
-async fn transitional_dependency_cannot_compose_a_registry_backed_result() {
-    let registry = registry_claim(
-        "enrollment-status",
-        RuleConfig::Extract {
-            source: "enrollment".to_string(),
-            field: "registration_status".to_string(),
-        },
-        "string",
-    );
-    let mut transitional = test_claim("legacy-derived", vec!["enrollment-status"], false);
-    transitional.rule = RuleConfig::Cel {
-        expression: "claims.enrollment_status == 'ACTIVE'".to_string(),
-        bindings: CelBindingsConfig::default(),
-    };
-    let mut evidence = (*test_evidence(vec![registry, transitional])).clone();
-    evidence.allowed_purposes = vec!["test".to_string()];
-    let source = Arc::new(CountingSource::default());
-    let activated = Arc::new(FixedRelayConsultation {
-        calls: AtomicU64::new(0),
-        outcome: RuntimeRelayOutcome::Match,
-    });
-    let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
-    let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
-    let mut principal = machine_principal();
-    principal.scopes = vec!["registry:evidence".to_string()];
-
-    let error = runtime
-        .evaluate(
-            Arc::new(evidence),
-            source.clone() as Arc<dyn SourceReader>,
-            &EvidenceStore::default(),
-            &principal,
-            test_request("legacy-derived"),
-            None,
-        )
-        .await
-        .expect_err("cross-mode claim composition must fail before either source path");
-
-    assert!(matches!(error, EvidenceError::InvalidRequest));
-    assert_eq!(activated.calls.load(Ordering::SeqCst), 0);
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
-async fn evaluate_refuses_extract_result_that_violates_declared_value_type() {
-    let source = Arc::new(WrongTypeSource);
-    let mut evidence_config =
-        (*test_evidence(vec![test_claim("selected", Vec::new(), true)])).clone();
-    evidence_config.allowed_purposes = vec!["test".to_string()];
-    let evidence = Arc::new(evidence_config);
-    let store = EvidenceStore::default();
-    let request = test_request("selected");
-
-    let err = RegistryNotaryRuntime::new()
-        .evaluate(
-            evidence,
-            source as Arc<dyn SourceReader>,
-            &store,
-            &machine_principal(),
-            request,
-            None,
-        )
-        .await
-        .expect_err("extract result of the wrong JSON shape must be refused");
-
-    assert!(matches!(err, EvidenceError::RuleEvaluationFailed));
 }
 
 #[tokio::test]
 async fn evaluate_refuses_exists_result_that_violates_declared_value_type() {
-    let source = Arc::new(CountingSource::default());
     let mut claim = test_claim("selected", Vec::new(), true);
     claim.rule = RuleConfig::Exists {
         source: "src".to_string(),
@@ -1898,7 +1744,6 @@ async fn evaluate_refuses_exists_result_that_violates_declared_value_type() {
     let err = RegistryNotaryRuntime::new()
         .evaluate(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &store,
             &machine_principal(),
             request,
@@ -1910,12 +1755,10 @@ async fn evaluate_refuses_exists_result_that_violates_declared_value_type() {
         );
 
     assert!(matches!(err, EvidenceError::RuleEvaluationFailed));
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
 async fn evaluate_target_ref_serializes_as_opaque_handle() {
-    let source = Arc::new(CountingSource::default());
     let mut evidence_config =
         (*test_evidence(vec![test_claim("selected", Vec::new(), true)])).clone();
     evidence_config.allowed_purposes = vec!["test".to_string()];
@@ -1931,7 +1774,6 @@ async fn evaluate_target_ref_serializes_as_opaque_handle() {
     let results = RegistryNotaryRuntime::new()
         .evaluate(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &store,
             &machine_principal(),
             request,
@@ -1952,7 +1794,6 @@ async fn evaluate_target_ref_serializes_as_opaque_handle() {
 
 #[tokio::test]
 async fn batch_item_target_ref_serializes_as_opaque_handle() {
-    let source = Arc::new(CountingSource::default());
     let mut claim = test_claim("selected", Vec::new(), true);
     claim.operations.batch_evaluate.enabled = true;
     claim.operations.batch_evaluate.max_subjects = 1;
@@ -1977,7 +1818,6 @@ async fn batch_item_target_ref_serializes_as_opaque_handle() {
     let response = RegistryNotaryRuntime::new()
         .batch_evaluate(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &store,
             &machine_principal(),
             request,
@@ -1999,7 +1839,6 @@ async fn batch_item_target_ref_serializes_as_opaque_handle() {
 
 #[tokio::test]
 async fn evaluate_uses_requested_claim_version() {
-    let source = Arc::new(CountingSource::default());
     let older_claim = test_claim("selected", Vec::new(), false);
     let mut newer_claim = test_claim("selected", Vec::new(), true);
     newer_claim.version = "2.0".to_string();
@@ -2013,7 +1852,6 @@ async fn evaluate_uses_requested_claim_version() {
     let results = RegistryNotaryRuntime::new()
         .evaluate(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &store,
             &machine_principal(),
             request,
@@ -2023,19 +1861,14 @@ async fn evaluate_uses_requested_claim_version() {
         .expect("versioned evaluate succeeds");
 
     assert_eq!(results[0].claim_version, "2.0");
-    assert_eq!(results[0].value, Some(json!(true)));
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 1);
 }
 
 /// REQ-SEC-G-005: the direct `evaluate` path must refuse a principal that
-/// lacks a claim's required scope, and must do so before any source read
-/// happens (`require_claim_access` runs ahead of `load_sources`). This
-/// mirrors the scope-denial coverage that already exists for federation
-/// and Relay call sites, using a counting fake source as the read probe.
+/// lacks a claim's required scope.
 #[tokio::test]
-async fn evaluate_denies_missing_scope_before_reading_source() {
-    let source = Arc::new(VersionScopedSource::default());
-    let claim = test_claim("selected", Vec::new(), true);
+async fn evaluate_denies_missing_scope() {
+    let mut claim = test_claim("selected", Vec::new(), true);
+    claim.required_scopes = vec!["selected:1.0".to_string()];
     let mut evidence_config = (*test_evidence(vec![claim])).clone();
     evidence_config.allowed_purposes = vec!["test".to_string()];
     let evidence = Arc::new(evidence_config);
@@ -2053,7 +1886,6 @@ async fn evaluate_denies_missing_scope_before_reading_source() {
     let err = RegistryNotaryRuntime::new()
         .evaluate(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &store,
             &principal,
             request,
@@ -2066,15 +1898,15 @@ async fn evaluate_denies_missing_scope_before_reading_source() {
         err,
         EvidenceError::ScopeDenied { required } if required == "selected:1.0"
     ));
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
 async fn evaluate_authorizes_required_scope_from_requested_claim_version() {
-    let source = Arc::new(VersionScopedSource::default());
-    let older_claim = test_claim("selected", Vec::new(), true);
+    let mut older_claim = test_claim("selected", Vec::new(), true);
+    older_claim.required_scopes = vec!["selected:1.0".to_string()];
     let mut newer_claim = test_claim("selected", Vec::new(), true);
     newer_claim.version = "2.0".to_string();
+    newer_claim.required_scopes = vec!["selected:2.0".to_string()];
     let mut evidence_config = (*test_evidence(vec![older_claim, newer_claim])).clone();
     evidence_config.allowed_purposes = vec!["test".to_string()];
     let evidence = Arc::new(evidence_config);
@@ -2093,7 +1925,6 @@ async fn evaluate_authorizes_required_scope_from_requested_claim_version() {
     let err = RegistryNotaryRuntime::new()
         .evaluate(
             Arc::clone(&evidence),
-            source.clone() as Arc<dyn SourceReader>,
             &store,
             &principal,
             request.clone(),
@@ -2106,7 +1937,6 @@ async fn evaluate_authorizes_required_scope_from_requested_claim_version() {
         err,
         EvidenceError::ScopeDenied { required } if required == "selected:2.0"
     ));
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 
     let principal = EvidencePrincipal {
         scopes: vec!["selected:2.0".to_string()],
@@ -2115,7 +1945,6 @@ async fn evaluate_authorizes_required_scope_from_requested_claim_version() {
     let results = RegistryNotaryRuntime::new()
         .evaluate(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &store,
             &principal,
             request,
@@ -2125,12 +1954,10 @@ async fn evaluate_authorizes_required_scope_from_requested_claim_version() {
         .expect("version 2 scope authorizes version 2");
 
     assert_eq!(results[0].claim_version, "2.0");
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
 async fn evaluate_rejects_missing_claim_version() {
-    let source = Arc::new(CountingSource::default());
     let evidence = test_evidence(vec![test_claim("selected", Vec::new(), true)]);
     let store = EvidenceStore::default();
     let mut request = test_request("selected");
@@ -2139,7 +1966,6 @@ async fn evaluate_rejects_missing_claim_version() {
     let err = RegistryNotaryRuntime::new()
         .evaluate(
             evidence,
-            source.clone() as Arc<dyn SourceReader>,
             &store,
             &machine_principal(),
             request,
@@ -2149,7 +1975,6 @@ async fn evaluate_rejects_missing_claim_version() {
         .expect_err("unknown version is rejected");
 
     assert!(matches!(err, EvidenceError::ClaimVersionNotFound));
-    assert_eq!(source.read_count.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -2212,86 +2037,6 @@ fn batch_input_validation_deduplicates_purposes() {
         .expect("batch inputs are valid");
 
     assert_eq!(unique, BTreeSet::from(["appeals", "benefits"]));
-}
-
-#[tokio::test]
-async fn evaluate_claim_provenance_carries_selected_pack_identity() {
-    let mut claim = test_claim("birth.certificate_summary", Vec::new(), true);
-    claim.disclosure.default = "value".to_string();
-    claim.disclosure.allowed = vec!["value".to_string(), "predicate".to_string()];
-    let matching = &mut claim
-        .source_bindings
-        .get_mut("src")
-        .expect("test source binding exists")
-        .matching;
-    matching.allowed_purposes = vec!["benefits".to_string()];
-    matching.ecosystem_binding = Some(registry_notary_core::EcosystemBindingSelectorConfig {
-        id: Some("oots-birth-evidence/v1".to_string()),
-        pack_id: Some("oots-birth-evidence/v1".to_string()),
-        pack_version: Some("v1".to_string()),
-        ..registry_notary_core::EcosystemBindingSelectorConfig::default()
-    });
-
-    let mut evidence = EvidenceConfig {
-        enabled: true,
-        service_id: "runtime.test".to_string(),
-        claims: vec![claim],
-        ..EvidenceConfig::default()
-    };
-    evidence.ecosystem_bindings.insert(
-        "oots-birth-evidence/v1".to_string(),
-        registry_notary_core::EvidenceEcosystemBindingConfig {
-            profile: Some("registry-notary/source-policy/v1".to_string()),
-            policy_id: "lab.oots-birth-evidence.governed-evidence.v1".to_string(),
-            policy_hash: "sha256:5555555555555555555555555555555555555555555555555555555555555555"
-                .to_string(),
-            unsupported_odrl_terms: Vec::new(),
-        },
-    );
-
-    let principal = EvidencePrincipal {
-        auth_profile_id: registry_notary_core::EvidenceAuthProfileId::StaticApiKey,
-        principal_id: "caseworker".to_string(),
-        scopes: vec!["birth.certificate_summary:1.0".to_string()],
-        access_mode: AccessMode::MachineClient,
-        verified_claims: None,
-        authorization_details: None,
-    };
-    let results = crate::RegistryNotaryRuntime::new()
-        .evaluate(
-            Arc::new(evidence),
-            Arc::new(VersionScopedSource::default()),
-            &EvidenceStore::default(),
-            &principal,
-            EvaluateRequest {
-                requester: None,
-                target: Some(EvidenceEntity::from_subject_request(
-                    "Person",
-                    SubjectRequest {
-                        id: "person-123".to_string(),
-                        id_type: None,
-                    },
-                )),
-                relationship: None,
-                on_behalf_of: None,
-                variables: Default::default(),
-                claims: vec![ClaimRef::from("birth.certificate_summary")],
-                disclosure: Some("value".to_string()),
-                format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
-                purpose: Some("benefits".to_string()),
-            },
-            None,
-        )
-        .await
-        .expect("claim evaluates");
-
-    let generated_by = &results[0].provenance.generated_by;
-    assert_eq!(
-        generated_by.pack_id.as_deref(),
-        Some("oots-birth-evidence/v1")
-    );
-    assert_eq!(generated_by.pack_version.as_deref(), Some("v1"));
-    assert_eq!(results[0].disclosure, "value");
 }
 #[test]
 fn internal_claim_result_debug_redacts_relay_correlation_and_value() {

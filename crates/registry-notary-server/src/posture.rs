@@ -2,10 +2,10 @@
 //! Redacted Registry Ops posture for standalone Registry Notary.
 
 use registry_notary_core::{
-    BulkMode, CredentialStatusConfig, DeploymentEvidenceConfig, EvidenceAuditConfig,
-    SelfAttestationConfig, SelfAttestationRateLimitMode, SigningKeyStatus,
-    StandaloneRegistryNotaryConfig, CREDENTIAL_STATUS_STORAGE_REDIS,
-    MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS, REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
+    CredentialStatusConfig, DeploymentEvidenceConfig, EvidenceAuditConfig, SelfAttestationConfig,
+    SelfAttestationRateLimitMode, SigningKeyStatus, StandaloneRegistryNotaryConfig,
+    CREDENTIAL_STATUS_STORAGE_REDIS, MAX_BEARER_PRE_AUTHORIZED_CODE_TTL_SECONDS,
+    REPLAY_STORAGE_IN_MEMORY, REPLAY_STORAGE_REDIS,
 };
 use registry_platform_ops::{
     audit_shipping_target, filter_posture_for_tier, override_pin_posture,
@@ -33,7 +33,6 @@ pub(crate) struct PostureContext {
     credential_status_enabled: bool,
     credential_status_storage: String,
     audit: AuditPosture,
-    source_connections: SourceConnectionPosture,
     signing_keys: SigningKeyPosture,
     oid4vci: Oid4vciPosture,
     self_attestation: SelfAttestationPosture,
@@ -60,11 +59,6 @@ struct AuditPosture {
     shipping_health: Option<String>,
     /// The ack cursor's `acked_at` when one was read, else `None` (null).
     shipping_observed_at: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-struct SourceConnectionPosture {
-    by_kind: BTreeMap<String, usize>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -139,9 +133,6 @@ impl PostureContext {
                 &config.deployment.evidence,
                 &audit_observation,
             ),
-            source_connections: SourceConnectionPosture {
-                by_kind: source_connection_counts_by_kind(config),
-            },
             signing_keys: signing_key_posture(config)?,
             oid4vci: oid4vci_posture(config),
             self_attestation: self_attestation_posture(&config.self_attestation),
@@ -291,7 +282,6 @@ pub(crate) async fn posture_document(
         "standards_artifacts": standards_artifacts(state),
         "notary": {
             "claim_count": state.evidence.claims.len(),
-            "source_connection_counts": context.source_connections.by_kind,
             "signing_keys": {
                 "active": signing_keys.active,
                 "publish_only": signing_keys.publish_only,
@@ -466,9 +456,6 @@ fn default_posture_context() -> PostureContext {
             shipping_health: None,
             shipping_observed_at: None,
         },
-        source_connections: SourceConnectionPosture {
-            by_kind: BTreeMap::new(),
-        },
         signing_keys: SigningKeyPosture::default(),
         oid4vci: Oid4vciPosture {
             pre_authorized_code_enabled: false,
@@ -612,46 +599,6 @@ fn audit_assurance_object(config: Option<&StandaloneRegistryNotaryConfig>) -> Va
     })
 }
 
-fn source_connection_counts_by_kind(
-    config: &StandaloneRegistryNotaryConfig,
-) -> BTreeMap<String, usize> {
-    let mut seen_connections = BTreeSet::new();
-    let mut counts = BTreeMap::new();
-    for claim in &config.evidence.claims {
-        for binding in claim.source_bindings.values() {
-            let Some(connection) = binding.connection.as_deref() else {
-                continue;
-            };
-            if seen_connections.contains(connection) {
-                continue;
-            }
-            seen_connections.insert(connection.to_string());
-            let kind = config
-                .evidence
-                .source_connections
-                .get(connection)
-                .map(|source_connection| {
-                    if source_connection.bulk_mode == BulkMode::None {
-                        source_connector_kind(binding.connector)
-                    } else {
-                        unused_source_connection_kind(source_connection.bulk_mode)
-                    }
-                })
-                .unwrap_or_else(|| source_connector_kind(binding.connector));
-            *counts.entry(kind.to_string()).or_insert(0) += 1;
-        }
-    }
-    for (connection_id, connection) in &config.evidence.source_connections {
-        if seen_connections.contains(connection_id) {
-            continue;
-        }
-        *counts
-            .entry(unused_source_connection_kind(connection.bulk_mode).to_string())
-            .or_insert(0) += 1;
-    }
-    counts
-}
-
 fn signing_key_readiness_by_kid(state: &RegistryNotaryApiState) -> BTreeMap<String, String> {
     state
         .signer_readiness()
@@ -734,23 +681,6 @@ fn self_attestation_posture(config: &SelfAttestationConfig) -> SelfAttestationPo
 fn rate_limit_mode_label(mode: SelfAttestationRateLimitMode) -> &'static str {
     match mode {
         SelfAttestationRateLimitMode::InProcess => "in_process",
-    }
-}
-
-fn unused_source_connection_kind(bulk_mode: BulkMode) -> &'static str {
-    match bulk_mode {
-        BulkMode::RdaInFilter => "registry_data_api",
-        BulkMode::DciBatchedSearch => "dci",
-        BulkMode::SourceAdapterSidecarBatch => "source_adapter_sidecar",
-        BulkMode::None => "unknown",
-    }
-}
-
-fn source_connector_kind(kind: registry_notary_core::SourceConnectorKind) -> &'static str {
-    match kind {
-        registry_notary_core::SourceConnectorKind::RegistryDataApi => "registry_data_api",
-        registry_notary_core::SourceConnectorKind::Dci => "dci",
-        registry_notary_core::SourceConnectorKind::SourceAdapterSidecar => "source_adapter_sidecar",
     }
 }
 
@@ -904,55 +834,6 @@ mod tests {
         assert!(production_like("STAGING"));
         assert!(production_like("production-like"));
         assert!(!production_like("development"));
-    }
-
-    #[test]
-    fn source_connection_counts_count_each_connection_once() {
-        let config: StandaloneRegistryNotaryConfig = serde_norway::from_str(
-            r#"
-auth: {}
-evidence:
-  source_connections:
-    shared:
-      base_url: http://127.0.0.1:1
-      allow_insecure_localhost: true
-      token_env: TEST_TOKEN
-      bulk_mode: rda_in_filter
-  claims:
-    - id: person-age
-      title: Person age
-      version: "2026-06"
-      subject_type: person
-      evidence_mode:
-        type: transitional_direct
-      source_bindings:
-        registry:
-          connector: registry_data_api
-          connection: shared
-          dataset: people
-          entity: person
-          lookup:
-            input: target.id
-            field: id
-        dci:
-          connector: dci
-          connection: shared
-          dataset: people
-          entity: person
-          lookup:
-            input: target.id
-            field: id
-      rule:
-        type: exists
-        source: registry
-"#,
-        )
-        .expect("posture count fixture parses");
-
-        let counts = source_connection_counts_by_kind(&config);
-
-        assert_eq!(counts.get("registry_data_api"), Some(&1));
-        assert_eq!(counts.get("dci"), None);
     }
 
     #[test]

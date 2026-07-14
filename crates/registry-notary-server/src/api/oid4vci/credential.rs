@@ -223,12 +223,11 @@ pub(in crate::api) async fn oid4vci_credential(
     };
     let results = match state
         .runtime()
-        .evaluate_with_source_capability(
+        .evaluate_with_capability(
             Arc::clone(&state.evidence),
-            Arc::clone(&state.source),
             &state.store,
             &principal,
-            context.source_capability,
+            context.evaluation_capability,
             request,
             None,
             Some(context.metadata.clone()),

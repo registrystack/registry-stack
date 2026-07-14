@@ -221,17 +221,7 @@ pub(super) fn cel_preflight_root_bindings(
         }
         return roots;
     }
-    let mut sources = Map::new();
-    for (alias, binding) in &claim.source_bindings {
-        let mut source = Map::new();
-        for (field_alias, field) in &binding.fields {
-            source.insert(
-                field_alias.clone(),
-                cel_dummy_value_for_type(field.field_type.as_deref().unwrap_or("string")),
-            );
-        }
-        sources.insert(alias.clone(), Value::Object(source));
-    }
+    let sources = Map::new();
 
     let mut claims = Map::new();
     for (alias, binding) in &bindings.claims {
@@ -695,24 +685,10 @@ pub(super) fn is_cel_identifier(value: &str) -> bool {
 #[cfg(feature = "registry-notary-cel")]
 pub(super) fn cel_meta(evidence: &EvidenceConfig, claim: &ClaimDefinition) -> Value {
     let mut sources = Map::new();
-    for (alias, binding) in &claim.source_bindings {
-        let connector = match binding.connector {
-            registry_notary_core::config::SourceConnectorKind::RegistryDataApi => {
-                "registry_data_api"
-            }
-            registry_notary_core::config::SourceConnectorKind::Dci => "dci",
-            registry_notary_core::config::SourceConnectorKind::SourceAdapterSidecar => {
-                "source_adapter_sidecar"
-            }
-        };
-        sources.insert(
-            alias.clone(),
-            json!({
-                "dataset": binding.dataset,
-                "entity": binding.entity,
-                "connector": connector,
-            }),
-        );
+    if let ClaimEvidenceMode::RegistryBacked { consultations } = &claim.evidence_mode {
+        for (alias, consultation) in consultations {
+            sources.insert(alias.clone(), json!({ "profile": consultation.profile.id }));
+        }
     }
     json!({
         "service_id": evidence.service_id,

@@ -24,8 +24,7 @@ struct PreparedRegistryBatchItem {
     format: String,
     evaluation_id: String,
     relay_plan: Arc<RequestScopedRelayPlan>,
-    trusted_policy: TrustedPolicyContext,
-    source_capability: SourceCapability,
+    evaluation_capability: EvaluationCapability,
 }
 
 pub(crate) fn registry_backed_batch_requested(
@@ -39,19 +38,8 @@ pub(crate) fn registry_backed_batch_requested(
         let claim = find_claim_for_selection(evidence, claim_id, &claim_versions)?;
         match claim.evidence_mode {
             ClaimEvidenceMode::RegistryBacked { .. } => registry_backed = true,
-            ClaimEvidenceMode::TransitionalDirect if registry_backed => {
-                return Err(EvidenceError::ConsultationInvalidRequest)
-            }
-            ClaimEvidenceMode::TransitionalDirect | ClaimEvidenceMode::SelfAttested => {}
+            ClaimEvidenceMode::SelfAttested => {}
         }
-    }
-    if registry_backed
-        && levels.iter().flatten().any(|claim_id| {
-            find_claim_for_selection(evidence, claim_id, &claim_versions)
-                .is_ok_and(|claim| claim.evidence_mode.is_transitional_direct())
-        })
-    {
-        return Err(EvidenceError::ConsultationInvalidRequest);
     }
     Ok(registry_backed)
 }
@@ -283,27 +271,22 @@ impl RegistryNotaryRuntime {
         document
     }
 
-    pub fn list_claims<R: SourceReader + ?Sized>(
-        evidence: &EvidenceConfig,
-        source: &R,
-        principal: &EvidencePrincipal,
-    ) -> Vec<Value> {
+    pub fn list_claims(evidence: &EvidenceConfig, principal: &EvidencePrincipal) -> Vec<Value> {
         evidence
             .claims
             .iter()
-            .filter(|claim| principal_can_see_claim(evidence, source, principal, claim))
+            .filter(|claim| principal_can_see_claim(principal, claim))
             .map(claim_summary)
             .collect()
     }
 
-    pub fn get_claim<R: SourceReader + ?Sized>(
+    pub fn get_claim(
         evidence: &EvidenceConfig,
-        source: &R,
         principal: &EvidencePrincipal,
         claim_id: &str,
     ) -> Result<Value, EvidenceError> {
         let claim = find_claim(evidence, claim_id)?;
-        if !principal_can_see_claim(evidence, source, principal, claim) {
+        if !principal_can_see_claim(principal, claim) {
             return Err(EvidenceError::ClaimNotFound);
         }
         Ok(claim_summary(claim))
@@ -316,7 +299,6 @@ impl RegistryNotaryRuntime {
     pub async fn evaluate(
         &self,
         evidence: Arc<EvidenceConfig>,
-        source: Arc<dyn SourceReader>,
         store: &EvidenceStore,
         principal: &EvidencePrincipal,
         request: EvaluateRequest,
@@ -324,7 +306,6 @@ impl RegistryNotaryRuntime {
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
         self.evaluate_with_audit_collector(
             evidence,
-            source,
             store,
             principal,
             request,
@@ -337,7 +318,6 @@ impl RegistryNotaryRuntime {
     pub(crate) async fn evaluate_for_api(
         &self,
         evidence: Arc<EvidenceConfig>,
-        source: Arc<dyn SourceReader>,
         store: &EvidenceStore,
         principal: &EvidencePrincipal,
         request: EvaluateRequest,
@@ -350,7 +330,6 @@ impl RegistryNotaryRuntime {
         let result = self
             .evaluate_with_audit_collector(
                 evidence,
-                source,
                 store,
                 principal,
                 request,
@@ -365,7 +344,6 @@ impl RegistryNotaryRuntime {
     async fn evaluate_with_audit_collector(
         &self,
         evidence: Arc<EvidenceConfig>,
-        source: Arc<dyn SourceReader>,
         store: &EvidenceStore,
         principal: &EvidencePrincipal,
         request: EvaluateRequest,
@@ -373,17 +351,16 @@ impl RegistryNotaryRuntime {
         audit: Arc<EvaluationAuditCollector>,
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
         let request_claim_ids = claim_ids(&request.claims);
-        let source_capability = source_capability_for_principal(
+        let evaluation_capability = evaluation_capability_for_principal(
             &self.self_attestation_rate_keys,
             principal,
             &request_claim_ids,
         )?;
-        self.evaluate_with_source_capability_and_audit(
+        self.evaluate_with_capability_and_audit(
             evidence,
-            source,
             store,
             principal,
-            source_capability,
+            evaluation_capability,
             request,
             header_purpose,
             None,
@@ -394,24 +371,22 @@ impl RegistryNotaryRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn evaluate_with_source_capability(
+    pub async fn evaluate_with_capability(
         &self,
         evidence: Arc<EvidenceConfig>,
-        source: Arc<dyn SourceReader>,
         store: &EvidenceStore,
         principal: &EvidencePrincipal,
-        source_capability: SourceCapability,
+        evaluation_capability: EvaluationCapability,
         request: EvaluateRequest,
         header_purpose: Option<&str>,
         self_attestation: Option<StoredSelfAttestationMetadata>,
         correlation_id: Option<BoundedCorrelationId>,
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
-        self.evaluate_with_source_capability_and_audit(
+        self.evaluate_with_capability_and_audit(
             evidence,
-            source,
             store,
             principal,
-            source_capability,
+            evaluation_capability,
             request,
             header_purpose,
             self_attestation,
@@ -422,13 +397,12 @@ impl RegistryNotaryRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn evaluate_with_source_capability_for_api(
+    pub(crate) async fn evaluate_with_capability_for_api(
         &self,
         evidence: Arc<EvidenceConfig>,
-        source: Arc<dyn SourceReader>,
         store: &EvidenceStore,
         principal: &EvidencePrincipal,
-        source_capability: SourceCapability,
+        evaluation_capability: EvaluationCapability,
         request: EvaluateRequest,
         header_purpose: Option<&str>,
         self_attestation: Option<StoredSelfAttestationMetadata>,
@@ -439,12 +413,11 @@ impl RegistryNotaryRuntime {
     ) {
         let audit = Arc::new(EvaluationAuditCollector::new());
         let result = self
-            .evaluate_with_source_capability_and_audit(
+            .evaluate_with_capability_and_audit(
                 evidence,
-                source,
                 store,
                 principal,
-                source_capability,
+                evaluation_capability,
                 request,
                 header_purpose,
                 self_attestation,
@@ -456,20 +429,19 @@ impl RegistryNotaryRuntime {
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn evaluate_with_source_capability_and_audit(
+    async fn evaluate_with_capability_and_audit(
         &self,
         evidence: Arc<EvidenceConfig>,
-        source: Arc<dyn SourceReader>,
         store: &EvidenceStore,
         principal: &EvidencePrincipal,
-        source_capability: SourceCapability,
+        evaluation_capability: EvaluationCapability,
         request: EvaluateRequest,
         header_purpose: Option<&str>,
         self_attestation: Option<StoredSelfAttestationMetadata>,
         correlation_id: Option<BoundedCorrelationId>,
         audit: Arc<EvaluationAuditCollector>,
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
-        ensure_source_capability_matches_principal(principal, &source_capability)?;
+        ensure_evaluation_capability_matches_principal(principal, &evaluation_capability)?;
         if request.claims.is_empty() {
             return Err(EvidenceError::InvalidRequest);
         }
@@ -478,12 +450,12 @@ impl RegistryNotaryRuntime {
             .as_ref()
             .ok_or(EvidenceError::InvalidRequest)?;
         if !target.has_matching_input() {
-            return Err(EvidenceError::TargetAttributesInsufficient);
+            return Err(EvidenceError::InvalidRequest);
         }
         let claim_versions = requested_claim_versions(&request.claims)?;
         let request_claim_ids = claim_ids(&request.claims);
         for claim_id in &request.claims {
-            require_source_read_capability(&source_capability, claim_id)?;
+            require_evaluation_capability(&evaluation_capability, claim_id)?;
         }
         let purpose = resolve_purpose(header_purpose, request.purpose.as_deref())?;
         require_purpose_allowed(
@@ -521,9 +493,8 @@ impl RegistryNotaryRuntime {
         validate_request_variables_before_relay(&evidence, &context, &claim_versions, &levels)?;
         preflight_claim_closure(
             &evidence,
-            source.as_ref(),
             principal,
-            &source_capability,
+            &evaluation_capability,
             &claim_versions,
             &levels,
             &purpose,
@@ -543,41 +514,26 @@ impl RegistryNotaryRuntime {
             self.activated_relay.as_ref(),
             Arc::clone(&audit),
             None,
-            &source_capability,
+            &evaluation_capability,
         )?;
         let now = OffsetDateTime::now_utc();
-        let binding_concurrency = Arc::new(Semaphore::new(evidence.concurrency.bindings));
         #[cfg(feature = "registry-notary-cel")]
         let cel_concurrency = self
             .cel_worker
             .as_ref()
             .map(|_| Arc::new(Semaphore::new(self.cel_config.worker_count.max(1))));
         let policy = evaluation_policy_from_self_attestation(self_attestation.as_ref());
-        let request_claim_refs = scoped_authorization_claim_refs(
-            &evidence,
-            &request.claims,
-            &claim_versions,
-            &source_capability,
-        )?;
-        let trusted_policy =
-            TrustedPolicyContext::from_principal(principal).with_request_claims(request_claim_refs);
         let internal = self
             .evaluate_claims_dag(
                 Arc::clone(&evidence),
-                Arc::clone(&source),
                 context,
-                trusted_policy,
                 purpose.clone(),
-                disclosure,
-                format.clone(),
                 evaluation_id.clone(),
                 now,
                 claim_versions.clone(),
                 levels,
-                binding_concurrency,
-                source_capability,
+                evaluation_capability,
                 relay_plan,
-                None, // single-subject evaluate: no cross-subject memo needed
                 #[cfg(feature = "registry-notary-cel")]
                 cel_concurrency,
                 correlation_id,
@@ -626,7 +582,6 @@ impl RegistryNotaryRuntime {
     pub async fn batch_evaluate(
         &self,
         evidence: Arc<EvidenceConfig>,
-        source: Arc<dyn SourceReader>,
         store: &EvidenceStore,
         principal: &EvidencePrincipal,
         request: BatchEvaluateRequest,
@@ -653,7 +608,7 @@ impl RegistryNotaryRuntime {
             .idempotency_key
             .map(|key| batch_idempotency_key(&principal.principal_id, key));
         let claim_versions = requested_claim_versions(&request.claims)?;
-        let source_capability = source_capability_for_principal(
+        let evaluation_capability = evaluation_capability_for_principal(
             &self.self_attestation_rate_keys,
             principal,
             &request_claim_ids,
@@ -682,7 +637,6 @@ impl RegistryNotaryRuntime {
             return self
                 .batch_evaluate_registry_backed(
                     evidence,
-                    source,
                     store,
                     principal,
                     request,
@@ -691,7 +645,7 @@ impl RegistryNotaryRuntime {
                         .ok_or(EvidenceError::ConsultationInvalidRequest)?,
                     request_hash,
                     scoped_key.ok_or(EvidenceError::ConsultationInvalidRequest)?,
-                    source_capability,
+                    evaluation_capability,
                     subject_purposes,
                     claim_versions,
                     options.owner_quota,
@@ -710,17 +664,6 @@ impl RegistryNotaryRuntime {
             .cel_worker
             .as_ref()
             .map(|_| Arc::new(Semaphore::new(self.cel_config.worker_count.max(1))));
-        // Per-batch memoization table shared across all concurrent subject
-        // tasks. Scoped to this `batch_evaluate` call; dropped when the call
-        // returns, so no state leaks between batches. Tests can pre-create the
-        // table via `options.memo_observer` to read counters after the call.
-        let fetch_memo: FetchMemo = options
-            .memo_observer
-            .map(Arc::clone)
-            .unwrap_or_else(|| Arc::new(MemoState::new()));
-        let request_claim_refs = selected_claim_refs(&evidence, &request.claims, &claim_versions)?;
-        let trusted_policy =
-            TrustedPolicyContext::from_principal(principal).with_request_claims(request_claim_refs);
         let disclosure = requested_disclosure(
             &evidence,
             &request.claims,
@@ -751,43 +694,11 @@ impl RegistryNotaryRuntime {
                     retry_after_seconds: error.retry_after_seconds,
                 })?;
         }
-        // Stage 3: when a connection declares `bulk_mode != None`, prefetch
-        // all bindings across all target contexts via `SourceReader::read_many`
-        // and seed the memo with the results. The per-target evaluation pipeline
-        // then naturally hits the memo and skips its own per-target upstream
-        // call. We do this before the JoinSet so the bulk request runs
-        // exactly once per group instead of being raced by N sibling subject
-        // tasks.
-        let mut prefetch_contexts_by_purpose: BTreeMap<String, Vec<EvidenceRequestContext>> =
-            BTreeMap::new();
-        for (item, purpose) in request.items.iter().zip(&subject_purposes) {
-            prefetch_contexts_by_purpose
-                .entry(purpose.clone())
-                .or_default()
-                .push(item.request_context());
-        }
-        for (purpose, contexts) in prefetch_contexts_by_purpose {
-            prefetch_bulk_bindings(
-                Arc::clone(&evidence),
-                Arc::clone(&source),
-                source_capability.clone(),
-                &contexts,
-                &request.claims,
-                &claim_versions,
-                purpose.as_str(),
-                disclosure,
-                FORMAT_CLAIM_RESULT_JSON,
-                &trusted_policy,
-                Arc::clone(&fetch_memo),
-            )
-            .await;
-        }
         let mut join_set: JoinSet<(usize, Result<Vec<ClaimResultView>, EvidenceError>)> =
             JoinSet::new();
         for (input_index, item) in request.items.clone().into_iter().enumerate() {
             let runtime = self.clone();
             let evidence = Arc::clone(&evidence);
-            let source = Arc::clone(&source);
             let permit_semaphore = Arc::clone(&subject_concurrency);
             let claims_list = request.claims.clone();
             let disclosure = request.disclosure.clone();
@@ -797,8 +708,7 @@ impl RegistryNotaryRuntime {
             let principal_id = principal.principal_id.clone();
             let principal_scopes = principal.scopes.clone();
             let principal_authorization_details = principal.authorization_details.clone();
-            let memo_for_task = Arc::clone(&fetch_memo);
-            let source_capability = source_capability.clone();
+            let evaluation_capability = evaluation_capability.clone();
             #[cfg(feature = "registry-notary-cel")]
             let cel_concurrency = cel_concurrency.as_ref().map(Arc::clone);
             join_set.spawn(async move {
@@ -828,12 +738,10 @@ impl RegistryNotaryRuntime {
                 let result = runtime
                     .evaluate_subject_for_batch(
                         evidence,
-                        source,
                         &principal,
-                        source_capability,
+                        evaluation_capability,
                         eval,
                         purpose_for_task.as_str(),
-                        memo_for_task,
                         #[cfg(feature = "registry-notary-cel")]
                         cel_concurrency,
                     )
@@ -903,12 +811,10 @@ impl RegistryNotaryRuntime {
                             )
                         })
                         .transpose()?;
-                    let matching = results.first().and_then(|result| result.matching.clone());
                     items[input_index] = Some(BatchItemResponse {
                         input_index,
                         target_ref,
                         requester_ref,
-                        matching,
                         evaluation_id,
                         status: BatchItemStatus::Succeeded,
                         claim_results,
@@ -935,7 +841,6 @@ impl RegistryNotaryRuntime {
                         input_index,
                         target_ref,
                         requester_ref,
-                        matching: None,
                         evaluation_id: None,
                         status: BatchItemStatus::Failed,
                         claim_results: Vec::new(),
@@ -965,19 +870,18 @@ impl RegistryNotaryRuntime {
     async fn batch_evaluate_registry_backed(
         &self,
         evidence: Arc<EvidenceConfig>,
-        source: Arc<dyn SourceReader>,
         store: &EvidenceStore,
         principal: &EvidencePrincipal,
         request: BatchEvaluateRequest,
         outer_idempotency_key: &str,
         request_hash: String,
         scoped_key: String,
-        source_capability: SourceCapability,
+        evaluation_capability: EvaluationCapability,
         subject_purposes: Vec<String>,
         claim_versions: ClaimVersionSelections,
         owner_quota: Option<(&crate::MachineQuotaLimiter, u32)>,
     ) -> Result<BatchEvaluateResponse, EvidenceError> {
-        ensure_source_capability_matches_principal(principal, &source_capability)?;
+        ensure_evaluation_capability_matches_principal(principal, &evaluation_capability)?;
         let format = request
             .format
             .clone()
@@ -995,16 +899,7 @@ impl RegistryNotaryRuntime {
             disclosure,
         )?;
         let levels = build_claim_levels(&evidence, &request.claims, &claim_versions)?;
-        let request_claim_refs = scoped_authorization_claim_refs(
-            &evidence,
-            &request.claims,
-            &claim_versions,
-            &source_capability,
-        )?;
-        let trusted_policy =
-            TrustedPolicyContext::from_principal(principal).with_request_claims(request_claim_refs);
-
-        // This loop is intentionally pure with respect to Relay and source
+        // This loop is intentionally pure with respect to Relay
         // execution. Every item must pass the complete authorization and
         // request-shape preflight before any item can be forwarded.
         let mut prepared = Vec::with_capacity(request.items.len());
@@ -1016,21 +911,20 @@ impl RegistryNotaryRuntime {
             .enumerate()
         {
             if !item.target.has_matching_input() {
-                return Err(EvidenceError::TargetAttributesInsufficient);
+                return Err(EvidenceError::InvalidRequest);
             }
             for claim_ref in &request.claims {
-                require_source_read_capability(&source_capability, claim_ref)?;
+                require_evaluation_capability(&evaluation_capability, claim_ref)?;
                 let claim = find_claim_for_selection(&evidence, claim_ref, &claim_versions)?;
-                require_claim_access(&evidence, source.as_ref(), principal, claim)?;
+                require_claim_access(principal, claim)?;
                 require_claim_format(claim, &format)?;
             }
             let context = item.request_context();
             validate_request_variables_before_relay(&evidence, &context, &claim_versions, &levels)?;
             preflight_claim_closure(
                 &evidence,
-                source.as_ref(),
                 principal,
-                &source_capability,
+                &evaluation_capability,
                 &claim_versions,
                 &levels,
                 purpose,
@@ -1049,7 +943,7 @@ impl RegistryNotaryRuntime {
                 self.activated_relay.as_ref(),
                 audit,
                 Some((outer_idempotency_key, input_index)),
-                &source_capability,
+                &evaluation_capability,
             )?
             .ok_or(EvidenceError::ConsultationInvalidRequest)?;
             total_groups = total_groups
@@ -1079,8 +973,7 @@ impl RegistryNotaryRuntime {
                 format: format.clone(),
                 evaluation_id: evaluation_ulid.to_string(),
                 relay_plan,
-                trusted_policy: trusted_policy.clone(),
-                source_capability: source_capability.clone(),
+                evaluation_capability: evaluation_capability.clone(),
             });
         }
 
@@ -1109,7 +1002,6 @@ impl RegistryNotaryRuntime {
         for item in prepared {
             let runtime = self.clone();
             let evidence = Arc::clone(&evidence);
-            let source = Arc::clone(&source);
             let permit_semaphore = Arc::clone(&subject_concurrency);
             #[cfg(feature = "registry-notary-cel")]
             let cel_concurrency = cel_concurrency.as_ref().map(Arc::clone);
@@ -1122,7 +1014,6 @@ impl RegistryNotaryRuntime {
                 let result = runtime
                     .evaluate_prepared_registry_batch_item(
                         evidence,
-                        source,
                         item,
                         #[cfg(feature = "registry-notary-cel")]
                         cel_concurrency,
@@ -1188,7 +1079,6 @@ impl RegistryNotaryRuntime {
                         input_index,
                         target_ref,
                         requester_ref,
-                        matching: results.first().and_then(|result| result.matching.clone()),
                         evaluation_id,
                         status: BatchItemStatus::Succeeded,
                         claim_results,
@@ -1201,7 +1091,6 @@ impl RegistryNotaryRuntime {
                         input_index,
                         target_ref,
                         requester_ref,
-                        matching: None,
                         evaluation_id: None,
                         status: BatchItemStatus::Failed,
                         claim_results: Vec::new(),
@@ -1226,7 +1115,6 @@ impl RegistryNotaryRuntime {
     async fn evaluate_prepared_registry_batch_item(
         &self,
         evidence: Arc<EvidenceConfig>,
-        source: Arc<dyn SourceReader>,
         item: PreparedRegistryBatchItem,
         #[cfg(feature = "registry-notary-cel")] cel_concurrency: Option<Arc<Semaphore>>,
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
@@ -1234,20 +1122,14 @@ impl RegistryNotaryRuntime {
         let internal = self
             .evaluate_claims_dag(
                 Arc::clone(&evidence),
-                source,
                 item.context,
-                item.trusted_policy,
                 item.purpose,
-                item.disclosure,
-                item.format.clone(),
                 item.evaluation_id,
                 now,
                 item.claim_versions.clone(),
                 item.levels,
-                Arc::new(Semaphore::new(evidence.concurrency.bindings)),
-                item.source_capability,
+                item.evaluation_capability,
                 Some(item.relay_plan),
-                None,
                 #[cfg(feature = "registry-notary-cel")]
                 cel_concurrency,
                 None,
@@ -1276,31 +1158,27 @@ impl RegistryNotaryRuntime {
     /// Like `evaluate` but without writing the per-subject evaluation to the
     /// store (the caller is responsible). Used by `batch_evaluate` so that
     /// store inserts happen on the calling task that owns `&EvidenceStore`.
-    /// Accepts the per-batch memoization table so sibling subjects can share
-    /// upstream reads.
     #[allow(clippy::too_many_arguments)]
     async fn evaluate_subject_for_batch(
         &self,
         evidence: Arc<EvidenceConfig>,
-        source: Arc<dyn SourceReader>,
         principal: &EvidencePrincipal,
-        source_capability: SourceCapability,
+        evaluation_capability: EvaluationCapability,
         request: EvaluateRequest,
         purpose_override: &str,
-        fetch_memo: FetchMemo,
         #[cfg(feature = "registry-notary-cel")] cel_concurrency: Option<Arc<Semaphore>>,
     ) -> Result<Vec<ClaimResultView>, EvidenceError> {
-        ensure_source_capability_matches_principal(principal, &source_capability)?;
+        ensure_evaluation_capability_matches_principal(principal, &evaluation_capability)?;
         if request.claims.is_empty() {
             return Err(EvidenceError::InvalidRequest);
         }
         let claim_versions = requested_claim_versions(&request.claims)?;
         for claim_id in &request.claims {
-            require_source_read_capability(&source_capability, claim_id)?;
+            require_evaluation_capability(&evaluation_capability, claim_id)?;
         }
         for claim_ref in &request.claims {
             let claim = find_claim_for_selection(&evidence, claim_ref, &claim_versions)?;
-            require_claim_access(&evidence, source.as_ref(), principal, claim)?;
+            require_claim_access(principal, claim)?;
         }
         let format = request
             .format
@@ -1333,28 +1211,19 @@ impl RegistryNotaryRuntime {
         }
         let evaluation_id = Ulid::new().to_string();
         let now = OffsetDateTime::now_utc();
-        let binding_concurrency = Arc::new(Semaphore::new(evidence.concurrency.bindings));
         let internal = self
             .evaluate_claims_dag(
                 Arc::clone(&evidence),
-                Arc::clone(&source),
                 request
                     .request_context()
                     .ok_or(EvidenceError::InvalidRequest)?,
-                TrustedPolicyContext::from_principal(principal).with_request_claims(
-                    selected_claim_refs(&evidence, &request.claims, &claim_versions)?,
-                ),
                 purpose_override.to_string(),
-                disclosure,
-                format.clone(),
                 evaluation_id.clone(),
                 now,
                 claim_versions.clone(),
                 levels,
-                binding_concurrency,
-                source_capability,
+                evaluation_capability,
                 None,
-                Some(fetch_memo),
                 #[cfg(feature = "registry-notary-cel")]
                 cel_concurrency,
                 None,
@@ -1389,20 +1258,14 @@ impl RegistryNotaryRuntime {
     async fn evaluate_claims_dag(
         &self,
         evidence: Arc<EvidenceConfig>,
-        source: Arc<dyn SourceReader>,
         context: EvidenceRequestContext,
-        trusted_policy: TrustedPolicyContext,
         purpose: String,
-        disclosure: DisclosureProfile,
-        format: String,
         evaluation_id: String,
         now: OffsetDateTime,
         claim_versions: ClaimVersionSelections,
         levels: Vec<Vec<String>>,
-        binding_concurrency: Arc<Semaphore>,
-        source_capability: SourceCapability,
+        evaluation_capability: EvaluationCapability,
         relay_plan: Option<Arc<RequestScopedRelayPlan>>,
-        fetch_memo: Option<FetchMemo>,
         #[cfg(feature = "registry-notary-cel")] cel_concurrency: Option<Arc<Semaphore>>,
         correlation_id: Option<BoundedCorrelationId>,
         policy: EvaluationPolicy,
@@ -1424,21 +1287,15 @@ impl RegistryNotaryRuntime {
                 }
                 let ctx = ClaimEvaluationContext {
                     evidence: Arc::clone(&evidence),
-                    source: Arc::clone(&source),
                     self_attestation_rate_keys: Arc::clone(&self.self_attestation_rate_keys),
-                    source_capability: source_capability.clone(),
+                    evaluation_capability: evaluation_capability.clone(),
                     relay_plan: relay_plan.as_ref().map(Arc::clone),
                     context: context.clone(),
-                    trusted_policy: trusted_policy.clone(),
                     purpose: purpose.clone(),
-                    disclosure,
-                    format: format.clone(),
                     correlation_id: correlation_id.clone(),
                     evaluation_id: evaluation_id.clone(),
                     policy: policy.clone(),
                     now,
-                    binding_concurrency: Arc::clone(&binding_concurrency),
-                    fetch_memo: fetch_memo.as_ref().map(Arc::clone),
                     claim_versions: claim_versions.clone(),
                     #[cfg(feature = "registry-notary-cel")]
                     cel_worker: self.cel_worker.as_ref().map(Arc::clone),
@@ -1448,12 +1305,6 @@ impl RegistryNotaryRuntime {
                     cel_config: Arc::clone(&self.cel_config),
                 };
                 let prior_for_task = Arc::clone(&prior);
-                // We do not acquire a permit here. The `bindings` cap applies to
-                // outbound source reads (the actual upstream work) and is taken
-                // inside `load_sources`. Acquiring at this level too would
-                // deadlock when bindings <= sibling claims, since each spawned
-                // task would hold a permit and then block waiting for one inside
-                // load_sources.
                 tasks.spawn(async move {
                     let correlation_id = ctx.correlation_id.clone();
                     let evaluation = evaluate_claim_task(ctx, &claim_id, prior_for_task);
@@ -1565,11 +1416,10 @@ fn validate_request_variables_before_relay(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn preflight_claim_closure<R: SourceReader + ?Sized>(
+fn preflight_claim_closure(
     evidence: &EvidenceConfig,
-    source: &R,
     principal: &EvidencePrincipal,
-    source_capability: &SourceCapability,
+    evaluation_capability: &EvaluationCapability,
     claim_versions: &ClaimVersionSelections,
     levels: &[Vec<String>],
     purpose: &str,
@@ -1580,28 +1430,18 @@ fn preflight_claim_closure<R: SourceReader + ?Sized>(
         if !claim.operations.evaluate.enabled {
             return Err(EvidenceError::OperationUnsupported);
         }
-        require_claim_access(evidence, source, principal, claim)?;
+        require_claim_access(principal, claim)?;
         match &claim.evidence_mode {
             ClaimEvidenceMode::RegistryBacked { .. } => {
-                require_relay_consultation_capability(source_capability, &claim.id)?;
+                require_relay_consultation_capability(evaluation_capability, &claim.id)?;
                 if !relay_is_activated {
-                    return Err(EvidenceError::SourceUnavailable);
+                    return Err(EvidenceError::EvidenceNotAvailable);
                 }
                 if claim.purpose.as_deref() != Some(purpose) {
                     return Err(EvidenceError::PurposeNotAllowed);
                 }
             }
             ClaimEvidenceMode::SelfAttested => {}
-            ClaimEvidenceMode::TransitionalDirect => {
-                for dependency_id in &claim.depends_on {
-                    if find_claim_for_selection(evidence, dependency_id, claim_versions)?
-                        .evidence_mode
-                        .is_registry_backed()
-                    {
-                        return Err(EvidenceError::InvalidRequest);
-                    }
-                }
-            }
         }
     }
     Ok(())
@@ -1619,7 +1459,7 @@ fn plan_relay_consultations(
     activated_relay: Option<&Arc<dyn ActivatedRelayConsultations>>,
     audit: Arc<EvaluationAuditCollector>,
     batch: Option<(&str, usize)>,
-    source_capability: &SourceCapability,
+    evaluation_capability: &EvaluationCapability,
 ) -> Result<Option<Arc<RequestScopedRelayPlan>>, EvidenceError> {
     let mut entries = Vec::new();
     for claim_id in levels.iter().flatten() {
@@ -1674,7 +1514,7 @@ fn plan_relay_consultations(
     }
     let activated = activated_relay
         .map(Arc::clone)
-        .ok_or(EvidenceError::SourceUnavailable)?;
+        .ok_or(EvidenceError::EvidenceNotAvailable)?;
     let plan = match batch {
         Some((outer_key, item_position)) => {
             RequestScopedRelayPlan::new_batch(entries, outer_key, item_position, activated, audit)
@@ -1683,8 +1523,8 @@ fn plan_relay_consultations(
     };
     plan.map(Arc::new).map(Some).map_err(|_| {
         if matches!(
-            source_capability,
-            SourceCapability::DelegatedAttestation { .. }
+            evaluation_capability,
+            EvaluationCapability::DelegatedAttestation { .. }
         ) {
             delegated_proof_denied()
         } else {
@@ -1758,7 +1598,7 @@ pub(super) async fn evaluate_claim_task(
     }
     ensure_delegated_capability_context_binding(&ctx)?;
     if let Some(proof_claim_id) = ctx
-        .source_capability
+        .evaluation_capability
         .required_delegated_proof_for_claim(claim_id)
     {
         let proof_satisfied = prior
@@ -1771,68 +1611,20 @@ pub(super) async fn evaluate_claim_task(
             return Err(delegated_relationship_unproven());
         }
     }
-    let delegated_proof_claim = ctx.source_capability.is_delegated_proof_claim(claim_id);
-    let (
-        sources,
-        observed_at,
-        redaction_fields,
-        matching_policy_audit,
-        direct_source_count,
-        mut relay_consultation_ids,
-        legacy_direct,
-    ) = match &claim.evidence_mode {
-        ClaimEvidenceMode::TransitionalDirect => {
-            let sources_result = load_sources(
-                Arc::clone(&ctx.evidence),
-                Arc::clone(&ctx.source),
-                Arc::clone(&claim_arc(&claim)),
-                ctx.source_capability.clone(),
-                ctx.context.clone(),
-                ctx.trusted_policy.clone(),
-                ctx.purpose.clone(),
-                ctx.disclosure,
-                ctx.format.clone(),
-                Arc::clone(&ctx.binding_concurrency),
-                ctx.fetch_memo.clone(),
-            )
-            .await;
-            let (sources, observed_at, redaction_fields, matching_policy_audit) =
-                match sources_result {
-                    Ok(loaded) => loaded,
-                    Err(_) if delegated_proof_claim => return Err(delegated_proof_denied()),
-                    Err(error) => return Err(error),
-                };
-            let source_count = sources.len();
-            (
-                sources,
-                observed_at,
-                redaction_fields,
-                matching_policy_audit,
-                source_count,
-                BTreeSet::new(),
-                true,
-            )
-        }
-        ClaimEvidenceMode::SelfAttested => (
-            BTreeMap::new(),
-            None,
-            BTreeSet::new(),
-            None,
-            0,
-            BTreeSet::new(),
-            false,
-        ),
+    let delegated_proof_claim = ctx.evaluation_capability.is_delegated_proof_claim(claim_id);
+    let (sources, observed_at, mut relay_consultation_ids) = match &claim.evidence_mode {
+        ClaimEvidenceMode::SelfAttested => (BTreeMap::new(), None, BTreeSet::new()),
         ClaimEvidenceMode::RegistryBacked { .. } => {
-            require_relay_consultation_capability(&ctx.source_capability, &claim.id)?;
+            require_relay_consultation_capability(&ctx.evaluation_capability, &claim.id)?;
             let plan = ctx
                 .relay_plan
                 .as_ref()
-                .ok_or(EvidenceError::SourceUnavailable)?;
+                .ok_or(EvidenceError::EvidenceNotAvailable)?;
             let result = plan.consult(&claim.id).await.map_err(|_| {
                 if delegated_proof_claim {
                     delegated_proof_denied()
                 } else {
-                    EvidenceError::SourceUnavailable
+                    EvidenceError::EvidenceNotAvailable
                 }
             })?;
             let relay_outcome = result.outcome();
@@ -1847,13 +1639,13 @@ pub(super) async fn evaluate_claim_task(
                 RuntimeRelayOutcome::NoMatch
                     if matches!(&claim.rule, RuleConfig::Extract { .. }) =>
                 {
-                    Err(EvidenceError::SourceNotFound)
+                    Err(EvidenceError::EvidenceNotAvailable)
                 }
                 RuntimeRelayOutcome::NoMatch if matches!(&claim.rule, RuleConfig::Cel { .. }) => {
                     materialize_relay_absence(&claim)
                 }
                 RuntimeRelayOutcome::NoMatch => Ok(BTreeMap::new()),
-                RuntimeRelayOutcome::Ambiguous => Err(EvidenceError::SourceAmbiguous),
+                RuntimeRelayOutcome::Ambiguous => Err(EvidenceError::EvidenceNotAvailable),
             };
             let sources = sources_result.map_err(|error| {
                 if delegated_proof_claim {
@@ -1869,26 +1661,20 @@ pub(super) async fn evaluate_claim_task(
             (
                 sources,
                 Some(result.acquired_at()),
-                BTreeSet::new(),
-                None,
-                0,
                 BTreeSet::from([result.consultation_id().to_string()]),
-                false,
             )
         }
     };
-    // When a memoized entry was used, `observed_at` carries the timestamp of
-    // the original upstream read. Use that as `iat` so sibling subjects that
-    // share a read produce credentials with identical issued_at values.
+    // Relay acquisition time pins the result to the consultation evidence.
     let issued_at = observed_at.unwrap_or(ctx.now);
     let value_result = match &claim.rule {
         RuleConfig::Extract { source, field } => {
             let record = sources
                 .get(source)
-                .ok_or(EvidenceError::SourceUnavailable)?;
+                .ok_or(EvidenceError::EvidenceNotAvailable)?;
             let value = get_json_path(record, field)
                 .cloned()
-                .ok_or(EvidenceError::SourceNotFound)?;
+                .ok_or(EvidenceError::RuleEvaluationFailed)?;
             validate_claim_value_config(&value, &claim.value)?;
             Ok(value)
         }
@@ -1945,67 +1731,29 @@ pub(super) async fn evaluate_claim_task(
     if delegated_proof_claim && value.as_bool() != Some(true) {
         return Err(delegated_relationship_unproven());
     }
-    // The source_count for this claim is the number of direct sources it
-    // read, plus the accumulated source_count from any dependency claims
-    // that were evaluated to satisfy depends_on. This ensures predicate
-    // and CEL claims that have no source_bindings of their own still
-    // report the registry reads performed by their dependencies.
-    let (dep_source_count, mut source_runtime_summaries): (
-        usize,
-        BTreeMap<(String, String), SourceRuntimeSummary>,
-    ) = {
+    {
         let snapshot = prior.lock().expect("prior mutex is not poisoned");
-        let mut count = 0;
-        let mut summaries = BTreeMap::new();
         for dep in claim
             .depends_on
             .iter()
             .filter_map(|dep_id| snapshot.get(dep_id))
         {
-            count += dep
-                .provenance
-                .used
-                .source_count
-                .saturating_sub(dep.relay_consultation_ids.len());
             relay_consultation_ids.extend(dep.relay_consultation_ids.iter().cloned());
-            for summary in &dep.provenance.used.source_runtimes {
-                summaries
-                    .entry((summary.kind.clone(), summary.config_hash.clone()))
-                    .or_insert_with(|| summary.clone());
-            }
-        }
-        (count, summaries)
-    };
-    if legacy_direct {
-        for summary in ctx
-            .source
-            .observed_source_runtimes(&ctx.evidence, &claim.id)
-            .await
-        {
-            source_runtime_summaries
-                .insert((summary.kind.clone(), summary.config_hash.clone()), summary);
         }
     }
-    let source_runtimes = source_runtime_summaries.into_values().collect();
-    let matching = claim_matching_metadata(&ctx.evidence, &claim, matching_policy_audit.as_ref());
     let mut provenance = ClaimProvenance::new(
         ctx.evidence.service_id.clone(),
         ctx.evaluation_id.clone(),
         claim.id.clone(),
         claim.version.clone(),
         ProvenanceUsed {
-            source_count: direct_source_count + dep_source_count + relay_consultation_ids.len(),
+            source_count: relay_consultation_ids.len(),
             source_versions: BTreeMap::new(),
-            source_runtimes,
         },
     );
     provenance.generated_by.policy_id = ctx.policy.policy_id.clone();
     provenance.generated_by.policy_version = ctx.policy.policy_version.clone();
     provenance.generated_by.policy_hash = ctx.policy.policy_hash.clone();
-    if let Some(matching) = &matching {
-        provenance.generated_by.pack_id = matching.pack_id.clone();
-        provenance.generated_by.pack_version = matching.pack_version.clone();
-    }
     Ok(ClaimResultInternal {
         evaluation_id: ctx.evaluation_id.clone(),
         claim_id: claim.id.clone(),
@@ -2013,9 +1761,8 @@ pub(super) async fn evaluate_claim_task(
         subject_type: claim.subject_type.clone(),
         target: ctx.context.target.clone(),
         requester: ctx.context.requester.clone(),
-        matching,
         value,
-        redaction_fields,
+        redaction_fields: BTreeSet::new(),
         issued_at,
         expires_at: None,
         provenance,
@@ -2065,8 +1812,8 @@ pub(super) fn materialize_relay_absence(
         .ok_or(EvidenceError::RuleEvaluationFailed)?;
     let mut record: serde_json::Map<String, Value> = consultation
         .outputs
-        .iter()
-        .map(|(name, _)| (name.clone(), Value::Null))
+        .keys()
+        .map(|name| (name.clone(), Value::Null))
         .collect();
     record.insert("matched".to_string(), Value::Bool(false));
     record.insert("outcome".to_string(), Value::String("no_match".to_string()));

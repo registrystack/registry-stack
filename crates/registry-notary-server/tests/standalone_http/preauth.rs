@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use super::preauth_support::*;
 use super::support::*;
 #[allow(unused_imports)]
 use super::{
     admin::*, audit::*, auth::*, credentials::*, federation::*, http_contracts::*, oid4vci::*,
-    sources::*,
 };
 
 #[tokio::test]
@@ -1318,20 +1318,10 @@ pub(super) async fn preauth_existing_esignet_token_still_authenticates_credentia
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(self_attestation_registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let app = standalone_router(preauth_test_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp,
         &token_upstream,
@@ -1367,20 +1357,10 @@ pub(super) async fn preauth_notary_access_token_with_empty_authorization_details
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(self_attestation_registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let app = standalone_router(preauth_test_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp,
         &token_upstream,
@@ -1429,20 +1409,10 @@ pub(super) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
-    let upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(self_attestation_registry_data_api),
-        ));
-    let base_url = upstream
-        .server_address()
-        .expect("upstream address")
-        .to_string();
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let app = standalone_router(preauth_test_config(
-        base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp,
         &token_upstream,
@@ -1598,20 +1568,10 @@ pub(super) async fn preauth_credential_subject_and_evaluation_match_esignet_toke
     // subject-binding claim is the same civil id the pre-auth login carries.
     let baseline_idp = MockIdp::start().await;
     let baseline_token_upstream = MockHttpUpstream::start().await;
-    let baseline_upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(self_attestation_registry_data_api),
-        ));
-    let baseline_base_url = baseline_upstream
-        .server_address()
-        .expect("baseline upstream address")
-        .to_string();
     let baseline_tmp = TempDir::new().expect("tempdir");
     let baseline_audit_path = baseline_tmp.path().join("audit.jsonl");
     let baseline_app = standalone_router(preauth_test_config(
-        baseline_base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         baseline_audit_path.to_str().expect("audit path is UTF-8"),
         &baseline_idp,
         &baseline_token_upstream,
@@ -1667,20 +1627,10 @@ pub(super) async fn preauth_credential_subject_and_evaluation_match_esignet_toke
     // login leg (the offer/start -> callback -> token chain).
     let preauth_idp = MockIdp::start().await;
     let preauth_token_upstream = MockHttpUpstream::start().await;
-    let preauth_upstream = TestServer::builder()
-        .http_transport()
-        .build(Router::new().route(
-            "/v1/datasets/people/entities/person/records",
-            get(self_attestation_registry_data_api),
-        ));
-    let preauth_base_url = preauth_upstream
-        .server_address()
-        .expect("preauth upstream address")
-        .to_string();
     let preauth_tmp = TempDir::new().expect("tempdir");
     let preauth_audit_path = preauth_tmp.path().join("audit.jsonl");
     let preauth_app = standalone_router(preauth_test_config(
-        preauth_base_url.trim_end_matches('/'),
+        "http://127.0.0.1:1",
         preauth_audit_path.to_str().expect("audit path is UTF-8"),
         &preauth_idp,
         &preauth_token_upstream,

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use super::preauth_support::*;
 use super::support::*;
 #[allow(unused_imports)]
 use super::{
     audit::*, auth::*, credentials::*, federation::*, http_contracts::*, oid4vci::*, preauth::*,
-    sources::*,
 };
 
 #[tokio::test]
@@ -18,11 +18,10 @@ pub(super) async fn admin_reload_401_unauth_403_wrong_scope_501_admin() {
         "TEST_EVIDENCE_WRONG_SCOPE_KEY_HASH",
         "sha256:ac3dced2bcf7d2cb4166747790d67437b5cc5314ed33e01d06b274a7fe0c3b3c",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -100,11 +99,10 @@ pub(super) async fn admin_posture_requires_ops_read_not_admin_and_ops_cannot_rel
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -170,11 +168,10 @@ pub(super) async fn admin_capabilities_requires_ops_read_and_reports_notary_surf
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -285,11 +282,10 @@ pub(super) async fn dedicated_topology_splits_admin_routes_and_reports_capabilit
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -299,7 +295,7 @@ pub(super) async fn dedicated_topology_splits_admin_routes_and_reports_capabilit
     let routers = notary_routers_from_runtime(
         compile_notary_runtime(config).expect("runtime compiles for dedicated topology"),
     )
-    .expect("direct-source runtime is serve-ready");
+    .expect("Notary-only runtime is serve-ready");
     let public = TestServer::builder().http_transport().build(routers.public);
     let admin = TestServer::builder().http_transport().build(routers.admin);
 
@@ -348,11 +344,10 @@ pub(super) async fn governed_config_rejects_shared_admin_listener_topology() {
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -374,28 +369,6 @@ pub(super) async fn governed_config_rejects_shared_admin_listener_topology() {
     );
 }
 
-#[test]
-pub(super) fn governed_config_docs_do_not_ship_unresolved_config_trust_placeholders() {
-    let doc = fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../products/notary/docs/operator-config-reference.md"),
-    )
-    .expect("operator config reference reads");
-
-    assert!(
-        doc.contains("syntactically valid but illustrative"),
-        "governed config example must be explicitly labeled as illustrative"
-    );
-    assert!(
-        !doc.contains("REPLACE_WITH_FINAL"),
-        "governed config example must not contain replacement placeholders"
-    );
-    assert!(
-        !doc.contains("TUF_TARGETS_ROLE_KEY_ID"),
-        "governed config example must not mention retired TUF key placeholders"
-    );
-}
-
 #[tokio::test]
 pub(super) async fn admin_posture_rejects_unknown_tier_with_shared_error_code() {
     set_audit_secret();
@@ -403,11 +376,10 @@ pub(super) async fn admin_posture_rejects_unknown_tier_with_shared_error_code() 
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -438,11 +410,10 @@ pub(super) async fn admin_posture_reports_configured_instance_override() {
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -477,11 +448,10 @@ pub(super) async fn admin_posture_top_level_keys_match_documented_example() {
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -559,7 +529,6 @@ pub(super) async fn admin_posture_top_level_keys_match_documented_example() {
 #[tokio::test]
 pub(super) async fn admin_posture_reports_self_attestation_summary_and_redacts_signing_key_ids() {
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let issuer = MockIdp::start().await;
     let issuer_url = issuer.issuer();
@@ -695,32 +664,21 @@ pub(super) async fn admin_posture_reports_oid4vci_bearer_offer_mode() {
 }
 
 #[tokio::test]
-pub(super) async fn admin_posture_redacts_runtime_config_secrets_and_private_topology() {
+pub(super) async fn admin_posture_redacts_runtime_config_signing_secrets() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "very-secret-source-token");
-    std::env::set_var("TEST_UNUSED_SOURCE_TOKEN", "unused-secret-source-token");
     std::env::set_var("TEST_POSTURE_PRIVATE_JWK", TEST_ISSUER_JWK);
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1/private-source?token=source-url-secret",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
     enable_shared_admin_listener(&mut config);
-    let mut unused_connection = config.evidence.source_connections["farmer_registry"].clone();
-    unused_connection.base_url =
-        "http://10.24.0.9/internal/source-adapter?token=unused-url-secret".to_string();
-    unused_connection.token_env = "TEST_UNUSED_SOURCE_TOKEN".to_string();
-    unused_connection.bulk_mode = BulkMode::SourceAdapterSidecarBatch;
-    config.evidence.source_connections.insert(
-        "private_unused_source_adapter".to_string(),
-        unused_connection,
-    );
     config.evidence.signing_keys.insert(
         "issuer".to_string(),
         SigningKeyConfig {
@@ -740,18 +698,6 @@ pub(super) async fn admin_posture_redacts_runtime_config_secrets_and_private_top
             password_env: String::new(),
         },
     );
-    let claim = config
-        .evidence
-        .claims
-        .iter_mut()
-        .find(|claim| claim.id == "farmed-land-size")
-        .expect("farmed-land-size claim exists");
-    claim
-        .source_bindings
-        .get_mut("farmer")
-        .expect("farmer source binding exists")
-        .matching
-        .policy_id = Some("civil-id-policy-1234567890123".to_string());
     add_ops_read_api_key(&mut config);
 
     let app = standalone_router(config).expect("standalone router builds");
@@ -763,14 +709,6 @@ pub(super) async fn admin_posture_redacts_runtime_config_secrets_and_private_top
     posture.assert_status_ok();
     let text = posture.text();
 
-    assert!(!text.contains("very-secret-source-token"));
-    assert!(!text.contains("unused-secret-source-token"));
-    assert!(!text.contains("source-url-secret"));
-    assert!(!text.contains("unused-url-secret"));
-    assert!(!text.contains("http://127.0.0.1:1/private-source"));
-    assert!(!text.contains("http://10.24.0.9/internal/source-adapter"));
-    assert!(!text.contains("TEST_EVIDENCE_SOURCE_TOKEN"));
-    assert!(!text.contains("TEST_UNUSED_SOURCE_TOKEN"));
     assert!(!text.contains("TEST_EVIDENCE_API_KEY_HASH"));
     assert!(!text.contains("TEST_POSTURE_PRIVATE_JWK"));
     assert!(
@@ -779,8 +717,6 @@ pub(super) async fn admin_posture_redacts_runtime_config_secrets_and_private_top
     assert!(!text.contains("2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw"));
     assert!(!text.contains("private_jwk"));
     assert!(!text.contains("\"d\""));
-    assert!(!text.contains("token_env"));
-    assert!(!text.contains("civil-id-policy-1234567890123"));
     assert!(!text.contains("disclosure"));
     assert!(!text.contains("predicate"));
     // The disclosure config must not leak. `audit.redaction_mode: "redacted"` is
@@ -791,222 +727,17 @@ pub(super) async fn admin_posture_redacts_runtime_config_secrets_and_private_top
 }
 
 #[tokio::test]
-pub(super) async fn admin_posture_hash_ignores_secret_only_config_changes() {
-    set_audit_secret();
-    std::env::set_var(
-        "TEST_EVIDENCE_API_KEY_HASH",
-        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
-    );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
-    std::env::set_var("TEST_ROTATED_SOURCE_TOKEN", "rotated-source-token");
-
-    let tmp = TempDir::new().expect("tempdir");
-    let first_audit_path = tmp.path().join("first-audit.jsonl");
-    let second_audit_path = tmp.path().join("second-audit.jsonl");
-    let mut first = registry_data_api_config(
-        "http://127.0.0.1:1",
-        first_audit_path.to_str().expect("audit path is UTF-8"),
-    );
-    let mut second = registry_data_api_config(
-        "http://127.0.0.1:1",
-        second_audit_path.to_str().expect("audit path is UTF-8"),
-    );
-    enable_shared_admin_listener(&mut first);
-    enable_shared_admin_listener(&mut second);
-    first
-        .evidence
-        .source_connections
-        .get_mut("farmer_registry")
-        .expect("farmer source connection exists")
-        .token_env = "TEST_EVIDENCE_SOURCE_TOKEN".to_string();
-    second
-        .evidence
-        .source_connections
-        .get_mut("farmer_registry")
-        .expect("farmer source connection exists")
-        .token_env = "TEST_ROTATED_SOURCE_TOKEN".to_string();
-    second
-        .evidence
-        .source_connections
-        .get_mut("farmer_registry")
-        .expect("farmer source connection exists")
-        .base_url = "http://127.0.0.1:2/private-source".to_string();
-    add_ops_read_api_key(&mut first);
-    add_ops_read_api_key(&mut second);
-    let first_internal_hash = internal_config_hash(
-        serde_json::to_string(&first)
-            .expect("config serializes")
-            .as_bytes(),
-    );
-
-    let first_server = TestServer::builder()
-        .http_transport()
-        .build(standalone_router(first).expect("first router builds"));
-    let second_server = TestServer::builder()
-        .http_transport()
-        .build(standalone_router(second).expect("second router builds"));
-
-    let first_posture = first_server
-        .get("/admin/v1/posture")
-        .add_header("x-api-key", "ops-token")
-        .await;
-    first_posture.assert_status_ok();
-    let second_posture = second_server
-        .get("/admin/v1/posture")
-        .add_header("x-api-key", "ops-token")
-        .await;
-    second_posture.assert_status_ok();
-    let first_body: Value = first_posture.json();
-    let second_body: Value = second_posture.json();
-    assert_matches_posture_schema(&first_body);
-    assert_matches_posture_schema(&second_body);
-
-    assert_eq!(
-        first_body["configuration"]["last_config_hash"],
-        second_body["configuration"]["last_config_hash"]
-    );
-    assert_ne!(
-        first_body["configuration"]["last_config_hash"],
-        json!(first_internal_hash)
-    );
-}
-
-#[tokio::test]
-pub(super) async fn admin_posture_hash_tracks_public_instance_config_changes() {
-    set_audit_secret();
-    std::env::set_var(
-        "TEST_EVIDENCE_API_KEY_HASH",
-        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
-    );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
-
-    let tmp = TempDir::new().expect("tempdir");
-    let first_audit_path = tmp.path().join("first-audit.jsonl");
-    let second_audit_path = tmp.path().join("second-audit.jsonl");
-    let mut first = registry_data_api_config(
-        "http://127.0.0.1:1",
-        first_audit_path.to_str().expect("audit path is UTF-8"),
-    );
-    let mut second = registry_data_api_config(
-        "http://127.0.0.1:1",
-        second_audit_path.to_str().expect("audit path is UTF-8"),
-    );
-    enable_shared_admin_listener(&mut first);
-    enable_shared_admin_listener(&mut second);
-    first.instance.owner = Some("operations".to_string());
-    second.instance.owner = Some("data-office".to_string());
-    first
-        .evidence
-        .source_connections
-        .get_mut("farmer_registry")
-        .expect("farmer source connection exists")
-        .token_env = "TEST_EVIDENCE_SOURCE_TOKEN".to_string();
-    second
-        .evidence
-        .source_connections
-        .get_mut("farmer_registry")
-        .expect("farmer source connection exists")
-        .token_env = "TEST_EVIDENCE_SOURCE_TOKEN".to_string();
-    add_ops_read_api_key(&mut first);
-    add_ops_read_api_key(&mut second);
-
-    let first_server = TestServer::builder()
-        .http_transport()
-        .build(standalone_router(first).expect("first router builds"));
-    let second_server = TestServer::builder()
-        .http_transport()
-        .build(standalone_router(second).expect("second router builds"));
-
-    let first_posture = first_server
-        .get("/admin/v1/posture")
-        .add_header("x-api-key", "ops-token")
-        .await;
-    first_posture.assert_status_ok();
-    let second_posture = second_server
-        .get("/admin/v1/posture")
-        .add_header("x-api-key", "ops-token")
-        .await;
-    second_posture.assert_status_ok();
-    let first_body: Value = first_posture.json();
-    let second_body: Value = second_posture.json();
-
-    assert_ne!(
-        first_body["configuration"]["last_config_hash"],
-        second_body["configuration"]["last_config_hash"]
-    );
-}
-
-#[tokio::test]
-pub(super) async fn admin_posture_counts_configured_but_unused_source_connections_by_safe_kind() {
-    set_audit_secret();
-    std::env::set_var(
-        "TEST_EVIDENCE_API_KEY_HASH",
-        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
-    );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
-    std::env::set_var("TEST_UNUSED_DCI_SOURCE_TOKEN", "unused-dci-source-token");
-    std::env::set_var(
-        "TEST_UNUSED_GENERIC_SOURCE_TOKEN",
-        "unused-generic-source-token",
-    );
-
-    let tmp = TempDir::new().expect("tempdir");
-    let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
-        "http://127.0.0.1:1",
-        audit_path.to_str().expect("audit path is UTF-8"),
-    );
-    enable_shared_admin_listener(&mut config);
-    let mut unused_dci = config.evidence.source_connections["farmer_registry"].clone();
-    unused_dci.base_url = "http://127.0.0.1:2/private-dci".to_string();
-    unused_dci.token_env = "TEST_UNUSED_DCI_SOURCE_TOKEN".to_string();
-    unused_dci.bulk_mode = BulkMode::DciBatchedSearch;
-    config
-        .evidence
-        .source_connections
-        .insert("unused_dci".to_string(), unused_dci);
-    let mut unused_generic = config.evidence.source_connections["farmer_registry"].clone();
-    unused_generic.base_url = "http://127.0.0.1:3/private-generic".to_string();
-    unused_generic.token_env = "TEST_UNUSED_GENERIC_SOURCE_TOKEN".to_string();
-    config
-        .evidence
-        .source_connections
-        .insert("unused_generic".to_string(), unused_generic);
-    add_ops_read_api_key(&mut config);
-
-    let app = standalone_router(config).expect("standalone router builds");
-    let server = TestServer::builder().http_transport().build(app);
-    let posture = server
-        .get("/admin/v1/posture")
-        .add_header("x-api-key", "ops-token")
-        .await;
-    posture.assert_status_ok();
-    let body: Value = posture.json();
-    assert_matches_posture_schema(&body);
-    assert_eq!(
-        body["notary"]["source_connection_counts"]["registry_data_api"],
-        json!(1)
-    );
-    assert_eq!(body["notary"]["source_connection_counts"]["dci"], json!(1));
-    assert_eq!(
-        body["notary"]["source_connection_counts"]["unknown"],
-        json!(1)
-    );
-}
-
-#[tokio::test]
 pub(super) async fn admin_posture_classifies_replay_storage() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
     std::env::set_var("TEST_REPLAY_REDIS_URL", "redis://127.0.0.1:6379/0");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -1034,11 +765,10 @@ pub(super) async fn admin_posture_warns_for_production_like_in_memory_replay() {
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
@@ -1110,11 +840,10 @@ pub(super) async fn metrics_requires_metrics_scope_and_keeps_health_public() {
         "TEST_EVIDENCE_ADMIN_KEY_HASH",
         "sha256:10a4c7c9fc5206d6f36dc6944a81bb6f4a3cb0e25014ae3b12e6c3e52712292a",
     );
-    std::env::set_var("TEST_EVIDENCE_SOURCE_TOKEN", "source-token");
 
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = registry_data_api_config(
+    let mut config = notary_only_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );

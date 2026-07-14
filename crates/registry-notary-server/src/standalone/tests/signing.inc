@@ -847,12 +847,11 @@ credential_profiles:
                 identifier_schemes: vec!["registry-subject-ref".to_string()],
                 profile: None,
             },
-            matching: None,
             value: Some(serde_json::json!({ "verified": true })),
             satisfied: Some(true),
             disclosure: "value".to_string(),
             redacted_fields: Vec::new(),
-            format: FORMAT_CLAIM_RESULT_JSON.to_string(),
+            format: registry_notary_core::FORMAT_CLAIM_RESULT_JSON.to_string(),
             issued_at: "2026-05-23T00:00:00Z".to_string(),
             expires_at: None,
             provenance: ClaimProvenance::new(
@@ -863,7 +862,6 @@ credential_profiles:
                 registry_notary_core::ProvenanceUsed {
                     source_count: 0,
                     source_versions: BTreeMap::new(),
-                    source_runtimes: Vec::new(),
                 },
             ),
         }];
