@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use registryctl::{
     BundleSignOptions, DeploymentProfile, DoctorFormat, ProjectBuildOptions, ProjectCheckOptions,
-    ProjectInitOptions, ProjectStarter, ProjectTestOptions, ProjectTestSelection, Sample,
+    ProjectCommandReport, ProjectInitOptions, ProjectStarter, ProjectTestOptions,
+    ProjectTestSelection, Sample,
 };
 
 fn main() -> Result<()> {
@@ -94,17 +95,37 @@ fn main() -> Result<()> {
             project_dir,
             environment,
             explain,
+            format,
             against,
             anchor,
-        } => print_json(&registryctl::check_registry_project(
-            &ProjectCheckOptions {
+        } => {
+            let report = registryctl::check_registry_project(&ProjectCheckOptions {
                 project_directory: project_dir,
                 environment,
-                explain,
+                explain: explain || format == ProjectReportFormat::Human,
                 against,
                 anchor,
+            })?;
+            match format {
+                ProjectReportFormat::Human => {
+                    println!("{}", render_check_report(&report, explain)?)
+                }
+                ProjectReportFormat::Json => print_json(&report)?,
+            }
+        }
+        Commands::Authoring { command } => match command {
+            AuthoringCommand::Xw { format } => match format {
+                XwFormat::Reference => print!(
+                    "{}",
+                    registry_relay::rhai_worker::xw::generated_function_reference()
+                ),
+                XwFormat::Editor => print!(
+                    "{}",
+                    registry_relay::rhai_worker::xw::generated_editor_metadata()
+                ),
             },
-        )?)?,
+            AuthoringCommand::Schema { kind } => print!("{}", kind.document()),
+        },
         Commands::Build {
             project_dir,
             environment,
@@ -218,9 +239,8 @@ fn watch_project_tests_until(
 ) -> Result<()> {
     let mut completed_runs = 0;
     loop {
-        print_json(&registryctl::test_registry_project_selected(
-            &options, &selection,
-        )?)?;
+        let report = registryctl::test_registry_project_selected(&options, &selection)?;
+        println!("{}", render_test_summary(&report));
         let observed = project_watch_fingerprint(&options.project_directory)?;
         completed_runs += 1;
         if should_stop_after_observation(completed_runs, &options.project_directory)? {
@@ -293,6 +313,278 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
     Ok(())
 }
 
+fn render_test_summary(report: &ProjectCommandReport) -> String {
+    let passed = report
+        .fixtures
+        .iter()
+        .filter(|fixture| fixture.passed)
+        .count();
+    let failed = report.fixtures.len().saturating_sub(passed);
+    let mut output = format!(
+        "{}: {passed}/{} fixtures passed",
+        if failed == 0 { "PASS" } else { "FAIL" },
+        report.fixtures.len()
+    );
+    for fixture in report.fixtures.iter().filter(|fixture| !fixture.passed) {
+        output.push_str(&format!(
+            "\n  {}.{}: {}",
+            fixture.integration,
+            fixture.fixture,
+            fixture.failure.as_deref().unwrap_or("failed")
+        ));
+    }
+    output
+}
+
+fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let explanation = report
+        .explanation
+        .as_ref()
+        .context("human check output requires the redacted project explanation")?;
+    let mut output = String::new();
+    writeln!(
+        output,
+        "Registry Stack project: {} ({})",
+        report.project, report.status
+    )?;
+    writeln!(
+        output,
+        "Environment: {}",
+        report.environment.as_deref().unwrap_or("none")
+    )?;
+    writeln!(output, "Baseline: {}", report.baseline)?;
+    if report.semantic_changes.is_empty() {
+        writeln!(
+            output,
+            "Semantic changes: {}",
+            if report.baseline == "initial_without_baseline" {
+                "not compared (initial review)"
+            } else {
+                "none"
+            }
+        )?;
+    } else {
+        writeln!(
+            output,
+            "Semantic changes: {}",
+            report
+                .semantic_changes
+                .iter()
+                .map(|change| change.dimension)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )?;
+    }
+
+    let passed = report
+        .fixtures
+        .iter()
+        .filter(|fixture| fixture.passed)
+        .count();
+    writeln!(
+        output,
+        "Fixtures: {passed}/{} passed",
+        report.fixtures.len()
+    )?;
+    let mut by_integration = std::collections::BTreeMap::<&str, (usize, usize)>::new();
+    for fixture in &report.fixtures {
+        let totals = by_integration
+            .entry(fixture.integration.as_str())
+            .or_default();
+        totals.1 += 1;
+        totals.0 += usize::from(fixture.passed);
+    }
+    for (integration, (passed, total)) in by_integration {
+        writeln!(output, "  {integration}: {passed}/{total} passed")?;
+    }
+
+    writeln!(output, "Effective authority and limits:")?;
+    if let Some(integrations) = explanation
+        .get("integrations")
+        .and_then(serde_json::Value::as_object)
+    {
+        for (name, integration) in integrations {
+            let capability = integration
+                .get("capability")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            writeln!(output, "  {name}: capability={capability}")?;
+            if let Some(bounds) = integration
+                .get("bounds")
+                .and_then(serde_json::Value::as_object)
+            {
+                let rendered = bounds
+                    .iter()
+                    .map(|(name, bound)| {
+                        let value = bound.get("value").unwrap_or(&serde_json::Value::Null);
+                        let unit = bound
+                            .get("unit")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("");
+                        let source = bound
+                            .get("source")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("intrinsic");
+                        format!("{name}={value}{unit} ({source})")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                writeln!(output, "    limits: {rendered}")?;
+            }
+            if let Some(operations) = integration
+                .get("operations")
+                .and_then(serde_json::Value::as_array)
+            {
+                writeln!(
+                    output,
+                    "    authority: {} bounded operation(s)",
+                    operations.len()
+                )?;
+                if expanded {
+                    for operation in operations {
+                        writeln!(
+                            output,
+                            "      {} {} {}",
+                            operation
+                                .get("method")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("READ"),
+                            operation
+                                .get("destination")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("source"),
+                            operation
+                                .get("path")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("/")
+                        )?;
+                    }
+                }
+            } else if let Some(authority) = integration.get("script_authority") {
+                let rules = authority
+                    .get("allow")
+                    .and_then(serde_json::Value::as_array)
+                    .map_or(0, Vec::len);
+                writeln!(
+                    output,
+                    "    authority: reviewed script with {rules} source allow rule(s)"
+                )?;
+            } else if capability == "snapshot" {
+                writeln!(
+                    output,
+                    "    authority: exact local materialized snapshot read"
+                )?;
+            }
+            if let Some(ambiguity) = integration.pointer("/not_applicable/ambiguity") {
+                writeln!(
+                    output,
+                    "    ambiguity not applicable: {} [request fixture: {}]",
+                    ambiguity
+                        .get("rationale")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("missing rationale"),
+                    ambiguity
+                        .get("request_fixture")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("missing")
+                )?;
+            }
+            if expanded {
+                let outputs = integration
+                    .get("outputs")
+                    .and_then(serde_json::Value::as_object)
+                    .map(|values| values.keys().cloned().collect::<Vec<_>>().join(", "))
+                    .unwrap_or_else(|| "none".to_string());
+                writeln!(output, "    outputs: {outputs}")?;
+            }
+        }
+    }
+    if expanded {
+        writeln!(output, "Claims and disclosure:")?;
+        if let Some(services) = explanation
+            .get("services")
+            .and_then(serde_json::Value::as_object)
+        {
+            for (service, declaration) in services {
+                writeln!(output, "  {service}:")?;
+                if let Some(claims) = declaration
+                    .get("claims")
+                    .and_then(serde_json::Value::as_object)
+                {
+                    for (claim, value) in claims {
+                        writeln!(
+                            output,
+                            "    {claim}: disclosure={}",
+                            value
+                                .get("disclosure")
+                                .map(serde_json::Value::to_string)
+                                .unwrap_or_else(|| "null".to_string())
+                        )?;
+                    }
+                }
+            }
+        }
+    }
+    writeln!(
+        output,
+        "Rhai xw.v1 reference: registryctl authoring xw --format reference"
+    )?;
+    Ok(output.trim_end().to_string())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ProjectReportFormat {
+    Human,
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum XwFormat {
+    Reference,
+    Editor,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ProjectSchemaKind {
+    Project,
+    Environment,
+    Integration,
+    Fixture,
+    Entity,
+}
+
+impl ProjectSchemaKind {
+    const fn document(self) -> &'static str {
+        match self {
+            Self::Project => include_str!("../schemas/project-authoring/project.schema.json"),
+            Self::Environment => {
+                include_str!("../schemas/project-authoring/environment.schema.json")
+            }
+            Self::Integration => {
+                include_str!("../schemas/project-authoring/integration.schema.json")
+            }
+            Self::Fixture => include_str!("../schemas/project-authoring/fixture.schema.json"),
+            Self::Entity => include_str!("../schemas/project-authoring/entity.schema.json"),
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum AuthoringCommand {
+    /// Print the generated xw.v1 function reference or editor metadata.
+    Xw {
+        #[arg(long, value_enum, default_value = "reference")]
+        format: XwFormat,
+    },
+    /// Print one strict project-authoring JSON Schema for editor integration.
+    Schema {
+        #[arg(long, value_enum)]
+        kind: ProjectSchemaKind,
+    },
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "registryctl")]
 #[command(version)]
@@ -341,7 +633,7 @@ enum Commands {
         #[arg(long)]
         trace: bool,
         /// Rerun the selected offline scope when authored files change.
-        #[arg(long, conflicts_with = "live")]
+        #[arg(long, conflicts_with_all = ["live", "trace"])]
         watch: bool,
     },
     /// Validate and explain generated Relay and Notary configuration.
@@ -355,12 +647,20 @@ enum Commands {
         /// Print the complete redacted acquisition and disclosure plan.
         #[arg(long)]
         explain: bool,
+        /// Human-readable review report, or deliberate machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human")]
+        format: ProjectReportFormat,
         /// Previously signed product Config Bundle with review and internal approval state.
         #[arg(long)]
         against: Option<PathBuf>,
         /// Trust anchor for --against.
         #[arg(long)]
         anchor: Option<PathBuf>,
+    },
+    /// Inspect project-authoring references and schemas.
+    Authoring {
+        #[command(subcommand)]
+        command: AuthoringCommand,
     },
     /// Emit deterministic unsigned Relay and Notary Config Bundle inputs.
     Build {
@@ -422,6 +722,7 @@ impl Commands {
         !matches!(
             self,
             Self::Doctor { .. }
+                | Self::Authoring { .. }
                 | Self::Bundle { .. }
                 | Self::Anchor { .. }
                 | Self::UpdateCheck
@@ -527,6 +828,7 @@ mod tests {
                 project_dir,
                 environment,
                 explain: true,
+                format: ProjectReportFormat::Human,
                 against: Some(against),
                 anchor: Some(anchor),
             } if project_dir == std::path::Path::new("registry-project")
@@ -534,6 +836,70 @@ mod tests {
                 && against == std::path::Path::new("baseline")
                 && anchor == std::path::Path::new("anchor.json")
         ));
+
+        let json_check = Cli::try_parse_from([
+            "registryctl",
+            "check",
+            "--project-dir",
+            "registry-project",
+            "--environment",
+            "staging",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            json_check.command,
+            Commands::Check {
+                format: ProjectReportFormat::Json,
+                explain: false,
+                ..
+            }
+        ));
+
+        assert!(Cli::try_parse_from([
+            "registryctl",
+            "test",
+            "--integration",
+            "person-record",
+            "--trace",
+            "--watch",
+        ])
+        .is_err());
+
+        let xw =
+            Cli::try_parse_from(["registryctl", "authoring", "xw", "--format", "editor"]).unwrap();
+        assert!(matches!(
+            xw.command,
+            Commands::Authoring {
+                command: AuthoringCommand::Xw {
+                    format: XwFormat::Editor
+                }
+            }
+        ));
+
+        let schema = Cli::try_parse_from([
+            "registryctl",
+            "authoring",
+            "schema",
+            "--kind",
+            "integration",
+        ])
+        .unwrap();
+        assert!(matches!(
+            schema.command,
+            Commands::Authoring {
+                command: AuthoringCommand::Schema {
+                    kind: ProjectSchemaKind::Integration
+                }
+            }
+        ));
+        let schema_document: serde_json::Value =
+            serde_json::from_str(ProjectSchemaKind::Integration.document()).unwrap();
+        assert_eq!(
+            schema_document["title"],
+            "Registry Stack project integration v1"
+        );
 
         let build = Cli::try_parse_from([
             "registryctl",
@@ -573,6 +939,39 @@ mod tests {
         assert!(
             Cli::try_parse_from(["registryctl", "test", "--project", "registry-project",]).is_err()
         );
+    }
+
+    #[test]
+    fn human_check_report_is_concise_and_explain_adds_review_detail() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project_directory = temporary.path().join("registry-project");
+        registryctl::init_registry_project(&ProjectInitOptions {
+            starter: ProjectStarter::Http,
+            directory: project_directory.clone(),
+        })
+        .expect("starter initializes");
+        let report = registryctl::check_registry_project(&ProjectCheckOptions {
+            project_directory,
+            environment: "local".to_string(),
+            explain: true,
+            against: None,
+            anchor: None,
+        })
+        .expect("starter checks");
+        let concise = render_check_report(&report, false).expect("concise report renders");
+        for heading in [
+            "Baseline:",
+            "Semantic changes:",
+            "Fixtures:",
+            "Effective authority and limits:",
+            "Rhai xw.v1 reference:",
+        ] {
+            assert!(concise.contains(heading), "missing {heading}: {concise}");
+        }
+        assert!(!concise.contains("Claims and disclosure:"));
+        let expanded = render_check_report(&report, true).expect("expanded report renders");
+        assert!(expanded.contains("outputs:"));
+        assert!(expanded.contains("Claims and disclosure:"));
     }
 
     #[test]

@@ -1747,14 +1747,17 @@ async fn execute_interactive_rhai(
                 Some(&output_map),
             )
         }
-        WorkerOutput::Failure { failure } => {
-            Ok(ConcreteExecutorProof::known_failure(match failure {
-                ScriptFailure::SourceUnavailable => KnownFailureClass::SourceUnavailable,
-                ScriptFailure::SourceRejected | ScriptFailure::SubjectMismatch => {
-                    KnownFailureClass::ResponseContractViolation
-                }
-            }))
-        }
+        WorkerOutput::Failure { failure } => Ok(ConcreteExecutorProof::known_failure(
+            map_script_failure(failure),
+        )),
+    }
+}
+
+const fn map_script_failure(failure: ScriptFailure) -> KnownFailureClass {
+    match failure {
+        ScriptFailure::SourceUnavailable => KnownFailureClass::SourceUnavailable,
+        ScriptFailure::SourceRejected => KnownFailureClass::ResponseContractViolation,
+        ScriptFailure::SubjectMismatch => KnownFailureClass::SubjectMismatch,
     }
 }
 
@@ -2561,6 +2564,21 @@ mod tests {
         assert_eq!(
             map_decode_error(ClosedJsonDecodeError::ProjectionContractViolation),
             KnownFailureClass::ResponseContractViolation
+        );
+        assert_eq!(
+            map_script_failure(ScriptFailure::SourceRejected),
+            KnownFailureClass::ResponseContractViolation
+        );
+        assert_eq!(
+            map_script_failure(ScriptFailure::SubjectMismatch),
+            KnownFailureClass::SubjectMismatch
+        );
+        let (public_output, _) =
+            ConcreteExecutorProof::<()>::known_failure(KnownFailureClass::SubjectMismatch)
+                .into_parts();
+        assert!(
+            public_output.is_none(),
+            "subject mismatch remains redacted from the ordinary caller"
         );
     }
 

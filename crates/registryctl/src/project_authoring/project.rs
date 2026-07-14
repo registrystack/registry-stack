@@ -61,6 +61,7 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
             .join(&document.fixtures);
         let fixtures = load_fixtures(&root, &fixture_dir, &mut hasher)?;
         validate_fixture_inputs(alias, &document, &fixtures)?;
+        validate_not_applicable(alias, &document, &fixtures, &entities)?;
         let script = integration_script(&document)
             .map(|script| {
                 let script_path = resolve_relative_to_file(&root, &path, script)?;
@@ -341,6 +342,14 @@ fn lower_project_integration(
             },
         },
         outputs,
+        not_applicable: NotApplicableDeclaration {
+            ambiguity: authored.not_applicable.ambiguity.as_ref().map(|reason| {
+                NotApplicableReason {
+                    rationale: reason.rationale.clone(),
+                    request_fixture: reason.request_fixture.clone(),
+                }
+            }),
+        },
         bounds: BoundsDeclaration {
             calls: 0,
             calls_authored: false,
@@ -354,6 +363,65 @@ fn lower_project_integration(
         },
         fixtures: PathBuf::from("fixtures"),
     })
+}
+
+fn validate_not_applicable(
+    alias: &str,
+    integration: &IntegrationDocument,
+    fixtures: &[(PathBuf, FixtureDocument)],
+    entities: &BTreeMap<String, LoadedEntityDefinition>,
+) -> Result<()> {
+    let ambiguous_fixtures = fixtures
+        .iter()
+        .filter(|(_, fixture)| fixture.expect.outcome.as_deref() == Some("ambiguous"))
+        .map(|(_, fixture)| fixture.name.as_str())
+        .collect::<Vec<_>>();
+    let Some(reason) = &integration.not_applicable.ambiguity else {
+        if ambiguous_fixtures.is_empty() {
+            bail!(
+                "integration {alias} must provide an ambiguous fixture or declare not_applicable.ambiguity with request evidence"
+            );
+        }
+        return Ok(());
+    };
+    if !ambiguous_fixtures.is_empty() {
+        bail!(
+            "integration {alias} declares ambiguity not applicable but also provides ambiguous fixtures: {}",
+            ambiguous_fixtures.join(", ")
+        );
+    }
+    let evidence = fixtures
+        .iter()
+        .find(|(_, fixture)| fixture.name == reason.request_fixture)
+        .map(|(_, fixture)| fixture)
+        .ok_or_else(|| {
+            anyhow!(
+                "integration {alias} not_applicable.ambiguity.request_fixture references missing fixture {}",
+                reason.request_fixture
+            )
+        })?;
+    if evidence.interactions.is_empty()
+        || evidence.expect.error.is_some()
+        || !matches!(
+            evidence.expect.outcome.as_deref(),
+            None | Some("match" | "no_match")
+        )
+    {
+        bail!(
+            "integration {alias} ambiguity request evidence must contain a source request and expect match or no_match"
+        );
+    }
+    if let CapabilityDeclaration::Snapshot { snapshot } = &integration.capability {
+        let entity = entities
+            .get(&snapshot.entity)
+            .ok_or_else(|| anyhow!("snapshot ambiguity evidence references an unknown entity"))?;
+        if !snapshot.exact.contains_key(&entity.document.primary_key) {
+            bail!(
+                "snapshot ambiguity may be not_applicable only when exact selectors include the entity primary_key"
+            );
+        }
+    }
+    Ok(())
 }
 
 fn entity_output_contract(

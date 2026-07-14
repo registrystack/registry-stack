@@ -24,10 +24,9 @@
         "x-registry-canonicalization": "identity"
       }
     },
-    "integration_pack": {
+    "integration": {
       "id": "dhis2.tracker.enrollment-status",
-      "version": "1",
-      "hash": "sha256:3ebf1e17fba13e4071101a162ad53311e1a7404bea8e2624ec8621aa9d0ac997"
+      "revision": 1
     },
     "acquisition": {
       "class": "source_projected_exact",
@@ -63,7 +62,7 @@
       "legal_basis": "public_task",
       "policy": {
         "id": "relay.dhis2.tracker.enrollment-status.exact",
-        "hash": "sha256:d9a93a8723464f8223db688ec7b9029a546b095687357344c5cc79cb9e8a1afe",
+        "hash": "sha256:77fd87a4fa546c2aefb3acbfff7fdb509b767374aed1366199b702e70899acfb",
         "decision_cache": "disabled",
         "max_decision_age_ms": 1000,
         "unavailable": "deny"

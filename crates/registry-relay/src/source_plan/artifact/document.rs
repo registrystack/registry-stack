@@ -17,6 +17,13 @@ pub(in super::super) struct UnhashedArtifactReferenceDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in super::super) struct IntegrationReferenceDocument {
+    pub(in super::super) id: String,
+    pub(in super::super) revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(in super::super) enum SubjectModeDocument {
     SingleSubject,
@@ -647,7 +654,7 @@ pub(in super::super) struct PublicContractSpecDocument {
     pub(in super::super) runtime: RuntimeRequirementsDocument,
     pub(in super::super) subject: SubjectDocument,
     pub(in super::super) inputs: BTreeMap<String, InputDocument>,
-    pub(in super::super) integration_pack: ArtifactReferenceDocument,
+    pub(in super::super) integration: IntegrationReferenceDocument,
     pub(in super::super) acquisition: PublicAcquisitionDocument,
     pub(in super::super) source_provenance: SourceProvenanceDocument,
     pub(in super::super) output: BTreeMap<String, OutputFieldDocument>,
@@ -671,7 +678,8 @@ pub(in super::super) struct PublicContractDocument {
 pub struct PublicContractArtifact {
     pub(in super::super) document: PublicContractDocument,
     pub(super) identity: ProfileIdentity,
-    pub(in super::super) pack_identity: IntegrationPackIdentity,
+    pub(in super::super) integration_id: IntegrationPackId,
+    pub(in super::super) integration_revision: ProfileVersion,
     pub(in super::super) acquisition_class: AcquisitionClass,
     pub(in super::super) acquired_fields: BTreeSet<AcquiredField>,
     pub(in super::super) cardinality: SourceCardinality,
@@ -691,7 +699,8 @@ impl fmt::Debug for PublicContractArtifact {
         formatter
             .debug_struct("PublicContractArtifact")
             .field("identity", &self.identity)
-            .field("pack_identity", &self.pack_identity)
+            .field("integration_id", &self.integration_id)
+            .field("integration_revision", &self.integration_revision)
             .finish_non_exhaustive()
     }
 }
@@ -703,10 +712,16 @@ impl PublicContractArtifact {
         &self.identity
     }
 
-    /// Return the reviewed pack pinned by the public contract.
+    /// Return the product-neutral integration id declared by the public contract.
     #[must_use]
-    pub const fn integration_pack(&self) -> &IntegrationPackIdentity {
-        &self.pack_identity
+    pub const fn integration_id(&self) -> &IntegrationPackId {
+        &self.integration_id
+    }
+
+    /// Return the semantic integration revision declared by the public contract.
+    #[must_use]
+    pub const fn integration_revision(&self) -> ProfileVersion {
+        self.integration_revision
     }
 
     /// Return exactly the canonical JSON form of the typed public contract.

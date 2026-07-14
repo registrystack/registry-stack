@@ -359,7 +359,8 @@ pub(super) fn validate_cross_references(
 ) -> Result<(), SourcePlanCompileError> {
     let profile_matches = binding.profile_id == *contract.identity().id()
         && binding.profile_version == contract.identity().version();
-    let contract_pack_matches = identities_equal(contract.integration_pack(), pack.identity());
+    let contract_pack_matches = contract.integration_id() == pack.identity().id()
+        && contract.integration_revision() == pack.identity().version();
     let binding_pack_matches = identities_equal(&binding.pack_identity, pack.identity());
     if profile_matches && contract_pack_matches && binding_pack_matches {
         Ok(())

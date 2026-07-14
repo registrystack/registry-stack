@@ -837,6 +837,7 @@ fn integration_explanation(integration: &IntegrationDocument) -> Value {
         "source_versions": integration.source.versions,
         "input": integration.input,
         "outputs": integration.outputs,
+        "not_applicable": integration.not_applicable,
     });
     let object = value.as_object_mut().expect("integration explanation object");
     match &integration.capability {

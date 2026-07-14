@@ -37,6 +37,9 @@ fn consult(ctx) {
         for patient in continuation.matches {
             patients.push(patient);
         }
+        if continuation.next != () {
+            return result.ambiguous();
+        }
     }
     if patients.len == 0 {
         return result.no_match();

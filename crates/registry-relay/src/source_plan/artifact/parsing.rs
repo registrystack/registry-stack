@@ -29,7 +29,8 @@ fn parse_public_contract_inner(
         .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
     let version = ProfileVersion::try_from(document.version.as_str())
         .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
-    let pack_identity = parse_pack_reference(&document.spec.integration_pack)?;
+    let (integration_id, integration_revision) =
+        parse_integration_reference(&document.spec.integration)?;
     let selector_provenance = validate_subject(&document.spec.subject)?;
     validate_inputs(&document.spec.inputs)?;
     let acquired_fields = validate_acquisition(&document.spec.acquisition)?;
@@ -74,7 +75,8 @@ fn parse_public_contract_inner(
     Ok(PublicContractArtifact {
         document,
         identity,
-        pack_identity,
+        integration_id,
+        integration_revision,
         acquisition_class,
         acquired_fields,
         cardinality,

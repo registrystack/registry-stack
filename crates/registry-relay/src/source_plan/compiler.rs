@@ -2175,15 +2175,12 @@ impl CompiledSourcePlanRegistry {
                 .remove(&key)
                 .ok_or(SourcePlanCompileError::MissingBinding)?;
             let pack_key = (
-                contract.integration_pack().id().clone(),
-                contract.integration_pack().version(),
+                contract.integration_id().clone(),
+                contract.integration_revision(),
             );
             let pack = packs
                 .get(&pack_key)
                 .ok_or(SourcePlanCompileError::MissingPack)?;
-            if pack.identity().hash() != contract.integration_pack().hash() {
-                return Err(SourcePlanCompileError::ReferenceMismatch);
-            }
             referenced_packs.insert(pack_key.clone());
             let plan = compile_one(contract, pack, binding, bundle.rhai_workers)?;
             plans.insert(key, plan);

@@ -314,6 +314,7 @@ pub(crate) enum KnownFailureClass {
     CredentialUnavailable,
     SourceUnavailable,
     ResponseContractViolation,
+    SubjectMismatch,
     CardinalityViolation,
 }
 
@@ -323,6 +324,7 @@ impl KnownFailureClass {
             Self::CredentialUnavailable => "credential_unavailable",
             Self::SourceUnavailable => "source_unavailable",
             Self::ResponseContractViolation => "response_contract_violation",
+            Self::SubjectMismatch => "subject_mismatch",
             Self::CardinalityViolation => "cardinality_violation",
         }
     }
@@ -1761,4 +1763,23 @@ fn encode_hex(value: &[u8; 32]) -> String {
         output.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{KnownConsultationCompletionFacts, KnownFailureClass};
+
+    #[test]
+    fn subject_mismatch_is_a_distinct_durable_failure_class() {
+        let facts = KnownConsultationCompletionFacts::failure(KnownFailureClass::SubjectMismatch);
+        let (execution_result, provenance) = facts.payload_values();
+
+        assert_eq!(
+            execution_result,
+            json!({"class": "known_failure", "failure_class": "subject_mismatch"})
+        );
+        assert_eq!(provenance, serde_json::Value::Null);
+    }
 }

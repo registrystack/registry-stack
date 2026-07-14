@@ -2402,7 +2402,6 @@ mod tests {
         let pack_bytes = serde_json::to_vec(&pack).expect("pack bytes");
         let pack = compile_integration_pack(&pack_bytes)
             .unwrap_or_else(|error| panic!("{count}-input composite pack: {error:?}"));
-        contract["spec"]["integration_pack"]["hash"] = Value::String(pack.typed_hash().to_owned());
         let contract_bytes = serde_json::to_vec(&contract).expect("contract bytes");
         let contract = compile_consultation_contract(&contract_bytes).expect("composite contract");
         binding["integration_pack"]["hash"] = Value::String(pack.typed_hash().to_owned());

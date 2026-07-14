@@ -37,8 +37,8 @@ consultation:
   artifacts:
     public_contracts:
       - path: public-contract.json
-        hash: sha256:c86ebb8e721fe74a26b5c1726779e352ff120003c503b1a8e45740554218d583
-        sha256: sha256:4ec3c817afd16badd80c8d97062cd07494cba4eed29a2c6823a6907c186b3a43
+        hash: sha256:037e272f8856e4d46c57fa6a7fb3b5d1342b33a82c1380cae05992121445c39b
+        sha256: sha256:217be8a5be2cafdbebd9d4867af058d14b1208f5df25e0e7a1aab7d0a9be210a
     integration_packs:
       - path: integration-pack.json
         hash: sha256:1756f16b1c496e11be1069831ea4f54d8953466ed62bb48efc9f0c7e7def8768

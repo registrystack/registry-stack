@@ -1,4 +1,4 @@
-name: health-ambiguous-identifier
+name: health-source-rejected
 classification: synthetic
 input: { tracked_entity: A0000000001 }
 variables: { as_of_date: 2026-01-01 }
@@ -8,5 +8,5 @@ interactions:
       path: /api/tracker/trackedEntities/A0000000001
       query:
         fields: trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]
-    respond: { status: 409, body: {} }
-expect: { outcome: ambiguous, outputs: {}, claims: {} }
+    respond: { status: 500, body: {} }
+expect: { error: source.status_rejected, outputs: {}, claims: {} }

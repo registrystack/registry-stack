@@ -2968,7 +2968,7 @@ fn consultation_profile_metadata_schema() -> Value {
             },
             "contract": {
                 "type": "object",
-                "description": "Complete public consultation contract. Clients strict-parse and recompute its domain-separated contract hash before activation."
+                "description": "Complete public consultation contract. Clients strict-parse and recompute its domain-separated contract hash before activation. The product-neutral spec.integration object contains exactly id and a positive integer revision; integration-pack content hashes remain internal to the signed deployment closure."
             }
         },
         "additionalProperties": false

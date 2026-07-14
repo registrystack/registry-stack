@@ -15,6 +15,16 @@ pub(super) fn parse_pack_reference(
     Ok(IntegrationPackIdentity::new(id, version, hash))
 }
 
+pub(super) fn parse_integration_reference(
+    reference: &IntegrationReferenceDocument,
+) -> Result<(IntegrationPackId, ProfileVersion), SourcePlanArtifactError> {
+    let id = IntegrationPackId::try_from(reference.id.as_str())
+        .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
+    let revision = ProfileVersion::try_from(reference.revision.to_string().as_str())
+        .map_err(|_| SourcePlanArtifactError::InvalidIdentity)?;
+    Ok((id, revision))
+}
+
 pub(super) fn validate_subject(
     subject: &SubjectDocument,
 ) -> Result<SelectorProvenance, SourcePlanArtifactError> {

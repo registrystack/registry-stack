@@ -1750,6 +1750,35 @@ async fn readiness_rejects_each_semantic_contract_mismatch_before_execution() {
     workload["spec"]["authorization"]["workload"] = json!("different-workload");
     cases.push(("configured workload identity", workload));
 
+    let mut retired_selector_provenance = contract_value();
+    retired_selector_provenance["spec"]["subject"]["selector_provenance"] = json!({
+        "type": "trusted_notary_assertion",
+        "assertion_contract": {
+            "id": "retired.notary.assertion",
+            "hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+    });
+    cases.push((
+        "retired trusted Notary assertion provenance",
+        retired_selector_provenance,
+    ));
+
+    let mut integration_revision = contract_value();
+    integration_revision["spec"]["integration"]["revision"] = json!(0);
+    cases.push(("integration revision", integration_revision));
+
+    let mut retired_integration_pack = contract_value();
+    retired_integration_pack["spec"]["integration_pack"] = json!({
+        "id": "dhis2.tracker.enrollment-status",
+        "version": "1",
+        "hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    });
+    retired_integration_pack["spec"]
+        .as_object_mut()
+        .expect("contract spec is an object")
+        .remove("integration");
+    cases.push(("retired integration_pack alias", retired_integration_pack));
+
     let mut input = contract_value();
     input["spec"]["inputs"][INPUT_NAME]["role"] = json!("parameter");
     cases.push(("input role", input));

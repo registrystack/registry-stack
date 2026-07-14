@@ -1550,11 +1550,22 @@ mod tests {
     #[test]
     fn protected_metadata_embeds_the_complete_bounded_contract_object() {
         let hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let encoded = encode_protected_metadata(hash, br#"{"value":"line\nquote\""}"#)
-            .expect("bounded canonical contract");
+        let encoded = encode_protected_metadata(
+            hash,
+            br#"{"spec":{"integration":{"id":"individual-status","revision":3}},"value":"line\nquote\""}"#,
+        )
+        .expect("bounded canonical contract");
         let metadata = parse_json_strict(&encoded).expect("strict metadata");
         assert_eq!(metadata["contract_hash"], hash);
-        assert_eq!(metadata["contract"], json!({"value": "line\nquote\""}));
+        assert_eq!(
+            metadata["contract"],
+            json!({
+                "spec": {"integration": {"id": "individual-status", "revision": 3}},
+                "value": "line\nquote\""
+            })
+        );
+        assert!(metadata["contract"]["spec"]["integration_pack"].is_null());
+        assert!(metadata["contract"]["spec"]["integration"]["hash"].is_null());
         assert!(metadata["contract"].is_object());
 
         assert_eq!(

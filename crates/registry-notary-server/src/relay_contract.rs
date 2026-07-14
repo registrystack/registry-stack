@@ -41,7 +41,7 @@ pub(crate) struct RelayPublicContract {
 struct ContractSpec {
     subject: Subject,
     inputs: BTreeMap<String, Input>,
-    integration_pack: ArtifactReference,
+    integration: IntegrationReference,
     acquisition: Acquisition,
     source_provenance: SourceProvenance,
     output: BTreeMap<String, Output>,
@@ -70,22 +70,13 @@ enum SubjectMode {
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum SelectorProvenance {
     WorkloadSelected,
-    TrustedNotaryAssertion { assertion_contract: HashReference },
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct HashReference {
+struct IntegrationReference {
     id: String,
-    hash: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ArtifactReference {
-    id: String,
-    version: String,
-    hash: String,
+    revision: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -298,7 +289,7 @@ enum Unavailable {
 struct Consent {
     required: bool,
     #[serde(default)]
-    verifier: Option<HashReference>,
+    verifier: Option<Never>,
     #[serde(default)]
     max_age_ms: Option<u32>,
     #[serde(default)]
@@ -446,8 +437,10 @@ pub(crate) fn verify_contract(
     verify_runtime(&spec.runtime, spec.acquisition.class)?;
     verify_bounds(&spec.bounds, spec.acquisition.class)?;
     verify_response_schemas(&spec.acquisition.fields)?;
-    let integration_revision = positive_revision(&spec.integration_pack.version)?;
-    if !stable_id(&spec.integration_pack.id) || !sha256_uri(&spec.integration_pack.hash) {
+    if !stable_id(&spec.integration.id)
+        || spec.integration.revision <= 0
+        || spec.integration.revision > MAX_JSON_INTEGER
+    {
         return Err(());
     }
     let source_observed_at = verify_observed_at(
@@ -470,8 +463,8 @@ pub(crate) fn verify_contract(
                 VerifiedAcquisitionClass::MaterializedSnapshot
             }
         },
-        integration_id: spec.integration_pack.id.into_boxed_str(),
-        integration_revision,
+        integration_id: spec.integration.id.into_boxed_str(),
+        integration_revision: spec.integration.revision,
         source_observed_at,
         source_revision,
     })
@@ -481,15 +474,8 @@ fn verify_subject(subject: &Subject) -> Result<(), ()> {
     if !matches!(subject.mode, SubjectMode::SingleSubject) {
         return Err(());
     }
-    match &subject.selector_provenance {
+    match subject.selector_provenance {
         SelectorProvenance::WorkloadSelected => Ok(()),
-        SelectorProvenance::TrustedNotaryAssertion { assertion_contract } => {
-            if stable_id(&assertion_contract.id) && sha256_uri(&assertion_contract.hash) {
-                Ok(())
-            } else {
-                Err(())
-            }
-        }
     }
 }
 
@@ -935,14 +921,6 @@ fn verify_materialization(
         }
         _ => Err(()),
     }
-}
-
-fn positive_revision(value: &str) -> Result<i64, ()> {
-    value
-        .parse::<i64>()
-        .ok()
-        .filter(|value| *value > 0 && *value <= MAX_JSON_INTEGER)
-        .ok_or(())
 }
 
 fn stable_id(value: &str) -> bool {

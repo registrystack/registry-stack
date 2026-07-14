@@ -22,10 +22,9 @@
         "x-registry-canonicalization": "identity"
       }
     },
-    "integration_pack": {
+    "integration": {
       "id": "opencrvs.dci.farajaland.birth-record-exists",
-      "version": "1",
-      "hash": "sha256:1756f16b1c496e11be1069831ea4f54d8953466ed62bb48efc9f0c7e7def8768"
+      "revision": 1
     },
     "acquisition": {
       "class": "bounded_full_record",
@@ -131,7 +130,7 @@
       "legal_basis": "public_task",
       "policy": {
         "id": "relay.opencrvs.dci.farajaland.birth-record-exists.exact",
-        "hash": "sha256:d59063f01480bbe00781eacce6e2fea47e27319b8f254315ec796b4295a46507",
+        "hash": "sha256:6bf852c7c401df717364b4c6a84eab2c7d3eb35192f6a456d3c5b4ca4ea5ce9c",
         "decision_cache": "disabled",
         "max_decision_age_ms": 1000,
         "unavailable": "deny"

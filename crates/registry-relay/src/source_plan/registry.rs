@@ -477,7 +477,7 @@ mod tests {
             "action": "consultation_execute",
             "target": {
                 "profile": {"id": contract["id"].clone(), "version": contract["version"].clone()},
-                "integration_pack": contract["spec"]["integration_pack"].clone()
+                "integration": contract["spec"]["integration"].clone()
             },
             "authorization": {
                 "workload": authorization["workload"].clone(),
@@ -587,7 +587,6 @@ mod tests {
     fn rhai_closure() -> (VerifiedConsultationArtifactClosure, String) {
         let (pack, pack_hash) = rhai_pack("synthetic.person-status");
         let mut contract = parse_json_strict(CONTRACT).unwrap();
-        contract["spec"]["integration_pack"]["hash"] = json!(pack_hash);
         contract["spec"]["runtime"] = json!({
             "platform_profile": "registry-stack.consultation.v1",
             "source_capability": "script",

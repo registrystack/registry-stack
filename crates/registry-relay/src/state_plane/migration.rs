@@ -4690,7 +4690,8 @@ BEGIN
                ]::text[] <> '{}'::jsonb
                OR v_execution_result ->> 'failure_class' NOT IN (
                    'credential_unavailable', 'source_unavailable',
-                   'response_contract_violation', 'cardinality_violation'
+                   'response_contract_violation', 'subject_mismatch',
+                   'cardinality_violation'
                )
                OR v_provenance IS DISTINCT FROM 'null'::jsonb
                OR (

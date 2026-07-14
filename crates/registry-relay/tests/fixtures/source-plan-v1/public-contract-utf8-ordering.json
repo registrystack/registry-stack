@@ -28,10 +28,9 @@
         "x-registry-canonicalization": "identity"
       }
     },
-    "integration_pack": {
+    "integration": {
       "id": "synthetic.person-status",
-      "version": "1",
-        "hash": "sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9"
+      "revision": 1
     },
     "acquisition": {
       "class": "source_projected_exact",
@@ -68,7 +67,7 @@
       "legal_basis": "public_task",
       "policy": {
         "id": "relay.synthetic.person-status.exact",
-          "hash": "sha256:7797ed50f151aef5917cb239274168f9ef54cfbd9eb5c3829c5885985d325f8c",
+          "hash": "sha256:1f11bbda616e8205dab57c5f3c25a68150f497bbb4cdc2e0958ecd5f7b215bab",
         "decision_cache": "disabled",
         "max_decision_age_ms": 1000,
         "unavailable": "deny"

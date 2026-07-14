@@ -9,7 +9,12 @@ registryctl test --project-dir . --integration coverage --fixture coverage-activ
 registryctl test --project-dir .
 registryctl check --project-dir . --environment local --explain
 registryctl build --project-dir . --environment local
+registryctl authoring xw --format reference
+registryctl authoring schema --kind integration > integration.schema.json
 ```
+
+`check` is human-readable by default. Use `--format json` only for machine
+consumers. The generated schema can be selected from an editor modeline.
 
 The fixtures are synthetic and offline. Keep source authority, authentication,
 private-network admission, and TLS bindings in `environments/`.

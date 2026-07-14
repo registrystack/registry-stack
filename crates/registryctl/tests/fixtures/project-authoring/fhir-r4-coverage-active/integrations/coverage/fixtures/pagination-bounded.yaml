@@ -1,0 +1,35 @@
+name: bounded-continuation-ambiguity
+classification: synthetic
+input: { birthdate: 2018-05-12, family: Example, given: Ada }
+interactions:
+  - expect:
+      method: GET
+      path: /fhir/Patient
+      query: { _count: 2, birthdate: 2018-05-12, family: Example, given: Ada }
+    respond:
+      status: 200
+      body:
+        resourceType: Bundle
+        type: searchset
+        total: 3
+        link: [{ relation: next, url: "https://coverage.fixture.invalid/fhir/Patient?_count=2&page=2" }]
+        entry: []
+  - expect:
+      method: GET
+      path: /fhir/Patient
+      query: { _count: 2, page: 2 }
+    respond:
+      status: 200
+      body:
+        resourceType: Bundle
+        type: searchset
+        total: 3
+        link: [{ relation: next, url: "https://coverage.fixture.invalid/fhir/Patient?_count=2&page=3" }]
+        entry:
+          - search: { mode: match }
+            resource:
+              resourceType: Patient
+              id: patient-1
+              birthDate: 2018-05-12
+              name: [{ family: Example, given: [Ada] }]
+expect: { outcome: ambiguous, outputs: {}, claims: {} }

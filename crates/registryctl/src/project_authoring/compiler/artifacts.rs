@@ -2248,10 +2248,9 @@ fn consultation_contract_document(
             "selector_provenance": { "type": "workload_selected" },
         },
         "inputs": input,
-        "integration_pack": {
+        "integration": {
             "id": pack.id,
-            "version": pack.version,
-            "hash": pack.artifact.typed_hash(),
+            "revision": integration.document.revision,
         },
         "acquisition": pack_spec.get("acquisition"),
         "source_provenance": pack_spec.get("source_provenance"),

@@ -44,7 +44,8 @@
         }
       ]
     },
-    "limits": { "$ref": "#/$defs/limits", "description": "Optional tighter resource limits for one integration execution." }
+    "limits": { "$ref": "#/$defs/limits", "description": "Optional tighter resource limits for one integration execution." },
+    "not_applicable": { "$ref": "#/$defs/notApplicable", "description": "Explicit rationale and request-fixture evidence for a normally required outcome that the source contract cannot produce." }
   },
   "examples": [
     {
@@ -63,6 +64,25 @@
     }
   ],
   "$defs": {
+    "notApplicable": {
+      "description": "Closed declarations for outcomes that the source protocol, exact singleton endpoint, or local unique-key constraint proves impossible.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "ambiguity": { "$ref": "#/$defs/notApplicableReason" }
+      }
+    },
+    "notApplicableReason": {
+      "description": "A reviewable reason that names a real request fixture proving the source access shape used by the rationale.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rationale", "request_fixture"],
+      "properties": {
+        "rationale": { "type": "string", "minLength": 24, "maxLength": 512, "description": "Why ambiguity cannot occur for this source contract." },
+        "request_fixture": { "$ref": "#/$defs/stableId", "description": "Fixture name containing the supporting bounded source request." }
+      }
+    },
     "stableId": {
       "description": "Lowercase stable identifier used in project references.",
       "type": "string",

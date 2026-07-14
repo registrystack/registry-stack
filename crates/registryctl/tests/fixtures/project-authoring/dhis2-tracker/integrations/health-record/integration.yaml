@@ -33,4 +33,9 @@ outputs:
   child_health_visit_recorded: { type: boolean }
   tb_program_active: { type: boolean }
 
+not_applicable:
+  ambiguity:
+    rationale: The tracked-entity identifier is resolved by the exact singleton trackedEntities resource endpoint, so a collection cannot be returned.
+    request_fixture: complete-health-match
+
 limits: { calls: 1, source_bytes: 64KiB, request_bytes: 4KiB, deadline: 8s }

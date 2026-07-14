@@ -24,7 +24,6 @@ capability:
         _elements: active,programme_code,household_reference
     response:
       no_match: [404]
-      ambiguous: [409]
 
 outputs:
   active:
@@ -38,6 +37,11 @@ outputs:
     type: [string, "null"]
     maxLength: 64
     x-registry-source: /household_reference
+
+not_applicable:
+  ambiguity:
+    rationale: The individual identifier is resolved by an exact singleton resource endpoint, so the source contract cannot return a collection.
+    request_fixture: social-registry-match
 
 limits:
   request_bytes: 2KiB

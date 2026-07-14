@@ -25,7 +25,7 @@ struct ConsultationPolicyPreimage<'a> {
 #[derive(Serialize)]
 struct ConsultationPolicyTarget<'a> {
     profile: ConsultationPolicyProfileTarget<'a>,
-    integration_pack: ConsultationPolicyPackTarget<'a>,
+    integration: ConsultationPolicyIntegrationTarget<'a>,
 }
 
 #[derive(Serialize)]
@@ -35,10 +35,9 @@ struct ConsultationPolicyProfileTarget<'a> {
 }
 
 #[derive(Serialize)]
-struct ConsultationPolicyPackTarget<'a> {
+struct ConsultationPolicyIntegrationTarget<'a> {
     id: &'a str,
-    version: &'a str,
-    hash: &'a str,
+    revision: u64,
 }
 
 #[derive(Serialize)]
@@ -74,7 +73,7 @@ pub(in super::super) fn derive_consultation_policy(
 ) -> Result<DerivedConsultationPolicy, SourcePlanArtifactError> {
     let authorization = &document.spec.authorization;
     let policy = &authorization.policy;
-    let pack = &document.spec.integration_pack;
+    let integration = &document.spec.integration;
     let preimage = ConsultationPolicyPreimage {
         schema: POLICY_SCHEMA,
         enforcement_profile: POLICY_ENFORCEMENT_PROFILE,
@@ -86,10 +85,9 @@ pub(in super::super) fn derive_consultation_policy(
                 id: &document.id,
                 version: &document.version,
             },
-            integration_pack: ConsultationPolicyPackTarget {
-                id: &pack.id,
-                version: &pack.version,
-                hash: &pack.hash,
+            integration: ConsultationPolicyIntegrationTarget {
+                id: &integration.id,
+                revision: integration.revision,
             },
         },
         authorization: ConsultationPolicyAuthorization {

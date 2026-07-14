@@ -716,8 +716,24 @@ struct IntegrationDocument {
     input: BTreeMap<String, InputDeclaration>,
     capability: CapabilityDeclaration,
     outputs: BTreeMap<String, OutputDeclaration>,
+    #[serde(default)]
+    not_applicable: NotApplicableDeclaration,
     bounds: BoundsDeclaration,
     fixtures: PathBuf,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NotApplicableDeclaration {
+    #[serde(default)]
+    ambiguity: Option<NotApplicableReason>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NotApplicableReason {
+    rationale: String,
+    request_fixture: String,
 }
 
 fn default_integration_revision() -> u32 {

@@ -91,17 +91,17 @@ const OPENCRVS_MINIMIZATION: &[u8] = include_bytes!(
 const DHIS2_PACK_HASH: &str =
     "sha256:3ebf1e17fba13e4071101a162ad53311e1a7404bea8e2624ec8621aa9d0ac997";
 const DHIS2_POLICY_HASH: &str =
-    "sha256:d9a93a8723464f8223db688ec7b9029a546b095687357344c5cc79cb9e8a1afe";
+    "sha256:77fd87a4fa546c2aefb3acbfff7fdb509b767374aed1366199b702e70899acfb";
 const DHIS2_CONTRACT_HASH: &str =
-    "sha256:5204b26c004cdeb7530012ee00877e184854ed223cfdaa27fd82925117512a32";
+    "sha256:09d7286fdd36bb936f074454aa50fd06aa4dcbca62b45ad9d8357b082bdaa036";
 const DHIS2_BINDING_HASH: &str =
     "sha256:2195fdb4b47ef523b3c23b45329d6cfaca9d32a2e6c5b2de6fbb520c5fbcb3ca";
 const OPENCRVS_PACK_HASH: &str =
     "sha256:1756f16b1c496e11be1069831ea4f54d8953466ed62bb48efc9f0c7e7def8768";
 const OPENCRVS_POLICY_HASH: &str =
-    "sha256:d59063f01480bbe00781eacce6e2fea47e27319b8f254315ec796b4295a46507";
+    "sha256:6bf852c7c401df717364b4c6a84eab2c7d3eb35192f6a456d3c5b4ca4ea5ce9c";
 const OPENCRVS_CONTRACT_HASH: &str =
-    "sha256:c86ebb8e721fe74a26b5c1726779e352ff120003c503b1a8e45740554218d583";
+    "sha256:037e272f8856e4d46c57fa6a7fb3b5d1342b33a82c1380cae05992121445c39b";
 const OPENCRVS_BINDING_HASH: &str =
     "sha256:84d37eff9db4c95a1b35287087f7d40c9f7d017fd92262cfe8caee3c0bc087b1";
 
@@ -140,8 +140,6 @@ impl Fixture {
     fn refresh_all(&mut self) {
         self.pack = serde_json::to_vec(&self.pack_value).expect("pack JSON");
         self.pack_hash = typed_hash(PACK_DOMAIN, &self.pack);
-        self.contract_value["spec"]["integration_pack"]["hash"] =
-            Value::String(self.pack_hash.clone());
         self.binding_value["integration_pack"]["hash"] = Value::String(self.pack_hash.clone());
         refresh_policy_hash(&mut self.contract_value);
         self.contract = serde_json::to_vec(&self.contract_value).expect("contract JSON");
@@ -168,7 +166,7 @@ fn policy_preimage_value(contract: &Value) -> Value {
                 "id": contract["id"].clone(),
                 "version": contract["version"].clone()
             },
-            "integration_pack": contract["spec"]["integration_pack"].clone()
+            "integration": contract["spec"]["integration"].clone()
         },
         "authorization": {
             "workload": authorization["workload"].clone(),
@@ -2691,10 +2689,9 @@ fn policy_preimage_has_the_closed_fixed_v1_decision_shape() {
                     "id": "synthetic.person-status.exact",
                     "version": "1"
                 },
-                "integration_pack": {
+                "integration": {
                     "id": "synthetic.person-status",
-                    "version": "1",
-                    "hash": vector_expected_hash("integration_pack")
+                    "revision": 1
                 }
             },
             "authorization": {
@@ -2727,14 +2724,10 @@ fn every_authored_policy_semantic_changes_policy_and_contract_hashes() {
         ("/id", json!("synthetic.person-status.other")),
         ("/version", json!("2")),
         (
-            "/spec/integration_pack/id",
+            "/spec/integration/id",
             json!("synthetic.person-status.other"),
         ),
-        ("/spec/integration_pack/version", json!("2")),
-        (
-            "/spec/integration_pack/hash",
-            json!("sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
-        ),
+        ("/spec/integration/revision", json!(2)),
         ("/spec/authorization/workload", json!("registry-auditor")),
         (
             "/spec/authorization/required_scope",
@@ -3247,6 +3240,29 @@ fn rejects_unknown_fields_at_every_closed_boundary() {
 }
 
 #[test]
+fn public_contract_rejects_the_retired_integration_pack_alias() {
+    let mut fixture = fixture();
+    fixture.contract_value["spec"]["integration_pack"] = json!({
+        "id": "synthetic.person-status",
+        "version": "1",
+        "hash": fixture.pack_hash,
+    });
+    fixture.contract_value["spec"]
+        .as_object_mut()
+        .expect("contract spec")
+        .remove("integration");
+    fixture.contract = serde_json::to_vec(&fixture.contract_value).expect("contract JSON");
+    fixture.contract_hash = typed_hash(CONTRACT_DOMAIN, &fixture.contract);
+
+    assert!(matches!(
+        compile(&fixture),
+        Err(SourcePlanCompileError::Artifact(
+            SourcePlanArtifactError::ClosedSchema
+        ))
+    ));
+}
+
+#[test]
 fn rejects_committed_hash_mismatch() {
     let fixture = fixture();
     let wrong_hash = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
@@ -3497,9 +3513,9 @@ fn rhai_runtime_commitment_digest_binds_safe_script_and_dispatch_outputs() {
     let changed_script_digest =
         rhai_runtime_digests(&changed_script, limits).expect("changed reviewed script compiles");
     assert_ne!(changed_script_digest.0, base.0);
-    assert_ne!(
+    assert_eq!(
         changed_script.contract_hash, base_fixture.contract_hash,
-        "a Script-only change must invalidate the pinned public contract"
+        "internal pack content changes stay under the signed private closure"
     );
 
     let mut dual_entrypoint = rhai_five_operation_fixture();

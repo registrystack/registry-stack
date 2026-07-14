@@ -9,10 +9,9 @@
       "id": "synthetic.person-status.exact",
       "version": "1"
     },
-    "integration_pack": {
+    "integration": {
       "id": "synthetic.person-status",
-      "version": "1",
-      "hash": "sha256:c7c73a312a5759bd1ce898a9dd944b10f313821c3b680698cf5c13927d3d2ba9"
+      "revision": 1
     }
   },
   "authorization": {

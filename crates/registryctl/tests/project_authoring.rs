@@ -134,6 +134,204 @@ fn successful_negative_fixtures_report_the_closed_denial_assertion() {
 }
 
 #[test]
+fn exact_sources_report_reviewable_ambiguity_not_applicable_evidence() {
+    for (project, integration, fixture) in [
+        ("dhis2-tracker", "health-record", "complete-health-match"),
+        ("openspp-exact", "individual", "social-registry-match"),
+        ("snapshot-exact", "person-snapshot", "snapshot-match"),
+    ] {
+        let report = check_registry_project(&ProjectCheckOptions {
+            project_directory: golden(project),
+            environment: "local".to_string(),
+            explain: true,
+            against: None,
+            anchor: None,
+        })
+        .unwrap_or_else(|error| panic!("{project} check failed: {error:#}"));
+        let ambiguity = &report.explanation.as_ref().expect("explanation")["integrations"]
+            [integration]["not_applicable"]["ambiguity"];
+        assert_eq!(ambiguity["request_fixture"], fixture, "{project}");
+        assert!(ambiguity["rationale"]
+            .as_str()
+            .is_some_and(|rationale| rationale.len() >= 24));
+        assert!(!report
+            .fixtures
+            .iter()
+            .any(|fixture| fixture.outcome.as_deref() == Some("ambiguous")));
+    }
+
+    let fhir = test_registry_project(&ProjectTestOptions {
+        project_directory: golden("fhir-r4-coverage-active"),
+        environment: None,
+        live: false,
+    })
+    .expect("genuinely ambiguous collection source remains covered");
+    assert!(fhir
+        .fixtures
+        .iter()
+        .any(|fixture| fixture.outcome.as_deref() == Some("ambiguous")));
+}
+
+#[test]
+fn ambiguity_not_applicable_requires_a_real_request_fixture() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("openspp-exact", temporary.path());
+    replace_in_file(
+        &project.join("integrations/individual/integration.yaml"),
+        "request_fixture: social-registry-match",
+        "request_fixture: missing-request-proof",
+    );
+    let error = test_registry_project(&ProjectTestOptions {
+        project_directory: project,
+        environment: None,
+        live: false,
+    })
+    .expect_err("missing not-applicable request evidence must fail");
+    assert!(format!("{error:#}").contains("references missing fixture"));
+}
+
+#[test]
+fn maintained_script_starter_exercises_explicit_result_fail() {
+    let report = test_registry_project_selected(
+        &ProjectTestOptions {
+            project_directory: golden("dhis2-tracker"),
+            environment: None,
+            live: false,
+        },
+        &ProjectTestSelection {
+            integration: Some("health-record".to_string()),
+            fixture: Some("health-source-rejected".to_string()),
+            trace: true,
+        },
+    )
+    .expect("result.fail fixture passes its closed error assertion");
+    let fixture = report
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.fixture == "health-source-rejected")
+        .expect("authored failure fixture report");
+    assert_eq!(
+        fixture.expected_error.as_deref(),
+        Some("source.status_rejected")
+    );
+    assert_eq!(fixture.source_access, Some(true));
+    assert!(fixture.passed);
+}
+
+#[test]
+fn script_source_byte_budget_rejects_two_call_underprovisioning_before_execution() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("fhir-r4-coverage-active", temporary.path());
+    replace_in_file(
+        &project.join("integrations/coverage/integration.yaml"),
+        "limits: { calls: 4, source_bytes: 512KiB, request_bytes: 8KiB, deadline: 12s }",
+        "limits: { calls: 2, source_bytes: 200KiB, request_bytes: 8KiB, deadline: 12s }",
+    );
+    let error = test_registry_project_selected(
+        &ProjectTestOptions {
+            project_directory: project,
+            environment: None,
+            live: false,
+        },
+        &ProjectTestSelection {
+            integration: Some("coverage".to_string()),
+            fixture: Some("coverage-active".to_string()),
+            trace: true,
+        },
+    )
+    .expect_err("two source responses must not bypass the aggregate source-byte budget");
+    let diagnostic = format!("{error:#}");
+    assert!(diagnostic.contains("InvalidLimits"), "{diagnostic}");
+}
+
+#[test]
+fn signed_dci_rejects_wrong_jwks_algorithm_and_key_use() {
+    for (field, value) in [("alg", "RS512"), ("use", "enc")] {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = copy_project("opencrvs", temporary.path());
+        let jwks_path = project.join("integrations/birth-record/fixtures/bodies/jwks.json");
+        let mut jwks: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&jwks_path).expect("JWKS reads"))
+                .expect("JWKS parses");
+        jwks["keys"][0][field] = serde_json::Value::String(value.to_string());
+        std::fs::write(
+            &jwks_path,
+            serde_json::to_vec_pretty(&jwks).expect("JWKS serializes"),
+        )
+        .expect("mutated JWKS writes");
+        let error = test_registry_project_selected(
+            &ProjectTestOptions {
+                project_directory: project,
+                environment: None,
+                live: false,
+            },
+            &ProjectTestSelection {
+                integration: Some("birth-record".to_string()),
+                fixture: Some("birth-record-match".to_string()),
+                trace: true,
+            },
+        )
+        .expect_err("wrong signing-key metadata must fail closed");
+        assert!(
+            format!("{error:#}").contains("source.response_malformed"),
+            "{error:#}"
+        );
+    }
+}
+
+#[test]
+fn relay_only_and_notary_only_projects_complete_their_applicable_journeys() {
+    let relay_root = tempfile::tempdir().expect("Relay-only temporary directory");
+    let relay = copy_project("relay-only-records", relay_root.path());
+    test_registry_project(&ProjectTestOptions {
+        project_directory: relay.clone(),
+        environment: None,
+        live: false,
+    })
+    .expect("Relay-only project tests");
+    check_registry_project(&ProjectCheckOptions {
+        project_directory: relay.clone(),
+        environment: "local".to_string(),
+        explain: true,
+        against: None,
+        anchor: None,
+    })
+    .expect("Relay-only project explains");
+    build_registry_project(&ProjectBuildOptions {
+        project_directory: relay,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("Relay-only project builds");
+
+    let notary_root = tempfile::tempdir().expect("Notary-only temporary directory");
+    let notary = copy_project("notary-only-self-attested", notary_root.path());
+    test_registry_project(&ProjectTestOptions {
+        project_directory: notary.clone(),
+        environment: None,
+        live: false,
+    })
+    .expect("Notary-only project tests");
+    let check = check_registry_project(&ProjectCheckOptions {
+        project_directory: notary.clone(),
+        environment: "local".to_string(),
+        explain: true,
+        against: None,
+        anchor: None,
+    })
+    .expect("Notary-only project explains");
+    assert!(check.explanation.is_some());
+    build_registry_project(&ProjectBuildOptions {
+        project_directory: notary,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("Notary-only project builds");
+}
+
+#[test]
 fn authored_rhai_script_compiles_under_the_production_surface() {
     let script = std::fs::read_to_string(
         golden("dhis2-script").join("integrations/health-record/adapter.rhai"),
@@ -635,6 +833,21 @@ expect:
 "#,
     )
     .expect("adapted fixture writes");
+    std::fs::write(
+        fixture_directory.join("ambiguous.yaml"),
+        r#"name: adapted-ambiguous-person
+classification: synthetic
+input: { municipal_reference: AB-123456 }
+interactions:
+  - expect:
+      method: GET
+      path: /municipal/registry/lookup
+      query: { reference: AB-123456, include: "status,category" }
+    respond: { status: 409, body: {} }
+expect: { outcome: ambiguous, outputs: {}, claims: {} }
+"#,
+    )
+    .expect("adapted ambiguity fixture writes");
     let project_file = project.join("registry-stack.yaml");
     let mut project_document = read_yaml(&project_file);
     let service = &mut project_document["services"]["person-verification"];
@@ -928,7 +1141,13 @@ fn authored_unknown_fields_and_traversal_fail_closed() {
         live: false,
     })
     .expect_err("unknown field must fail");
-    assert!(format!("{error:#}").contains("unknown field"));
+    let diagnostic = format!("{error:#}");
+    assert!(diagnostic.contains("registry-stack.yaml:"), "{diagnostic}");
+    assert!(diagnostic.contains("unknown field"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("registryctl authoring schema --kind project"),
+        "{diagnostic}"
+    );
 
     let conformance_escape = copy_project("dhis2-script", temporary.path());
     let fixture_path = conformance_escape.join("integrations/health-record/fixtures/match.yaml");
@@ -1978,12 +2197,27 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert!(notary_config.contains("output: category"));
     assert!(!notary_config.contains("type: extract"));
     assert!(!notary_config.contains("type: exists"));
+    let public_contract: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(output.join(
+            "private/relay/config/artifacts/consultation-contracts/household-eligibility-household.json",
+        ))
+        .expect("generated public contract reads"),
+    )
+    .expect("generated public contract parses");
+    assert_eq!(
+        public_contract["spec"]["integration"],
+        serde_json::json!({
+            "id": "fictional-household-authority.fictional-household-eligibility",
+            "revision": 1,
+        })
+    );
+    assert!(public_contract["spec"].get("integration_pack").is_none());
     let first_closure = directory_closure(&output);
     build_registry_project(&options).expect("second build");
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "ddeeadf57462d71421002747a72381afe2bbd91ec2f7a962bc209d2ca64085fe",
+        "65938afc5df9ba9f187c0cae28964736399d19aa3c1e6691107efb62c4c04aa0",
         "project inputs must match the cross-machine golden digest"
     );
 }

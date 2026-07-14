@@ -16,6 +16,22 @@ struct AuthoredIntegrationDocument {
     outputs: AuthoredOutputsDeclaration,
     #[serde(default)]
     limits: Option<AuthoredLimitsDeclaration>,
+    #[serde(default)]
+    not_applicable: AuthoredNotApplicableDeclaration,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredNotApplicableDeclaration {
+    #[serde(default)]
+    ambiguity: Option<AuthoredNotApplicableReason>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct AuthoredNotApplicableReason {
+    rationale: String,
+    request_fixture: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -485,6 +501,14 @@ fn lower_authored_integration(
         input,
         capability,
         outputs,
+        not_applicable: NotApplicableDeclaration {
+            ambiguity: authored.not_applicable.ambiguity.as_ref().map(|reason| {
+                NotApplicableReason {
+                    rationale: reason.rationale.clone(),
+                    request_fixture: reason.request_fixture.clone(),
+                }
+            }),
+        },
         bounds: BoundsDeclaration {
             calls: if matches!(
                 &authored.capability,
@@ -511,6 +535,17 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
         bail!("integration version must be 1 and revision must be positive");
     }
     validate_stable_id(&authored.id, "integration id")?;
+    if let Some(reason) = &authored.not_applicable.ambiguity {
+        let rationale = reason.rationale.trim();
+        let rationale_characters = rationale.chars().count();
+        if !(24..=512).contains(&rationale_characters) {
+            bail!("not_applicable.ambiguity.rationale must contain 24 to 512 non-whitespace characters");
+        }
+        validate_stable_id(
+            &reason.request_fixture,
+            "not_applicable.ambiguity.request_fixture",
+        )?;
+    }
     if authored.input.is_empty() || authored.input.len() > 16 {
         bail!("integration input must contain between one and sixteen entries");
     }

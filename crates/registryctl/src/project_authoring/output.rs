@@ -1167,7 +1167,37 @@ fn read_bounded_fixture_body(root: &Path, path: &Path, max_bytes: u64) -> Result
 }
 
 fn parse_yaml<T: for<'de> Deserialize<'de>>(bytes: &[u8], label: &str) -> Result<T> {
-    serde_yaml::from_slice(bytes).with_context(|| format!("invalid authored YAML in {label}"))
+    serde_yaml::from_slice(bytes).map_err(|error| {
+        let location = error
+            .location()
+            .map(|location| format!(":{}:{}", location.line(), location.column()))
+            .unwrap_or_default();
+        let schema = authored_schema_kind(label)
+            .map(|kind| {
+                format!(
+                    "; schema hint: registryctl authoring schema --kind {kind} > {kind}.schema.json"
+                )
+            })
+            .unwrap_or_default();
+        anyhow!("{label}{location}: invalid authored YAML: {error}{schema}")
+    })
+}
+
+fn authored_schema_kind(label: &str) -> Option<&'static str> {
+    let normalized = label.replace('\\', "/");
+    if normalized == PROJECT_FILE || normalized.ends_with("/registry-stack.yaml") {
+        Some("project")
+    } else if normalized.contains("/environments/") || normalized.starts_with("environments/") {
+        Some("environment")
+    } else if normalized.ends_with("/integration.yaml") {
+        Some("integration")
+    } else if normalized.contains("/fixtures/") || normalized.starts_with("fixtures/") {
+        Some("fixture")
+    } else if normalized.contains("/entities/") || normalized.starts_with("entities/") {
+        Some("entity")
+    } else {
+        None
+    }
 }
 
 fn hash_authored_file(hasher: &mut Sha256, relative: &str, bytes: &[u8]) {

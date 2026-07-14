@@ -1221,7 +1221,7 @@
         "description": "Protected metadata containing the complete public contract for the one active contract behind this profile id.",
         "properties": {
           "contract": {
-            "description": "Complete public consultation contract. Clients strict-parse and recompute its domain-separated contract hash before activation.",
+            "description": "Complete public consultation contract. Clients strict-parse and recompute its domain-separated contract hash before activation. The product-neutral spec.integration object contains exactly id and a positive integer revision; integration-pack content hashes remain internal to the signed deployment closure.",
             "type": "object"
           },
           "contract_hash": {

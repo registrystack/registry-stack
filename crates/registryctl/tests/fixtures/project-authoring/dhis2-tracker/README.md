@@ -10,7 +10,12 @@ registryctl test --project-dir . --integration health-record --fixture complete-
 registryctl test --project-dir .
 registryctl check --project-dir . --environment local --explain
 registryctl build --project-dir . --environment local
+registryctl authoring xw --format reference
+registryctl authoring schema --kind integration > integration.schema.json
 ```
+
+`check` is human-readable by default. Use `--format json` only for machine
+consumers. The generated schema can be selected from an editor modeline.
 
 Edit the reviewed `adapter.rhai`, integration contract, and synthetic fixtures
 together. Keep source credentials in the environment binding.

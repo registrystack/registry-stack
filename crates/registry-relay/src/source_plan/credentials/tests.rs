@@ -127,8 +127,7 @@ fn basic_artifacts() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
 
     let mut contract = parse_json_strict(OAUTH_CONTRACT).expect("strict source contract");
     contract["id"] = json!("synthetic.person-status.basic");
-    contract["spec"]["integration_pack"]["id"] = json!("synthetic.person-status.basic");
-    contract["spec"]["integration_pack"]["hash"] = Value::String(pack_hash.clone());
+    contract["spec"]["integration"]["id"] = json!("synthetic.person-status.basic");
     contract["spec"]["bounds"]["max_credential_exchanges"] = json!(0);
     contract["spec"]["authorization"]["policy"]["id"] =
         json!("relay.synthetic.person-status.basic");
@@ -165,8 +164,7 @@ fn api_key_artifacts(mode: &str, name: &str) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
 
     let mut contract = parse_json_strict(OAUTH_CONTRACT).expect("strict source contract");
     contract["id"] = json!(format!("synthetic.person-status.{mode}"));
-    contract["spec"]["integration_pack"]["id"] = json!(format!("synthetic.person-status.{mode}"));
-    contract["spec"]["integration_pack"]["hash"] = Value::String(pack_hash.clone());
+    contract["spec"]["integration"]["id"] = json!(format!("synthetic.person-status.{mode}"));
     contract["spec"]["bounds"]["max_credential_exchanges"] = json!(0);
     contract["spec"]["authorization"]["policy"]["id"] =
         json!(format!("relay.synthetic.person-status.{mode}"));
@@ -266,7 +264,7 @@ fn refresh_policy_hash(contract: &mut Value) {
                 "id": contract["id"].clone(),
                 "version": contract["version"].clone()
             },
-            "integration_pack": contract["spec"]["integration_pack"].clone()
+            "integration": contract["spec"]["integration"].clone()
         },
         "authorization": {
             "workload": authorization["workload"].clone(),

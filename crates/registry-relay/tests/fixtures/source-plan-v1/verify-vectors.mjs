@@ -322,7 +322,7 @@ for (const [contractName, policyName] of [
     action: "consultation_execute",
     target: {
       profile: { id: publicContract.id, version: publicContract.version },
-      integration_pack: publicContract.spec.integration_pack,
+      integration: publicContract.spec.integration,
     },
     authorization: {
       workload: contractAuthorization.workload,
@@ -366,6 +366,9 @@ for (const reference of manifest.cross_references) {
   const expected = { id: target.value.id, version: target.value.version };
   if (reference.kind === "artifact_identity") {
     expected.hash = target.actualHash;
+  } else if (reference.kind === "integration_identity") {
+    delete expected.version;
+    expected.revision = Number(target.value.version);
   } else if (reference.kind === "derived_policy_identity") {
     delete expected.version;
     expected.hash = target.actualHash;

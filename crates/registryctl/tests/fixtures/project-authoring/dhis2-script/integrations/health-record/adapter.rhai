@@ -51,9 +51,6 @@ fn consult(ctx) {
     if response.status == 404 {
         return result.no_match();
     }
-    if response.status == 409 {
-        return result.ambiguous();
-    }
     if response.status != 200 {
         return result.fail(failure.source_rejected);
     }

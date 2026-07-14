@@ -14,3 +14,7 @@ capability:
       person_id: { input: person_id }
     freshness: 24h
 outputs: [registration_status, eligible]
+not_applicable:
+  ambiguity:
+    rationale: The exact snapshot selector is the entity primary key, whose materialized unique-key constraint permits at most one record.
+    request_fixture: snapshot-match
