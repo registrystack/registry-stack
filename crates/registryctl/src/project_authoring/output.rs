@@ -1307,16 +1307,23 @@ fn validate_https_origin(value: &str, field: &str) -> Result<()> {
 }
 
 fn validate_absolute_runtime_path(path: &Path, field: &str) -> Result<()> {
-    if path.as_os_str().as_encoded_bytes().len() > 4096 || !path.is_absolute() {
+    let value = path
+        .to_str()
+        .ok_or_else(|| anyhow!("{field} must be valid UTF-8"))?;
+    if value.len() > 4096 || !value.starts_with('/') {
         bail!("{field} must be one bounded absolute path");
     }
-    for component in path.components() {
-        match component {
-            Component::RootDir | Component::Normal(_) => {}
-            Component::CurDir | Component::ParentDir | Component::Prefix(_) => {
-                bail!("{field} must be normalized and cannot traverse")
-            }
-        }
+    if value == "/"
+        || value.starts_with("//")
+        || value.ends_with('/')
+        || value.contains('\\')
+        || value.bytes().any(|byte| byte.is_ascii_control())
+        || value
+            .split('/')
+            .skip(1)
+            .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        bail!("{field} must be normalized and cannot traverse");
     }
     Ok(())
 }
@@ -1377,6 +1384,39 @@ fn canonical_json_line(value: &Value) -> Result<Vec<u8>> {
 
 fn sha256_uri(bytes: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+}
+
+#[cfg(test)]
+mod runtime_path_tests {
+    use super::*;
+
+    #[test]
+    fn runtime_paths_use_target_posix_semantics_on_every_authoring_host() {
+        assert!(validate_absolute_runtime_path(
+            Path::new("/run/secrets/relay-workload-token"),
+            "runtime path"
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn runtime_paths_reject_relative_ambiguous_and_traversing_forms() {
+        for value in [
+            "run/secrets/token",
+            "/",
+            "//run/secrets/token",
+            "/run/secrets/token/",
+            "/run/./secrets/token",
+            "/run/../secrets/token",
+            "/run\\secrets\\token",
+            "C:\\run\\secrets\\token",
+        ] {
+            assert!(
+                validate_absolute_runtime_path(Path::new(value), "runtime path").is_err(),
+                "unexpectedly accepted {value}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
