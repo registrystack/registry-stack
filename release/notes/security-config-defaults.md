@@ -1,5 +1,11 @@
 # Security-Relevant Configuration Defaults Inventory
 
+> **Status: Historical beta-11 inventory.** The paths and example counts below
+> describe the pre-convergence v0.9.0 tree. Direct Notary source connectors,
+> source-adapter sidecars, and their Lab and demo configurations were removed
+> before 1.0. Do not use this snapshot as the current runtime or deployment
+> inventory.
+
 Issue: [#204](https://github.com/registrystack/registry-stack/issues/204)
 
 This inventory records security-relevant code defaults and the values shipped in
