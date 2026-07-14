@@ -492,21 +492,18 @@ pub(super) fn config_trust_is_optional_but_requires_explicit_antirollback_path()
 
 #[test]
 pub(super) fn cel_config_defaults_and_validates_operator_limits() {
-    let mut config = minimal_config();
+    let config = minimal_config();
     assert_eq!(config.cel.mode, "worker");
     assert_eq!(config.cel.worker_count, 2);
-    assert_eq!(config.cel.queue_max, 0);
     assert!(!config.cel.allow_regex);
     config.validate().expect("default CEL config validates");
+}
 
-    config.cel.queue_max = 1;
-    let error = config
-        .validate()
-        .expect_err("queueing must be explicit and unsupported");
-    assert!(matches!(
-        error,
-        EvidenceConfigError::InvalidCelConfig { .. }
-    ));
+#[test]
+pub(super) fn cel_config_rejects_removed_queue_max() {
+    let error = serde_norway::from_str::<RegistryNotaryCelConfig>("queue_max: 0\n")
+        .expect_err("the unreleased CEL queue setting must not remain accepted");
+    assert!(error.to_string().contains("queue_max"));
 }
 
 #[test]
@@ -533,7 +530,6 @@ cel:
   mode: worker
   worker_count: 4
   eval_timeout_ms: 1500
-  queue_max: 0
   allow_regex: false
   max_expression_bytes: 4096
   max_binding_json_bytes: 32768

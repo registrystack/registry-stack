@@ -13,8 +13,6 @@ pub struct RegistryNotaryCelConfig {
     #[serde(default = "default_cel_eval_timeout_ms")]
     pub eval_timeout_ms: u64,
     #[serde(default)]
-    pub queue_max: usize,
-    #[serde(default)]
     pub allow_regex: bool,
     #[serde(default = "default_cel_max_expression_bytes")]
     pub max_expression_bytes: usize,
@@ -42,7 +40,6 @@ impl Default for RegistryNotaryCelConfig {
             mode: default_cel_mode(),
             worker_count: default_cel_worker_count(),
             eval_timeout_ms: default_cel_eval_timeout_ms(),
-            queue_max: 0,
             allow_regex: false,
             max_expression_bytes: default_cel_max_expression_bytes(),
             max_binding_json_bytes: default_cel_max_binding_json_bytes(),
@@ -67,11 +64,6 @@ impl RegistryNotaryCelConfig {
         }
         if self.eval_timeout_ms == 0 || self.eval_timeout_ms > 30_000 {
             return invalid_cel("cel.eval_timeout_ms must be between 1 and 30000");
-        }
-        if self.queue_max != 0 {
-            return invalid_cel(
-                "cel.queue_max must be 0; queued CEL evaluation is not implemented",
-            );
         }
         if self.max_expression_bytes == 0 || self.max_expression_bytes > 256 * 1024 {
             return invalid_cel("cel.max_expression_bytes must be between 1 and 262144");

@@ -1725,7 +1725,6 @@ pub(super) async fn evaluate_claim_task(
             validate_claim_value_config(&value, &claim.value)?;
             Ok(value)
         }
-        RuleConfig::Plugin { .. } => return Err(EvidenceError::OperationUnsupported),
     };
     let value = match value_result {
         Ok(value) => value,

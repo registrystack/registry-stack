@@ -372,12 +372,6 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                         );
                     }
                 }
-                RuleConfig::Plugin { .. } => {
-                    return invalid_claim_evidence_mode(
-                        claim,
-                        "registry_backed plugins are not supported",
-                    );
-                }
             }
         }
         ClaimEvidenceMode::SelfAttested => match &claim.rule {
@@ -386,12 +380,6 @@ pub(in crate::config) fn validate_claim_evidence_mode(
                 return invalid_claim_evidence_mode(
                     claim,
                     "self_attested rules cannot name a Relay consultation",
-                );
-            }
-            RuleConfig::Plugin { .. } => {
-                return invalid_claim_evidence_mode(
-                    claim,
-                    "self_attested supports only CEL rules in v1",
                 );
             }
         },
@@ -496,7 +484,7 @@ pub(in crate::config) fn validate_relay_activation_shape(
             .then(|| match &claim.rule {
                 RuleConfig::ConsultationOutput { output, .. } => Some(output.clone()),
                 RuleConfig::ConsultationMatched { .. } => None,
-                RuleConfig::Cel { .. } | RuleConfig::Plugin { .. } => None,
+                RuleConfig::Cel { .. } => None,
             })
             .flatten();
         match outputs_by_client.get_mut(&client_key) {
@@ -780,9 +768,6 @@ pub enum RuleConfig {
         expression: String,
         #[serde(default)]
         bindings: CelBindingsConfig,
-    },
-    Plugin {
-        plugin: String,
     },
 }
 

@@ -857,15 +857,16 @@ fn self_attested_claims_are_source_free_across_dependencies() {
     };
     expect_mode_error(&source_rule, "cannot name a Relay consultation");
 
-    let mut plugin_rule = config.clone();
-    plugin_rule.evidence.claims[0].rule = RuleConfig::Plugin {
-        plugin: "unavailable".to_string(),
-    };
-    expect_mode_error(&plugin_rule, "supports only CEL");
-
     let mut config = config.clone();
     config.evidence.claims[0].required_scopes = vec!["self:read".to_string(); 2];
     expect_mode_error(&config, "duplicate");
+}
+
+#[test]
+fn removed_plugin_rule_is_rejected_during_deserialization() {
+    let error = serde_norway::from_str::<RuleConfig>("type: plugin\nplugin: unavailable\n")
+        .expect_err("the unreleased plugin rule must not remain accepted");
+    assert!(error.to_string().contains("plugin"));
 }
 
 #[test]
