@@ -1173,6 +1173,8 @@ struct EnvironmentDocument {
     #[serde(default)]
     notary_relay: Option<NotaryRelayBinding>,
     #[serde(default)]
+    relay_state: Option<RelayStateBinding>,
+    #[serde(default)]
     notary_state: Option<NotaryStateBinding>,
     deployment: DeploymentBinding,
 }
@@ -1337,6 +1339,18 @@ struct RelayBinding {
 struct NotaryRelayBinding {
     workload_client_id: String,
     token_file: PathBuf,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RelayStateBinding {
+    postgresql: RelayPostgresqlBinding,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RelayPostgresqlBinding {
+    root_certificate_path: PathBuf,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
