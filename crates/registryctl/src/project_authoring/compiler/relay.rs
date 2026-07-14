@@ -200,6 +200,15 @@ fn generated_relay_config(
                 "rhai_scripts": rhai_scripts,
             },
         });
+        if let Some(binding) = &environment.relay_state {
+            config["consultation"]["state_plane"]["root_certificate_path"] = Value::String(
+                binding
+                    .postgresql
+                    .root_certificate_path
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
     }
     Ok(config)
 }

@@ -284,6 +284,7 @@ fn offline_fixture_environment(loaded: &LoadedRegistryProject) -> Result<Environ
             workload_client_id: "registry-project-fixture-notary".to_string(),
             token_file: PathBuf::from("/run/secrets/offline-fixture-token"),
         }),
+        relay_state: None,
         notary_state: None,
         deployment: DeploymentBinding {
             profile: DeploymentProfile::Local,

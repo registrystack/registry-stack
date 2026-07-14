@@ -34,6 +34,16 @@
       "type": "object", "additionalProperties": false, "required": ["workload_client_id", "token_file"],
       "properties": { "workload_client_id": { "type": "string", "minLength": 1, "maxLength": 256 }, "token_file": { "type": "string", "minLength": 2, "maxLength": 4096, "pattern": "^/(?!.*(?:^|/)\\.\\.?/)(?!.*//).+$" } }
     },
+    "relay_state": {
+      "description": "Optional deployment binding for Relay-owned consultation PostgreSQL state transport trust.",
+      "type": "object", "additionalProperties": false, "required": ["postgresql"],
+      "properties": {
+        "postgresql": {
+          "type": "object", "additionalProperties": false, "required": ["root_certificate_path"],
+          "properties": { "root_certificate_path": { "$ref": "#/$defs/absolutePath" } }
+        }
+      }
+    },
     "notary_state": {
       "description": "Optional deployment binding for Notary-owned PostgreSQL state transport trust.",
       "type": "object", "additionalProperties": false, "required": ["postgresql"],
@@ -60,6 +70,10 @@
     {
       "if": { "required": ["notary_relay"] },
       "then": { "properties": { "deployment": { "required": ["relay", "notary"] } } }
+    },
+    {
+      "if": { "required": ["relay_state"] },
+      "then": { "properties": { "deployment": { "required": ["relay"] } } }
     },
     {
       "if": { "required": ["notary_state"] },

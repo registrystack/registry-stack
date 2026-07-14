@@ -829,7 +829,7 @@ fn semantic_digests(
             .iter()
             .map(|(id, caller)| (id, &caller.api_key_fingerprint))
             .collect::<BTreeMap<_, _>>();
-        json!({
+        let mut operator = json!({
             "integrations": integrations,
             "entities": environment.entities,
             "caller_credentials": caller_credentials,
@@ -838,7 +838,11 @@ fn semantic_digests(
             "notary_relay": environment.notary_relay,
             "notary_state": environment.notary_state,
             "deployment": environment.deployment,
-        })
+        });
+        if let Some(relay_state) = &environment.relay_state {
+            operator["relay_state"] = json!(relay_state);
+        }
+        operator
     });
     Ok(SemanticDigests {
         claim: digest_json(&json!({ "services": claims }))?,
@@ -2011,6 +2015,15 @@ fn validate_environment(
             256,
         )?;
         validate_absolute_runtime_path(&connection.token_file, "Relay workload token file")?;
+    }
+    if let Some(state) = &environment.relay_state {
+        if !requires_notary_relay {
+            bail!("relay_state is valid only when Relay consultations are enabled");
+        }
+        validate_absolute_runtime_path(
+            &state.postgresql.root_certificate_path,
+            "Relay PostgreSQL root_certificate_path",
+        )?;
     }
     if let Some(state) = &environment.notary_state {
         if !requires_notary {

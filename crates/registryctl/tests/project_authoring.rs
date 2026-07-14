@@ -1658,7 +1658,7 @@ fn project_schema_accepts_sixteen_consultation_inputs_and_rejects_seventeen() {
 }
 
 #[test]
-fn environment_schema_tracks_local_loopback_signing_kid_and_notary_state() {
+fn environment_schema_tracks_local_loopback_signing_kid_and_postgresql_state() {
     let schema: serde_json::Value = serde_json::from_slice(
         &std::fs::read(
             Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1690,6 +1690,11 @@ fn environment_schema_tracks_local_loopback_signing_kid_and_notary_state() {
             "workload_client_id": "authority-notary",
             "token_file": "/run/secrets/authority-notary-relay-token",
         },
+        "relay_state": {
+            "postgresql": {
+                "root_certificate_path": "/run/secrets/relay-postgres-ca.pem",
+            },
+        },
         "notary_state": {
             "postgresql": {
                 "root_certificate_path": "/run/secrets/notary-postgres-ca.pem",
@@ -1715,6 +1720,11 @@ fn environment_schema_tracks_local_loopback_signing_kid_and_notary_state() {
     relative_root["notary_state"]["postgresql"]["root_certificate_path"] =
         serde_json::json!("notary-postgres-ca.pem");
     assert!(!schema.is_valid(&relative_root));
+
+    let mut relative_relay_root = local.clone();
+    relative_relay_root["relay_state"]["postgresql"]["root_certificate_path"] =
+        serde_json::json!("relay-postgres-ca.pem");
+    assert!(!schema.is_valid(&relative_relay_root));
 
     let mut whitespace_kid = local.clone();
     whitespace_kid["issuance"]["signing_kid"] =
@@ -2799,6 +2809,10 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
         "postgresql:\n  root_certificate_path: /run/secrets/notary-postgres-ca.pem\n",
     )
     .expect("Notary state binding parses");
+    environment["relay_state"] = serde_yaml::from_str(
+        "postgresql:\n  root_certificate_path: /run/secrets/relay-postgres-ca.pem\n",
+    )
+    .expect("Relay state binding parses");
     write_yaml(&environment_path, &environment);
 
     let build = build_registry_project(&ProjectBuildOptions {
@@ -2813,6 +2827,10 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
     assert_eq!(
         relay["auth"]["oidc"]["allow_dev_insecure_fetch_urls"].as_bool(),
         Some(true)
+    );
+    assert_eq!(
+        relay["consultation"]["state_plane"]["root_certificate_path"].as_str(),
+        Some("/run/secrets/relay-postgres-ca.pem")
     );
     let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
     assert_eq!(notary["state"]["storage"].as_str(), Some("postgresql"));
