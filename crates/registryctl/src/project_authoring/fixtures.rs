@@ -38,14 +38,14 @@ fn preflight_project_rhai_scripts(loaded: &LoadedRegistryProject) -> Result<()> 
         let function = diagnostic
             .function()
             .map_or_else(String::new, |function| format!(" function={function}"));
-        let signatures = (!diagnostic.valid_signatures().is_empty())
-            .then(|| {
-                format!(
-                    " valid_signatures=[{}]",
-                    diagnostic.valid_signatures().join("|")
-                )
-            })
-            .unwrap_or_default();
+        let signatures = if diagnostic.valid_signatures().is_empty() {
+            String::new()
+        } else {
+            format!(
+                " valid_signatures=[{}]",
+                diagnostic.valid_signatures().join("|")
+            )
+        };
         bail!(
             "integration={alias} field={field} file={relative}{line}{column} cause={}{}{}",
             diagnostic.cause().as_str(),
@@ -56,10 +56,10 @@ fn preflight_project_rhai_scripts(loaded: &LoadedRegistryProject) -> Result<()> 
     Ok(())
 }
 
-fn rhai_diagnostic_source<'a>(
-    integration: &'a LoadedIntegration,
+fn rhai_diagnostic_source(
+    integration: &LoadedIntegration,
     compiled_line: Option<usize>,
-) -> Option<(&'a Path, Option<usize>, &'static str)> {
+) -> Option<(&Path, Option<usize>, &'static str)> {
     let (script_path, _) = integration.script.as_ref()?;
     let Some(compiled_line) = compiled_line else {
         return Some((script_path.as_path(), None, "capability.script.file"));
@@ -357,8 +357,7 @@ fn derived_fixture_reports(
             .map(|mut observation| {
                 calls = std::mem::take(&mut observation.calls);
                 observation
-            })
-            .map_err(|error| error);
+            });
             let actual = result.as_ref().err().map(String::as_str);
             let passed = actual == Some(expected);
             FixtureReport {

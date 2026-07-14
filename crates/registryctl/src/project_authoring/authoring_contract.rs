@@ -618,10 +618,11 @@ fn validate_authored_integration_contract(authored: &AuthoredIntegrationDocument
 }
 
 fn validate_authored_source(source: &AuthoredSourceDeclaration) -> Result<()> {
-    if source.versions.tested.is_empty() && source.versions.unverified.is_empty() {
-        if source.product.is_some() {
-            bail!("source.versions must classify at least one product version label");
-        }
+    if source.versions.tested.is_empty()
+        && source.versions.unverified.is_empty()
+        && source.product.is_some()
+    {
+        bail!("source.versions must classify at least one product version label");
     }
     if source
         .response
@@ -1652,7 +1653,7 @@ fn response_schema_for_outputs(
         fields: BTreeMap::new(),
     };
     for (name, output) in outputs {
-        let source = output.source.as_deref().unwrap_or_else(|| name.as_str());
+        let source = output.source.as_deref().unwrap_or(name.as_str());
         let path = pointer_segments(source)?;
         insert_output_schema(&mut root, &path, output, name)?;
     }

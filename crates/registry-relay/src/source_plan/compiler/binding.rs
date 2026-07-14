@@ -475,8 +475,12 @@ pub(super) fn validate_credential_shape(
     let reviewed = pack.document.spec.plan.credential_operation.is_some();
     let destination = binding.document.credential_destination.is_some();
     let credential = binding.document.credential.is_some();
-    let data_destination_matches = binding.document.data_destination.is_some()
-        == (pack.document.spec.plan.kind != SourcePlanKind::SnapshotExact);
+    let data_destination_matches = match pack.document.spec.plan.kind {
+        SourcePlanKind::SnapshotExact => binding.document.data_destination.is_none(),
+        SourcePlanKind::BoundedHttp | SourcePlanKind::SandboxedRhai => {
+            binding.document.data_destination.is_some()
+        }
+    };
     let credential_slot_matches = binding.document.credential_destination.is_some()
         == pack
             .document
@@ -485,7 +489,7 @@ pub(super) fn validate_credential_shape(
             .credential_destination_slot
             .is_some();
     let verification_destination_matches = binding.document.verification_destination.is_some()
-        == !pack.document.spec.plan.verification_operations.is_empty();
+        != pack.document.spec.plan.verification_operations.is_empty();
     let verification_slot_matches = binding.document.verification_destination.is_some()
         == pack
             .document

@@ -53,9 +53,7 @@ pub(super) fn validate_inputs(
         let (input_type, nullable) = input
             .resolved_type()
             .ok_or(SourcePlanArtifactError::InvalidAcquisition)?;
-        if (input.role == InputRoleDocument::Selector && nullable)
-            || (nullable && input.role != InputRoleDocument::Parameter)
-        {
+        if nullable && input.role != InputRoleDocument::Parameter {
             return Err(SourcePlanArtifactError::InvalidAcquisition);
         }
         let shape_valid = match input_type {
@@ -737,10 +735,10 @@ pub(super) fn validate_plan(
         }
     }
     let verification_data_exchanges = plan.verification_operations.len();
-    if (plan.kind == SourcePlanKind::BoundedHttp && used_operations != known_operations)
-        || (plan.kind == SourcePlanKind::BoundedHttp
-            && plan.steps.len() + verification_data_exchanges
-                != usize::from(spec.bounds.max_data_exchanges))
+    if (plan.kind == SourcePlanKind::BoundedHttp
+        && (used_operations != known_operations
+            || plan.steps.len() + verification_data_exchanges
+                != usize::from(spec.bounds.max_data_exchanges)))
         || (plan.kind == SourcePlanKind::SandboxedRhai && !plan.step_conditions.is_empty())
     {
         return Err(SourcePlanArtifactError::InvalidPlan);

@@ -2037,7 +2037,7 @@ fn compiled_rhai_source(integration: &LoadedIntegration) -> Result<Box<[u8]>> {
     let mut source = Vec::new();
     for (module_path, module) in &integration.script_modules {
         let module_path = module_path
-            .strip_prefix(&integration_root(script_path, &integration.document)?)
+            .strip_prefix(integration_root(script_path, &integration.document)?)
             .unwrap_or(module_path)
             .to_string_lossy();
         std::str::from_utf8(module).context("sandboxed Rhai module is not UTF-8")?;

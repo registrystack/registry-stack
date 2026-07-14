@@ -1517,7 +1517,9 @@ fn prepare_for_operation<'a>(
     })
 }
 
-fn split_rhai_target(target: &str) -> Result<(&str, Vec<(String, String)>), HostFailure> {
+type RhaiQuery = Vec<(String, String)>;
+
+fn split_rhai_target(target: &str) -> Result<(&str, RhaiQuery), HostFailure> {
     if !target.starts_with('/')
         || target.starts_with("//")
         || target.contains('#')
@@ -1537,9 +1539,9 @@ fn split_rhai_target(target: &str) -> Result<(&str, Vec<(String, String)>), Host
 }
 
 fn merge_rhai_query(
-    mut target: Vec<(String, String)>,
+    mut target: RhaiQuery,
     options: BTreeMap<String, JsonValue>,
-) -> Result<Vec<(String, String)>, HostFailure> {
+) -> Result<RhaiQuery, HostFailure> {
     for (name, value) in options {
         if target.iter().any(|(target_name, _)| target_name == &name) {
             return Err(HostFailure::ContractViolation);
