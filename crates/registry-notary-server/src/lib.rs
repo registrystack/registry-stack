@@ -32,6 +32,7 @@ pub(crate) mod response_context;
 pub mod runtime;
 pub mod self_attestation_rate_limit;
 pub mod standalone;
+pub mod state_plane;
 
 pub(crate) use problem::PROBLEM_TYPE_BASE_URL;
 

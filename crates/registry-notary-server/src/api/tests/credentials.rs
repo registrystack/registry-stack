@@ -2,44 +2,93 @@
 //! Credentials API tests.
 
 use super::*;
+use async_trait::async_trait;
+use registry_platform_cache::{
+    CacheCompareAndSetOutcome, CacheKey, CacheSetOutcome, CacheStore, CacheStoreError,
+};
+
+struct UnavailableCredentialStatusStore;
+
+fn unavailable_status_error() -> CacheStoreError {
+    CacheStoreError::Operation {
+        message: "test store unavailable".to_string(),
+    }
+}
+
+#[async_trait]
+impl CacheStore for UnavailableCredentialStatusStore {
+    async fn get(&self, _key: &CacheKey) -> Result<Option<Vec<u8>>, CacheStoreError> {
+        Err(unavailable_status_error())
+    }
+
+    async fn set(
+        &self,
+        _key: &CacheKey,
+        _value: &[u8],
+        _expires_at: OffsetDateTime,
+    ) -> Result<(), CacheStoreError> {
+        Err(unavailable_status_error())
+    }
+
+    async fn set_if_absent(
+        &self,
+        _key: &CacheKey,
+        _value: &[u8],
+        _expires_at: OffsetDateTime,
+    ) -> Result<CacheSetOutcome, CacheStoreError> {
+        Err(unavailable_status_error())
+    }
+
+    async fn compare_and_set(
+        &self,
+        _key: &CacheKey,
+        _expected: &[u8],
+        _value: &[u8],
+        _expires_at: OffsetDateTime,
+    ) -> Result<CacheCompareAndSetOutcome, CacheStoreError> {
+        Err(unavailable_status_error())
+    }
+
+    async fn delete(&self, _key: &CacheKey) -> Result<bool, CacheStoreError> {
+        Err(unavailable_status_error())
+    }
+
+    async fn check_ready(&self) -> Result<(), CacheStoreError> {
+        Err(unavailable_status_error())
+    }
+}
 
 #[tokio::test]
 async fn issue_credential_fails_closed_when_status_record_write_fails() {
-    std::env::set_var(
-        "TEST_CREDENTIAL_STATUS_UNREACHABLE_REDIS_URL",
-        "redis://127.0.0.1:1",
-    );
     let evidence = credential_issue_evidence_config();
     let store = Arc::new(EvidenceStore::default());
-    store.insert(registry_notary_core::StoredEvaluation {
-        client_id: "caseworker".to_string(),
-        purpose: "test".to_string(),
-        claim_ids: vec!["person-is-alive".to_string()],
-        claim_refs: Vec::new(),
-        disclosure: "predicate".to_string(),
-        format: FORMAT_SD_JWT_VC.to_string(),
-        results: vec![claim_result_view(
-            "eval-status-write-fails",
-            "person-is-alive",
-        )],
-        created_at: "2026-05-23T00:00:00Z".to_string(),
-        expires_at: "2999-01-01T00:00:00Z".to_string(),
-        request_hash: "request-hash".to_string(),
-        self_attestation: None,
-    });
-    let credential_status = CredentialStatusStore::from_config(&CredentialStatusConfig {
-        enabled: true,
-        base_url: "https://issuer.example".to_string(),
-        storage: CREDENTIAL_STATUS_STORAGE_REDIS.to_string(),
-        retention_seconds: 60,
-        redis: CredentialStatusRedisConfig {
-            url_env: "TEST_CREDENTIAL_STATUS_UNREACHABLE_REDIS_URL".to_string(),
-            key_prefix: "registry-notary-status-fail-test".to_string(),
-            connect_timeout_ms: 10,
-            operation_timeout_ms: 10,
+    store
+        .insert(registry_notary_core::StoredEvaluation {
+            client_id: "caseworker".to_string(),
+            purpose: "test".to_string(),
+            claim_ids: vec!["person-is-alive".to_string()],
+            claim_refs: Vec::new(),
+            disclosure: "predicate".to_string(),
+            format: FORMAT_SD_JWT_VC.to_string(),
+            results: vec![claim_result_view(
+                "eval-status-write-fails",
+                "person-is-alive",
+            )],
+            created_at: "2026-05-23T00:00:00Z".to_string(),
+            expires_at: "2999-01-01T00:00:00Z".to_string(),
+            request_hash: "request-hash".to_string(),
+            self_attestation: None,
+        })
+        .await
+        .expect("evaluation inserts");
+    let credential_status = CredentialStatusStore::with_test_store(
+        &CredentialStatusConfig {
+            enabled: true,
+            base_url: "https://issuer.example".to_string(),
+            retention_seconds: 60,
         },
-    })
-    .expect("status store builds without connecting");
+        Arc::new(UnavailableCredentialStatusStore),
+    );
     let state = Arc::new(
         RegistryNotaryApiState::new_with_federation(
             Arc::new(evidence),
@@ -99,22 +148,25 @@ async fn issue_credential_rejects_purpose_mismatch() {
     let evidence = credential_issue_evidence_config();
     let store = Arc::new(EvidenceStore::default());
     let sign_count = Arc::new(AtomicUsize::new(0));
-    store.insert(registry_notary_core::StoredEvaluation {
-        client_id: "caseworker".to_string(),
-        purpose: "benefits".to_string(),
-        claim_ids: vec!["person-is-alive".to_string()],
-        claim_refs: Vec::new(),
-        disclosure: "predicate".to_string(),
-        format: FORMAT_SD_JWT_VC.to_string(),
-        results: vec![claim_result_view(
-            "eval-purpose-mismatch",
-            "person-is-alive",
-        )],
-        created_at: "2026-05-23T00:00:00Z".to_string(),
-        expires_at: "2999-01-01T00:00:00Z".to_string(),
-        request_hash: "request-hash".to_string(),
-        self_attestation: None,
-    });
+    store
+        .insert(registry_notary_core::StoredEvaluation {
+            client_id: "caseworker".to_string(),
+            purpose: "benefits".to_string(),
+            claim_ids: vec!["person-is-alive".to_string()],
+            claim_refs: Vec::new(),
+            disclosure: "predicate".to_string(),
+            format: FORMAT_SD_JWT_VC.to_string(),
+            results: vec![claim_result_view(
+                "eval-purpose-mismatch",
+                "person-is-alive",
+            )],
+            created_at: "2026-05-23T00:00:00Z".to_string(),
+            expires_at: "2999-01-01T00:00:00Z".to_string(),
+            request_hash: "request-hash".to_string(),
+            self_attestation: None,
+        })
+        .await
+        .expect("evaluation inserts");
     let state = Arc::new(
         RegistryNotaryApiState::new_with_federation(
             Arc::new(evidence),

@@ -78,6 +78,20 @@ impl AuthAuditState {
         })
     }
 
+    #[must_use]
+    pub(super) fn with_postgres_state_plane(
+        mut self,
+        state_plane: Arc<crate::state_plane::NotaryStatePlaneHandle>,
+        rate_limits: registry_notary_core::SelfAttestationRateLimitsConfig,
+    ) -> Self {
+        if self.self_attestation_invalid_token_limiter.is_some() {
+            self.self_attestation_invalid_token_limiter = Some(Arc::new(
+                SelfAttestationRateLimiter::with_state_plane(rate_limits, state_plane),
+            ));
+        }
+        self
+    }
+
     pub(super) async fn authenticate(
         &self,
         credentials: RequestCredentials,

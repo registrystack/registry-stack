@@ -36,9 +36,9 @@ mod evidence;
 mod federation;
 mod http;
 mod oid4vci;
-mod replay;
 mod root;
 mod self_attestation;
+mod state;
 
 pub use audit::*;
 pub use auth::*;
@@ -49,9 +49,9 @@ pub use evidence::*;
 pub use federation::*;
 pub use http::*;
 pub use oid4vci::*;
-pub use replay::*;
 pub use root::*;
 pub use self_attestation::*;
+pub use state::*;
 
 #[cfg(test)]
 mod tests;

@@ -65,13 +65,14 @@ use zeroize::Zeroizing;
 use crate::cel_worker::{CelWorker, CelWorkerConfig};
 #[cfg(feature = "registry-notary-cel")]
 use crate::runtime::validate_cel_claims_for_startup;
+use crate::state_plane::{NotaryPostgresStatePlaneError, NotaryStatePlaneHandle};
 use crate::{
     api::METRICS_SCOPE,
     config_governed::ConfigGovernanceContext,
-    credential_status::{CredentialStatusBuildError, CredentialStatusStore},
+    credential_status::CredentialStatusStore,
     metrics::{metrics_handler, metrics_middleware, AppMetrics},
     posture::PostureContext,
-    replay::{require_replay_insert, ReplayBuildError, ReplayStores},
+    replay::{require_replay_insert, ReplayStores},
     router, EvidenceAuditContext, EvidenceErrorCodeContext, EvidenceIssuerResolver, EvidenceStore,
     RegistryNotaryApiState, SelfAttestationRateLimitKeys, SelfAttestationRateLimiter,
 };
@@ -107,8 +108,8 @@ pub(crate) use deployment::*;
 pub use offline_fixture::*;
 use preauth::*;
 pub(crate) use preauth::{
-    constant_time_eq, generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge,
-    pre_auth_audit_event, PreAuthAuditFields, PreAuthRuntime,
+    generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge, pre_auth_audit_event,
+    PreAuthAuditFields, PreAuthRuntime,
 };
 use relay::*;
 pub use signing::providers::EvidenceIssuerRegistry;
@@ -120,7 +121,6 @@ use transport::*;
 const FILE_WATCH_METADATA_CHECK_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_REQUEST_URI_BYTES: usize = 8 * 1024;
 const MAX_INBOUND_REQUEST_BODY_BYTES: usize = 1024 * 1024;
-const PREAUTH_LOGIN_STATE_MAX_ENTRIES: usize = 4096;
 const SELF_ATTESTATION_CORS_METHODS: &str = "GET,POST,OPTIONS";
 const OIDC_ID_TOKEN_HEADER: &str = "x-registry-notary-oidc-id-token";
 const SELF_ATTESTATION_CORS_DEFAULT_HEADERS: &str =
@@ -135,4 +135,7 @@ mod tests {
     include!("tests/audit.inc");
     include!("tests/preauth.inc");
     include!("tests/signing.inc");
+    mod deployment_gates {
+        include!("tests/deployment_gates.rs");
+    }
 }

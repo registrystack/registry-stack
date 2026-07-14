@@ -42,7 +42,7 @@ use registry_notary_core::deployment::{
 };
 use registry_notary_core::{
     deprecated_config_fields, ConfigAuditEvent, ConfigTrustConfig, RegistryNotaryAdminListenerMode,
-    SigningKeyProviderConfig, StandaloneRegistryNotaryConfig,
+    SigningKeyProviderConfig, StandaloneRegistryNotaryConfig, STATE_STORAGE_POSTGRESQL,
 };
 use registry_notary_server::{
     compile_notary_runtime_with_provenance, notary_router_from_runtime,
@@ -133,6 +133,11 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Install or attest the Notary-owned PostgreSQL correctness state.
+    State {
+        #[command(subcommand)]
+        command: StateCommand,
+    },
     /// Generate or hash a Registry Notary API key.
     HashApiKey {
         /// Read the API key from stdin.
@@ -185,6 +190,27 @@ enum Command {
 enum ConfigCommand {
     /// Verify a Registry Config Bundle directory against local trust and state.
     VerifyBundle(ConfigVerifyBundleArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum StateCommand {
+    /// Install or attest the forward-only PostgreSQL state schema.
+    Install(StateInstallArgs),
+    /// Connect as the runtime role and attest readiness without mutation.
+    Doctor,
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+struct StateInstallArgs {
+    /// Environment variable containing the migration-login PostgreSQL URL.
+    #[arg(long)]
+    migration_url_env: String,
+    /// NOLOGIN role that owns the Notary schemas and functions.
+    #[arg(long)]
+    owner_role: String,
+    /// Restricted LOGIN role used by the Notary runtime.
+    #[arg(long)]
+    runtime_role: String,
 }
 
 #[derive(Debug, Clone, ClapArgs)]
@@ -259,6 +285,20 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             command: ConfigCommand::VerifyBundle(verify_args),
         }) => {
             config_verify_bundle(verify_args).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::State {
+            command: StateCommand::Install(install),
+        }) => {
+            let config_path = required_config_path(args.config.as_deref())?;
+            state_install(config_path, install).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::State {
+            command: StateCommand::Doctor,
+        }) => {
+            let config_path = required_config_path(args.config.as_deref())?;
+            state_doctor(config_path).await?;
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::HashApiKey {

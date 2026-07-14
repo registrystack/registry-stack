@@ -4,51 +4,179 @@ use super::*;
 use super::{auth::*, credentials::*, issuance::*, preauth::*, root::*};
 
 #[test]
-pub(super) fn replay_config_validates_redis_backend_shape() {
+pub(super) fn state_postgresql_config_parses_and_validates() {
     let mut config = minimal_config();
-    config.replay = serde_norway::from_str(
+    config.state = serde_norway::from_str(
         r#"
-storage: redis
-redis:
-  url_env: REGISTRY_NOTARY_REPLAY_REDIS_URL
-  key_prefix: registry-notary-test
-  connect_timeout_ms: 1000
-  operation_timeout_ms: 500
+storage: postgresql
+postgresql:
+  url_env: REGISTRY_NOTARY_POSTGRES_URL
+  root_certificate_path: /run/secrets/notary-postgres-ca.pem
+  connect_timeout_ms: 5000
+  operation_timeout_ms: 2000
+  sensitive_state_key_env: REGISTRY_NOTARY_SENSITIVE_STATE_KEY
 "#,
     )
-    .expect("redis replay config parses");
+    .expect("PostgreSQL state config parses");
 
-    config.validate().expect("redis replay config validates");
-
-    config.replay.redis.url_env.clear();
-    let reason = expect_replay_error(&config);
-    assert!(reason.contains("url_env"), "unexpected: {reason}");
+    config
+        .validate()
+        .expect("PostgreSQL state config validates");
+    assert_eq!(config.state.storage, STATE_STORAGE_POSTGRESQL);
+    assert_eq!(
+        config.state.postgresql.root_certificate_path.as_deref(),
+        Some(std::path::Path::new("/run/secrets/notary-postgres-ca.pem"))
+    );
 }
 
 #[test]
-pub(super) fn credential_status_config_validates_redis_backend_shape() {
+pub(super) fn state_defaults_to_postgresql_contract() {
+    let config = minimal_config();
+
+    assert_eq!(config.state.storage, STATE_STORAGE_POSTGRESQL);
+    assert_eq!(
+        config.state.postgresql.url_env,
+        "REGISTRY_NOTARY_POSTGRES_URL"
+    );
+    assert_eq!(config.state.postgresql.connect_timeout_ms, 5_000);
+    assert_eq!(config.state.postgresql.operation_timeout_ms, 2_000);
+    assert_eq!(
+        config.state.postgresql.sensitive_state_key_env,
+        "REGISTRY_NOTARY_SENSITIVE_STATE_KEY"
+    );
+    config.validate().expect("default state config validates");
+}
+
+#[test]
+pub(super) fn state_postgresql_config_rejects_invalid_connection_shape() {
     let mut config = minimal_config();
-    config.credential_status = serde_norway::from_str(
+    config.state.postgresql.url_env.clear();
+    let reason = expect_state_error(&config);
+    assert!(
+        reason.contains("state.postgresql.url_env"),
+        "unexpected: {reason}"
+    );
+
+    config = minimal_config();
+    config.state.postgresql.connect_timeout_ms = 0;
+    let reason = expect_state_error(&config);
+    assert!(
+        reason.contains("connect_timeout_ms"),
+        "unexpected: {reason}"
+    );
+
+    config = minimal_config();
+    config.state.postgresql.operation_timeout_ms = 0;
+    let reason = expect_state_error(&config);
+    assert!(
+        reason.contains("operation_timeout_ms"),
+        "unexpected: {reason}"
+    );
+
+    config = minimal_config();
+    config.state.postgresql.root_certificate_path = Some(std::path::PathBuf::new());
+    let reason = expect_state_error(&config);
+    assert!(
+        reason.contains("root_certificate_path"),
+        "unexpected: {reason}"
+    );
+}
+
+#[test]
+pub(super) fn state_in_memory_is_limited_to_local_single_instance() {
+    let mut config = minimal_config();
+    config.state.storage = STATE_STORAGE_IN_MEMORY.to_string();
+
+    let reason = expect_state_error(&config);
+    assert!(
+        reason.contains("deployment.profile = local"),
+        "unexpected: {reason}"
+    );
+
+    config.deployment.profile = Some(crate::deployment::DeploymentProfile::HostedLab);
+    let reason = expect_state_error(&config);
+    assert!(
+        reason.contains("deployment.profile = local"),
+        "unexpected: {reason}"
+    );
+
+    config.deployment.profile = Some(crate::deployment::DeploymentProfile::Local);
+    config.deployment.multi_instance = true;
+    let reason = expect_state_error(&config);
+    assert!(
+        reason.contains("deployment.multi_instance = false"),
+        "unexpected: {reason}"
+    );
+
+    config.deployment.multi_instance = false;
+    config
+        .validate()
+        .expect("local single-instance in-memory state validates");
+}
+
+#[test]
+pub(super) fn state_rejects_unknown_storage() {
+    let mut config = minimal_config();
+    config.state.storage = "redis".to_string();
+
+    let reason = expect_state_error(&config);
+    assert!(
+        reason.contains("postgresql or in_memory"),
+        "unexpected: {reason}"
+    );
+}
+
+#[test]
+pub(super) fn state_postgresql_requires_sensitive_key_env_for_preauthorization() {
+    let mut config = valid_pre_auth_config();
+    config.state.postgresql.sensitive_state_key_env.clear();
+
+    let reason = expect_state_error(&config);
+    assert!(
+        reason.contains("sensitive_state_key_env"),
+        "unexpected: {reason}"
+    );
+}
+
+#[test]
+pub(super) fn removed_per_domain_storage_selectors_are_rejected() {
+    let replay = serde_norway::from_str::<StandaloneRegistryNotaryConfig>(
+        r#"
+evidence:
+  enabled: true
+  signing_keys:
+    issuer-key:
+      provider: local_jwk_env
+      private_jwk_env: ISSUER_KEY
+      alg: EdDSA
+      kid: did:web:issuer.example#key-1
+      status: active
+auth:
+  mode: api_key
+  api_keys:
+    - id: test-key
+      fingerprint:
+        provider: env
+        name: TEST_TOKEN_HASH
+replay:
+  storage: redis
+"#,
+    )
+    .expect_err("top-level replay config was removed");
+    assert!(replay.to_string().contains("replay"));
+
+    let credential_status = serde_norway::from_str::<CredentialStatusConfig>(
         r#"
 enabled: true
 base_url: https://issuer.example
 storage: redis
 redis:
   url_env: REGISTRY_NOTARY_STATUS_REDIS_URL
-  key_prefix: registry-notary-test
-  connect_timeout_ms: 1000
-  operation_timeout_ms: 500
 "#,
     )
-    .expect("credential status config parses");
-
-    config
-        .validate()
-        .expect("redis credential status config validates");
-
-    config.credential_status.redis.url_env.clear();
-    let reason = expect_credential_status_error(&config);
-    assert!(reason.contains("url_env"), "unexpected: {reason}");
+    .expect_err("credential-status storage selectors were removed");
+    let error = credential_status.to_string();
+    assert!(error.contains("storage") || error.contains("redis"));
 }
 
 #[test]
@@ -205,26 +333,15 @@ pub(super) fn federation_signing_key_must_reference_active_named_signing_key() {
 }
 
 #[test]
-pub(super) fn federation_legacy_redis_replay_requires_top_level_redis_replay() {
-    let mut config = valid_federation_config();
-    config.federation.replay.storage = REPLAY_STORAGE_REDIS.to_string();
-
-    let reason = expect_federation_error(&config);
-    assert!(
-        reason.contains("top-level replay.storage = redis"),
-        "unexpected: {reason}"
-    );
-
-    config.replay = ReplayConfig {
-        storage: REPLAY_STORAGE_REDIS.to_string(),
-        redis: ReplayRedisConfig {
-            url_env: "REGISTRY_NOTARY_REPLAY_REDIS_URL".to_string(),
-            ..ReplayRedisConfig::default()
-        },
-    };
-    config
-        .validate()
-        .expect("matching top-level redis replay validates");
+pub(super) fn federation_replay_storage_selector_is_rejected() {
+    let error = serde_norway::from_str::<FederationConfig>(
+        r#"
+replay:
+  storage: redis
+"#,
+    )
+    .expect_err("federation replay storage selection was removed");
+    assert!(error.to_string().contains("replay"));
 }
 
 #[test]

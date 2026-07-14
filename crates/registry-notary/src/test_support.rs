@@ -107,6 +107,8 @@ pub(crate) fn notary_bundle_runtime_config() -> String {
     r#"
 deployment:
   profile: local
+state:
+  storage: in_memory
 server:
   bind: 127.0.0.1:4255
   admin_listener:

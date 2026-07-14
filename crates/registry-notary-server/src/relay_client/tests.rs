@@ -22,10 +22,9 @@ use registry_platform_httputil::destination::{
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, Mutex};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinHandle;
 use zeroize::Zeroizing;
 
 const PROFILE_ID: &str = "dhis2.tracker.enrollment-status.exact";
@@ -51,10 +50,8 @@ const NOTARY_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_RELAY_VERTICAL_API_KEY_HA
 const NOTARY_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_RELAY_VERTICAL_AUDIT_SECRET";
 const TRANSITION_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_TRANSITION_API_KEY_HASH";
 const TRANSITION_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_TRANSITION_AUDIT_SECRET";
-const TRANSITION_REPLAY_REDIS_URL_ENV: &str = "REGISTRY_NOTARY_TRANSITION_REPLAY_REDIS_URL";
 const RESTART_API_KEY_HASH_ENV: &str = "REGISTRY_NOTARY_RESTART_API_KEY_HASH";
 const RESTART_AUDIT_SECRET_ENV: &str = "REGISTRY_NOTARY_RESTART_AUDIT_SECRET";
-const RESTART_REPLAY_REDIS_URL_ENV: &str = "REGISTRY_NOTARY_RESTART_REPLAY_REDIS_URL";
 const ISOLATED_TEST_KIND_ENV: &str = "REGISTRY_NOTARY_RELAY_CLIENT_ISOLATED_TEST_KIND";
 const ASSEMBLED_JOURNEY_KIND: &str = "assembled-notary-relay-journey";
 const BLUE_GREEN_JOURNEY_KIND: &str = "coordinated-blue-green-journey";
@@ -215,102 +212,6 @@ impl FakeRelay {
         }
         self.task.await.unwrap();
     }
-}
-
-struct FakeRedis {
-    url: String,
-    shutdown: Option<oneshot::Sender<()>>,
-    task: JoinHandle<()>,
-}
-
-impl FakeRedis {
-    async fn start() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let (shutdown, mut receiver) = oneshot::channel();
-        let task = tokio::spawn(async move {
-            let mut connections = JoinSet::new();
-            loop {
-                tokio::select! {
-                    _ = &mut receiver => break,
-                    accepted = listener.accept() => {
-                        let (stream, _) = accepted.unwrap();
-                        connections.spawn(handle_fake_redis_connection(stream));
-                    }
-                }
-            }
-            connections.abort_all();
-            while connections.join_next().await.is_some() {}
-        });
-        Self {
-            url: format!("redis://{address}/"),
-            shutdown: Some(shutdown),
-            task,
-        }
-    }
-
-    async fn shutdown(mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
-        }
-        self.task.await.unwrap();
-    }
-}
-
-async fn handle_fake_redis_connection(mut stream: tokio::net::TcpStream) {
-    let mut buffered = Vec::new();
-    let mut chunk = [0_u8; 4096];
-    loop {
-        let read = stream.read(&mut chunk).await.unwrap();
-        if read == 0 {
-            return;
-        }
-        buffered.extend_from_slice(&chunk[..read]);
-        while let Some((command, consumed)) = parse_resp_command(&buffered) {
-            buffered.drain(..consumed);
-            let response: &[u8] = match command.as_str() {
-                "PING" => b"+PONG\r\n",
-                "SET" | "CLIENT" | "HELLO" | "SELECT" => b"+OK\r\n",
-                "DEL" => b":1\r\n",
-                _ => b"-ERR unsupported test command\r\n",
-            };
-            stream.write_all(response).await.unwrap();
-        }
-    }
-}
-
-fn parse_resp_command(input: &[u8]) -> Option<(String, usize)> {
-    let (count, mut cursor) = parse_resp_number(input, 0, b'*')?;
-    let mut command = None;
-    for index in 0..count {
-        let (length, payload_start) = parse_resp_number(input, cursor, b'$')?;
-        let payload_end = payload_start.checked_add(length)?;
-        if input.get(payload_end..payload_end + 2)? != b"\r\n" {
-            return None;
-        }
-        if index == 0 {
-            command = Some(
-                std::str::from_utf8(input.get(payload_start..payload_end)?)
-                    .ok()?
-                    .to_ascii_uppercase(),
-            );
-        }
-        cursor = payload_end + 2;
-    }
-    Some((command?, cursor))
-}
-
-fn parse_resp_number(input: &[u8], start: usize, prefix: u8) -> Option<(usize, usize)> {
-    if *input.get(start)? != prefix {
-        return None;
-    }
-    let digits = input.get(start + 1..)?;
-    let line_end = digits.windows(2).position(|window| window == b"\r\n")?;
-    let value = std::str::from_utf8(&digits[..line_end])
-        .ok()?
-        .parse()
-        .ok()?;
-    Some((value, start + 1 + line_end + 2))
 }
 
 async fn metadata_handler(State(state): State<FakeState>, request: Request) -> Response<Body> {
@@ -835,7 +736,6 @@ fn assembled_notary_config(
         &contract_hash(),
         NOTARY_API_KEY_HASH_ENV,
         NOTARY_AUDIT_SECRET_ENV,
-        None,
     )
 }
 
@@ -846,22 +746,18 @@ fn assembled_notary_config_for_generation(
     contract_hash: &str,
     api_key_hash_env: &str,
     audit_secret_env: &str,
-    replay_redis_url_env: Option<&str>,
 ) -> StandaloneRegistryNotaryConfig {
     let relay_origin = serde_json::to_string(&relay.origin).expect("Relay origin serializes");
     let token_path =
         serde_json::to_string(&token_file.path.to_string_lossy()).expect("token path serializes");
     let audit_path =
         serde_json::to_string(&audit_path.to_string_lossy()).expect("audit path serializes");
-    let replay = replay_redis_url_env.map_or_else(String::new, |url_env| {
-        format!(
-            "replay:\n  storage: redis\n  redis:\n    url_env: {url_env}\n    key_prefix: registry-notary-transition\n    connect_timeout_ms: 1000\n    operation_timeout_ms: 500\n"
-        )
-    });
     serde_norway::from_str(&format!(
         r#"
 deployment:
   profile: local
+state:
+  storage: in_memory
 server:
   bind: 127.0.0.1:0
 auth:
@@ -876,7 +772,6 @@ audit:
   sink: file
   path: {audit_path}
   hash_secret_env: {audit_secret_env}
-{replay}
 evidence:
   enabled: true
   service_id: notary-relay-vertical.test
@@ -1090,7 +985,6 @@ async fn assert_generation_ready_and_serving(notary: &TestServer) {
 
 #[tokio::test]
 async fn coordinated_blue_green_never_serves_mixed_contract_generations() {
-    let replay = FakeRedis::start().await;
     let status = run_isolated_test(
         BLUE_GREEN_JOURNEY_CHILD,
         BLUE_GREEN_JOURNEY_KIND,
@@ -1103,11 +997,9 @@ async fn coordinated_blue_green_never_serves_mixed_contract_generations() {
                 TRANSITION_AUDIT_SECRET_ENV,
                 "abcdef0123456789abcdef0123456789".to_string(),
             ),
-            (TRANSITION_REPLAY_REDIS_URL_ENV, replay.url.clone()),
         ],
     )
     .await;
-    replay.shutdown().await;
     assert_isolated_test_passed(status, BLUE_GREEN_JOURNEY_CHILD);
 }
 
@@ -1152,7 +1044,6 @@ async fn coordinated_blue_green_journey_child() {
         &old_hash,
         TRANSITION_API_KEY_HASH_ENV,
         TRANSITION_AUDIT_SECRET_ENV,
-        Some(TRANSITION_REPLAY_REDIS_URL_ENV),
     ))
     .expect("blue Notary compiles")
     .activate_relay()
@@ -1173,7 +1064,6 @@ async fn coordinated_blue_green_journey_child() {
             &old_hash,
             TRANSITION_API_KEY_HASH_ENV,
             TRANSITION_AUDIT_SECRET_ENV,
-            Some(TRANSITION_REPLAY_REDIS_URL_ENV),
         ))
         .expect("mixed old Notary configuration compiles")
         .activate_relay()
@@ -1192,7 +1082,6 @@ async fn coordinated_blue_green_journey_child() {
             &successor_hash,
             TRANSITION_API_KEY_HASH_ENV,
             TRANSITION_AUDIT_SECRET_ENV,
-            Some(TRANSITION_REPLAY_REDIS_URL_ENV),
         ))
         .expect("mixed successor Notary configuration compiles")
         .activate_relay()
@@ -1210,7 +1099,6 @@ async fn coordinated_blue_green_journey_child() {
         &successor_hash,
         TRANSITION_API_KEY_HASH_ENV,
         TRANSITION_AUDIT_SECRET_ENV,
-        Some(TRANSITION_REPLAY_REDIS_URL_ENV),
     ))
     .expect("green Notary compiles")
     .activate_relay()
@@ -1231,7 +1119,6 @@ async fn coordinated_blue_green_journey_child() {
 
 #[tokio::test]
 async fn coordinated_drain_and_restart_keeps_partial_generation_unavailable() {
-    let replay = FakeRedis::start().await;
     let status = run_isolated_test(
         RESTART_JOURNEY_CHILD,
         RESTART_JOURNEY_KIND,
@@ -1244,11 +1131,9 @@ async fn coordinated_drain_and_restart_keeps_partial_generation_unavailable() {
                 RESTART_AUDIT_SECRET_ENV,
                 "fedcba9876543210fedcba9876543210".to_string(),
             ),
-            (RESTART_REPLAY_REDIS_URL_ENV, replay.url.clone()),
         ],
     )
     .await;
-    replay.shutdown().await;
     assert_isolated_test_passed(status, RESTART_JOURNEY_CHILD);
 }
 
@@ -1288,7 +1173,6 @@ async fn coordinated_drain_and_restart_journey_child() {
         &old_hash,
         RESTART_API_KEY_HASH_ENV,
         RESTART_AUDIT_SECRET_ENV,
-        Some(RESTART_REPLAY_REDIS_URL_ENV),
     ))
     .expect("old restart Notary compiles")
     .activate_relay()
@@ -1319,7 +1203,6 @@ async fn coordinated_drain_and_restart_journey_child() {
         &old_hash,
         RESTART_API_KEY_HASH_ENV,
         RESTART_AUDIT_SECRET_ENV,
-        Some(RESTART_REPLAY_REDIS_URL_ENV),
     ))
     .expect("partially restarted Notary configuration compiles")
     .activate_relay()
@@ -1341,7 +1224,6 @@ async fn coordinated_drain_and_restart_journey_child() {
         &successor_hash,
         RESTART_API_KEY_HASH_ENV,
         RESTART_AUDIT_SECRET_ENV,
-        Some(RESTART_REPLAY_REDIS_URL_ENV),
     ))
     .expect("successor restart Notary compiles")
     .activate_relay()

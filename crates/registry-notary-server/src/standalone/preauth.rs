@@ -82,10 +82,8 @@ pub(crate) struct PreAuthRuntime {
     esignet_id_token_verifier: Arc<TokenVerifier>,
     fetch_url_policy: FetchUrlPolicy,
     login_state_ttl_seconds: u64,
-    login_states: Arc<crate::preauth_state::SingleUseStore<crate::preauth_state::LoginState>>,
-    /// Per-code `tx_code` PIN sessions keyed by the pre-authorized code `jti`.
-    tx_code_sessions:
-        Arc<crate::preauth_state::SingleUseStore<crate::preauth_state::TxCodeSession>>,
+    /// Typed state contract for login-state and code-redemption transactions.
+    preauthorization_state: Arc<crate::preauth_state::PreauthorizationState>,
     /// Audit pipeline so the callback and token endpoints (public, so not
     /// covered by the auth-audit middleware) can emit hashed audit events.
     audit: AuditPipeline,
@@ -175,15 +173,7 @@ impl PreAuthRuntime {
         config: &StandaloneRegistryNotaryConfig,
         signing_keys: &SigningKeyRegistry,
         audit: AuditPipeline,
-    ) -> Result<Option<Self>, StandaloneServerError> {
-        Self::from_config_preserving_stores(config, signing_keys, audit, None)
-    }
-
-    pub(super) fn from_config_preserving_stores(
-        config: &StandaloneRegistryNotaryConfig,
-        signing_keys: &SigningKeyRegistry,
-        audit: AuditPipeline,
-        previous: Option<&PreAuthRuntime>,
+        state_plane: Arc<NotaryStatePlaneHandle>,
     ) -> Result<Option<Self>, StandaloneServerError> {
         let pre_auth = &config.oid4vci.pre_authorized_code;
         let signing = &config.auth.access_token_signing;
@@ -254,16 +244,18 @@ impl PreAuthRuntime {
             esignet_id_token_verifier,
             fetch_url_policy,
             login_state_ttl_seconds: esignet.login_state_ttl_seconds,
-            login_states: previous
-                .map(|runtime| Arc::clone(&runtime.login_states))
-                .unwrap_or_else(|| {
-                    Arc::new(crate::preauth_state::SingleUseStore::new_with_max_entries(
-                        PREAUTH_LOGIN_STATE_MAX_ENTRIES,
-                    ))
-                }),
-            tx_code_sessions: previous
-                .map(|runtime| Arc::clone(&runtime.tx_code_sessions))
-                .unwrap_or_else(|| Arc::new(crate::preauth_state::SingleUseStore::new())),
+            preauthorization_state: Arc::new(
+                crate::preauth_state::PreauthorizationState::from_state_plane(
+                    state_plane,
+                    pre_auth.tx_code.required,
+                )
+                .map_err(|_| {
+                    StandaloneServerError::InvalidOidcConfig(
+                        "preauthorization state could not initialize its process-local key"
+                            .to_string(),
+                    )
+                })?,
+            ),
             audit,
         }))
     }
@@ -314,16 +306,8 @@ impl PreAuthRuntime {
         self.login_state_ttl_seconds
     }
 
-    pub(crate) fn login_states(
-        &self,
-    ) -> &crate::preauth_state::SingleUseStore<crate::preauth_state::LoginState> {
-        self.login_states.as_ref()
-    }
-
-    pub(crate) fn tx_code_sessions(
-        &self,
-    ) -> &crate::preauth_state::SingleUseStore<crate::preauth_state::TxCodeSession> {
-        self.tx_code_sessions.as_ref()
+    pub(crate) fn preauthorization_state(&self) -> &crate::preauth_state::PreauthorizationState {
+        self.preauthorization_state.as_ref()
     }
 
     /// Build the eSignet authorization redirect URL for the citizen browser.

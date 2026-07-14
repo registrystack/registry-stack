@@ -9,8 +9,7 @@ async fn credential_status_list_response_is_signed_status_list_jwt() {
         enabled: true,
         base_url: "https://issuer.example".to_string(),
         ..CredentialStatusConfig::default()
-    })
-    .expect("credential status builds");
+    });
     let issued_at = OffsetDateTime::now_utc();
     credential_status
         .record_issued(
@@ -75,8 +74,7 @@ async fn credential_status_list_response_reuses_cached_signature() {
         enabled: true,
         base_url: "https://issuer.example".to_string(),
         ..CredentialStatusConfig::default()
-    })
-    .expect("credential status builds");
+    });
     let issued_at = OffsetDateTime::now_utc();
     credential_status
         .record_issued(

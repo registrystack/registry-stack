@@ -2,35 +2,27 @@
 //! Storage-backed SD-JWT VC credential status records.
 
 use std::collections::hash_map::DefaultHasher;
-use std::env;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::time::Duration;
 
 use registry_notary_core::{
     CredentialStatusConfig, CREDENTIAL_STATUS_EXPIRED, CREDENTIAL_STATUS_REVOKED,
-    CREDENTIAL_STATUS_STORAGE_REDIS, CREDENTIAL_STATUS_SUSPENDED, CREDENTIAL_STATUS_VALID,
+    CREDENTIAL_STATUS_SUSPENDED, CREDENTIAL_STATUS_VALID,
 };
 use registry_platform_cache::{
     CacheCompareAndSetOutcome, CacheKey, CacheKeyError, CacheStore, CacheStoreError,
-    InMemoryCacheStore, RedisCacheBuildError, RedisCacheStore,
+    InMemoryCacheStore,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+use crate::state_plane::{NotaryPostgresStatePlaneReadiness, NotaryStatePlaneHandle};
+
 type CredentialStatusTransitionLock = Arc<tokio::sync::Mutex<()>>;
 type CredentialStatusTransitionLocks = Arc<Vec<CredentialStatusTransitionLock>>;
 const CREDENTIAL_STATUS_TRANSITION_LOCK_STRIPES: usize = 1024;
-
-#[derive(Debug, thiserror::Error)]
-pub enum CredentialStatusBuildError {
-    #[error("credential status redis URL environment variable is missing or empty: {0}")]
-    MissingRedisUrlEnv(String),
-    #[error("credential status redis store could not be built")]
-    InvalidRedisStore(#[source] RedisCacheBuildError),
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum CredentialStatusStoreError {
@@ -42,6 +34,10 @@ pub enum CredentialStatusStoreError {
     InvalidKey(#[source] CacheKeyError),
     #[error("credential status store failed")]
     Store(#[source] CacheStoreError),
+    #[error("credential status record already exists")]
+    DuplicateCredential,
+    #[error("credential status PostgreSQL operation is unavailable")]
+    PostgresUnavailable,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,7 +87,7 @@ pub(crate) struct CredentialStatusStore {
     retention_seconds: u64,
     key_prefix: String,
     store: Option<Arc<dyn CacheStore>>,
-    redis_ready: Option<Arc<RedisCacheStore>>,
+    state_plane: Option<Arc<NotaryStatePlaneHandle>>,
     transition_locks: CredentialStatusTransitionLocks,
 }
 
@@ -103,52 +99,39 @@ impl std::fmt::Debug for CredentialStatusStore {
             .field("retention_seconds", &self.retention_seconds)
             .field("key_prefix", &self.key_prefix)
             .field("store", &self.store.as_ref().map(|_| "<redacted>"))
+            .field("postgresql", &self.state_plane.is_some())
             .finish()
     }
 }
 
 impl CredentialStatusStore {
-    pub(crate) fn from_config(
-        config: &CredentialStatusConfig,
-    ) -> Result<Self, CredentialStatusBuildError> {
+    pub(crate) fn from_config(config: &CredentialStatusConfig) -> Self {
         if !config.enabled {
-            return Ok(Self::disabled());
+            return Self::disabled();
         }
-        match config.storage.as_str() {
-            CREDENTIAL_STATUS_STORAGE_REDIS => {
-                let url = env::var(&config.redis.url_env)
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-                    .ok_or_else(|| {
-                        CredentialStatusBuildError::MissingRedisUrlEnv(config.redis.url_env.clone())
-                    })?;
-                let redis = Arc::new(
-                    RedisCacheStore::new(
-                        &url,
-                        Duration::from_millis(config.redis.connect_timeout_ms),
-                        Duration::from_millis(config.redis.operation_timeout_ms),
-                    )
-                    .map_err(CredentialStatusBuildError::InvalidRedisStore)?,
-                );
-                Ok(Self {
-                    enabled: true,
-                    base_url: config.base_url.trim_end_matches('/').to_string(),
-                    retention_seconds: config.retention_seconds,
-                    key_prefix: config.redis.key_prefix.clone(),
-                    store: Some(redis.clone()),
-                    redis_ready: Some(redis),
-                    transition_locks: transition_locks(),
-                })
-            }
-            _ => Ok(Self {
-                enabled: true,
-                base_url: config.base_url.trim_end_matches('/').to_string(),
-                retention_seconds: config.retention_seconds,
-                key_prefix: "registry-notary".to_string(),
-                store: Some(Arc::new(InMemoryCacheStore::new())),
-                redis_ready: None,
-                transition_locks: transition_locks(),
-            }),
+        Self {
+            enabled: true,
+            base_url: config.base_url.trim_end_matches('/').to_string(),
+            retention_seconds: config.retention_seconds,
+            key_prefix: "registry-notary".to_string(),
+            store: Some(Arc::new(InMemoryCacheStore::new())),
+            state_plane: None,
+            transition_locks: transition_locks(),
+        }
+    }
+
+    pub(crate) fn postgres(
+        config: &CredentialStatusConfig,
+        state_plane: Arc<NotaryStatePlaneHandle>,
+    ) -> Self {
+        Self {
+            enabled: config.enabled,
+            base_url: config.base_url.trim_end_matches('/').to_string(),
+            retention_seconds: config.retention_seconds,
+            key_prefix: "registry-notary".to_string(),
+            store: None,
+            state_plane: Some(state_plane),
+            transition_locks: transition_locks(),
         }
     }
 
@@ -159,7 +142,23 @@ impl CredentialStatusStore {
             retention_seconds: 86_400,
             key_prefix: "registry-notary".to_string(),
             store: None,
-            redis_ready: None,
+            state_plane: None,
+            transition_locks: transition_locks(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_store(
+        config: &CredentialStatusConfig,
+        store: Arc<dyn CacheStore>,
+    ) -> Self {
+        Self {
+            enabled: config.enabled,
+            base_url: config.base_url.trim_end_matches('/').to_string(),
+            retention_seconds: config.retention_seconds,
+            key_prefix: "registry-notary".to_string(),
+            store: Some(store),
+            state_plane: None,
             transition_locks: transition_locks(),
         }
     }
@@ -194,6 +193,40 @@ impl CredentialStatusStore {
         if !self.enabled {
             return Ok(());
         }
+        if let Some(state_plane) = &self.state_plane {
+            let runtime = state_plane
+                .runtime()
+                .map_err(|_| CredentialStatusStoreError::PostgresUnavailable)?;
+            let session = runtime
+                .open_domain_session()
+                .await
+                .map_err(|_| CredentialStatusStoreError::PostgresUnavailable)?;
+            let retention_seconds = i32::try_from(self.retention_seconds)
+                .map_err(|_| CredentialStatusStoreError::InvalidRecord)?;
+            let row = session
+                .run_operation(session.client().query_one(
+                    "SELECT registry_notary_api.credential_status_insert_v1(\
+                        $1, $2, $3, $4, $5, $6) AS inserted",
+                    &[
+                        &credential_id,
+                        &issuer,
+                        &credential_profile,
+                        &issued_at,
+                        &expires_at,
+                        &retention_seconds,
+                    ],
+                ))
+                .await
+                .map_err(|_| CredentialStatusStoreError::PostgresUnavailable)?;
+            let inserted = row
+                .try_get::<_, bool>("inserted")
+                .map_err(|_| CredentialStatusStoreError::InvalidRecord)?;
+            return if inserted {
+                Ok(())
+            } else {
+                Err(CredentialStatusStoreError::DuplicateCredential)
+            };
+        }
         let record = CredentialStatusRecord {
             credential_id,
             issuer,
@@ -212,6 +245,25 @@ impl CredentialStatusStore {
     ) -> Result<Option<CredentialStatusRecord>, CredentialStatusStoreError> {
         if !self.enabled {
             return Ok(None);
+        }
+        if let Some(state_plane) = &self.state_plane {
+            let runtime = state_plane
+                .runtime()
+                .map_err(|_| CredentialStatusStoreError::PostgresUnavailable)?;
+            let session = runtime
+                .open_domain_session()
+                .await
+                .map_err(|_| CredentialStatusStoreError::PostgresUnavailable)?;
+            let row = session
+                .run_operation(session.client().query_opt(
+                    "SELECT credential_id, issuer, profile, status, issued_at,\
+                            credential_expires_at, updated_at\
+                       FROM registry_notary_api.credential_status_get_v1($1)",
+                    &[&credential_id],
+                ))
+                .await
+                .map_err(|_| CredentialStatusStoreError::PostgresUnavailable)?;
+            return row.as_ref().map(postgres_status_record).transpose();
         }
         let Some(store) = self.store.as_ref() else {
             return Ok(None);
@@ -234,6 +286,33 @@ impl CredentialStatusStore {
     ) -> Result<Option<CredentialStatusRecord>, CredentialStatusStoreError> {
         if !self.enabled {
             return Ok(None);
+        }
+        if let Some(state_plane) = &self.state_plane {
+            let runtime = state_plane
+                .runtime()
+                .map_err(|_| CredentialStatusStoreError::PostgresUnavailable)?;
+            let session = runtime
+                .open_domain_session()
+                .await
+                .map_err(|_| CredentialStatusStoreError::PostgresUnavailable)?;
+            let row = session
+                .run_operation(session.client().query_one(
+                    "SELECT outcome, credential_id, issuer, profile, status, issued_at,\
+                            credential_expires_at, updated_at\
+                       FROM registry_notary_api.credential_status_update_v1($1, $2)",
+                    &[&credential_id, &status],
+                ))
+                .await
+                .map_err(|_| CredentialStatusStoreError::PostgresUnavailable)?;
+            let outcome = row
+                .try_get::<_, String>("outcome")
+                .map_err(|_| CredentialStatusStoreError::InvalidRecord)?;
+            return match outcome.as_str() {
+                "not_found" => Ok(None),
+                "invalid_transition" => Err(CredentialStatusStoreError::InvalidTransition),
+                "updated" => postgres_status_record(&row).map(Some),
+                _ => Err(CredentialStatusStoreError::InvalidRecord),
+            };
         }
         let Some(store) = self.store.as_ref() else {
             return Ok(None);
@@ -273,10 +352,15 @@ impl CredentialStatusStore {
     }
 
     pub(crate) async fn check_ready(&self) -> Result<(), CacheStoreError> {
-        match &self.redis_ready {
-            Some(redis) => redis.check_ready().await,
-            None => Ok(()),
+        if let Some(state_plane) = &self.state_plane {
+            return match state_plane.readiness().await {
+                NotaryPostgresStatePlaneReadiness::Ready => Ok(()),
+                _ => Err(CacheStoreError::Operation {
+                    message: "Notary PostgreSQL state is unavailable".to_string(),
+                }),
+            };
         }
+        Ok(())
     }
 
     async fn write_record(
@@ -325,6 +409,37 @@ impl CredentialStatusStore {
     }
 }
 
+fn postgres_status_record(
+    row: &tokio_postgres::Row,
+) -> Result<CredentialStatusRecord, CredentialStatusStoreError> {
+    let issued_at = row
+        .try_get::<_, OffsetDateTime>("issued_at")
+        .map_err(|_| CredentialStatusStoreError::InvalidRecord)?;
+    let expires_at = row
+        .try_get::<_, OffsetDateTime>("credential_expires_at")
+        .map_err(|_| CredentialStatusStoreError::InvalidRecord)?;
+    let updated_at = row
+        .try_get::<_, OffsetDateTime>("updated_at")
+        .map_err(|_| CredentialStatusStoreError::InvalidRecord)?;
+    Ok(CredentialStatusRecord {
+        credential_id: row
+            .try_get("credential_id")
+            .map_err(|_| CredentialStatusStoreError::InvalidRecord)?,
+        issuer: row
+            .try_get("issuer")
+            .map_err(|_| CredentialStatusStoreError::InvalidRecord)?,
+        credential_profile: row
+            .try_get("profile")
+            .map_err(|_| CredentialStatusStoreError::InvalidRecord)?,
+        status: row
+            .try_get("status")
+            .map_err(|_| CredentialStatusStoreError::InvalidRecord)?,
+        issued_at: format_time(issued_at),
+        expires_at: format_time(expires_at),
+        updated_at: format_time(updated_at),
+    })
+}
+
 pub(crate) fn is_mutable_status(value: &str) -> bool {
     matches!(
         value,
@@ -366,9 +481,9 @@ fn transition_locks() -> CredentialStatusTransitionLocks {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use registry_notary_core::CredentialStatusRedisConfig;
     use registry_platform_cache::{CacheCompareAndSetOutcome, CacheSetOutcome};
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
     use tokio::sync::Notify;
 
     struct BlockingInMemoryCacheStore {
@@ -468,9 +583,7 @@ mod tests {
             enabled: true,
             base_url: "https://issuer.example/".to_string(),
             retention_seconds: 60,
-            ..CredentialStatusConfig::default()
         })
-        .expect("store builds")
     }
 
     fn memory_store_with_cache(cache: Arc<dyn CacheStore>) -> CredentialStatusStore {
@@ -480,7 +593,7 @@ mod tests {
             retention_seconds: 60,
             key_prefix: "registry-notary".to_string(),
             store: Some(cache),
-            redis_ready: None,
+            state_plane: None,
             transition_locks: transition_locks(),
         }
     }
@@ -711,88 +824,13 @@ mod tests {
         assert_eq!(record.status, CREDENTIAL_STATUS_REVOKED);
     }
 
-    #[tokio::test]
-    async fn redis_store_records_reads_updates_and_checks_readiness_when_env_is_set() {
-        if env::var("REGISTRY_PLATFORM_REDIS_TEST_URL").is_err() {
-            return;
-        }
-        let credential_id = format!(
-            "urn:registry-notary:test:{}:{}",
-            std::process::id(),
-            OffsetDateTime::now_utc().unix_timestamp_nanos()
-        );
-        let store = CredentialStatusStore::from_config(&CredentialStatusConfig {
-            enabled: true,
-            base_url: "https://issuer.example/".to_string(),
-            storage: CREDENTIAL_STATUS_STORAGE_REDIS.to_string(),
-            retention_seconds: 60,
-            redis: CredentialStatusRedisConfig {
-                url_env: "REGISTRY_PLATFORM_REDIS_TEST_URL".to_string(),
-                key_prefix: format!(
-                    "registry-notary-credential-status-test:{}:{}",
-                    std::process::id(),
-                    OffsetDateTime::now_utc().unix_timestamp_nanos()
-                ),
-                connect_timeout_ms: 500,
-                operation_timeout_ms: 500,
-            },
-        })
-        .expect("redis credential status store builds");
-        if store.check_ready().await.is_err() {
-            return;
-        }
-
-        let issued_at = OffsetDateTime::now_utc() - time::Duration::seconds(10);
-        let expires_at = OffsetDateTime::now_utc() + time::Duration::seconds(120);
-        store
-            .record_issued(
-                credential_id.clone(),
-                "did:web:issuer.example".to_string(),
-                "civil_status_sd_jwt".to_string(),
-                issued_at,
-                expires_at,
-            )
-            .await
-            .expect("redis record writes");
-
-        let record = store
-            .get(&credential_id)
-            .await
-            .expect("redis lookup succeeds")
-            .expect("redis record exists");
-        assert_eq!(record.credential_id, credential_id);
-        assert_eq!(record.issuer, "did:web:issuer.example");
-        assert_eq!(record.credential_profile, "civil_status_sd_jwt");
-        assert_eq!(record.status, CREDENTIAL_STATUS_VALID);
-
-        let suspended = store
-            .update_status(&credential_id, CREDENTIAL_STATUS_SUSPENDED)
-            .await
-            .expect("redis update succeeds")
-            .expect("redis record exists");
-        assert_eq!(suspended.status, CREDENTIAL_STATUS_SUSPENDED);
-
-        let reread = store
-            .get(&credential_id)
-            .await
-            .expect("redis reread succeeds")
-            .expect("redis record still exists");
-        assert_eq!(reread.status, CREDENTIAL_STATUS_SUSPENDED);
-
-        if let Some(cache) = store.store.as_ref() {
-            let key = store.key(&credential_id).expect("redis cleanup key builds");
-            let _ = cache.delete(&key).await;
-        }
-    }
-
     #[test]
     fn status_claim_uses_trimmed_base_url() {
         let store = CredentialStatusStore::from_config(&CredentialStatusConfig {
             enabled: true,
             base_url: "https://issuer.example/".to_string(),
             ..CredentialStatusConfig::default()
-        })
-        .expect("store builds");
+        });
 
         assert_eq!(
             store.status_claim("credential-1"),

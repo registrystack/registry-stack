@@ -1097,7 +1097,9 @@ async fn registry_backed_claims_share_one_relay_consultation_without_fallback() 
         .iter()
         .all(|result| result.provenance.used.relay_consultation_count == 1));
     let stored = store
-        .get(&results[0].evaluation_id)
+        .get(&results[0].evaluation_id, &principal.principal_id)
+        .await
+        .expect("stored evaluation read succeeds")
         .expect("restricted evaluation record is stored");
     let stored_wire = serde_json::to_string(&stored).expect("stored evaluation serializes");
     assert!(!stored_wire.contains("relay_consultation_ids"));
@@ -1801,6 +1803,7 @@ async fn batch_item_target_ref_serializes_as_opaque_handle() {
     evidence_config.inline_batch_limit = 1;
     let evidence = Arc::new(evidence_config);
     let store = EvidenceStore::default();
+    let principal = machine_principal();
     let request = BatchEvaluateRequest {
         items: vec![registry_notary_core::BatchEvaluateItemRequest::from(
             registry_notary_core::BatchSubjectRequest {
@@ -1819,9 +1822,12 @@ async fn batch_item_target_ref_serializes_as_opaque_handle() {
         .batch_evaluate(
             evidence,
             &store,
-            &machine_principal(),
+            &principal,
             request,
-            BatchEvaluateOptions::default(),
+            BatchEvaluateOptions {
+                idempotency_key: Some("retained-batch"),
+                ..BatchEvaluateOptions::default()
+            },
         )
         .await
         .expect("batch evaluate succeeds");
@@ -1835,6 +1841,15 @@ async fn batch_item_target_ref_serializes_as_opaque_handle() {
         .starts_with("rnref:v1:"));
     assert!(target_ref.get("id_type").is_none());
     assert!(!target_ref.to_string().contains("person-1"));
+    let evaluation_id = response.items[0]
+        .evaluation_id
+        .as_deref()
+        .expect("successful item has an evaluation id");
+    assert!(store
+        .get(evaluation_id, &principal.principal_id)
+        .await
+        .expect("completed batch evaluation read succeeds")
+        .is_some());
 }
 
 #[tokio::test]

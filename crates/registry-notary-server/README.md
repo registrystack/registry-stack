@@ -57,40 +57,40 @@ cargo test -p registry-notary-server --no-default-features --features pkcs11 --l
 When SoftHSM and OpenSSL are installed, that feature test includes a live
 PKCS#11 signing smoke test.
 
-## Replay Store Configuration
+## Correctness state configuration
 
-Replay protection for federation request JWTs, OID4VCI nonces, and holder proof
-JWTs is configured under `StandaloneRegistryNotaryConfig.replay`:
+Registry Notary stores replay decisions, consumable nonces, evaluations,
+idempotency records, credential status, quotas, and preauthorization state in
+one Notary-owned PostgreSQL schema:
 
 ```yaml
-replay:
+state:
+  storage: postgresql
+  postgresql:
+    url_env: REGISTRY_NOTARY_POSTGRES_URL
+    connect_timeout_ms: 5000
+    operation_timeout_ms: 2000
+```
+
+Run `registry-notary state install` with a restricted migration login before
+starting the service. Runtime connections require Transport Layer Security
+(TLS), attest the exact schema and runtime role, and fail readiness when the
+database is unavailable, read-only, incompatible, or configured with unsafe
+durability settings.
+
+Local, single-process development can select the process-local backend
+explicitly:
+
+```yaml
+deployment:
+  profile: local
+  multi_instance: false
+state:
   storage: in_memory
 ```
 
-`in_memory` retains one-time identifiers in the current process and is not safe
-for active-active serving because another Notary process cannot see those
-replay decisions.
-
-Production multi-instance deployments should use Redis as the shared replay
-store:
-
-```yaml
-replay:
-  storage: redis
-  redis:
-    url_env: REGISTRY_NOTARY_REPLAY_REDIS_URL
-    key_prefix: registry-notary
-    connect_timeout_ms: 1000
-    operation_timeout_ms: 500
-```
-
-`url_env` names the environment variable containing the Redis URL. The router
-fails to build when that variable is missing, and `/ready` fails closed if Redis
-cannot be reached. Replay storage is implemented through
-`registry-platform-replay`, which layers replay and consumable nonce semantics
-over `registry-platform-cache`. Redis keys hash replay scope and one-time
-identifiers before storage, keeping peer ids, subjects, holders, nonces, and
-JWT `jti` values out of backend keys.
+`in_memory` is rejected outside the local, single-instance profile. It loses
+correctness state on restart and does not provide cross-replica decisions.
 
 ## Credential Lifecycle
 
@@ -102,10 +102,10 @@ Set `credential_status.enabled = true` to add a storage-backed credential
 status endpoint. Issued SD-JWT VC payloads then include a
 `status.status_list.uri` pointing at `/v1/credentials/{credential_id}/status`.
 The same URL serves `application/statuslist+jwt` for verifiers and the JSON
-lifecycle representation for operational compatibility. The store supports
-`in_memory` for lab deployments and `redis` for deployable multi-process
-instances. The JSON endpoint returns `valid`, `suspended`, `revoked`, or
-derived `expired`; admins update mutable states through
+lifecycle representation for operational compatibility. The global
+correctness-state backend stores status rows. The JSON endpoint returns
+`valid`, `suspended`, `revoked`, or derived `expired`; admins update mutable
+states through
 `POST /admin/v1/credentials/{credential_id}/status` with the
 `registry_notary:admin` scope. Status records contain only credential lifecycle
 metadata, not subject ids, holder keys, claim values, disclosures, or source
@@ -213,13 +213,13 @@ this host. Evidence-grade deployments refuse to start when the audit sink is
 - Federated evaluation routes are not mounted unless `federation.enabled` is
   true, and accepted requests must be signed compact JWS bodies from configured
   peers.
-- The default replay store is `in_memory`; active-active deployments need the
-  Redis replay backend before privileged federation traffic is enabled.
+- Production and active-active deployments use the typed Notary PostgreSQL
+  state plane. Process-local state is limited to explicit local development.
 - Registry-backed evaluation is available only through an authenticated,
   purpose-bound Relay consultation whose public contract is verified before
   readiness succeeds.
-- Redis durability for replay protection is provided by `registry-platform-replay`
-  and selected through the Notary replay configuration.
+- Runtime readiness attests the PostgreSQL schema, role, write authority, and
+  durability settings before serving correctness-dependent traffic.
 
 ## Testing
 

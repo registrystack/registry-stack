@@ -9,7 +9,7 @@ pub(super) struct SelfAttestationEvaluateContext {
     pub(super) metadata: StoredSelfAttestationMetadata,
     pub(super) purpose: String,
 }
-pub(super) fn consume_classification_denial_if_keyable(
+pub(super) async fn consume_classification_denial_if_keyable(
     state: &RegistryNotaryApiState,
     principal: &EvidencePrincipal,
 ) -> Result<(), SelfAttestationRateLimitError> {
@@ -22,6 +22,7 @@ pub(super) fn consume_classification_denial_if_keyable(
     state
         .self_attestation_rate_limiter
         .check_authenticated_request(&principal_hash)
+        .await
 }
 
 pub(super) fn classify_self_attestation_principal(
@@ -1103,13 +1104,14 @@ pub(super) fn require_delegated_attestation_credential_profile_policy(
     Ok(())
 }
 
-pub(super) fn consume_subject_mismatch_denial(
+pub(super) async fn consume_subject_mismatch_denial(
     state: &RegistryNotaryApiState,
     principal_hash: &Hashed<registry_notary_core::PrincipalIdentifier>,
 ) -> Result<(), SelfAttestationRateLimitError> {
     state
         .self_attestation_rate_limiter
         .consume_subject_mismatch_denial_only(principal_hash)
+        .await
 }
 
 #[allow(clippy::too_many_arguments)]

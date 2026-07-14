@@ -1,31 +1,23 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Replay-store wiring for Registry Notary one-time identifiers.
 
-use std::env;
 use std::sync::Arc;
-use std::time::Duration;
 
-use registry_notary_core::{ReplayConfig, REPLAY_STORAGE_REDIS};
+use async_trait::async_trait;
 use registry_platform_replay::{
     require_insert_once, ConsumableNonceStore, InMemoryConsumableNonceStore, InMemoryReplayStore,
-    RedisReplayBuildError, RedisReplayStore, ReplayKey, ReplayScope, ReplayStore, ReplayStoreError,
-    RequiredReplayError,
+    ReplayKey, ReplayScope, ReplayStore, ReplayStoreError, RequiredReplayError,
 };
+use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
-#[derive(Debug, thiserror::Error)]
-pub enum ReplayBuildError {
-    #[error("replay redis URL environment variable is missing or empty: {0}")]
-    MissingRedisUrlEnv(String),
-    #[error("replay redis store could not be built")]
-    InvalidRedisStore(#[source] RedisReplayBuildError),
-}
+use crate::state_plane::{NotaryPostgresStatePlaneReadiness, NotaryStatePlaneHandle};
 
 #[derive(Clone)]
 pub(crate) struct ReplayStores {
     store: Arc<dyn ReplayStore>,
     nonce_store: Arc<dyn ConsumableNonceStore>,
-    redis_ready: Option<Arc<RedisReplayStore>>,
+    state_plane: Option<Arc<NotaryStatePlaneHandle>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,49 +36,34 @@ impl std::fmt::Debug for ReplayStores {
 }
 
 impl ReplayStores {
-    pub(crate) fn from_config(config: &ReplayConfig) -> Result<Self, ReplayBuildError> {
-        match config.storage.as_str() {
-            REPLAY_STORAGE_REDIS => {
-                let url = env::var(&config.redis.url_env)
-                    .ok()
-                    .filter(|value| !value.trim().is_empty())
-                    .ok_or_else(|| {
-                        ReplayBuildError::MissingRedisUrlEnv(config.redis.url_env.clone())
-                    })?;
-                let store = Arc::new(
-                    RedisReplayStore::new(
-                        &url,
-                        config.redis.key_prefix.clone(),
-                        Duration::from_millis(config.redis.connect_timeout_ms),
-                        Duration::from_millis(config.redis.operation_timeout_ms),
-                    )
-                    .map_err(ReplayBuildError::InvalidRedisStore)?,
-                );
-                Ok(Self {
-                    store: store.clone(),
-                    nonce_store: store.clone(),
-                    redis_ready: Some(store),
-                })
-            }
-            _ => {
-                let store = Arc::new(InMemoryReplayStore::new());
-                let nonce_store = Arc::new(InMemoryConsumableNonceStore::new());
-                Ok(Self {
-                    store,
-                    nonce_store,
-                    redis_ready: None,
-                })
-            }
-        }
-    }
-
     pub(crate) fn memory() -> Self {
         let store = Arc::new(InMemoryReplayStore::new());
         let nonce_store = Arc::new(InMemoryConsumableNonceStore::new());
         Self {
             store,
             nonce_store,
-            redis_ready: None,
+            state_plane: None,
+        }
+    }
+
+    pub(crate) fn configured_in_memory(state_plane: Arc<NotaryStatePlaneHandle>) -> Self {
+        let store = Arc::new(InMemoryReplayStore::new());
+        let nonce_store = Arc::new(InMemoryConsumableNonceStore::new());
+        Self {
+            store,
+            nonce_store,
+            state_plane: Some(state_plane),
+        }
+    }
+
+    pub(crate) fn postgres(state_plane: Arc<NotaryStatePlaneHandle>) -> Self {
+        let store = Arc::new(PostgresReplayStore {
+            state_plane: Arc::clone(&state_plane),
+        });
+        Self {
+            store: store.clone(),
+            nonce_store: store,
+            state_plane: Some(state_plane),
         }
     }
 
@@ -99,10 +76,154 @@ impl ReplayStores {
     }
 
     pub(crate) async fn check_ready(&self) -> Result<ReplayReadiness, ReplayStoreError> {
-        match &self.redis_ready {
-            Some(redis) => redis.check_ready().await.map(|()| ReplayReadiness::Ready),
-            None => Ok(ReplayReadiness::Degraded),
+        let Some(state_plane) = &self.state_plane else {
+            return Ok(ReplayReadiness::Degraded);
+        };
+        match state_plane.readiness().await {
+            NotaryPostgresStatePlaneReadiness::Ready => Ok(ReplayReadiness::Ready),
+            _ => Err(replay_operation_error()),
         }
+    }
+}
+
+#[derive(Clone)]
+struct PostgresReplayStore {
+    state_plane: Arc<NotaryStatePlaneHandle>,
+}
+
+#[async_trait]
+impl ReplayStore for PostgresReplayStore {
+    async fn insert_once(
+        &self,
+        scope: &ReplayScope,
+        key: &ReplayKey,
+        expires_at: OffsetDateTime,
+    ) -> Result<registry_platform_replay::ReplayInsertOutcome, ReplayStoreError> {
+        let runtime = self
+            .state_plane
+            .runtime()
+            .map_err(|_| replay_operation_error())?;
+        let session = runtime
+            .open_domain_session()
+            .await
+            .map_err(|_| replay_operation_error())?;
+        let scope_hash = replay_scope_hash(scope);
+        let identifier_hash = replay_key_hash(key);
+        let row = session
+            .run_operation(session.client().query_one(
+                "SELECT registry_notary_api.replay_insert_v1($1, $2, $3) AS inserted",
+                &[
+                    &scope_hash.as_slice(),
+                    &identifier_hash.as_slice(),
+                    &expires_at,
+                ],
+            ))
+            .await
+            .map_err(|_| replay_operation_error())?;
+        let inserted = row
+            .try_get::<_, bool>("inserted")
+            .map_err(|_| replay_operation_error())?;
+        Ok(if inserted {
+            registry_platform_replay::ReplayInsertOutcome::Inserted
+        } else {
+            registry_platform_replay::ReplayInsertOutcome::AlreadySeen
+        })
+    }
+}
+
+#[async_trait]
+impl ConsumableNonceStore for PostgresReplayStore {
+    async fn reserve_nonce(
+        &self,
+        scope: &ReplayScope,
+        key: &ReplayKey,
+        expires_at: OffsetDateTime,
+    ) -> Result<(), ReplayStoreError> {
+        let runtime = self
+            .state_plane
+            .runtime()
+            .map_err(|_| replay_operation_error())?;
+        let session = runtime
+            .open_domain_session()
+            .await
+            .map_err(|_| replay_operation_error())?;
+        let scope_hash = replay_scope_hash(scope);
+        let nonce_hash = replay_key_hash(key);
+        let row = session
+            .run_operation(session.client().query_one(
+                "SELECT registry_notary_api.nonce_reserve_v1($1, $2, $3) AS reserved",
+                &[&scope_hash.as_slice(), &nonce_hash.as_slice(), &expires_at],
+            ))
+            .await
+            .map_err(|_| replay_operation_error())?;
+        if row
+            .try_get::<_, bool>("reserved")
+            .map_err(|_| replay_operation_error())?
+        {
+            Ok(())
+        } else {
+            Err(ReplayStoreError::Operation {
+                message: "nonce is already reserved".to_string(),
+            })
+        }
+    }
+
+    async fn consume_nonce(
+        &self,
+        scope: &ReplayScope,
+        key: &ReplayKey,
+    ) -> Result<registry_platform_replay::ReplayInsertOutcome, ReplayStoreError> {
+        let runtime = self
+            .state_plane
+            .runtime()
+            .map_err(|_| replay_operation_error())?;
+        let session = runtime
+            .open_domain_session()
+            .await
+            .map_err(|_| replay_operation_error())?;
+        let scope_hash = replay_scope_hash(scope);
+        let nonce_hash = replay_key_hash(key);
+        let row = session
+            .run_operation(session.client().query_one(
+                "SELECT registry_notary_api.nonce_consume_v1($1, $2) AS consumed",
+                &[&scope_hash.as_slice(), &nonce_hash.as_slice()],
+            ))
+            .await
+            .map_err(|_| replay_operation_error())?;
+        let consumed = row
+            .try_get::<_, bool>("consumed")
+            .map_err(|_| replay_operation_error())?;
+        Ok(if consumed {
+            registry_platform_replay::ReplayInsertOutcome::Inserted
+        } else {
+            registry_platform_replay::ReplayInsertOutcome::AlreadySeen
+        })
+    }
+}
+
+pub(crate) fn replay_scope_hash(scope: &ReplayScope) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"registry-notary:replay-scope:v1\0");
+    for (name, value) in scope.parts() {
+        hasher.update((name.len() as u64).to_be_bytes());
+        hasher.update(name.as_bytes());
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    hasher.finalize().into()
+}
+
+pub(crate) fn replay_key_hash(key: &ReplayKey) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"registry-notary:replay-identifier:v1\0");
+    hasher.update((key.as_str().len() as u64).to_be_bytes());
+    hasher.update(key.as_str().as_bytes());
+    hasher.finalize().into()
+}
+
+fn replay_operation_error() -> ReplayStoreError {
+    ReplayStoreError::Operation {
+        message: "Notary PostgreSQL replay operation is unavailable".to_string(),
     }
 }
 
@@ -238,35 +359,5 @@ mod tests {
             err.to_string().contains("in-memory cache store is full"),
             "unexpected: {err}"
         );
-    }
-
-    #[test]
-    fn redis_keys_hash_scope_and_key_material() {
-        let store = RedisReplayStore::new(
-            "redis://127.0.0.1:6379/",
-            "registry-notary",
-            Duration::from_millis(10),
-            Duration::from_millis(10),
-        )
-        .expect("redis URL is syntactically valid");
-        let scope = ReplayScope::federation_request_jwt(
-            "tenant-secret",
-            "https://peer.example/issuer",
-            "https://notary.example",
-            "profile-sensitive",
-        )
-        .expect("scope is valid");
-        let key = ReplayKey::new("jti-sensitive-123").expect("key is valid");
-
-        let redis_key = store
-            .redis_key("one-time", &scope, &key)
-            .expect("redis key builds");
-
-        assert!(redis_key.starts_with("registry-notary:one-time:"));
-        assert!(!redis_key.contains("tenant-secret"));
-        assert!(!redis_key.contains("peer.example"));
-        assert!(!redis_key.contains("notary.example"));
-        assert!(!redis_key.contains("profile-sensitive"));
-        assert!(!redis_key.contains("jti-sensitive-123"));
     }
 }

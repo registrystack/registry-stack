@@ -44,21 +44,28 @@ pub(in crate::api) async fn oid4vci_offer_start(
         return oid4vci_error_response(Oid4vciWireError::ServerError);
     };
     let pkce_challenge = pkce_s256_challenge(&pkce_verifier);
-    let reserved = preauth.login_states().try_reserve(
-        &login_state,
-        LoginState {
-            pkce_verifier,
-            nonce: nonce.clone(),
-            credential_configuration_id: configuration_id,
-        },
-        preauth.login_state_ttl_seconds(),
-    );
+    let reserved = preauth
+        .preauthorization_state()
+        .reserve_login(
+            &login_state,
+            LoginState {
+                pkce_verifier,
+                nonce: nonce.clone(),
+                credential_configuration_id: configuration_id,
+            },
+            preauth.login_state_ttl_seconds(),
+        )
+        .await;
     if let Err(error) = reserved {
         return match error {
-            SingleUseReserveError::Capacity => {
+            PreauthorizationStateError::LoginStateCapacity => {
                 oid4vci_error_response(Oid4vciWireError::RateLimited)
             }
-            SingleUseReserveError::Duplicate | SingleUseReserveError::Unavailable => {
+            PreauthorizationStateError::DuplicateLoginState
+            | PreauthorizationStateError::Unavailable
+            | PreauthorizationStateError::IncompatibleTransactionCodeProof
+            | PreauthorizationStateError::InvalidExpiry
+            | PreauthorizationStateError::SensitiveState(_) => {
                 oid4vci_error_response(Oid4vciWireError::ServerError)
             }
         };
@@ -103,16 +110,34 @@ pub(in crate::api) async fn oid4vci_offer_callback(
     };
     // Single-use consume: unknown/expired/replayed state is the CSRF/replay
     // guard. A missing state yields no code.
-    let Some(stored) = preauth.login_states().consume(login_state) else {
-        return preauth_denied(
-            &preauth,
-            path,
-            "GET",
-            None,
-            SelfAttestationDenialCode::InvalidToken,
-            Oid4vciWireError::InvalidRequest,
-        )
-        .await;
+    let stored = match preauth
+        .preauthorization_state()
+        .consume_login(login_state)
+        .await
+    {
+        Ok(Some(stored)) => stored,
+        Ok(None) => {
+            return preauth_denied(
+                &preauth,
+                path,
+                "GET",
+                None,
+                SelfAttestationDenialCode::InvalidToken,
+                Oid4vciWireError::InvalidRequest,
+            )
+            .await;
+        }
+        Err(_) => {
+            return preauth_denied(
+                &preauth,
+                path,
+                "GET",
+                None,
+                SelfAttestationDenialCode::OperationDenied,
+                Oid4vciWireError::ServerError,
+            )
+            .await;
+        }
     };
     let subject_binding_claim = state.self_attestation.subject_binding.token_claim.clone();
     let subject = match preauth
@@ -190,10 +215,24 @@ pub(in crate::api) async fn oid4vci_offer_callback(
         // Persist the PIN keyed by the code's jti so the token endpoint can verify
         // the holder-presented tx_code. The PIN is never embedded in the offer code
         // JWT (otherwise the code holder would know it).
-        if !preauth.tx_code_sessions().reserve(
-            &jti,
-            crate::preauth_state::TxCodeSession { pin: pin.clone() },
-            preauth.pre_authorized_code_ttl_seconds(),
+        let expires_at = match OffsetDateTime::from_unix_timestamp(code_claims.exp) {
+            Ok(expires_at) => expires_at,
+            Err(_) => {
+                return preauth_server_error(
+                    &preauth,
+                    path,
+                    "GET",
+                    &stored.credential_configuration_id,
+                )
+                .await;
+            }
+        };
+        if !matches!(
+            preauth
+                .preauthorization_state()
+                .reserve_transaction_code(&jti, &pin, preauth.tx_code_length(), expires_at,)
+                .await,
+            Ok(true)
         ) {
             return preauth_server_error(
                 &preauth,
@@ -309,7 +348,10 @@ pub(in crate::api) async fn oid4vci_token(
     };
     // Throttle random-code floods per client address (reuse the existing
     // invalid-token-per-address limiter bucket).
-    if check_token_client_address_rate_limit(&state, &client_address).is_err() {
+    if check_token_client_address_rate_limit(&state, &client_address)
+        .await
+        .is_err()
+    {
         return token_error_with_audit(
             &preauth,
             path,
@@ -362,10 +404,24 @@ pub(in crate::api) async fn oid4vci_token(
         )
         .await;
     };
-    if preauth.tx_code_required() {
+    let Some(code_expires_at) = verified
+        .claim_i64("exp")
+        .and_then(|expiry| OffsetDateTime::from_unix_timestamp(expiry).ok())
+    else {
+        return token_error_after_invalid_attempt(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            configuration_id.as_deref(),
+            TokenWireError::InvalidGrant,
+        )
+        .await;
+    };
+    let transaction_code = if preauth.tx_code_required() {
         // Cap wrong-PIN attempts per code (brute-force guard). A locked code
         // (attempts over the cap) is rejected before the PIN compare.
-        if check_tx_code_attempt(&state, code).is_err() {
+        if check_tx_code_attempt(&state, code).await.is_err() {
             return token_error_after_invalid_attempt(
                 &state,
                 &preauth,
@@ -377,47 +433,37 @@ pub(in crate::api) async fn oid4vci_token(
             .await;
         }
         let tx_code = request.tx_code.as_deref().unwrap_or("");
-        // Read (do not consume) the per-code PIN by jti. Missing means the code was
-        // already redeemed or expired. A wrong PIN does not consume the code, so it
-        // can be retried until the rate cap locks it.
-        let session_pin = preauth
-            .tx_code_sessions()
-            .peek(&jti)
-            .map(|session| session.pin);
-        let pin_ok = session_pin.as_deref().is_some_and(|pin| {
-            !tx_code.is_empty() && constant_time_eq(tx_code.as_bytes(), pin.as_bytes())
-        });
-        if !pin_ok {
-            return token_error_after_invalid_attempt(
-                &state,
-                &preauth,
-                path,
-                &client_address,
-                configuration_id.as_deref(),
-                TokenWireError::InvalidGrant,
-            )
-            .await;
+        match preauth
+            .preauthorization_state()
+            .verify_transaction_code(&jti, tx_code)
+            .await
+        {
+            Ok(Some(proof)) => Some(proof),
+            Ok(None) => {
+                return token_error_after_invalid_attempt(
+                    &state,
+                    &preauth,
+                    path,
+                    &client_address,
+                    configuration_id.as_deref(),
+                    TokenWireError::InvalidGrant,
+                )
+                .await;
+            }
+            Err(_) => {
+                return token_error_with_audit(
+                    &preauth,
+                    path,
+                    configuration_id.as_deref(),
+                    SelfAttestationDenialCode::OperationDenied,
+                    TokenWireError::ServerError,
+                )
+                .await;
+            }
         }
-    }
-    // Single-use: claim the code's jti in the replay store now that the PIN
-    // matched. A second redemption fails AlreadySeen.
-    if consume_pre_authorized_code_jti(&state, &jti, now)
-        .await
-        .is_err()
-    {
-        return token_error_after_invalid_attempt(
-            &state,
-            &preauth,
-            path,
-            &client_address,
-            configuration_id.as_deref(),
-            TokenWireError::InvalidGrant,
-        )
-        .await;
-    }
-    // The code is now spent; drop its PIN session. This is a safe no-op when
-    // optional tx_code mode did not create one.
-    preauth.tx_code_sessions().remove(&jti);
+    } else {
+        None
+    };
     let Some(bound_subject) = bound_subject_from_code(&verified, &state) else {
         return token_error_after_invalid_attempt(
             &state,
@@ -477,6 +523,47 @@ pub(in crate::api) async fn oid4vci_token(
             .await;
         }
     };
+    let replay_scope = match pre_authorized_code_replay_scope(&state) {
+        Ok(scope) => scope,
+        Err(()) => {
+            return token_error_with_audit(
+                &preauth,
+                path,
+                Some(configuration_id),
+                SelfAttestationDenialCode::OperationDenied,
+                TokenWireError::ServerError,
+            )
+            .await;
+        }
+    };
+    match preauth
+        .preauthorization_state()
+        .redeem(&replay_scope, &jti, code_expires_at, transaction_code)
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => {
+            return token_error_after_invalid_attempt(
+                &state,
+                &preauth,
+                path,
+                &client_address,
+                Some(configuration_id),
+                TokenWireError::InvalidGrant,
+            )
+            .await;
+        }
+        Err(_) => {
+            return token_error_with_audit(
+                &preauth,
+                path,
+                Some(configuration_id),
+                SelfAttestationDenialCode::OperationDenied,
+                TokenWireError::ServerError,
+            )
+            .await;
+        }
+    }
     let configuration_id = configuration_id.as_str();
     let access_token_claims = AccessTokenClaims {
         issuer: preauth.notary_issuer().to_string(),
@@ -588,29 +675,6 @@ pub(in crate::api) fn single_credential_configuration_id(config: &Oid4vciConfig)
         return None;
     }
     Some(first.clone())
-}
-
-/// Claim the pre-authorized code's `jti` exactly once. The first redemption
-/// inserts the jti; any later redemption of the same code fails `AlreadySeen`.
-/// This is the single-use guarantee for the code.
-pub(in crate::api) async fn consume_pre_authorized_code_jti(
-    state: &RegistryNotaryApiState,
-    jti: &str,
-    now: i64,
-) -> Result<(), ()> {
-    let scope = pre_authorized_code_replay_scope(state)?;
-    let key = ReplayKey::new(jti).map_err(|_| ())?;
-    // Bound the single-use marker's storage to roughly the code lifetime.
-    let expires_at = OffsetDateTime::from_unix_timestamp(now).map_err(|_| ())?
-        + time::Duration::seconds(
-            preauth_runtime(state)
-                .as_deref()
-                .map(|preauth| preauth.pre_authorized_code_ttl_seconds())
-                .unwrap_or(300) as i64,
-        );
-    require_replay_insert(state.replay.store().as_ref(), &scope, &key, expires_at)
-        .await
-        .map_err(|_| ())
 }
 
 pub(in crate::api) fn pre_authorized_code_replay_scope(
@@ -803,7 +867,7 @@ pub(in crate::api) fn forwarded_client_ip(headers: &HeaderMap) -> Option<IpAddr>
 /// existing invalid-token-per-address limiter bucket. This is a check-only gate
 /// (availability); the bucket is consumed only on an invalid attempt, matching
 /// the auth middleware's check-before / consume-after pattern.
-pub(in crate::api) fn check_token_client_address_rate_limit(
+pub(in crate::api) async fn check_token_client_address_rate_limit(
     state: &RegistryNotaryApiState,
     client_address: &str,
 ) -> Result<(), SelfAttestationRateLimitError> {
@@ -813,9 +877,10 @@ pub(in crate::api) fn check_token_client_address_rate_limit(
     state
         .self_attestation_rate_limiter
         .check_invalid_token_for_client_address_available(&hashed)
+        .await
 }
 
-pub(in crate::api) fn consume_public_client_address_rate_limit(
+pub(in crate::api) async fn consume_public_client_address_rate_limit(
     state: &RegistryNotaryApiState,
     client_address: &str,
 ) -> Result<(), SelfAttestationRateLimitError> {
@@ -825,6 +890,7 @@ pub(in crate::api) fn consume_public_client_address_rate_limit(
     state
         .self_attestation_rate_limiter
         .check_invalid_token_for_client_address(&hashed)
+        .await
 }
 
 pub(in crate::api) fn replay_store_error_is_capacity(error: &ReplayStoreError) -> bool {
@@ -837,7 +903,7 @@ pub(in crate::api) fn replay_store_error_is_capacity(error: &ReplayStoreError) -
 
 /// Record one `tx_code` attempt against the hashed pre-authorized code. After
 /// the configured cap the code is locked.
-pub(in crate::api) fn check_tx_code_attempt(
+pub(in crate::api) async fn check_tx_code_attempt(
     state: &RegistryNotaryApiState,
     pre_authorized_code: &str,
 ) -> Result<(), SelfAttestationRateLimitError> {
@@ -847,6 +913,7 @@ pub(in crate::api) fn check_tx_code_attempt(
     state
         .self_attestation_rate_limiter
         .check_tx_code_attempt(&hashed)
+        .await
 }
 
 /// Emit a denial audit event for a public pre-auth endpoint and return the
@@ -919,7 +986,8 @@ pub(in crate::api) async fn token_error_after_invalid_attempt(
     {
         let _ = state
             .self_attestation_rate_limiter
-            .check_invalid_token_for_client_address(&hashed);
+            .check_invalid_token_for_client_address(&hashed)
+            .await;
     }
     token_error_with_audit(
         preauth,

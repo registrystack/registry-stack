@@ -23,6 +23,7 @@ struct TestConfigOptions<'a> {
     durable_audit: Option<bool>,
     audit_ack_cursor_path: Option<&'a str>,
     unbound_credential_profile: bool,
+    state_storage: Option<&'a str>,
 }
 
 fn write_config(tmp: &TempDir) -> PathBuf {
@@ -82,6 +83,10 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
         format!("deployment:\n  profile: local\n{deployment_evidence}")
     };
     let durable_audit = options.durable_audit.unwrap_or(options.config_trust);
+    let state = options
+        .state_storage
+        .map(|storage| format!("state:\n  storage: {storage}\n"))
+        .unwrap_or_default();
     let audit = if durable_audit {
         format!(
             r#"audit:
@@ -152,7 +157,7 @@ server:
         provider: env
         name: TEST_DOCTOR_JSON_API_HASH
       scopes: [registry_notary:credential_issue]
-{deployment}{audit}evidence:
+{deployment}{state}{audit}evidence:
   enabled: true
   service_id: doctor-json-test
   signing_keys:
@@ -179,6 +184,7 @@ fn write_env_file(tmp: &TempDir) -> PathBuf {
 TEST_DOCTOR_JSON_API_HASH={TEST_API_HASH}
 TEST_DOCTOR_JSON_AUDIT_SECRET={TEST_AUDIT_SECRET}
 TEST_DOCTOR_JSON_ISSUER_JWK='{TEST_ISSUER_JWK}'
+REGISTRY_NOTARY_POSTGRES_URL='postgresql://registry_notary_runtime:test@127.0.0.1:1/registry_notary?sslmode=require'
 "
         ),
     )
@@ -569,13 +575,14 @@ fn doctor_json_local_public_openapi_has_no_profile_finding() {
 }
 
 #[test]
-fn doctor_json_production_in_memory_replay_high_risk_fails_readiness() {
+fn doctor_json_rejects_multi_instance_in_memory_state_before_profile_override() {
     let tmp = TempDir::new().expect("tempdir");
     let config = write_config_with_options(
         &tmp,
         TestConfigOptions {
             config_trust: true,
             multi_instance: true,
+            state_storage: Some("in_memory"),
             ..TestConfigOptions::default()
         },
     );
@@ -588,7 +595,7 @@ fn doctor_json_production_in_memory_replay_high_risk_fails_readiness() {
 
     assert!(
         !output.status.success(),
-        "production high-risk in-memory replay should fail readiness\nstdout:\n{}\nstderr:\n{}",
+        "multi-instance in-memory correctness state should fail validation\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
@@ -597,10 +604,12 @@ fn doctor_json_production_in_memory_replay_high_risk_fails_readiness() {
     assert_product_diagnostic_report(&report);
     assert_eq!(report["status"], "error");
 
-    let diagnostic = diagnostic_with_code(&report, "notary.replay.in_memory_high_risk")
-        .expect("high-risk replay finding");
+    let diagnostic = diagnostic_with_code(&report, "failed").expect("invalid state diagnostic");
     assert_eq!(diagnostic["severity"], "error");
-    assert_active_finding(diagnostic);
+    assert!(diagnostic["message"]
+        .as_str()
+        .expect("diagnostic message")
+        .contains("state.storage = in_memory requires deployment.multi_instance = false"));
 }
 
 #[test]

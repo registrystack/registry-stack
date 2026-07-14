@@ -33,8 +33,6 @@ pub struct FederationConfig {
     #[serde(default)]
     pub pairwise_subject_hash: FederationPairwiseSubjectHashConfig,
     #[serde(default)]
-    pub replay: FederationReplayConfig,
-    #[serde(default)]
     pub response_shaping: FederationResponseShapingConfig,
     #[serde(default)]
     pub emergency_denylist: FederationEmergencyDenylistConfig,
@@ -58,7 +56,6 @@ impl Default for FederationConfig {
             clock_leeway_seconds: default_federation_clock_leeway_seconds(),
             signing: FederationSigningConfig::default(),
             pairwise_subject_hash: FederationPairwiseSubjectHashConfig::default(),
-            replay: FederationReplayConfig::default(),
             response_shaping: FederationResponseShapingConfig::default(),
             emergency_denylist: FederationEmergencyDenylistConfig::default(),
             peers: Vec::new(),
@@ -134,20 +131,6 @@ impl FederationConfig {
             "federation.pairwise_subject_hash.secret_env",
             &self.pairwise_subject_hash.secret_env,
         )?;
-        if self.replay.storage != FEDERATION_REPLAY_IN_PROCESS_SINGLE_INSTANCE_ONLY
-            && self.replay.storage != REPLAY_STORAGE_IN_MEMORY
-            && self.replay.storage != REPLAY_STORAGE_REDIS
-        {
-            return invalid_federation(
-                "federation.replay.storage must be in_process_single_instance_only, in_memory, or redis",
-            );
-        }
-        if self.replay.max_entries == 0 {
-            return invalid_federation("federation.replay.max_entries must be greater than zero");
-        }
-        if self.replay.eviction != FEDERATION_REPLAY_EVICT_EXPIRE_OLDEST {
-            return invalid_federation("federation.replay.eviction must be expire_oldest");
-        }
         if self.peers.is_empty() {
             return invalid_federation("federation.peers must list at least one peer");
         }
@@ -257,50 +240,6 @@ pub struct FederationSigningConfig {
 pub struct FederationPairwiseSubjectHashConfig {
     #[serde(default)]
     pub secret_env: String,
-}
-
-pub const FEDERATION_REPLAY_IN_PROCESS_SINGLE_INSTANCE_ONLY: &str =
-    "in_process_single_instance_only";
-pub const FEDERATION_REPLAY_EVICT_EXPIRE_OLDEST: &str = "expire_oldest";
-
-/// Replay protection settings for the federation MVP.
-///
-/// `in_process_single_instance_only` is deliberately named as an operator
-/// warning. It is not safe for active-active serving Notary deployments
-/// because a replay accepted by one process is invisible to another process.
-/// Production multi-instance federation needs a shared replay store before
-/// privileged federation routes are enabled.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct FederationReplayConfig {
-    #[serde(default = "default_federation_replay_storage")]
-    pub storage: String,
-    #[serde(default = "default_federation_replay_max_entries")]
-    pub max_entries: usize,
-    #[serde(default = "default_federation_replay_eviction")]
-    pub eviction: String,
-}
-
-impl Default for FederationReplayConfig {
-    fn default() -> Self {
-        Self {
-            storage: default_federation_replay_storage(),
-            max_entries: default_federation_replay_max_entries(),
-            eviction: default_federation_replay_eviction(),
-        }
-    }
-}
-
-pub(super) fn default_federation_replay_storage() -> String {
-    FEDERATION_REPLAY_IN_PROCESS_SINGLE_INSTANCE_ONLY.to_string()
-}
-
-pub(super) const fn default_federation_replay_max_entries() -> usize {
-    10_000
-}
-
-pub(super) fn default_federation_replay_eviction() -> String {
-    FEDERATION_REPLAY_EVICT_EXPIRE_OLDEST.to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

@@ -120,7 +120,6 @@ postgres-native-tls = { version = "0.5" }
 proptest = { version = "1" }
 rand_core = { version = "0.6", features = ["std"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "zeroize"] }
-redis = { version = "1.2.1", default-features = false, features = ["aio", "tokio-comp"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }
 rhai = { version = "1.25.1", features = ["sync", "serde"] }
 rustix = { version = "1", features = ["fs", "process"] }

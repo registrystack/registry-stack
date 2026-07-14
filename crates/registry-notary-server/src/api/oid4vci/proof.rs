@@ -79,7 +79,10 @@ pub(in crate::api) async fn oid4vci_nonce(
         return StatusCode::NOT_FOUND.into_response();
     }
     let client_address = token_client_address(&state, &headers, connect_info.as_deref());
-    if consume_public_client_address_rate_limit(&state, &client_address).is_err() {
+    if consume_public_client_address_rate_limit(&state, &client_address)
+        .await
+        .is_err()
+    {
         return oid4vci_error_response(Oid4vciWireError::RateLimited);
     }
     let request = if body.is_empty() {

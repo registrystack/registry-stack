@@ -10,17 +10,11 @@ publish = false
 [lints]
 workspace = true
 
-[features]
-default = []
-redis = ["dep:redis"]
-
 [dependencies]
 async-trait.workspace = true
-redis = { workspace = true, optional = true }
 sha2.workspace = true
 thiserror.workspace = true
 time.workspace = true
-tokio.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

@@ -181,7 +181,6 @@ pub(super) fn enable_credential_status(config: &mut StandaloneRegistryNotaryConf
         r#"
 enabled: true
 base_url: http://127.0.0.1:4325
-storage: in_memory
 retention_seconds: 3600
 "#,
     )
@@ -292,6 +291,8 @@ pub(super) fn notary_only_config(
         r#"
 deployment:
   profile: local
+state:
+  storage: in_memory
 server:
   bind: 127.0.0.1:0
 auth:

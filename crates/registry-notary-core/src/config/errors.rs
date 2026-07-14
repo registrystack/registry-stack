@@ -19,8 +19,8 @@ pub enum EvidenceConfigError {
     InvalidOid4vciConfig { reason: String },
     #[error("invalid auth.access_token_signing config: {reason}")]
     InvalidAccessTokenSigningConfig { reason: String },
-    #[error("invalid replay config: {reason}")]
-    InvalidReplayConfig { reason: String },
+    #[error("invalid state config: {reason}")]
+    InvalidStateConfig { reason: String },
     #[error("invalid credential status config: {reason}")]
     InvalidCredentialStatusConfig { reason: String },
     #[error("invalid cel config: {reason}")]

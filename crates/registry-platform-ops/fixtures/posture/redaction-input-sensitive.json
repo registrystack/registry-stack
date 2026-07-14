@@ -5,7 +5,7 @@
       "database_url": "postgres://registry:super-secret-db-password@private-db.internal:5432/registry",
       "bearer_token": "Bearer eyJsecret.source.token",
       "oauth_client_secret": "oauth-client-secret-value",
-      "redis_url": "redis://:redis-secret@private-redis.internal:6379/0",
+      "state_sensitive_key": "base64url-sensitive-state-key-material",
       "audit_hmac_secret_env_value": "audit-hmac-secret-value"
     },
     "subject_ids": [
@@ -80,7 +80,7 @@
         "profile": "production",
         "findings": [
           {
-            "id": "readiness.replay.storage",
+            "id": "readiness.state.storage",
             "severity": "finding_warn",
             "status": "active"
           }
@@ -109,18 +109,18 @@
         ],
         "findings": [
           {
-            "id": "notary.replay.in_memory.production",
+            "id": "notary.state.in_memory.production",
             "severity": "high",
-            "title": "Production Notary uses in-memory replay storage",
-            "detail": "Multiple instances cannot share replay decisions.",
+            "title": "Production Notary uses in-memory correctness state",
+            "detail": "Multiple instances cannot share correctness decisions.",
             "evidence": [
               {
-                "field": "notary.replay.storage",
+                "field": "notary.state.storage",
                 "value": "in_memory"
               }
             ],
             "standards_refs": [],
-            "recommended_action": "Use Redis replay storage before enabling active-active production traffic."
+            "recommended_action": "Use PostgreSQL correctness state before enabling production traffic."
           }
         ],
         "audit": {
@@ -140,13 +140,13 @@
       "notary": {
         "claim_count": 6,
         "credential_profile_count": 2,
-        "replay": {
+        "state": {
           "storage": "in_memory",
           "ready": true
         },
         "credential_status": {
           "enabled": true,
-          "storage": "in_memory"
+          "storage": "state"
         },
         "federation": {
           "enabled": true,

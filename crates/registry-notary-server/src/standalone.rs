@@ -19,8 +19,8 @@ pub use runtime::{
 };
 
 pub(crate) use runtime::{
-    audit_error_response, constant_time_eq, current_request_correlation_id,
-    generate_numeric_tx_code, generate_opaque_token, new_request_correlation_id,
-    pkce_s256_challenge, pre_auth_audit_event, with_request_correlation_id, AuditPipeline,
-    AuthAuditState, DeploymentGateState, PreAuthAuditFields, PreAuthRuntime, SignerReadiness,
+    audit_error_response, current_request_correlation_id, generate_numeric_tx_code,
+    generate_opaque_token, new_request_correlation_id, pkce_s256_challenge, pre_auth_audit_event,
+    with_request_correlation_id, AuditPipeline, AuthAuditState, DeploymentGateState,
+    PreAuthAuditFields, PreAuthRuntime, SignerReadiness,
 };

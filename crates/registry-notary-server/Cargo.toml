@@ -22,7 +22,7 @@ relay-contract-test-support = ["registry-platform-httputil/test-support"]
 registry-notary-core.workspace = true
 registry-platform-audit.workspace = true
 registry-platform-authcommon.workspace = true
-registry-platform-cache = { workspace = true, features = ["redis"] }
+registry-platform-cache.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httpsec.workspace = true
@@ -31,10 +31,11 @@ registry-platform-oid4vci.workspace = true
 registry-platform-oidc.workspace = true
 registry-platform-ops.workspace = true
 registry-platform-pdp.workspace = true
-registry-platform-replay = { workspace = true, features = ["redis"] }
+registry-platform-replay.workspace = true
 registry-platform-sdjwt.workspace = true
 axum.workspace = true
 async-trait.workspace = true
+aws-lc-rs.workspace = true
 base64.workspace = true
 crosswalk-core = { workspace = true, optional = true }
 registry-notary-worker-harness = { workspace = true, optional = true }
@@ -42,6 +43,8 @@ cryptoki = { workspace = true, optional = true }
 getrandom.workspace = true
 hex = { workspace = true, optional = true }
 jsonwebtoken.workspace = true
+native-tls.workspace = true
+postgres-native-tls.workspace = true
 reqwest.workspace = true
 rustix.workspace = true
 serde.workspace = true
@@ -52,6 +55,7 @@ subtle.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
+tokio-postgres.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 ulid.workspace = true
@@ -59,7 +63,6 @@ utoipa.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-aws-lc-rs = { version = "1" }
 axum-test = { version = "20" }
 chrono = { version = "0.4" }
 registry-notary-client = { workspace = true, features = ["verifier"] }

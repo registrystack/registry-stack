@@ -727,14 +727,12 @@ pub(super) async fn admin_posture_redacts_runtime_config_signing_secrets() {
 }
 
 #[tokio::test]
-pub(super) async fn admin_posture_classifies_replay_storage() {
+pub(super) async fn admin_posture_classifies_in_memory_state_storage() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
         "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
     );
-    std::env::set_var("TEST_REPLAY_REDIS_URL", "redis://127.0.0.1:6379/0");
-
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     let mut config = notary_only_config(
@@ -742,8 +740,6 @@ pub(super) async fn admin_posture_classifies_replay_storage() {
         audit_path.to_str().expect("audit path is UTF-8"),
     );
     enable_shared_admin_listener(&mut config);
-    config.replay.storage = "redis".to_string();
-    config.replay.redis.url_env = "TEST_REPLAY_REDIS_URL".to_string();
     add_ops_read_api_key(&mut config);
 
     let app = standalone_router(config).expect("standalone router builds");
@@ -755,11 +751,11 @@ pub(super) async fn admin_posture_classifies_replay_storage() {
     posture.assert_status_ok();
     let body: Value = posture.json();
     assert_matches_posture_schema(&body);
-    assert_eq!(body["notary"]["replay"]["storage"], json!("redis"));
+    assert_eq!(body["notary"]["state"]["storage"], json!("in_memory"));
 }
 
 #[tokio::test]
-pub(super) async fn admin_posture_warns_for_production_like_in_memory_replay() {
+pub(super) async fn admin_posture_warns_for_production_like_in_memory_state() {
     set_audit_secret();
     std::env::set_var(
         "TEST_EVIDENCE_API_KEY_HASH",
@@ -787,13 +783,13 @@ pub(super) async fn admin_posture_warns_for_production_like_in_memory_replay() {
     assert_matches_posture_schema(&body);
     assert_eq!(
         body["posture"]["warnings"][0],
-        json!("notary.replay.in_memory.production")
+        json!("notary.state.in_memory.production")
     );
     assert_eq!(
         body["posture"]["findings"][0]["id"],
-        json!("notary.replay.in_memory.production")
+        json!("notary.state.in_memory.production")
     );
-    assert_eq!(body["runtime"]["readiness"], json!("degraded"));
+    assert_eq!(body["runtime"]["readiness"], json!("ready"));
 }
 
 #[tokio::test]

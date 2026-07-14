@@ -2426,7 +2426,7 @@
                     "credential_profile_count": 2,
                     "credential_status": {
                       "enabled": true,
-                      "storage": "redis"
+                      "storage": "state"
                     },
                     "federation": {
                       "allowed_profile_count": 3,
@@ -2441,10 +2441,6 @@
                       "credential_configuration_count": 1,
                       "enabled": true
                     },
-                    "replay": {
-                      "ready": true,
-                      "storage": "redis"
-                    },
                     "self_attestation": {
                       "allowed_claim_count": 1,
                       "allowed_purpose_count": 1,
@@ -2452,6 +2448,10 @@
                       "enabled": true,
                       "rate_limit_mode": "in_process",
                       "wallet_origin_count": 1
+                    },
+                    "state": {
+                      "ready": true,
+                      "storage": "postgresql"
                     }
                   },
                   "observed_at": "2026-06-04T10:00:00Z",

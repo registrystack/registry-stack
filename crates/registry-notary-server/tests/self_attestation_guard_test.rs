@@ -28,6 +28,8 @@ use registry_notary_core::{
 };
 #[cfg(feature = "registry-notary-cel")]
 use registry_notary_server::cel_worker::{CelWorker, CelWorkerConfig, CelWorkerLimits};
+#[cfg(feature = "registry-notary-cel")]
+use registry_notary_server::SelfAttestationRateLimitKeys;
 use registry_notary_server::{EvidenceIssuerResolver, EvidenceStore, RegistryNotaryApiState};
 use registry_platform_audit::AuditKeyHasher;
 #[cfg(feature = "registry-notary-cel")]
@@ -138,6 +140,15 @@ fn machine_principal() -> EvidencePrincipal {
         verified_claims: None,
         authorization_details: None,
     }
+}
+
+#[cfg(feature = "registry-notary-cel")]
+fn stored_self_attestation_client_id(raw_principal_id: &str) -> String {
+    SelfAttestationRateLimitKeys::new(AuditKeyHasher::unkeyed_dev_only())
+        .principal(raw_principal_id)
+        .expect("test principal identifier hashes")
+        .as_str()
+        .to_string()
 }
 
 fn config_with_allowed_disclosures(allowed_disclosures: &[&str]) -> TestRuntimeConfig {
@@ -535,8 +546,11 @@ async fn self_attestation_stores_hashed_principal_and_render_policy_changes_fail
         .to_string();
     assert_eq!(evaluate_body["results"][0]["value"], json!(true));
 
+    let principal_hash = stored_self_attestation_client_id(RAW_PRINCIPAL_ID);
     let stored = store
-        .get(&evaluation_id)
+        .get(&evaluation_id, &principal_hash)
+        .await
+        .expect("self-attestation evaluation lookup succeeds")
         .expect("self-attestation evaluation was stored");
     let metadata = stored
         .self_attestation
@@ -682,8 +696,11 @@ async fn self_attestation_render_rejects_expired_metadata_via_http() {
         .expect("evaluation id is returned")
         .to_string();
 
+    let principal_hash = stored_self_attestation_client_id(RAW_PRINCIPAL_ID);
     let mut stored = store
-        .get(&evaluation_id)
+        .get(&evaluation_id, &principal_hash)
+        .await
+        .expect("self-attestation evaluation lookup succeeds")
         .expect("self-attestation evaluation was stored");
     stored.expires_at = "2999-01-01T00:00:00Z".to_string();
     stored
@@ -691,7 +708,10 @@ async fn self_attestation_render_rejects_expired_metadata_via_http() {
         .as_mut()
         .expect("self-attestation metadata was stored")
         .evaluation_expires_at = Some("1970-01-01T00:00:00Z".to_string());
-    store.insert(stored);
+    store
+        .insert(stored)
+        .await
+        .expect("expired self-attestation fixture is updated");
 
     let render = server
         .post(&format!("/v1/evaluations/{evaluation_id}/render"))

@@ -78,10 +78,6 @@ signing:
   signing_key: federation-key
 pairwise_subject_hash:
   secret_env: TEST_FEDERATION_PAIRWISE_SECRET
-replay:
-  storage: in_process_single_instance_only
-  max_entries: 100
-  eviction: expire_oldest
 response_shaping:
   minimum_denial_latency_ms: 1
 peers:
@@ -257,6 +253,8 @@ pub(super) fn self_attestation_oidc_config(
         r#"
 deployment:
   profile: local
+state:
+  storage: in_memory
 
 server:
   bind: 127.0.0.1:0

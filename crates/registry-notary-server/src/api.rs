@@ -109,14 +109,14 @@ use crate::{
     metrics::AppMetrics,
     openapi_document,
     posture::{posture_document, PostureContext, PostureDocumentError},
-    preauth_state::{LoginState, SingleUseReserveError},
+    preauth_state::{LoginState, PreauthorizationStateError},
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::{
         claim_ids, claim_semantics_metadata, validate_batch_subject_limit, EvaluationAuditSnapshot,
     },
     standalone::{
-        constant_time_eq, generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge,
-        pre_auth_audit_event, AuthAuditState, PreAuthAuditFields, PreAuthRuntime, SignerReadiness,
+        generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge, pre_auth_audit_event,
+        AuthAuditState, PreAuthAuditFields, PreAuthRuntime, SignerReadiness,
     },
     BatchEvaluateOptions, EvidenceStore, MachineQuotaLimiter, RegistryNotaryRuntime,
     SelfAttestationRateLimitBucket, SelfAttestationRateLimitError, SelfAttestationRateLimitKeys,

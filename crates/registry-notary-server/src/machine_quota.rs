@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! In-process quota for machine (non-self-attestation) `evaluate` and
-//! `batch_evaluate` traffic.
+//! Quota for machine (non-self-attestation) `evaluate` and `batch_evaluate`
+//! traffic. PostgreSQL is authoritative when a state plane is configured;
+//! the bounded in-memory path remains for local and test deployments.
 //!
 //! Budget is counted in subjects per principal over a fixed one-minute
 //! window: a single `/v1/evaluations` call consumes 1, a batch consumes
@@ -12,11 +13,16 @@
 //! `api.rs` only calls it for principals that failed
 //! [`registry_notary_core::model::EvidencePrincipal::is_self_attestation`].
 
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use registry_notary_core::{Bounded, MachineQuotaConfig};
+use registry_platform_audit::AuditKeyHasher;
 use time::{Duration, OffsetDateTime};
+
+use crate::state_plane::NotaryStatePlaneHandle;
 
 const MAX_MACHINE_QUOTA_KEY_LEN: usize = 128;
 
@@ -54,13 +60,13 @@ impl Counter {
     }
 }
 
-/// Fixed-window quota limiter keyed by `principal_id`, mirroring the
-/// structure of [`crate::self_attestation_rate_limit::SelfAttestationRateLimiter`]
-/// but with a single bucket kind and cost-aware (rather than one-per-call)
-/// consumption.
+/// Fixed-window quota limiter keyed by an audit pseudonym of `principal_id`,
+/// with a single bucket kind and cost-aware consumption.
 #[derive(Debug)]
 pub struct MachineQuotaLimiter {
     config: MachineQuotaConfig,
+    state_plane: Option<Arc<NotaryStatePlaneHandle>>,
+    principal_hasher: AuditKeyHasher,
     counters: Mutex<HashMap<MachineQuotaKey, Counter>>,
 }
 
@@ -69,6 +75,22 @@ impl MachineQuotaLimiter {
     pub fn new(config: MachineQuotaConfig) -> Self {
         Self {
             config,
+            state_plane: None,
+            principal_hasher: AuditKeyHasher::unkeyed_dev_only(),
+            counters: Mutex::new(HashMap::new()),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn with_state_plane(
+        config: MachineQuotaConfig,
+        state_plane: Arc<NotaryStatePlaneHandle>,
+        principal_hasher: AuditKeyHasher,
+    ) -> Self {
+        Self {
+            config,
+            state_plane: Some(state_plane),
+            principal_hasher,
             counters: Mutex::new(HashMap::new()),
         }
     }
@@ -78,12 +100,89 @@ impl MachineQuotaLimiter {
     /// that would exceed the remaining budget is rejected in full: nothing
     /// is consumed, so the caller may retry with a smaller batch (or wait
     /// out the window) without having partially spent its quota.
-    pub fn check_and_consume(
+    pub async fn check_and_consume(
         &self,
         principal_id: &str,
         cost: u32,
     ) -> Result<(), MachineQuotaExceeded> {
-        self.check_and_consume_at(principal_id, cost, OffsetDateTime::now_utc())
+        if !self.config.enabled || cost == 0 {
+            return Ok(());
+        }
+        validate_principal_id(principal_id)?;
+        let Some(state_plane) = self
+            .state_plane
+            .as_ref()
+            .filter(|state_plane| !state_plane.is_in_memory())
+        else {
+            return self.check_and_consume_at(principal_id, cost, OffsetDateTime::now_utc());
+        };
+        self.check_and_consume_postgres(state_plane, principal_id, cost)
+            .await
+    }
+
+    pub(crate) fn batch_reservation_parameters(
+        &self,
+        principal_id: &str,
+        cost: u32,
+    ) -> Result<(Vec<u8>, Option<i32>, i32), MachineQuotaExceeded> {
+        validate_principal_id(principal_id)?;
+        let principal_hash = machine_quota_hash(&self.principal_hasher, principal_id)?;
+        let cost = i32::try_from(cost)
+            .ok()
+            .filter(|cost| *cost > 0)
+            .ok_or_else(quota_failure)?;
+        let limit = self
+            .config
+            .enabled
+            .then(|| i32::try_from(self.config.subjects_per_minute).ok())
+            .flatten()
+            .filter(|limit| *limit > 0);
+        if self.config.enabled && limit.is_none() {
+            return Err(quota_failure());
+        }
+        Ok((principal_hash, limit, cost))
+    }
+
+    async fn check_and_consume_postgres(
+        &self,
+        state_plane: &NotaryStatePlaneHandle,
+        principal_id: &str,
+        cost: u32,
+    ) -> Result<(), MachineQuotaExceeded> {
+        let limit = i32::try_from(self.config.subjects_per_minute)
+            .ok()
+            .filter(|limit| *limit > 0)
+            .ok_or_else(quota_failure)?;
+        let cost = i32::try_from(cost)
+            .ok()
+            .filter(|cost| *cost > 0)
+            .ok_or_else(quota_failure)?;
+        let principal_hash = machine_quota_hash(&self.principal_hasher, principal_id)?;
+        let runtime = state_plane.runtime().map_err(|_| quota_failure())?;
+        let session = runtime
+            .open_domain_session()
+            .await
+            .map_err(|_| quota_failure())?;
+        let row = session
+            .run_operation(session.client().query_one(
+                concat!(
+                    "SELECT allowed, retry_after_seconds ",
+                    "FROM registry_notary_api.machine_quota_debit_v1($1, $2, $3)"
+                ),
+                &[&principal_hash, &limit, &cost],
+            ))
+            .await
+            .map_err(|_| quota_failure())?;
+        let allowed: bool = row.try_get("allowed").map_err(|_| quota_failure())?;
+        if allowed {
+            return Ok(());
+        }
+        let retry_after_seconds: i64 = row
+            .try_get("retry_after_seconds")
+            .map_err(|_| quota_failure())?;
+        Err(MachineQuotaExceeded {
+            retry_after_seconds: retry_after_seconds.max(1) as u64,
+        })
     }
 
     fn check_and_consume_at(
@@ -159,6 +258,56 @@ impl MachineQuotaLimiter {
             .lock()
             .expect("counter mutex is not poisoned")
             .contains_key(&key)
+    }
+}
+
+fn validate_principal_id(principal_id: &str) -> Result<(), MachineQuotaExceeded> {
+    MachineQuotaKey::new(principal_id)
+        .map(|_| ())
+        .map_err(|_| quota_failure())
+}
+
+fn quota_failure() -> MachineQuotaExceeded {
+    MachineQuotaExceeded {
+        retry_after_seconds: WINDOW.whole_seconds() as u64,
+    }
+}
+
+fn machine_quota_hash(
+    hasher: &AuditKeyHasher,
+    principal_id: &str,
+) -> Result<Vec<u8>, MachineQuotaExceeded> {
+    let encoded = hasher
+        .audit_reference_hash("notary-machine-quota-v1", "", principal_id)
+        .map_err(|_| quota_failure())?;
+    let digest = encoded
+        .strip_prefix("hmac-sha256:")
+        .or_else(|| encoded.strip_prefix("sha256:"))
+        .ok_or_else(quota_failure)?;
+    decode_32_byte_hex(digest).ok_or_else(quota_failure)
+}
+
+fn decode_32_byte_hex(encoded: &str) -> Option<Vec<u8>> {
+    if encoded.len() != 64 {
+        return None;
+    }
+    encoded
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let high = hex_nibble(pair[0])?;
+            let low = hex_nibble(pair[1])?;
+            Some((high << 4) | low)
+        })
+        .collect()
+}
+
+fn hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -300,5 +449,21 @@ mod tests {
         let limiter = MachineQuotaLimiter::new(config(true, 1));
         assert!(limiter.check_and_consume_at("machine-a", 0, now()).is_ok());
         assert!(limiter.check_and_consume_at("machine-a", 0, now()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn public_in_memory_path_uses_the_same_atomic_budget() {
+        let limiter = MachineQuotaLimiter::new(config(true, 2));
+        assert!(limiter.check_and_consume("machine-a", 2).await.is_ok());
+        assert!(limiter.check_and_consume("machine-a", 1).await.is_err());
+    }
+
+    #[test]
+    fn database_principal_key_is_a_fixed_width_audit_pseudonym() {
+        let hasher = AuditKeyHasher::unkeyed_dev_only();
+        let pseudonym = machine_quota_hash(&hasher, "machine-a").unwrap();
+
+        assert_eq!(pseudonym.len(), 32);
+        assert_ne!(pseudonym, b"machine-a");
     }
 }
