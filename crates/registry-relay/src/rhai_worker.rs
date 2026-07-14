@@ -612,32 +612,138 @@ impl SourceHost for RejectingHost {
     }
 }
 
+/// Stable, value-free reason a reviewed script failed its static probe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScriptProbeCause {
+    ContractViolation,
+    SyntaxError,
+    UnknownEntrypoint,
+    UnsupportedEntrypointSignature,
+}
+
+impl ScriptProbeCause {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ContractViolation => "closed_contract_violation",
+            Self::SyntaxError => "syntax_error",
+            Self::UnknownEntrypoint => "unknown_function",
+            Self::UnsupportedEntrypointSignature => "unsupported_function_signature",
+        }
+    }
+}
+
+/// Safe source location and reason returned by a static script probe.
+///
+/// Source text, inputs, selector values, and credentials are deliberately not
+/// retained in this diagnostic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScriptProbeDiagnostic {
+    cause: ScriptProbeCause,
+    line: Option<usize>,
+    column: Option<usize>,
+}
+
+impl ScriptProbeDiagnostic {
+    const fn without_position(cause: ScriptProbeCause) -> Self {
+        Self {
+            cause,
+            line: None,
+            column: None,
+        }
+    }
+
+    #[must_use]
+    pub const fn cause(self) -> ScriptProbeCause {
+        self.cause
+    }
+
+    #[must_use]
+    pub const fn line(self) -> Option<usize> {
+        self.line
+    }
+
+    #[must_use]
+    pub const fn column(self) -> Option<usize> {
+        self.column
+    }
+
+    const fn worker_error(self) -> WorkerError {
+        match self.cause {
+            ScriptProbeCause::ContractViolation => WorkerError::ContractViolation,
+            ScriptProbeCause::SyntaxError
+            | ScriptProbeCause::UnknownEntrypoint
+            | ScriptProbeCause::UnsupportedEntrypointSignature => WorkerError::ScriptRejected,
+        }
+    }
+}
+
+impl std::fmt::Display for ScriptProbeDiagnostic {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.cause.as_str())
+    }
+}
+
+impl std::error::Error for ScriptProbeDiagnostic {}
+
 /// Compiles a reviewed script and verifies its one-context entrypoint without
 /// executing it or granting a source capability.
+pub fn probe_script_diagnostic(
+    script: &str,
+    entrypoint: &str,
+    limits: WorkerLimits,
+) -> Result<(), ScriptProbeDiagnostic> {
+    validate_limits(&limits).map_err(|_| {
+        ScriptProbeDiagnostic::without_position(ScriptProbeCause::ContractViolation)
+    })?;
+    if script.is_empty() || script.len() > MAX_SCRIPT_BYTES {
+        return Err(ScriptProbeDiagnostic::without_position(
+            ScriptProbeCause::ContractViolation,
+        ));
+    }
+    validate_entrypoint(entrypoint).map_err(|_| {
+        ScriptProbeDiagnostic::without_position(ScriptProbeCause::ContractViolation)
+    })?;
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(limits.wall_time_ms))
+        .ok_or_else(|| {
+            ScriptProbeDiagnostic::without_position(ScriptProbeCause::ContractViolation)
+        })?;
+    let engine = hardened_engine(&limits, deadline, None, true);
+    let normalized = normalize_host_namespace_syntax(script);
+    let ast = engine.compile(normalized).map_err(|error| {
+        let position = error.position();
+        ScriptProbeDiagnostic {
+            cause: ScriptProbeCause::SyntaxError,
+            line: position.line(),
+            column: position.position(),
+        }
+    })?;
+    if ast
+        .iter_functions()
+        .any(|function| function.name == entrypoint && function.params.len() == 1)
+    {
+        return Ok(());
+    }
+    let cause = if ast
+        .iter_functions()
+        .any(|function| function.name == entrypoint)
+    {
+        ScriptProbeCause::UnsupportedEntrypointSignature
+    } else {
+        ScriptProbeCause::UnknownEntrypoint
+    };
+    Err(ScriptProbeDiagnostic::without_position(cause))
+}
+
+/// Closed runtime probe used while compiling source plans. Developer tooling
+/// should use [`probe_script_diagnostic`] to preserve safe source locations.
 pub fn probe_script(
     script: &str,
     entrypoint: &str,
     limits: WorkerLimits,
 ) -> Result<(), WorkerError> {
-    validate_limits(&limits)?;
-    if script.is_empty() || script.len() > MAX_SCRIPT_BYTES {
-        return Err(WorkerError::ContractViolation);
-    }
-    validate_entrypoint(entrypoint)?;
-    let deadline = Instant::now()
-        .checked_add(Duration::from_millis(limits.wall_time_ms))
-        .ok_or(WorkerError::ContractViolation)?;
-    let engine = hardened_engine(&limits, deadline, None, true);
-    let normalized = normalize_host_namespace_syntax(script);
-    let ast = engine
-        .compile(normalized)
-        .map_err(|_| WorkerError::ScriptRejected)?;
-    let has_entrypoint = ast
-        .iter_functions()
-        .any(|function| function.name == entrypoint && function.params.len() == 1)
-        .then_some(())
-        .ok_or(WorkerError::ScriptRejected);
-    has_entrypoint
+    probe_script_diagnostic(script, entrypoint, limits).map_err(ScriptProbeDiagnostic::worker_error)
 }
 
 #[doc(hidden)]
@@ -2035,6 +2141,42 @@ mod tests {
         let request =
             request("fn consult(ctx) { #{ operations: [], outputs: #{ active: true } } }");
         assert_eq!(evaluate(&request), Err(WorkerError::ContractViolation));
+    }
+
+    #[test]
+    fn script_probe_reports_safe_position_and_entrypoint_causes() {
+        let syntax = probe_script_diagnostic(
+            "fn consult(ctx) {\n  let value = ;\n}",
+            "consult",
+            WorkerLimits::default(),
+        )
+        .expect_err("syntax error rejects");
+        assert_eq!(syntax.cause(), ScriptProbeCause::SyntaxError);
+        assert_eq!(syntax.line(), Some(2));
+        assert!(syntax.column().is_some());
+        assert_eq!(syntax.to_string(), "syntax_error");
+
+        let unknown = probe_script_diagnostic(
+            "fn other(ctx) { result.no_match() }",
+            "consult",
+            WorkerLimits::default(),
+        )
+        .expect_err("missing entrypoint rejects");
+        assert_eq!(unknown.cause(), ScriptProbeCause::UnknownEntrypoint);
+        assert_eq!(unknown.line(), None);
+        assert_eq!(unknown.to_string(), "unknown_function");
+
+        let signature = probe_script_diagnostic(
+            "fn consult(left, right) { result.no_match() }",
+            "consult",
+            WorkerLimits::default(),
+        )
+        .expect_err("unsupported signature rejects");
+        assert_eq!(
+            signature.cause(),
+            ScriptProbeCause::UnsupportedEntrypointSignature
+        );
+        assert_eq!(signature.to_string(), "unsupported_function_signature");
     }
 
     #[test]

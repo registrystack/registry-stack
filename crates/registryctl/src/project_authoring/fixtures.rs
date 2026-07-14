@@ -1,11 +1,86 @@
 // SPDX-License-Identifier: Apache-2.0
 
+fn preflight_project_rhai_scripts(loaded: &LoadedRegistryProject) -> Result<()> {
+    for (alias, integration) in &loaded.integrations {
+        let Some((script_path, _)) = integration.script.as_ref() else {
+            continue;
+        };
+        let source = compiled_rhai_source(integration)?;
+        let source =
+            std::str::from_utf8(&source).context("compiled Rhai closure was not valid UTF-8")?;
+        let diagnostic = match registry_relay::rhai_worker::probe_script_diagnostic(
+            source,
+            "consult",
+            registry_relay::rhai_worker::WorkerLimits {
+                max_operations: 100_000,
+                max_call_levels: 16,
+                max_expr_depth: 16,
+                max_string_bytes: 64 * 1024,
+                max_array_items: 1024,
+                max_map_entries: 1024,
+                max_output_bytes: 64 * 1024,
+                max_ipc_frame_bytes: 256 * 1024,
+                max_memory_bytes: 128 * 1024 * 1024,
+                wall_time_ms: 250,
+                max_source_calls: 16,
+            },
+        ) {
+            Ok(()) => continue,
+            Err(diagnostic) => diagnostic,
+        };
+        let (path, line, field) = rhai_diagnostic_source(integration, diagnostic.line())
+            .unwrap_or((script_path.as_path(), None, "capability.script.file"));
+        let relative = path.strip_prefix(&loaded.root).unwrap_or(path).display();
+        let line = line.map_or_else(String::new, |line| format!(" line={line}"));
+        let column = diagnostic
+            .column()
+            .map_or_else(String::new, |column| format!(" column={column}"));
+        bail!(
+            "integration={alias} field={field} file={relative}{line}{column} cause={} expected=consult(context)",
+            diagnostic.cause().as_str()
+        );
+    }
+    Ok(())
+}
+
+fn rhai_diagnostic_source<'a>(
+    integration: &'a LoadedIntegration,
+    compiled_line: Option<usize>,
+) -> Option<(&'a Path, Option<usize>, &'static str)> {
+    let (script_path, _) = integration.script.as_ref()?;
+    let Some(compiled_line) = compiled_line else {
+        return Some((script_path.as_path(), None, "capability.script.file"));
+    };
+    let mut next_line = 1_usize;
+    for (module_path, module) in &integration.script_modules {
+        next_line += 1; // registry-local-module marker
+        let module_lines = module.iter().filter(|byte| **byte == b'\n').count() + 1;
+        if (next_line..next_line + module_lines).contains(&compiled_line) {
+            return Some((
+                module_path.as_path(),
+                Some(compiled_line - next_line + 1),
+                "capability.script.modules",
+            ));
+        }
+        // compiled_rhai_source appends one newline after every module. The
+        // line-count expression includes that transition for both terminated
+        // and unterminated module text.
+        next_line += module_lines;
+    }
+    next_line += 1; // registry-entrypoint marker
+    (compiled_line >= next_line).then_some((
+        script_path.as_path(),
+        Some(compiled_line - next_line + 1),
+        "capability.script.file",
+    ))
+}
+
 fn execute_all_fixtures(
     loaded: &LoadedRegistryProject,
     compiled: &CompiledProject,
     integration_filter: Option<&str>,
     fixture_filter: Option<&str>,
-    _trace: bool,
+    trace: bool,
 ) -> Result<Vec<FixtureReport>> {
     if loaded.integrations.is_empty() {
         return Ok(Vec::new());
@@ -25,8 +100,14 @@ fn execute_all_fixtures(
                 continue;
             }
             let mut actual_calls = Vec::new();
-            let relay =
-                execute_fixture(compiled, &relay_fixture, alias, fixture, &mut actual_calls);
+            let relay = execute_fixture(
+                compiled,
+                &relay_fixture,
+                alias,
+                fixture,
+                &mut actual_calls,
+                trace,
+            );
             let (result, evaluated_claims) = match relay {
                 Ok((outputs, outcome))
                     if matches!(outcome, "match" | "no_match")
@@ -161,6 +242,7 @@ fn execute_all_fixtures(
                 &relay_fixture,
                 alias,
                 fixture,
+                trace,
             )?);
         }
     }
@@ -176,6 +258,7 @@ fn derived_fixture_reports(
     relay_fixture: &registry_relay::offline_fixture::OfflineRelayFixture,
     integration_alias: &str,
     fixture: &FixtureDocument,
+    trace: bool,
 ) -> Result<Vec<FixtureReport>> {
     use registry_relay::offline_fixture::OfflineSourceResponse;
 
@@ -256,6 +339,7 @@ fn derived_fixture_reports(
                 integration_alias,
                 input.clone(),
                 interactions,
+                trace,
             )
             .map(|mut observation| {
                 calls = std::mem::take(&mut observation.calls);
@@ -351,6 +435,7 @@ fn derived_fixture_reports(
                     integration_alias,
                     input,
                     minimized,
+                    trace,
                 );
                 let (passed, calls, outputs, outcome, failure) = match result {
                     Ok(observation) => {
@@ -407,10 +492,7 @@ fn derived_fixture_reports(
     Ok(reports)
 }
 
-fn integration_has_product_claims(
-    loaded: &LoadedRegistryProject,
-    integration_alias: &str,
-) -> bool {
+fn integration_has_product_claims(loaded: &LoadedRegistryProject, integration_alias: &str) -> bool {
     loaded.project.services.values().any(|service| {
         service.kind == ServiceKind::Evidence
             && service.claims.values().any(|claim| {
@@ -724,8 +806,16 @@ fn execute_fixture<'a>(
     integration_alias: &str,
     fixture: &'a FixtureDocument,
     calls: &mut Vec<String>,
+    trace: bool,
 ) -> std::result::Result<(BTreeMap<String, Value>, &'a str), String> {
-    execute_compiled_relay_fixture(compiled, relay_fixture, integration_alias, fixture, calls)
+    execute_compiled_relay_fixture(
+        compiled,
+        relay_fixture,
+        integration_alias,
+        fixture,
+        calls,
+        trace,
+    )
 }
 
 fn execute_compiled_relay_fixture<'a>(
@@ -734,6 +824,7 @@ fn execute_compiled_relay_fixture<'a>(
     integration_alias: &str,
     fixture: &'a FixtureDocument,
     calls: &mut Vec<String>,
+    trace: bool,
 ) -> std::result::Result<(BTreeMap<String, Value>, &'a str), String> {
     use registry_relay::offline_fixture::OfflineFixtureOutcome;
 
@@ -745,6 +836,7 @@ fn execute_compiled_relay_fixture<'a>(
         integration_alias,
         input,
         interactions,
+        trace,
     )?;
     calls.extend(observation.calls);
     let outcome = match observation.outcome {
@@ -825,6 +917,7 @@ fn execute_offline_profiles(
     integration_alias: &str,
     input: BTreeMap<String, String>,
     interactions: Vec<registry_relay::offline_fixture::OfflineInteraction>,
+    trace: bool,
 ) -> std::result::Result<registry_relay::offline_fixture::OfflineFixtureObservation, String> {
     use registry_relay::offline_fixture::{
         OfflineFixtureError, OfflineFixtureRequest, OfflineProfilePin,
@@ -838,7 +931,7 @@ fn execute_offline_profiles(
         .next()
         .ok_or_else(|| "fixture.product_contract_invalid".to_string())?;
     let execute = |profile: &FixtureProfile| {
-        relay_fixture.execute(OfflineFixtureRequest {
+        let request = OfflineFixtureRequest {
             profile: OfflineProfilePin {
                 id: profile.id.clone(),
                 version: profile
@@ -849,7 +942,12 @@ fn execute_offline_profiles(
             },
             input: input.clone(),
             interactions: interactions.clone(),
-        })
+        };
+        if trace {
+            relay_fixture.execute_with_trace(request)
+        } else {
+            relay_fixture.execute(request)
+        }
     };
     let observation = execute(first).map_err(map_offline_relay_error)?;
     for profile in selected {
@@ -964,8 +1062,7 @@ fn validate_operation(
                 && operation.response.codec.as_deref() == Some("json_v1")
                 && matches!(
                     (operation.request.method, operation.request.codec.as_deref()),
-                    (ReadMethod::Get, None)
-                        | (ReadMethod::Post, None | Some("strict_json_v1"))
+                    (ReadMethod::Get, None) | (ReadMethod::Post, None | Some("strict_json_v1"))
                 ) => {}
         _ => bail!("operation role and reviewed primitive do not form a supported closed shape"),
     }
@@ -1357,12 +1454,14 @@ fn validate_output(
         {
             bail!("presence mapping must use a non-null Boolean or presence type");
         }
-    } else if declaration.source_pointer.is_none() && path.split('.').any(|segment| {
-        segment.is_empty()
-            || !segment
-                .bytes()
-                .all(|byte| matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-'))
-    }) {
+    } else if declaration.source_pointer.is_none()
+        && path.split('.').any(|segment| {
+            segment.is_empty()
+                || !segment.bytes().all(
+                    |byte| matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-'),
+                )
+        })
+    {
         bail!("output mapping must use a static record path");
     }
     if declaration.output_type == FactType::String
@@ -1556,5 +1655,126 @@ fn integration_script(integration: &IntegrationDocument) -> Option<&Path> {
     match &integration.capability {
         CapabilityDeclaration::Script { script } => Some(script.script.as_path()),
         CapabilityDeclaration::Http { .. } | CapabilityDeclaration::Snapshot { .. } => None,
+    }
+}
+
+#[cfg(test)]
+mod fixture_interface_tests {
+    use super::*;
+
+    fn rhai_project() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/project-authoring/dhis2-sandboxed-rhai")
+    }
+
+    fn compiled_project(
+        loaded: &LoadedRegistryProject,
+    ) -> Result<(
+        CompiledProject,
+        registry_relay::offline_fixture::OfflineRelayFixture,
+    )> {
+        let environment = offline_fixture_environment(loaded)?;
+        let compiled =
+            compile_project_for_environment(loaded, "offline-fixture", &environment, None)?;
+        let relay_config = compiled
+            .relay_private
+            .get(Path::new("config/relay.yaml"))
+            .ok_or_else(|| anyhow!("generated Relay config is absent"))?;
+        let fixture = compile_generated_relay_fixture(relay_config, &compiled.relay_private)?;
+        Ok((compiled, fixture))
+    }
+
+    #[test]
+    fn trace_is_deterministic_material_and_value_free() {
+        let loaded = load_registry_project(&rhai_project(), None).expect("Rhai project loads");
+        let (compiled, relay_fixture) = compiled_project(&loaded).expect("Rhai project compiles");
+        let (_, fixture) = loaded.integrations["health-record"]
+            .fixtures
+            .iter()
+            .find(|(_, fixture)| fixture.name == "complete-health-match")
+            .expect("match fixture exists");
+        let input = offline_fixture_input(fixture).expect("fixture input is valid");
+        let interactions =
+            offline_fixture_interactions(fixture).expect("fixture interactions are valid");
+        let ordinary = execute_offline_profiles(
+            &compiled,
+            &relay_fixture,
+            "health-record",
+            input.clone(),
+            interactions.clone(),
+            false,
+        )
+        .expect("ordinary fixture passes");
+        assert_eq!(ordinary.calls, ["allow-1"]);
+
+        let traced = execute_offline_profiles(
+            &compiled,
+            &relay_fixture,
+            "health-record",
+            input,
+            interactions,
+            true,
+        )
+        .expect("traced fixture passes");
+        assert_eq!(traced.calls.len(), 1);
+        assert_eq!(
+            traced.calls[0],
+            "call=1 operation=allow-1 method=GET path=/api/tracker/trackedEntities/* query=[fields] headers=[] body=none"
+        );
+        for sensitive in ["A0000000001", "Nia", "REF-0001"] {
+            assert!(!traced.calls[0].contains(sensitive));
+        }
+    }
+
+    #[test]
+    fn rhai_preflight_addresses_the_script_file_and_safe_cause_once() {
+        let mut loaded = load_registry_project(&rhai_project(), None).expect("Rhai project loads");
+        let integration = loaded
+            .integrations
+            .get_mut("health-record")
+            .expect("integration exists");
+        integration.script.as_mut().expect("script exists").1 =
+            b"fn consult(ctx) {\n  let marker = \"selector-marker\"; let broken = ;\n}"
+                .to_vec()
+                .into_boxed_slice();
+        let error = preflight_project_rhai_scripts(&loaded)
+            .expect_err("broken script rejects")
+            .to_string();
+        assert!(error.contains("integration=health-record"));
+        assert!(error.contains("field=capability.script.file"));
+        assert!(error.contains("file=integrations/health-record/adapter.rhai"));
+        assert!(error.contains("line=2"));
+        assert!(error.contains("cause=syntax_error"));
+        assert!(!error.contains("selector-marker"));
+
+        let integration = loaded
+            .integrations
+            .get_mut("health-record")
+            .expect("integration exists");
+        integration.script.as_mut().expect("script exists").1 =
+            b"fn consult(left, right) { result.no_match() }"
+                .to_vec()
+                .into_boxed_slice();
+        let error = preflight_project_rhai_scripts(&loaded)
+            .expect_err("wrong signature rejects")
+            .to_string();
+        assert!(error.contains("cause=unsupported_function_signature"));
+        assert!(error.contains("expected=consult(context)"));
+
+        let integration = loaded
+            .integrations
+            .get_mut("health-record")
+            .expect("integration exists");
+        integration.script.as_mut().expect("script exists").1 =
+            b"fn other(ctx) { result.no_match() }"
+                .to_vec()
+                .into_boxed_slice();
+        let error = preflight_project_rhai_scripts(&loaded)
+            .expect_err("unknown entrypoint rejects")
+            .to_string();
+        assert!(error.contains("field=capability.script.file"));
+        assert!(error.contains("file=integrations/health-record/adapter.rhai"));
+        assert!(error.contains("cause=unknown_function"));
+        assert!(error.contains("expected=consult(context)"));
     }
 }

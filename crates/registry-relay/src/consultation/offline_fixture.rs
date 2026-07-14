@@ -235,6 +235,23 @@ impl OfflineRelayFixture {
         &self,
         request: OfflineFixtureRequest,
     ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
+        self.execute_inner(request, false)
+    }
+
+    /// Execute the exact same closed fixture while returning a deterministic,
+    /// value-free description of each rendered interaction in `calls`.
+    pub fn execute_with_trace(
+        &self,
+        request: OfflineFixtureRequest,
+    ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
+        self.execute_inner(request, true)
+    }
+
+    fn execute_inner(
+        &self,
+        request: OfflineFixtureRequest,
+        trace: bool,
+    ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
         let plan = self
             .plans
             .iter()
@@ -246,13 +263,16 @@ impl OfflineRelayFixture {
             .ok_or(OfflineFixtureError::ProfileNotFound)?;
         let inputs = OfflineBoundInputs::try_new(plan, request.input)?;
         match plan.kind() {
-            SourcePlanKind::SnapshotExact => execute_snapshot(plan, &inputs, request.interactions),
-            SourcePlanKind::BoundedHttp => execute_http(plan, &inputs, request.interactions),
+            SourcePlanKind::SnapshotExact => {
+                execute_snapshot(plan, &inputs, request.interactions, trace)
+            }
+            SourcePlanKind::BoundedHttp => execute_http(plan, &inputs, request.interactions, trace),
             SourcePlanKind::SandboxedRhai => execute_rhai(
                 plan,
                 &inputs,
                 request.interactions,
                 self.rhai_worker_program.as_deref(),
+                trace,
             ),
         }
     }
@@ -270,22 +290,28 @@ struct OfflineBoundInputs {
 struct OfflineInteractionQueue {
     interactions: VecDeque<OfflineInteraction>,
     calls: Vec<String>,
+    trace: bool,
 }
 
 impl OfflineInteractionQueue {
-    fn new(interactions: Vec<OfflineInteraction>) -> Result<Self, OfflineFixtureError> {
+    fn new(
+        interactions: Vec<OfflineInteraction>,
+        trace: bool,
+    ) -> Result<Self, OfflineFixtureError> {
         if interactions.is_empty() || interactions.len() > 16 {
             return Err(OfflineFixtureError::RequestMismatch);
         }
         Ok(Self {
             interactions: interactions.into(),
             calls: Vec::new(),
+            trace,
         })
     }
 
     fn take(
         &mut self,
         operation: &str,
+        canonical_path: &str,
         actual: &OfflineRenderedRequest,
     ) -> Result<OfflineSourceResponse, OfflineFixtureError> {
         let interaction = self
@@ -295,7 +321,11 @@ impl OfflineInteractionQueue {
         if !offline_request_matches(&interaction.request, actual) {
             return Err(OfflineFixtureError::RequestMismatch);
         }
-        self.calls.push(operation.to_owned());
+        self.calls.push(if self.trace {
+            safe_interaction_trace(self.calls.len() + 1, operation, canonical_path, actual)
+        } else {
+            operation.to_owned()
+        });
         Ok(interaction.response)
     }
 
@@ -304,6 +334,69 @@ impl OfflineInteractionQueue {
             return Err(OfflineFixtureError::RequestMismatch);
         }
         Ok(self.calls)
+    }
+}
+
+fn safe_interaction_trace(
+    call_order: usize,
+    operation: &str,
+    canonical_path: &str,
+    request: &OfflineRenderedRequest,
+) -> String {
+    let method = match request.method {
+        OfflineRequestMethod::Get => "GET",
+        OfflineRequestMethod::Post => "POST",
+    };
+    let query = request.query.keys().cloned().collect::<Vec<_>>().join(",");
+    let mut headers = request
+        .headers
+        .keys()
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    headers.sort_unstable();
+    headers.dedup();
+    let body = request
+        .body
+        .as_ref()
+        .map_or_else(|| "none".to_string(), |body| safe_json_shape(body, 0));
+    format!(
+        "call={call_order} operation={operation} method={method} path={canonical_path} query=[{query}] headers=[{}] body={body}",
+        headers.join(",")
+    )
+}
+
+fn safe_json_shape(value: &Value, depth: usize) -> String {
+    const MAX_TRACE_DEPTH: usize = 4;
+    if depth >= MAX_TRACE_DEPTH {
+        return "nested".to_string();
+    }
+    match value {
+        Value::Null => "null".to_string(),
+        Value::Bool(_) => "boolean".to_string(),
+        Value::Number(_) => "number".to_string(),
+        Value::String(_) => "string".to_string(),
+        Value::Array(values) => {
+            let mut shapes = values
+                .iter()
+                .map(|value| safe_json_shape(value, depth + 1))
+                .collect::<Vec<_>>();
+            shapes.sort_unstable();
+            shapes.dedup();
+            format!("array(len={};items=[{}])", values.len(), shapes.join(","))
+        }
+        Value::Object(values) => {
+            let mut shapes = values
+                .values()
+                .map(|value| safe_json_shape(value, depth + 1))
+                .collect::<Vec<_>>();
+            shapes.sort_unstable();
+            shapes.dedup();
+            format!(
+                "object(fields={};values=[{}])",
+                values.len(),
+                shapes.join(",")
+            )
+        }
     }
 }
 
@@ -605,10 +698,11 @@ impl SourceHost for OfflineRhaiHost<'_> {
                         .map_err(|_| HostFailure::ContractViolation)?,
                 )
                 .map_err(|_| HostFailure::ContractViolation)?;
-                let observed = match self
-                    .interactions
-                    .take(credential.id().as_str(), &credential_request)
-                {
+                let observed = match self.interactions.take(
+                    credential.id().as_str(),
+                    credential_request.path.as_str(),
+                    &credential_request,
+                ) {
                     Ok(observed) => observed,
                     Err(error) => {
                         self.terminal_error = Some(error);
@@ -619,13 +713,17 @@ impl SourceHost for OfflineRhaiHost<'_> {
                 self.credential_used = true;
             }
         }
-        let observed = match self.interactions.take(operation.id().as_str(), &actual) {
-            Ok(observed) => observed,
-            Err(error) => {
-                self.terminal_error = Some(error);
-                return Err(HostFailure::ContractViolation);
-            }
-        };
+        let observed =
+            match self
+                .interactions
+                .take(operation.id().as_str(), operation.fixed_path(), &actual)
+            {
+                Ok(observed) => observed,
+                Err(error) => {
+                    self.terminal_error = Some(error);
+                    return Err(HostFailure::ContractViolation);
+                }
+            };
         match observed {
             OfflineSourceResponse::Http {
                 status,
@@ -741,8 +839,11 @@ impl OfflineRhaiHost<'_> {
                     .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
             )?;
             require_basic_success(
-                self.interactions
-                    .take(credential.id().as_str(), &credential_request)?,
+                self.interactions.take(
+                    credential.id().as_str(),
+                    credential_request.path.as_str(),
+                    &credential_request,
+                )?,
                 64 * 1024,
             )?;
             self.credential_used = true;
@@ -757,14 +858,20 @@ impl OfflineRhaiHost<'_> {
             verification_request.noncredential_effect_value("fixture-verification"),
         )?;
         let jwks = require_http_body(
-            self.interactions
-                .take(verification.id().as_str(), &verification_request)?,
+            self.interactions.take(
+                verification.id().as_str(),
+                verification.fixed_path(),
+                &verification_request,
+            )?,
             verification.response_max_bytes(),
         )?;
         let data_request = rendered_dci_request_values(operation, &component_values)?;
         let response = require_http_body(
-            self.interactions
-                .take(operation.id().as_str(), &data_request)?,
+            self.interactions.take(
+                operation.id().as_str(),
+                operation.fixed_path(),
+                &data_request,
+            )?,
             operation.response_max_bytes(),
         )?;
         let expectation = offline_dci_expectation(operation, &component_values)?;
@@ -943,11 +1050,12 @@ fn execute_rhai(
     inputs: &OfflineBoundInputs,
     interactions: Vec<OfflineInteraction>,
     worker_program: Option<&Path>,
+    trace: bool,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
     let request = build_rhai_request(plan, inputs)?;
     let mut host = OfflineRhaiHost {
         plan,
-        interactions: OfflineInteractionQueue::new(interactions)?,
+        interactions: OfflineInteractionQueue::new(interactions, trace)?,
         credential_used: false,
         terminal_error: None,
     };
@@ -1300,19 +1408,20 @@ fn execute_http(
     plan: &CompiledSourcePlan,
     inputs: &OfflineBoundInputs,
     interactions: Vec<OfflineInteraction>,
+    trace: bool,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
     if plan
         .operations()
         .any(|operation| operation.dci_exact().is_some())
     {
-        return execute_dci(plan, inputs, interactions);
+        return execute_dci(plan, inputs, interactions, trace);
     }
     validate_bounded_http_activation(plan)
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
     if !inputs.is_bound_to(plan) {
         return Err(OfflineFixtureError::ExecutionContractViolation);
     }
-    let mut interactions = OfflineInteractionQueue::new(interactions)?;
+    let mut interactions = OfflineInteractionQueue::new(interactions, trace)?;
     let operations = plan.operations().collect::<Vec<_>>();
     let mut memory = (0..operations.len()).map(|_| None).collect::<Vec<_>>();
     let mut facts = Vec::new();
@@ -1343,14 +1452,15 @@ fn execute_http(
                         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
                 )?;
                 require_basic_success(
-                    interactions.take(credential.id().as_str(), &request)?,
+                    interactions.take(credential.id().as_str(), request.path.as_str(), &request)?,
                     64 * 1024,
                 )?;
                 credential_used = true;
             }
         }
         let request = rendered_compiled_operation_request(plan, operation, inputs, &memory)?;
-        let response = interactions.take(operation.id().as_str(), &request)?;
+        let response =
+            interactions.take(operation.id().as_str(), operation.fixed_path(), &request)?;
         let decoded = decode_operation(operation, response)?;
         match decoded {
             ClosedJsonOutcome::Ambiguous => {
@@ -1447,6 +1557,7 @@ fn execute_dci(
     plan: &CompiledSourcePlan,
     inputs: &OfflineBoundInputs,
     interactions: Vec<OfflineInteraction>,
+    trace: bool,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
     let operation = plan
         .operations()
@@ -1459,7 +1570,7 @@ fn execute_dci(
     let credential = plan
         .credential_operation()
         .ok_or(OfflineFixtureError::ExecutionContractViolation)?;
-    let mut interactions = OfflineInteractionQueue::new(interactions)?;
+    let mut interactions = OfflineInteractionQueue::new(interactions, trace)?;
     let credential_request = rendered_credential_request_effect(
         credential
             .render_request(
@@ -1469,7 +1580,11 @@ fn execute_dci(
             .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?,
     )?;
     require_basic_success(
-        interactions.take(credential.id().as_str(), &credential_request)?,
+        interactions.take(
+            credential.id().as_str(),
+            credential_request.path.as_str(),
+            &credential_request,
+        )?,
         64 * 1024,
     )?;
     let verification_request = verification
@@ -1480,12 +1595,20 @@ fn execute_dci(
         verification_request.noncredential_effect_value("fixture-verification"),
     )?;
     let jwks = require_http_body(
-        interactions.take(verification.id().as_str(), &verification_request)?,
+        interactions.take(
+            verification.id().as_str(),
+            verification.fixed_path(),
+            &verification_request,
+        )?,
         verification.response_max_bytes(),
     )?;
     let data_request = rendered_dci_request(operation, inputs)?;
     let response = require_http_body(
-        interactions.take(operation.id().as_str(), &data_request)?,
+        interactions.take(
+            operation.id().as_str(),
+            operation.fixed_path(),
+            &data_request,
+        )?,
         operation.response_max_bytes(),
     )?;
     let calls = interactions.finish()?;
@@ -1750,6 +1873,7 @@ fn execute_snapshot(
     plan: &CompiledSourcePlan,
     inputs: &OfflineBoundInputs,
     interactions: Vec<OfflineInteraction>,
+    trace: bool,
 ) -> Result<OfflineFixtureObservation, OfflineFixtureError> {
     validate_snapshot_exact_activation(plan)
         .map_err(|_| OfflineFixtureError::ExecutionContractViolation)?;
@@ -1766,9 +1890,10 @@ fn execute_snapshot(
     {
         return Err(OfflineFixtureError::ExecutionContractViolation);
     }
-    let mut interactions = OfflineInteractionQueue::new(interactions)?;
+    let mut interactions = OfflineInteractionQueue::new(interactions, trace)?;
     let response = interactions.take(
         "snapshot",
+        "/snapshot",
         &OfflineRenderedRequest {
             method: OfflineRequestMethod::Get,
             path: "/snapshot".to_string(),
@@ -2508,6 +2633,78 @@ mod tests {
         assert!(!rendered.contains("secret-body"));
         assert!(!rendered.contains("secret-source-value"));
         drop(harness);
+    }
+
+    #[test]
+    fn safe_trace_reports_body_structure_without_keys_or_values() {
+        let request = OfflineRenderedRequest {
+            method: OfflineRequestMethod::Post,
+            path: "/records/selector-marker".to_string(),
+            query: BTreeMap::from([("subject".to_string(), vec!["query-marker".to_string()])]),
+            headers: BTreeMap::from([("X-Profile".to_string(), "header-marker".to_string())]),
+            body: Some(serde_json::json!({
+                "dynamic-selector-marker": "body-marker",
+                "items": [true, false]
+            })),
+        };
+        let trace = safe_interaction_trace(2, "lookup", "/records/*", &request);
+        assert_eq!(
+            trace,
+            "call=2 operation=lookup method=POST path=/records/* query=[subject] headers=[x-profile] body=object(fields=2;values=[array(len=2;items=[boolean]),string])"
+        );
+        for sensitive in [
+            "selector-marker",
+            "query-marker",
+            "header-marker",
+            "dynamic-selector-marker",
+            "body-marker",
+        ] {
+            assert!(!trace.contains(sensitive));
+        }
+    }
+
+    #[test]
+    fn trace_queue_records_only_matched_call_order() {
+        let expected = |path: &str| OfflineExpectedRequest {
+            method: OfflineRequestMethod::Get,
+            path: path.to_string(),
+            query: BTreeMap::new(),
+            headers: BTreeMap::new(),
+            body: None,
+        };
+        let interactions = ["/first/value-one", "/second/value-two"]
+            .into_iter()
+            .map(|path| OfflineInteraction {
+                request: expected(path),
+                response: OfflineSourceResponse::NoMatch,
+            })
+            .collect();
+        let mut queue = OfflineInteractionQueue::new(interactions, true).expect("trace queue");
+        for (operation, canonical, actual) in [
+            ("first", "/first/*", "/first/value-one"),
+            ("second", "/second/*", "/second/value-two"),
+        ] {
+            queue
+                .take(
+                    operation,
+                    canonical,
+                    &OfflineRenderedRequest {
+                        method: OfflineRequestMethod::Get,
+                        path: actual.to_string(),
+                        query: BTreeMap::new(),
+                        headers: BTreeMap::new(),
+                        body: None,
+                    },
+                )
+                .expect("matched interaction");
+        }
+        assert_eq!(
+            queue.finish().expect("complete queue"),
+            [
+                "call=1 operation=first method=GET path=/first/* query=[] headers=[] body=none",
+                "call=2 operation=second method=GET path=/second/* query=[] headers=[] body=none",
+            ]
+        );
     }
 
     #[test]
