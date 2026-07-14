@@ -2150,6 +2150,10 @@ fn validate_environment(
         validate_https_or_local_loopback_resource(&relay.jwks_url, "Relay OIDC JWKS URL", local)?;
     }
     if let Some(connection) = &environment.notary_relay {
+        validate_internal_https_or_loopback_origin(
+            &connection.base_url,
+            "Notary-to-Relay base URL",
+        )?;
         validate_token(
             &connection.workload_client_id,
             "Notary-to-Relay workload client id",

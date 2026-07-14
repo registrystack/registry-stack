@@ -20,6 +20,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Environment authoring can set the existing bounded Notary CEL worker memory
   ceiling, and changes to that operator-controlled limit require an
   operator-security review.
+- Notary-to-Relay authoring separates the Relay's public catalog origin from
+  the deployment-internal connection URL, so colocated production pairs can
+  use an explicit loopback path without publishing that path to integrators.
 - `script` authoring uses the release-gated isolated Rhai worker, fixed source
   authority, bounded host calls, and a hash-covered static local module
   closure. Script availability never depends on source product or version and

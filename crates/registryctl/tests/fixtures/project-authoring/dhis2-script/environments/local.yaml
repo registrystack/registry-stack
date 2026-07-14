@@ -24,6 +24,7 @@ relay:
   allowed_clients: [health-relay-client]
 
 notary_relay:
+  base_url: http://127.0.0.1:8080
   workload_client_id: health-registry-notary
   token_file: /run/secrets/relay-workload-token
 

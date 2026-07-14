@@ -156,13 +156,6 @@ impl StandaloneRegistryNotaryConfig {
         self.evidence.machine_quota.validate()?;
         if let Some(relay) = &self.evidence.relay {
             relay.validate()?;
-            if relay.uses_insecure_url()
-                && self.deployment.profile != Some(crate::deployment::DeploymentProfile::Local)
-            {
-                return Err(EvidenceConfigError::InvalidRelayConfig {
-                    reason: "HTTP Relay origins require deployment.profile = local".to_string(),
-                });
-            }
             if !self
                 .evidence
                 .claims
@@ -455,11 +448,6 @@ impl StandaloneRegistryNotaryConfig {
                 .audit_offhost_shipping),
             audit_ack_cursor_configured: self.deployment.evidence.audit_ack_cursor_path().is_some(),
             audit_ack_health_ok: ack_observation.health == registry_platform_ops::AckHealth::Ok,
-            relay_insecure_url: self
-                .evidence
-                .relay
-                .as_ref()
-                .is_some_and(RelayConnectionConfig::uses_insecure_url),
             admin_shared_exposure: self.server.admin_listener.mode
                 == RegistryNotaryAdminListenerMode::SharedWithPublic,
             openapi_public: !self.server.openapi_requires_auth,

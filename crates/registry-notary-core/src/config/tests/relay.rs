@@ -789,8 +789,7 @@ fn relay_connection_requires_https_origin_or_explicit_loopback() {
     config.deployment.profile = Some(crate::deployment::DeploymentProfile::Local);
     config
         .validate()
-        .expect("explicit HTTP loopback is permitted for local development");
-    assert!(config.gate_input().relay_insecure_url);
+        .expect("explicit HTTP loopback is permitted for a colocated Relay");
 
     let mut config = valid_registry_backed_config();
     let mut relay = relay_connection();
@@ -808,14 +807,9 @@ fn relay_connection_requires_https_origin_or_explicit_loopback() {
     relay.allow_insecure_localhost = true;
     config.evidence.relay = Some(relay);
     config.deployment.profile = Some(crate::deployment::DeploymentProfile::HostedLab);
-    let error = config
+    config
         .validate()
-        .expect_err("HTTP Relay is restricted to the local deployment profile");
-    assert!(matches!(
-        error,
-        EvidenceConfigError::InvalidRelayConfig { ref reason }
-            if reason.contains("deployment.profile = local")
-    ));
+        .expect("hosted Notary can use the paired Relay through its loopback namespace");
 
     let sensitive_path = "private-route";
     let mut config = valid_registry_backed_config();

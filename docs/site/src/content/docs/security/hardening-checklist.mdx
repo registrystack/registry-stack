@@ -117,9 +117,9 @@ or the [Registry Notary operator configuration reference](../../products/registr
 - Enforce ingress rate limiting at your gateway or edge, then either declare
   `deployment.evidence.ingress_rate_limit: true` or accept the `relay.ingress.rate_limit_missing`
   finding it otherwise raises. The flag defaults to `false`.
-- Keep Notary's Relay connection on HTTPS in production. `allow_insecure_localhost` exists only
-  for local development; an insecure Relay URL trips `notary.relay.insecure_url` under the
-  evidence-grade posture.
+- Keep Notary's Relay connection on HTTPS unless the two services share a network namespace.
+  `allow_insecure_localhost` permits only an HTTP IP-loopback origin for that colocated topology;
+  remote HTTP origins remain invalid.
 - Require every project-authored Relay source destination to be an exact HTTPS origin. The project
   validator rejects origins with user information, paths, queries, or fragments.
 - For Postgres sources, require `sslmode=require` on the connection string and use read-only

@@ -1412,6 +1412,7 @@ struct RelayBinding {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct NotaryRelayBinding {
+    base_url: String,
     workload_client_id: String,
     token_file: PathBuf,
 }

@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Relay-only, self-attested Notary-only, and combined deployments are modeled
   independently. Combined deployments use the project's single Relay
   connection.
+- BREAKING: a combined deployment may connect Notary to its paired Relay
+  through an explicitly enabled HTTP IP-loopback origin in any deployment
+  profile. The obsolete `notary.relay.insecure_url` posture finding is removed;
+  remote HTTP Relay origins remain invalid, so no cleartext hop crosses the
+  shared network namespace.
 - BREAKING: registry-backed claim rules are now named
   `consultation_output { consultation, output }` and
   `consultation_matched { consultation }`. The unreleased `extract`/`exists`
