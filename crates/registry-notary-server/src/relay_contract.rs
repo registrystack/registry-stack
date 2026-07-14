@@ -23,7 +23,10 @@ const MAX_INPUT_PATTERN_BYTES: usize = 1_024;
 const MAX_OUTPUTS: usize = 64;
 const MAX_OUTPUT_STRING_BYTES: u32 = 64 * 1_024;
 const MAX_JSON_INTEGER: i64 = 9_007_199_254_740_991;
-const MAX_SOURCE_BYTES: u64 = 16 * 1_024 * 1_024;
+// A consultation reads one bounded response. A materialization refresh may
+// ingest the larger, separately reviewed Relay public-contract footprint.
+const MAX_OPERATION_SOURCE_BYTES: u64 = 16 * 1_024 * 1_024;
+const MAX_MATERIALIZATION_SOURCE_BYTES: u64 = MAX_JSON_INTEGER as u64;
 const MAX_SCHEMA_DEPTH: usize = 8;
 const MAX_SCHEMA_FIELDS: usize = 256;
 
@@ -757,7 +760,7 @@ fn verify_bounds(bounds: &Bounds, class: AcquisitionClass) -> Result<(), ()> {
     ((1..=2).contains(&bounds.max_source_matches)
         && bounds.max_disclosed_records == 1
         && transport
-        && (1..=MAX_SOURCE_BYTES).contains(&bounds.max_source_bytes)
+        && (1..=MAX_OPERATION_SOURCE_BYTES).contains(&bounds.max_source_bytes)
         && bounds.timeout_ms > 0
         && compatible_timeout
         && (1..=64).contains(&bounds.max_in_flight)
@@ -906,7 +909,8 @@ fn verify_materialization(
                     .iter()
                     .all(|field| bounded_name(field))
                 && materialization.footprint.max_source_records > 0
-                && (1..=MAX_SOURCE_BYTES).contains(&materialization.footprint.max_source_bytes)
+                && (1..=MAX_MATERIALIZATION_SOURCE_BYTES)
+                    .contains(&materialization.footprint.max_source_bytes)
                 && (1..=16).contains(&materialization.footprint.max_data_exchanges)
                 && materialization.footprint.max_credential_exchanges <= 1
                 && materialization.footprint.max_data_destinations == 1
