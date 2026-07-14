@@ -1574,7 +1574,7 @@ impl BoundedDestinationRequestTemplate<DataDestination> {
             let name = HeaderName::from_str(raw_name)
                 .map_err(|_| DestinationRequestError::ForbiddenHeader)?;
             if !policy.request_headers.contains(&name)
-                || headers.iter().any(|(prior, _)| prior == &name)
+                || headers.iter().any(|(prior, _)| prior == name)
             {
                 return Err(DestinationRequestError::ForbiddenHeader);
             }
@@ -2573,7 +2573,7 @@ impl<S: DestinationSlot> BoundedDestinationRequest<S> {
                 "name": header.name.as_str(),
                 "value_base64url": URL_SAFE_NO_PAD.encode(header.value.as_slice()),
             })).collect::<Vec<_>>(),
-            "body_base64url": (!exclude_body).then(|| self.body.as_ref())
+            "body_base64url": (!exclude_body).then_some(self.body.as_ref())
                 .flatten()
                 .map(|body| URL_SAFE_NO_PAD.encode(body.as_slice())),
         })
