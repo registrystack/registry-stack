@@ -155,6 +155,29 @@ docker run --rm --user root \
   'cp /source/server.crt /certs/server.crt; cp /source/server.key /certs/server.key; chown 70:70 /certs/server.crt /certs/server.key; chmod 600 /certs/server.key' \
   >"${work_dir}/certificate-install.log" 2>&1
 
+postgres_ready() {
+  docker exec "${postgres_container}" pg_isready --host 127.0.0.1 \
+    --username postgres --dbname postgres >/dev/null 2>&1 || return 1
+
+  local probe
+  probe="$(docker exec --env "PGPASSWORD=${admin_password}" "${postgres_container}" \
+    psql --host 127.0.0.1 --username postgres --dbname postgres \
+    --tuples-only --no-align --set ON_ERROR_STOP=1 --command 'SELECT 1' 2>/dev/null)" \
+    || return 1
+  [[ "${probe}" == "1" ]]
+}
+
+wait_for_postgres() {
+  local deadline=$((SECONDS + 90))
+  while (( SECONDS < deadline )); do
+    if postgres_ready; then
+      return 0
+    fi
+    sleep 1
+  done
+  fail "PostgreSQL did not become ready"
+}
+
 start_postgres() {
   local image="$1"
   docker run --detach --name "${postgres_container}" \
@@ -171,15 +194,7 @@ start_postgres() {
     -c synchronous_commit=on \
     -c full_page_writes=on >/dev/null
 
-  local deadline=$((SECONDS + 90))
-  while (( SECONDS < deadline )); do
-    if docker exec "${postgres_container}" pg_isready --username postgres --dbname postgres \
-      >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 1
-  done
-  fail "PostgreSQL did not become ready"
+  wait_for_postgres
 }
 
 admin_sql() {
@@ -600,10 +615,7 @@ if "${notary_bin}" --config "${config_path}" state doctor >"${work_dir}/doctor-u
   fail "state doctor accepted unavailable PostgreSQL"
 fi
 docker start "${postgres_container}" >/dev/null
-for _ in {1..90}; do
-  docker exec "${postgres_container}" pg_isready --username postgres --dbname postgres >/dev/null 2>&1 && break
-  sleep 1
-done
+wait_for_postgres
 wait_ready "${url_a}" "${notary_pid_a}" \
   || fail "running Notary did not reconnect after PostgreSQL recovery"
 wait_ready "${url_b}" "${notary_pid_b}" \
