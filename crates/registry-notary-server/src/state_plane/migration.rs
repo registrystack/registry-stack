@@ -246,10 +246,12 @@ async fn runtime_capability_binding(
         owner: row_i64(&row, "owner_role_oid")?,
         runtime: row_i64(&row, "runtime_role_oid")?,
     };
+    if row_i64(&row, "caller_role_oid")? != roles.runtime {
+        return Err(StatePlaneMigrationError::InvalidRuntimeRoleContract);
+    }
     if capability != STATE_PLANE_CAPABILITY_V1
         || schema_version != STATE_PLANE_SCHEMA_VERSION_V1
         || fingerprint != STATE_PLANE_SCHEMA_FINGERPRINT_V1
-        || row_i64(&row, "caller_role_oid")? != roles.runtime
         || !row_bool(&row, "database_writable")?
         || !row_bool(&row, "durability_safe")?
     {
@@ -2333,6 +2335,8 @@ mod tests {
     const POOL_DATABASE_URL_ENV: &str = "REGISTRY_NOTARY_STATE_POOL_TEST_URL";
     const SENSITIVE_DATABASE_URL_ENV: &str = "REGISTRY_NOTARY_STATE_SENSITIVE_TEST_URL";
     const SENSITIVE_KEY_ENV: &str = "REGISTRY_NOTARY_STATE_SENSITIVE_TEST_KEY";
+    const SENSITIVE_PROBE_MODE_ENV: &str = "REGISTRY_NOTARY_STATE_SENSITIVE_PROBE_MODE";
+    const SENSITIVE_PROBE_PIN_ENV: &str = "REGISTRY_NOTARY_STATE_SENSITIVE_PROBE_PIN";
     const OWNER_ROLE: &str = "registry_notary_owner_test";
     const RUNTIME_ROLE: &str = "registry_notary_runtime_test";
     const MIGRATION_ROLE: &str = "registry_notary_migration_test";
@@ -4014,6 +4018,85 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    #[ignore = "requires an installed Notary PostgreSQL state plane"]
+    async fn postgres_v1_sensitive_restart_restore_probe() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mode = std::env::var(SENSITIVE_PROBE_MODE_ENV)?;
+        let probe_pin = std::env::var(SENSITIVE_PROBE_PIN_ENV)?;
+        if probe_pin.len() != 6 || !probe_pin.bytes().all(|value| value.is_ascii_uppercase()) {
+            return Err("restart probe PIN is invalid".into());
+        }
+        let config = PostgresStatePlaneConfig::new(
+            SENSITIVE_DATABASE_URL_ENV,
+            Some(PathBuf::from(std::env::var(DATABASE_CA_ENV)?)),
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+            1,
+        )?;
+        let runtime = Arc::new(NotaryPostgresStatePlaneRuntime::connect(&config).await?);
+        let sensitive = PostgresSensitiveState::activate(
+            Arc::clone(&runtime),
+            &SensitiveStateKeyConfig::new(SENSITIVE_KEY_ENV)?,
+        )
+        .await?;
+        let expires_at = time::OffsetDateTime::now_utc() + time::Duration::minutes(9);
+
+        if mode == "seed" {
+            for phase in ["process", "database", "restore"] {
+                let login = LoginState {
+                    pkce_verifier: format!("restart-{phase}-pkce-secret"),
+                    nonce: format!("restart-{phase}-login-nonce"),
+                    credential_configuration_id: format!("restart-{phase}-config"),
+                };
+                assert_eq!(
+                    sensitive
+                        .reserve_login(&format!("restart-{phase}-opaque-state"), &login, expires_at)
+                        .await?,
+                    LoginReserveOutcome::Reserved
+                );
+                assert!(
+                    sensitive
+                        .reserve_transaction_code(
+                            &format!("restart-{phase}-jti"),
+                            &probe_pin,
+                            6,
+                            expires_at,
+                        )
+                        .await?
+                );
+            }
+        } else if matches!(mode.as_str(), "process" | "database" | "restore") {
+            let login = sensitive
+                .consume_login(&format!("restart-{mode}-opaque-state"))
+                .await?
+                .ok_or("restart probe login state is unavailable")?;
+            if login.pkce_verifier != format!("restart-{mode}-pkce-secret")
+                || login.nonce != format!("restart-{mode}-login-nonce")
+                || login.credential_configuration_id != format!("restart-{mode}-config")
+            {
+                return Err("restart probe login state did not decrypt exactly".into());
+            }
+            let jti = format!("restart-{mode}-jti");
+            let proof = sensitive
+                .verify_transaction_code(&jti, &probe_pin)
+                .await?
+                .ok_or("restart probe transaction-code verifier is unavailable")?;
+            let scope = registry_platform_replay::ReplayScope::new([("flow", mode.as_str())])?;
+            if !sensitive
+                .redeem(&scope, &jti, expires_at, Some(proof))
+                .await?
+            {
+                return Err("restart probe transaction code was not redeemable".into());
+            }
+        } else {
+            return Err("restart probe mode is invalid".into());
+        }
+
+        runtime.shutdown();
+        Ok(())
+    }
+
     async fn assert_sensitive_adapter_contract(
         database_url: &str,
         admin: &Client,
@@ -4028,7 +4111,7 @@ mod tests {
         // in an isolated process, so these dedicated variables have no readers.
         unsafe {
             std::env::set_var(SENSITIVE_DATABASE_URL_ENV, &runtime_url);
-            std::env::set_var(SENSITIVE_KEY_ENV, &primary_key);
+            std::env::remove_var(SENSITIVE_KEY_ENV);
         }
         let config = PostgresStatePlaneConfig::new(
             SENSITIVE_DATABASE_URL_ENV,
@@ -4039,6 +4122,25 @@ mod tests {
         )?;
         let runtime = Arc::new(NotaryPostgresStatePlaneRuntime::connect(&config).await?);
         let key_config = SensitiveStateKeyConfig::new(SENSITIVE_KEY_ENV)?;
+        let missing_key_error = PostgresSensitiveState::activate(Arc::clone(&runtime), &key_config)
+            .await
+            .expect_err("an absent sensitive-state key must fail activation");
+        assert_eq!(
+            missing_key_error,
+            SensitiveStateError::KeyEnvironmentUnavailable
+        );
+        assert_eq!(
+            missing_key_error.to_string(),
+            "Notary sensitive-state key environment variable is unavailable"
+        );
+        let rendered_error = format!("{missing_key_error:?}");
+        assert!(!rendered_error.contains(SENSITIVE_KEY_ENV));
+        assert!(!rendered_error.contains(&primary_key));
+        assert!(!rendered_error.contains(&wrong_key));
+
+        // SAFETY: this exact-name live test remains isolated from other
+        // environment readers for its entire process lifetime.
+        unsafe { std::env::set_var(SENSITIVE_KEY_ENV, &primary_key) };
         let sensitive = PostgresSensitiveState::activate(Arc::clone(&runtime), &key_config).await?;
         let expires_at = time::OffsetDateTime::now_utc() + time::Duration::hours(1);
         let login = LoginState {
