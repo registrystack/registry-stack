@@ -108,7 +108,7 @@ sslrootcert=/run/secrets/notary-postgres-ca.pem
 ```
 
 The service name is operator-defined. The
-[Registry Notary PostgreSQL operations guide](../../products/registry-notary/postgresql-state-operations/)
+[Registry Notary PostgreSQL operations guide](https://docs.registrystack.org/products/registry-notary/postgresql-state-operations/)
 provides the complete role-provisioning example and password-file requirements.
 
 ```sh
@@ -202,7 +202,7 @@ Keep Notary offline when the recovery point might predate an acknowledged write.
 possibly missing replay, nonce, evaluation, idempotency, preauthorization, and quota decision to
 expire, and reconcile credential status before admitting traffic. A lost suspension or revocation
 does not become safe through waiting. The
-[Registry Notary PostgreSQL operations guide](../../products/registry-notary/postgresql-state-operations/)
+[Registry Notary PostgreSQL operations guide](https://docs.registrystack.org/products/registry-notary/postgresql-state-operations/)
 defines the full stale-restore quarantine.
 
 ## Verify after restore

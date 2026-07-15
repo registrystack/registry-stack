@@ -88,11 +88,10 @@ set `allow_sub_as_civil_id: true` so the config records that decision.
 
 ## OIDC auth config
 
-Self-attestation requires `auth.mode: oidc`:
+Self-attestation requires an `auth.oidc` block. There is no authentication mode selector:
 
 ```yaml
 auth:
-  mode: oidc
   oidc:
     issuer: https://idp.example.gov
     jwks_url: https://idp.example.gov/.well-known/jwks.json
@@ -113,8 +112,10 @@ auth:
     leeway: 60s
 ```
 
-When OIDC mode is active, static `api_keys` and `bearer_tokens` must be empty.
-Use a separate deployment or config if you need machine clients with API keys.
+The `auth` block is additive, so OIDC can coexist with static `api_keys` and
+`bearer_tokens`. Keep machine credentials out of a citizen-facing deployment
+unless a reviewed use case requires both, and grant every credential only its
+exact scopes.
 
 ## Subject binding
 
