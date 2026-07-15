@@ -209,10 +209,9 @@ audiences, token type, principal claim, and scope mapping:
 
 ```yaml
 auth:
-  mode: oidc
   oidc:
     issuer: https://id.example.gov
-    jwks_uri: https://id.example.gov/oauth/v2/keys
+    jwks_url: https://id.example.gov/oauth/v2/keys
     audiences:
       - registry-notary
     scope_claim: scope
