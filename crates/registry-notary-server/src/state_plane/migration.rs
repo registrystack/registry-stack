@@ -25,22 +25,22 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "roles=owner-nologin-migration-assumption-runtime-execute-only-no-private-access-v1\0",
     "database=postgresql-16-17-18-writable-safe-durability-database-clock-v1\0",
     "replay=keyed-scope-identifier-one-winner-expiry-replacement-v1\0",
-    "nonce=keyed-reserve-consume-sixty-second-tombstone-v1\0",
+    "nonce=keyed-generation-reserve-compare-consume-sixty-second-tombstone-v2\0",
     "evaluation=client-bound-stored-record-v2-atomic-publication-expiry-v1\0",
     "batch=keyed-request-owner-lease-quota-once-takeover-atomic-completion-stored-response-v2-fifteen-minute-retention-v1\0",
     "credential-status=insert-only-locked-transition-terminal-revocation-expiry-retention-monotonic-updated-at-v1\0",
     "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-v1\0",
     "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1\0",
-    "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-v1\0",
-    "preauthorization-tx-code=keyed-jti-keyed-pin-verifier-peek-redeem-with-replay-one-winner-expiry-v1\0",
+    "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2\0",
+    "preauthorization-tx-code=keyed-jti-keyed-pin-verifier-peek-redeem-with-replay-one-winner-expiry-live-key-attestation-v2\0",
     "retention=bounded-expiry-prune-skip-locked-v1\0",
 );
 pub const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "786d9bc5192fc0a11bf9e298b5612bd66233ddd877b65ee32ed70ff5905faea2";
+    "4cb2932fba579abe8981cd9c072fecaa1c030e61c371ae9792b1b105f5dd001b";
 
 const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 0x4e4f_5441_5259_0001;
 const EXPECTED_PRIVATE_TABLE_COUNT_V1: i64 = 10;
-const EXPECTED_API_FUNCTION_COUNT_V1: i64 = 23;
+const EXPECTED_API_FUNCTION_COUNT_V1: i64 = 25;
 
 /// The `NOLOGIN` role that owns the Notary schemas and fixed functions.
 #[derive(Clone, PartialEq, Eq)]
@@ -421,7 +421,8 @@ fn state_plane_acl_sql(runtime_role: &RuntimeDatabaseRole) -> String {
          GRANT EXECUTE ON FUNCTION registry_notary_api.readiness_v1() TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.replay_insert_v1(bytea, bytea, timestamptz) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.nonce_reserve_v1(bytea, bytea, timestamptz) TO {role};\n\
-         GRANT EXECUTE ON FUNCTION registry_notary_api.nonce_consume_v1(bytea, bytea) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.nonce_reservation_generation_v1(bytea, bytea) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.nonce_consume_v1(bytea, bytea, bigint) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.evaluation_insert_v1(text, bytea, bytea, text, smallint, jsonb, timestamptz, timestamptz) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.evaluation_get_v1(text, bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.batch_reserve_v1(bytea, bytea, bytea, bytea, integer, integer, integer) TO {role};\n\
@@ -438,6 +439,7 @@ fn state_plane_acl_sql(runtime_role: &RuntimeDatabaseRole) -> String {
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_login_consume_v1(bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_tx_code_reserve_v1(bytea, bytea, bytea, smallint, timestamptz) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_tx_code_peek_v1(bytea) TO {role};\n\
+         GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_key_attest_v1(bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.preauthorization_redeem_v1(bytea, bytea, timestamptz, boolean, bytea) TO {role};\n\
          GRANT EXECUTE ON FUNCTION registry_notary_api.retention_prune_v1(integer) TO {role};"
     )
@@ -776,11 +778,11 @@ fn expected_catalog_definition_fingerprint(
 // These fingerprints are derived from the deterministic catalog projection
 // below and are pinned separately for every supported PostgreSQL major.
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG16_V1: &str =
-    "ad2a1f3101bd9c68cd1f0eb840a832335da76ef0ce0d61abdcd443e786db47a1";
+    "dbc0f6153a4af15b5d323f2480ecf50ec0ca399ccf536306a68d30b4d2967eb6";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG17_V1: &str =
-    "ad2a1f3101bd9c68cd1f0eb840a832335da76ef0ce0d61abdcd443e786db47a1";
+    "dbc0f6153a4af15b5d323f2480ecf50ec0ca399ccf536306a68d30b4d2967eb6";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG18_V1: &str =
-    "7daa60e883a4e1fe5bab97590d74039da7c63e306e52e17b39baf2460d2f60c9";
+    "c45e7da4136960827b90ad271f8640a35354120ff1f7cd890db8fab870e588e9";
 
 const CATALOG_DEFINITION_QUERY_V1: &str = r#"
 SELECT COALESCE((
@@ -928,6 +930,7 @@ CREATE INDEX replay_identifier_expiry_idx
 CREATE TABLE registry_notary_private.consumable_nonce (
     scope_hash bytea NOT NULL CHECK (pg_catalog.octet_length(scope_hash) = 32),
     nonce_hash bytea NOT NULL CHECK (pg_catalog.octet_length(nonce_hash) = 32),
+    generation bigint NOT NULL CHECK (generation > 0),
     state text NOT NULL CHECK (state IN ('reserved', 'consumed')),
     reservation_expires_at timestamptz NOT NULL,
     tombstone_expires_at timestamptz,
@@ -1171,14 +1174,15 @@ BEGIN
     END IF;
 
     INSERT INTO registry_notary_private.consumable_nonce (
-        scope_hash, nonce_hash, state, reservation_expires_at,
+        scope_hash, nonce_hash, generation, state, reservation_expires_at,
         tombstone_expires_at, created_at, updated_at
     ) VALUES (
-        p_scope_hash, p_nonce_hash, 'reserved', p_expires_at,
+        p_scope_hash, p_nonce_hash, 1, 'reserved', p_expires_at,
         NULL, v_now, v_now
     )
     ON CONFLICT (scope_hash, nonce_hash) DO UPDATE
-       SET state = 'reserved',
+       SET generation = registry_notary_private.consumable_nonce.generation + 1,
+           state = 'reserved',
            reservation_expires_at = EXCLUDED.reservation_expires_at,
            tombstone_expires_at = NULL,
            created_at = EXCLUDED.created_at,
@@ -1195,9 +1199,28 @@ BEGIN
 END
 $function$;
 
-CREATE FUNCTION registry_notary_api.nonce_consume_v1(
+CREATE FUNCTION registry_notary_api.nonce_reservation_generation_v1(
     p_scope_hash bytea,
     p_nonce_hash bytea
+)
+RETURNS bigint
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+    SELECT stored.generation
+      FROM registry_notary_private.consumable_nonce AS stored
+     WHERE stored.scope_hash = p_scope_hash
+       AND stored.nonce_hash = p_nonce_hash
+       AND stored.state = 'reserved'
+       AND stored.reservation_expires_at > pg_catalog.statement_timestamp()
+$function$;
+
+CREATE FUNCTION registry_notary_api.nonce_consume_v1(
+    p_scope_hash bytea,
+    p_nonce_hash bytea,
+    p_generation bigint
 )
 RETURNS boolean
 LANGUAGE plpgsql
@@ -1209,7 +1232,8 @@ DECLARE
     v_count bigint;
 BEGIN
     IF pg_catalog.octet_length(p_scope_hash) <> 32
-       OR pg_catalog.octet_length(p_nonce_hash) <> 32 THEN
+       OR pg_catalog.octet_length(p_nonce_hash) <> 32
+       OR p_generation <= 0 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid nonce input';
     END IF;
 
@@ -1219,6 +1243,7 @@ BEGIN
            updated_at = v_now
      WHERE scope_hash = p_scope_hash
        AND nonce_hash = p_nonce_hash
+       AND generation = p_generation
        AND state = 'reserved'
        AND reservation_expires_at > v_now;
     GET DIAGNOSTICS v_count = ROW_COUNT;
@@ -1938,8 +1963,21 @@ DECLARE
     v_now timestamptz := pg_catalog.clock_timestamp();
     v_count bigint;
 BEGIN
-    IF p_expires_at <= v_now THEN
+    IF pg_catalog.octet_length(p_key_id) <> 32 OR p_expires_at <= v_now THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid login state expiry';
+    END IF;
+    -- One domain-specific lock serializes the live sensitive-key generation
+    -- decision across both preauthorization tables and all Notary replicas.
+    PERFORM pg_catalog.pg_advisory_xact_lock(5642808141211099137);
+    IF EXISTS (
+        SELECT 1 FROM registry_notary_private.preauthorization_login_state
+         WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.preauthorization_tx_code
+         WHERE expires_at > v_now AND key_id <> p_key_id
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '55000',
+            MESSAGE = 'sensitive-state key generation mismatch';
     END IF;
     -- The table lock serializes the exact 4,096-row capacity decision across
     -- replicas. It is bounded because this table cannot exceed that capacity.
@@ -2009,8 +2047,19 @@ DECLARE
     v_now timestamptz := pg_catalog.clock_timestamp();
     v_count bigint;
 BEGIN
-    IF p_expires_at <= v_now THEN
+    IF pg_catalog.octet_length(p_key_id) <> 32 OR p_expires_at <= v_now THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid transaction code expiry';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(5642808141211099137);
+    IF EXISTS (
+        SELECT 1 FROM registry_notary_private.preauthorization_login_state
+         WHERE expires_at > v_now AND key_id <> p_key_id
+        UNION ALL
+        SELECT 1 FROM registry_notary_private.preauthorization_tx_code
+         WHERE expires_at > v_now AND key_id <> p_key_id
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = '55000',
+            MESSAGE = 'sensitive-state key generation mismatch';
     END IF;
     DELETE FROM registry_notary_private.preauthorization_tx_code
      WHERE jti_hash = p_jti_hash AND expires_at <= v_now;
@@ -2022,6 +2071,25 @@ BEGIN
     GET DIAGNOSTICS v_count = ROW_COUNT;
     RETURN v_count = 1;
 END
+$function$;
+
+CREATE FUNCTION registry_notary_api.preauthorization_key_attest_v1(
+    p_key_id bytea
+)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $function$
+    SELECT pg_catalog.octet_length(p_key_id) = 32
+       AND NOT EXISTS (
+            SELECT 1 FROM registry_notary_private.preauthorization_login_state
+             WHERE expires_at > pg_catalog.statement_timestamp() AND key_id <> p_key_id
+            UNION ALL
+            SELECT 1 FROM registry_notary_private.preauthorization_tx_code
+             WHERE expires_at > pg_catalog.statement_timestamp() AND key_id <> p_key_id
+       )
 $function$;
 
 CREATE FUNCTION registry_notary_api.preauthorization_tx_code_peek_v1(
@@ -2247,9 +2315,15 @@ REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA registry_notary_api FROM PUBLIC;
 mod tests {
     use std::{path::PathBuf, sync::Arc, time::Duration};
 
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use registry_notary_core::{StateConfig, StatePostgresqlConfig, STATE_STORAGE_POSTGRESQL};
+
+    use crate::preauth_state::LoginState;
     use crate::state_plane::{
-        NotaryPostgresStatePlaneError, NotaryPostgresStatePlaneReadiness,
-        NotaryPostgresStatePlaneRuntime, PostgresStatePlaneConfig,
+        attest_postgres_state_plane_runtime, LoginReserveOutcome, NotaryPostgresStatePlaneError,
+        NotaryPostgresStatePlaneReadiness, NotaryPostgresStatePlaneRuntime, NotaryStatePlaneHandle,
+        PostgresSensitiveState, PostgresStatePlaneConfig, SensitiveStateError,
+        SensitiveStateKeyConfig,
     };
 
     use super::*;
@@ -2257,6 +2331,8 @@ mod tests {
     const DATABASE_URL_ENV: &str = "REGISTRY_NOTARY_STATE_POSTGRES_TEST_URL";
     const DATABASE_CA_ENV: &str = "REGISTRY_NOTARY_STATE_POSTGRES_TEST_CA";
     const POOL_DATABASE_URL_ENV: &str = "REGISTRY_NOTARY_STATE_POOL_TEST_URL";
+    const SENSITIVE_DATABASE_URL_ENV: &str = "REGISTRY_NOTARY_STATE_SENSITIVE_TEST_URL";
+    const SENSITIVE_KEY_ENV: &str = "REGISTRY_NOTARY_STATE_SENSITIVE_TEST_KEY";
     const OWNER_ROLE: &str = "registry_notary_owner_test";
     const RUNTIME_ROLE: &str = "registry_notary_runtime_test";
     const MIGRATION_ROLE: &str = "registry_notary_migration_test";
@@ -2278,14 +2354,14 @@ mod tests {
             "roles=owner-nologin-migration-assumption-runtime-execute-only-no-private-access-v1",
             "database=postgresql-16-17-18-writable-safe-durability-database-clock-v1",
             "replay=keyed-scope-identifier-one-winner-expiry-replacement-v1",
-            "nonce=keyed-reserve-consume-sixty-second-tombstone-v1",
+            "nonce=keyed-generation-reserve-compare-consume-sixty-second-tombstone-v2",
             "evaluation=client-bound-stored-record-v2-atomic-publication-expiry-v1",
             "batch=keyed-request-owner-lease-quota-once-takeover-atomic-completion-stored-response-v2-fifteen-minute-retention-v1",
             "credential-status=insert-only-locked-transition-terminal-revocation-expiry-retention-monotonic-updated-at-v1",
             "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-v1",
             "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1",
-            "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-v1",
-            "preauthorization-tx-code=keyed-jti-keyed-pin-verifier-peek-redeem-with-replay-one-winner-expiry-v1",
+            "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2",
+            "preauthorization-tx-code=keyed-jti-keyed-pin-verifier-peek-redeem-with-replay-one-winner-expiry-live-key-attestation-v2",
             "retention=bounded-expiry-prune-skip-locked-v1",
         ] {
             assert!(
@@ -2789,6 +2865,7 @@ mod tests {
         assert_credential_status_and_machine_quota_contracts(&database_url, &runtime, &admin)
             .await?;
         assert_preauthorization_contracts(&database_url, &runtime, &admin).await?;
+        assert_sensitive_adapter_contract(&database_url, &admin).await?;
         assert_retention_contract(&runtime, &admin).await?;
         assert_runtime_pool_contract(&database_url).await?;
 
@@ -3005,20 +3082,28 @@ mod tests {
             )
             .await?
             .get::<_, bool>(0));
+        let generation: i64 = runtime
+            .query_one(
+                "SELECT registry_notary_api.nonce_reservation_generation_v1($1, $2)",
+                &[&nonce_scope, &nonce],
+            )
+            .await?
+            .get(0);
+        assert_eq!(generation, 1);
         let (peer, peer_driver) = connect_as(database_url, RUNTIME_ROLE).await?;
         let (left, right) = tokio::join!(
             async {
                 runtime
                     .query_one(
-                        "SELECT registry_notary_api.nonce_consume_v1($1, $2)",
-                        &[&nonce_scope, &nonce],
+                        "SELECT registry_notary_api.nonce_consume_v1($1, $2, $3)",
+                        &[&nonce_scope, &nonce, &generation],
                     )
                     .await
             },
             async {
                 peer.query_one(
-                    "SELECT registry_notary_api.nonce_consume_v1($1, $2)",
-                    &[&nonce_scope, &nonce],
+                    "SELECT registry_notary_api.nonce_consume_v1($1, $2, $3)",
+                    &[&nonce_scope, &nonce, &generation],
                 )
                 .await
             }
@@ -3063,6 +3148,21 @@ mod tests {
             )
             .await?
             .get::<_, bool>(0));
+        let replacement_generation: i64 = runtime
+            .query_one(
+                "SELECT registry_notary_api.nonce_reservation_generation_v1($1, $2)",
+                &[&nonce_scope, &nonce],
+            )
+            .await?
+            .get(0);
+        assert_eq!(replacement_generation, generation + 1);
+        assert!(!runtime
+            .query_one(
+                "SELECT registry_notary_api.nonce_consume_v1($1, $2, $3)",
+                &[&nonce_scope, &nonce, &generation],
+            )
+            .await?
+            .get::<_, bool>(0));
         admin
             .execute(
                 "UPDATE registry_notary_private.consumable_nonce SET reservation_expires_at = \
@@ -3073,8 +3173,8 @@ mod tests {
             .await?;
         assert!(!runtime
             .query_one(
-                "SELECT registry_notary_api.nonce_consume_v1($1, $2)",
-                &[&nonce_scope, &nonce],
+                "SELECT registry_notary_api.nonce_consume_v1($1, $2, $3)",
+                &[&nonce_scope, &nonce, &replacement_generation],
             )
             .await?
             .get::<_, bool>(0));
@@ -3542,7 +3642,7 @@ mod tests {
         let key_id = vec![0x82_u8; 32];
         let nonce = vec![0x83_u8; 12];
         let ciphertext = vec![0x84_u8; 17];
-        let expires_at = time::OffsetDateTime::now_utc() + time::Duration::minutes(5);
+        let expires_at = time::OffsetDateTime::now_utc() + time::Duration::days(1);
         let reserve_login_sql = "SELECT registry_notary_api.\
              preauthorization_login_reserve_v1($1, 'credential-config', $2, $3, $4, $5)";
         assert_eq!(
@@ -3555,6 +3655,20 @@ mod tests {
                 .get::<_, i16>(0),
             1
         );
+        assert!(runtime
+            .query_one(
+                "SELECT registry_notary_api.preauthorization_key_attest_v1($1)",
+                &[&key_id],
+            )
+            .await?
+            .get::<_, bool>(0));
+        assert!(!runtime
+            .query_one(
+                "SELECT registry_notary_api.preauthorization_key_attest_v1($1)",
+                &[&vec![0x8f_u8; 32]],
+            )
+            .await?
+            .get::<_, bool>(0));
         assert_eq!(
             runtime
                 .query_one(
@@ -3672,6 +3786,92 @@ mod tests {
             .execute(
                 "DELETE FROM registry_notary_private.preauthorization_login_state",
                 &[],
+            )
+            .await?;
+
+        let competing_key_id = vec![0x8f_u8; 32];
+        let competing_state = vec![0x8d_u8; 32];
+        let competing_jti = vec![0x8e_u8; 32];
+        let competing_pin = vec![0x8c_u8; 32];
+        let (first_generation, second_generation) = tokio::join!(
+            async {
+                runtime
+                    .query_one(
+                        reserve_login_sql,
+                        &[&competing_state, &key_id, &nonce, &ciphertext, &expires_at],
+                    )
+                    .await
+            },
+            async {
+                peer.query_one(
+                    "SELECT registry_notary_api.preauthorization_tx_code_reserve_v1(\
+                     $1, $2, $3, 6::smallint, $4)",
+                    &[
+                        &competing_jti,
+                        &competing_key_id,
+                        &competing_pin,
+                        &expires_at,
+                    ],
+                )
+                .await
+            }
+        );
+        assert_eq!(
+            [first_generation.is_ok(), second_generation.is_ok()]
+                .into_iter()
+                .filter(|accepted| *accepted)
+                .count(),
+            1,
+            "different sensitive-key generations must not create mixed live state"
+        );
+        let live_key_generations: i64 = admin
+            .query_one(
+                "SELECT count(DISTINCT encode(key_id, 'hex')) FROM ( \
+                   SELECT key_id FROM registry_notary_private.preauthorization_login_state \
+                    WHERE expires_at > pg_catalog.clock_timestamp() \
+                   UNION ALL \
+                   SELECT key_id FROM registry_notary_private.preauthorization_tx_code \
+                    WHERE expires_at > pg_catalog.clock_timestamp() \
+                 ) AS live_sensitive_state",
+                &[],
+            )
+            .await?
+            .get(0);
+        assert_eq!(live_key_generations, 1);
+        admin
+            .batch_execute(
+                "UPDATE registry_notary_private.preauthorization_login_state \
+                    SET created_at = pg_catalog.clock_timestamp() - interval '2 seconds', \
+                        expires_at = pg_catalog.clock_timestamp() - interval '1 second'; \
+                 UPDATE registry_notary_private.preauthorization_tx_code \
+                    SET created_at = pg_catalog.clock_timestamp() - interval '2 seconds', \
+                        expires_at = pg_catalog.clock_timestamp() - interval '1 second';",
+            )
+            .await?;
+        assert!(runtime
+            .query_one(
+                "SELECT registry_notary_api.preauthorization_tx_code_reserve_v1(\
+                 $1, $2, $3, 6::smallint, $4)",
+                &[
+                    &competing_jti,
+                    &competing_key_id,
+                    &competing_pin,
+                    &expires_at,
+                ],
+            )
+            .await?
+            .get::<_, bool>(0));
+        assert!(runtime
+            .query_one(
+                "SELECT registry_notary_api.preauthorization_key_attest_v1($1)",
+                &[&competing_key_id],
+            )
+            .await?
+            .get::<_, bool>(0));
+        admin
+            .batch_execute(
+                "DELETE FROM registry_notary_private.preauthorization_login_state; \
+                 DELETE FROM registry_notary_private.preauthorization_tx_code;",
             )
             .await?;
 
@@ -3803,8 +4003,208 @@ mod tests {
             )
             .await?
             .get::<_, bool>(0));
+        admin
+            .batch_execute(
+                "DELETE FROM registry_notary_private.preauthorization_login_state; \
+                 DELETE FROM registry_notary_private.preauthorization_tx_code;",
+            )
+            .await?;
         drop(peer);
         peer_driver.abort();
+        Ok(())
+    }
+
+    async fn assert_sensitive_adapter_contract(
+        database_url: &str,
+        admin: &Client,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let runtime_url = database_url.replacen("postgres@", &format!("{RUNTIME_ROLE}@"), 1);
+        if runtime_url == database_url {
+            return Err("sensitive adapter URL does not contain the dedicated admin role".into());
+        }
+        let primary_key = URL_SAFE_NO_PAD.encode([0xa1_u8; 32]);
+        let wrong_key = URL_SAFE_NO_PAD.encode([0xb2_u8; 32]);
+        // SAFETY: the conformance harness runs this ignored test by exact name
+        // in an isolated process, so these dedicated variables have no readers.
+        unsafe {
+            std::env::set_var(SENSITIVE_DATABASE_URL_ENV, &runtime_url);
+            std::env::set_var(SENSITIVE_KEY_ENV, &primary_key);
+        }
+        let config = PostgresStatePlaneConfig::new(
+            SENSITIVE_DATABASE_URL_ENV,
+            Some(PathBuf::from(std::env::var(DATABASE_CA_ENV)?)),
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+            2,
+        )?;
+        let runtime = Arc::new(NotaryPostgresStatePlaneRuntime::connect(&config).await?);
+        let key_config = SensitiveStateKeyConfig::new(SENSITIVE_KEY_ENV)?;
+        let sensitive = PostgresSensitiveState::activate(Arc::clone(&runtime), &key_config).await?;
+        let expires_at = time::OffsetDateTime::now_utc() + time::Duration::hours(1);
+        let login = LoginState {
+            pkce_verifier: "adapter-pkce-secret".to_string(),
+            nonce: "adapter-login-nonce".to_string(),
+            credential_configuration_id: "adapter-config".to_string(),
+        };
+        assert_eq!(
+            sensitive
+                .reserve_login("adapter-opaque-state", &login, expires_at)
+                .await?,
+            LoginReserveOutcome::Reserved
+        );
+        let stored = admin
+            .query_one(
+                "SELECT key_id, ciphertext FROM \
+                 registry_notary_private.preauthorization_login_state \
+                 WHERE credential_configuration_id = 'adapter-config'",
+                &[],
+            )
+            .await?;
+        let original_key_id: Vec<u8> = stored.get("key_id");
+        let stored_ciphertext: Vec<u8> = stored.get("ciphertext");
+        for secret in [login.pkce_verifier.as_bytes(), login.nonce.as_bytes()] {
+            assert!(
+                !stored_ciphertext
+                    .windows(secret.len())
+                    .any(|window| window == secret),
+                "sensitive login plaintext must not be stored"
+            );
+        }
+
+        unsafe { std::env::set_var(SENSITIVE_KEY_ENV, &wrong_key) };
+        let wrong_key_error = PostgresSensitiveState::activate(
+            Arc::clone(&runtime),
+            &SensitiveStateKeyConfig::new(SENSITIVE_KEY_ENV)?,
+        )
+        .await
+        .expect_err("a restored wrong key must fail activation");
+        assert_eq!(wrong_key_error, SensitiveStateError::InvalidStoredRecord);
+        let rendered_error = wrong_key_error.to_string();
+        assert!(!rendered_error.contains("adapter-pkce-secret"));
+        assert!(!rendered_error.contains("adapter-login-nonce"));
+        assert!(!rendered_error.contains(&primary_key));
+        assert!(!rendered_error.contains(&wrong_key));
+        let state_config = StateConfig {
+            storage: STATE_STORAGE_POSTGRESQL.to_string(),
+            postgresql: StatePostgresqlConfig {
+                url_env: SENSITIVE_DATABASE_URL_ENV.to_string(),
+                root_certificate_path: Some(PathBuf::from(std::env::var(DATABASE_CA_ENV)?)),
+                connect_timeout_ms: 2_000,
+                operation_timeout_ms: 2_000,
+                max_connections: 1,
+                sensitive_state_key_env: SENSITIVE_KEY_ENV.to_string(),
+            },
+        };
+        assert_eq!(
+            attest_postgres_state_plane_runtime(&state_config, true).await,
+            Err(NotaryPostgresStatePlaneReadiness::ConfigurationInvalid),
+            "the operator attestation boundary must reject the wrong restored key"
+        );
+        unsafe { std::env::set_var(SENSITIVE_KEY_ENV, &primary_key) };
+        assert!(attest_postgres_state_plane_runtime(&state_config, true)
+            .await
+            .is_ok());
+        let readiness_handle = NotaryStatePlaneHandle::from_config(&state_config, true)?;
+        readiness_handle.activate().await?;
+        assert_eq!(
+            readiness_handle.readiness().await,
+            NotaryPostgresStatePlaneReadiness::Ready
+        );
+
+        admin
+            .execute(
+                "UPDATE registry_notary_private.preauthorization_login_state \
+                 SET key_id = decode(repeat('ff', 32), 'hex') \
+                 WHERE credential_configuration_id = 'adapter-config'",
+                &[],
+            )
+            .await?;
+        assert_eq!(
+            sensitive.attest_key_generation().await,
+            Err(SensitiveStateError::InvalidStoredRecord),
+            "readiness key attestation must fail after live-row key tampering"
+        );
+        assert_eq!(
+            readiness_handle.readiness().await,
+            NotaryPostgresStatePlaneReadiness::ConfigurationInvalid,
+            "every serving readiness probe must re-attest the sensitive key"
+        );
+        admin
+            .execute(
+                "UPDATE registry_notary_private.preauthorization_login_state \
+                 SET key_id = $1 WHERE credential_configuration_id = 'adapter-config'",
+                &[&original_key_id],
+            )
+            .await?;
+        sensitive.attest_key_generation().await?;
+        assert_eq!(
+            readiness_handle.readiness().await,
+            NotaryPostgresStatePlaneReadiness::Ready
+        );
+        let consumed = sensitive
+            .consume_login("adapter-opaque-state")
+            .await?
+            .expect("the encrypted login must survive a fresh PostgreSQL session");
+        assert_eq!(consumed.pkce_verifier, login.pkce_verifier);
+        assert_eq!(consumed.nonce, login.nonce);
+        assert_eq!(
+            consumed.credential_configuration_id,
+            login.credential_configuration_id
+        );
+
+        assert_eq!(
+            sensitive
+                .reserve_login("adapter-tampered-state", &login, expires_at)
+                .await?,
+            LoginReserveOutcome::Reserved
+        );
+        admin
+            .execute(
+                "UPDATE registry_notary_private.preauthorization_login_state \
+                 SET ciphertext = set_byte(ciphertext, 0, get_byte(ciphertext, 0) # 1) \
+                 WHERE credential_configuration_id = 'adapter-config'",
+                &[],
+            )
+            .await?;
+        assert!(
+            matches!(
+                sensitive.consume_login("adapter-tampered-state").await,
+                Err(SensitiveStateError::InvalidStoredRecord)
+            ),
+            "authenticated login ciphertext tampering must fail closed"
+        );
+
+        assert!(
+            sensitive
+                .reserve_transaction_code("adapter-jti", "123456", 6, expires_at)
+                .await?
+        );
+        assert!(sensitive
+            .verify_transaction_code("adapter-jti", "000000")
+            .await?
+            .is_none());
+        let proof = sensitive
+            .verify_transaction_code("adapter-jti", "123456")
+            .await?
+            .expect("the keyed transaction-code verifier must round trip");
+        let scope = registry_platform_replay::ReplayScope::new([("flow", "adapter")])?;
+        assert!(
+            sensitive
+                .redeem(&scope, "adapter-jti", expires_at, Some(proof))
+                .await?
+        );
+
+        admin
+            .batch_execute(
+                "DELETE FROM registry_notary_private.preauthorization_login_state; \
+                 DELETE FROM registry_notary_private.preauthorization_tx_code;",
+            )
+            .await?;
+        runtime.shutdown();
+        unsafe {
+            std::env::remove_var(SENSITIVE_DATABASE_URL_ENV);
+            std::env::remove_var(SENSITIVE_KEY_ENV);
+        }
         Ok(())
     }
 
@@ -3831,10 +4231,10 @@ mod tests {
                    FROM (VALUES ('91', interval '-1 second'),
                                 ('92', interval '5 minutes')) AS rows(marker, lifetime);
                  INSERT INTO registry_notary_private.consumable_nonce
-                    (scope_hash, nonce_hash, state, reservation_expires_at,
+                    (scope_hash, nonce_hash, generation, state, reservation_expires_at,
                      tombstone_expires_at, created_at, updated_at)
                  SELECT decode(repeat('93', 32), 'hex'), decode(repeat(marker, 32), 'hex'),
-                        'reserved', clock_timestamp() + lifetime, NULL,
+                        1, 'reserved', clock_timestamp() + lifetime, NULL,
                         clock_timestamp() - interval '2 seconds', clock_timestamp()
                    FROM (VALUES ('94', interval '-1 second'),
                                 ('95', interval '5 minutes')) AS rows(marker, lifetime);

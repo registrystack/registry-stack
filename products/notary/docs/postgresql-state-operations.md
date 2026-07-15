@@ -259,10 +259,14 @@ rolled back, restore the matching database backup, role provisioning, and
 sensitive-state key together, then follow stale-restore quarantine. Never run
 an older binary against the forward schema.
 
-For a PostgreSQL server major upgrade, use a database-platform procedure
-supported by both source and target majors. Keep Notary stopped through the
-server upgrade, run `state doctor` against the promoted target, then use the
-same one-replica admission sequence.
+For a PostgreSQL server major upgrade, keep every Notary writer stopped and use
+the complete logical `pg_dump` and `pg_restore` procedure below for one
+adjacent supported-major hop. Registry Stack CI exercises 16 to 17 and 17 to
+18 with fresh target roles, changed role OIDs, full catalog reattestation, and
+post-restore behavior for every correctness-state domain. Run `state install`
+to rebind the target roles, run `state doctor`, then use the same one-replica
+admission sequence. Do not skip a major or use the old major's physical data
+directory with a new server binary.
 
 ## Retention and maintenance
 
@@ -439,7 +443,11 @@ The sensitive-state key is not stored in PostgreSQL and is not included in
 access restricted to Notary workloads and recovery operators. Record the
 secret version with each database backup without recording key material.
 Every replica must use the same key version while any preauthorization row is
-live.
+live. Activation, `state doctor`, and every readiness probe compare the
+configured key id with every live row in both preauthorization tables. A wrong
+backup-matched secret or live mixed-key state therefore remains unavailable.
+Both sensitive reservation transactions also serialize key-generation
+admission and reject a different key while either table has a live row.
 
 Rotate it with a stopped-issuance drain:
 

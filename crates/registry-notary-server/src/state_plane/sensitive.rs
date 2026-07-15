@@ -102,10 +102,34 @@ impl PostgresSensitiveState {
         }
         let master = decode_master_key(&encoded)?;
         let keys = SensitiveStateKeys::derive(&master);
-        Ok(Self {
+        let state = Self {
             runtime,
             keys: Arc::new(keys),
-        })
+        };
+        state.attest_key_generation().await?;
+        Ok(state)
+    }
+
+    /// Re-attest that every live encrypted or keyed preauthorization record
+    /// belongs to this process key generation. This is intentionally checked
+    /// during activation and on every readiness probe so a restore with the
+    /// wrong operator key cannot become ready.
+    pub(crate) async fn attest_key_generation(&self) -> Result<(), SensitiveStateError> {
+        let session = self.runtime.open_domain_session().await?;
+        let row = session
+            .run_operation(session.client().query_one(
+                "SELECT registry_notary_api.preauthorization_key_attest_v1($1::bytea) AS attested",
+                &[&&self.keys.key_id[..]],
+            ))
+            .await?;
+        if row
+            .try_get::<_, bool>("attested")
+            .map_err(|_| SensitiveStateError::InvalidStoredRecord)?
+        {
+            Ok(())
+        } else {
+            Err(SensitiveStateError::InvalidStoredRecord)
+        }
     }
 
     pub(crate) async fn reserve_login(

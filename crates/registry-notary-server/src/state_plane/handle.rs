@@ -129,7 +129,19 @@ impl NotaryStatePlaneHandle {
                 Some(_) if self.sensitive_key.is_some() && self.sensitive.get().is_none() => {
                     NotaryPostgresStatePlaneReadiness::ConfigurationInvalid
                 }
-                Some(runtime) => runtime.readiness().await,
+                Some(runtime) => {
+                    let readiness = runtime.readiness().await;
+                    if readiness != NotaryPostgresStatePlaneReadiness::Ready {
+                        return readiness;
+                    }
+                    match self.sensitive.get() {
+                        Some(sensitive) => sensitive
+                            .attest_key_generation()
+                            .await
+                            .map_or_else(readiness_from_sensitive_error, |_| readiness),
+                        None => readiness,
+                    }
+                }
                 None => NotaryPostgresStatePlaneReadiness::DatabaseUnavailable,
             },
         }

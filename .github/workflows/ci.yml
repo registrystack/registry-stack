@@ -184,6 +184,15 @@ jobs:
         working-directory: crates/registry-relay
         run: just exposure-check
 
+      - name: Notary PostgreSQL 16, 17, and 18 conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked -p registry-notary --features registry-notary-cel
+          for postgresql_major in 16 17 18; do
+            products/notary/scripts/postgresql-conformance.sh "${postgresql_major}"
+          done
+
   project-authoring-determinism:
     name: Project authoring portability and determinism (${{ matrix.arch }})
     needs: changes
