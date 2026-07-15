@@ -183,10 +183,22 @@ impl ConsumableNonceStore for PostgresReplayStore {
             .map_err(|_| replay_operation_error())?;
         let scope_hash = replay_scope_hash(scope);
         let nonce_hash = replay_key_hash(key);
+        let generation = session
+            .run_operation(session.client().query_one(
+                "SELECT registry_notary_api.nonce_reservation_generation_v1($1, $2) AS generation",
+                &[&scope_hash.as_slice(), &nonce_hash.as_slice()],
+            ))
+            .await
+            .map_err(|_| replay_operation_error())?
+            .try_get::<_, Option<i64>>("generation")
+            .map_err(|_| replay_operation_error())?;
+        let Some(generation) = generation else {
+            return Ok(registry_platform_replay::ReplayInsertOutcome::AlreadySeen);
+        };
         let row = session
             .run_operation(session.client().query_one(
-                "SELECT registry_notary_api.nonce_consume_v1($1, $2) AS consumed",
-                &[&scope_hash.as_slice(), &nonce_hash.as_slice()],
+                "SELECT registry_notary_api.nonce_consume_v1($1, $2, $3) AS consumed",
+                &[&scope_hash.as_slice(), &nonce_hash.as_slice(), &generation],
             ))
             .await
             .map_err(|_| replay_operation_error())?;

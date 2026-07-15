@@ -7,14 +7,20 @@ case "${postgresql_major}" in
   16)
     default_source_image="postgres:16.13-alpine"
     default_target_image="postgres:16.14-alpine"
+    default_restore_image="postgres:17.10-alpine"
+    restore_major="17"
     ;;
   17)
     default_source_image="postgres:17.9-alpine"
     default_target_image="postgres:17.10-alpine"
+    default_restore_image="postgres:18.4-alpine"
+    restore_major="18"
     ;;
   18)
     default_source_image="postgres:18.3-alpine"
     default_target_image="postgres:18.4-alpine"
+    default_restore_image="postgres:18.4-alpine"
+    restore_major="18"
     ;;
   *)
     echo "usage: $0 <16|17|18>" >&2
@@ -24,6 +30,7 @@ esac
 
 source_image="${NOTARY_POSTGRES_SOURCE_IMAGE:-${default_source_image}}"
 target_image="${NOTARY_POSTGRES_TARGET_IMAGE:-${default_target_image}}"
+restore_image="${NOTARY_POSTGRES_RESTORE_IMAGE:-${default_restore_image}}"
 notary_bin="${NOTARY_BIN:-target/debug/registry-notary}"
 run_id="${GITHUB_RUN_ID:-local}-$$"
 postgres_container="notary-postgres-conformance-${run_id}"
@@ -35,6 +42,7 @@ notary_port_b="${NOTARY_CONFORMANCE_PORT_B:-$((45000 + ($$ % 4000)))}"
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/notary-postgres-conformance.XXXXXX")"
 notary_pid_a=""
 notary_pid_b=""
+lost_ack_pid=""
 
 fail() {
   echo "notary PostgreSQL conformance failed: $1" >&2
@@ -64,6 +72,7 @@ cleanup() {
   set +e
   stop_process "${notary_pid_a}"
   stop_process "${notary_pid_b}"
+  stop_process "${lost_ack_pid}"
   docker rm -f "${postgres_container}" >/dev/null 2>&1
   docker volume rm -f "${postgres_data_volume}" "${postgres_cert_volume}" >/dev/null 2>&1
   rm -rf "${work_dir}"
@@ -71,7 +80,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-for command in cargo curl docker jq openssl; do
+for command in cargo curl docker jq openssl python3; do
   command -v "${command}" >/dev/null 2>&1 || fail "required command is unavailable"
 done
 [[ -x "${notary_bin}" ]] || fail "registry-notary binary is unavailable"
@@ -85,6 +94,21 @@ runtime_password="$(openssl rand -hex 24)"
 api_key="$(openssl rand -hex 32)"
 audit_secret="$(openssl rand -hex 32)"
 sensitive_state_key="$(openssl rand -base64 32 | tr -d '\n=' | tr '+/' '-_')"
+sensitive_state_key_id="$(NOTARY_SENSITIVE_KEY="${sensitive_state_key}" python3 - <<'PY'
+import base64
+import hashlib
+import hmac
+import os
+
+encoded = os.environ["NOTARY_SENSITIVE_KEY"]
+master = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+fields = [b"registry-notary/preauthorization/kdf/v1", b"key-id"]
+message = b"".join(len(field).to_bytes(8, "big") + field for field in fields)
+print(hmac.new(master, message, hashlib.sha256).hexdigest())
+PY
+)"
+[[ "${sensitive_state_key_id}" =~ ^[0-9a-f]{64}$ ]] \
+  || fail "sensitive-state key identifier derivation failed"
 idempotency_key_a="conformance-a-${run_id}"
 idempotency_key_b="conformance-b-${run_id}"
 idempotency_key_c="conformance-c-${run_id}"
@@ -119,6 +143,9 @@ chmod 600 "${work_dir}/server.key"
 
 docker pull "${source_image}" >"${work_dir}/docker-pull.log" 2>&1
 docker pull "${target_image}" >>"${work_dir}/docker-pull.log" 2>&1
+if [[ "${restore_image}" != "${source_image}" && "${restore_image}" != "${target_image}" ]]; then
+  docker pull "${restore_image}" >>"${work_dir}/docker-pull.log" 2>&1
+fi
 docker volume create "${postgres_data_volume}" >/dev/null
 docker volume create "${postgres_cert_volume}" >/dev/null
 docker run --rm --user root \
@@ -163,6 +190,22 @@ admin_sql() {
     >"${work_dir}/admin-sql.log" 2>&1
 }
 
+admin_scalar() {
+  local database="$1"
+  local sql="$2"
+  docker exec "${postgres_container}" \
+    psql --tuples-only --no-align --set ON_ERROR_STOP=1 \
+      --username postgres --dbname "${database}" --command "${sql}"
+}
+
+runtime_scalar() {
+  local sql="$1"
+  docker exec --env "PGPASSWORD=${runtime_password}" --env PGSSLMODE=require \
+    "${postgres_container}" psql --tuples-only --no-align --set ON_ERROR_STOP=1 \
+      --host 127.0.0.1 --username registry_notary_runtime \
+      --dbname registry_notary --command "${sql}"
+}
+
 role_oid_pair() {
   docker exec "${postgres_container}" psql --tuples-only --no-align \
     --username postgres --dbname postgres --command \
@@ -186,6 +229,12 @@ database_session_count() {
     --username postgres --dbname postgres --command \
     "SELECT sessions FROM pg_catalog.pg_stat_database
       WHERE datname = 'registry_notary';"
+}
+
+completed_batch_count() {
+  admin_scalar registry_notary \
+    "SELECT pg_catalog.count(*) FROM registry_notary_private.batch_idempotency
+      WHERE state = 'completed';"
 }
 
 provision_roles() {
@@ -450,8 +499,59 @@ batch_request "${url_a}" "${idempotency_key_a}" "${request_a}" "${work_dir}/resp
 [[ "$(jq --raw-output '.batch_id' "${work_dir}/response-a-restart.json")" == "${batch_id}" ]] \
   || fail "restart did not preserve the completed decision"
 
-batch_request "${url_b}" "${idempotency_key_b}" "${request_b}" "${work_dir}/response-b.json" 200 \
-  || fail "second unique batch failed"
+completed_before_lost_ack="$(completed_batch_count)"
+LOST_ACK_PORT="${notary_port_b}" LOST_ACK_API_KEY="${api_key}" \
+LOST_ACK_IDEMPOTENCY_KEY="${idempotency_key_b}" LOST_ACK_REQUEST="${request_b}" \
+  python3 -c '
+import os
+import socket
+import time
+
+body = open(os.environ["LOST_ACK_REQUEST"], "rb").read()
+port = os.environ["LOST_ACK_PORT"]
+api_key = os.environ["LOST_ACK_API_KEY"]
+idempotency_key = os.environ["LOST_ACK_IDEMPOTENCY_KEY"]
+headers = (
+    "POST /v1/batch-evaluations HTTP/1.1\r\n"
+    f"Host: 127.0.0.1:{port}\r\n"
+    "Connection: close\r\n"
+    f"x-api-key: {api_key}\r\n"
+    f"idempotency-key: {idempotency_key}\r\n"
+    "content-type: application/json\r\n"
+    f"content-length: {len(body)}\r\n\r\n"
+).encode("ascii")
+with socket.create_connection(("127.0.0.1", int(port)), timeout=10) as connection:
+    connection.sendall(headers + body)
+    while True:
+        time.sleep(60)
+' >"${work_dir}/lost-ack-client.log" 2>&1 &
+lost_ack_pid=$!
+completed_after_lost_ack="${completed_before_lost_ack}"
+lost_ack_deadline=$((SECONDS + 30))
+while (( SECONDS < lost_ack_deadline )); do
+  completed_after_lost_ack="$(completed_batch_count)"
+  if (( completed_after_lost_ack > completed_before_lost_ack )); then
+    break
+  fi
+  kill -0 "${lost_ack_pid}" 2>/dev/null || fail "lost-ack request ended before commit"
+  sleep 0.25
+done
+(( completed_after_lost_ack > completed_before_lost_ack )) \
+  || fail "lost-ack request did not commit"
+stop_process "${lost_ack_pid}"
+lost_ack_pid=""
+batch_request "${url_b}" "${idempotency_key_b}" "${request_b}" \
+  "${work_dir}/response-b-retry-1.json" 200 \
+  || fail "lost-ack retry did not replay the committed result"
+batch_request "${url_a}" "${idempotency_key_b}" "${request_b}" \
+  "${work_dir}/response-b-retry-2.json" 200 \
+  || fail "peer lost-ack retry did not replay the committed result"
+[[ "$(jq --raw-output '.batch_id' "${work_dir}/response-b-retry-1.json")" \
+   == "$(jq --raw-output '.batch_id' "${work_dir}/response-b-retry-2.json")" ]] \
+  || fail "lost-ack retry reopened the committed batch"
+[[ "$(jq --raw-output '.items[0].evaluation_id' "${work_dir}/response-b-retry-1.json")" \
+   == "$(jq --raw-output '.items[0].evaluation_id' "${work_dir}/response-b-retry-2.json")" ]] \
+  || fail "lost-ack retry changed the committed evaluation"
 batch_request "${url_a}" "${idempotency_key_c}" "${request_c}" "${work_dir}/response-c-denied.json" 429 \
   || fail "shared machine quota did not reject excess work"
 
@@ -481,6 +581,18 @@ admin_sql registry_notary \
 wait_ready "${url_a}" "${notary_pid_a}" || fail "readiness did not recover after schema repair"
 "${notary_bin}" --config "${config_path}" state doctor >"${work_dir}/doctor-schema-recovered.log" 2>&1 \
   || fail "state doctor did not recover after schema repair"
+
+admin_sql registry_notary \
+  'REVOKE EXECUTE ON FUNCTION registry_notary_api.nonce_consume_v1(bytea, bytea, bigint) FROM registry_notary_runtime;'
+wait_not_ready "${url_a}" || fail "runtime permission drift did not fail readiness"
+if "${notary_bin}" --config "${config_path}" state doctor >"${work_dir}/doctor-permission-drift.log" 2>&1; then
+  fail "state doctor accepted runtime permission drift"
+fi
+admin_sql registry_notary \
+  'GRANT EXECUTE ON FUNCTION registry_notary_api.nonce_consume_v1(bytea, bytea, bigint) TO registry_notary_runtime;'
+wait_ready "${url_a}" "${notary_pid_a}" || fail "readiness did not recover after permission repair"
+"${notary_bin}" --config "${config_path}" state doctor >"${work_dir}/doctor-permission-recovered.log" 2>&1 \
+  || fail "state doctor did not recover after permission repair"
 
 docker stop --time 20 "${postgres_container}" >/dev/null
 wait_not_ready "${url_a}" || fail "unavailable PostgreSQL did not fail readiness"
@@ -537,8 +649,53 @@ render_status="$(curl --silent --show-error --max-time 30 \
   || fail "persisted evaluation render request failed"
 [[ "${render_status}" == "200" ]] || fail "persisted evaluation was unavailable after the minor upgrade"
 
-if [[ "${postgresql_major}" == "18" ]]; then
+[[ "$(runtime_scalar "SELECT registry_notary_api.replay_insert_v1(
+  decode(repeat('c1', 32), 'hex'), decode(repeat('c2', 32), 'hex'),
+  pg_catalog.clock_timestamp() + interval '1 day');")" == "t" ]] \
+  || fail "backup replay fixture was not inserted"
+[[ "$(runtime_scalar "SELECT registry_notary_api.nonce_reserve_v1(
+  decode(repeat('c3', 32), 'hex'), decode(repeat('c4', 32), 'hex'),
+  pg_catalog.clock_timestamp() + interval '1 day');")" == "t" ]] \
+  || fail "backup nonce fixture was not reserved"
+[[ "$(runtime_scalar "SELECT registry_notary_api.evaluation_insert_v1(
+  'backup-evaluation', decode(repeat('c5', 32), 'hex'),
+  decode(repeat('c6', 32), 'hex'), 'conformance', 2::smallint,
+  '{\"decision\":\"allow\"}'::jsonb, pg_catalog.clock_timestamp(),
+  pg_catalog.clock_timestamp() + interval '1 day');")" == "t" ]] \
+  || fail "backup evaluation fixture was not inserted"
+[[ "$(runtime_scalar "SELECT registry_notary_api.credential_status_insert_v1(
+  'backup-credential', 'backup-issuer', 'backup-profile',
+  pg_catalog.clock_timestamp(), pg_catalog.clock_timestamp() + interval '1 day', 3600);")" == "t" ]] \
+  || fail "backup credential-status fixture was not inserted"
+[[ "$(runtime_scalar "SELECT allowed FROM registry_notary_api.machine_quota_debit_v1(
+  decode(repeat('c7', 32), 'hex'), 10, 3);")" == "t" ]] \
+  || fail "backup machine-quota fixture was not debited"
+[[ "$(runtime_scalar "SELECT allowed FROM registry_notary_api.subject_access_quota_debit_v1(
+  ARRAY['per_principal']::text[], ARRAY[decode(repeat('c8', 32), 'hex')]::bytea[],
+  ARRAY[10]::integer[], ARRAY[3600]::integer[]);")" == "t" ]] \
+  || fail "backup subject-quota fixture was not debited"
+admin_sql registry_notary \
+  "INSERT INTO registry_notary_private.preauthorization_login_state
+     (state_hash, credential_configuration_id, key_id, aead_nonce, ciphertext,
+      created_at, expires_at)
+   VALUES (decode(repeat('c9', 32), 'hex'), 'backup-sensitive',
+           decode('${sensitive_state_key_id}', 'hex'), decode(repeat('ca', 12), 'hex'),
+           decode(repeat('cb', 32), 'hex'), pg_catalog.clock_timestamp(),
+           pg_catalog.clock_timestamp() + interval '1 day');
+   INSERT INTO registry_notary_private.preauthorization_tx_code
+     (jti_hash, key_id, pin_verifier, pin_length, created_at, expires_at)
+   VALUES (decode(repeat('cc', 32), 'hex'), decode('${sensitive_state_key_id}', 'hex'),
+           decode(repeat('cd', 32), 'hex'), 6, pg_catalog.clock_timestamp(),
+           pg_catalog.clock_timestamp() + interval '1 day');"
+"${notary_bin}" --config "${config_path}" state doctor \
+  >"${work_dir}/doctor-sensitive-fixtures.log" 2>&1 \
+  || fail "correct sensitive-state key rejected backup fixtures"
+
+if [[ "${restore_major}" == "${postgresql_major}" ]]; then
   echo "notary PostgreSQL ${postgresql_major} conformance: logical backup and restore"
+else
+  echo "notary PostgreSQL ${postgresql_major}->${restore_major} conformance: logical upgrade"
+fi
   stop_process "${notary_pid_a}"
   notary_pid_a=""
   docker exec --env "PGPASSWORD=${migrator_password}" --env PGSSLMODE=require \
@@ -553,7 +710,11 @@ if [[ "${postgresql_major}" == "18" ]]; then
   docker rm "${postgres_container}" >/dev/null
   docker volume rm "${postgres_data_volume}" >/dev/null
   docker volume create "${postgres_data_volume}" >/dev/null
-  start_postgres "${target_image}"
+  start_postgres "${restore_image}"
+  restored_version="$(docker exec "${postgres_container}" psql --tuples-only --no-align \
+    --username postgres --dbname postgres --command 'SHOW server_version_num')"
+  [[ "${restored_version}" =~ ^[0-9]+$ ]] || fail "restore PostgreSQL version is unavailable"
+  (( restored_version / 10000 == restore_major )) || fail "restore PostgreSQL major does not match"
   provision_roles true "${work_dir}/role-restore-install.log"
   restored_role_oids="$(role_oid_pair)"
   [[ "${restored_role_oids}" =~ ^[0-9]+:[0-9]+$ ]] || fail "restored role identities are unavailable"
@@ -574,13 +735,62 @@ if [[ "${postgresql_major}" == "18" ]]; then
     || fail "schema role binding failed after logical restore"
   "${notary_bin}" --config "${config_path}" state doctor >"${work_dir}/doctor-restored.log" 2>&1 \
     || fail "state attestation failed after logical restore"
+  [[ "$(runtime_scalar "SELECT NOT registry_notary_api.replay_insert_v1(
+    decode(repeat('c1', 32), 'hex'), decode(repeat('c2', 32), 'hex'),
+    pg_catalog.clock_timestamp() + interval '1 day');")" == "t" ]] \
+    || fail "restored replay identifier was reusable"
+  [[ "$(runtime_scalar "SELECT registry_notary_api.nonce_reservation_generation_v1(
+    decode(repeat('c3', 32), 'hex'), decode(repeat('c4', 32), 'hex'));")" == "1" ]] \
+    || fail "restored nonce generation changed"
+  [[ "$(runtime_scalar "SELECT registry_notary_api.nonce_consume_v1(
+    decode(repeat('c3', 32), 'hex'), decode(repeat('c4', 32), 'hex'), 1);")" == "t" ]] \
+    || fail "restored nonce could not be consumed"
+  [[ "$(runtime_scalar "SELECT registry_notary_api.nonce_consume_v1(
+    decode(repeat('c3', 32), 'hex'), decode(repeat('c4', 32), 'hex'), 1);")" == "f" ]] \
+    || fail "restored nonce had more than one consume winner"
+  [[ "$(runtime_scalar "SELECT EXISTS (SELECT 1 FROM registry_notary_api.evaluation_get_v1(
+    'backup-evaluation', decode(repeat('c5', 32), 'hex')));")" == "t" ]] \
+    || fail "restored evaluation was unavailable"
+  [[ "$(runtime_scalar "SELECT EXISTS (SELECT 1 FROM registry_notary_api.credential_status_get_v1(
+    'backup-credential') WHERE status = 'valid');")" == "t" ]] \
+    || fail "restored credential status changed"
+  [[ "$(admin_scalar registry_notary "SELECT used FROM registry_notary_private.machine_quota
+    WHERE principal_hash = decode(repeat('c7', 32), 'hex');")" == "3" ]] \
+    || fail "restored machine quota lost its debit"
+  [[ "$(runtime_scalar "SELECT allowed FROM registry_notary_api.machine_quota_debit_v1(
+    decode(repeat('c7', 32), 'hex'), 10, 7);")" == "t" ]] \
+    || fail "restored machine quota did not continue atomically"
+  [[ "$(admin_scalar registry_notary "SELECT used FROM registry_notary_private.subject_access_quota
+    WHERE bucket_kind = 'per_principal'
+      AND key_hash = decode(repeat('c8', 32), 'hex');")" == "1" ]] \
+    || fail "restored subject quota lost its debit"
+  [[ "$(runtime_scalar "SELECT allowed FROM registry_notary_api.subject_access_quota_check_v1(
+    ARRAY['per_principal']::text[], ARRAY[decode(repeat('c8', 32), 'hex')]::bytea[],
+    ARRAY[1]::integer[], ARRAY[3600]::integer[]);")" == "f" ]] \
+    || fail "restored subject quota reopened its exhausted bucket"
+  [[ "$(runtime_scalar "SELECT registry_notary_api.preauthorization_key_attest_v1(
+    decode('${sensitive_state_key_id}', 'hex'));")" == "t" ]] \
+    || fail "restored sensitive-state key generation changed"
+  [[ "$(runtime_scalar "SELECT count(*) FROM registry_notary_api.preauthorization_login_consume_v1(
+    decode(repeat('c9', 32), 'hex'));")" == "1" ]] \
+    || fail "restored sensitive login state was unavailable"
+  [[ "$(runtime_scalar "SELECT count(*) FROM registry_notary_api.preauthorization_login_consume_v1(
+    decode(repeat('c9', 32), 'hex'));")" == "0" ]] \
+    || fail "restored sensitive login state had more than one consume winner"
+  [[ "$(runtime_scalar "SELECT EXISTS (SELECT 1 FROM registry_notary_api.preauthorization_tx_code_peek_v1(
+    decode(repeat('cc', 32), 'hex')));")" == "t" ]] \
+    || fail "restored transaction-code verifier was unavailable"
+  [[ "$(runtime_scalar "SELECT registry_notary_api.preauthorization_redeem_v1(
+    decode(repeat('ce', 32), 'hex'), decode(repeat('cc', 32), 'hex'),
+    pg_catalog.clock_timestamp() + interval '1 day', TRUE,
+    decode(repeat('cd', 32), 'hex'));")" == "t" ]] \
+    || fail "restored transaction code could not be redeemed"
   start_notary "127.0.0.1:${notary_port_a}" "${work_dir}/notary-a-restored.log" notary_pid_a
   wait_ready "${url_a}" "${notary_pid_a}" || fail "Notary did not become ready after logical restore"
   batch_request "${url_a}" "${idempotency_key_a}" "${request_a}" "${work_dir}/response-a-restored.json" 200 \
     || fail "completed decision was unavailable after logical restore"
   [[ "$(jq --raw-output '.batch_id' "${work_dir}/response-a-restored.json")" == "${batch_id}" ]] \
     || fail "logical restore reopened a completed decision"
-fi
 
 for output in "${work_dir}"/*.log; do
   [[ -f "${output}" ]] || continue
