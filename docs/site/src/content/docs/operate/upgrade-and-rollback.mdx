@@ -28,8 +28,8 @@ anti-rollback state before starting its binary. The
      real topology. A partial exercise record now exists at
      release/exercises/upgrade-v0.8.3-to-v0.8.4.md and is linked from the verification
      step below. Keep status: draft until the remaining gaps are exercised:
-     release-artifact verification, credential issuance, metrics, Redis replay/nonce
-     survival, and anti-rollback monotonicity. */}
+     release-artifact verification, credential issuance, metrics, the historical Redis
+     replay/nonce path used by that release, and anti-rollback monotonicity. */}
 
 ## Prerequisites
 
@@ -109,8 +109,9 @@ anti-rollback state before starting its binary. The
    This procedure has been partially exercised against a real topology: the
    [v0.8.3 -> v0.8.4 exercise record](https://github.com/registrystack/registry-stack/blob/main/release/exercises/upgrade-v0.8.3-to-v0.8.4.md)
    covers the upgrade and roll-back steps above; release-artifact verification, credential
-   issuance, metrics, Redis replay/nonce survival, and anti-rollback monotonicity were not
-   exercised by that run.
+   issuance, metrics, the historical Redis replay/nonce path used by that release, and
+   anti-rollback monotonicity were not exercised by that run. Current Registry Notary releases
+   keep replay and nonce correctness state in PostgreSQL.
 
 7. Keep the previous release's artifacts, config, and exact anti-rollback state restore set
    until the new release has run through your soak period. Only then remove them under your
