@@ -19,7 +19,7 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 import { Steps } from '@astrojs/starlight/components';
 
 Solmara Lab is a standalone Registry Stack adopter demo for the fictional Republic of Solmara: six
-[Registry Relay](../../products/registry-relay/) instances and four
+[Registry Relay](../../products/registry-relay/) instances and six authority-owned
 [Registry Notary](../../products/registry-notary/) instances wired over generated synthetic data
 into one topology, alongside a citizen portal and a public Visitor's Center. This tutorial brings
 the topology up with the lab's `just` recipes, verifies it with the smoke suite, and calls a Notary
@@ -105,104 +105,111 @@ plus, by default, live checks against the running Relay, Notary, and portal serv
 
 ## What is running
 
-`just up` starts 16 long-running services: six purpose-scoped Relay instances, one per Solmara
-ministry authority, four purpose-scoped Notary instances, the citizen portal, the public Visitor's
-Center, a static metadata publisher, a scenario-runner service that backs the portal's guided
-demos, Postgres, and Redis.
+`just up` defines 37 Compose services: 24 long-running services and 13 one-shot database bootstrap
+and schema-install jobs. Each of the six Solmara authorities runs one Relay, one Notary, and one
+workload-token agent. The remaining runtime services are the citizen portal, the public Visitor's
+Center, a child-benefit evidence federator, a static metadata publisher, a scenario runner, and
+Postgres. Registry Notary has no Redis dependency. The optional eSignet overlay owns a separate
+Redis service outside the Notary state boundary.
 
 {/* SVG diagram. Every service name and host port in the diagram is restated in the
     table and paragraphs that follow. */}
 <figure>
   <img src="../../images/solmara-lab-topology.svg"
-       alt="Solmara Lab compose topology, 16 services. Six authority Relay instances
+       alt="Solmara Lab runtime topology, 24 long-running services. Six authority Relay instances
             (cra-civil-relay :4311, nia-population-relay :4312, sro-social-relay :4313,
             programme-mis-relay :4314, sipf-pensions-relay :4315, nagdi-agriculture-relay :4316)
-            provide evidence reads to four Notary instances (child-benefit-notary :4321, which
-            you call directly in this tutorial; pension-notary :4322; nagdi-notary :4323;
-            citizen-notary :4324). The citizen portal :4300 is wired to the citizen Notary;
-            the Visitor's Center runs on :4301. A support strip holds static-metadata :4331,
-            scenario-runner, Postgres :54329, and Redis :63799." />
+            are paired with six authority Notary instances (cra-notary :4325, which you call
+            directly in this tutorial; nia-notary :4326; sro-notary :4327; programme-notary
+            :4328; sipf-notary :4322; nagdi-notary :4323) through six workload-token agents.
+            The citizen portal :4300 and Visitor's Center :4301 call these services. A support
+            strip holds child-benefit-federator :4321, static-metadata :4331, scenario-runner
+            :4302, and Postgres :54329. Thirteen one-shot state jobs run before the services." />
 </figure>
 
 The services this tutorial calls directly:
 
 | Service | Host port | Role |
 | --- | --- | --- |
-| `portal` | `4300` | Citizen portal: a SvelteKit application wired to the citizen Notary. |
+| `portal` | `4300` | Citizen portal: a SvelteKit application wired to authority Notaries and the child-benefit federator. |
 | `home` | `4301` | Visitor's Center: the lab's public tour, including an Engineer door. |
-| `child-benefit-notary` | `4321` | Notary for the birth-to-child-benefit journey; you call its evaluation route directly. |
+| `cra-notary` | `4325` | CRA authority Notary; you call its child-benefit evaluation route directly. |
 | `static-metadata` | `4331` | Unauthenticated multi-authority metadata bundle. |
 
-The other six Relay instances, three Notary instances, Postgres, and Redis back the pension and
-farmer-voucher journeys and the portal's own evidence calls; this tutorial does not call them
-directly. The topology figure shows the full port map.
+The other five Relay and Notary pairs, the workload-token agents, Postgres, and the support
+services back the remaining child-benefit evidence and the pension, farmer-voucher, citizen, and
+livestock journeys. This tutorial does not call them directly. The topology figure shows the full
+runtime map.
 
-Each instance publishes its rendered API reference at `/docs`, a route that is always public, and
-its raw `/openapi.json`, public here because every Relay and Notary configuration in this lab sets
-`openapi_requires_auth: false`. This is the same route pattern documented in
+Each Relay and Notary publishes its rendered API reference at `/docs`, a route that is always
+public, and its raw `/openapi.json`, public here because every Relay and Notary configuration in
+this lab sets `openapi_requires_auth: false`. This is the same route pattern documented in
 [Evaluate a claim with Registry Notary](../verify-claim-registry-api/).
 
 ## See it: the citizen portal and the Visitor's Center
 
 Open the citizen portal at [http://127.0.0.1:4300](http://127.0.0.1:4300). It is a SvelteKit
-application backed by the citizen Notary and the civil, social, and agriculture Relay instances.
+application backed by the CRA, NIA, SIPF, and NAgDI authority Notaries and the child-benefit
+federator.
 Sign in with one of the portal's fixed demo personas to see a resident's own view of the evidence
 flows this tutorial calls directly.
 
 Open the Visitor's Center at [http://127.0.0.1:4301](http://127.0.0.1:4301). It is Solmara Lab's
 public tour, organized as three doors: visit as a citizen, as a relying agency running a guided
-story, or as an engineer. Scroll to the Engineer door section. It republishes the same four
-synthetic Notary tokens this tutorial's `.env` generates: `child-benefit-notary`, `pension-notary`,
-`nagdi-notary`, and `citizen-notary`. They appear as ready-made copy-as-curl examples, including
-the evaluation call you make by hand next.
+story, or as an engineer. Scroll to the Engineer door section. It republishes a deliberate
+allowlist of six synthetic demo tokens: `child-benefit-federator`, `cra-pension-client`,
+`cra-citizen-client`, `nia-citizen-client`, `sipf-pension-client`, and `nagdi-notary`. They appear
+as ready-made copy-as-curl examples. The call below uses the separate CRA child-benefit client
+token generated in the same `.env` file.
 
 ## Call a Notary evaluation route directly
 
-The birth-to-child-benefit journey is one of the lab's guided stories. Its positive fixture is Mateo
-Santos, Solmara UIN `2300010248`: a child whose birth is registered, who is under five, whose
-household falls below the poverty threshold, and who is not already enrolled.
+The birth-to-child-benefit journey is one of the lab's guided stories. Its positive fixture is
+Mateo Santos, Solmara UIN `2300010248`: a child whose birth is registered and who is under five.
+Those two civil predicates belong to the CRA Notary. The child-benefit federator separately
+collects the NIA, SRO, and Programme authority predicates needed by the complete story.
 
-Load the generated Notary token for this journey from `.env`, then evaluate the same four claims
-the birth-to-child-benefit story checks:
+Load the generated Notary token for this journey from `.env`, then evaluate the two civil claims
+that the CRA contributes to the birth-to-child-benefit story:
 
 ```sh
-export CHILD_BENEFIT_NOTARY_TOKEN="$(grep -m1 '^CHILD_BENEFIT_NOTARY_TOKEN=' .env | cut -d= -f2-)"
+export CRA_CHILD_BENEFIT_CLIENT_TOKEN="$(grep -m1 '^CRA_CHILD_BENEFIT_CLIENT_TOKEN=' .env | cut -d= -f2-)"
 ```
 
 ```sh
 curl -sS -X POST \
-  -H "x-api-key: $CHILD_BENEFIT_NOTARY_TOKEN" \
+  -H "x-api-key: $CRA_CHILD_BENEFIT_CLIENT_TOKEN" \
   -H "Data-Purpose: https://id.registrystack.org/solmara/purpose/child-benefit-review" \
   -H "Content-Type: application/json" \
   -H "Accept: application/vnd.registry-notary.claim-result+json" \
   -d '{
     "target": {"type": "Person", "identifiers": [{"scheme": "solmara_uin", "value": "2300010248"}]},
-    "claims": ["birth-is-registered", "child-age-under-5", "household-below-poverty-threshold", "not-already-enrolled"],
+    "claims": ["birth-is-registered", "child-age-under-5"],
     "disclosure": "predicate",
-    "format": "application/vnd.registry-notary.claim-result+json"
+    "format": "application/vnd.registry-notary.claim-result+json",
+    "variables": {"as_of_date": "2026-07-14"}
   }' \
-  http://127.0.0.1:4321/v1/evaluations
+  http://127.0.0.1:4325/v1/evaluations
 ```
 
-The Notary returns `200 OK` with all four claims `satisfied`. The important fields look like this;
+The CRA Notary returns `200 OK` with both claims `satisfied`. The important fields look like this;
 other fields are omitted:
 
 ```json
 {
   "results": [
     { "claim_id": "birth-is-registered", "satisfied": true, "value": true },
-    { "claim_id": "child-age-under-5", "satisfied": true, "value": true },
-    { "claim_id": "household-below-poverty-threshold", "satisfied": true, "value": true },
-    { "claim_id": "not-already-enrolled", "satisfied": true, "value": true }
+    { "claim_id": "child-age-under-5", "satisfied": true, "value": true }
   ]
 }
 ```
 
 The `x-api-key` header carries the caller's credential. `Data-Purpose` declares why the caller is
-asking, and the Notary's configuration allows this token to ask only under the
-`child-benefit-review` purpose. The `disclosure: predicate` request means the response discloses a
-true or false satisfaction per claim, never the underlying civil, population, social, or programme
-registry rows Relay consulted to answer it. The Notary can also issue a signed
+asking, and the CRA Notary's configuration allows this token to ask only under the
+`child-benefit-review` purpose. The `as_of_date` variable makes the age comparison deterministic.
+The `disclosure: predicate` request means the response discloses a true or false satisfaction per
+claim, never the underlying civil-registry row its paired Relay consulted to answer it. An
+authority Notary can also issue a signed
 [SD-JWT verifiable credential (SD-JWT VC)](../../reference/glossary/) for this same eligibility
 claim set; that holder-bound issuance flow is out of scope for this tutorial. See
 [Registry Notary](../../products/registry-notary/) for the credential issuance contract.
@@ -227,17 +234,16 @@ ls output/smoke/portal-compose.json
 ```
 
 ```sh
-curl -sS -X POST -H "x-api-key: $(grep -m1 '^CHILD_BENEFIT_NOTARY_TOKEN=' .env | cut -d= -f2-)" -H "Data-Purpose: https://id.registrystack.org/solmara/purpose/child-benefit-review" -H "Content-Type: application/json" -H "Accept: application/vnd.registry-notary.claim-result+json" -d '{"target":{"type":"Person","identifiers":[{"scheme":"solmara_uin","value":"2300010248"}]},"claims":["birth-is-registered","child-age-under-5","household-below-poverty-threshold","not-already-enrolled"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json"}' http://127.0.0.1:4321/v1/evaluations | python3 -c "import json, sys; data = json.load(sys.stdin); got = {r['claim_id']: r['satisfied'] for r in data['results']}; expected = ['birth-is-registered', 'child-age-under-5', 'household-below-poverty-threshold', 'not-already-enrolled']; raise SystemExit(0 if len(data['results']) == 4 and all(got.get(c) is True for c in expected) else 1)"
+curl -sS -X POST -H "x-api-key: $(grep -m1 '^CRA_CHILD_BENEFIT_CLIENT_TOKEN=' .env | cut -d= -f2-)" -H "Data-Purpose: https://id.registrystack.org/solmara/purpose/child-benefit-review" -H "Content-Type: application/json" -H "Accept: application/vnd.registry-notary.claim-result+json" -d '{"target":{"type":"Person","identifiers":[{"scheme":"solmara_uin","value":"2300010248"}]},"claims":["birth-is-registered","child-age-under-5"],"disclosure":"predicate","format":"application/vnd.registry-notary.claim-result+json","variables":{"as_of_date":"2026-07-14"}}' http://127.0.0.1:4325/v1/evaluations | python3 -c "import json, sys; data = json.load(sys.stdin); got = {r['claim_id']: r['satisfied'] for r in data['results']}; expected = ['birth-is-registered', 'child-age-under-5']; raise SystemExit(0 if len(data['results']) == 2 and all(got.get(c) is True for c in expected) else 1)"
 ```
 
 ## What you built
 
-You brought up 16 Relay, Notary, portal, and supporting services on your laptop from a single
-`just up`, and the smoke suite verified the topology. You then called the child benefit Notary
-directly and watched it return four satisfied predicates for Mateo Santos without exposing the
-civil, population, social, or programme registry rows Relay consulted to answer. The same
-synthetic token and evaluation call are also visible through the Visitor's Center's Engineer door,
-so you can confirm what you ran by hand against what the lab publishes.
+You brought up six authority-owned Relay and Notary pairs plus their supporting services from a
+single `just up`, and the smoke suite verified the topology. You then called the CRA Notary
+directly and watched it return two satisfied civil predicates for Mateo Santos without exposing
+the civil-registry row its Relay consulted. The Visitor's Center Engineer door lets you inspect
+the complete service map, live status, and deliberately published demo credentials.
 
 ## Next
 
@@ -259,7 +265,7 @@ so you can confirm what you ran by hand against what the lab publishes.
 | Symptom | Cause | Resolution |
 | --- | --- | --- |
 | `just up` fails immediately with `required variable ... is missing a value: .env not loaded; run just gen-secrets once, then just up` | `just generate` (or `just gen-secrets`) never ran, so `.env` does not exist. | Run `just generate`, then `just up` again. |
-| `docker compose` reports a port already allocated | Another process on your machine already holds one of the lab's ports: `4300`, `4301`, `4311` through `4316`, `4321` through `4324`, `4331`, `54329`, or `63799`. | Stop the conflicting process, or set the matching `SOLMARA_*_PORT` environment variable (for example `SOLMARA_PORTAL_PORT=4400`) before `just up`. |
+| `docker compose` reports a port already allocated | Another process on your machine already holds one of the lab's ports: `4300` through `4302`, `4311` through `4316`, `4321` through `4323`, `4325` through `4328`, `4331`, or `54329`. | Stop the conflicting process, or set the matching `SOLMARA_*_PORT` environment variable (for example `SOLMARA_PORTAL_PORT=4400`) before `just up`. |
 | `command not found: uv` or `command not found: pnpm` | A required tool is not on your PATH. | Install [`uv`](https://docs.astral.sh/uv/), or run `corepack enable` for `pnpm`, then run `just setup` again. |
 | `docker compose ps -a` lists lab containers you did not start | The lab derives a per-checkout Compose project name (`solmara-lab-` plus a hash of the checkout path), so two checkouts never share a project. Leftover containers come from a lab version that used the shared project name `solmara-lab`. | Inspect the old project with `docker compose -p solmara-lab ps`, then remove it with `docker compose -p solmara-lab down` (add `-v` only if you also want its volumes deleted). |
 | The Relay and Notary containers start slowly or show high CPU on Apple Silicon | The pinned Relay and Notary images publish `linux/amd64` only, so Compose runs them under emulation. | Expected. Allow extra time on the first `just up`; later runs are faster once the images are cached. |
@@ -273,7 +279,7 @@ Stop the containers:
 just down
 ```
 
-`just down` runs `docker compose ... down`, keeping the Postgres data volume and the Relay and
-Notary state volumes, so a later `just up` resumes with the same data. To also remove the
-volumes, run `just reset` instead; that is the lab's documented clean slate: rerun
+`just down` runs `docker compose ... down`, keeping the Postgres data, Relay cache, and workload
+token volumes, so a later `just up` resumes with the same data. To also remove the volumes, run
+`just reset` instead; that is the lab's documented clean slate: rerun
 `just generate` and `just up` for a fresh topology.

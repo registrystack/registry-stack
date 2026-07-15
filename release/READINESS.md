@@ -106,10 +106,11 @@ What 1.0 promises the institutions that run this.
       [exercised run v0.8.3 -> v0.8.4 -> v0.8.3](exercises/upgrade-v0.8.3-to-v0.8.4.md)
       (#203; exercises the draft operate/upgrade-and-rollback page with
       source-built release-tag images; release-artifact verification,
-      credential issuance, metrics, Redis replay/nonce survival, and
-      anti-rollback monotonic rejection remain outside this run). Backup and
-      restore guidance for generated and single-node deployments is documented
-      in [`backup-and-restore.mdx`](../docs/site/src/content/docs/operate/backup-and-restore.mdx)
+      credential issuance, metrics, the historical Redis replay/nonce path used
+      by that release, and anti-rollback monotonic rejection remain outside this
+      run). Current Notary replay and nonce correctness state is PostgreSQL-backed.
+      Backup and restore guidance for generated and single-node deployments is
+      documented in [`backup-and-restore.mdx`](../docs/site/src/content/docs/operate/backup-and-restore.mdx)
       (#226). The
       [v0.8.4 -> v0.9.0 -> v0.8.4 procedure](exercises/upgrade-v0.8.4-to-v0.9.0.md)
       records the beta-11 migration and rollback gate; it does not claim a
