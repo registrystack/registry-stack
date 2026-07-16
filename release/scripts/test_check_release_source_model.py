@@ -31,6 +31,17 @@ external:
     ref: 3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c
 """
 
+POST_LAB_MANIFEST_YAML = """\
+stack:
+  release: test
+  version: 0.0.1
+
+external:
+  crosswalk:
+    repo: PublicSchema/crosswalk
+    ref: 1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a
+"""
+
 
 class MonorepoSourceModelTest(unittest.TestCase):
     def test_monorepo_mode_passes_without_lab_directory(self) -> None:
@@ -67,7 +78,7 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("registry-relay crate", result.stderr)
 
-    def test_monorepo_mode_records_external_release_refs(self) -> None:
+    def test_monorepo_mode_records_all_declared_external_release_refs(self) -> None:
         with MonorepoFixture() as stack_root:
             result = run_monorepo_validator(stack_root)
 
@@ -97,21 +108,38 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("external.registry-atlas", result.stderr)
 
-    def test_monorepo_mode_rejects_missing_required_external(self) -> None:
+    def test_monorepo_mode_allows_omitting_historical_lab_externals(self) -> None:
         with MonorepoFixture() as stack_root:
             manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
-            lines = manifest.read_text(encoding="utf-8").splitlines(keepends=True)
-            kept = [
-                line
-                for line in lines
-                if "registry-atlas" not in line and "2b2b" not in line
-            ]
-            manifest.write_text("".join(kept), encoding="utf-8")
+            manifest.write_text(POST_LAB_MANIFEST_YAML, encoding="utf-8")
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(
+            "release-source-external registry-stack-test.yaml crosswalk",
+            result.stdout,
+        )
+        self.assertNotIn("registry-atlas", result.stdout)
+        self.assertNotIn("esignet-relay-authenticator", result.stdout)
+
+    def test_monorepo_mode_rejects_missing_crosswalk(self) -> None:
+        with MonorepoFixture() as stack_root:
+            manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
+            manifest.write_text(
+                MANIFEST_YAML.replace(
+                    "  crosswalk:\n"
+                    "    repo: PublicSchema/crosswalk\n"
+                    "    ref: 1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a\n",
+                    "",
+                ),
+                encoding="utf-8",
+            )
 
             result = run_monorepo_validator(stack_root)
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("missing required external.registry-atlas", result.stderr)
+        self.assertIn("missing required external.crosswalk", result.stderr)
 
     def test_monorepo_mode_rejects_missing_manifests(self) -> None:
         with MonorepoFixture() as stack_root:

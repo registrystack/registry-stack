@@ -76,10 +76,10 @@ from pathlib import Path
 import yaml
 
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
+# Crosswalk is a product dependency for every release. Historical lab-only
+# externals remain validated when declared, but post-lab manifests may omit them.
 REQUIRED_EXTERNALS = (
     "crosswalk",
-    "esignet-relay-authenticator",
-    "registry-atlas",
 )
 
 failed = False

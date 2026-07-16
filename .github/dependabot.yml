@@ -39,6 +39,7 @@ updates:
   - package-ecosystem: docker
     directories:
       - "/release/docker"
+      - "/release/conformance/openid"
       - "/crates/registry-relay"
       - "/products/notary"
     schedule:

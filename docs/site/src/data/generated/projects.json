@@ -130,16 +130,15 @@
     "rename_status": "Already using the target repo name locally."
   },
   {
-    "id": "registry-lab",
-    "name": "Registry Lab",
-    "repo_path": "../registry-lab",
-    "target_repo_path": "../registry-lab",
-    "role": "Docker Compose demo of the registry runtime on a laptop. Wires Relay and Notary instances, live Postgres and Zitadel services, Relay-backed consultations, a static metadata publisher, and narrated demo clients together with Registry Platform source pins, fixtures, and smoke tests.",
+    "id": "solmara-lab",
+    "name": "Solmara Lab",
+    "repo_path": "../solmara-lab",
+    "target_repo_path": "../solmara-lab",
+    "role": "Standalone Registry Stack adopter demo for the fictional Republic of Solmara. Runs published Registry Stack images pinned by digest with generated synthetic data, purpose-limited Relay APIs, Notary evidence services, and citizen portal journeys.",
     "owns": [
-      "End-to-end local topology for Relay, Notary, live Postgres, live Zitadel, Relay-backed consultations, the static metadata publisher, and demo-client fixtures.",
-      "Demo scripts, smoke checks, generated local credentials, live-service checks, static metadata checks, and narrated client flows.",
-      "Historical citizen self-attestation walkthrough that exercised the Notary OID4VCI flow through the `just citizen-oid4vci-*` recipes at v0.9.0. The replacement Solmara Lab uses `just hosted-smoke` for current issuer endpoint checks.",
-      "Acceptance rehearsal after rename waves land."
+      "End-to-end local and hosted demo topologies for Relay, Notary, Postgres, eSignet, static metadata, scenario services, and the citizen portal.",
+      "Deterministic synthetic data, authority-owned demo configuration, purpose catalogues, and fictional country stories.",
+      "Demo orchestration, smoke checks, browser journeys, hosted deployment wrappers, and release-pin checks."
     ],
     "does_not_own": [
       "Production deployment guidance.",
@@ -149,13 +148,9 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.9.0/lab/README.md"
-      },
-      {
-        "label": "Rename plan",
-        "url": "https://github.com/jeremi/registry-docs/blob/e926f05441f39eb2d633979c3bc5a3552f5cf6e2/rename-plan-2026-05-23.md"
+        "url": "https://github.com/registrystack/solmara-lab/blob/00cd51a2be4a405ef75d337ddcede0f9de134b1f/README.md"
       }
     ],
-    "rename_status": "Local checkout renamed to `registry-lab`; stable demo identifiers may still contain `decentralized-demo` as protocol and artifact values."
+    "rename_status": "Standalone replacement for the historical Registry Lab; not part of the Registry Stack monorepo."
   }
 ]
