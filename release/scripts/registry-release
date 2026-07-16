@@ -25,6 +25,17 @@ IMAGE_DIGEST_REF = re.compile(r"^([^@]+)@(sha256:[0-9a-f]{64})$")
 RELEASE_IMAGE_LOCK_SCHEMA = "registryctl.release_image_lock.v1"
 RELEASE_IMAGE_LOCK_PLATFORM = "linux/amd64"
 RELEASE_IMAGE_LOCK_MINIMUM_VERSION = (0, 9, 0)
+EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION = (0, 10, 0)
+EXACT_ARTIFACT_INVENTORY = {
+    "registry-notary",
+    "registry-notary-cel-worker",
+    "registry-relay",
+    "registry-relay-rhai-worker",
+    "registry-manifest-cli",
+    "registryctl",
+    "registryctl-image-lock",
+    "registry-docs",
+}
 RELEASE_IMAGE_LOCK_REPOSITORIES = {
     "registry-relay": "ghcr.io/registrystack/registry-relay",
     "registry-notary": "ghcr.io/registrystack/registry-notary",
@@ -261,6 +272,7 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
         f"registryctl-{tag}-macos-arm64",
         f"registryctl-{tag}-linux-arm64",
         f"registry-relay-rhai-worker-{tag}-linux-amd64",
+        f"registry-notary-cel-worker-{tag}-linux-amd64",
     ]
     optional_release_file_names = [f"registryctl-{tag}-image-lock.json"]
     image_names = [
@@ -287,7 +299,7 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
 
     print(
         f"staged {len(binary_names)} binary assets "
-        f"({len(staged_optional)}/{len(optional_binary_names)} optional cross-platform) "
+        f"({len(staged_optional)}/{len(optional_binary_names)} optional binaries) "
         f"and {len(staged_release_files)}/{len(optional_release_file_names)} optional release files "
         f"and {len(image_names)} image digest assets for {tag}"
     )
@@ -329,6 +341,23 @@ def validate(manifest_path: Path) -> int:
         and "registryctl-image-lock" not in artifacts
     ):
         errors.append("artifact registryctl-image-lock is required for version 0.9.0 or later")
+    if (
+        parsed_version is not None
+        and parsed_version >= EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION
+    ):
+        artifact_names = set(artifacts)
+        missing = sorted(EXACT_ARTIFACT_INVENTORY - artifact_names)
+        unexpected = sorted(artifact_names - EXACT_ARTIFACT_INVENTORY)
+        if missing or unexpected:
+            details = []
+            if missing:
+                details.append(f"missing {', '.join(missing)}")
+            if unexpected:
+                details.append(f"unexpected {', '.join(unexpected)}")
+            errors.append(
+                "artifact inventory for version 0.10.0 or later must be exactly the "
+                f"supported release set: {'; '.join(details)}"
+            )
     for name, artifact_version in sorted(artifacts.items()):
         if str(artifact_version) != version:
             errors.append(f"artifact {name} version {artifact_version} does not match stack version {version}")

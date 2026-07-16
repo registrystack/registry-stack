@@ -96,6 +96,32 @@ jobs:
           fetch-depth: 0
           submodules: false
 
+      - name: Resolve release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          manifest="$(
+            python3 - "${version}" <<'PY'
+          import glob
+          import sys
+          import yaml
+
+          version = sys.argv[1]
+          matches = []
+          for path in sorted(glob.glob("release-source/release/manifests/registry-stack-*.yaml")):
+              with open(path, encoding="utf-8") as handle:
+                  manifest = yaml.safe_load(handle)
+              if str(manifest.get("stack", {}).get("version", "")) == version:
+                  matches.append(path)
+          if len(matches) != 1:
+              print(f"expected exactly one release manifest for {version}, found {matches}", file=sys.stderr)
+              sys.exit(1)
+          print(matches[0])
+          PY
+          )"
+          echo "RELEASE_MANIFEST=${manifest}" >> "${GITHUB_ENV}"
+
       - name: Verify release source lineage
         shell: bash
         run: |
@@ -109,7 +135,7 @@ jobs:
             exit 1
           fi
           generator/release/scripts/registry-release validate-source \
-            release-source/release/manifests/registry-stack-beta-6.yaml \
+            "${RELEASE_MANIFEST}" \
             --tag "${TAG}" \
             --repo release-source \
             --default-branch origin/main
@@ -205,7 +231,7 @@ jobs:
           version="${TAG#v}"
           mkdir -p dist/release-capsule
           generator/release/scripts/registry-release render-capsule \
-            release-source/release/manifests/registry-stack-beta-6.yaml \
+            "${RELEASE_MANIFEST}" \
             --tag "${TAG}" \
             --version "${version}" \
             --binary-dir dist/staged/bin \

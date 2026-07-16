@@ -190,6 +190,22 @@ class RegistryReleaseTest(unittest.TestCase):
         self.assertIn("dist/staged/binary-sbom", backfill)
         self.assertIn("--binary-sbom-dir", backfill)
 
+    def test_capsule_backfill_resolves_manifest_for_requested_tag(self) -> None:
+        backfill = (ROOT / ".github/workflows/release-capsule-backfill.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('version="${TAG#v}"', backfill)
+        self.assertIn(
+            'glob.glob("release-source/release/manifests/registry-stack-*.yaml")',
+            backfill,
+        )
+        self.assertIn("expected exactly one release manifest for {version}", backfill)
+        self.assertEqual(2, backfill.count('"${RELEASE_MANIFEST}"'))
+        self.assertNotIn(
+            "release-source/release/manifests/registry-stack-beta-6.yaml", backfill
+        )
+
     def test_validate_beta_6_manifest(self) -> None:
         result = run_tool("validate", "release/manifests/registry-stack-beta-6.yaml")
         self.assertEqual(0, result.returncode, result.stderr)
@@ -320,6 +336,24 @@ class RegistryReleaseTest(unittest.TestCase):
             rejected.stderr,
         )
         self.assertEqual(0, accepted.returncode, accepted.stderr)
+
+    def test_validate_requires_exact_v0_10_artifact_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            manifest = write_manifest(root, version="0.10.0")
+            accepted = run_tool("validate", str(manifest))
+
+            data = yaml.safe_load(manifest.read_text(encoding="utf-8"))
+            del data["artifacts"]["registry-notary-cel-worker"]
+            data["artifacts"]["registry-lab"] = "0.10.0"
+            manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+            rejected = run_tool("validate", str(manifest))
+
+        self.assertEqual(0, accepted.returncode, accepted.stderr)
+        self.assertNotEqual(0, rejected.returncode)
+        self.assertIn("artifact inventory for version 0.10.0 or later", rejected.stderr)
+        self.assertIn("missing registry-notary-cel-worker", rejected.stderr)
+        self.assertIn("unexpected registry-lab", rejected.stderr)
 
     def test_render_registryctl_image_lock_from_exact_release_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -946,6 +980,9 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertTrue(
                 (binary_dir / "registry-relay-rhai-worker-v0.8.0-linux-amd64").is_file()
             )
+            self.assertTrue(
+                (binary_dir / "registry-notary-cel-worker-v0.8.0-linux-amd64").is_file()
+            )
             self.assertTrue((binary_dir / "registry-notary-v0.8.0-linux-amd64").is_file())
             self.assertTrue((binary_dir / "SHA256SUMS").is_file())
             self.assertTrue((image_dir / "registry-notary.digest").is_file())
@@ -1157,16 +1194,29 @@ def write_manifest(
 ) -> Path:
     if source_tag is None:
         source_tag = f"v{version}"
-    artifacts = {
-        "registry-notary": version,
-        "registry-relay": version,
-    }
+    version_tuple = tuple(int(part) for part in version.split("."))
+    if version_tuple >= (0, 10, 0):
+        artifacts = {
+            "registry-notary": version,
+            "registry-notary-cel-worker": version,
+            "registry-relay": version,
+            "registry-relay-rhai-worker": version,
+            "registry-manifest-cli": version,
+            "registryctl": version,
+            "registryctl-image-lock": version,
+            "registry-docs": version,
+        }
+    else:
+        artifacts = {
+            "registry-notary": version,
+            "registry-relay": version,
+        }
     if include_registryctl_image_lock is None:
-        include_registryctl_image_lock = tuple(
-            int(part) for part in version.split(".")
-        ) >= (0, 9, 0)
+        include_registryctl_image_lock = version_tuple >= (0, 9, 0)
     if include_registryctl_image_lock:
         artifacts["registryctl-image-lock"] = version
+    else:
+        artifacts.pop("registryctl-image-lock", None)
     manifest = {
         "stack": {
             "release": "beta-6",
@@ -1339,6 +1389,7 @@ def write_release_asset_fixture(
         "registry-relay-v0.8.0-linux-amd64",
         "registry-relay-rhai-worker-v0.8.0-linux-amd64",
         "registry-notary-v0.8.0-linux-amd64",
+        "registry-notary-cel-worker-v0.8.0-linux-amd64",
     ]
     if include_cross_platform:
         binary_names += [
