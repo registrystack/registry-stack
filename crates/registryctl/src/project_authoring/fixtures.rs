@@ -685,6 +685,7 @@ fn evaluate_product_claims(
         evaluated_any = true;
         let mut target = EvidenceEntity::new("person");
         let mut identifiers = BTreeMap::new();
+        let mut attributes = BTreeMap::new();
         for consultation in service
             .consultations
             .values()
@@ -702,6 +703,10 @@ fn evaluate_product_claims(
                     request_path.strip_prefix("request.target.identifiers.")
                 {
                     identifiers.insert(scheme.to_string(), value.to_string());
+                } else if let Some(name) =
+                    request_path.strip_prefix("request.target.attributes.")
+                {
+                    attributes.insert(name.to_string(), Value::String(value.to_string()));
                 } else {
                     bail!("compiled consultation input uses an unsupported target path");
                 }
@@ -716,6 +721,7 @@ fn evaluate_product_claims(
                 country: None,
             })
             .collect();
+        target.attributes = attributes;
         let variables = fixture
             .variables
             .iter()

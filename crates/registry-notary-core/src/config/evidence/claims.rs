@@ -185,6 +185,7 @@ pub enum RequestVariableType {
 pub enum RelayConsultationInput {
     TargetId,
     TargetIdentifier(String),
+    TargetAttribute(String),
     RequesterId,
     RequesterIdentifier(String),
 }
@@ -195,6 +196,7 @@ impl RelayConsultationInput {
         match self {
             Self::TargetId => "target.id",
             Self::TargetIdentifier(path) => path,
+            Self::TargetAttribute(path) => path,
             Self::RequesterId => "request.requester.id",
             Self::RequesterIdentifier(path) => path,
         }
@@ -214,7 +216,10 @@ impl RelayConsultationInput {
 
     #[must_use]
     pub const fn is_target_derived(&self) -> bool {
-        matches!(self, Self::TargetId | Self::TargetIdentifier(_))
+        matches!(
+            self,
+            Self::TargetId | Self::TargetIdentifier(_) | Self::TargetAttribute(_)
+        )
     }
 }
 
@@ -246,13 +251,19 @@ impl<'de> Deserialize<'de> for RelayConsultationInput {
                 Ok(Self::TargetIdentifier(mapping))
             }
             _ if mapping
+                .strip_prefix("request.target.attributes.")
+                .is_some_and(is_target_attribute_name) =>
+            {
+                Ok(Self::TargetAttribute(mapping))
+            }
+            _ if mapping
                 .strip_prefix("request.requester.identifiers.")
                 .is_some_and(is_request_identifier_name) =>
             {
                 Ok(Self::RequesterIdentifier(mapping))
             }
             _ => Err(serde::de::Error::custom(
-                "unsupported consultation input mapping; v1 permits target.id, request.requester.id, request.target.identifiers.<stable-id>, or request.requester.identifiers.<stable-id>",
+                "unsupported consultation input mapping; v1 permits target.id, request.requester.id, request.target.identifiers.<stable-id>, request.target.attributes.<stable-name>, or request.requester.identifiers.<stable-id>",
             )),
         }
     }
@@ -695,6 +706,13 @@ fn is_request_identifier_name(value: &str) -> bool {
                 b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-' | b'_'
             )
         })
+}
+
+fn is_target_attribute_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && value.len() <= 64
+        && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
 }
 
 fn is_stable_id(value: &str) -> bool {
