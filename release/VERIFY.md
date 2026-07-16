@@ -89,7 +89,7 @@ working directory rather than the `verify-v0.8.4` directory above.
 ### Download The v0.9.0+ Assets
 
 ```bash
-tag=v0.9.0
+tag=v0.10.0
 asset=registryctl-${tag}-linux-amd64
 image_lock=registryctl-${tag}-image-lock.json
 image_lock_sbom=${image_lock}.spdx.json
