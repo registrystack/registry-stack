@@ -423,6 +423,52 @@ fn output_contract_rejects_reserved_notary_view_names() {
     }
 }
 
+#[test]
+fn execute_request_serializes_verified_scalar_input_types() {
+    let inputs = BTreeMap::from([
+        ("active".to_string(), Zeroizing::new("true".to_string())),
+        ("name".to_string(), Zeroizing::new("Ada".to_string())),
+        ("sequence".to_string(), Zeroizing::new("42".to_string())),
+    ]);
+    let input_types = BTreeMap::from([
+        (
+            "active".to_string(),
+            crate::relay_contract::VerifiedInputType::Boolean,
+        ),
+        (
+            "name".to_string(),
+            crate::relay_contract::VerifiedInputType::String,
+        ),
+        (
+            "sequence".to_string(),
+            crate::relay_contract::VerifiedInputType::Integer,
+        ),
+    ]);
+    let body = serde_json::to_value(ExecuteRequestBody {
+        contract_hash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        inputs: &inputs,
+        input_types: &input_types,
+    })
+    .expect("verified typed inputs serialize");
+
+    assert_eq!(
+        body["inputs"],
+        json!({ "active": true, "name": "Ada", "sequence": 42 })
+    );
+    assert!(valid_wire_input(
+        "-7",
+        crate::relay_contract::VerifiedInputType::Integer
+    ));
+    assert!(!valid_wire_input(
+        "01",
+        crate::relay_contract::VerifiedInputType::Integer
+    ));
+    assert!(!valid_wire_input(
+        "TRUE",
+        crate::relay_contract::VerifiedInputType::Boolean
+    ));
+}
+
 fn snapshot_contract_value() -> Value {
     let mut contract = contract_value();
     contract["spec"]["acquisition"]["class"] = json!("materialized_snapshot");

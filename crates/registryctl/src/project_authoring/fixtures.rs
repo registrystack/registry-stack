@@ -695,18 +695,30 @@ fn evaluate_product_claims(
                 let value = fixture
                     .input
                     .get(name)
-                    .and_then(Value::as_str)
                     .ok_or_else(|| anyhow!("fixture omitted a compiled consultation input"))?;
                 if request_path == "request.target.id" {
-                    target.id = Some(value.to_string());
+                    target.id = Some(
+                        value
+                            .as_str()
+                            .ok_or_else(|| anyhow!("target id fixture input must be a String"))?
+                            .to_string(),
+                    );
                 } else if let Some(scheme) =
                     request_path.strip_prefix("request.target.identifiers.")
                 {
-                    identifiers.insert(scheme.to_string(), value.to_string());
+                    identifiers.insert(
+                        scheme.to_string(),
+                        value
+                            .as_str()
+                            .ok_or_else(|| {
+                                anyhow!("target identifier fixture input must be a String")
+                            })?
+                            .to_string(),
+                    );
                 } else if let Some(name) =
                     request_path.strip_prefix("request.target.attributes.")
                 {
-                    attributes.insert(name.to_string(), Value::String(value.to_string()));
+                    attributes.insert(name.to_string(), value.clone());
                 } else {
                     bail!("compiled consultation input uses an unsupported target path");
                 }

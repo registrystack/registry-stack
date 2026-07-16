@@ -1516,7 +1516,7 @@ fn plan_relay_consultations(
             .map(|(input_name, input_mapping)| {
                 context
                     .lookup_value(input_mapping.request_context_path())
-                    .and_then(|value| value.as_str().map(str::to_string))
+                    .and_then(|value| canonical_request_scalar(&value))
                     .map(|value| (input_name.clone(), Zeroizing::new(value)))
                     .ok_or(EvidenceError::InvalidRequest)
             })
@@ -1567,6 +1567,15 @@ fn plan_relay_consultations(
             EvidenceError::InvalidRequest
         }
     })
+}
+
+pub(super) fn canonical_request_scalar(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Bool(value) => Some(value.to_string()),
+        Value::Number(value) => value.as_i64().map(|value| value.to_string()),
+        Value::Null | Value::Array(_) | Value::Object(_) => None,
+    }
 }
 
 fn relay_expected_result(
