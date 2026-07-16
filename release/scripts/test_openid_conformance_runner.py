@@ -272,11 +272,14 @@ class OpenIdConformanceRunnerTest(TestCase):
             def fake_run_checked(command, cwd=None, env=None):
                 jar.write_text("new", encoding="utf-8")
 
-            with patch.object(self.runner, "suite_checkout_ref", return_value="b" * 40):
+            with patch.object(shutil, "which", return_value="/usr/bin/docker"):
                 with patch.object(
-                    self.runner, "run_checked", side_effect=fake_run_checked
-                ) as run_checked:
-                    self.runner.ensure_suite_artifact(checkout, args)
+                    self.runner, "suite_checkout_ref", return_value="b" * 40
+                ):
+                    with patch.object(
+                        self.runner, "run_checked", side_effect=fake_run_checked
+                    ) as run_checked:
+                        self.runner.ensure_suite_artifact(checkout, args)
 
             run_checked.assert_called_once()
             self.assertEqual("new", jar.read_text(encoding="utf-8"))
