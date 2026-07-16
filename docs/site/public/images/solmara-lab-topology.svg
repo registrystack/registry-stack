@@ -1,129 +1,132 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 500" role="img"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 408" role="img"
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
-  <title>Solmara Lab runtime topology</title>
-  <desc>The 24 long-running Solmara Lab services. Six authority Relay instances are paired with six authority Notary instances through six workload-token agents. CRA Relay and Notary use host ports 4311 and 4325, NIA 4312 and 4326, SRO 4313 and 4327, Programme 4314 and 4328, SIPF 4315 and 4322, and NAgDI 4316 and 4323. The citizen portal runs on 4300, the Visitor's Center on 4301, the child-benefit federator on 4321, the scenario runner on 4302, static metadata on 4331, and Postgres on 54329. Thirteen one-shot database bootstrap and schema-install jobs complete before runtime traffic. Registry Notary does not use Redis.</desc>
+  <title>Solmara Lab compose topology</title>
+  <desc>The 16 Solmara Lab services in four groups. Six authority Relay instances (cra-civil-relay on host port 4311, nia-population-relay 4312, sro-social-relay 4313, programme-mis-relay 4314, sipf-pensions-relay 4315, nagdi-agriculture-relay 4316) provide evidence reads to four Notary instances (child-benefit-notary 4321, which this tutorial calls directly; pension-notary 4322; nagdi-notary 4323; citizen-notary 4324). The citizen portal on 4300 is wired to the citizen Notary; the Visitor's Center runs on 4301. A support strip holds static-metadata on 4331, scenario-runner, Postgres on 54329, and Redis on 63799. All 16 services start from one just up; host ports shown are the compose defaults.</desc>
 
-  <text x="16" y="24" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">SOLMARA LAB · 24 LONG-RUNNING SERVICES</text>
-  <rect x="16" y="32" width="32" height="2" fill="#000091"/>
+  <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">SOLMARA LAB — COMPOSE TOPOLOGY · 16 SERVICES</text>
+  <rect x="16" y="30" width="32" height="2" fill="#000091"/>
 
   <g fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">
-    <text x="16" y="66">AUTHORITY RELAYS (6)</text>
-    <text x="310" y="66">TOKEN AGENTS (6)</text>
-    <text x="500" y="66">AUTHORITY NOTARIES (6)</text>
-    <text x="756" y="66">EXPERIENCE + SUPPORT (6)</text>
+    <text x="16" y="64">AUTHORITY RELAYS (6)</text>
+    <text x="314" y="64">NOTARIES (4)</text>
+    <text x="554" y="64">EXPERIENCE</text>
   </g>
   <g fill="#000091">
-    <rect x="16" y="74" width="24" height="2"/>
-    <rect x="310" y="74" width="24" height="2"/>
-    <rect x="500" y="74" width="24" height="2"/>
-    <rect x="756" y="74" width="24" height="2"/>
+    <rect x="16" y="72" width="24" height="2"/>
+    <rect x="314" y="72" width="24" height="2"/>
+    <rect x="554" y="72" width="24" height="2"/>
   </g>
 
-  <g fill="#ffffff" stroke="#161616" stroke-width="1">
-    <rect x="16" y="86" width="242" height="230"/>
-    <rect x="310" y="86" width="150" height="230"/>
-    <rect x="500" y="86" width="210" height="230"/>
-    <rect x="756" y="86" width="188" height="230"/>
-  </g>
+  <!-- Authority Relays -->
+  <rect x="16" y="84" width="212" height="178" fill="#ffffff" stroke="#161616" stroke-width="1"/>
   <g stroke="#e5e5e5" stroke-width="1">
-    <line x1="16" y1="124" x2="258" y2="124"/>
-    <line x1="16" y1="162" x2="258" y2="162"/>
-    <line x1="16" y1="200" x2="258" y2="200"/>
-    <line x1="16" y1="238" x2="258" y2="238"/>
-    <line x1="16" y1="276" x2="258" y2="276"/>
-    <line x1="310" y1="124" x2="460" y2="124"/>
-    <line x1="310" y1="162" x2="460" y2="162"/>
-    <line x1="310" y1="200" x2="460" y2="200"/>
-    <line x1="310" y1="238" x2="460" y2="238"/>
-    <line x1="310" y1="276" x2="460" y2="276"/>
-    <line x1="500" y1="124" x2="710" y2="124"/>
-    <line x1="500" y1="162" x2="710" y2="162"/>
-    <line x1="500" y1="200" x2="710" y2="200"/>
-    <line x1="500" y1="238" x2="710" y2="238"/>
-    <line x1="500" y1="276" x2="710" y2="276"/>
-    <line x1="756" y1="124" x2="944" y2="124"/>
-    <line x1="756" y1="162" x2="944" y2="162"/>
-    <line x1="756" y1="200" x2="944" y2="200"/>
-    <line x1="756" y1="238" x2="944" y2="238"/>
-    <line x1="756" y1="276" x2="944" y2="276"/>
+    <line x1="16" y1="118" x2="228" y2="118"/>
+    <line x1="16" y1="146" x2="228" y2="146"/>
+    <line x1="16" y1="174" x2="228" y2="174"/>
+    <line x1="16" y1="202" x2="228" y2="202"/>
+    <line x1="16" y1="230" x2="228" y2="230"/>
   </g>
-
   <g fill="#161616" font-size="10.5"
      font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
-    <text x="28" y="110">cra-civil-relay</text>
-    <text x="28" y="148">nia-population-relay</text>
-    <text x="28" y="186">sro-social-relay</text>
-    <text x="28" y="224">programme-mis-relay</text>
-    <text x="28" y="262">sipf-pensions-relay</text>
-    <text x="28" y="300">nagdi-agriculture-relay</text>
-
-    <text x="322" y="110">cra-agent</text>
-    <text x="322" y="148">nia-agent</text>
-    <text x="322" y="186">sro-agent</text>
-    <text x="322" y="224">programme-agent</text>
-    <text x="322" y="262">sipf-agent</text>
-    <text x="322" y="300">nagdi-agent</text>
-
-    <text x="512" y="110">cra-notary</text>
-    <text x="512" y="148">nia-notary</text>
-    <text x="512" y="186">sro-notary</text>
-    <text x="512" y="224">programme-notary</text>
-    <text x="512" y="262">sipf-notary</text>
-    <text x="512" y="300">nagdi-notary</text>
-
-    <text x="768" y="110">portal</text>
-    <text x="768" y="148">home</text>
-    <text x="768" y="180">child-benefit-</text>
-    <text x="768" y="193">federator</text>
-    <text x="768" y="224">scenario-runner</text>
-    <text x="768" y="262">static-metadata</text>
-    <text x="768" y="300">postgres</text>
+    <text x="28" y="106">cra-civil-relay</text>
+    <text x="28" y="134">nia-population-relay</text>
+    <text x="28" y="162">sro-social-relay</text>
+    <text x="28" y="190">programme-mis-relay</text>
+    <text x="28" y="218">sipf-pensions-relay</text>
+    <text x="28" y="246">nagdi-agriculture-relay</text>
   </g>
-
   <g fill="#6a6a6a" font-size="10.5" text-anchor="end"
      font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
-    <text x="246" y="110">:4311</text>
-    <text x="246" y="148">:4312</text>
-    <text x="246" y="186">:4313</text>
-    <text x="246" y="224">:4314</text>
-    <text x="246" y="262">:4315</text>
-    <text x="246" y="300">:4316</text>
-
-    <text x="698" y="110">:4325</text>
-    <text x="698" y="148">:4326</text>
-    <text x="698" y="186">:4327</text>
-    <text x="698" y="224">:4328</text>
-    <text x="698" y="262">:4322</text>
-    <text x="698" y="300">:4323</text>
-
-    <text x="932" y="110">:4300</text>
-    <text x="932" y="148">:4301</text>
-    <text x="932" y="186">:4321</text>
-    <text x="932" y="224">:4302</text>
-    <text x="932" y="262">:4331</text>
-    <text x="932" y="300">:54329</text>
+    <text x="216" y="106">:4311</text>
+    <text x="216" y="134">:4312</text>
+    <text x="216" y="162">:4313</text>
+    <text x="216" y="190">:4314</text>
+    <text x="216" y="218">:4315</text>
+    <text x="216" y="246">:4316</text>
   </g>
 
+  <!-- Relays to Notaries -->
+  <text x="270" y="138" fill="#3a3a3a" font-size="11" text-anchor="middle">evidence</text>
+  <text x="270" y="164" fill="#3a3a3a" font-size="11" text-anchor="middle">reads</text>
   <g stroke="#000091" stroke-width="1" fill="none">
-    <line x1="262" y1="207" x2="304" y2="207"/>
-    <polyline points="298,203 304,207 298,211"/>
-    <line x1="464" y1="207" x2="494" y2="207"/>
-    <polyline points="488,203 494,207 488,211"/>
-  </g>
-  <g fill="#3a3a3a" font-size="9.5" text-anchor="middle">
-    <text x="283" y="194">token</text>
-    <text x="479" y="194">file</text>
+    <line x1="232" y1="150" x2="308" y2="150"/>
+    <polyline points="302,146 308,150 302,154"/>
   </g>
 
-  <text x="16" y="358" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">PERSISTENCE + STARTUP</text>
-  <rect x="16" y="366" width="24" height="2" fill="#000091"/>
-  <rect x="16" y="378" width="928" height="66" fill="#ffffff" stroke="#e5e5e5" stroke-width="1"/>
-  <text x="32" y="402" fill="#161616" font-size="11.5">One Postgres server, six isolated Notary databases and role sets, plus six Relay consultation databases.</text>
-  <text x="32" y="423" fill="#3a3a3a" font-size="11.5">13 one-shot bootstrap/install jobs complete before runtime traffic. Notary has no Redis service or volume.</text>
+  <!-- Notaries -->
+  <rect x="314" y="84" width="192" height="140" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+  <rect x="314" y="84" width="4" height="50" fill="#000091"/>
+  <g stroke="#e5e5e5" stroke-width="1">
+    <line x1="314" y1="134" x2="506" y2="134"/>
+    <line x1="314" y1="166" x2="506" y2="166"/>
+    <line x1="314" y1="194" x2="506" y2="194"/>
+  </g>
+  <text x="328" y="106" fill="#000091" font-size="10.5"
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">child-benefit-notary</text>
+  <text x="328" y="124" fill="#000091" font-size="10.5">you call this one directly</text>
+  <g fill="#161616" font-size="10.5"
+     font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
+    <text x="328" y="152">pension-notary</text>
+    <text x="328" y="180">nagdi-notary</text>
+    <text x="328" y="208">citizen-notary</text>
+  </g>
+  <g fill="#6a6a6a" font-size="10.5" text-anchor="end"
+     font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
+    <text x="494" y="106">:4321</text>
+    <text x="494" y="152">:4322</text>
+    <text x="494" y="180">:4323</text>
+    <text x="494" y="208">:4324</text>
+  </g>
 
-  <text x="16" y="476" fill="#6a6a6a" font-size="12">One
-    <tspan font-size="11.5" font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">just up</tspan>
-    defines the topology; host ports shown are the local Compose defaults.
-  </text>
+  <!-- Experience -->
+  <rect x="554" y="84" width="150" height="98" fill="#ffffff" stroke="#161616" stroke-width="1"/>
+  <line x1="554" y1="132" x2="704" y2="132" stroke="#e5e5e5" stroke-width="1"/>
+  <g fill="#161616" font-size="10.5"
+     font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
+    <text x="566" y="106">portal</text>
+    <text x="566" y="150">home</text>
+  </g>
+  <g fill="#6a6a6a" font-size="10.5" text-anchor="end"
+     font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
+    <text x="692" y="106">:4300</text>
+    <text x="692" y="150">:4301</text>
+  </g>
+  <g fill="#3a3a3a" font-size="11">
+    <text x="566" y="122">Citizen portal</text>
+    <text x="566" y="166">Visitor's Center</text>
+  </g>
+
+  <!-- Portal to citizen Notary -->
+  <g stroke="#000091" stroke-width="1" fill="none">
+    <polyline points="554,102 530,102 530,208 512,208"/>
+    <polyline points="518,204 512,208 518,212"/>
+  </g>
+
+  <!-- Support strip -->
+  <text x="16" y="292" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">SUPPORT</text>
+  <rect x="16" y="300" width="24" height="2" fill="#000091"/>
+  <rect x="16" y="312" width="688" height="52" fill="#ffffff" stroke="#e5e5e5" stroke-width="1"/>
+  <g fill="#161616" font-size="10.5"
+     font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
+    <text x="32" y="332">static-metadata</text>
+    <text x="200" y="332">scenario-runner</text>
+    <text x="392" y="332">postgres</text>
+    <text x="540" y="332">redis</text>
+  </g>
+  <g fill="#6a6a6a" font-size="10.5"
+     font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">
+    <text x="134" y="332">:4331</text>
+    <text x="448" y="332">:54329</text>
+    <text x="578" y="332">:63799</text>
+  </g>
+  <g fill="#3a3a3a" font-size="11">
+    <text x="32" y="350">metadata bundle</text>
+    <text x="200" y="350">backs the portal's guided demos</text>
+  </g>
+
+  <text x="16" y="392" fill="#6a6a6a" font-size="12">All 16 services start from one</text>
+  <text x="196" y="392" fill="#6a6a6a" font-size="11.5"
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">just up</text>
+  <text x="243" y="392" fill="#6a6a6a" font-size="12">; host ports shown are the compose defaults.</text>
 </svg>
