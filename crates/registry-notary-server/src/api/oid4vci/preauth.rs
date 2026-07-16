@@ -180,6 +180,7 @@ pub(in crate::api) async fn oid4vci_offer_callback(
         issuer: preauth.notary_issuer().to_string(),
         jti: jti.clone(),
         credential_configuration_id: stored.credential_configuration_id.clone(),
+        tx_code_required: preauth.tx_code_required(),
         subject: bound_subject,
         iat: now,
         exp: now + preauth.pre_authorized_code_ttl_seconds() as i64,
@@ -418,7 +419,22 @@ pub(in crate::api) async fn oid4vci_token(
         )
         .await;
     };
-    let transaction_code = if preauth.tx_code_required() {
+    let Some(tx_code_required) = verified
+        .payload
+        .get("tx_code_required")
+        .and_then(Value::as_bool)
+    else {
+        return token_error_after_invalid_attempt(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            configuration_id.as_deref(),
+            TokenWireError::InvalidGrant,
+        )
+        .await;
+    };
+    let transaction_code = if tx_code_required {
         // Cap wrong-PIN attempts per code (brute-force guard). A locked code
         // (attempts over the cap) is rejected before the PIN compare.
         if check_tx_code_attempt(&state, code).await.is_err() {
@@ -538,7 +554,13 @@ pub(in crate::api) async fn oid4vci_token(
     };
     match preauth
         .preauthorization_state()
-        .redeem(&replay_scope, &jti, code_expires_at, transaction_code)
+        .redeem(
+            &replay_scope,
+            &jti,
+            code_expires_at,
+            tx_code_required,
+            transaction_code,
+        )
         .await
     {
         Ok(true) => {}

@@ -245,16 +245,13 @@ impl PreAuthRuntime {
             fetch_url_policy,
             login_state_ttl_seconds: esignet.login_state_ttl_seconds,
             preauthorization_state: Arc::new(
-                crate::preauth_state::PreauthorizationState::from_state_plane(
-                    state_plane,
-                    pre_auth.tx_code.required,
-                )
-                .map_err(|_| {
-                    StandaloneServerError::InvalidOidcConfig(
-                        "preauthorization state could not initialize its process-local key"
-                            .to_string(),
-                    )
-                })?,
+                crate::preauth_state::PreauthorizationState::from_state_plane(state_plane)
+                    .map_err(|_| {
+                        StandaloneServerError::InvalidOidcConfig(
+                            "preauthorization state could not initialize its process-local key"
+                                .to_string(),
+                        )
+                    })?,
             ),
             audit,
         }))

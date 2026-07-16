@@ -120,6 +120,11 @@ impl MachineQuotaLimiter {
             .await
     }
 
+    #[must_use]
+    pub(crate) const fn is_enabled(&self) -> bool {
+        self.config.enabled
+    }
+
     pub(crate) fn batch_reservation_parameters(
         &self,
         principal_id: &str,

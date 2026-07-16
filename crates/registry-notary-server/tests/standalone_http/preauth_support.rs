@@ -345,6 +345,17 @@ pub(super) fn jwt_payload(jwt: &str) -> Value {
     serde_json::from_slice(&bytes).expect("payload is JSON")
 }
 
+/// Re-sign a pre-authorized-code payload with the configured test access-token
+/// key so endpoint tests can exercise authenticated claim-shape variations.
+pub(super) fn sign_test_preauthorized_code(payload: Value) -> String {
+    sign_ed25519_compact_jwt(
+        TEST_ACCESS_TOKEN_JWK,
+        registry_notary_core::tokens::PRE_AUTHORIZED_CODE_JWT_TYP,
+        "did:web:issuer.example#access-token-key",
+        payload,
+    )
+}
+
 /// Decode (without verifying) the JOSE header of a compact JWT.
 #[cfg(feature = "registry-notary-cel")]
 pub(super) fn jwt_header(jwt: &str) -> Value {

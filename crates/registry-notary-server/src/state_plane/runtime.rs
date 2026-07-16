@@ -48,8 +48,12 @@ const RETENTION_MAINTENANCE_BATCH_SIZE: i32 = 1_000;
 /// Cleanup is deliberately less frequent than request-path state operations;
 /// expiry checks remain authoritative even between maintenance passes.
 const RETENTION_MAINTENANCE_CADENCE: Duration = Duration::from_secs(60);
+/// A catch-up sequence releases its pooled session between transactions and
+/// backs off before the next batch so request traffic retains pool access.
+const RETENTION_CATCH_UP_INITIAL_BACKOFF: Duration = Duration::from_millis(10);
+const RETENTION_CATCH_UP_MAX_BACKOFF: Duration = Duration::from_millis(100);
 const RETENTION_PRUNE_QUERY: &str =
-    "SELECT registry_notary_api.retention_prune_v1($1) AS deleted_count";
+    "SELECT deleted_count, batch_saturated FROM registry_notary_api.retention_prune_v1($1)";
 
 type ConnectionDriver = JoinHandle<Result<(), tokio_postgres::Error>>;
 type CredentialGeneration = [u8; 32];
@@ -257,6 +261,17 @@ pub struct NotaryPostgresStatePlaneRuntime {
     retention_attempts: AtomicU64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RetentionPruneOutcome {
+    batch_saturated: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetentionCatchUpOutcome {
+    CaughtUp,
+    Shutdown,
+}
+
 /// One PostgreSQL-serving retention worker. It owns no state values and is
 /// stopped by the serving state-plane handle before runtime connections close.
 pub(crate) struct PostgresRetentionMaintenance {
@@ -378,10 +393,12 @@ impl NotaryPostgresStatePlaneRuntime {
         }
     }
 
-    /// Invoke the fixed, bounded retention transaction once. Maintenance
-    /// errors use the same value-free state-plane error contract as requests
-    /// and are not retained as readiness state.
-    async fn prune_expired_rows(&self) -> Result<(), NotaryPostgresStatePlaneError> {
+    /// Invoke one fixed, bounded retention transaction. Maintenance errors use
+    /// the same value-free state-plane error contract as requests and are not
+    /// retained as readiness state.
+    async fn prune_expired_rows(
+        &self,
+    ) -> Result<RetentionPruneOutcome, NotaryPostgresStatePlaneError> {
         #[cfg(test)]
         self.retention_attempts.fetch_add(1, Ordering::Relaxed);
         let session = self.open_domain_session().await?;
@@ -395,10 +412,16 @@ impl NotaryPostgresStatePlaneRuntime {
         let deleted_count: i64 = row
             .try_get("deleted_count")
             .map_err(|_| NotaryPostgresStatePlaneError::OperationUnavailable)?;
-        if deleted_count < 0 {
+        let batch_saturated: bool = row
+            .try_get("batch_saturated")
+            .map_err(|_| NotaryPostgresStatePlaneError::OperationUnavailable)?;
+        let maximum_deleted = i64::from(RETENTION_MAINTENANCE_BATCH_SIZE) * 9;
+        if !(0..=maximum_deleted).contains(&deleted_count)
+            || (batch_saturated && deleted_count < i64::from(RETENTION_MAINTENANCE_BATCH_SIZE))
+        {
             return Err(NotaryPostgresStatePlaneError::OperationUnavailable);
         }
-        Ok(())
+        Ok(RetentionPruneOutcome { batch_saturated })
     }
 
     /// Stop admission of new sessions and abort every active connection
@@ -459,19 +482,20 @@ async fn run_postgres_retention_maintenance(
                 }
             }
             _ = interval.tick() => {
-                let prune = runtime.prune_expired_rows();
-                tokio::pin!(prune);
-                let result = tokio::select! {
-                    changed = shutdown.changed() => {
-                        if changed.is_err() || *shutdown.borrow() {
-                            return;
-                        }
-                        continue;
-                    }
-                    result = &mut prune => result,
-                };
+                let prune_runtime = Arc::clone(&runtime);
+                let result = catch_up_postgres_retention(
+                    &mut shutdown,
+                    RETENTION_CATCH_UP_INITIAL_BACKOFF,
+                    RETENTION_CATCH_UP_MAX_BACKOFF,
+                    move || {
+                        let runtime = Arc::clone(&prune_runtime);
+                        async move { runtime.prune_expired_rows().await }
+                    },
+                )
+                .await;
                 match result {
-                    Ok(()) => {}
+                    Ok(RetentionCatchUpOutcome::CaughtUp) => {}
+                    Ok(RetentionCatchUpOutcome::Shutdown) => return,
                     Err(NotaryPostgresStatePlaneError::Shutdown) => return,
                     Err(_) => tracing::warn!(
                         target: "registry_notary::state_plane",
@@ -480,6 +504,46 @@ async fn run_postgres_retention_maintenance(
                 }
             }
         }
+    }
+}
+
+async fn catch_up_postgres_retention<Prune, PruneFuture>(
+    shutdown: &mut watch::Receiver<bool>,
+    initial_backoff: Duration,
+    maximum_backoff: Duration,
+    mut prune: Prune,
+) -> Result<RetentionCatchUpOutcome, NotaryPostgresStatePlaneError>
+where
+    Prune: FnMut() -> PruneFuture,
+    PruneFuture: Future<Output = Result<RetentionPruneOutcome, NotaryPostgresStatePlaneError>>,
+{
+    let mut backoff = initial_backoff;
+    loop {
+        if *shutdown.borrow() {
+            return Ok(RetentionCatchUpOutcome::Shutdown);
+        }
+        let outcome = tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(RetentionCatchUpOutcome::Shutdown);
+                }
+                continue;
+            }
+            outcome = prune() => outcome?,
+        };
+        if !outcome.batch_saturated {
+            return Ok(RetentionCatchUpOutcome::CaughtUp);
+        }
+
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(RetentionCatchUpOutcome::Shutdown);
+                }
+            }
+            () = tokio::time::sleep(backoff) => {}
+        }
+        backoff = backoff.saturating_mul(2).min(maximum_backoff);
     }
 }
 
@@ -1116,9 +1180,67 @@ mod tests {
         assert_eq!(RETENTION_MAINTENANCE_BATCH_SIZE, 1_000);
         assert_eq!(RETENTION_MAINTENANCE_CADENCE, Duration::from_secs(60));
         assert_eq!(
-            RETENTION_PRUNE_QUERY,
-            "SELECT registry_notary_api.retention_prune_v1($1) AS deleted_count"
+            RETENTION_CATCH_UP_INITIAL_BACKOFF,
+            Duration::from_millis(10)
         );
+        assert_eq!(RETENTION_CATCH_UP_MAX_BACKOFF, Duration::from_millis(100));
+        assert_eq!(
+            RETENTION_PRUNE_QUERY,
+            "SELECT deleted_count, batch_saturated FROM registry_notary_api.retention_prune_v1($1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn retention_catch_up_repeats_saturated_batches_until_short() {
+        let attempts = Arc::new(AtomicU64::new(0));
+        let prune_attempts = Arc::clone(&attempts);
+        let (_shutdown, mut shutdown_rx) = watch::channel(false);
+
+        let outcome = catch_up_postgres_retention(
+            &mut shutdown_rx,
+            Duration::ZERO,
+            Duration::ZERO,
+            move || {
+                let attempt = prune_attempts.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    Ok(RetentionPruneOutcome {
+                        batch_saturated: attempt < 2,
+                    })
+                }
+            },
+        )
+        .await
+        .expect("successful retention batches catch up");
+
+        assert_eq!(outcome, RetentionCatchUpOutcome::CaughtUp);
+        assert_eq!(attempts.load(Ordering::Relaxed), 3);
+    }
+
+    #[tokio::test]
+    async fn retention_catch_up_observes_shutdown_already_signaled() {
+        let attempts = Arc::new(AtomicU64::new(0));
+        let prune_attempts = Arc::clone(&attempts);
+        let (shutdown, mut shutdown_rx) = watch::channel(false);
+        shutdown.send(true).expect("shutdown receiver remains open");
+
+        let outcome = catch_up_postgres_retention(
+            &mut shutdown_rx,
+            RETENTION_CATCH_UP_INITIAL_BACKOFF,
+            RETENTION_CATCH_UP_MAX_BACKOFF,
+            move || {
+                prune_attempts.fetch_add(1, Ordering::Relaxed);
+                async move {
+                    Ok(RetentionPruneOutcome {
+                        batch_saturated: true,
+                    })
+                }
+            },
+        )
+        .await
+        .expect("shutdown is not a maintenance failure");
+
+        assert_eq!(outcome, RetentionCatchUpOutcome::Shutdown);
+        assert_eq!(attempts.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]

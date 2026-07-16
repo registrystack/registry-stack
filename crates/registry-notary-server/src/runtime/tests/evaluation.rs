@@ -1345,6 +1345,147 @@ async fn registry_batch_preflights_every_item_before_first_relay_call() {
 }
 
 #[tokio::test]
+async fn registry_batch_quota_denial_does_not_bind_a_fresh_idempotency_key() {
+    let mut claim = registry_claim(
+        "enrollment-known",
+        RuleConfig::ConsultationMatched {
+            consultation: "enrollment".to_string(),
+        },
+        "boolean",
+    );
+    enable_registry_batch(&mut claim);
+    let mut evidence = (*test_evidence(vec![claim])).clone();
+    evidence.allowed_purposes = vec!["test".to_string()];
+    evidence.inline_batch_limit = 4;
+    let evidence = Arc::new(evidence);
+    let activated = Arc::new(BatchIdentityRelay::default());
+    let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+    let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+    let store = EvidenceStore::default();
+    let mut principal = machine_principal();
+    principal.scopes = vec!["registry:evidence".to_string()];
+    let mut request = registry_batch_request(vec![ClaimRef::from("enrollment-known")]);
+    request.items.truncate(1);
+    let exhausted_quota = crate::MachineQuotaLimiter::new(
+        registry_notary_core::MachineQuotaConfig {
+            enabled: true,
+            subjects_per_minute: 1,
+        },
+    );
+    exhausted_quota
+        .check_and_consume(&principal.principal_id, 1)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        runtime
+            .batch_evaluate(
+                Arc::clone(&evidence),
+                &store,
+                &principal,
+                request.clone(),
+                BatchEvaluateOptions {
+                    idempotency_key: Some("quota-denied-key"),
+                    owner_quota: Some((&exhausted_quota, 1)),
+                    ..BatchEvaluateOptions::default()
+                },
+            )
+            .await,
+        Err(EvidenceError::MachineQuotaExceeded { .. })
+    ));
+
+    let disabled_quota = crate::MachineQuotaLimiter::new(
+        registry_notary_core::MachineQuotaConfig {
+            enabled: false,
+            subjects_per_minute: 1,
+        },
+    );
+    let mut changed_scope_principal = principal;
+    changed_scope_principal
+        .scopes
+        .push("registry:catalog".to_string());
+    let retry = runtime
+        .batch_evaluate(
+            evidence,
+            &store,
+            &changed_scope_principal,
+            request,
+            BatchEvaluateOptions {
+                idempotency_key: Some("quota-denied-key"),
+                owner_quota: Some((&disabled_quota, 1)),
+                ..BatchEvaluateOptions::default()
+            },
+        )
+        .await
+        .expect("an uncharged quota denial does not bind the idempotency key");
+
+    assert!(matches!(retry.items[0].status, BatchItemStatus::Succeeded));
+    assert_eq!(
+        activated
+            .child_identities
+            .lock()
+            .expect("child identity lock is not poisoned")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn registry_batch_disabled_quota_accepts_an_unbounded_oidc_subject() {
+    let mut claim = registry_claim(
+        "enrollment-known",
+        RuleConfig::ConsultationMatched {
+            consultation: "enrollment".to_string(),
+        },
+        "boolean",
+    );
+    enable_registry_batch(&mut claim);
+    let mut evidence = (*test_evidence(vec![claim])).clone();
+    evidence.allowed_purposes = vec!["test".to_string()];
+    evidence.inline_batch_limit = 4;
+    let activated = Arc::new(BatchIdentityRelay::default());
+    let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+    let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+    let mut principal = machine_principal();
+    principal.auth_profile_id = registry_notary_core::EvidenceAuthProfileId::ExternalOidc;
+    principal.principal_id = "s".repeat(129);
+    principal.scopes = vec!["registry:evidence".to_string()];
+    let mut request = registry_batch_request(vec![ClaimRef::from("enrollment-known")]);
+    request.items.truncate(1);
+    let disabled_quota = crate::MachineQuotaLimiter::new(
+        registry_notary_core::MachineQuotaConfig {
+            enabled: false,
+            subjects_per_minute: 1,
+        },
+    );
+
+    let response = runtime
+        .batch_evaluate(
+            Arc::new(evidence),
+            &EvidenceStore::default(),
+            &principal,
+            request,
+            BatchEvaluateOptions {
+                idempotency_key: Some("disabled-quota-key"),
+                owner_quota: Some((&disabled_quota, u32::MAX)),
+                ..BatchEvaluateOptions::default()
+            },
+        )
+        .await
+        .expect("disabled quota performs no principal validation or quota hashing");
+
+    assert!(matches!(response.items[0].status, BatchItemStatus::Succeeded));
+    assert_eq!(
+        activated
+            .child_identities
+            .lock()
+            .expect("child identity lock is not poisoned")
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn registry_batch_coalesces_within_items_never_across_duplicates_and_replays_outer_key() {
     let mut exists = registry_claim(
         "enrollment-known",
@@ -1482,7 +1623,7 @@ async fn registry_batch_coalesces_within_items_never_across_duplicates_and_repla
 }
 
 #[tokio::test]
-async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_with_fresh_evaluation()
+async fn registry_batch_retry_after_ambiguous_dispatch_reuses_identity_and_quota_charge()
 {
     let mut claim = registry_claim(
         "enrollment-status",
@@ -1505,6 +1646,12 @@ async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_wit
     principal.scopes = vec!["registry:evidence".to_string()];
     let mut request = registry_batch_request(vec![ClaimRef::from("enrollment-status")]);
     request.items.truncate(1);
+    let quota = Arc::new(crate::MachineQuotaLimiter::new(
+        registry_notary_core::MachineQuotaConfig {
+            enabled: true,
+            subjects_per_minute: 1,
+        },
+    ));
 
     let first = {
         let runtime = runtime.clone();
@@ -1512,6 +1659,7 @@ async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_wit
         let store = Arc::clone(&store);
         let principal = principal.clone();
         let request = request.clone();
+        let quota = Arc::clone(&quota);
         tokio::spawn(async move {
             runtime
                 .batch_evaluate(
@@ -1521,6 +1669,7 @@ async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_wit
                     request,
                     BatchEvaluateOptions {
                         idempotency_key: Some("crash-retry-key"),
+                        owner_quota: Some((quota.as_ref(), 1)),
                         ..BatchEvaluateOptions::default()
                     },
                 )
@@ -1542,6 +1691,7 @@ async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_wit
             request.clone(),
             BatchEvaluateOptions {
                 idempotency_key: Some("crash-retry-key"),
+                owner_quota: Some((quota.as_ref(), 1)),
                 ..BatchEvaluateOptions::default()
             },
         )
@@ -1573,6 +1723,7 @@ async fn registry_batch_retry_after_ambiguous_dispatch_reuses_child_identity_wit
             request,
             BatchEvaluateOptions {
                 idempotency_key: Some("crash-retry-key"),
+                owner_quota: Some((quota.as_ref(), 1)),
                 ..BatchEvaluateOptions::default()
             },
         )

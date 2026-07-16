@@ -87,6 +87,9 @@ pub struct PreAuthorizedCodeClaims {
     pub jti: String,
     /// Selected credential configuration the code is bound to.
     pub credential_configuration_id: String,
+    /// Whether this individual code requires the holder-presented transaction
+    /// code advertised with its credential offer.
+    pub tx_code_required: bool,
     /// eSignet-verified subject claims carried into the code.
     pub subject: BoundSubject,
     /// Issued-at (unix seconds).
@@ -161,6 +164,10 @@ pub async fn mint_pre_authorized_code(
     payload.insert(
         "credential_configuration_id".to_string(),
         Value::String(claims.credential_configuration_id.clone()),
+    );
+    payload.insert(
+        "tx_code_required".to_string(),
+        Value::Bool(claims.tx_code_required),
     );
     payload.insert("iat".to_string(), Value::from(claims.iat));
     payload.insert("nbf".to_string(), Value::from(claims.iat));
@@ -349,6 +356,7 @@ const RESERVED_TOKEN_CLAIMS: &[&str] = &[
     "client_id",
     "token_type",
     "credential_configuration_id",
+    "tx_code_required",
     "acr",
     "auth_time",
 ];
@@ -573,6 +581,7 @@ mod tests {
             issuer: ISSUER.to_string(),
             jti: "01J0000000000000000000PREAU".to_string(),
             credential_configuration_id: "date_of_birth_sd_jwt".to_string(),
+            tx_code_required: true,
             subject: bound_subject(),
             iat: NOW,
             exp: NOW + 120,
@@ -650,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn pre_authorized_code_round_trip_carries_jti_and_subject() {
+    fn pre_authorized_code_round_trip_carries_jti_subject_and_tx_code_requirement() {
         let signer = access_token_signer();
         let claims = pre_authorized_code_claims();
         let token = block_on(mint_pre_authorized_code(
@@ -679,6 +688,7 @@ mod tests {
             verified.claim_str("credential_configuration_id"),
             Some("date_of_birth_sd_jwt")
         );
+        assert_eq!(verified.payload["tx_code_required"], true);
     }
 
     #[test]
