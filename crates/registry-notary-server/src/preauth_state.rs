@@ -95,7 +95,6 @@ pub(crate) enum PreauthorizationStateError {
 /// operations.
 pub(crate) struct PreauthorizationState {
     backend: PreauthorizationBackend,
-    transaction_code_required: bool,
 }
 
 enum PreauthorizationBackend {
@@ -106,17 +105,13 @@ enum PreauthorizationBackend {
 impl PreauthorizationState {
     pub(crate) fn from_state_plane(
         state_plane: Arc<NotaryStatePlaneHandle>,
-        transaction_code_required: bool,
     ) -> Result<Self, PreauthorizationStateError> {
         let backend = if state_plane.is_in_memory() {
             PreauthorizationBackend::InMemory(Arc::new(InMemoryPreauthorizationState::new()?))
         } else {
             PreauthorizationBackend::Postgresql(state_plane)
         };
-        Ok(Self {
-            backend,
-            transaction_code_required,
-        })
+        Ok(Self { backend })
     }
 
     pub(crate) async fn reserve_login(
@@ -169,9 +164,6 @@ impl PreauthorizationState {
         pin_length: u64,
         expires_at: OffsetDateTime,
     ) -> Result<bool, PreauthorizationStateError> {
-        if !self.transaction_code_required {
-            return Err(PreauthorizationStateError::IncompatibleTransactionCodeProof);
-        }
         match &self.backend {
             PreauthorizationBackend::InMemory(state) => {
                 state.reserve_transaction_code(jti, pin, pin_length, expires_at)
@@ -190,9 +182,6 @@ impl PreauthorizationState {
         jti: &str,
         presented_pin: &str,
     ) -> Result<Option<VerifiedTransactionCode>, PreauthorizationStateError> {
-        if !self.transaction_code_required {
-            return Err(PreauthorizationStateError::IncompatibleTransactionCodeProof);
-        }
         match &self.backend {
             PreauthorizationBackend::InMemory(state) => {
                 state.verify_transaction_code(jti, presented_pin)
@@ -204,24 +193,34 @@ impl PreauthorizationState {
         }
     }
 
-    /// Atomically claim the code JTI and, when configured, validate and remove
-    /// the corresponding transaction-code verifier.
+    /// Atomically claim the code JTI and, when required by the signed code,
+    /// validate and remove the corresponding transaction-code verifier.
     pub(crate) async fn redeem(
         &self,
         scope: &ReplayScope,
         jti: &str,
         expires_at: OffsetDateTime,
+        transaction_code_required: bool,
         proof: Option<VerifiedTransactionCode>,
     ) -> Result<bool, PreauthorizationStateError> {
-        if self.transaction_code_required != proof.is_some() {
+        if transaction_code_required != proof.is_some() {
             return Err(PreauthorizationStateError::IncompatibleTransactionCodeProof);
         }
         match &self.backend {
-            PreauthorizationBackend::InMemory(state) => state.redeem(scope, jti, expires_at, proof),
-            PreauthorizationBackend::Postgresql(handle) => Ok(handle
-                .sensitive_state()?
-                .redeem(scope, jti, expires_at, proof)
-                .await?),
+            PreauthorizationBackend::InMemory(state) => {
+                state.redeem(scope, jti, expires_at, transaction_code_required, proof)
+            }
+            PreauthorizationBackend::Postgresql(handle) => {
+                let sensitive = handle.sensitive_state()?;
+                // Issuance reserves before exposing the signed code, and no
+                // typed path adds a verifier for an existing code afterward.
+                // A concurrent successful redemption can only remove this row;
+                // the atomic replay claim below still makes that request lose.
+                if !transaction_code_required && sensitive.has_live_transaction_code(jti).await? {
+                    return Ok(false);
+                }
+                Ok(sensitive.redeem(scope, jti, expires_at, proof).await?)
+            }
         }
     }
 }
@@ -237,7 +236,6 @@ impl std::fmt::Debug for PreauthorizationState {
                     PreauthorizationBackend::Postgresql(_) => "postgresql",
                 },
             )
-            .field("transaction_code_required", &self.transaction_code_required)
             .finish()
     }
 }
@@ -373,6 +371,7 @@ impl InMemoryPreauthorizationState {
         scope: &ReplayScope,
         jti: &str,
         expires_at: OffsetDateTime,
+        transaction_code_required: bool,
         proof: Option<VerifiedTransactionCode>,
     ) -> Result<bool, PreauthorizationStateError> {
         let now = OffsetDateTime::now_utc();
@@ -385,6 +384,13 @@ impl InMemoryPreauthorizationState {
         let mut records = self.lock_records()?;
         records.redeemed.retain(|_, expiry| *expiry > now);
         if records.redeemed.contains_key(&replay_key) {
+            return Ok(false);
+        }
+        let has_live_transaction_code = records
+            .transaction_codes
+            .get(&jti_hash)
+            .is_some_and(|stored| stored.expires_at > now);
+        if transaction_code_required != has_live_transaction_code {
             return Ok(false);
         }
         if let Some(proof) = proof {
@@ -434,12 +440,11 @@ mod tests {
         }
     }
 
-    fn memory_state(transaction_code_required: bool) -> PreauthorizationState {
+    fn memory_state() -> PreauthorizationState {
         PreauthorizationState {
             backend: PreauthorizationBackend::InMemory(Arc::new(
                 InMemoryPreauthorizationState::new().unwrap(),
             )),
-            transaction_code_required,
         }
     }
 
@@ -449,7 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn login_state_is_consumed_exactly_once() {
-        let state = memory_state(false);
+        let state = memory_state();
         state
             .reserve_login("opaque", login_state(), 300)
             .await
@@ -460,7 +465,7 @@ mod tests {
 
     #[tokio::test]
     async fn wrong_pin_preserves_offer_and_successful_redemption_is_single_use() {
-        let state = memory_state(true);
+        let state = memory_state();
         let expires_at = OffsetDateTime::now_utc() + Duration::minutes(5);
         assert!(state
             .reserve_transaction_code("jti", "246810", 6, expires_at)
@@ -477,7 +482,7 @@ mod tests {
             .unwrap()
             .expect("correct PIN remains available after wrong PIN");
         assert!(state
-            .redeem(&scope(), "jti", expires_at, Some(proof))
+            .redeem(&scope(), "jti", expires_at, true, Some(proof))
             .await
             .unwrap());
         assert!(state
@@ -486,28 +491,64 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(state
-            .redeem(&scope(), "jti", expires_at, None)
+            .redeem(&scope(), "jti", expires_at, true, None)
             .await
             .is_err());
     }
 
     #[tokio::test]
+    async fn live_transaction_code_row_rejects_no_pin_policy() {
+        let backend = Arc::new(InMemoryPreauthorizationState::new().unwrap());
+        let issuing_runtime = PreauthorizationState {
+            backend: PreauthorizationBackend::InMemory(Arc::clone(&backend)),
+        };
+        let expires_at = OffsetDateTime::now_utc() + Duration::minutes(5);
+        assert!(issuing_runtime
+            .reserve_transaction_code("reconfigured-jti", "246810", 6, expires_at)
+            .await
+            .unwrap());
+
+        let reconfigured_runtime = PreauthorizationState {
+            backend: PreauthorizationBackend::InMemory(backend),
+        };
+        assert!(matches!(
+            reconfigured_runtime
+                .redeem(&scope(), "reconfigured-jti", expires_at, true, None)
+                .await,
+            Err(PreauthorizationStateError::IncompatibleTransactionCodeProof)
+        ));
+        assert!(!reconfigured_runtime
+            .redeem(&scope(), "reconfigured-jti", expires_at, false, None)
+            .await
+            .unwrap());
+        let proof = reconfigured_runtime
+            .verify_transaction_code("reconfigured-jti", "246810")
+            .await
+            .unwrap()
+            .expect("the persisted per-code PIN requirement remains redeemable");
+        assert!(reconfigured_runtime
+            .redeem(&scope(), "reconfigured-jti", expires_at, true, Some(proof),)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
     async fn redemption_without_pin_is_atomic_and_single_use() {
-        let state = memory_state(false);
+        let state = memory_state();
         let expires_at = OffsetDateTime::now_utc() + Duration::minutes(5);
         assert!(state
-            .redeem(&scope(), "jti", expires_at, None)
+            .redeem(&scope(), "jti", expires_at, false, None)
             .await
             .unwrap());
         assert!(!state
-            .redeem(&scope(), "jti", expires_at, None)
+            .redeem(&scope(), "jti", expires_at, false, None)
             .await
             .unwrap());
     }
 
     #[tokio::test]
     async fn concurrent_redemptions_have_exactly_one_winner() {
-        let state = Arc::new(memory_state(false));
+        let state = Arc::new(memory_state());
         let expires_at = OffsetDateTime::now_utc() + Duration::minutes(5);
         let barrier = Arc::new(tokio::sync::Barrier::new(3));
         let mut attempts = Vec::new();
@@ -517,7 +558,7 @@ mod tests {
             attempts.push(tokio::spawn(async move {
                 barrier.wait().await;
                 state
-                    .redeem(&scope(), "jti", expires_at, None)
+                    .redeem(&scope(), "jti", expires_at, false, None)
                     .await
                     .unwrap()
             }));

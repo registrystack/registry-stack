@@ -682,7 +682,7 @@ impl RegistryNotaryRuntime {
                 .uses_postgresql()
                 .then(|| format!("notary-internal-batch:{batch_id}"))
         });
-        let idempotency_owner = if let Some(key) = reservation_key {
+        let mut idempotency_owner = if let Some(key) = reservation_key {
             match store
                 .reserve_idempotent_batch(
                     key,
@@ -705,12 +705,18 @@ impl RegistryNotaryRuntime {
             .owner_quota
             .filter(|_| !quota_charged_by_reservation)
         {
-            quota
-                .check_and_consume(&principal.principal_id, cost)
-                .await
-                .map_err(|error| EvidenceError::MachineQuotaExceeded {
+            let quota_enabled = idempotency_owner.is_some() && quota.is_enabled();
+            if let Err(error) = quota.check_and_consume(&principal.principal_id, cost).await {
+                if let Some(owner) = idempotency_owner.take() {
+                    owner.abandon_uncharged()?;
+                }
+                return Err(EvidenceError::MachineQuotaExceeded {
                     retry_after_seconds: error.retry_after_seconds,
-                })?;
+                });
+            }
+            if let Some(owner) = idempotency_owner.as_mut().filter(|_| quota_enabled) {
+                owner.mark_quota_charged()?;
+            }
         }
         let mut retained_evaluations = Vec::new();
         let mut join_set: JoinSet<(usize, Result<Vec<ClaimResultView>, EvidenceError>)> =
@@ -992,7 +998,7 @@ impl RegistryNotaryRuntime {
             });
         }
 
-        let idempotency_owner = match store
+        let mut idempotency_owner = match store
             .reserve_idempotent_batch(
                 scoped_key,
                 request_hash.clone(),
@@ -1006,12 +1012,16 @@ impl RegistryNotaryRuntime {
         };
         let quota_charged_by_reservation = idempotency_owner.quota_charged();
         if let Some((quota, cost)) = owner_quota.filter(|_| !quota_charged_by_reservation) {
-            quota
-                .check_and_consume(&principal.principal_id, cost)
-                .await
-                .map_err(|error| EvidenceError::MachineQuotaExceeded {
+            let quota_enabled = quota.is_enabled();
+            if let Err(error) = quota.check_and_consume(&principal.principal_id, cost).await {
+                idempotency_owner.abandon_uncharged()?;
+                return Err(EvidenceError::MachineQuotaExceeded {
                     retry_after_seconds: error.retry_after_seconds,
-                })?;
+                });
+            }
+            if quota_enabled {
+                idempotency_owner.mark_quota_charged()?;
+            }
         }
 
         let subject_concurrency = Arc::new(Semaphore::new(evidence.concurrency.subjects));

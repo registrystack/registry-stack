@@ -198,6 +198,11 @@ pub(super) async fn preauth_callback_mints_pre_authorized_offer_with_tx_code() {
 
     let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
     assert!(!code.is_empty(), "callback mints a pre-authorized_code");
+    assert_eq!(
+        jwt_payload(&code)["tx_code_required"],
+        json!(true),
+        "the signed offer code binds its PIN requirement"
+    );
     assert_eq!(pin.len(), 6, "tx_code is a 6-digit PIN");
     assert!(pin.chars().all(|c| c.is_ascii_digit()));
     idp.stop().await;
@@ -816,6 +821,11 @@ pub(super) async fn preauth_token_accepts_missing_tx_code_when_optional() {
         page.pin.is_none(),
         "optional tx_code mode does not mint a PIN"
     );
+    assert_eq!(
+        jwt_payload(&page.code)["tx_code_required"],
+        json!(false),
+        "the signed offer code binds its no-PIN policy"
+    );
     redeem_token_without_pin(&server, &page.code)
         .await
         .assert_status_ok();
@@ -823,6 +833,120 @@ pub(super) async fn preauth_token_accepts_missing_tx_code_when_optional() {
     let second = redeem_token_without_pin(&server, &page.code).await;
     second.assert_status(StatusCode::BAD_REQUEST);
     assert_eq!(second.json::<Value>()["error"], json!("invalid_grant"));
+    idp.stop().await;
+}
+
+#[tokio::test]
+pub(super) async fn preauth_signed_required_policy_and_lockout_survive_optional_runtime_config() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = subject_access_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    );
+    config.oid4vci.pre_authorized_code.tx_code.required = false;
+    config
+        .oid4vci
+        .pre_authorized_code
+        .pre_authorized_code_ttl_seconds = 120;
+    config
+        .subject_access
+        .rate_limits
+        .tx_code_attempts_per_code_per_minute = 2;
+    let app = standalone_router(config).expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let issued = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
+    let mut payload = jwt_payload(&issued.code);
+    payload["jti"] = json!(Ulid::new().to_string());
+    payload["tx_code_required"] = json!(true);
+    let signed_required_code = sign_test_preauthorized_code(payload);
+
+    for wrong_pin in ["111111", "222222"] {
+        let response = redeem_token(&server, &signed_required_code, wrong_pin).await;
+        response.assert_status(StatusCode::BAD_REQUEST);
+        assert_eq!(response.json::<Value>()["error"], json!("invalid_grant"));
+    }
+    let locked = redeem_token(&server, &signed_required_code, "333333").await;
+    locked.assert_status(StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(locked.json::<Value>()["error"], json!("slow_down"));
+    idp.stop().await;
+}
+
+#[tokio::test]
+pub(super) async fn preauth_signed_optional_policy_survives_required_runtime_config() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(subject_access_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let issued = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
+    let mut payload = jwt_payload(&issued.code);
+    payload["jti"] = json!(Ulid::new().to_string());
+    payload["tx_code_required"] = json!(false);
+    let signed_optional_code = sign_test_preauthorized_code(payload);
+
+    redeem_token_without_pin(&server, &signed_optional_code)
+        .await
+        .assert_status_ok();
+    idp.stop().await;
+}
+
+#[tokio::test]
+pub(super) async fn preauth_token_rejects_missing_or_non_boolean_signed_tx_code_policy() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(subject_access_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let issued = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
+    let baseline = jwt_payload(&issued.code);
+    for malformed_policy in [None, Some(json!("true"))] {
+        let mut payload = baseline.clone();
+        payload["jti"] = json!(Ulid::new().to_string());
+        match malformed_policy {
+            Some(value) => payload["tx_code_required"] = value,
+            None => {
+                payload
+                    .as_object_mut()
+                    .expect("JWT payload is an object")
+                    .remove("tx_code_required");
+            }
+        }
+        let response =
+            redeem_token_without_pin(&server, &sign_test_preauthorized_code(payload)).await;
+        response.assert_status(StatusCode::BAD_REQUEST);
+        assert_eq!(response.json::<Value>()["error"], json!("invalid_grant"));
+    }
     idp.stop().await;
 }
 

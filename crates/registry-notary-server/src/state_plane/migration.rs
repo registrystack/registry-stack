@@ -28,15 +28,15 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "nonce=keyed-generation-reserve-compare-consume-sixty-second-tombstone-v2\0",
     "evaluation=client-bound-stored-record-v2-atomic-publication-expiry-v1\0",
     "batch=keyed-request-owner-lease-quota-once-takeover-atomic-completion-stored-response-v2-fifteen-minute-retention-v1\0",
-    "credential-status=insert-only-locked-transition-terminal-revocation-expiry-retention-monotonic-updated-at-v1\0",
+    "credential-status=insert-only-locked-transition-terminal-revocation-database-clock-effective-expiry-before-suspension-retention-monotonic-updated-at-v2\0",
     "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-v1\0",
     "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1\0",
     "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2\0",
     "preauthorization-tx-code=keyed-jti-keyed-pin-verifier-peek-redeem-with-replay-one-winner-expiry-live-key-attestation-v2\0",
-    "retention=bounded-expiry-prune-skip-locked-v1\0",
+    "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2\0",
 );
 pub const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "4cb2932fba579abe8981cd9c072fecaa1c030e61c371ae9792b1b105f5dd001b";
+    "3d34d8525e6f8ec83ebb187a8240432d2a63a579bfde5dc2d53d1e1ac1d95ed8";
 
 const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 0x4e4f_5441_5259_0001;
 const EXPECTED_PRIVATE_TABLE_COUNT_V1: i64 = 10;
@@ -780,11 +780,11 @@ fn expected_catalog_definition_fingerprint(
 // These fingerprints are derived from the deterministic catalog projection
 // below and are pinned separately for every supported PostgreSQL major.
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG16_V1: &str =
-    "dbc0f6153a4af15b5d323f2480ecf50ec0ca399ccf536306a68d30b4d2967eb6";
+    "a4b2fe9ac6210ade086f9eab2909687c24227b3537188d448c6fa87f35c7171d";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG17_V1: &str =
-    "dbc0f6153a4af15b5d323f2480ecf50ec0ca399ccf536306a68d30b4d2967eb6";
+    "a4b2fe9ac6210ade086f9eab2909687c24227b3537188d448c6fa87f35c7171d";
 const EXPECTED_CATALOG_DEFINITION_FINGERPRINT_PG18_V1: &str =
-    "c45e7da4136960827b90ad271f8640a35354120ff1f7cd890db8fab870e588e9";
+    "896946d10c4065ede59d1c0fb14b0c305c326e3e76f39bfd88290b15b2adad60";
 
 const CATALOG_DEFINITION_QUERY_V1: &str = r#"
 SELECT COALESCE((
@@ -1607,6 +1607,7 @@ RETURNS TABLE (
     issuer text,
     profile text,
     status text,
+    effective_status text,
     issued_at timestamptz,
     credential_expires_at timestamptz,
     updated_at timestamptz,
@@ -1620,6 +1621,11 @@ AS $function$
            stored.issuer,
            stored.profile,
            stored.status,
+           CASE
+               WHEN stored.status = 'revoked' THEN stored.status
+               WHEN stored.credential_expires_at <= pg_catalog.clock_timestamp() THEN 'expired'
+               ELSE stored.status
+           END,
            stored.issued_at,
            stored.credential_expires_at,
            stored.updated_at,
@@ -1639,6 +1645,7 @@ RETURNS TABLE (
     issuer text,
     profile text,
     status text,
+    effective_status text,
     issued_at timestamptz,
     credential_expires_at timestamptz,
     updated_at timestamptz,
@@ -1662,14 +1669,20 @@ BEGIN
      FOR UPDATE;
     IF NOT FOUND THEN
         RETURN QUERY SELECT 'not_found'::text, NULL::text, NULL::text, NULL::text,
-                            NULL::text, NULL::timestamptz, NULL::timestamptz,
+                            NULL::text, NULL::text, NULL::timestamptz, NULL::timestamptz,
                             NULL::timestamptz, NULL::timestamptz;
         RETURN;
     END IF;
     IF v_stored.status = 'revoked' AND p_status <> 'revoked' THEN
         RETURN QUERY SELECT 'invalid_transition'::text,
             v_stored.credential_id, v_stored.issuer, v_stored.profile,
-            v_stored.status, v_stored.issued_at, v_stored.credential_expires_at,
+            v_stored.status,
+            CASE
+                WHEN v_stored.status = 'revoked' THEN v_stored.status
+                WHEN v_stored.credential_expires_at <= v_now THEN 'expired'
+                ELSE v_stored.status
+            END,
+            v_stored.issued_at, v_stored.credential_expires_at,
             v_stored.updated_at, v_stored.purge_after;
         RETURN;
     END IF;
@@ -1683,7 +1696,13 @@ BEGIN
      RETURNING stored.* INTO v_stored;
     RETURN QUERY SELECT 'updated'::text,
         v_stored.credential_id, v_stored.issuer, v_stored.profile,
-        v_stored.status, v_stored.issued_at, v_stored.credential_expires_at,
+        v_stored.status,
+        CASE
+            WHEN v_stored.status = 'revoked' THEN v_stored.status
+            WHEN v_stored.credential_expires_at <= v_now THEN 'expired'
+            ELSE v_stored.status
+        END,
+        v_stored.issued_at, v_stored.credential_expires_at,
         v_stored.updated_at, v_stored.purge_after;
 END
 $function$;
@@ -2172,7 +2191,7 @@ END
 $function$;
 
 CREATE FUNCTION registry_notary_api.retention_prune_v1(p_batch_size integer)
-RETURNS bigint
+RETURNS TABLE (deleted_count bigint, batch_saturated boolean)
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog
@@ -2181,6 +2200,7 @@ DECLARE
     v_now timestamptz := pg_catalog.clock_timestamp();
     v_count bigint;
     v_total bigint := 0;
+    v_saturated boolean := FALSE;
 BEGIN
     IF p_batch_size NOT BETWEEN 1 AND 1000 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'invalid retention batch';
@@ -2200,6 +2220,7 @@ BEGIN
         RETURNING 1
     ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
     v_total := v_total + v_count;
+    v_saturated := v_saturated OR v_count = p_batch_size;
 
     WITH candidates AS (
         SELECT scope_hash, nonce_hash
@@ -2216,6 +2237,7 @@ BEGIN
         RETURNING 1
     ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
     v_total := v_total + v_count;
+    v_saturated := v_saturated OR v_count = p_batch_size;
 
     WITH candidates AS (
         SELECT evaluation_id FROM registry_notary_private.evaluation
@@ -2228,6 +2250,7 @@ BEGIN
         RETURNING 1
     ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
     v_total := v_total + v_count;
+    v_saturated := v_saturated OR v_count = p_batch_size;
 
     WITH candidates AS (
         SELECT key_hash FROM registry_notary_private.batch_idempotency
@@ -2240,6 +2263,7 @@ BEGIN
         RETURNING 1
     ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
     v_total := v_total + v_count;
+    v_saturated := v_saturated OR v_count = p_batch_size;
 
     WITH candidates AS (
         SELECT credential_id FROM registry_notary_private.credential_status
@@ -2252,6 +2276,7 @@ BEGIN
         RETURNING 1
     ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
     v_total := v_total + v_count;
+    v_saturated := v_saturated OR v_count = p_batch_size;
 
     WITH candidates AS (
         SELECT principal_hash FROM registry_notary_private.machine_quota
@@ -2264,6 +2289,7 @@ BEGIN
         RETURNING 1
     ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
     v_total := v_total + v_count;
+    v_saturated := v_saturated OR v_count = p_batch_size;
 
     WITH candidates AS (
         SELECT bucket_kind, key_hash
@@ -2279,6 +2305,7 @@ BEGIN
         RETURNING 1
     ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
     v_total := v_total + v_count;
+    v_saturated := v_saturated OR v_count = p_batch_size;
 
     WITH candidates AS (
         SELECT state_hash FROM registry_notary_private.preauthorization_login_state
@@ -2291,6 +2318,7 @@ BEGIN
         RETURNING 1
     ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
     v_total := v_total + v_count;
+    v_saturated := v_saturated OR v_count = p_batch_size;
 
     WITH candidates AS (
         SELECT jti_hash FROM registry_notary_private.preauthorization_tx_code
@@ -2303,8 +2331,9 @@ BEGIN
         RETURNING 1
     ) SELECT pg_catalog.count(*) INTO v_count FROM deleted;
     v_total := v_total + v_count;
+    v_saturated := v_saturated OR v_count = p_batch_size;
 
-    RETURN v_total;
+    RETURN QUERY SELECT v_total, v_saturated;
 END
 $function$;
 
@@ -2320,7 +2349,7 @@ mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use registry_notary_core::{StateConfig, StatePostgresqlConfig, STATE_STORAGE_POSTGRESQL};
 
-    use crate::preauth_state::LoginState;
+    use crate::preauth_state::{LoginState, PreauthorizationState};
     use crate::state_plane::{
         attest_postgres_state_plane_runtime, LoginReserveOutcome, NotaryPostgresStatePlaneError,
         NotaryPostgresStatePlaneReadiness, NotaryPostgresStatePlaneRuntime, NotaryStatePlaneHandle,
@@ -2361,12 +2390,12 @@ mod tests {
             "nonce=keyed-generation-reserve-compare-consume-sixty-second-tombstone-v2",
             "evaluation=client-bound-stored-record-v2-atomic-publication-expiry-v1",
             "batch=keyed-request-owner-lease-quota-once-takeover-atomic-completion-stored-response-v2-fifteen-minute-retention-v1",
-            "credential-status=insert-only-locked-transition-terminal-revocation-expiry-retention-monotonic-updated-at-v1",
+            "credential-status=insert-only-locked-transition-terminal-revocation-database-clock-effective-expiry-before-suspension-retention-monotonic-updated-at-v2",
             "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-v1",
             "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1",
             "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2",
             "preauthorization-tx-code=keyed-jti-keyed-pin-verifier-peek-redeem-with-replay-one-winner-expiry-live-key-attestation-v2",
-            "retention=bounded-expiry-prune-skip-locked-v1",
+            "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2",
         ] {
             assert!(
                 STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1.contains(semantic_revision),
@@ -3578,13 +3607,47 @@ mod tests {
             )
             .await?
             .get::<_, bool>(0));
-        assert!(runtime
-            .query_opt(
+        let expired_row = runtime
+            .query_one(
                 "SELECT * FROM registry_notary_api.credential_status_get_v1('credential-expired')",
                 &[],
             )
-            .await?
-            .is_some());
+            .await?;
+        assert_eq!(expired_row.get::<_, String>("status"), "valid");
+        assert_eq!(
+            expired_row.get::<_, String>("effective_status"),
+            "expired",
+            "PostgreSQL time must derive expiry independently of replica clocks"
+        );
+        let expired_record = crate::credential_status::postgres_status_record(&expired_row)?;
+        assert_eq!(
+            expired_record.effective_status(time::OffsetDateTime::UNIX_EPOCH),
+            registry_notary_core::CREDENTIAL_STATUS_EXPIRED,
+            "a replica clock far behind PostgreSQL must not reopen an expired credential"
+        );
+        let expired_suspended_row = runtime
+            .query_one(
+                "SELECT * FROM registry_notary_api.credential_status_update_v1(\
+                 'credential-expired', 'suspended')",
+                &[],
+            )
+            .await?;
+        assert_eq!(expired_suspended_row.get::<_, String>("outcome"), "updated");
+        assert_eq!(
+            expired_suspended_row.get::<_, String>("status"),
+            "suspended"
+        );
+        assert_eq!(
+            expired_suspended_row.get::<_, String>("effective_status"),
+            "expired",
+            "credential expiry must supersede a stored suspension"
+        );
+        let expired_suspended_record =
+            crate::credential_status::postgres_status_record(&expired_suspended_row)?;
+        assert_eq!(
+            expired_suspended_record.effective_status(time::OffsetDateTime::UNIX_EPOCH),
+            registry_notary_core::CREDENTIAL_STATUS_EXPIRED
+        );
         admin
             .execute(
                 "UPDATE registry_notary_private.credential_status SET \
@@ -4206,7 +4269,7 @@ mod tests {
         assert!(attest_postgres_state_plane_runtime(&state_config, true)
             .await
             .is_ok());
-        let readiness_handle = NotaryStatePlaneHandle::from_config(&state_config, true)?;
+        let readiness_handle = Arc::new(NotaryStatePlaneHandle::from_config(&state_config, true)?);
         readiness_handle.activate().await?;
         assert_eq!(
             readiness_handle.readiness().await,
@@ -4293,6 +4356,42 @@ mod tests {
         assert!(
             sensitive
                 .redeem(&scope, "adapter-jti", expires_at, Some(proof))
+                .await?
+        );
+
+        let preauthorization_state =
+            PreauthorizationState::from_state_plane(Arc::clone(&readiness_handle))?;
+        let mismatch_jti = "adapter-policy-mismatch-jti";
+        assert!(
+            preauthorization_state
+                .reserve_transaction_code(mismatch_jti, "654321", 6, expires_at)
+                .await?
+        );
+        let mismatch_scope =
+            registry_platform_replay::ReplayScope::new([("flow", "adapter-policy-mismatch")])?;
+        assert!(
+            !preauthorization_state
+                .redeem(&mismatch_scope, mismatch_jti, expires_at, false, None)
+                .await?,
+            "a signed no-PIN requirement must reject a contradictory live verifier"
+        );
+        let proof = preauthorization_state
+            .verify_transaction_code(mismatch_jti, "654321")
+            .await?
+            .expect("the rejected policy mismatch must preserve the verifier");
+        assert!(
+            preauthorization_state
+                .redeem(&mismatch_scope, mismatch_jti, expires_at, true, Some(proof),)
+                .await?,
+            "the rejected policy mismatch must not consume the replay claim"
+        );
+        assert!(preauthorization_state
+            .verify_transaction_code(mismatch_jti, "654321")
+            .await?
+            .is_none());
+        assert!(
+            !preauthorization_state
+                .redeem(&mismatch_scope, mismatch_jti, expires_at, false, None)
                 .await?
         );
 
@@ -4398,13 +4497,21 @@ mod tests {
                                 ('a9', interval '5 minutes')) AS rows(marker, lifetime);",
             )
             .await?;
-        let pruned: i64 = runtime
-            .query_one("SELECT registry_notary_api.retention_prune_v1(1000)", &[])
-            .await?
-            .get(0);
+        let prune = runtime
+            .query_one(
+                "SELECT deleted_count, batch_saturated \
+                   FROM registry_notary_api.retention_prune_v1(1000)",
+                &[],
+            )
+            .await?;
+        let pruned: i64 = prune.get("deleted_count");
         assert_eq!(
             pruned, 9,
             "each typed state table must prune its expired row"
+        );
+        assert!(
+            !prune.get::<_, bool>("batch_saturated"),
+            "a short per-table pass must report that catch-up is complete"
         );
         let remaining: i64 = admin
             .query_one(
@@ -4423,6 +4530,57 @@ mod tests {
             .await?
             .get(0);
         assert_eq!(remaining, 9, "retention must preserve every live row");
+
+        admin
+            .batch_execute(
+                "INSERT INTO registry_notary_private.evaluation
+                    (evaluation_id, client_id_hash, request_hash, purpose, record_version,
+                     record_json, created_at, expires_at)
+                 SELECT 'retention-backlog-' || sequence,
+                        decode(repeat('aa', 32), 'hex'),
+                        decode(repeat('ab', 32), 'hex'),
+                        'retention-backlog', 2, '{}'::jsonb,
+                        clock_timestamp() - interval '2 minutes',
+                        clock_timestamp() - interval '1 minute'
+                   FROM pg_catalog.generate_series(1, 1001) AS sequence;",
+            )
+            .await?;
+        let saturated = runtime
+            .query_one(
+                "SELECT deleted_count, batch_saturated \
+                   FROM registry_notary_api.retention_prune_v1(1000)",
+                &[],
+            )
+            .await?;
+        assert_eq!(saturated.get::<_, i64>("deleted_count"), 1_000);
+        assert!(
+            saturated.get::<_, bool>("batch_saturated"),
+            "a full batch from any one table must request another transaction"
+        );
+        let caught_up = runtime
+            .query_one(
+                "SELECT deleted_count, batch_saturated \
+                   FROM registry_notary_api.retention_prune_v1(1000)",
+                &[],
+            )
+            .await?;
+        assert_eq!(caught_up.get::<_, i64>("deleted_count"), 1);
+        assert!(
+            !caught_up.get::<_, bool>("batch_saturated"),
+            "the short follow-up batch must terminate catch-up"
+        );
+        let expired_backlog: i64 = admin
+            .query_one(
+                "SELECT count(*) FROM registry_notary_private.evaluation \
+                  WHERE expires_at <= clock_timestamp()",
+                &[],
+            )
+            .await?
+            .get(0);
+        assert_eq!(
+            expired_backlog, 0,
+            "catch-up must drain the expired backlog"
+        );
         Ok(())
     }
 

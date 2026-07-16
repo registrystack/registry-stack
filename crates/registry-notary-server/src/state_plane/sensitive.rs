@@ -304,6 +304,32 @@ impl PostgresSensitiveState {
         Ok(Some(VerifiedTransactionCode::new(jti_hash, expected)))
     }
 
+    /// Return whether a live transaction-code verifier exists for this JTI.
+    /// This lets the typed redemption boundary reject a signed no-PIN policy
+    /// if storage contains a contradictory live PIN row.
+    pub(crate) async fn has_live_transaction_code(
+        &self,
+        jti: &str,
+    ) -> Result<bool, SensitiveStateError> {
+        let jti_hash = self.keys.identifier_hash(JTI_IDENTIFIER_CONTEXT, jti);
+        let session = self.runtime.open_domain_session().await?;
+        let row = session
+            .run_operation(session.client().query_opt(
+                "SELECT key_id \
+                   FROM registry_notary_api.preauthorization_tx_code_peek_v1($1::bytea)",
+                &[&&jti_hash[..]],
+            ))
+            .await?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        let key_id: Vec<u8> = row.get(0);
+        if key_id.ct_eq(&self.keys.key_id).unwrap_u8() != 1 {
+            return Err(SensitiveStateError::InvalidStoredRecord);
+        }
+        Ok(true)
+    }
+
     /// Atomically claim the replay identifier and remove the transaction-code
     /// verifier. The proof is bound to the same keyed JTI hash.
     pub(crate) async fn redeem(

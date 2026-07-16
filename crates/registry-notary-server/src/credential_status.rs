@@ -49,15 +49,17 @@ pub(crate) struct CredentialStatusRecord {
     pub issued_at: String,
     pub expires_at: String,
     pub updated_at: String,
+    #[serde(skip)]
+    database_effective_status: Option<String>,
 }
 
 impl CredentialStatusRecord {
     pub(crate) fn effective_status(&self, now: OffsetDateTime) -> String {
+        if let Some(status) = &self.database_effective_status {
+            return status.clone();
+        }
         if self.status == CREDENTIAL_STATUS_REVOKED {
             return CREDENTIAL_STATUS_REVOKED.to_string();
-        }
-        if self.status == CREDENTIAL_STATUS_SUSPENDED {
-            return CREDENTIAL_STATUS_SUSPENDED.to_string();
         }
         let expired = OffsetDateTime::parse(&self.expires_at, &Rfc3339).is_ok_and(|exp| exp <= now);
         if expired {
@@ -235,6 +237,7 @@ impl CredentialStatusStore {
             issued_at: format_time(issued_at),
             expires_at: format_time(expires_at),
             updated_at: format_time(OffsetDateTime::now_utc()),
+            database_effective_status: None,
         };
         self.write_record(&record).await
     }
@@ -256,7 +259,7 @@ impl CredentialStatusStore {
                 .map_err(|_| CredentialStatusStoreError::PostgresUnavailable)?;
             let row = session
                 .run_operation(session.client().query_opt(
-                    "SELECT credential_id, issuer, profile, status, issued_at,\
+                    "SELECT credential_id, issuer, profile, status, effective_status, issued_at,\
                             credential_expires_at, updated_at\
                        FROM registry_notary_api.credential_status_get_v1($1)",
                     &[&credential_id],
@@ -297,7 +300,7 @@ impl CredentialStatusStore {
                 .map_err(|_| CredentialStatusStoreError::PostgresUnavailable)?;
             let row = session
                 .run_operation(session.client().query_one(
-                    "SELECT outcome, credential_id, issuer, profile, status, issued_at,\
+                    "SELECT outcome, credential_id, issuer, profile, status, effective_status, issued_at,\
                             credential_expires_at, updated_at\
                        FROM registry_notary_api.credential_status_update_v1($1, $2)",
                     &[&credential_id, &status],
@@ -409,7 +412,7 @@ impl CredentialStatusStore {
     }
 }
 
-fn postgres_status_record(
+pub(crate) fn postgres_status_record(
     row: &tokio_postgres::Row,
 ) -> Result<CredentialStatusRecord, CredentialStatusStoreError> {
     let issued_at = row
@@ -437,6 +440,10 @@ fn postgres_status_record(
         issued_at: format_time(issued_at),
         expires_at: format_time(expires_at),
         updated_at: format_time(updated_at),
+        database_effective_status: Some(
+            row.try_get("effective_status")
+                .map_err(|_| CredentialStatusStoreError::InvalidRecord)?,
+        ),
     })
 }
 
@@ -639,6 +646,24 @@ mod tests {
         assert_eq!(
             record.effective_status(expires_at + time::Duration::seconds(1)),
             CREDENTIAL_STATUS_EXPIRED
+        );
+
+        let suspended = store
+            .update_status(
+                "urn:ulid:01HX7Y5F2WAJ7ZP0Q4M5K9E8NC",
+                CREDENTIAL_STATUS_SUSPENDED,
+            )
+            .await
+            .expect("update succeeds")
+            .expect("record exists");
+        assert_eq!(
+            suspended.effective_status(issued_at),
+            CREDENTIAL_STATUS_SUSPENDED
+        );
+        assert_eq!(
+            suspended.effective_status(expires_at + time::Duration::seconds(1)),
+            CREDENTIAL_STATUS_EXPIRED,
+            "credential expiry supersedes suspension"
         );
 
         let revoked = store

@@ -10,6 +10,8 @@ use crate::state_plane::NotaryStatePlaneHandle;
 const BATCH_IDEMPOTENCY_RETENTION: time::Duration = time::Duration::minutes(15);
 const BATCH_OWNER_LEASE_SECONDS: i32 = 30;
 const BATCH_OWNER_HEARTBEAT_SECONDS: u64 = 10;
+const BATCH_WAIT_INITIAL_MILLIS: u64 = 50;
+const BATCH_WAIT_MAX_MILLIS: u64 = 1_000;
 // Version 2 adopts the pre-1.0 subject-access vocabulary in persisted
 // evaluation and idempotency response envelopes. Version 1 used the removed
 // self-attestation field and access-mode vocabulary and is intentionally not
@@ -19,6 +21,7 @@ const STORED_RECORD_VERSION: i16 = 2;
 enum IdempotencyRecord {
     InFlight {
         request_hash: String,
+        quota_charged: bool,
         wake: tokio::sync::watch::Sender<bool>,
     },
     Completed {
@@ -28,6 +31,7 @@ enum IdempotencyRecord {
     },
     Failed {
         request_hash: String,
+        quota_charged: bool,
         expires_at: OffsetDateTime,
     },
 }
@@ -108,6 +112,78 @@ impl BatchIdempotencyOwner<'_> {
         self.quota_charged
     }
 
+    pub(super) fn mark_quota_charged(&mut self) -> Result<(), EvidenceError> {
+        if self.quota_charged {
+            return Ok(());
+        }
+        let Some(backend) = self.backend.as_ref() else {
+            return Err(EvidenceError::RuleEvaluationFailed);
+        };
+        let BatchIdempotencyOwnerBackend::InMemory {
+            store,
+            key,
+            request_hash,
+            wake,
+        } = backend
+        else {
+            return Err(EvidenceError::RuleEvaluationFailed);
+        };
+        let mut records = store
+            .idempotency
+            .lock()
+            .expect("evidence idempotency mutex is not poisoned");
+        match records.get_mut(key) {
+            Some(IdempotencyRecord::InFlight {
+                request_hash: current_hash,
+                quota_charged,
+                wake: current_wake,
+            }) if current_hash == request_hash && current_wake.same_channel(wake) => {
+                *quota_charged = true;
+            }
+            _ => return Err(EvidenceError::RuleEvaluationFailed),
+        }
+        self.quota_charged = true;
+        Ok(())
+    }
+
+    pub(super) fn abandon_uncharged(mut self) -> Result<(), EvidenceError> {
+        if self.quota_charged {
+            return Err(EvidenceError::RuleEvaluationFailed);
+        }
+        let wake = {
+            let Some(BatchIdempotencyOwnerBackend::InMemory {
+                store,
+                key,
+                request_hash,
+                wake,
+            }) = self.backend.as_ref()
+            else {
+                return Err(EvidenceError::RuleEvaluationFailed);
+            };
+            let mut records = store
+                .idempotency
+                .lock()
+                .expect("evidence idempotency mutex is not poisoned");
+            let matches_owner = matches!(
+                records.get(key),
+                Some(IdempotencyRecord::InFlight {
+                    request_hash: current_hash,
+                    quota_charged: false,
+                    wake: current_wake,
+                }) if current_hash == request_hash && current_wake.same_channel(wake)
+            );
+            if !matches_owner {
+                return Err(EvidenceError::RuleEvaluationFailed);
+            }
+            records.remove(key);
+            wake.clone()
+        };
+        self.backend.take();
+        self.completed = true;
+        wake.send_replace(true);
+        Ok(())
+    }
+
     pub(super) async fn complete(
         mut self,
         response: BatchEvaluateResponse,
@@ -133,6 +209,7 @@ impl BatchIdempotencyOwner<'_> {
                     Some(IdempotencyRecord::InFlight {
                         request_hash: current_hash,
                         wake: current_wake,
+                        ..
                     }) if current_hash == &request_hash && current_wake.same_channel(&wake)
                 );
                 if !matches_owner {
@@ -208,6 +285,7 @@ impl Drop for BatchIdempotencyOwner<'_> {
                     Some(IdempotencyRecord::InFlight {
                         request_hash: current_hash,
                         wake: current_wake,
+                        ..
                     }) if current_hash == &request_hash && current_wake.same_channel(&wake)
                 );
                 if matches_owner {
@@ -215,6 +293,7 @@ impl Drop for BatchIdempotencyOwner<'_> {
                         key,
                         IdempotencyRecord::Failed {
                             request_hash,
+                            quota_charged: self.quota_charged,
                             expires_at: OffsetDateTime::now_utc() + BATCH_IDEMPOTENCY_RETENTION,
                         },
                     );
@@ -342,6 +421,7 @@ impl EvidenceStore {
                             key.clone(),
                             IdempotencyRecord::InFlight {
                                 request_hash: request_hash.clone(),
+                                quota_charged: false,
                                 wake: wake.clone(),
                             },
                         );
@@ -362,12 +442,14 @@ impl EvidenceStore {
                     Some(IdempotencyRecord::Completed { response, .. }) => {
                         return Ok(BatchIdempotencyReservation::Replay(response.clone()));
                     }
-                    Some(IdempotencyRecord::Failed { .. }) => {
+                    Some(IdempotencyRecord::Failed { quota_charged, .. }) => {
+                        let quota_charged = *quota_charged;
                         let (wake, _) = tokio::sync::watch::channel(false);
                         records.insert(
                             key.clone(),
                             IdempotencyRecord::InFlight {
                                 request_hash: request_hash.clone(),
+                                quota_charged,
                                 wake: wake.clone(),
                             },
                         );
@@ -378,7 +460,7 @@ impl EvidenceStore {
                                 request_hash,
                                 wake,
                             }),
-                            quota_charged: false,
+                            quota_charged,
                             completed: false,
                         }));
                     }
@@ -490,21 +572,9 @@ async fn reserve_postgres_batch<'a>(
     let key_hash = state_hash("batch-idempotency-key", &key);
     let request_hash = state_hash("batch-idempotency-request", &request_hash);
     let owner_token = random_owner_token()?;
-    let (principal_hash, quota_limit, quota_cost) = match quota {
-        Some((limiter, cost)) => limiter
-            .batch_reservation_parameters(principal_id, cost)
-            .map_err(|error| EvidenceError::MachineQuotaExceeded {
-                retry_after_seconds: error.retry_after_seconds,
-            })?,
-        None => (
-            state_hash(
-                "batch-principal-fallback",
-                &format!("{key}\0{principal_id}"),
-            ),
-            None,
-            1,
-        ),
-    };
+    let (principal_hash, quota_limit, quota_cost) =
+        postgres_batch_quota_parameters(&key, principal_id, quota)?;
+    let mut wait_attempt = 0_u32;
 
     loop {
         let runtime = state_plane
@@ -585,11 +655,69 @@ async fn reserve_postgres_batch<'a>(
                 });
             }
             "wait" => {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                wait_for_postgres_batch_retry(
+                    session,
+                    postgres_batch_wait_delay(wait_attempt, &owner_token),
+                )
+                .await;
+                wait_attempt = wait_attempt.saturating_add(1);
             }
             _ => return Err(EvidenceError::RuleEvaluationFailed),
         }
     }
+}
+
+fn postgres_batch_quota_parameters(
+    key: &str,
+    principal_id: &str,
+    quota: Option<(&crate::MachineQuotaLimiter, u32)>,
+) -> Result<(Vec<u8>, Option<i32>, i32), EvidenceError> {
+    let Some((limiter, cost)) = quota.filter(|(limiter, _)| limiter.is_enabled()) else {
+        return Ok((
+            state_hash(
+                "batch-principal-fallback",
+                &format!("{key}\0{principal_id}"),
+            ),
+            None,
+            1,
+        ));
+    };
+    limiter
+        .batch_reservation_parameters(principal_id, cost)
+        .map_err(|error| EvidenceError::MachineQuotaExceeded {
+            retry_after_seconds: error.retry_after_seconds,
+        })
+}
+
+async fn wait_for_postgres_batch_retry<Session>(session: Session, delay: std::time::Duration) {
+    drop(session);
+    tokio::time::sleep(delay).await;
+}
+
+fn postgres_batch_wait_delay(attempt: u32, jitter_seed: &[u8]) -> std::time::Duration {
+    let mut hasher = Sha256::new();
+    hasher.update(b"batch-idempotency-wait");
+    hasher.update([0]);
+    hasher.update(jitter_seed);
+    hasher.update(attempt.to_le_bytes());
+    let digest = hasher.finalize();
+    let sample = u64::from_le_bytes(
+        digest[..8]
+            .try_into()
+            .expect("SHA-256 digest prefix is eight bytes"),
+    );
+    postgres_batch_wait_delay_from_sample(attempt, sample)
+}
+
+fn postgres_batch_wait_delay_from_sample(attempt: u32, sample: u64) -> std::time::Duration {
+    let multiplier = 1_u64 << attempt.min(63);
+    let ceiling_millis = BATCH_WAIT_INITIAL_MILLIS
+        .saturating_mul(multiplier)
+        .min(BATCH_WAIT_MAX_MILLIS);
+    let floor_millis = (ceiling_millis / 2).max(1);
+    let span = ceiling_millis - floor_millis + 1;
+    let jitter_millis = ((u128::from(sample) * u128::from(span)) >> 64) as u64;
+    std::time::Duration::from_millis(floor_millis + jitter_millis)
 }
 
 fn spawn_postgres_batch_heartbeat(
@@ -816,6 +944,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn postgres_batch_wait_backoff_is_exponential_jittered_and_bounded() {
+        let ceilings = [50, 100, 200, 400, 800, 1_000, 1_000, 1_000];
+        for (attempt, ceiling) in ceilings.into_iter().enumerate() {
+            let minimum = postgres_batch_wait_delay_from_sample(attempt as u32, 0);
+            let maximum = postgres_batch_wait_delay_from_sample(attempt as u32, u64::MAX);
+            assert_eq!(minimum, std::time::Duration::from_millis(ceiling / 2));
+            assert_eq!(maximum, std::time::Duration::from_millis(ceiling));
+        }
+    }
+
+    #[tokio::test]
+    async fn postgres_waiter_releases_pool_session_before_backoff_for_peer() {
+        let pool = Arc::new(tokio::sync::Semaphore::new(1));
+        let waiter_session = Arc::clone(&pool).acquire_owned().await.unwrap();
+        let waiter = tokio::spawn(wait_for_postgres_batch_retry(
+            waiter_session,
+            std::time::Duration::from_secs(30),
+        ));
+
+        let peer_session = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            Arc::clone(&pool).acquire_owned(),
+        )
+        .await
+        .expect("a waiting reservation must not pin the only pool session")
+        .unwrap();
+
+        drop(peer_session);
+        waiter.abort();
+        let _ = waiter.await;
+    }
+
+    #[test]
+    fn disabled_postgres_batch_quota_skips_bounded_principal_parameters() {
+        let limiter = crate::MachineQuotaLimiter::new(registry_notary_core::MachineQuotaConfig {
+            enabled: false,
+            subjects_per_minute: 1,
+        });
+        let principal_id = "unbounded-oidc-subject".repeat(32);
+
+        let parameters =
+            postgres_batch_quota_parameters("batch-key", &principal_id, Some((&limiter, u32::MAX)))
+                .expect("disabled quota does not validate or hash quota principal parameters");
+
+        assert_eq!(
+            parameters,
+            (
+                state_hash(
+                    "batch-principal-fallback",
+                    &format!("batch-key\0{principal_id}"),
+                ),
+                None,
+                1,
+            )
+        );
+    }
+
     #[tokio::test]
     async fn completion_before_first_waiter_poll_is_not_lost() {
         let store = EvidenceStore::default();
@@ -895,6 +1081,7 @@ mod tests {
             BatchIdempotencyReservation::Owner(owner) => owner,
             BatchIdempotencyReservation::Replay(_) => panic!("first request owns reservation"),
         };
+        assert!(!owner.quota_charged());
         drop(owner);
         let takeover = match store
             .reserve_idempotent_batch("key".to_owned(), "hash".to_owned(), "principal", None)
@@ -904,6 +1091,7 @@ mod tests {
             BatchIdempotencyReservation::Owner(owner) => owner,
             BatchIdempotencyReservation::Replay(_) => panic!("failed owner is not replayable"),
         };
+        assert!(!takeover.quota_charged());
         assert!(matches!(
             store
                 .reserve_idempotent_batch(
@@ -919,5 +1107,103 @@ mod tests {
             .complete(response("batch-2"), Vec::new())
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn uncharged_abandonment_removes_key_and_wakes_waiters() {
+        let store = EvidenceStore::default();
+        let owner = match store
+            .reserve_idempotent_batch("key".to_owned(), "hash".to_owned(), "principal", None)
+            .await
+            .unwrap()
+        {
+            BatchIdempotencyReservation::Owner(owner) => owner,
+            BatchIdempotencyReservation::Replay(_) => panic!("first request owns reservation"),
+        };
+        let mut waiter = {
+            let records = store.idempotency.lock().unwrap();
+            match records.get("key").unwrap() {
+                IdempotencyRecord::InFlight { wake, .. } => wake.subscribe(),
+                _ => panic!("reservation is in flight"),
+            }
+        };
+
+        owner.abandon_uncharged().unwrap();
+
+        waiter.changed().await.unwrap();
+        assert!(*waiter.borrow());
+        assert!(!store.idempotency.lock().unwrap().contains_key("key"));
+        let replacement = match store
+            .reserve_idempotent_batch(
+                "key".to_owned(),
+                "different-hash".to_owned(),
+                "principal",
+                None,
+            )
+            .await
+            .unwrap()
+        {
+            BatchIdempotencyReservation::Owner(owner) => owner,
+            BatchIdempotencyReservation::Replay(_) => {
+                panic!("an abandoned reservation is not replayable")
+            }
+        };
+        replacement
+            .complete(response("batch-2"), Vec::new())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_owner_preserves_quota_charge_for_takeover_completion_and_replay() {
+        let store = EvidenceStore::default();
+        let mut owner = match store
+            .reserve_idempotent_batch("key".to_owned(), "hash".to_owned(), "principal", None)
+            .await
+            .unwrap()
+        {
+            BatchIdempotencyReservation::Owner(owner) => owner,
+            BatchIdempotencyReservation::Replay(_) => panic!("first request owns reservation"),
+        };
+        assert!(!owner.quota_charged());
+        owner.mark_quota_charged().unwrap();
+        assert!(owner.quota_charged());
+        drop(owner);
+        assert!(matches!(
+            store.idempotency.lock().unwrap().get("key"),
+            Some(IdempotencyRecord::Failed {
+                quota_charged: true,
+                ..
+            })
+        ));
+
+        let takeover = match store
+            .reserve_idempotent_batch("key".to_owned(), "hash".to_owned(), "principal", None)
+            .await
+            .unwrap()
+        {
+            BatchIdempotencyReservation::Owner(owner) => owner,
+            BatchIdempotencyReservation::Replay(_) => panic!("failed owner is not replayable"),
+        };
+        assert!(takeover.quota_charged());
+        takeover
+            .complete(response("batch-2"), Vec::new())
+            .await
+            .unwrap();
+        assert!(matches!(
+            store.idempotency.lock().unwrap().get("key"),
+            Some(IdempotencyRecord::Completed { .. })
+        ));
+
+        match store
+            .reserve_idempotent_batch("key".to_owned(), "hash".to_owned(), "principal", None)
+            .await
+            .unwrap()
+        {
+            BatchIdempotencyReservation::Replay(replay) => {
+                assert_eq!(replay.batch_id, "batch-2");
+            }
+            BatchIdempotencyReservation::Owner(_) => panic!("completed request is replayed"),
+        };
     }
 }
