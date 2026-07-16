@@ -71,6 +71,18 @@ class OpenIdConformanceRunnerTest(TestCase):
             self.runner.builder_command(Path("/suite"), "run", "builder"),
         )
 
+    def test_runtime_override_pins_built_image_bases(self) -> None:
+        override = self.runner.COMPOSE_OVERRIDE_PATH.read_text(encoding="utf-8")
+        nginx = (self.runner.CONFIG_DIR / "nginx.Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        server = (self.runner.CONFIG_DIR / "server-dev.Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("REGISTRY_OPENID_CONFORMANCE_CONFIG_DIR", override)
+        self.assertIn("nginx:1.27.3@sha256:", nginx)
+        self.assertIn("eclipse-temurin:21@sha256:", server)
+
     def test_metadata_scenario_cli_selects_single_oid4vci_module(self) -> None:
         scenario = self.runner.find_scenario(
             self.plan_map, "notary-oid4vci-issuer-metadata"
@@ -170,10 +182,11 @@ class OpenIdConformanceRunnerTest(TestCase):
                 jar.write_text("jar", encoding="utf-8")
 
             with patch.object(shutil, "which", return_value="/usr/bin/docker"):
-                with patch.object(
-                    self.runner, "run_checked", side_effect=fake_run_checked
-                ):
-                    self.runner.ensure_suite_artifact(checkout, args)
+                with patch.object(self.runner, "suite_checkout_ref", return_value="a" * 40):
+                    with patch.object(
+                        self.runner, "run_checked", side_effect=fake_run_checked
+                    ):
+                        self.runner.ensure_suite_artifact(checkout, args)
 
             self.assertEqual(
                 self.runner.builder_command(checkout, "run", "--rm", "builder"),
@@ -183,6 +196,19 @@ class OpenIdConformanceRunnerTest(TestCase):
             self.assertEqual(
                 str((Path(tmp) / "maven").resolve()), calls[0][2]["MAVEN_CACHE"]
             )
+            stamp = json.loads(
+                (checkout / self.runner.SUITE_JAR_STAMP).read_text(encoding="utf-8")
+            )
+            self.assertEqual("a" * 40, stamp["source_ref"])
+            self.assertEqual(
+                self.runner.file_sha256(jar), stamp["jar_sha256"]
+            )
+            self.assertEqual(
+                self.runner.file_sha256(
+                    self.runner.BUILDER_COMPOSE_OVERRIDE_PATH
+                ),
+                stamp["builder_override_sha256"],
+            )
 
     def test_existing_suite_artifact_skips_build_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -190,19 +216,66 @@ class OpenIdConformanceRunnerTest(TestCase):
             jar = checkout / self.runner.SUITE_JAR
             jar.parent.mkdir(parents=True)
             jar.write_text("jar", encoding="utf-8")
+            stamp = checkout / self.runner.SUITE_JAR_STAMP
+            with patch.object(self.runner, "suite_checkout_ref", return_value="a" * 40):
+                stamp.write_text(
+                    json.dumps(
+                        self.runner.expected_suite_artifact_stamp(checkout, jar),
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
             args = self.runner.parse_args(["prepare", "--suite-dir", str(checkout)])
 
-            with patch.object(self.runner, "run_checked") as run_checked:
-                self.runner.ensure_suite_artifact(checkout, args)
+            with patch.object(self.runner, "suite_checkout_ref", return_value="a" * 40):
+                with patch.object(self.runner, "run_checked") as run_checked:
+                    self.runner.ensure_suite_artifact(checkout, args)
 
             run_checked.assert_not_called()
+
+    def test_suite_artifact_rebuilds_when_checkout_ref_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = Path(tmp) / "suite"
+            jar = checkout / self.runner.SUITE_JAR
+            jar.parent.mkdir(parents=True)
+            jar.write_text("old", encoding="utf-8")
+            stamp = checkout / self.runner.SUITE_JAR_STAMP
+            with patch.object(self.runner, "suite_checkout_ref", return_value="a" * 40):
+                stamp.write_text(
+                    json.dumps(
+                        self.runner.expected_suite_artifact_stamp(checkout, jar),
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+            args = self.runner.parse_args(["prepare", "--suite-dir", str(checkout)])
+
+            def fake_run_checked(command, cwd=None, env=None):
+                jar.write_text("new", encoding="utf-8")
+
+            with patch.object(self.runner, "suite_checkout_ref", return_value="b" * 40):
+                with patch.object(
+                    self.runner, "run_checked", side_effect=fake_run_checked
+                ) as run_checked:
+                    self.runner.ensure_suite_artifact(checkout, args)
+
+            run_checked.assert_called_once()
+            self.assertEqual("new", jar.read_text(encoding="utf-8"))
+            self.assertEqual(
+                "b" * 40,
+                json.loads(stamp.read_text(encoding="utf-8"))["source_ref"],
+            )
 
     def test_suite_python_venv_installs_requirements_and_records_digest(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             checkout = Path(tmp) / "suite"
             requirements = checkout / "scripts" / "requirements.txt"
             requirements.parent.mkdir(parents=True)
-            requirements.write_text("httpx\npyparsing\n", encoding="utf-8")
+            requirements.write_bytes(
+                self.runner.SUITE_REQUIREMENTS_INPUT_PATH.read_bytes()
+            )
             venv_dir = Path(tmp) / "venv"
             args = self.runner.parse_args(
                 [
@@ -219,26 +292,98 @@ class OpenIdConformanceRunnerTest(TestCase):
             def fake_run_checked(command, cwd=None, env=None):
                 calls.append(command)
                 if command[1:3] == ["-m", "venv"]:
-                    venv_dir.mkdir(parents=True)
+                    Path(command[-1]).mkdir(parents=True)
 
             with patch.object(
                 self.runner, "run_checked", side_effect=fake_run_checked
             ):
                 python = self.runner.ensure_suite_python(checkout, args)
 
-            self.assertEqual(venv_dir.resolve() / "bin" / "python", python)
+            self.assertEqual(venv_dir.resolve(), python.parents[2])
+            self.assertTrue(python.parent.parent.name.startswith("py"))
             self.assertEqual(
-                [sys.executable, "-m", "venv", str(venv_dir.resolve())], calls[0]
+                [sys.executable, "-m", "venv", str(python.parents[1])], calls[0]
             )
             self.assertEqual(str(python), calls[1][0])
+            self.assertIn("--require-hashes", calls[1])
+            self.assertIn("--only-binary=:all:", calls[1])
             self.assertEqual("-r", calls[1][-2])
-            self.assertEqual(str(requirements), calls[1][-1])
             self.assertEqual(
-                self.runner.requirements_digest(requirements),
-                (venv_dir / ".requirements.sha256")
+                str(self.runner.SUITE_REQUIREMENTS_LOCK_PATH), calls[1][-1]
+            )
+            self.assertEqual(
+                self.runner.requirements_digest(
+                    self.runner.SUITE_REQUIREMENTS_INPUT_PATH,
+                    self.runner.SUITE_REQUIREMENTS_LOCK_PATH,
+                ),
+                (python.parents[1] / ".requirements.sha256")
                 .read_text(encoding="utf-8")
                 .strip(),
             )
+
+    def test_suite_python_cache_key_changes_with_lock_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            args = self.runner.parse_args(
+                ["prepare", "--python-venv-dir", str(Path(tmp) / "venvs")]
+            )
+            first = self.runner.suite_python(args)
+            with patch.object(
+                self.runner, "requirements_digest", return_value="b" * 64
+            ):
+                second = self.runner.suite_python(args)
+            self.assertNotEqual(first, second)
+
+    def test_suite_python_recreates_incomplete_digest_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = Path(tmp) / "suite"
+            requirements = checkout / "scripts" / "requirements.txt"
+            requirements.parent.mkdir(parents=True)
+            requirements.write_bytes(
+                self.runner.SUITE_REQUIREMENTS_INPUT_PATH.read_bytes()
+            )
+            args = self.runner.parse_args(
+                [
+                    "prepare",
+                    "--suite-dir",
+                    str(checkout),
+                    "--python-venv-dir",
+                    str(Path(tmp) / "venvs"),
+                ]
+            )
+            python = self.runner.suite_python(args)
+            python.parent.mkdir(parents=True)
+            python.touch()
+            stale = python.parents[1] / "stale-package"
+            stale.touch()
+
+            def fake_run_checked(command, cwd=None, env=None):
+                if command[1:3] == ["-m", "venv"]:
+                    Path(command[-1]).mkdir(parents=True)
+
+            with patch.object(
+                self.runner, "run_checked", side_effect=fake_run_checked
+            ):
+                self.runner.ensure_suite_python(checkout, args)
+
+            self.assertFalse(stale.exists())
+            self.assertTrue(
+                (python.parents[1] / ".requirements.sha256").is_file()
+            )
+
+    def test_suite_python_rejects_changed_upstream_requirements(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = Path(tmp) / "suite"
+            requirements = checkout / "scripts" / "requirements.txt"
+            requirements.parent.mkdir(parents=True)
+            requirements.write_text("httpx\npyparsing\nunreviewed\n", encoding="utf-8")
+            args = self.runner.parse_args(
+                ["prepare", "--suite-dir", str(checkout)]
+            )
+
+            with self.assertRaisesRegex(
+                self.runner.RunnerError, "differ from the checked-in locked input"
+            ):
+                self.runner.ensure_suite_python(checkout, args)
 
     def test_blocked_full_scenario_requires_explicit_override(self) -> None:
         args = self.runner.parse_args(

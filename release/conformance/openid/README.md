@@ -7,9 +7,12 @@ not depend on a mutable hosted environment or on the separately maintained
 
 The wrapper pins the upstream suite checkout to `release-v5.2.0`
 (`dee9a25160e789f0f80517674693ef7989ab9fa1`) and overlays the upstream Compose
-files with digest-pinned MongoDB runtime and Maven builder images. A different
-suite ref can be supplied for investigation, but results from an override are
-not evidence for the checked-in mapping.
+files with digest-pinned MongoDB, Maven, Nginx, and Java images. The suite JAR
+cache is bound to the checked-out commit, and the suite's Python helpers install
+from the checked-in fully hashed lock only when its upstream requirements still
+match the reviewed input. A different suite ref can be supplied for
+investigation, but results from an override are not evidence for the checked-in
+mapping until the image, Python, and JAR pins are reviewed with it.
 
 ## Evidence boundary
 
@@ -92,6 +95,14 @@ release/scripts/openid-conformance-runner.py down
 The checkout, Python environment, Maven cache, rendered configuration, and
 exported suite artifacts live under `target/openid-conformance/`, which Git
 ignores.
+
+When advancing the suite ref, compare its `scripts/requirements.txt` with
+`python-requirements.in`. After review, regenerate the hashed lock with the
+command recorded at the top of `python-requirements.lock`. Also review the four
+image tags and refresh their immutable digests through the matching Dependabot
+Dockerfile and Docker Compose updates. `prepare` reuses the suite JAR only while
+its recorded source ref, builder override digest, and artifact digest still
+match.
 
 ## Sensitive result handling
 

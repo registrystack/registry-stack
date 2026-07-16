@@ -26,11 +26,15 @@ CONFIG_DIR = REPO_ROOT / "release" / "conformance" / "openid"
 PLAN_MAP_PATH = CONFIG_DIR / "plan-map.json"
 COMPOSE_OVERRIDE_PATH = CONFIG_DIR / "docker-compose.override.yaml"
 BUILDER_COMPOSE_OVERRIDE_PATH = CONFIG_DIR / "builder-compose.override.yaml"
+SUITE_REQUIREMENTS_INPUT_PATH = CONFIG_DIR / "python-requirements.in"
+SUITE_REQUIREMENTS_LOCK_PATH = CONFIG_DIR / "python-requirements.lock"
 DEFAULT_WORK_ROOT = REPO_ROOT / "target" / "openid-conformance"
 DEFAULT_CACHE_DIR = DEFAULT_WORK_ROOT / "cache"
 DEFAULT_OUTPUT_ROOT = DEFAULT_WORK_ROOT / "results"
 SCHEMA_VERSION = "registry.release.openid_conformance_plan_map.v1"
 SUITE_JAR = "target/fapi-test-suite.jar"
+SUITE_JAR_STAMP = "target/fapi-test-suite.jar.registry-stack-source-ref"
+COMPOSE_CONFIG_DIR_ENV = "REGISTRY_OPENID_CONFORMANCE_CONFIG_DIR"
 
 
 class RunnerError(RuntimeError):
@@ -197,10 +201,45 @@ def builder_command(checkout: Path, *compose_args: str) -> list[str]:
     ]
 
 
+def suite_checkout_ref(checkout: Path) -> str:
+    git = shutil.which("git")
+    if not git:
+        raise RunnerError("git is required to inspect the OpenID conformance suite")
+    result = subprocess.run(
+        [git, "rev-parse", "HEAD"],
+        cwd=checkout,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    actual = result.stdout.strip()
+    if result.returncode != 0 or len(actual) != 40:
+        raise RunnerError(result.stderr.strip() or "could not resolve suite checkout ref")
+    return actual
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def expected_suite_artifact_stamp(checkout: Path, jar: Path) -> dict[str, str]:
+    return {
+        "source_ref": suite_checkout_ref(checkout),
+        "builder_override_sha256": file_sha256(BUILDER_COMPOSE_OVERRIDE_PATH),
+        "jar_sha256": file_sha256(jar),
+    }
+
+
 def ensure_suite_artifact(checkout: Path, args: argparse.Namespace) -> Path:
     jar = checkout / SUITE_JAR
-    if jar.exists() and not args.rebuild_suite:
-        return jar
+    stamp = checkout / SUITE_JAR_STAMP
+    if jar.exists() and stamp.exists() and not args.rebuild_suite:
+        try:
+            stamped = json.loads(stamp.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            stamped = None
+        if stamped == expected_suite_artifact_stamp(checkout, jar):
+            return jar
     if not shutil.which("docker"):
         raise RunnerError("docker is required to build the OpenID conformance suite")
     maven_cache = Path(args.maven_cache_dir).expanduser().resolve()
@@ -214,15 +253,30 @@ def ensure_suite_artifact(checkout: Path, args: argparse.Namespace) -> Path:
     )
     if not jar.exists():
         raise RunnerError(f"OpenID conformance suite build did not create {jar}")
+    stamp.write_text(
+        json.dumps(expected_suite_artifact_stamp(checkout, jar), sort_keys=True)
+        + "\n",
+        encoding="utf-8",
+    )
     return jar
 
 
-def requirements_digest(requirements_path: Path) -> str:
-    return hashlib.sha256(requirements_path.read_bytes()).hexdigest()
+def requirements_digest(*requirements_paths: Path) -> str:
+    digest = hashlib.sha256()
+    for path in requirements_paths:
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def suite_python(args: argparse.Namespace) -> Path:
-    venv_dir = Path(args.python_venv_dir).expanduser().resolve()
+    digest = requirements_digest(
+        SUITE_REQUIREMENTS_INPUT_PATH, SUITE_REQUIREMENTS_LOCK_PATH
+    )
+    cache_key = f"py{sys.version_info.major}.{sys.version_info.minor}-{digest[:16]}"
+    venv_dir = Path(args.python_venv_dir).expanduser().resolve() / cache_key
     if os.name == "nt":
         return venv_dir / "Scripts" / "python.exe"
     return venv_dir / "bin" / "python"
@@ -232,13 +286,26 @@ def ensure_suite_python(checkout: Path, args: argparse.Namespace) -> Path:
     requirements_path = checkout / "scripts" / "requirements.txt"
     if not requirements_path.exists():
         raise RunnerError(f"missing suite Python requirements: {requirements_path}")
+    if requirements_path.read_bytes() != SUITE_REQUIREMENTS_INPUT_PATH.read_bytes():
+        raise RunnerError(
+            "suite Python requirements differ from the checked-in locked input; "
+            "review and regenerate release/conformance/openid/python-requirements.lock"
+        )
     python = suite_python(args)
     venv_dir = python.parents[1]
+    digest = requirements_digest(
+        SUITE_REQUIREMENTS_INPUT_PATH, SUITE_REQUIREMENTS_LOCK_PATH
+    )
+    stamp = venv_dir / ".requirements.sha256"
+    cache_matches = (
+        python.exists()
+        and stamp.exists()
+        and stamp.read_text(encoding="utf-8").strip() == digest
+    )
+    if venv_dir.exists() and not cache_matches:
+        shutil.rmtree(venv_dir)
     if not python.exists():
         run_checked([sys.executable, "-m", "venv", str(venv_dir)])
-    digest = requirements_digest(requirements_path)
-    stamp = venv_dir / ".requirements.sha256"
-    if not stamp.exists() or stamp.read_text(encoding="utf-8").strip() != digest:
         run_checked(
             [
                 str(python),
@@ -246,8 +313,10 @@ def ensure_suite_python(checkout: Path, args: argparse.Namespace) -> Path:
                 "pip",
                 "install",
                 "--disable-pip-version-check",
+                "--require-hashes",
+                "--only-binary=:all:",
                 "-r",
-                str(requirements_path),
+                str(SUITE_REQUIREMENTS_LOCK_PATH),
             ]
         )
         stamp.write_text(digest + "\n", encoding="utf-8")
@@ -326,7 +395,9 @@ def cmd_up(args: argparse.Namespace) -> int:
     plan_map = load_plan_map(args.plan_map)
     checkout = ensure_suite_checkout(plan_map, args)
     ensure_suite_artifact(checkout, args)
-    run_checked(compose_command(checkout, args, "up", "-d", "--build"))
+    env = os.environ.copy()
+    env[COMPOSE_CONFIG_DIR_ENV] = str(CONFIG_DIR)
+    run_checked(compose_command(checkout, args, "up", "-d", "--build"), env=env)
     settings = suite_settings(plan_map, args)
     wait_for_suite(settings["base_url"], args.wait_seconds)
     print(settings["base_url"])
@@ -335,7 +406,9 @@ def cmd_up(args: argparse.Namespace) -> int:
 
 def cmd_down(args: argparse.Namespace) -> int:
     checkout = suite_dir(args)
-    run_checked(compose_command(checkout, args, "down"))
+    env = os.environ.copy()
+    env[COMPOSE_CONFIG_DIR_ENV] = str(CONFIG_DIR)
+    run_checked(compose_command(checkout, args, "down"), env=env)
     return 0
 
 

@@ -49,3 +49,15 @@ updates:
       docker-images:
         patterns:
           - "*"
+
+  # Docker Compose image pins use a distinct Dependabot ecosystem from
+  # Dockerfiles, so both conformance override files need this entry.
+  - package-ecosystem: docker-compose
+    directory: "/release/conformance/openid"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      docker-compose-images:
+        patterns:
+          - "*"
