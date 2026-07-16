@@ -2945,7 +2945,10 @@ mod tests {
         let config = PostgresStatePlaneConfig::new(
             POOL_DATABASE_URL_ENV,
             Some(PathBuf::from(std::env::var(DATABASE_CA_ENV)?)),
-            Duration::from_secs(2),
+            // Allow hosted runners enough time for the initial TLS connection.
+            // The short operation timeout below remains the pool-saturation
+            // assertion exercised by this conformance test.
+            Duration::from_secs(5),
             Duration::from_millis(100),
             1,
         )?;
