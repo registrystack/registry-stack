@@ -2574,7 +2574,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "a46c38a32d9a28596065aad4e96854d5bbb53c81f8ad4742a680a51980a49aa9",
+        "a6e86b105eaa2aab4ca6e2e0e1b4d7c823573668179143f89df9f5590005e53e",
         "project inputs must match the cross-machine golden digest"
     );
 }
@@ -3071,10 +3071,15 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
         notary["state"]["postgresql"]["url_env"].as_str(),
         Some("REGISTRY_NOTARY_POSTGRES_URL")
     );
-    assert_eq!(
-        notary["state"]["postgresql"]["max_connections"].as_u64(),
-        Some(16)
-    );
+    assert!(notary["state"]["postgresql"]
+        .get("connect_timeout_ms")
+        .is_none());
+    assert!(notary["state"]["postgresql"]
+        .get("operation_timeout_ms")
+        .is_none());
+    assert!(notary["state"]["postgresql"]
+        .get("max_connections")
+        .is_none());
     assert_eq!(
         notary["state"]["postgresql"]["root_certificate_path"].as_str(),
         Some("/run/secrets/notary-postgres-ca.pem")

@@ -250,13 +250,15 @@ fn generated_notary_config(
             "max_in_flight": 8,
         });
     }
+    let state_defaults = StatePostgresqlConfig::default();
     let mut state = json!({
         "storage": "postgresql",
         "postgresql": {
-            "url_env": "REGISTRY_NOTARY_POSTGRES_URL",
-            "connect_timeout_ms": 5_000,
-            "operation_timeout_ms": 2_000,
-            "max_connections": 16,
+            // Keep the environment-backed database secret discoverable in the
+            // generated consumer descriptor. Runtime policy uses Notary's
+            // authoritative defaults unless the project gains an explicit
+            // operator-facing override.
+            "url_env": state_defaults.url_env,
         },
     });
     if let Some(binding) = &environment.notary_state {

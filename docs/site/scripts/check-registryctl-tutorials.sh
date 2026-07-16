@@ -99,16 +99,22 @@ build_source_under_test() {
 				-p registryctl \
 				-p registry-relay \
 				-p registry-notary \
-				--features registry-relay/spdci-api-standards,registry-relay/standards-cel-mapping,registry-relay/ogcapi-edr,registry-notary/registry-notary-cel,registry-notary/pkcs11'
+				--features registry-relay/spdci-api-standards,registry-relay/standards-cel-mapping,registry-relay/ogcapi-edr,registry-notary/registry-notary-cel,registry-notary/pkcs11
+			cargo build --release --locked \
+				-p registry-notary-server \
+				--bin registry-notary-cel-worker \
+				--features registry-notary-server/registry-notary-cel'
 
 	cp "$LINUX_TARGET/release/registry-relay" "$image_context/dist/image-bin/registry-relay"
 	cp "$LINUX_TARGET/release/registry-relay-rhai-worker" "$image_context/dist/image-bin/registry-relay-rhai-worker"
 	cp "$LINUX_TARGET/release/registry-notary" "$image_context/dist/image-bin/registry-notary"
+	cp "$LINUX_TARGET/release/registry-notary-cel-worker" "$image_context/dist/image-bin/registry-notary-cel-worker"
 	cp "$REPO_ROOT/LICENSE" "$image_context/LICENSE"
 	chmod 0755 \
 		"$image_context/dist/image-bin/registry-relay" \
 		"$image_context/dist/image-bin/registry-relay-rhai-worker" \
-		"$image_context/dist/image-bin/registry-notary"
+		"$image_context/dist/image-bin/registry-notary" \
+		"$image_context/dist/image-bin/registry-notary-cel-worker"
 
 	DOCKER_BUILDKIT=1 docker build \
 		--platform linux/amd64 \

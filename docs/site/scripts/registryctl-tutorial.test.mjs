@@ -149,3 +149,13 @@ test('source tutorial image staging includes the dedicated Relay Rhai worker', (
   assert.match(script, new RegExp(`dist/image-bin/${worker}`));
   assert.match(script, new RegExp(`chmod 0755[\\s\\S]*dist/image-bin/${worker}`));
 });
+
+test('source tutorial image staging includes the dedicated Notary CEL worker', () => {
+  const script = readFileSync(new URL('./check-registryctl-tutorials.sh', import.meta.url), 'utf8');
+  const worker = 'registry-notary-cel-worker';
+
+  assert.match(script, new RegExp(`--bin ${worker}`));
+  assert.match(script, new RegExp(`\\$LINUX_TARGET/release/${worker}`));
+  assert.match(script, new RegExp(`dist/image-bin/${worker}`));
+  assert.match(script, new RegExp(`chmod 0755[\\s\\S]*dist/image-bin/${worker}`));
+});

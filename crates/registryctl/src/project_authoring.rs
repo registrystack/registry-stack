@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::ValueEnum;
-use registry_notary_core::StandaloneRegistryNotaryConfig;
+use registry_notary_core::{config::StatePostgresqlConfig, StandaloneRegistryNotaryConfig};
 use registry_platform_crypto::{canonicalize_json, parse_json_strict};
 use registry_relay::source_plan::{
     authoring::{
