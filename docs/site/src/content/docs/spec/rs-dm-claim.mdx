@@ -93,6 +93,13 @@ REQ-DM-CLAIM-002: Each claim MUST declare exactly one evidence mode. A registry-
 
 REQ-DM-CLAIM-003: A registry-backed claim SHOULD bind only the Relay outputs its rule needs. Consultation input mapping MUST NOT select a Relay origin, credential, method, capability, output projection, or response mapper. Request paths outside the closed mapping MUST be rejected.
 
+For target-derived inputs, the closed project mapping admits `request.target.id`,
+`request.target.identifiers.<stable-id>`, and
+`request.target.attributes.<stable-name>`.
+A target attribute stable name MUST match `[a-z][a-z0-9_]{0,63}`.
+An authored mapping admits only that named value from the authenticated target request; it does
+not authorize arbitrary traversal of the target object.
+
 ## 4. Relay consultation contract
 
 A Registry Stack project compiles subject selection, cardinality, source adaptation, and output minimization into Relay. Notary sees only the consultation inputs and typed output contract.
