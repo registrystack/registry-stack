@@ -287,15 +287,22 @@ future retention setting does not shorten existing rows.
 | Preauthorization login state | Configured lifetime, at most 600 seconds |
 | Preauthorization transaction code | Code lifetime, at most 600 seconds, or successful redemption |
 
-Each serving replica runs one bounded expiry-maintenance pass every 60 seconds.
-A pass deletes at most 1,000 expired rows from each typed state table. Multiple
-replicas may run the transaction concurrently because candidates are locked
-with skip-locked semantics. Logical expiry checks on reads and writes remain
-authoritative between passes, so a transient cleanup failure does not reopen
-expired state. Transient cleanup contention is not a reason to delete rows
-manually. Never remove an unexpired replay row, nonce tombstone, idempotency
-completion, credential-status record, quota window, or preauthorization row to
-recover capacity.
+Each serving replica begins expiry maintenance every 60 seconds. One
+transaction deletes at most 1,000 expired rows from each typed state table and
+reports whether any table filled that bound. A full per-table batch causes the
+replica to release its pooled session, wait with a short bounded internal
+backoff, and run another bounded transaction until every table returns a short
+batch. The catch-up policy has no operator-facing tuning setting. Multiple
+replicas may run these transactions concurrently because candidates are locked
+with skip-locked semantics.
+
+Logical expiry checks on reads and writes remain authoritative between
+transactions, so a transient cleanup failure does not reopen expired state. A
+failed catch-up transaction is retried by the next scheduled maintenance cycle.
+Transient cleanup contention is not a reason to delete rows manually. Never
+remove an unexpired replay row, nonce tombstone, idempotency completion,
+credential-status record, quota window, or preauthorization row to recover
+capacity.
 
 Monitor database size, transaction latency, pool wait failures, the configured
 per-replica connection cap, database connection saturation, dead tuples,
@@ -486,7 +493,9 @@ Run these checks without production traffic and retain only redacted outcomes:
 5. Race the same idempotent batch through A and B. Both callers must observe
    one completed response, and quota must be charged once.
 6. When credential status is enabled, update a credential to revoked through A
-   and verify B cannot reverse it before or after restart.
+   and verify B cannot reverse it before or after restart. Also verify a valid
+   or suspended credential becomes effectively expired at its stored expiry on
+   both replicas; application clock skew must not change that result.
 7. When preauthorization is enabled, redeem one code concurrently through A
    and B. Exactly one token request may win.
 8. Stop PostgreSQL and confirm every replica becomes not ready. Restore the

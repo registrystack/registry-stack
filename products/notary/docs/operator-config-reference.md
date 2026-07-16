@@ -11,7 +11,7 @@ are not valid Notary configuration.
 | Area | Responsibility |
 | --- | --- |
 | `server` | Public and optional dedicated admin listeners and HTTP bounds |
-| `auth` | API key, bearer, or OIDC caller authentication and scope mapping |
+| `auth` | Configured API-key, static bearer, and OIDC authentication and scope mapping |
 | `deployment` | Deployment profile and assurance evidence |
 | `audit` | Notary-owned redacted audit sink and keyed chain |
 | `config_trust` | Product bundle verification and anti-rollback state |
@@ -19,7 +19,7 @@ are not valid Notary configuration.
 | `cel` | Isolated claim-policy worker limits |
 | `state` | PostgreSQL or explicit local in-memory correctness state |
 | `credential_status` | Optional credential lifecycle state |
-| `self_attestation` | OIDC-bound source-free evidence policy |
+| `subject_access` | OIDC-bound direct and delegated subject-access policy |
 | `oid4vci` | Wallet-facing issuance facade |
 | `federation` | Static-peer delegated evaluation |
 
@@ -71,11 +71,18 @@ Relay outputs are never credentials or public claims by themselves.
 
 ## Authentication and delegation
 
-Machine callers use configured static or OIDC credentials. Citizen and wallet
-flows use the self-attestation subject-binding policy. Delegated access must
-bind requester, target, relationship, purpose, and authorization details
-before evaluation. A delegated Relay proof consultation proves only its exact
-compiled edge and does not grant scopes.
+Authentication has no mode selector. The configured methods define the
+accepted callers. API keys may be configured alongside OIDC so service callers
+and citizen or wallet flows can use one Notary instance. Each request must
+present exactly one credential type; presenting an API key and a bearer token
+together fails before either credential is authenticated. Static bearer tokens
+cannot be configured alongside OIDC because both use the `Authorization:
+Bearer` transport.
+
+Citizen and wallet flows use the self-attestation subject-binding policy.
+Delegated access must bind requester, target, relationship, purpose, and
+authorization details before evaluation. A delegated Relay proof consultation
+proves only its exact compiled edge and does not grant scopes.
 
 ## State and operations
 

@@ -40,7 +40,7 @@ the policy gate that prevents a wallet from using any valid token to request
 another person's credential. The operator who runs Notary owns these settings;
 this guide assumes they are already in place.
 
-For the full configuration, including the `auth.oidc`, `self_attestation`, and
+For the full configuration, including the `auth.oidc`, `subject_access`, and
 `oid4vci` blocks and their constraints, see the
 [operator configuration reference](operator-config-reference.md). For the policy
 gate that binds a request to the token subject, see the
@@ -116,7 +116,7 @@ The current wallet-facing flow is:
 
 The credential request should not carry a raw subject id as a free-form wallet
 choice. The subject comes from the OIDC token claim configured in
-`self_attestation.subject_binding` and must match the Notary request context.
+`subject_access.subject_binding` and must match the Notary request context.
 If the access token's scoped authorization details select
 `access_mode: delegated_attestation`, the credential endpoint rejects the
 request rather than issuing for a dependent target.
@@ -148,7 +148,7 @@ When enabled, the flow is:
 2. The citizen authenticates at eSignet. eSignet redirects back to
    `GET /oid4vci/offer/callback?code=...&state=...` (public, unauthenticated).
    The Notary exchanges the code with eSignet using `private_key_jwt`, validates
-   the returned `id_token`, captures the exact `self_attestation.subject_binding`
+   the returned `id_token`, captures the exact `subject_access.subject_binding`
    claim value (the civil id), and only then mints one single-use
    `pre-authorized_code`. By default it also mints one numeric `tx_code` (a PIN).
    It renders an HTML offer page carrying the `openid-credential-offer://` URI
@@ -186,9 +186,13 @@ enters the displayed PIN separately.
 The `pre-authorized_code` is single-use and short-lived: a second redemption
 fails, and the code expires after `pre_authorized_code_ttl_seconds`. When
 `tx_code.required` is true (the default), repeated wrong-PIN attempts on one code
-hit `self_attestation.rate_limits.tx_code_attempts_per_code_per_minute` and lock
+hit `subject_access.rate_limits.tx_code_attempts_per_code_per_minute` and lock
 the code. A flood of random codes from one client address is throttled by the
 existing per-address invalid-attempt limiter.
+
+Each signed pre-authorized code records whether its offer requires a
+transaction code. Changing `tx_code.required` affects newly issued offers only;
+it cannot weaken or add the PIN requirement for an unexpired offer.
 
 Operators may set `oid4vci.pre_authorized_code.tx_code.required: false` for
 wallets that cannot present a transaction code. Registry Notary reports this as
@@ -397,13 +401,13 @@ logging boundaries, see the
 | Symptom | Likely cause | Check |
 | --- | --- | --- |
 | Metadata route is unavailable | `oid4vci.enabled` is false or self-attestation is disabled | Expanded config and startup logs |
-| Config fails validation | OID4VCI references a claim or credential profile outside self-attestation allow-lists | `credential_configurations`, `self_attestation.allowed_claims`, `self_attestation.credential_profiles` |
-| Delegated token is rejected | The credential endpoint only accepts direct self-attestation access tokens | Token authorization details, `self_attestation.delegation` |
+| Config fails validation | OID4VCI references a claim or credential profile outside self-attestation allow-lists | `credential_configurations`, `subject_access.allowed_claims`, `subject_access.credential_profiles` |
+| Delegated token is rejected | The credential endpoint only accepts direct self-attestation access tokens | Token authorization details, `subject_access.delegation` |
 | Wallet token rejected | Audience, issuer, client id, scope, or algorithm mismatch | `auth.oidc`, `oid4vci.accepted_token_audiences`, wallet token header and claims |
 | Wallet never asks for PIN | Offer is still `authorization_code`, pre-authorized-code flow is disabled, or wallet ignored the grant | Issuer metadata `token_endpoint`, offer `grants`, `oid4vci.pre_authorized_code.enabled` |
 | PIN is rejected | Wrong `tx_code`, expired code, reused code, or rate-limit lockout | Offer age, token endpoint response, `tx_code_attempts_per_code_per_minute` |
 | Wallet aborts before login or PIN | Wallet cannot resolve SD-JWT VC Type Metadata | `GET /.well-known/vct/{vct_path}` returns `200` JSON without auth |
-| Subject mismatch | Token claim does not exactly match the requested subject context | `self_attestation.subject_binding` and identity-provider claims |
+| Subject mismatch | Token claim does not exactly match the requested subject context | `subject_access.subject_binding` and identity-provider claims |
 | Nonce rejected | Nonce expired, reused, or from another configuration | Nonce TTL, replay store, credential configuration id |
 | Proof rejected | Unsupported alg, wrong holder binding, stale proof, or clock skew | Wallet proof JWT and `oid4vci.proof` |
 | Credential issued but wallet cannot verify | JWKS, issuer DID, `kid`, or `vct` mismatch | Signing key config and credential profile |

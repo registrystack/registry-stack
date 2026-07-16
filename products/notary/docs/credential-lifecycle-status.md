@@ -20,7 +20,7 @@ By default, issued credentials are status-free:
 The top-level `evidence.max_credential_validity_seconds` sets the issuing
 agency's local ceiling, and profile validity must be between 1 second and that
 maximum. Self-attestation profiles are also bounded by
-`self_attestation.token_policy.max_credential_validity_seconds`.
+`subject_access.token_policy.max_credential_validity_seconds`.
 
 This lets operators keep offer codes, access tokens, proofs, and evidence
 freshness short while issuing wallet-held credentials with a practical validity
