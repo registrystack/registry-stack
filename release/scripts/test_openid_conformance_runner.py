@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -70,6 +71,22 @@ class OpenIdConformanceRunnerTest(TestCase):
             str(self.runner.BUILDER_COMPOSE_OVERRIDE_PATH),
             self.runner.builder_command(Path("/suite"), "run", "builder"),
         )
+
+    def test_dependency_inputs_are_dependabot_discoverable(self) -> None:
+        compose_filename = re.compile(
+            r"(docker-)?compose(-[\w]+)?(?:\.[\w-]+)?\.ya?ml",
+            re.IGNORECASE,
+        )
+        self.assertIsNotNone(
+            compose_filename.fullmatch(
+                self.runner.BUILDER_COMPOSE_OVERRIDE_PATH.name
+            )
+        )
+        self.assertEqual(".txt", self.runner.SUITE_REQUIREMENTS_LOCK_PATH.suffix)
+        dependabot_path = self.runner.REPO_ROOT / ".github" / "dependabot.yml"
+        dependabot = dependabot_path.read_text(encoding="utf-8")
+        self.assertIn("package-ecosystem: docker-compose", dependabot)
+        self.assertIn("package-ecosystem: pip", dependabot)
 
     def test_runtime_override_pins_built_image_bases(self) -> None:
         override = self.runner.COMPOSE_OVERRIDE_PATH.read_text(encoding="utf-8")

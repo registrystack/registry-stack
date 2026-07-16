@@ -98,11 +98,12 @@ ignores.
 
 When advancing the suite ref, compare its `scripts/requirements.txt` with
 `python-requirements.in`. After review, regenerate the hashed lock with the
-command recorded at the top of `python-requirements.lock`. Also review the four
-image tags and refresh their immutable digests through the matching Dependabot
-Dockerfile and Docker Compose updates. `prepare` reuses the suite JAR only while
-its recorded source ref, builder override digest, and artifact digest still
-match.
+command recorded at the top of `python-requirements.txt`. Dependabot scans that
+pip-compile lock weekly, while the runner keeps its direct input byte-bound to
+the pinned suite. Review the four image tags and refresh their immutable digests
+through the matching Dependabot Dockerfile and Docker Compose updates.
+`prepare` reuses the suite JAR only while its recorded source ref, builder
+override digest, and artifact digest still match.
 
 ## Sensitive result handling
 

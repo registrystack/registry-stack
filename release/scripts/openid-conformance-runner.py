@@ -25,9 +25,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = REPO_ROOT / "release" / "conformance" / "openid"
 PLAN_MAP_PATH = CONFIG_DIR / "plan-map.json"
 COMPOSE_OVERRIDE_PATH = CONFIG_DIR / "docker-compose.override.yaml"
-BUILDER_COMPOSE_OVERRIDE_PATH = CONFIG_DIR / "builder-compose.override.yaml"
+BUILDER_COMPOSE_OVERRIDE_PATH = CONFIG_DIR / "docker-compose-builder.override.yaml"
 SUITE_REQUIREMENTS_INPUT_PATH = CONFIG_DIR / "python-requirements.in"
-SUITE_REQUIREMENTS_LOCK_PATH = CONFIG_DIR / "python-requirements.lock"
+SUITE_REQUIREMENTS_LOCK_PATH = CONFIG_DIR / "python-requirements.txt"
 DEFAULT_WORK_ROOT = REPO_ROOT / "target" / "openid-conformance"
 DEFAULT_CACHE_DIR = DEFAULT_WORK_ROOT / "cache"
 DEFAULT_OUTPUT_ROOT = DEFAULT_WORK_ROOT / "results"
@@ -289,7 +289,7 @@ def ensure_suite_python(checkout: Path, args: argparse.Namespace) -> Path:
     if requirements_path.read_bytes() != SUITE_REQUIREMENTS_INPUT_PATH.read_bytes():
         raise RunnerError(
             "suite Python requirements differ from the checked-in locked input; "
-            "review and regenerate release/conformance/openid/python-requirements.lock"
+            "review and regenerate release/conformance/openid/python-requirements.txt"
         )
     python = suite_python(args)
     venv_dir = python.parents[1]
