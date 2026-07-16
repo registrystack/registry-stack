@@ -2945,11 +2945,11 @@ mod tests {
         let config = PostgresStatePlaneConfig::new(
             POOL_DATABASE_URL_ENV,
             Some(PathBuf::from(std::env::var(DATABASE_CA_ENV)?)),
-            // Allow hosted runners enough time for the initial TLS connection.
-            // The short operation timeout below remains the pool-saturation
-            // assertion exercised by this conformance test.
+            // Exercise the pool contract with the implementer-facing defaults.
+            // Artificially short activation deadlines are unreliable on hosted
+            // runners and do not represent the production readiness boundary.
             Duration::from_secs(5),
-            Duration::from_millis(100),
+            Duration::from_secs(2),
             1,
         )?;
         let pooled = Arc::new(NotaryPostgresStatePlaneRuntime::connect(&config).await?);
@@ -2975,7 +2975,7 @@ mod tests {
         ));
         let waited = wait_started.elapsed();
         assert!(
-            waited >= Duration::from_millis(50) && waited < Duration::from_secs(1),
+            waited >= Duration::from_secs(1) && waited < Duration::from_secs(5),
             "saturated pool admission must honor the configured operation deadline"
         );
         assert_eq!(pooled.pool_status().max_size, 1);
