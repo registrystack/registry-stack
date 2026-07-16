@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#[test]
+fn request_context_scalars_preserve_supported_types() {
+    assert_eq!(canonical_request_scalar(&json!("Ada")), Some("Ada".to_string()));
+    assert_eq!(canonical_request_scalar(&json!(true)), Some("true".to_string()));
+    assert_eq!(canonical_request_scalar(&json!(-42)), Some("-42".to_string()));
+    assert_eq!(canonical_request_scalar(&json!(1.5)), None);
+    assert_eq!(canonical_request_scalar(&Value::Null), None);
+    assert_eq!(canonical_request_scalar(&json!(["Ada"])), None);
+}
+
 #[derive(Debug)]
 struct FixedRelayConsultation {
     calls: AtomicU64,

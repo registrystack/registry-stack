@@ -98,8 +98,8 @@ For target-derived inputs, the closed project mapping admits `request.target.id`
 `request.target.identifiers.<stable-id>`, and
 `request.target.attributes.<stable-name>`.
 A target attribute stable name MUST match `[a-z][a-z0-9_]{0,63}`.
-An authored mapping admits only that named value from the authenticated target request; it does
-not authorize arbitrary traversal of the target object.
+An authored mapping admits only that named caller-supplied target value; it does not authenticate
+the value or authorize arbitrary traversal of the target object.
 
 ## 4. Relay consultation contract
 

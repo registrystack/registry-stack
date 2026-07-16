@@ -1475,6 +1475,54 @@ fn all_advertised_starters_initialize_and_test_without_source_access() {
 }
 
 #[test]
+fn typed_target_attribute_executes_through_the_offline_notary_journey() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("typed-target-attribute");
+    copy_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/project-starters/bounded-http"),
+        &project,
+    );
+
+    let integration = project.join("integrations/person-record/integration.yaml");
+    let integration_document = std::fs::read_to_string(&integration).expect("integration file");
+    std::fs::write(
+        &integration,
+        integration_document.replace(
+            "    type: string\n    maxLength: 64",
+            "    type: integer\n    minimum: 0\n    maximum: 10",
+        ),
+    )
+    .expect("typed integration writes");
+
+    let fixture_directory = project.join("integrations/person-record/fixtures");
+    for entry in std::fs::read_dir(&fixture_directory).expect("starter fixtures") {
+        let path = entry.expect("fixture entry").path();
+        let fixture = std::fs::read_to_string(&path).expect("fixture file");
+        std::fs::write(&path, fixture.replace("AB-123456", "1")).expect("typed fixture writes");
+    }
+
+    let project_file = project.join("registry-stack.yaml");
+    let project_document = std::fs::read_to_string(&project_file).expect("project file");
+    std::fs::write(
+        &project_file,
+        project_document.replace(
+            "request.target.identifiers.registry_person_id",
+            "request.target.attributes.person_sequence",
+        ),
+    )
+    .expect("target attribute mapping writes");
+
+    let report = test_registry_project(&ProjectTestOptions {
+        project_directory: project,
+        environment: None,
+        live: false,
+    })
+    .expect("typed target attribute passes the offline journey");
+    assert_eq!(report.status, "passed");
+    assert!(report.fixtures.iter().all(|fixture| fixture.passed));
+}
+
+#[test]
 fn check_explain_reports_starter_divergence_and_runtime_abi() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = temporary.path().join("registry-project");
