@@ -215,7 +215,7 @@ class RegistryReleaseTest(unittest.TestCase):
         result = run_tool("validate-docsets")
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("validated 5 versioned docsets", result.stdout)
+        self.assertIn("validated 6 versioned docsets", result.stdout)
 
     def test_validate_docsets_rejects_external_ref_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

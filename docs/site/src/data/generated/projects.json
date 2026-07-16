@@ -19,11 +19,11 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.9.0/products/platform/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.10.0/products/platform/README.md"
       },
       {
         "label": "Registry Platform crates",
-        "url": "https://github.com/registrystack/registry-stack/tree/v0.9.0/crates"
+        "url": "https://github.com/registrystack/registry-stack/tree/v0.10.0/crates"
       }
     ],
     "rename_status": "New shared workspace; not part of the 2026-05-23 rename wave."
@@ -48,11 +48,11 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.9.0/products/manifest/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.10.0/products/manifest/README.md"
       },
       {
         "label": "Local examples",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.9.0/products/manifest/examples/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.10.0/products/manifest/examples/README.md"
       }
     ],
     "rename_status": "Already using the target repo name locally."
@@ -81,15 +81,15 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/README.md"
       },
       {
         "label": "Local API docs",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/api.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/docs/api.md"
       },
       {
         "label": "Local metadata docs",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/metadata.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/docs/metadata.md"
       }
     ],
     "rename_status": "Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence."
@@ -120,11 +120,11 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.9.0/products/notary/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.10.0/products/notary/README.md"
       },
       {
         "label": "OpenAPI source",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/openapi.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-server/src/openapi.rs"
       }
     ],
     "rename_status": "Already using the target repo name locally."

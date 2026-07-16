@@ -1,0 +1,31 @@
+stack:
+  release: beta-12
+  version: 0.10.0
+  source_repo: registrystack/registry-stack
+  source_ref: 4653e5995594c2213c87063489221649e08948b7
+  source_tag: v0.10.0
+  status: release-candidate
+
+artifacts:
+  registry-notary: 0.10.0
+  registry-notary-cel-worker: 0.10.0
+  registry-relay: 0.10.0
+  registry-relay-rhai-worker: 0.10.0
+  registry-manifest-cli: 0.10.0
+  registryctl: 0.10.0
+  registryctl-image-lock: 0.10.0
+  registry-docs: 0.10.0
+
+external:
+  crosswalk:
+    repo: PublicSchema/crosswalk
+    ref: 1d44ec735fdc8a7c719264b339574371e8330337
+    status: tested external input
+
+warnings:
+  - code: hosted-publication-held
+    classification: hosted-gate-held
+    detail: Source beta may ship; hosted/public announcement remains held until Solmara Lab is atomically repinned to the published v0.10.0 digests and its adopter smoke passes.
+  - code: solmara-adopter-repin-pending
+    classification: adopter-gate-pending
+    detail: Solmara Lab consumes released images and will be repinned and validated only after immutable v0.10.0 digests exist.

@@ -302,6 +302,10 @@ repos:
         doc_type: how-to
         last_reviewed: unreviewed
         standards_referenced: []
+        docset_overrides:
+          - docsets: [v0.10.0]
+            standards_referenced: []
+            last_reviewed: unreviewed
         exclude_docsets: [v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/credential-lifecycle-status.md
         archive_src: docs/credential-lifecycle-status.md
