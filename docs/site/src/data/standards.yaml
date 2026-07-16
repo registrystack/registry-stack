@@ -15,11 +15,11 @@
     - access service metadata
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/README.md
     - label: Registry Manifest README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/products/manifest/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/products/manifest/README.md
     - label: Registry Relay DCAT catalog tests
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/tests/catalog_entity.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/tests/catalog_entity.rs
   last_checked: 2026-06-13
   notes: Relay and Manifest emit DCAT-shaped metadata; the emitted catalog structure is asserted by Relay's catalog tests. Profile conformance claims still require profile-specific validation evidence (no DCAT validator output is pinned).
 - id: bregdcat-ap
@@ -38,11 +38,11 @@
     - embedded SHACL entity shapes
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/README.md
     - label: Registry Manifest README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/products/manifest/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/products/manifest/README.md
     - label: Registry Relay BRegDCAT-AP route tests
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/tests/catalog_entity.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/tests/catalog_entity.rs
   last_checked: 2026-06-13
   notes: Manifest and Relay emit BRegDCAT-shaped registry and data-service metadata; the `/metadata/dcat/bregdcat-ap` route output is asserted by Relay's catalog tests. CPSV-AP is now the service-discovery layer; BRegDCAT-AP remains the registry and data-service discovery layer. Later BRegDCAT-AP releases require a separate renderer review.
 - id: cpsv-ap
@@ -61,7 +61,7 @@
     - competent authority and requirement links
   evidence_docs:
     - label: Registry Manifest CPSV-AP fixture
-      url: https://github.com/registrystack/registry-stack/tree/v0.9.0/products/manifest/fixtures/cpsv-ap
+      url: https://github.com/registrystack/registry-stack/tree/v0.10.0/products/manifest/fixtures/cpsv-ap
   last_checked: 2026-05-25
   notes: Registry Manifest emits CPSV-AP service catalogues. Registry Relay does not expose a current CPSV-AP runtime route.
 - id: ogc-api-records
@@ -80,11 +80,11 @@
     - OGC records item bodies
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/README.md
     - label: Registry Manifest README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/products/manifest/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/products/manifest/README.md
     - label: Registry Relay OGC records API tests
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/tests/ogc_records_api.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/tests/ogc_records_api.rs
   last_checked: 2026-06-13
   notes: Relay exposes records routes behind the ogcapi-records feature (route output asserted by the OGC records API tests), and Manifest renders and publishes static OGC Records item collections.
 - id: ogc-api-features
@@ -102,9 +102,9 @@
     - dataset-scoped feature items
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/README.md
     - label: Registry Relay OGC Features API tests
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/tests/ogc_api.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/tests/ogc_api.rs
   last_checked: 2026-06-20
   notes: Relay exposes OGC API Features routes behind the ogcapi-features feature. The claim is scoped to the profiled route output tested in Registry Relay, not full OGC conformance.
 - id: ogc-api-edr
@@ -122,7 +122,7 @@
     - EDR collection discovery
   evidence_docs:
     - label: Registry Relay OGC EDR API tests
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/tests/ogc_edr_api.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/tests/ogc_edr_api.rs
   last_checked: 2026-06-20
   notes: Relay exposes OGC API EDR area routes behind the ogcapi-edr feature for configured spatial aggregates. The claim is scoped to the tested adapter surface, not full OGC conformance.
 - id: openapi
@@ -141,13 +141,13 @@
     - native OpenAPI publication
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/README.md
     - label: Registry Notary README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/products/notary/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/products/notary/README.md
     - label: Registry Relay generated OpenAPI document (pinned)
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/openapi/registry-relay.openapi.json
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/openapi/registry-relay.openapi.json
     - label: Registry Notary generated OpenAPI document (pinned)
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/products/notary/openapi/registry-notary.openapi.json
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/products/notary/openapi/registry-notary.openapi.json
   last_checked: 2026-06-13
   notes: Relay and Notary generate OpenAPI; the pinned generated documents are cited directly. These docs publish the same pinned artifacts as native API reference pages.
 - id: shacl
@@ -166,11 +166,11 @@
     - entity node shapes
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/README.md
     - label: Registry Manifest README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/products/manifest/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/products/manifest/README.md
     - label: Registry Relay SHACL document structure tests
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/tests/catalog_entity.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/tests/catalog_entity.rs
   last_checked: 2026-06-13
   notes: Relay emits SHACL/JSON-LD documents whose structure is asserted by its catalog tests, and Manifest renders SHACL. No SHACL validator run against the emitted shapes is pinned.
 - id: skos
@@ -189,9 +189,9 @@
     - BRegDCAT/DCAT dataset codelist references
   evidence_docs:
     - label: Registry Manifest codelist renderer
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-manifest-core/src/lib.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-manifest-core/src/lib.rs
     - label: Registry Manifest codelist tests
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-manifest-core/tests/metadata_core.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-manifest-core/tests/metadata_core.rs
   last_checked: 2026-06-20
   notes: Registry Manifest emits flat SKOS-shaped `skos:ConceptScheme` and `skos:Concept` nodes for manifest codelists inside SHACL and BRegDCAT/DCAT-shaped outputs. It does not yet publish a standalone SKOS artifact or claim full SKOS conformance.
 - id: json-schema
@@ -210,11 +210,11 @@
     - static discovery bundle
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/README.md
     - label: Registry Manifest README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/products/manifest/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/products/manifest/README.md
     - label: Registry Manifest form schema fixture (Draft 2020-12)
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/products/manifest/fixtures/cpsv-ap/health-linked-child-support.form.schema.json
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/products/manifest/fixtures/cpsv-ap/health-linked-child-support.form.schema.json
   last_checked: 2026-06-13
   notes: Manifest renders entity JSON Schemas (the pinned fixture declares Draft 2020-12) and Relay exposes entity schema endpoints.
 - id: json-ld
@@ -236,11 +236,11 @@
     - CCCEV render output
   evidence_docs:
     - label: Registry Relay JSON-LD renderers
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/src/metadata/shacl.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/src/metadata/shacl.rs
     - label: Registry Notary CCCEV renderer
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/runtime.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-server/src/runtime.rs
     - label: Registry Manifest CPSV-AP JSON-LD fixture
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/products/manifest/fixtures/cpsv-ap/health-linked-child-support.cpsv-ap.jsonld
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/products/manifest/fixtures/cpsv-ap/health-linked-child-support.cpsv-ap.jsonld
   last_checked: 2026-06-13
   notes: The projects emit JSON-LD artifacts and contexts; a pinned JSON-LD fixture is cited as a concrete emitted artifact. No broad RDF dataset conformance claim is made here.
 - id: sd-jwt-vc
@@ -260,11 +260,11 @@
     - shared SD-JWT VC issuance and holder-proof helpers
   evidence_docs:
     - label: Registry Notary SD-JWT VC conformance profile
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/products/notary/docs/sd-jwt-vc-conformance-profile.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/products/notary/docs/sd-jwt-vc-conformance-profile.md
     - label: Registry Notary format constants
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-core/src/model.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-core/src/model.rs
     - label: Registry Platform SD-JWT crate
-      url: https://github.com/registrystack/registry-stack/tree/v0.9.0/crates/registry-platform-sdjwt
+      url: https://github.com/registrystack/registry-stack/tree/v0.10.0/crates/registry-platform-sdjwt
   last_checked: 2026-06-13
   notes: >-
     Registry Platform owns reusable SD-JWT VC issuance and holder-proof helpers.
@@ -288,7 +288,7 @@
     - SD-JWT VC credential issuance
   evidence_docs:
     - label: Registry Notary README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/products/notary/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/products/notary/README.md
   last_checked: 2026-05-23
   notes: Registry Notary issues SD-JWT VC. Relay no longer emits or hosts VC artifacts.
 - id: cccev
@@ -310,11 +310,11 @@
     - evidence node JSON-LD
   evidence_docs:
     - label: Registry Manifest grouped evidence fixture
-      url: https://github.com/registrystack/registry-stack/tree/v0.9.0/products/manifest/fixtures/cpsv-ap
+      url: https://github.com/registrystack/registry-stack/tree/v0.10.0/products/manifest/fixtures/cpsv-ap
     - label: Registry Notary CCCEV renderer
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/runtime.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-server/src/runtime.rs
     - label: Registry Notary media type constants
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-core/src/model.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-core/src/model.rs
   last_checked: 2026-05-25
   notes: Manifest emits CCCEV requirement and evidence type list metadata. Notary renders CCCEV-shaped claim results. Profile conformance is not claimed.
 - id: odrl
@@ -335,15 +335,15 @@
     - governed evidence PDP constraint terms
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/README.md
     - label: Registry Manifest README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/products/manifest/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/products/manifest/README.md
     - label: Registry Relay catalog tests (ODRL offer assertions)
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/tests/catalog_entity.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/tests/catalog_entity.rs
     - label: Registry Platform PDP ODRL enforcement profile constants
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-platform-pdp/src/lib.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-platform-pdp/src/lib.rs
     - label: Registry Relay governed evidence PDP path
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/src/api/governed.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/src/api/governed.rs
   last_checked: 2026-07-09
   notes: Relay catalog JSON-LD can include dataset-scoped ODRL Offers, and Manifest renders ODRL policy metadata. That publication surface is descriptive and is not itself an access grant. The shared governed Evidence Gateway profile vocabulary includes `odrl:purpose` and `odrl:spatial`, but Relay's governed runtime path currently enforces `odrl:purpose` only; `odrl:spatial` and other unsupported ODRL terms are denied fail-closed rather than treated as enforced.
 - id: sdmx
@@ -361,9 +361,9 @@
     - content negotiation delivery
   evidence_docs:
     - label: Registry Relay client integration guide
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/docs/client-integration.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/docs/client-integration.md
     - label: Registry Relay aggregates tests (schema-validated SDMX-JSON output)
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/tests/aggregates_entity.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/tests/aggregates_entity.rs
   last_checked: 2026-06-13
   notes: >-
     Relay serves configured aggregates as SDMX-JSON 2.1 data messages via
@@ -389,7 +389,7 @@
     - provenance-shaped claim fields
   evidence_docs:
     - label: Registry Notary claim model
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-core/src/model.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-core/src/model.rs
   last_checked: 2026-05-23
   notes: The code uses provenance concepts, but current evidence does not show a PROV-O vocabulary emission surface. Keep this as design influence until PROV-O terms are emitted or mapped.
 - id: fhir-r4
@@ -427,7 +427,7 @@
     - capability boundary
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/README.md
   last_checked: 2026-05-23
   notes: Relay explores a protected consultation gateway model rather than the current single uniform CRUD platform.
 - id: universal-dpi-safeguards
@@ -470,7 +470,7 @@
     - authored Relay source integration
   evidence_docs:
     - label: Registry Relay README
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-relay/README.md
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-relay/README.md
     - label: Registry Stack OpenCRVS project-authoring fixture
       url: https://github.com/registrystack/registry-stack/tree/2dfcf2dd/crates/registryctl/tests/fixtures/project-authoring/opencrvs
   last_checked: 2026-05-23
@@ -495,9 +495,9 @@
     - wallet-facing citizen self-attestation flow
   evidence_docs:
     - label: Registry Notary OID4VCI routes
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/api.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-server/src/api.rs
     - label: Registry Platform OID4VCI crate
-      url: https://github.com/registrystack/registry-stack/tree/v0.9.0/crates/registry-platform-oid4vci
+      url: https://github.com/registrystack/registry-stack/tree/v0.10.0/crates/registry-platform-oid4vci
     - label: Historical Registry Lab citizen OID4VCI smoke script
       url: https://github.com/registrystack/registry-stack/blob/v0.9.0/lab/scripts/smoke-citizen-oid4vci.sh
     - label: Solmara Lab hosted OID4VCI smoke
@@ -534,8 +534,8 @@
     - shared DID validation and Ed25519 JWK helpers
   evidence_docs:
     - label: Registry Notary did:jwk handling
-      url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/api.rs
+      url: https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-server/src/api.rs
     - label: Registry Platform crypto crate
-      url: https://github.com/registrystack/registry-stack/tree/v0.9.0/crates/registry-platform-crypto
+      url: https://github.com/registrystack/registry-stack/tree/v0.10.0/crates/registry-platform-crypto
   last_checked: 2026-06-13
   notes: Notary parses did:jwk values for credential subjects, and Platform owns shared DID and Ed25519 JWK helpers. Relay no longer hosts a did:web document. No DID resolver, DID URL dereferencing, or DID Core conformance class is implemented, so the claim stays at emits. The site does not claim conformance to the wider DID method registry beyond did:jwk.

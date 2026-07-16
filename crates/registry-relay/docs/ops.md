@@ -341,11 +341,128 @@ value is refused as drift. Successful output contains only status values:
 {"schema":"registry.relay.consultation-bootstrap-state.v1","state_plane":"installed_or_attested","keyring":"initialized"}
 ```
 
-Run `registry-relay doctor` first, bootstrap before starting the first Relay
-replica, then start all replicas with only the runtime database URL. Keep the
-migration, maintenance, and reader credentials outside the serving workload.
+Run `registry-relay doctor` first, bootstrap before starting Relay, then give
+the serving process only the runtime database URL. The serving fence admits one
+active consultation process for a state plane. A replacement process performs
+takeover recovery after the former holder releases or loses its database
+session. Keep the migration, maintenance, and reader credentials outside the
+serving workload.
 The maintained DHIS2 profile has an end-to-end deployment checklist in its
 [`README`](../profiles/dhis2-2.41.9-enrollment-status/README.md).
+
+### Back up and restore native consultation state
+
+The consultation database is Relay correctness state, not a registry source
+database and not Registry Notary state. Relay owns two schemas:
+
+- `relay_state_private` contains the durable audit chain, consultation attempts
+  and completions, dispatch permits, quota buckets, materialization publication
+  pointers, batch-child replay state, serving-fence state, and audit-pseudonym
+  keyring metadata. Only the isolated owner role owns or reads these objects
+  directly.
+- `relay_state_api` contains the attested `SECURITY DEFINER` functions. The
+  runtime, keyring-maintenance, and keyring-reader logins receive only the
+  function execution grants required for their roles.
+
+Registry Notary owns `registry_notary_private` and `registry_notary_api` in its
+database. Do not point Notary at the Relay schemas, point Relay at the Notary
+schemas, or copy tables between the products. A deployment can use one
+PostgreSQL cluster, but each product retains its own database roles, schema
+ownership, migrations, and recovery decision.
+
+Treat the following items as one Relay recovery set:
+
+- The complete consultation database, never a selection of state tables.
+- The Relay release, config, signed artifact closure, and PostgreSQL trust root.
+- The migration login name plus the owner, runtime, keyring-maintenance, and
+  keyring-reader role names and bound object identifiers.
+- The chain-key epoch, both advisory-lock keys, initial keyring lifecycle
+  inputs, audit HMAC material, and every retained audit-pseudonym key material.
+- The recovery timestamp or write-ahead-log position and the last externally
+  acknowledged audit watermark available to the operator.
+
+For a quiesced backup, remove traffic from every Notary that can call this
+Relay, stop the active Relay fence holder, and prevent another Relay process
+from acquiring the fence. Then capture one transactionally consistent database
+backup. If Relay and Notary are recovered as one service, either keep both
+products quiesced while their backups are taken or use a database-platform
+snapshot that gives both product databases one coordinated recovery point.
+Independent live backups can leave Notary with a completion that the restored
+Relay no longer remembers.
+
+A custom-format `pg_dump` is suitable for a database dedicated to Relay and for
+restoring an empty database in the same PostgreSQL cluster, where the four
+bound role object identifiers remain unchanged. Run the dump through a service
+definition and password file so the migration credential does not appear in
+process arguments:
+
+```sh
+PGSERVICEFILE=/run/registry-relay/pg_service.conf \
+PGSERVICE=registry_relay_migration \
+PGPASSFILE=/run/secrets/registry-relay-migration.pgpass \
+pg_dump --format=custom --no-owner --no-acl \
+  --role=relay_state_owner \
+  --file=relay-consultation-state.dump \
+  --dbname=registry_relay
+```
+
+If Relay shares a database with another owner, have the database administrator
+back up the complete database with an appropriately privileged backup identity.
+Do not narrow the backup to the two Relay schemas.
+
+For recovery into a different PostgreSQL cluster, use a physical backup or
+cluster-level managed snapshot that preserves the PostgreSQL role catalog and
+its object identifiers. Recreating roles with the same names does not recreate
+their object identifiers. The state-plane metadata binds those identifiers and
+the restore will fail attestation when they differ.
+
+Restore into an empty, isolated, writable PostgreSQL 16 through 18 primary with
+no Relay or Notary traffic path. Restore the database and exact external
+recovery-set items, then rerun `consultation bootstrap-state` with the same
+owner, role connections, lock keys, chain-key epoch, active key, deadline, and
+retention inputs. `installed_or_attested` plus `identical` means the command
+accepted the existing catalog and keyring. A drift response is not a repair
+instruction. Do not drop either Relay schema or rerun bootstrap with different
+inputs to make the restore pass.
+
+Start one Relay without admitting traffic and require `/healthz` and `/ready`
+to return `200`. Readiness attests the current catalog, role binding, keyring,
+fence, quota, audit, and materialization capabilities. It does not prove that a
+restore includes every previously acknowledged write.
+
+#### Stale recovery points
+
+A recovery point older than an acknowledged consultation can remove durable
+audit phases, completion and replay decisions, quota state, a materialization
+publication, or a keyring transition. Relay cannot infer that missing history
+from the restored database. Startup and readiness can therefore pass for a
+catalog-correct but stale restore.
+
+Keep a potentially stale restore offline. Recover forward with write-ahead-log
+replay or point-in-time recovery until the recovery point covers the last
+acknowledged write and external audit watermark, then repeat bootstrap
+attestation and the no-traffic canary. If that reconciliation cannot be proved,
+do not resume the same consultation workload from the restore. Expiry of the
+15-minute batch-child replay rows does not repair missing audit, quota,
+materialization, or keyring history.
+
+#### Upgrade and software rollback
+
+`consultation bootstrap-state` is a clean-or-attested installer for one exact
+compiled schema. It is not a general migration framework. Before an upgrade,
+quiesce writers, preserve the complete recovery set, and run the target
+release's bootstrap command before admitting traffic. If the target reports
+capability drift, abort the upgrade and keep the current database unchanged
+until that release provides an explicit migration path.
+
+When the old and target releases attest the same schema, software rollback can
+reuse the current database after all target processes stop. Restore the old
+binary, config, artifact closure, and external key material, attest with the old
+bootstrap command, and start without traffic first. A pre-upgrade database
+backup is safe for rollback only when the target release acknowledged no
+consultations after that backup. Once target traffic has written state,
+restoring the pre-upgrade database is a stale restore; keep the current database
+and fix forward unless a release-specific recovery procedure proves otherwise.
 
 For side-by-side local compose stacks, keep the public host ports distinct
 while letting each container use its internal default listener. A common

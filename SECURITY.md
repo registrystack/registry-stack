@@ -44,14 +44,14 @@ include cosign signatures without SLSA provenance.
 
 For each signed release asset, download three files from the GitHub Release:
 
-- The asset, for example `registryctl-v0.9.0-linux-amd64`
-- The matching signature, for example `registryctl-v0.9.0-linux-amd64.sig`
-- The matching certificate, for example `registryctl-v0.9.0-linux-amd64.pem`
+- The asset, for example `registryctl-v0.10.0-linux-amd64`
+- The matching signature, for example `registryctl-v0.10.0-linux-amd64.sig`
+- The matching certificate, for example `registryctl-v0.10.0-linux-amd64.pem`
 
 Then verify the asset:
 
 ```bash
-asset=registryctl-v0.9.0-linux-amd64
+asset=registryctl-v0.10.0-linux-amd64
 
 cosign verify-blob \
   --certificate "${asset}.pem" \
@@ -69,7 +69,7 @@ For releases with SLSA provenance, download the provenance asset and verify the
 artifact against the release tag:
 
 ```bash
-tag=v0.9.0
+tag=v0.10.0
 asset=registryctl-${tag}-linux-amd64
 provenance=registry-stack-${tag}-release-provenance.intoto.jsonl
 

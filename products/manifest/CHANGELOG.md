@@ -7,6 +7,26 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-17
+
+### Changed
+
+- BREAKING: source-manifest and policy digests now use the shared RFC 8785
+  canonical JSON implementation. Object names are ordered by UTF-16 code units
+  and numbers use ECMAScript finite binary64 serialization; integer values that
+  cannot be represented exactly are rejected. Digests can therefore change for
+  manifests containing numeric values or non-ASCII object names even when the
+  semantic manifest is unchanged.
+
+### Release Notes
+
+- Regenerate and republish rendered metadata and every digest-bound artifact
+  with the v0.10.0 toolchain. Do not carry a v0.9.0 manifest or policy digest
+  into a v0.10.0 project. Encode exact identifiers outside the safe binary64
+  integer range as strings.
+- Registry Manifest remains unpublished on crates.io. Consumers of the v0.10.0
+  stack must pin the v0.10.0 Registry Stack source ref.
+
 ## [0.9.0] - 2026-07-10
 
 ### Added

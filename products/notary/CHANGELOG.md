@@ -7,13 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-17
+
+### Added
+
+- Release distributions now publish `registry-notary-cel-worker` as a
+  standalone Linux amd64 binary. CEL-enabled standalone installations keep it
+  beside `registry-notary` under its canonical executable name; the Notary
+  image carries the same isolated worker.
+
 ### Changed
 
 - BREAKING: all deployable Notary correctness state now uses one typed,
-  Notary-owned PostgreSQL schema configured by the top-level `state` block.
+  Notary-owned PostgreSQL state contract with separate private and API schemas,
+  configured by the top-level `state` block.
   Removed Redis and per-domain storage configuration is rejected without
   aliases. Explicit single-process local development may use `in_memory`.
-- Authentication no longer uses a mode selector. API keys may coexist with
+- BREAKING: authentication no longer uses a mode selector, and a present
+  `auth.mode` is rejected. API keys may coexist with
   OIDC for distinct service and citizen or wallet callers, while each request
   must present exactly one credential type. Static bearer tokens and OIDC
   remain mutually exclusive because both use `Authorization: Bearer`.
@@ -63,6 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   profile. The obsolete `notary.relay.insecure_url` posture finding is removed;
   remote HTTP Relay origins remain invalid, so no cleartext hop crosses the
   shared network namespace.
+- Project authoring keeps the Relay's public catalog origin separate from the
+  Notary-to-Relay connection URL. Only the paired internal connection may use
+  an explicitly enabled literal IP-loopback HTTP origin; public or remote
+  Relay origins still require HTTPS.
 - BREAKING: registry-backed claim rules are now named
   `consultation_output { consultation, output }` and
   `consultation_matched { consultation }`. The unreleased `extract`/`exists`

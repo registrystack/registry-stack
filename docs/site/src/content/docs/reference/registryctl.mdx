@@ -15,8 +15,7 @@ import ProjectStarterSequence from '../../../components/ProjectStarterSequence.a
 
 `registryctl` is the local adopter command-line tool for Registry Stack. It creates a local project, starts and stops the generated services, and runs validation and smoke checks against them.
 
-This page lists commands released in registryctl `v0.9.0` and the pre-1.0 project authoring
-commands in the current source build.
+This page lists commands released in registryctl `v0.10.0`.
 Run `registryctl <command> --help` for the built-in usage text.
 Most human-facing commands also perform a once-per-day update check; see
 [Update check](#update-check).
@@ -190,7 +189,7 @@ verification. Trust-anchor creation and key changes use the existing `anchor` su
 ## Project setup
 
 The legacy `init relay` command creates a local spreadsheet project.
-In registryctl `v0.9.0`, this generation command requires the strict
+In registryctl `v0.10.0`, this generation command requires the strict
 `registryctl-vX.Y.Z-image-lock.json` from the same release beside the running
 binary. Set `REGISTRYCTL_IMAGE_LOCK` only when an operator has verified the same
 file at a separate explicit path. Registryctl does not search the current
@@ -261,8 +260,6 @@ Related environment variables are listed in the [environment variable reference]
 
 ## Source
 
-The released command tree comes from the registryctl source at `v0.9.0`.
+The released command tree comes from the registryctl source at `v0.10.0`.
 For its canonical definitions, read the
-[registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registryctl/src/main.rs).
-The pre-1.0 project authoring table tracks the current source command enum and will receive a
-release-tag link when that interface is released.
+[registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registryctl/src/main.rs).

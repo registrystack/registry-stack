@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-07-17
+
 ### Added
 
 - `registryctl init --from`, `test`, `check`, and `build` provide a strict
@@ -73,6 +75,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   codec evidence rather than live interoperability evidence. Platform-generic
   malformed, boundedness, timeout, authorization-before-source, and
   minimization negatives are derived instead of copied into every project.
+
+### Changed
+
+- BREAKING: adopters must reauthor generated deployments around the strict
+  `registry-stack.yaml` project contract and regenerate Relay and Notary
+  product inputs with `init --from`, `test`, `check`, and `build`. v0.9.0
+  generated source and product configuration is not upgraded in place. Install
+  registryctl v0.10.0 together with its matching image lock before rebuilding
+  and reviewing the generated closure.
+- Notary state authoring emits one typed PostgreSQL backend, a secret-consumer
+  reference, and only explicit deployment choices. Runtime pool and timeout
+  defaults are no longer copied into generated implementer configuration.
+
+### Removed
+
+- BREAKING: removed the direct-source commands `registryctl init notary`,
+  `registryctl add notary`, `registryctl notary smoke`,
+  `registryctl notary open`, `registryctl openfn import`, and
+  `registryctl openfn convert`. There are no compatibility aliases. Reauthor
+  supported source integration through the product-neutral `http`, `script`,
+  or `snapshot` contract and use governed `test --live` only through the
+  deployed Notary endpoint.
 
 ### Security
 

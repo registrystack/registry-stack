@@ -1,5 +1,21 @@
 # Release Notes
 
+## Unreleased
+
+## 0.10.0
+
+- BREAKING: source-manifest and policy digests now use Registry Stack's shared
+  RFC 8785 canonical JSON implementation. UTF-16 object-name ordering and
+  ECMAScript binary64 number serialization can change digests for manifests
+  containing numeric values or non-ASCII object names. Integers that are not
+  exactly representable as binary64 are rejected instead of rounded.
+- Regenerate and republish rendered metadata and all digest-bound artifacts
+  with the v0.10.0 CLI. Do not copy a v0.9.0 digest into a v0.10.0 project.
+  Represent exact identifiers outside the binary64 integer contract as
+  strings.
+- Workspace crates remain unpublished; pin the v0.10.0 Registry Stack source
+  ref.
+
 ## 0.9.0
 
 - BREAKING: metadata manifests reject unknown keys throughout the supported
