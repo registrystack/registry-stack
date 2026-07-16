@@ -80,12 +80,41 @@ Apply the v0.10.0 changelogs and release notes as a complete reauthoring guide:
   block. Supply the runtime URL, migration URL, TLS root, and sensitive-state
   key through named environment variables.
 - Provision a dedicated Notary database, migration login, `NOLOGIN` owner, and
-  runtime login. Run `registry-notary state install`, then `state doctor`.
+  runtime login. Install and attest the state contract with the released binary:
+
+  ```sh
+  registry-notary --config /etc/registry-notary/notary.yaml state install \
+    --migration-url-env REGISTRY_NOTARY_POSTGRES_MIGRATOR_URL \
+    --owner-role registry_notary_owner \
+    --runtime-role registry_notary_runtime
+  registry-notary --config /etc/registry-notary/notary.yaml state doctor
+  ```
+
+  The complete provisioning contract is in the
+  [Notary PostgreSQL state runbook](../../products/notary/docs/postgresql-state-operations.md#state-commands).
 - Use one Notary authority per Relay trust domain. Replicas may share a Notary
   database only when they serve the same authority configuration.
 - Bootstrap Relay consultation state with its separately owned PostgreSQL
   database, roles, schemas, audit-pseudonym keyring, and retention settings.
   Do not grant Relay roles access to Notary state or the reverse.
+
+  ```sh
+  registry-relay consultation bootstrap-state \
+    --config /etc/registry-relay/config.yaml \
+    --env-file /run/secrets/registry-relay-bootstrap.env \
+    --migration-database-url-env REGISTRY_RELAY_STATE_MIGRATION_URL \
+    --owner-role relay_state_owner \
+    --keyring-maintenance-database-url-env REGISTRY_RELAY_STATE_KEYRING_MAINTENANCE_URL \
+    --keyring-reader-database-url-env REGISTRY_RELAY_STATE_KEYRING_READER_URL \
+    --active-key-id epoch-1 \
+    --active-write-deadline-unix-ms "$ACTIVE_WRITE_DEADLINE_UNIX_MS" \
+    --audit-event-retention-ms "$AUDIT_EVENT_RETENTION_MS"
+  registry-relay --config /etc/registry-relay/config.yaml doctor
+  ```
+
+  Reuse the reviewed lifecycle values when attesting an existing state plane.
+  The complete role and recovery contract is in the
+  [Relay operations runbook](../../crates/registry-relay/docs/ops.md#bootstrap-native-consultation-state).
 - Replace removed Notary authentication modes and legacy federation or source
   configuration with the paired authority, internal workload, and current
   federation naming documented by v0.10.0.
@@ -133,16 +162,26 @@ Relay where the deployed profile enables native consultation.
 
 ## Backup and restore proof
 
-1. Quiesce candidate writers and take complete, encrypted logical backups of
-   the Relay and Notary databases. Preserve the corresponding role
-   provisioning, application release, migration set, and Notary sensitive-state
-   key version.
-2. Restore each dump into its own empty, isolated database with freshly
-   provisioned roles. Never restore individual correctness tables.
-3. Reattest Relay consultation bootstrap state. For Notary, run `state install`
-   to bind the restored role identities, then run `state doctor`.
-4. Start one replica without traffic and repeat the restart, duplicate
-   rejection, retained-evaluation, keyring, and readiness checks.
+1. Quiesce candidate writers and take complete, encrypted backups of the Relay
+   and Notary databases at one coordinated recovery point. Preserve each
+   product's role provisioning, application release, migration set, and
+   external recovery material, including the Notary sensitive-state key
+   version and the Relay keyring lifecycle inputs. Never restore individual
+   correctness tables.
+2. Restore Relay through one of its two supported paths: restore a complete
+   logical dump into an empty database in the same PostgreSQL cluster while
+   retaining the four bound roles and their object identifiers, or restore a
+   physical or managed cluster snapshot that preserves the role catalog. A
+   cross-cluster logical restore with newly created role names is invalid
+   because PostgreSQL assigns different object identifiers.
+3. Rerun Relay `consultation bootstrap-state` with the exact original role,
+   lock, chain-key, key-id, deadline, and retention inputs. Accept only an
+   identical `installed_or_attested` result. Restore Notary into its own empty,
+   isolated database, provision fresh isolated roles, then run the full
+   `state install` invocation above followed by `state doctor` to bind and
+   attest those role identities.
+4. Start one replica of each product without traffic and repeat the restart,
+   duplicate rejection, retained-evaluation, keyring, and readiness checks.
 5. Treat any snapshot that may predate acknowledged traffic as stale. Keep it
    quarantined for the maximum applicable drain and reconcile credential
    status before admission.
