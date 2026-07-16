@@ -58,7 +58,7 @@ contract.
 | Registry Notary | Publishes OpenID4VCI facade, validates token and proof, enforces self-attestation policy, issues credential |
 | Registry Relay | Supplies typed outputs through compiler-pinned consultations after Notary authorization |
 | Registry Platform | Provides reusable cryptographic, OpenID4VCI, SD-JWT, OIDC, and test-fixture primitives |
-| Registry Lab | Orchestrates the optional demo, scripts, artifacts, and wallet smoke checks |
+| External adopter demo | Optionally orchestrates scripts, artifacts, and wallet smoke checks outside Registry Stack; Solmara Lab is the current adopter repository |
 
 ## User Story
 
@@ -547,9 +547,10 @@ Notary owns product policy and runtime behavior:
 Notary must not move registry domain types into platform only to support this
 facade.
 
-## What Belongs In Registry Lab
+## What Belongs In An External Adopter Demo
 
-Registry Lab owns optional demo orchestration:
+An external adopter repository, currently Solmara Lab, owns optional demo
+orchestration:
 
 - generated Notary config with `oid4vci.enabled = true`;
 - `just oid4vci-offer`;
@@ -651,10 +652,9 @@ receives the credential.
 
 No Walt code change should be required for V1.
 
-Registry Lab keeps the operational wallet test procedure in
-`registry-lab/docs/wallet-interop-testing.md`. That guide defines the Walt API
-curl shape, the Inji/Mimoto configuration path, required topology, and evidence
-to capture for passed or blocked wallet runs.
+The external adopter repository keeps the operational wallet test procedure.
+That guide defines the Walt API curl shape, the Inji/Mimoto configuration path,
+required topology, and evidence to capture for passed or blocked wallet runs.
 
 ## Later Version Candidates
 
@@ -808,10 +808,10 @@ The feature is complete only when every item below is true:
   internal denial code, and subject override rejection.
 - Integration tests cover a successful citizen issuance and an attempted
   other-subject request with zero Relay consultations.
-- Registry Lab has an optional narrated smoke command that writes metadata,
+- The external adopter demo has an optional narrated smoke command that writes metadata,
   offer, successful credential response, denied response, audit excerpt, and
   transcript artifacts.
-- Existing Registry Lab default commands still work without enabling the
+- Existing external adopter default commands still work without enabling the
   OpenID4VCI facade.
 - A Walt-compatible offer smoke has either passed against a live Walt Wallet API
   or is documented as blocked with the exact command, missing dependency, and a
@@ -839,7 +839,7 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 
-# registry-lab
+# external adopter repository (currently solmara-lab)
 just generate
 just build
 just up
@@ -908,7 +908,7 @@ Exit criteria:
   detail;
 - reviewer signs off before lab work starts.
 
-### Wave 3: Registry Lab Demo And Artifacts
+### Wave 3: External Adopter Demo And Artifacts
 
 Parallel workers:
 
@@ -916,12 +916,12 @@ Parallel workers:
 - Worker B: add narrated smoke script and artifact report.
 - Worker C: add Walt offer smoke if local Walt API is available.
 - Worker D: add Inji/Mimoto compatibility config notes and smoke if stable.
-- Reviewer: run the demo from a clean lab state and check that output teaches
+- Reviewer: run the demo from a clean adopter state and check that output teaches
   the flow without leaking secrets.
 
 Exit criteria:
 
-- default lab still works with the facade disabled;
+- the external adopter's default path still works with the facade disabled;
 - new smoke writes all required artifacts;
 - at least one wallet-neutral client smoke passes;
 - live wallet gaps are documented with exact blockers.

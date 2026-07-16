@@ -6,12 +6,9 @@ Status: implemented in the current route surface. This document remains as the
 design record for the breaking route cleanup and intentionally names legacy
 routes in the comparison tables below.
 
-The notary route surface is implemented and clean of legacy routes. Cross-repo
-cleanup of the registry-lab vendored relay demo and smoke scripts remains
-outstanding: those scripts still call removed routes (`/claims/evaluate`,
-`/claims/batch-evaluate`, `/evidence/render`, `/credentials/issue`) and must
-be updated before the Definition of Done test-run items below can be marked
-complete.
+The Notary route surface is implemented and clean of legacy routes. The retired
+monorepo Registry Lab and its smoke scripts have been removed. Current adopter
+demos consume released routes from their own repositories.
 
 Registry Notary is still pre-real-adoption, so we should take the opportunity to
 make the HTTP API more consistent before external clients depend on it. The
@@ -136,7 +133,8 @@ route cleanup:
 
 - Do not mount legacy aliases by default.
 - Do not document legacy routes.
-- Update labs, smoke tests, OpenAPI, examples, and clients in the same change.
+- Update adopter demos, smoke tests, OpenAPI, examples, and clients in the same
+  change.
 - If maintainers want a safety net, add legacy aliases only behind a
   `compat_legacy_routes` test/dev feature and remove it before release.
 
@@ -148,7 +146,7 @@ route cleanup:
 - [x] Update client route constants/calls for Rust.
 - [x] Update Python and Node wrappers if they own route strings.
 - [x] Update docs and tutorials to use `/v1` application routes.
-- [ ] Update registry-lab vendored/client usage and smoke scripts.
+- [x] Remove the retired registry-lab client usage and smoke scripts.
 - [x] Update federation docs only to confirm no route change.
 - [x] Run a route grep to prove old application routes are gone from source
   docs/tests, except in this proposal, dated audit artifacts, demo audit logs,
@@ -163,7 +161,8 @@ route cleanup:
 - [ ] `cargo doc -p registry-notary-client --no-deps --all-features` passes.
 - [ ] Python binding tests pass.
 - [ ] Node binding tests and type checks pass.
-- [ ] Registry lab smoke/e2e flows pass against the new route surface.
+- [x] Retired Registry Lab smoke/e2e callers are removed. External adopter
+  validation belongs to the adopter repository.
 - [x] OpenAPI route coverage test asserts only the current route set.
 
 ## Review Checkpoints
@@ -176,8 +175,8 @@ route cleanup:
    - Route mounting, auth, body limits, OpenAPI, tests.
 3. Client/bindings review:
    - Rust/Python/Node route mapping, errors, docs, smoke usage.
-4. Lab/release review:
-   - Tutorials, lab flows, release notes, old-route grep, CI.
+4. Adopter/release review:
+   - Tutorials, adopter flows, release notes, old-route grep, CI.
 
 ## Decisions
 

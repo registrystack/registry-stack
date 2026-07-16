@@ -143,4 +143,4 @@ gap can be traced back to its flow.
 - Credential status and freshness policy for remote proofs.
 - Federated credential issuance holder-binding ceremony.
 - Signed audit checkpoints and peer monitoring.
-- Registry Lab federation scenario scripts and fixture metadata.
+- External adopter validation for federation scenarios and fixture metadata.

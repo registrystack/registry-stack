@@ -297,9 +297,9 @@ for the selected algorithm, `alg = none`, and any algorithm not in
 allow localhost, private address ranges, redirects to unapproved hosts, or
 non-HTTP(S) schemes.
 
-For the registry-lab story, confirm whether the issuer emits an algorithm
+For the external adopter story, confirm whether the issuer emits an algorithm
 Notary accepts. Current Notary OIDC defaults are expected to be EdDSA-only.
-The V1 lab story should use an EdDSA dev issuer. Zitadel RS256 support should
+The V1 adopter story should use an EdDSA dev issuer. Zitadel RS256 support should
 be a separate implementation ticket that adds RSA key-size validation before
 broadening `allowed_algorithms`. RSA keys smaller than 2048 bits must be
 rejected.
@@ -380,8 +380,8 @@ The token claim should be:
 not use `token_claim: sub` unless `subject_binding.allow_sub_as_civil_id = true`
 is explicitly configured and the deployment documents that `sub` is
 authoritative for the selected registry subject. Config validation must reject
-`token_claim: sub` when this flag is absent or false. The registry-lab demo
-should use a namespaced custom claim.
+`token_claim: sub` when this flag is absent or false. The external adopter demo,
+currently maintained in Solmara Lab, should use a namespaced custom claim.
 
 The configured token-claim name must be a bounded string matching
 `[A-Za-z0-9_:/\.\-]+`. This intentionally permits URL-shaped namespaced claims
@@ -560,7 +560,7 @@ complete long-lived citizen credential lifecycle by itself.
 
 V1 citizen-facing credential validity must not exceed
 `self_attestation.token_policy.max_credential_validity_seconds`, with a
-recommended ceiling of 600 seconds for the registry-lab story.
+recommended ceiling of 600 seconds for the external adopter story.
 
 ### Purpose Policy
 
@@ -1112,9 +1112,10 @@ Definition of Done:
 - A different principal cannot render or issue from the stored evaluation.
 - A disallowed credential profile fails.
 
-### Stage 5: Registry Lab Story
+### Stage 5: External Adopter Story
 
-- Add an optional `registry-lab` story that provisions a citizen-capable OIDC
+- Add an optional story in the external adopter repository, currently Solmara
+  Lab, that provisions a citizen-capable OIDC
   token with a namespaced custom subject-binding claim from an EdDSA dev issuer.
 - Configure a Notary instance with `self_attestation.enabled = true`.
 - Demonstrate a citizen token requesting an attestation for itself.
@@ -1133,8 +1134,8 @@ Definition of Done:
 - The story demonstrates in-Notary subject mismatch rate limiting and
   documents that production hour-window or cross-replica enforcement requires a
   gateway or shared limiter.
-- The story remains optional so existing lab release checks do not depend on a
-  citizen IdP setup unless explicitly enabled.
+- The story remains optional so Registry Stack release checks do not depend on
+  an external citizen IdP setup.
 
 ## Resolved V1 Decisions
 
@@ -1143,11 +1144,11 @@ Definition of Done:
   `subject_binding.id_type`.
 - `subject_binding.request_field` is an enum, and v1 accepts only
   `SubjectId`.
-- The registry-lab demo uses a namespaced custom subject-binding claim, not
+- The external adopter demo uses a namespaced custom subject-binding claim, not
   `sub`.
 - `token_claim: sub` requires `allow_sub_as_civil_id = true`; otherwise config
   validation rejects it.
-- The first lab story uses an EdDSA dev issuer. Zitadel RS256 support is a
+- The first adopter story uses an EdDSA dev issuer. Zitadel RS256 support is a
   separate hardening ticket requiring RSA minimum key-size enforcement.
 - Citizen-facing credential validity is capped at 600 seconds in v1.
 - Rate limiting starts with in-Notary in-process buckets keyed through
@@ -1219,7 +1220,7 @@ The feature is done only when all of the following are true:
   age using a currently valid citizen token.
 - Audit events use typed redaction wrappers and can represent every required
   self-attestation field without generic raw identifier strings.
-- Logs, metrics, audit JSONL, Problem Details, lab artifacts, and credential
+- Logs, metrics, audit JSONL, Problem Details, adopter artifacts, and credential
   payloads pass non-disclosure tests for tokens, civil identifiers, holder
   proofs, SD-JWT disclosures, source rows, and raw Relay responses.
 - In-Notary rate limits run before Relay consultations and issuance, use keyed hashes,
@@ -1228,7 +1229,7 @@ The feature is done only when all of the following are true:
 - Citizen-facing credentials are holder-bound, do not claim holder-equals-
   subject, use holder DID as the v1 credential subject identifier, and have
   validity no greater than 600 seconds.
-- The optional registry-lab story demonstrates success, subject mismatch denial,
+- The optional external adopter story demonstrates success, subject mismatch denial,
   rate limiting, holder-bound issuance, and audit correlation without writing
   secrets or raw registry rows.
 - Focused tests, relevant package tests, lint or formatting checks, and the
@@ -1284,17 +1285,17 @@ principal, access mode, subject-binding hash, client, audience, or stale
 evaluation, and credential issuance works only for allowed profiles with holder
 proof and the v1 holder-DID credential subject identifier.
 
-### Wave 4: Registry Lab And End-To-End Review
+### Wave 4: External Adopter And End-To-End Review
 
 Parallel workers:
 
-- Worker A owns the optional registry-lab EdDSA issuer story and fixtures.
+- Worker A owns the optional external adopter EdDSA issuer story and fixtures.
 - Worker B owns non-secret artifact generation and audit correlation checks.
 - Worker C owns documentation and operator notes for gateway rate limits,
   wallet origin policy, and Zitadel RS256 follow-up.
 - Worker D performs final review across the full diff and verifies the Global
   Definition of Done.
 
-Wave 4 is done when the lab story demonstrates the full happy path and negative
+Wave 4 is done when the adopter story demonstrates the full happy path and negative
 paths, all artifacts are non-secret, audit linkage works by correlation id, and
 the final reviewer signs off that no spec requirement remains partial.

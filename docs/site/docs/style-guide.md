@@ -96,9 +96,10 @@ Preferred terms.
 
 | Domain                | Preferred                                            |
 | --------------------- | ---------------------------------------------------- |
-| Product family        | `registry family` (lowercase) for the concept; `Registry Docs` for the site and repo |
-| Project names         | `Registry Manifest`, `Registry Relay`, `Registry Notary`, `Registry Atlas`, `Registry Lab` (Title Case) |
-| Repo slugs            | `registry-manifest`, `registry-relay`, `registry-notary`, `registry-atlas`, `registry-lab` (monospace) |
+| Product family        | `registry stack` (lowercase) for the concept; `Registry Docs` for the site and repo |
+| Formal product names  | `Registry Platform`, `Registry Manifest`, `Registry Relay`, and `Registry Notary` (Title Case) |
+| External adopter demo | `Solmara Lab` (Title Case); not a formal Registry Stack product |
+| Repo slugs            | `registry-platform`, `registry-manifest`, `registry-relay`, and `registry-notary` for formal products; `solmara-lab` for the external adopter demo (monospace) |
 | Legacy repo paths     | `registry_relay` and `decentralized-evidence-demo` appear only in historical pages or `rename_status` fields. Never in prose on a `current` page without explicit rename context. |
 | Standards             | Use the official acronym after spelling on first use. `DCAT`, `SHACL`, `OGC API Records`, `SD-JWT VC`, `CCCEV`. Never translate. |
 

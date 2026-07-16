@@ -2,7 +2,8 @@
 
 Portable metadata contracts, validators, compilers, and renderers for registry
 catalogs. This crate is the commons contract/schema kernel used by Registry
-Relay, Registry Notary metadata workflows, and Registry Lab fixtures.
+Relay, Registry Notary metadata workflows, and external adopter fixtures such
+as Solmara Lab.
 
 This crate is the source of truth for metadata manifests. It stays independent
 of Registry Relay runtime concerns so static publishers, CLIs, and services can
