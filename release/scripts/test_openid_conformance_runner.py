@@ -61,6 +61,16 @@ class OpenIdConformanceRunnerTest(TestCase):
         self.assertNotIn("REGISTRY_LAB_", serialized)
         self.assertNotIn("blocked-by-lab", serialized)
 
+    def test_builder_override_pins_maven_image_by_digest(self) -> None:
+        override = self.runner.BUILDER_COMPOSE_OVERRIDE_PATH.read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("maven:3-eclipse-temurin-21@sha256:", override)
+        self.assertIn(
+            str(self.runner.BUILDER_COMPOSE_OVERRIDE_PATH),
+            self.runner.builder_command(Path("/suite"), "run", "builder"),
+        )
+
     def test_metadata_scenario_cli_selects_single_oid4vci_module(self) -> None:
         scenario = self.runner.find_scenario(
             self.plan_map, "notary-oid4vci-issuer-metadata"

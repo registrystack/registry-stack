@@ -81,7 +81,7 @@ flowchart LR
 Prerequisites:
 
 - Rust toolchain from `rust-toolchain.toml`.
-- Python 3 for release helper tests.
+- Python 3.11 or later for release helper tests and conformance tooling.
 - Node.js 22.12.0 and npm for `docs/site`.
 
 Useful first checks:

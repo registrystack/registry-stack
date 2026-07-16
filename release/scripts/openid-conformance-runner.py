@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = REPO_ROOT / "release" / "conformance" / "openid"
 PLAN_MAP_PATH = CONFIG_DIR / "plan-map.json"
 COMPOSE_OVERRIDE_PATH = CONFIG_DIR / "docker-compose.override.yaml"
+BUILDER_COMPOSE_OVERRIDE_PATH = CONFIG_DIR / "builder-compose.override.yaml"
 DEFAULT_WORK_ROOT = REPO_ROOT / "target" / "openid-conformance"
 DEFAULT_CACHE_DIR = DEFAULT_WORK_ROOT / "cache"
 DEFAULT_OUTPUT_ROOT = DEFAULT_WORK_ROOT / "results"
@@ -190,6 +191,8 @@ def builder_command(checkout: Path, *compose_args: str) -> list[str]:
         "compose",
         "-f",
         str(checkout / "builder-compose.yml"),
+        "-f",
+        str(BUILDER_COMPOSE_OVERRIDE_PATH),
         *compose_args,
     ]
 

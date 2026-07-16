@@ -1,156 +1,113 @@
 ---
 title: Quickstart
-description: With zero install, read a protected registry API from your terminal against the public hosted lab and watch Registry Relay enforce scope.
+description: Clone Solmara Lab, generate its synthetic country configuration, start the local Registry Stack topology, and verify it with the smoke suite.
 status: current
 owner: registry-docs
 source_repos:
   - solmara-lab
   - registry-relay
-last_reviewed: "2026-06-28"
+  - registry-notary
+last_reviewed: "2026-07-16"
 doc_type: tutorial
 locale: en
 standards_referenced: []
 ---
 
 import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+import { Steps } from '@astrojs/starlight/components';
 
-:::caution[Hosted first-run publication held]
-The Relay-only steps passed their latest verification, but this hosted page is not the promoted
-first-run route while the complete
-[GH#198](https://github.com/registrystack/registry-stack/issues/198) fresh-reader run is unfinished.
-Use [the local Registry Relay tutorial](../../tutorials/publish-spreadsheet-secured-registry-api/)
-for the current first run.
-:::
-
-In about five minutes you can read a protected registry API from your terminal, with zero install,
-against a public hosted lab. You will call **Registry Relay**, which returns records to authorized
-callers, and watch it enforce scope: the same API answers some requests and refuses others,
-depending on what the caller's token allows. Everything runs in the hosted lab at
-[lab.registrystack.org](https://lab.registrystack.org), so this page has no setup on your machine.
+Solmara Lab is the standalone Registry Stack adopter demo. This quickstart
+clones its repository, generates synthetic country configuration and local demo
+secrets, starts the digest-pinned services, and runs the repository-owned smoke
+suite. It does not use the retired monorepo Lab or its hosted endpoints.
 
 <QuickstartMeta
-  outcome="One protected registry read against the public hosted lab, with scope enforcement visible in the response."
-  time="About 5 minutes"
-  level="Hosted lab, zero install"
-  prerequisites={['curl']}
+  outcome="A local Solmara Lab topology verified by its smoke suite."
+  time="About 20 minutes, mostly first-run dependency installation and image pulls"
+  level="Local multi-service demo"
+  prerequisites={['Docker Compose v2', 'just', 'uv', 'Python 3 and OpenSSL', 'pnpm 11.3.0 via corepack', 'git']}
 />
 
-This lab uses synthetic data and public demo-only credentials by design.
-Do not reuse anything you copy here outside the lab.
+:::note[Separate adopter repository]
+Solmara Lab demonstrates Registry Stack but is not a fifth Registry Stack
+product. Its configuration and orchestration live in
+[`registrystack/solmara-lab`](https://github.com/registrystack/solmara-lab).
+:::
 
-## What is running
+This tutorial uses generated synthetic records and local demo credentials. Do
+not reuse its keys, tokens, or passwords in another environment.
 
-The lab runs a civil-registry **Relay** you will call directly in this tutorial: a protected,
-scoped, read-only HTTP API over a civil registry source, at
-[civil-relay.lab.registrystack.org](https://civil-relay.lab.registrystack.org). The lab also runs
-**Registry Notary** services for the held credential path; see the
-[hosted credential tour (held)](../credential-tour/). For how these connect to the rest of
-the stack, see the [architecture overview](../../explanation/architecture/). For the full set of
-live demo credentials, identities, and ready-made requests, open the lab homepage at
-[lab.registrystack.org](https://lab.registrystack.org).
+## Get the repository
 
-## Get your bearer tokens
-
-The civil Relay authenticates callers with `Authorization: Bearer <token>`. Each token carries a
-scope, so the same API answers some requests and refuses others. Lab tokens are public demo-only
-values that rotate, so this page shows placeholders, never live tokens.
-
-In a browser, open [lab.registrystack.org](https://lab.registrystack.org), scroll to the
-**For developers** section near the bottom, and copy two bearer tokens from the demo credential
-cards: a metadata-scope token and a row-reader token. Working without a browser? The same tokens
-are served unauthenticated as JSON at
-[lab.registrystack.org/api/lab.json](https://lab.registrystack.org/api/lab.json).
-Set them in your shell. The following placeholders stand in for the live tokens.
+Clone Solmara Lab and install its pinned Python and Node dependencies:
 
 ```sh
-export CIVIL_METADATA_TOKEN="<metadata token from lab.registrystack.org>"
-export CIVIL_ROW_READER_TOKEN="<row-reader token from lab.registrystack.org>"
+git clone https://github.com/registrystack/solmara-lab
+cd solmara-lab
+just setup
 ```
 
-## List datasets (metadata scope)
+`just setup` installs the generator environments with `uv` and the portal
+dependencies with the repository's pinned `pnpm` version.
 
-The metadata-scope token can list the datasets the Relay publishes:
+## Start and verify the topology
+
+Run these commands from the Solmara Lab checkout:
+
+<Steps>
+
+1. Generate deterministic fixtures, local demo secrets, and TLS material:
+
+    ```sh
+    just generate
+    ```
+
+2. Build the adopter-owned wrapper images and start the topology:
+
+    ```sh
+    just up
+    ```
+
+3. Run the authoritative smoke suite:
+
+    ```sh
+    just smoke
+    ```
+
+</Steps>
+
+The smoke command exits successfully only after the generated configuration,
+service health, and protected Relay and Notary journeys selected by that
+Solmara revision pass. A failure stays visible in the command output.
+
+## Stop the topology
+
+When you are finished:
 
 ```sh
-curl -sS \
-  -H "Authorization: Bearer $CIVIL_METADATA_TOKEN" \
-  https://civil-relay.lab.registrystack.org/v1/datasets
+just down
 ```
 
-The Relay returns `200 OK` with the catalog. Each dataset entry carries more fields than shown;
-they are omitted here for brevity:
+## What you completed
 
-```json
-{ "data": [ { "dataset_id": "civil_registry" } ] }
-```
-
-## Read rows (row scope plus a purpose)
-
-Reading actual records needs a token with the row scope and a `Data-Purpose` header that declares why
-you are reading:
-
-```sh
-curl -sS \
-  -H "Authorization: Bearer $CIVIL_ROW_READER_TOKEN" \
-  -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" \
-  "https://civil-relay.lab.registrystack.org/v1/datasets/civil_registry/entities/civil_person/records?limit=1"
-```
-
-The Relay returns `200 OK` with one record and pagination metadata (synthetic demo data):
-
-```json
-{
-  "data": [
-    {
-      "national_id": "NID-1001",
-      "given_name": "Miguel",
-      "surname": "Santos",
-      "birth_date": "2016-01-15",
-      "life_stage": "child",
-      "deceased": false,
-      "district": "north",
-      "observed_at": "2026-07-01T00:00:00Z"
-    }
-  ],
-  "pagination": { "has_more": true, "next_cursor": "..." }
-}
-```
-
-The `observed_at` timestamp and cursor values vary between runs; the other fields match the
-record exactly.
-
-## See access control hold
-
-The point of the Relay is that it never widens reach at request time. Send the metadata-scope token
-to the rows endpoint and the Relay refuses it:
-
-```sh
-curl -sS -i \
-  -H "Authorization: Bearer $CIVIL_METADATA_TOKEN" \
-  -H "Data-Purpose: https://demo.example.gov/purpose/decentralized-evidence-demo" \
-  "https://civil-relay.lab.registrystack.org/v1/datasets/civil_registry/entities/civil_person/records?limit=1"
-```
-
-The Relay refuses with `403 Forbidden`, and the `problem+json` body carries the stable code
-`auth.scope_denied`. For more on this service, see
-[Registry Relay](../../products/registry-relay/).
-
-## What you built
-
-You read a protected registry API from your terminal and watched Registry Relay enforce scope: a
-metadata-scope token listed the dataset catalog (`200`), a row-scope token with a declared purpose
-read one record (`200`), and the same metadata-scope token was refused at the rows endpoint (`403`,
-`auth.scope_denied`). Same API, same network call, different scope, different answer.
+You generated an adopter-owned country topology, started the Registry Stack
+services from immutable image references, and verified the running system with
+the same smoke command Solmara maintains in CI. No deprecated hosted Lab token,
+URL, or monorepo path is part of the journey.
 
 ## Next
 
+- [First run with Solmara Lab](../../tutorials/first-run-with-solmara-lab/):
+  inspect the topology and call a Notary evaluation route directly.
 - [Run a protected registry API locally](../../tutorials/publish-spreadsheet-secured-registry-api/):
-  stand up your own protected Relay from a sample workbook.
-- [Hosted credential tour (held)](../credential-tour/): this continuation remains available for
-  inspection but is not the promoted first-run path.
+  generate a smaller Relay project from a sample workbook.
+- [Evaluate a claim with Registry Notary](../../tutorials/verify-claim-registry-api/):
+  extend the generated project with Notary.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| The hosted lab or a service URL does not respond | n/a | [First run with Solmara Lab](../../tutorials/first-run-with-solmara-lab/) runs a separate, fully local multi-service demo if the hosted lab is unavailable |
+| `just generate` reports a missing command | A prerequisite is not installed or not on `PATH` | Install the named tool, then rerun `just setup` and `just generate` |
+| Compose cannot pull a pinned image | Docker cannot reach GHCR or the host architecture is unsupported by that release | Confirm registry access and use the platform documented by the pinned Solmara revision |
+| `just smoke` fails after services start | One or more services are not ready, or generated files do not match the checkout | Read the first failing smoke check, run `just down`, then regenerate and retry without hand-editing generated files |

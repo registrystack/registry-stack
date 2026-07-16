@@ -136,6 +136,8 @@ until it is fixed or gets its own documented ignore.
 
 Release source checks:
 
+These checks require Python 3.11 or later.
+
 ```bash
 python3 -m unittest release/scripts/test_registry_release.py
 python3 -m unittest release/scripts/test_openid_conformance_runner.py

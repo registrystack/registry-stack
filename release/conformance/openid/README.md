@@ -7,9 +7,9 @@ not depend on a mutable hosted environment or on the separately maintained
 
 The wrapper pins the upstream suite checkout to `release-v5.2.0`
 (`dee9a25160e789f0f80517674693ef7989ab9fa1`) and overlays the upstream Compose
-file with a digest-pinned MongoDB image. A different suite ref can be supplied
-for investigation, but results from an override are not evidence for the
-checked-in mapping.
+files with digest-pinned MongoDB runtime and Maven builder images. A different
+suite ref can be supplied for investigation, but results from an override are
+not evidence for the checked-in mapping.
 
 ## Evidence boundary
 
