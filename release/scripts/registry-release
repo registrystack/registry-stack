@@ -259,6 +259,11 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
         print(f"error: release asset directory does not exist: {asset_dir}", file=sys.stderr)
         return 1
 
+    parsed_version = release_version_tuple(tag.removeprefix("v"))
+    if parsed_version is None:
+        print(f"error: release tag must look like v0.8.0, got {tag}", file=sys.stderr)
+        return 1
+
     binary_names = [
         f"registryctl-{tag}-linux-amd64",
         f"registry-manifest-{tag}-linux-amd64",
@@ -266,15 +271,28 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
         f"registry-notary-{tag}-linux-amd64",
         "SHA256SUMS",
     ]
-    # These binaries were introduced after the earliest supported release
-    # tags. Keep them optional so historical capsule backfills remain possible.
     optional_binary_names = [
         f"registryctl-{tag}-macos-arm64",
         f"registryctl-{tag}-linux-arm64",
+    ]
+    worker_binary_names = [
         f"registry-relay-rhai-worker-{tag}-linux-amd64",
         f"registry-notary-cel-worker-{tag}-linux-amd64",
     ]
-    optional_release_file_names = [f"registryctl-{tag}-image-lock.json"]
+    if parsed_version >= EXACT_ARTIFACT_INVENTORY_MINIMUM_VERSION:
+        binary_names.extend(worker_binary_names)
+    else:
+        # The dedicated worker binaries predate the exact v0.10+ artifact
+        # contract, so historical capsule backfills may omit them.
+        optional_binary_names.extend(worker_binary_names)
+
+    image_lock_name = f"registryctl-{tag}-image-lock.json"
+    required_release_file_names = []
+    optional_release_file_names = []
+    if parsed_version >= RELEASE_IMAGE_LOCK_MINIMUM_VERSION:
+        required_release_file_names.append(image_lock_name)
+    else:
+        optional_release_file_names.append(image_lock_name)
     image_names = [
         "registry-notary",
         "registry-relay",
@@ -284,6 +302,8 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
     staged_release_files: list[str] = []
     try:
         for name in binary_names:
+            copy_required_asset(asset_dir, name, binary_dir)
+        for name in required_release_file_names:
             copy_required_asset(asset_dir, name, binary_dir)
         for name in optional_binary_names:
             if copy_optional_asset(asset_dir, name, binary_dir):
@@ -300,6 +320,7 @@ def stage_capsule_backfill_assets(asset_dir: Path, tag: str, binary_dir: Path, i
     print(
         f"staged {len(binary_names)} binary assets "
         f"({len(staged_optional)}/{len(optional_binary_names)} optional binaries) "
+        f"and {len(required_release_file_names)} required release files "
         f"and {len(staged_release_files)}/{len(optional_release_file_names)} optional release files "
         f"and {len(image_names)} image digest assets for {tag}"
     )

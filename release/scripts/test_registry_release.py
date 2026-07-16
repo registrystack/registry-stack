@@ -196,6 +196,8 @@ class RegistryReleaseTest(unittest.TestCase):
         )
 
         self.assertIn('version="${TAG#v}"', backfill)
+        self.assertIn("if (( major > 0 || minor >= 9 )); then", backfill)
+        self.assertIn("--require-registryctl-image-lock", backfill)
         self.assertIn(
             'glob.glob("release-source/release/manifests/registry-stack-*.yaml")',
             backfill,
@@ -1039,6 +1041,56 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertTrue((binary_dir / "registryctl-v0.8.0-image-lock.json").is_file())
             self.assertIn("1/1 optional release files", result.stdout)
 
+    def test_stage_capsule_backfill_assets_requires_v010_worker_binaries(self) -> None:
+        for missing_name in (
+            "registry-relay-rhai-worker-v0.10.0-linux-amd64",
+            "registry-notary-cel-worker-v0.10.0-linux-amd64",
+        ):
+            with self.subTest(missing_name=missing_name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                asset_dir = write_release_asset_fixture(
+                    root,
+                    tag="v0.10.0",
+                    include_image_lock=True,
+                )
+                (asset_dir / missing_name).unlink()
+
+                result = run_tool(
+                    "stage-capsule-backfill-assets",
+                    str(asset_dir),
+                    "--tag",
+                    "v0.10.0",
+                    "--binary-dir",
+                    str(root / "staged-bin"),
+                    "--image-evidence-dir",
+                    str(root / "staged-images"),
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(f"missing release asset {missing_name}", result.stderr)
+
+    def test_stage_capsule_backfill_assets_requires_v09_registryctl_image_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            asset_dir = write_release_asset_fixture(root, tag="v0.9.0")
+
+            result = run_tool(
+                "stage-capsule-backfill-assets",
+                str(asset_dir),
+                "--tag",
+                "v0.9.0",
+                "--binary-dir",
+                str(root / "staged-bin"),
+                "--image-evidence-dir",
+                str(root / "staged-images"),
+            )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(
+            "missing release asset registryctl-v0.9.0-image-lock.json",
+            result.stderr,
+        )
+
     def test_stage_capsule_backfill_assets_rejects_missing_release_asset(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1378,26 +1430,27 @@ def write_binary_sbom_fixture(root: Path, binary_dir: Path) -> Path:
 def write_release_asset_fixture(
     root: Path,
     *,
+    tag: str = "v0.8.0",
     include_cross_platform: bool = False,
     include_image_lock: bool = False,
 ) -> Path:
     asset_dir = root / "release-assets"
     asset_dir.mkdir()
     binary_names = [
-        "registryctl-v0.8.0-linux-amd64",
-        "registry-manifest-v0.8.0-linux-amd64",
-        "registry-relay-v0.8.0-linux-amd64",
-        "registry-relay-rhai-worker-v0.8.0-linux-amd64",
-        "registry-notary-v0.8.0-linux-amd64",
-        "registry-notary-cel-worker-v0.8.0-linux-amd64",
+        f"registryctl-{tag}-linux-amd64",
+        f"registry-manifest-{tag}-linux-amd64",
+        f"registry-relay-{tag}-linux-amd64",
+        f"registry-relay-rhai-worker-{tag}-linux-amd64",
+        f"registry-notary-{tag}-linux-amd64",
+        f"registry-notary-cel-worker-{tag}-linux-amd64",
     ]
     if include_cross_platform:
         binary_names += [
-            "registryctl-v0.8.0-macos-arm64",
-            "registryctl-v0.8.0-linux-arm64",
+            f"registryctl-{tag}-macos-arm64",
+            f"registryctl-{tag}-linux-arm64",
         ]
     if include_image_lock:
-        binary_names.append("registryctl-v0.8.0-image-lock.json")
+        binary_names.append(f"registryctl-{tag}-image-lock.json")
     checksums = []
     for name in binary_names:
         path = asset_dir / name
@@ -1409,7 +1462,9 @@ def write_release_asset_fixture(
         (asset_dir / f"{image}.spdx.json").write_text("{}", encoding="utf-8")
         (asset_dir / f"{image}.grype.json").write_text("{}", encoding="utf-8")
         (asset_dir / f"{image}.metadata.json").write_text("{}", encoding="utf-8")
-    (asset_dir / "registry-stack-v0.8.0-release-evidence.json").write_text("{}", encoding="utf-8")
+    (asset_dir / f"registry-stack-{tag}-release-evidence.json").write_text(
+        "{}", encoding="utf-8"
+    )
     return asset_dir
 
 

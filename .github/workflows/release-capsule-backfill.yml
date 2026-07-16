@@ -229,11 +229,17 @@ jobs:
         run: |
           set -euo pipefail
           version="${TAG#v}"
+          capsule_requirements=()
+          IFS='.' read -r major minor _patch <<< "${version}"
+          if (( major > 0 || minor >= 9 )); then
+            capsule_requirements+=(--require-registryctl-image-lock)
+          fi
           mkdir -p dist/release-capsule
           generator/release/scripts/registry-release render-capsule \
             "${RELEASE_MANIFEST}" \
             --tag "${TAG}" \
             --version "${version}" \
+            "${capsule_requirements[@]}" \
             --binary-dir dist/staged/bin \
             --binary-sbom-dir dist/staged/binary-sbom \
             --image-evidence-dir dist/staged/image-evidence \
