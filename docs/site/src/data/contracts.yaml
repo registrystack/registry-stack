@@ -33,7 +33,11 @@
   source_of_truth:
     label: Registry Notary OID4VCI routes
     url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/api.rs
-  consumer_note: OID4VCI flow advertising `dc+sd-jwt` credential format. Registry Lab exercises the full path through the `just citizen-oid4vci-*` recipes. Full OID4VCI Draft 13 `vc+sd-jwt` wallet conformance is not asserted at this version.
+  consumer_note: >-
+    OID4VCI flow advertising `dc+sd-jwt` credential format. Solmara Lab checks
+    the hosted issuer metadata, credential offer, nonce, authorization redirect,
+    and unauthenticated denial paths through `just hosted-smoke`. Full OID4VCI
+    Draft 13 `vc+sd-jwt` wallet conformance is not asserted at this version.
 - id: registry-notary.federated-evaluation
   name: Registry Notary Federated Evaluation MVP
   owner: registry-notary

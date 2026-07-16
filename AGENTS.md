@@ -25,7 +25,7 @@ are shared primitives. `registryctl` is adopter tooling.
 | `crates/registryctl` | Adopter tooling |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
-| `release/` | Release manifests, schemas, notes, validation tooling, and the release source-model proof |
+| `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
 | `external/` | Notes on inputs that intentionally stay out of this tree (e.g. Crosswalk stays a pinned git dependency) |
 
 The adopter demo is maintained separately in
@@ -57,6 +57,7 @@ Release source checks:
 
 ```bash
 python3 -m unittest release/scripts/test_registry_release.py
+python3 -m unittest release/scripts/test_openid_conformance_runner.py
 release/scripts/registry-release validate release/manifests/<current>.yaml
 REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
 python3 -m unittest release/scripts/test_check_release_source_model.py

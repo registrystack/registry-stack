@@ -253,6 +253,9 @@ jobs:
       - name: Test release helper
         run: python3 -m unittest release/scripts/test_registry_release.py
 
+      - name: Test OpenID conformance runner
+        run: python3 -m unittest release/scripts/test_openid_conformance_runner.py
+
       - name: Gate inventory
         run: python3 release/scripts/check-gates-inventory.py
 

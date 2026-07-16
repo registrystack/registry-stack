@@ -49,6 +49,15 @@ class GateInventoryTest(unittest.TestCase):
         )
         self.assertIn("Release docset validation", self.module.missing_gates(text))
 
+    def test_missing_openid_conformance_runner_tests_are_reported(self) -> None:
+        text = self.workflow.replace(
+            "python3 -m unittest release/scripts/test_openid_conformance_runner.py",
+            "python3 release/scripts/openid-conformance-runner.py list",
+        )
+        self.assertIn(
+            "OpenID conformance runner tests", self.module.missing_gates(text)
+        )
+
     def test_missing_registryctl_tutorial_path_filter_is_reported(self) -> None:
         text = self.workflow.replace(
             "registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}",

@@ -98,7 +98,11 @@
   owns:
     - End-to-end local topology for Relay, Notary, live Postgres, live Zitadel, Relay-backed consultations, the static metadata publisher, and demo-client fixtures.
     - Demo scripts, smoke checks, generated local credentials, live-service checks, static metadata checks, and narrated client flows.
-    - Citizen self-attestation walkthrough that exercises the Notary OID4VCI flow end-to-end through the `just citizen-oid4vci-*` recipes.
+    - >-
+      Historical citizen self-attestation walkthrough that exercised the Notary
+      OID4VCI flow through the `just citizen-oid4vci-*` recipes at v0.9.0. The
+      replacement Solmara Lab uses `just hosted-smoke` for current issuer
+      endpoint checks.
     - Acceptance rehearsal after rename waves land.
   does_not_own:
     - Production deployment guidance.

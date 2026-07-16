@@ -46,9 +46,11 @@ write.
       deployment topology (#205). Must not depend on the retired monorepo lab,
       which was replaced by the standalone
       [Solmara Lab](https://github.com/registrystack/solmara-lab) (#224).
-      Historical harness and metadata-run evidence is preserved in the v0.9.0
-      tag: [`openid-conformance-suite.md`](https://github.com/registrystack/registry-stack/blob/v0.9.0/lab/docs/openid-conformance-suite.md),
-      [`openid-conformance-initial-report.md`](https://github.com/registrystack/registry-stack/blob/v0.9.0/lab/docs/openid-conformance-initial-report.md).
+      The release-owned [harness and plan mapping](conformance/openid/README.md)
+      no longer depend on either lab. Its
+      [initial report](conformance/openid/initial-report.md) preserves the
+      historical hosted-lab failures but does not yet prove a pinned release
+      topology.
 - [ ] Credentialing, OID4VCI, and status-list interop proof (#57).
 
 ## 4. Adversarial verification

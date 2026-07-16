@@ -678,7 +678,8 @@
     "used_by": [
       "registry-notary",
       "registry-platform",
-      "registry-lab"
+      "registry-lab",
+      "solmara-lab"
     ],
     "surfaces": [
       "credential offer endpoint",
@@ -701,12 +702,12 @@
         "url": "https://github.com/registrystack/registry-stack/blob/v0.9.0/lab/scripts/smoke-citizen-oid4vci.sh"
       },
       {
-        "label": "Hosted lab issuer metadata",
-        "url": "https://citizen-notary.lab.registrystack.org/.well-known/openid-credential-issuer"
+        "label": "Solmara Lab hosted OID4VCI smoke",
+        "url": "https://github.com/registrystack/solmara-lab/blob/00cd51a2be4a405ef75d337ddcede0f9de134b1f/scripts/smoke-hosted.py"
       }
     ],
     "last_checked": "2026-06-13",
-    "notes": "Registry Notary exposes the OID4VCI credential offer, nonce, credential, and issuer-metadata routes as a profiled subset of OID4VCI Draft 13. The hosted lab issuer metadata advertises `format: dc+sd-jwt` for the citizen credential configuration. Registry Platform owns the underlying primitives in the `registry-platform-oid4vci` crate. Registry Lab exercises the full flow through the `just citizen-oid4vci-*` recipes. Full OID4VCI issuer conformance is not asserted: the server advertises itself as `openid4vci.support: not_full_issuer`, and the surfaces emit the protocol shape validated against the lab smoke script."
+    "notes": "Registry Notary exposes the OID4VCI credential offer, nonce, credential, and issuer-metadata routes as a profiled subset of OID4VCI Draft 13. The v0.9.0 hosted lab issuer metadata advertised `format: dc+sd-jwt` for the citizen credential configuration. Registry Platform owns the underlying primitives in the `registry-platform-oid4vci` crate. The historical Registry Lab exercised the flow through the `just citizen-oid4vci-*` recipes at v0.9.0. Solmara Lab checks the current hosted issuer metadata, credential offer, nonce, authorization redirect, and unauthenticated denial paths through `just hosted-smoke`. Full OID4VCI issuer conformance is not asserted: the server advertises itself as `openid4vci.support: not_full_issuer`, and the surfaces emit the protocol shape validated by the checked smoke paths."
   },
   {
     "id": "w3c-did",
