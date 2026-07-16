@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM debian:bookworm-slim@sha256:60eac759739651111db372c07be67863818726f754804b8707c90979bda511df AS runtime-root
+FROM debian:bookworm-slim@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS runtime-root
 
 RUN mkdir -p \
         /workspace/runtime-root/etc/registry-relay \
@@ -9,7 +9,7 @@ RUN mkdir -p \
         /workspace/runtime-root/var/log/registry-relay && \
     chown -R 65532:65532 /workspace/runtime-root
 
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:ce0d66bc0f64aae46e6a03add867b07f42cc7b8799c949c2e898057b7f75a151 AS runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:66aa873a4a14fb164aa01296058efd8253744606d72715e45acface073359faa AS runtime
 
 COPY --from=runtime-root --chown=65532:65532 /workspace/runtime-root/ /
 COPY --chmod=0755 dist/image-bin/registry-relay /usr/local/bin/registry-relay
