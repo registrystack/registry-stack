@@ -1,6 +1,6 @@
 services:
   mongodb:
-    image: mongo:6.0.13@sha256:b415b12f638e2685d06c58ab7fb5943577c50fadec6d9340ef67d21aeac72070
+    image: mongo:8.2.11@sha256:951c2ff9fc6bdb6cb89b1dfea4a0e8ae3ee4fb287c0bf579b2bba54c7803f75d
   nginx:
     build:
       context: ./nginx
