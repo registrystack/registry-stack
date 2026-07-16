@@ -226,10 +226,19 @@ pub(crate) fn replay_scope_hash(scope: &ReplayScope) -> [u8; 32] {
 }
 
 pub(crate) fn replay_key_hash(key: &ReplayKey) -> [u8; 32] {
+    replay_identifier_hash(key.as_str())
+}
+
+/// Stable Notary replay identity for an already-validated one-time value.
+///
+/// This deliberately does not depend on an application secret. Replay rows
+/// must remain authoritative across application-key rotation, and callers only
+/// pass protocol-generated high-entropy identifiers through this boundary.
+pub(crate) fn replay_identifier_hash(identifier: &str) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(b"registry-notary:replay-identifier:v1\0");
-    hasher.update((key.as_str().len() as u64).to_be_bytes());
-    hasher.update(key.as_str().as_bytes());
+    hasher.update((identifier.len() as u64).to_be_bytes());
+    hasher.update(identifier.as_bytes());
     hasher.finalize().into()
 }
 

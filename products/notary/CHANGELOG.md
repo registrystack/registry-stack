@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Signed pre-authorized codes now bind the exact offer's transaction-code
   requirement. Restart or configuration changes cannot remove or add the PIN
   requirement for a live offer.
+- Pre-authorized-code replay identity now uses the verified Notary issuer and
+  stable Notary replay hashes. Redeemed no-PIN codes remain spent across
+  sensitive-state key rotation, unrelated service configuration changes,
+  process or database restart, and logical restore.
 - PostgreSQL now derives effective credential status from database time, so
   skewed replicas agree on expiry. Revocation remains terminal, and credential
   expiry supersedes valid or suspended status.

@@ -455,6 +455,9 @@ configured key id with every live row in both preauthorization tables. A wrong
 backup-matched secret or live mixed-key state therefore remains unavailable.
 Both sensitive reservation transactions also serialize key-generation
 admission and reject a different key while either table has a live row.
+Unexpired replay markers use the verified Notary issuer and stable Notary
+replay hashes rather than this sensitive key or mutable service configuration,
+so an already redeemed pre-authorized code remains spent across the rotation.
 
 Rotate it with a stopped-issuance drain:
 
