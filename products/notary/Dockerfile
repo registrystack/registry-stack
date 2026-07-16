@@ -3,7 +3,7 @@
 # syntax=docker/dockerfile:1.7
 
 # Keep the tag for humans and the digest for reproducible pulls.
-FROM rust:1-bookworm@sha256:54152db00aafd37bc5ce1f3585aaa42f17cdd5c8e5ef9eabfbc0718b42bce312 AS builder
+FROM rust:1-bookworm@sha256:8fa55b2f3ddf97471ab6a767bfa3f37e6bad0986ba823e75fea57e2a2a5c3073 AS builder
 
 WORKDIR /workspace/registry-notary
 COPY --from=registry-platform Cargo.toml README.md LICENSE /workspace/registry-platform/
@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Runtime policy: the main Notary image is a distroless Rust service image.
 # Keep the runtime shell-free, non-root, and compatible with binary healthchecks
 # and JSON-array entrypoints. CI enforces this policy.
-FROM gcr.io/distroless/cc-debian12:nonroot@sha256:b0ae8e989418b458e0f25489bc3be523718938a2b70864cc0f6a00af1ddbd985 AS runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:66aa873a4a14fb164aa01296058efd8253744606d72715e45acface073359faa AS runtime
 
 COPY --from=builder /workspace/out/ /usr/local/bin/
 
