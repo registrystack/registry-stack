@@ -81,9 +81,31 @@ jobs:
       - name: Build Registry Notary with CEL support
         run: cargo build --locked -p registry-notary --features registry-notary-cel
 
+      - name: Precompile PostgreSQL conformance tests before service startup
+        run: cargo test --locked -p registry-notary-server --lib --no-run
+
       - name: Run Notary PostgreSQL conformance
         env:
           NOTARY_BIN: target/notary-postgres-conformance/debug/registry-notary
           NOTARY_POSTGRES_SOURCE_IMAGE: ${{ matrix.source_image }}
           NOTARY_POSTGRES_TARGET_IMAGE: ${{ matrix.target_image }}
-        run: products/notary/scripts/postgresql-conformance.sh "${{ matrix.postgresql }}"
+        run: |
+          set -euo pipefail
+          diagnostics="${RUNNER_TEMP}/notary-postgresql-${{ matrix.postgresql }}-docker-events.log"
+          docker events --format '{{json .}}' >"${diagnostics}" &
+          events_pid=$!
+          trap 'kill "${events_pid}" 2>/dev/null || true; wait "${events_pid}" 2>/dev/null || true' EXIT
+          products/notary/scripts/postgresql-conformance.sh "${{ matrix.postgresql }}"
+
+      - name: Report PostgreSQL Docker diagnostics
+        if: failure()
+        run: |
+          set -euo pipefail
+          diagnostics="${RUNNER_TEMP}/notary-postgresql-${{ matrix.postgresql }}-docker-events.log"
+          if [[ -s "${diagnostics}" ]]; then
+            sed -n '1,400p' "${diagnostics}"
+          else
+            echo "No Docker events were captured."
+          fi
+          docker ps --all --no-trunc
+          docker version
