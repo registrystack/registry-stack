@@ -1,6 +1,6 @@
 ---
 name: Feature request
-about: Suggest a product, docs, lab, or release improvement.
+about: Suggest a product, docs, or release improvement.
 title: ""
 labels: enhancement
 assignees: ""

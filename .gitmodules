@@ -1,9 +1,0 @@
-[submodule "lab/vendor/crosswalk"]
-	path = lab/vendor/crosswalk
-	url = git@github.com:PublicSchema/crosswalk.git
-[submodule "lab/vendor/registry-atlas"]
-	path = lab/vendor/registry-atlas
-	url = git@github.com:jeremi/registry-atlas.git
-[submodule "lab/vendor/esignet-relay-authenticator"]
-	path = lab/vendor/esignet-relay-authenticator
-	url = git@github.com:jeremi/esignet-relay-authenticator.git

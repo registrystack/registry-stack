@@ -68,9 +68,7 @@ if [[ "${stack_git_root}" != "${stack_root}" ]]; then
 fi
 printf 'release-source registry-stack %s %s dirty=%s\n' "${stack_root}" "${stack_head}" "${stack_dirty}"
 
-external_gitlinks="$(git -C "${stack_root}" ls-files -s -- lab/vendor | awk '$1 == "160000" {n = split($NF, parts, "/"); print parts[n] "=" $2}')"
-RELEASE_EXTERNAL_GITLINKS="${external_gitlinks}" python3 - "${release_dir}"/manifests/registry-stack-*.yaml <<'PY'
-import os
+python3 - "${release_dir}"/manifests/registry-stack-*.yaml <<'PY'
 import re
 import sys
 from pathlib import Path
@@ -84,22 +82,6 @@ REQUIRED_EXTERNALS = (
     "registry-atlas",
 )
 
-gitlinks = {}
-for gitlink_line in os.environ.get("RELEASE_EXTERNAL_GITLINKS", "").splitlines():
-    gitlink_name, _, gitlink_sha = gitlink_line.partition("=")
-    if gitlink_name and gitlink_sha:
-        gitlinks[gitlink_name] = gitlink_sha
-
-
-def version_key(manifest):
-    stack = manifest.get("stack", {}) if isinstance(manifest, dict) else {}
-    parts = str(stack.get("version", "")).split(".")
-    if parts != [""] and all(part.isdigit() for part in parts):
-        return tuple(int(part) for part in parts)
-    return ()
-
-
-manifests = []
 failed = False
 for arg in sys.argv[1:]:
     path = Path(arg)
@@ -113,7 +95,6 @@ for arg in sys.argv[1:]:
         print(f"release source model failed: {path.name} has no external section", file=sys.stderr)
         failed = True
         continue
-    manifests.append((version_key(manifest), path, external))
     for name in REQUIRED_EXTERNALS:
         if name not in external:
             print(
@@ -134,22 +115,6 @@ for arg in sys.argv[1:]:
             continue
         print(f"release-source-external {path.name} {name} {repo} {ref}")
 
-if gitlinks and manifests:
-    _, current_path, current_external = max(manifests, key=lambda item: item[0])
-    for name in sorted(gitlinks):
-        entry = current_external.get(name)
-        if not isinstance(entry, dict):
-            continue
-        ref = str(entry.get("ref", ""))
-        if ref != gitlinks[name]:
-            print(
-                f"release source model failed: {current_path.name} external.{name} ref {ref} "
-                f"does not match committed lab/vendor/{name} gitlink {gitlinks[name]}",
-                file=sys.stderr,
-            )
-            failed = True
-        else:
-            print(f"release-source-external-pin {current_path.name} {name} gitlink={ref}")
 if failed:
     sys.exit(1)
 PY

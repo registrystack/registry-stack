@@ -3,8 +3,8 @@ name: CodeQL
 # Static analysis (SAST) for the interpreted languages in the monorepo.
 # Rust is covered separately by the per-crate semgrep configs; CodeQL has no
 # stable Rust analyzer yet. Adding this satisfies the OpenSSF Scorecard SAST
-# check and surfaces real issues in the docs site, lab portal, node bindings
-# and Python sidecars.
+# check and surfaces real issues in the docs site, node bindings, and Python
+# sidecars.
 
 on:
   push:

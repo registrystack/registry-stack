@@ -79,7 +79,6 @@ Keep changes focused on the owning area:
 - `crates/` for Rust crates and runnable binaries.
 - `products/` for product-owned specs, examples, fixtures, and docs.
 - `docs/site/` for the public documentation site.
-- `lab/` for Registry Lab demos and source proof scripts.
 - `release/` for public release manifests, schemas, notes, and tooling.
 
 Private planning, release evidence that is not already public, credentials,
@@ -91,7 +90,7 @@ repository.
 Public GitHub issue labels can help identify scope and priority. Start with:
 
 - [`enhancement`](https://github.com/registrystack/registry-stack/issues?q=is%3Aissue%20is%3Aopen%20label%3Aenhancement):
-  product, docs, lab, or release improvements.
+  product, docs, or release improvements.
 - [`criticality:p3`](https://github.com/registrystack/registry-stack/issues?q=is%3Aissue%20is%3Aopen%20label%3Acriticality%3Ap3):
   lower-risk work that is usually safer for first contributions than release or
   security-critical changes.

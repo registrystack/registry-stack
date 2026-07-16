@@ -113,42 +113,6 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("missing required external.registry-atlas", result.stderr)
 
-    def test_monorepo_mode_rejects_gitlink_manifest_ref_drift(self) -> None:
-        with MonorepoFixture() as stack_root:
-            add_gitlink(stack_root, "lab/vendor/registry-atlas", "a" * 40)
-
-            result = run_monorepo_validator(stack_root)
-
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn(
-            "does not match committed lab/vendor/registry-atlas gitlink",
-            result.stderr,
-        )
-
-    def test_monorepo_mode_cross_checks_only_the_current_manifest(self) -> None:
-        with MonorepoFixture() as stack_root:
-            add_gitlink(
-                stack_root,
-                "lab/vendor/registry-atlas",
-                "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
-            )
-            old = stack_root / "release" / "manifests" / "registry-stack-old.yaml"
-            old.write_text(
-                MANIFEST_YAML.replace("version: 0.0.1", "version: 0.0.0").replace(
-                    "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
-                    "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
-                ),
-                encoding="utf-8",
-            )
-
-            result = run_monorepo_validator(stack_root)
-
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn(
-            "release-source-external-pin registry-stack-test.yaml registry-atlas",
-            result.stdout,
-        )
-
     def test_monorepo_mode_rejects_missing_manifests(self) -> None:
         with MonorepoFixture() as stack_root:
             shutil.rmtree(stack_root / "release" / "manifests")
@@ -160,7 +124,7 @@ class MonorepoSourceModelTest(unittest.TestCase):
 
 
 class MonorepoFixture:
-    """A minimal registry-stack-shaped checkout with release/scripts/ but no lab/."""
+    """A minimal registry-stack-shaped checkout with release tooling."""
 
     def __enter__(self) -> Path:
         self.tmp = tempfile.TemporaryDirectory()
@@ -242,16 +206,6 @@ def run_validator_with_env_default(
         capture_output=True,
         check=False,
     )
-
-
-def add_gitlink(root: Path, rel_path: str, object_id: str) -> None:
-    (root / rel_path).parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["git", "update-index", "--add", "--cacheinfo", "160000", object_id, rel_path],
-        cwd=root,
-        check=True,
-    )
-    git(root, "commit", "-m", f"Pin {rel_path}")
 
 
 def configure_identity(repo: Path) -> None:
