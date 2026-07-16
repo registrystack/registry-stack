@@ -1276,6 +1276,17 @@ fn validate_request_mapping(mapping: &str) -> Result<()> {
     if mapping == "request.target.id" {
         return Ok(());
     }
+    if let Some(attribute) = mapping.strip_prefix("request.target.attributes.") {
+        let mut bytes = attribute.bytes();
+        if attribute.is_empty()
+            || attribute.len() > 64
+            || !matches!(bytes.next(), Some(b'a'..=b'z'))
+            || !bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
+        {
+            bail!("target attribute must match [a-z][a-z0-9_]{{0,63}}");
+        }
+        return Ok(());
+    }
     let identifier = mapping
         .strip_prefix("request.target.identifiers.")
         .ok_or_else(|| anyhow!("consultation input must use the closed target grammar"))?;
