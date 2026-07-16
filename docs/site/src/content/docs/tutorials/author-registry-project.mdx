@@ -167,6 +167,18 @@ deployment. The environment binds the one logical source origin and credentials.
 Consultation inputs can populate only declared request values.
 They cannot select an origin, method, credential, capability, projection, or response mapper.
 
+For target-derived consultation inputs, use one of these closed mappings:
+
+- `request.target.id` for the target's primary request identifier
+- `request.target.identifiers.<stable-id>` for a named institutional identifier
+- `request.target.attributes.<stable-name>` for an ordinary target attribute
+
+A target attribute name must match `[a-z][a-z0-9_]{0,63}`.
+Use an identifier mapping for values that identify a record within an issuing scheme.
+Use an attribute mapping for other request-bound values, and make the mapped value satisfy the
+integration input's declared type and bounds.
+Registryctl rejects any other target path before generating Relay or Notary configuration.
+
 ## Add another integration
 
 An existing project can add another protocol view over the same logical source without starting a
