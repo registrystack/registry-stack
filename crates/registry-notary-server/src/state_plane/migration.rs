@@ -32,11 +32,11 @@ const STATE_PLANE_SCHEMA_IDENTITY_PREIMAGE_V1: &str = concat!(
     "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-v1\0",
     "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1\0",
     "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2\0",
-    "preauthorization-tx-code=keyed-jti-keyed-pin-verifier-peek-redeem-with-replay-one-winner-expiry-live-key-attestation-v2\0",
+    "preauthorization-tx-code=verified-notary-issuer-stable-scope-jti-keyed-pin-verifier-peek-redeem-one-winner-expiry-live-key-attestation-v3\0",
     "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2\0",
 );
 pub const STATE_PLANE_SCHEMA_FINGERPRINT_V1: &str =
-    "3d34d8525e6f8ec83ebb187a8240432d2a63a579bfde5dc2d53d1e1ac1d95ed8";
+    "c4d71ac9215da182779ec1305b2c1bc62bb249143e4b7d8c01eacc38f4e2cc10";
 
 const MIGRATION_ADVISORY_LOCK_KEY_V1: i64 = 0x4e4f_5441_5259_0001;
 const EXPECTED_PRIVATE_TABLE_COUNT_V1: i64 = 10;
@@ -2394,7 +2394,7 @@ mod tests {
             "machine-quota=keyed-principal-fixed-minute-whole-cost-atomic-v1",
             "subject-access-quota=keyed-pseudonym-six-closed-buckets-fixed-windows-canonical-lock-order-caller-denial-order-atomic-all-or-none-check-only-no-mutation-v1",
             "preauthorization-login=keyed-state-capacity-4096-encrypted-single-consume-expiry-live-key-attestation-v2",
-            "preauthorization-tx-code=keyed-jti-keyed-pin-verifier-peek-redeem-with-replay-one-winner-expiry-live-key-attestation-v2",
+            "preauthorization-tx-code=verified-notary-issuer-stable-scope-jti-keyed-pin-verifier-peek-redeem-one-winner-expiry-live-key-attestation-v3",
             "retention=bounded-expiry-prune-skip-locked-saturation-catch-up-v2",
         ] {
             assert!(
@@ -4131,6 +4131,21 @@ mod tests {
                         )
                         .await?
                 );
+                let replay_scope = registry_platform_replay::ReplayScope::new([(
+                    "flow",
+                    format!("restart-{phase}-spent-preauthorization"),
+                )])?;
+                assert!(
+                    sensitive
+                        .redeem(
+                            &replay_scope,
+                            &format!("restart-{phase}-spent-jti"),
+                            expires_at,
+                            None,
+                        )
+                        .await?,
+                    "seed must persist a spent no-PIN preauthorization code"
+                );
             }
         } else if matches!(mode.as_str(), "process" | "database" | "restore") {
             let login = sensitive
@@ -4154,6 +4169,23 @@ mod tests {
                 .await?
             {
                 return Err("restart probe transaction code was not redeemable".into());
+            }
+            let replay_scope = registry_platform_replay::ReplayScope::new([(
+                "flow",
+                format!("restart-{mode}-spent-preauthorization"),
+            )])?;
+            if sensitive
+                .redeem(
+                    &replay_scope,
+                    &format!("restart-{mode}-spent-jti"),
+                    expires_at,
+                    None,
+                )
+                .await?
+            {
+                return Err(
+                    "restart or restore reopened a spent no-PIN preauthorization code".into(),
+                );
             }
         } else {
             return Err("restart probe mode is invalid".into());
@@ -4404,6 +4436,31 @@ mod tests {
                  DELETE FROM registry_notary_private.preauthorization_tx_code;",
             )
             .await?;
+
+        let rotation_scope = registry_platform_replay::ReplayScope::new([(
+            "flow",
+            "adapter-sensitive-key-rotation",
+        )])?;
+        let rotation_jti = "adapter-sensitive-key-rotation-jti";
+        assert!(
+            sensitive
+                .redeem(&rotation_scope, rotation_jti, expires_at, None)
+                .await?,
+            "the first no-PIN redemption must claim its replay identity"
+        );
+        // No live encrypted or PIN-verifier row remains, so rotating the
+        // sensitive-state key is allowed. The replay decision must still be
+        // found through its stable Notary replay hashes.
+        unsafe { std::env::set_var(SENSITIVE_KEY_ENV, &wrong_key) };
+        let rotated_sensitive =
+            PostgresSensitiveState::activate(Arc::clone(&runtime), &key_config).await?;
+        assert!(
+            !rotated_sensitive
+                .redeem(&rotation_scope, rotation_jti, expires_at, None)
+                .await?,
+            "sensitive-key rotation must not reopen a redeemed no-PIN code"
+        );
+        unsafe { std::env::set_var(SENSITIVE_KEY_ENV, &primary_key) };
         runtime.shutdown();
         unsafe {
             std::env::remove_var(SENSITIVE_DATABASE_URL_ENV);

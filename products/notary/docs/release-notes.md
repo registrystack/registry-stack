@@ -15,6 +15,9 @@
   active-active instances. The operations guide covers PostgreSQL 16 through
   18, backup and restore, stale-restore quarantine, upgrades, and the clean
   pre-1.0 cutover.
+- Redeemed pre-authorized codes use stable replay identity bound to the
+  verified Notary issuer, so sensitive-state key rotation and unrelated
+  service configuration changes cannot reopen a live no-PIN code.
 - BREAKING: Registry-backed evidence now uses only authenticated,
   compiler-pinned Registry Relay consultations. Notary no longer accepts
   direct registry connections, DCI/FHIR connectors, source adapter sidecars,

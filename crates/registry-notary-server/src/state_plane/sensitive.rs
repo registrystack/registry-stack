@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Encrypted PostgreSQL state for the OID4VCI pre-authorized-code flow.
 //!
-//! The database sees only keyed identifiers, an authenticated ciphertext for
-//! the eSignet login state, and a keyed transaction-code verifier. The master
-//! key is read only at the asynchronous state-plane activation boundary and is
-//! never retained as text.
+//! The database sees a keyed login identifier, an authenticated ciphertext for
+//! the eSignet login state, a keyed transaction-code verifier, and stable
+//! one-way replay identifiers. The master key is read only at the asynchronous
+//! state-plane activation boundary and is never retained as text.
 
 use std::{env, sync::Arc};
 
@@ -21,15 +21,16 @@ use time::OffsetDateTime;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use super::{NotaryPostgresStatePlaneError, NotaryPostgresStatePlaneRuntime};
-use crate::preauth_state::{LoginState, VerifiedTransactionCode};
+use crate::{
+    preauth_state::{LoginState, VerifiedTransactionCode},
+    replay::{replay_identifier_hash, replay_scope_hash},
+};
 
 const KEY_BYTES: usize = 32;
 const LOGIN_RECORD_VERSION: u8 = 1;
 const KDF_CONTEXT: &[u8] = b"registry-notary/preauthorization/kdf/v1";
 const LOGIN_AAD_CONTEXT: &[u8] = b"registry-notary/preauthorization/login-aad/v1";
 const STATE_IDENTIFIER_CONTEXT: &[u8] = b"login-state";
-const JTI_IDENTIFIER_CONTEXT: &[u8] = b"code-jti";
-const REPLAY_SCOPE_IDENTIFIER_CONTEXT: &[u8] = b"replay-scope";
 const PIN_VERIFIER_CONTEXT: &[u8] = b"transaction-code";
 
 /// The configured environment variable name is retained, but its value is
@@ -249,7 +250,7 @@ impl PostgresSensitiveState {
         let expires_at = normalize_expiry(expires_at)?;
         let pin_length =
             i16::try_from(pin_length).map_err(|_| SensitiveStateError::InvalidStoredRecord)?;
-        let jti_hash = self.keys.identifier_hash(JTI_IDENTIFIER_CONTEXT, jti);
+        let jti_hash = replay_identifier_hash(jti);
         let verifier = self.keys.pin_verifier(&jti_hash, pin);
         let session = self.runtime.open_domain_session().await?;
         let row = session
@@ -275,7 +276,7 @@ impl PostgresSensitiveState {
         jti: &str,
         presented_pin: &str,
     ) -> Result<Option<VerifiedTransactionCode>, SensitiveStateError> {
-        let jti_hash = self.keys.identifier_hash(JTI_IDENTIFIER_CONTEXT, jti);
+        let jti_hash = replay_identifier_hash(jti);
         let session = self.runtime.open_domain_session().await?;
         let row = session
             .run_operation(session.client().query_opt(
@@ -311,7 +312,7 @@ impl PostgresSensitiveState {
         &self,
         jti: &str,
     ) -> Result<bool, SensitiveStateError> {
-        let jti_hash = self.keys.identifier_hash(JTI_IDENTIFIER_CONTEXT, jti);
+        let jti_hash = replay_identifier_hash(jti);
         let session = self.runtime.open_domain_session().await?;
         let row = session
             .run_operation(session.client().query_opt(
@@ -330,8 +331,9 @@ impl PostgresSensitiveState {
         Ok(true)
     }
 
-    /// Atomically claim the replay identifier and remove the transaction-code
-    /// verifier. The proof is bound to the same keyed JTI hash.
+    /// Atomically claim the stable replay identifier and remove the
+    /// transaction-code verifier. The proof is bound to the same JTI hash,
+    /// while the PIN verifier remains keyed independently.
     pub(crate) async fn redeem(
         &self,
         scope: &ReplayScope,
@@ -340,8 +342,8 @@ impl PostgresSensitiveState {
         transaction_code: Option<VerifiedTransactionCode>,
     ) -> Result<bool, SensitiveStateError> {
         let code_expires_at = normalize_expiry(code_expires_at)?;
-        let scope_hash = self.keys.replay_scope_hash(scope);
-        let jti_hash = self.keys.identifier_hash(JTI_IDENTIFIER_CONTEXT, jti);
+        let scope_hash = replay_scope_hash(scope);
+        let jti_hash = replay_identifier_hash(jti);
         let expected_verifier = match transaction_code {
             Some(proof) => Some(
                 proof
@@ -416,21 +418,6 @@ impl SensitiveStateKeys {
 
     pub(crate) fn login_state_hash(&self, opaque_state: &str) -> [u8; KEY_BYTES] {
         self.identifier_hash(STATE_IDENTIFIER_CONTEXT, opaque_state)
-    }
-
-    pub(crate) fn jti_hash(&self, jti: &str) -> [u8; KEY_BYTES] {
-        self.identifier_hash(JTI_IDENTIFIER_CONTEXT, jti)
-    }
-
-    pub(crate) fn replay_scope_hash(&self, scope: &ReplayScope) -> [u8; KEY_BYTES] {
-        let key = hmac::Key::new(hmac::HMAC_SHA256, &self.identifier);
-        let mut context = hmac::Context::with_key(&key);
-        update_frame(&mut context, REPLAY_SCOPE_IDENTIFIER_CONTEXT);
-        for (name, value) in scope.parts() {
-            update_frame(&mut context, name.as_bytes());
-            update_frame(&mut context, value.as_bytes());
-        }
-        tag_bytes(context.sign())
     }
 
     pub(crate) fn pin_verifier(&self, jti_hash: &[u8; KEY_BYTES], pin: &str) -> [u8; KEY_BYTES] {
@@ -540,8 +527,8 @@ mod tests {
         assert_ne!(keys.pin_mac, keys.identifier);
         assert_ne!(keys.identifier, keys.key_id);
         assert_ne!(
-            keys.identifier_hash(STATE_IDENTIFIER_CONTEXT, "same"),
-            keys.identifier_hash(JTI_IDENTIFIER_CONTEXT, "same")
+            keys.login_state_hash("same"),
+            replay_identifier_hash("same")
         );
         assert_ne!(test_keys(7).key_id, test_keys(8).key_id);
     }

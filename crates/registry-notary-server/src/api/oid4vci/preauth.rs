@@ -539,9 +539,12 @@ pub(in crate::api) async fn oid4vci_token(
             .await;
         }
     };
-    let replay_scope = match pre_authorized_code_replay_scope(&state) {
-        Ok(scope) => scope,
-        Err(()) => {
+    let replay_scope = match verified
+        .claim_str("iss")
+        .and_then(|issuer| pre_authorized_code_replay_scope(issuer).ok())
+    {
+        Some(scope) => scope,
+        None => {
             return token_error_with_audit(
                 &preauth,
                 path,
@@ -700,14 +703,16 @@ pub(in crate::api) fn single_credential_configuration_id(config: &Oid4vciConfig)
 }
 
 pub(in crate::api) fn pre_authorized_code_replay_scope(
-    state: &RegistryNotaryApiState,
+    verified_notary_issuer: &str,
 ) -> Result<ReplayScope, ()> {
     ReplayScope::new([
-        ("tenant".to_string(), state.evidence.service_id.clone()),
-        ("kind".to_string(), "oid4vci-preauth-code".to_string()),
         (
-            "issuer".to_string(),
-            state.oid4vci.credential_issuer.clone(),
+            "protocol".to_string(),
+            "openid4vci-pre-authorized-code".to_string(),
+        ),
+        (
+            "notary_issuer".to_string(),
+            verified_notary_issuer.to_string(),
         ),
     ])
     .map_err(|_| ())
@@ -1159,5 +1164,23 @@ pub(in crate::api) fn hex_nibble(byte: u8) -> Result<u8, TokenWireError> {
         b'a'..=b'f' => Ok(byte - b'a' + 10),
         b'A'..=b'F' => Ok(byte - b'A' + 10),
         _ => Err(TokenWireError::InvalidRequest),
+    }
+}
+
+#[cfg(test)]
+mod replay_scope_tests {
+    use super::*;
+
+    #[test]
+    fn preauthorized_code_scope_is_fixed_by_the_verified_token_issuer() {
+        let issuer = "https://notary.example";
+        assert_eq!(
+            pre_authorized_code_replay_scope(issuer).unwrap(),
+            pre_authorized_code_replay_scope(issuer).unwrap()
+        );
+        assert_ne!(
+            pre_authorized_code_replay_scope(issuer).unwrap(),
+            pre_authorized_code_replay_scope("https://other-notary.example").unwrap()
+        );
     }
 }

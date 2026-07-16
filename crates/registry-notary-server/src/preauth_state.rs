@@ -17,7 +17,10 @@ use thiserror::Error;
 use time::{Duration, OffsetDateTime};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::state_plane::{NotaryStatePlaneHandle, SensitiveStateError, SensitiveStateKeys};
+use crate::{
+    replay::{replay_identifier_hash, replay_scope_hash},
+    state_plane::{NotaryStatePlaneHandle, SensitiveStateError, SensitiveStateKeys},
+};
 
 const PREAUTH_LOGIN_STATE_MAX_ENTRIES: usize = 4_096;
 
@@ -45,7 +48,7 @@ impl std::fmt::Debug for LoginState {
 }
 
 /// Opaque proof that a transaction code matched the verifier stored for one
-/// keyed JTI. It contains no plaintext PIN and is consumed by redemption.
+/// stable JTI hash. It contains no plaintext PIN and is consumed by redemption.
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub(crate) struct VerifiedTransactionCode {
     jti_hash: [u8; 32],
@@ -323,7 +326,7 @@ impl InMemoryPreauthorizationState {
         }
         let pin_length =
             usize::try_from(pin_length).map_err(|_| PreauthorizationStateError::Unavailable)?;
-        let jti_hash = self.keys.jti_hash(jti);
+        let jti_hash = replay_identifier_hash(jti);
         let verifier = self.keys.pin_verifier(&jti_hash, pin);
         let mut records = self.lock_records()?;
         records
@@ -351,7 +354,7 @@ impl InMemoryPreauthorizationState {
         presented_pin: &str,
     ) -> Result<Option<VerifiedTransactionCode>, PreauthorizationStateError> {
         let now = OffsetDateTime::now_utc();
-        let jti_hash = self.keys.jti_hash(jti);
+        let jti_hash = replay_identifier_hash(jti);
         let records = self.lock_records()?;
         let Some(stored) = records.transaction_codes.get(&jti_hash) else {
             return Ok(None);
@@ -378,8 +381,8 @@ impl InMemoryPreauthorizationState {
         if expires_at <= now {
             return Ok(false);
         }
-        let scope_hash = self.keys.replay_scope_hash(scope);
-        let jti_hash = self.keys.jti_hash(jti);
+        let scope_hash = replay_scope_hash(scope);
+        let jti_hash = replay_identifier_hash(jti);
         let replay_key = (scope_hash, jti_hash);
         let mut records = self.lock_records()?;
         records.redeemed.retain(|_, expiry| *expiry > now);
