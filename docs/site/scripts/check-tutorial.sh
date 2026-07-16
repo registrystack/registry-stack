@@ -27,7 +27,6 @@
 #   SOLMARA_LAB_PATH   path to an existing Solmara Lab checkout.
 #                      Default: clone https://github.com/registrystack/solmara-lab
 #                      at SOLMARA_LAB_REF into a temporary directory.
-#                      REGISTRY_LAB_PATH is accepted as a deprecated alias.
 #   SOLMARA_LAB_REF    commit to clone when SOLMARA_LAB_PATH is unset.
 #                      This pins the check's own reproducibility; the
 #                      tutorial itself tells readers to clone `main`.
@@ -233,9 +232,7 @@ if ((DRY_RUN)); then
 fi
 
 SOLMARA_LAB_REF="${SOLMARA_LAB_REF:-3698ea8690b3a170cb72fd1a27780d85b91b1583}"
-# REGISTRY_LAB_PATH is a deprecated alias kept for callers that have not
-# migrated their environment yet; SOLMARA_LAB_PATH takes precedence.
-SOLMARA_LAB_PATH="${SOLMARA_LAB_PATH:-${REGISTRY_LAB_PATH:-}}"
+SOLMARA_LAB_PATH="${SOLMARA_LAB_PATH:-}"
 
 CLONE_DIR=""
 if [[ -n "$SOLMARA_LAB_PATH" ]]; then

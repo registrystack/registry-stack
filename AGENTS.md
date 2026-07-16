@@ -25,9 +25,11 @@ are shared primitives. `registryctl` is adopter tooling.
 | `crates/registryctl` | Adopter tooling |
 | `products/` | Product-owned specs, examples, fixtures, docs (not crates) |
 | `docs/site/` | Public docs site (Astro). Has its own `AGENTS.md`; read it before touching this subtree |
-| `lab/` | Local demo topology, tutorials, smoke checks. The justfile auto-detects the monorepo layout, so plain `cd lab && just quick` works; `just release-fast` wraps the demo/smoke release check (`lab/scripts/release-check.sh`). `lab/scripts/check-release-source-model.sh` is now a thin wrapper around the real script in `release/scripts/` |
-| `release/` | Release manifests, schemas, notes, validation tooling, and the release source-model proof |
+| `release/` | Release manifests, schemas, notes, validation and conformance tooling, and the release source-model proof |
 | `external/` | Notes on inputs that intentionally stay out of this tree (e.g. Crosswalk stays a pinned git dependency) |
+
+The adopter demo is maintained separately in
+[`registrystack/solmara-lab`](https://github.com/registrystack/solmara-lab).
 
 ## Verify your change
 
@@ -55,6 +57,7 @@ Release source checks:
 
 ```bash
 python3 -m unittest release/scripts/test_registry_release.py
+python3 -m unittest release/scripts/test_openid_conformance_runner.py
 release/scripts/registry-release validate release/manifests/<current>.yaml
 REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
 python3 -m unittest release/scripts/test_check_release_source_model.py
@@ -72,7 +75,7 @@ Docs site (from `docs/site/`): `npm test` and `npm run check`.
   stable facts plus dates over commit SHAs.
 - Major functionality and bug fixes require automated tests with the change.
 - Keep a change scoped to one owning area (`crates/`, `products/`,
-  `docs/site/`, `lab/`, `release/`).
+  `docs/site/`, `release/`).
 - Changes to authentication, authorization, credential issuance, signing,
   audit integrity, release provenance, deployment defaults, or data
   minimization are security-sensitive and need explicit review notes.

@@ -11,8 +11,8 @@ Start with:
 
 - Product overview: <https://registrystack.org/>
 - Technical docs: <https://docs.registrystack.org/>
-- Hosted lab: <https://lab.registrystack.org/>
-- Local demo: `cd lab && just quick`
+- Hosted Solmara Lab: <https://solmara.registrystack.org/>
+- Local demo: <https://github.com/registrystack/solmara-lab#quick-start>
 
 Do not open public support requests for suspected vulnerabilities, credential
 disclosure, auth bypass, audit redaction failure, source connector data leakage,

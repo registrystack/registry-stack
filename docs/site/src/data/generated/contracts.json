@@ -45,7 +45,7 @@
       "label": "Registry Notary OID4VCI routes",
       "url": "https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/api.rs"
     },
-    "consumer_note": "OID4VCI flow advertising `dc+sd-jwt` credential format. Registry Lab exercises the full path through the `just citizen-oid4vci-*` recipes. Full OID4VCI Draft 13 `vc+sd-jwt` wallet conformance is not asserted at this version."
+    "consumer_note": "OID4VCI flow advertising `dc+sd-jwt` credential format. Solmara Lab checks the hosted issuer metadata, credential offer, nonce, authorization redirect, and unauthenticated denial paths through `just hosted-smoke`. Full OID4VCI Draft 13 `vc+sd-jwt` wallet conformance is not asserted at this version."
   },
   {
     "id": "registry-notary.federated-evaluation",
@@ -94,17 +94,5 @@
       "url": "https://github.com/registrystack/registry-stack/tree/v0.9.0/crates/registry-manifest-cli"
     },
     "consumer_note": "The bundle can be hosted as static files without running Registry Relay."
-  },
-  {
-    "id": "registry-lab.release-check",
-    "name": "Registry Lab Release Check",
-    "owner": "registry-lab",
-    "status": "current-source",
-    "surface": "Compose build, fixture generation, secret generation, static metadata publication, core smoke checks, live Postgres checks, live Zitadel and OIDC checks, Relay consultation checks, raw-secret log checks, and narrated demo flows.",
-    "source_of_truth": {
-      "label": "Registry Lab README",
-      "url": "https://github.com/registrystack/registry-stack/blob/v0.9.0/lab/README.md"
-    },
-    "consumer_note": "Use as a demo acceptance path only; production contracts remain in the owning repos."
   }
 ]

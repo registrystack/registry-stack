@@ -19,6 +19,9 @@ stack:
   release: test
   version: 0.0.1
 
+artifacts:
+  registry-lab: 0.0.1
+
 external:
   crosswalk:
     repo: PublicSchema/crosswalk
@@ -29,6 +32,17 @@ external:
   esignet-relay-authenticator:
     repo: example/esignet-relay-authenticator
     ref: 3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c
+"""
+
+POST_LAB_MANIFEST_YAML = """\
+stack:
+  release: test
+  version: 0.0.1
+
+external:
+  crosswalk:
+    repo: PublicSchema/crosswalk
+    ref: 1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a
 """
 
 
@@ -67,7 +81,7 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("registry-relay crate", result.stderr)
 
-    def test_monorepo_mode_records_external_release_refs(self) -> None:
+    def test_monorepo_mode_records_all_declared_external_release_refs(self) -> None:
         with MonorepoFixture() as stack_root:
             result = run_monorepo_validator(stack_root)
 
@@ -97,57 +111,89 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("external.registry-atlas", result.stderr)
 
-    def test_monorepo_mode_rejects_missing_required_external(self) -> None:
+    def test_monorepo_mode_allows_omitting_historical_lab_externals(self) -> None:
         with MonorepoFixture() as stack_root:
             manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
-            lines = manifest.read_text(encoding="utf-8").splitlines(keepends=True)
-            kept = [
-                line
-                for line in lines
-                if "registry-atlas" not in line and "2b2b" not in line
-            ]
-            manifest.write_text("".join(kept), encoding="utf-8")
+            manifest.write_text(POST_LAB_MANIFEST_YAML, encoding="utf-8")
 
             result = run_monorepo_validator(stack_root)
 
-        self.assertNotEqual(0, result.returncode)
-        self.assertIn("missing required external.registry-atlas", result.stderr)
-
-    def test_monorepo_mode_rejects_gitlink_manifest_ref_drift(self) -> None:
-        with MonorepoFixture() as stack_root:
-            add_gitlink(stack_root, "lab/vendor/registry-atlas", "a" * 40)
-
-            result = run_monorepo_validator(stack_root)
-
-        self.assertNotEqual(0, result.returncode)
+        self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn(
-            "does not match committed lab/vendor/registry-atlas gitlink",
-            result.stderr,
+            "release-source-external registry-stack-test.yaml crosswalk",
+            result.stdout,
         )
+        self.assertNotIn("registry-atlas", result.stdout)
+        self.assertNotIn("esignet-relay-authenticator", result.stdout)
 
-    def test_monorepo_mode_cross_checks_only_the_current_manifest(self) -> None:
+    def test_monorepo_mode_requires_externals_for_historical_lab_artifact(self) -> None:
         with MonorepoFixture() as stack_root:
-            add_gitlink(
-                stack_root,
-                "lab/vendor/registry-atlas",
-                "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
-            )
-            old = stack_root / "release" / "manifests" / "registry-stack-old.yaml"
-            old.write_text(
-                MANIFEST_YAML.replace("version: 0.0.1", "version: 0.0.0").replace(
-                    "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
-                    "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3",
+            manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
+            manifest.write_text(
+                MANIFEST_YAML.replace(
+                    "  registry-atlas:\n"
+                    "    repo: example/registry-atlas\n"
+                    "    ref: 2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b\n",
+                    "",
                 ),
                 encoding="utf-8",
             )
 
             result = run_monorepo_validator(stack_root)
 
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn(
-            "release-source-external-pin registry-stack-test.yaml registry-atlas",
-            result.stdout,
-        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("missing required external.registry-atlas", result.stderr)
+
+    def test_monorepo_mode_rejects_latest_manifest_crosswalk_pin_drift(self) -> None:
+        with MonorepoFixture() as stack_root:
+            manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+                    "4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("external.crosswalk.ref must match the live Cargo pin", result.stderr)
+
+    def test_monorepo_mode_rejects_crosswalk_lock_pin_drift(self) -> None:
+        with MonorepoFixture() as stack_root:
+            cargo_lock = stack_root / "Cargo.lock"
+            cargo_lock.write_text(
+                cargo_lock.read_text(encoding="utf-8").replace(
+                    "#1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+                    "#4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Cargo.lock Crosswalk packages must resolve", result.stderr)
+
+    def test_monorepo_mode_rejects_missing_crosswalk(self) -> None:
+        with MonorepoFixture() as stack_root:
+            manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
+            manifest.write_text(
+                MANIFEST_YAML.replace(
+                    "  crosswalk:\n"
+                    "    repo: PublicSchema/crosswalk\n"
+                    "    ref: 1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a\n",
+                    "",
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("missing required external.crosswalk", result.stderr)
 
     def test_monorepo_mode_rejects_missing_manifests(self) -> None:
         with MonorepoFixture() as stack_root:
@@ -160,7 +206,7 @@ class MonorepoSourceModelTest(unittest.TestCase):
 
 
 class MonorepoFixture:
-    """A minimal registry-stack-shaped checkout with release/scripts/ but no lab/."""
+    """A minimal registry-stack-shaped checkout with release tooling."""
 
     def __enter__(self) -> Path:
         self.tmp = tempfile.TemporaryDirectory()
@@ -169,7 +215,29 @@ class MonorepoFixture:
         git(stack_root, "init")
         configure_identity(stack_root)
         (stack_root / "Cargo.toml").write_text(
-            "[workspace]\nmembers = []\n",
+            "[workspace]\n"
+            "members = []\n\n"
+            "[workspace.dependencies]\n"
+            'crosswalk-core = { git = "https://github.com/PublicSchema/crosswalk", '
+            'rev = "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a" }\n'
+            'crosswalk-functions = { git = "https://github.com/PublicSchema/crosswalk", '
+            'rev = "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a" }\n',
+            encoding="utf-8",
+        )
+        (stack_root / "Cargo.lock").write_text(
+            "version = 4\n\n"
+            "[[package]]\n"
+            'name = "crosswalk-core"\n'
+            'version = "0.0.1"\n'
+            'source = "git+https://github.com/PublicSchema/crosswalk?'
+            'rev=1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a#'
+            '1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"\n\n'
+            "[[package]]\n"
+            'name = "crosswalk-functions"\n'
+            'version = "0.0.1"\n'
+            'source = "git+https://github.com/PublicSchema/crosswalk?'
+            'rev=1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a#'
+            '1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"\n',
             encoding="utf-8",
         )
         for crate_dir in (
@@ -242,16 +310,6 @@ def run_validator_with_env_default(
         capture_output=True,
         check=False,
     )
-
-
-def add_gitlink(root: Path, rel_path: str, object_id: str) -> None:
-    (root / rel_path).parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["git", "update-index", "--add", "--cacheinfo", "160000", object_id, rel_path],
-        cwd=root,
-        check=True,
-    )
-    git(root, "commit", "-m", f"Pin {rel_path}")
 
 
 def configure_identity(repo: Path) -> None:

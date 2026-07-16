@@ -48,8 +48,8 @@ Public issues remain the source of truth for work selection:
 ## Non-Goals For This Roadmap
 
 - Registry Stack will not become a hosted registry database.
-- The hosted lab is not production infrastructure and does not carry an uptime
-  or data-retention commitment.
+- The hosted Solmara Lab is not production infrastructure and does not carry an
+  uptime or data-retention commitment.
 - Runtime credentials, private deployment details, and internal release notes
   will not be copied into public repositories.
 - Dynamic trust-chain discovery and federated credential issuance remain out of

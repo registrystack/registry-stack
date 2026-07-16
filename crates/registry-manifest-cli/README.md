@@ -63,7 +63,9 @@ cargo run -p registry-manifest-cli -- validate-profiles profiles
 Run the commons contract-kernel check, optionally with consumer manifests:
 
 ```sh
-scripts/check-contract-kernel.sh ../registry-lab/config/static-metadata/metadata.yaml
+SOLMARA_LAB_DIR=/path/to/solmara-lab
+scripts/check-contract-kernel.sh \
+  "$SOLMARA_LAB_DIR/metadata/solmara-wave1.metadata.yaml"
 ```
 
 The script runs formatting, clippy, workspace tests, checked-in profile

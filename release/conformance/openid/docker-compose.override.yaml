@@ -1,0 +1,11 @@
+services:
+  mongodb:
+    image: mongo:6.0.13@sha256:b415b12f638e2685d06c58ab7fb5943577c50fadec6d9340ef67d21aeac72070
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: ${REGISTRY_OPENID_CONFORMANCE_CONFIG_DIR:?runner must set config directory}/nginx.Dockerfile
+  server:
+    build:
+      context: ./server-dev
+      dockerfile: ${REGISTRY_OPENID_CONFORMANCE_CONFIG_DIR:?runner must set config directory}/server-dev.Dockerfile

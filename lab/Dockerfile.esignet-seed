@@ -1,9 +1,0 @@
-# SPDX-License-Identifier: Apache-2.0
-
-FROM python:3.12.3-slim-bookworm@sha256:afc139a0a640942491ec481ad8dda10f2c5b753f5c969393b12480155fe15a63 AS python-runtime
-
-FROM postgres:bookworm@sha256:9479eac93922431e8a512b016d7362ae264f4ba139f840891b51f02931e450db
-
-COPY --from=python-runtime /usr/local/ /usr/local/
-
-ENV PATH="/usr/local/bin:${PATH}"

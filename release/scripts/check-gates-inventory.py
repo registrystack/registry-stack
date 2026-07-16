@@ -28,6 +28,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Relay OpenAPI command", "run: just openapi-contract"),
     ("Relay exposure check", "name: Relay exposure check"),
     ("Release helper tests", "run: python3 -m unittest release/scripts/test_registry_release.py"),
+    (
+        "OpenID conformance runner tests",
+        "run: python3 -m unittest release/scripts/test_openid_conformance_runner.py",
+    ),
     ("Release manifest validation", "release/scripts/registry-release validate"),
     ("Release docset validation", "release/scripts/registry-release validate-docsets"),
     ("Release import audit", "release/scripts/registry-release audit"),

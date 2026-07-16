@@ -95,11 +95,12 @@ scripts/check-contract-kernel.sh
 ```
 
 Consumer manifests can be passed as arguments. Each file is validated and
-published into `target/contract-kernel/` so Relay, Notary, and Lab can exercise
-the same schema and renderer contract before a commons release:
+published into `target/contract-kernel/` so Relay, Notary, and adopter demos can
+exercise the same schema and renderer contract before a commons release:
 
 ```sh
-scripts/check-contract-kernel.sh ../registry-lab/config/static-metadata/metadata.yaml
+SOLMARA_LAB_DIR=/path/to/solmara-lab
+scripts/check-contract-kernel.sh "$SOLMARA_LAB_DIR/metadata/solmara-wave1.metadata.yaml"
 ```
 
 Optional ITB/SEMIC smoke check for selected DCAT and BRegDCAT-AP artifacts:

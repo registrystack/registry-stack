@@ -1,0 +1,17 @@
+{
+  "alias": "registry-stack-notary-oid4vci-issuer",
+  "description": "Registry Stack Notary OID4VCI issuer conformance slice",
+  "vci": {
+    "credential_issuer_url": "${issuer_url}",
+    "authorization_server": "${authorization_server}",
+    "credential_configuration_id": "${credential_configuration_id}",
+    "credential_proof_type_hint": "jwt",
+    "static_tx_code": "${static_tx_code}"
+  },
+  "client": {
+    "client_id": "${client_id}"
+  },
+  "client2": {
+    "client_id": "${client2_id}"
+  }
+}

@@ -8,7 +8,7 @@ source_repos:
   - registry-platform
   - registry-relay
   - registry-notary
-  - registry-lab
+  - solmara-lab
 last_reviewed: "2026-07-07"
 doc_type: specification
 doc_id: RS-ARC-G
@@ -56,13 +56,15 @@ For a narrative explanation with worked examples, see the [architecture overview
 | 0.3.1 | 2026-06-22 | draft | Clarified static-peer delegated evaluation as distinct from delegated self-attestation. |
 | 0.4.0 | 2026-07-07 | draft | Clarified REQ-ARC-G-009's replay storage scope: shared within a deployment's own replicas, never across a federation trust boundary. Reframed Registry Lab as a non-normative demonstration topology. |
 | 0.4.1 | 2026-07-07 | draft | Stated plainly in REQ-ARC-G-009 that the per-peer replay storage isolation is deployment topology and that Registry Notary enforces no runtime gate for it. |
+| 0.5.0 | 2026-07-16 | draft | Defined four formal Registry Stack products and moved the non-normative demo boundary to the separate Solmara Lab adopter project. |
 
 ## 1. Scope and audience
 
 This specification covers:
 
 - The two-layer design principle that governs the separation between portable metadata and runtime services.
-- The five projects that make up the registry stack, their responsibilities, and their boundaries.
+- The four formal products that make up the registry stack, their responsibilities, and their boundaries.
+- The boundary between the formal products and the separate Solmara Lab adopter demo.
 - The ordered data and contract flow from metadata authoring through claim evaluation.
 - The binding invariants that hold across all conforming deployments.
 
@@ -80,7 +82,8 @@ The **runtime services layer** is responsible for enforcing what the registry de
 
 This split separates two distinct obligations: the obligation to describe (what a registry declares it can expose and under what policy) from the obligation to enforce (what a running service will actually return to an authorized caller). The separation enables offline audit of metadata, offline validation of schemas and claim shapes, and governance updates to policy documents without touching deployment configuration.
 
-The diagram in this section shows the five projects and how they relate to the two layers.
+The diagram in this section shows the four formal products, their relationship to the two layers,
+and the separate adopter demo.
 
 ```mermaid
 flowchart TD
@@ -93,19 +96,30 @@ flowchart TD
         notary["Registry Notary<br/>(registry-notary)<br/>Evaluates claims; issues SD-JWT VC credentials;<br/>handles static-peer delegated evaluation"]
     end
 
-    subgraph support["Supporting components"]
+    subgraph support["Supporting component"]
         platform["Registry Platform<br/>(registry-platform)<br/>Shared Rust primitives: auth, OIDC,<br/>audit, crypto, SD-JWT VC helpers"]
-        lab["Registry Lab<br/>(registry-lab)<br/>Local compose demo: wires all<br/>runtime services together"]
+    end
+
+    subgraph adopter["External adopter demo"]
+        solmara["Solmara Lab<br/>(solmara-lab)<br/>Runs published stack images<br/>in local and hosted topologies"]
     end
 
     manifest -- "static discovery bundle" --> relay
     platform -- "shared primitives" --> relay
     platform -- "shared primitives" --> notary
     relay -- "compiler-pinned consultation" --> notary
-    relay & notary --> lab
+    relay -. "published image" .-> solmara
+    notary -. "published image" .-> solmara
 ```
 
-The diagram captures five components. This section restates the essential relationships as text: Registry Manifest produces a static discovery bundle consumed by Registry Relay, static publishers, and clients that inspect the metadata offline. Registry Platform supplies shared primitives to both runtime services. Registry Relay owns registry source access and product-neutral adaptation. Registry Notary consumes compiler-pinned Relay consultations for registry-backed claims or configured inputs for source-free and self-attested claims. Registry Lab assembles the runtime services into a runnable local demo.
+The diagram captures four formal products and one external adopter demo. This section restates the
+essential relationships as text: Registry Manifest produces a static discovery bundle consumed by
+Registry Relay, static publishers, and clients that inspect the metadata offline. Registry Platform
+supplies shared primitives to both runtime services. Registry Relay owns registry source access and
+product-neutral adaptation. Registry Notary consumes compiler-pinned Relay consultations for
+registry-backed claims or configured inputs for source-free and self-attested claims. Solmara Lab
+consumes published stack images in runnable local and hosted demo topologies, but it is not a formal
+Registry Stack product.
 
 ## 3. Components
 
@@ -127,9 +141,14 @@ Registry Relay is not an open-data portal; it serves restricted consultation API
 
 Registry Notary (`registry-notary`) is a standalone Rust service for claim evaluation, disclosure policy, credential issuance, and audit. A Notary-only deployment supports source-free and self-attested claims. Registry-backed claims consume compiler-pinned Relay consultations whose profile, contract hash, purpose, and typed inputs are fixed before Relay source work. Notary does not own registry source origins, credentials, protocol adaptation, or snapshots. Registry Notary returns evaluation results as `application/vnd.registry-notary.claim-result+json` or CCCEV-shaped JSON-LD (`application/ld+json; profile="cccev"`). It materializes SD-JWT VC credentials (`application/dc+sd-jwt`) through its credential issuance surfaces, including an OpenID for Verifiable Credential Issuance (OID4VCI) flow as a profiled subset of OID4VCI Draft 13. It supports static-peer delegated evaluation through `POST /federation/v1/evaluations`. Static-peer delegated evaluation is separate from delegated self-attestation, the local citizen/OIDC access mode defined in [RS-PR-NOTARY](../rs-pr-notary/). Registry Notary does not produce DCAT, BRegDCAT-AP, SHACL, or OGC Records artifacts. The current federation implementation is static-peer only; dynamic trust-chain discovery, replay storage shared across federation peers, and federated credential issuance are not part of this version. Each federation peer maintains its own replay scope; a peer does not share replay storage with the peers it federates with.
 
-### Registry Lab
+### Solmara Lab
 
-Registry Lab (`registry-lab`) is a compose-based local demo. It starts Registry Relay instances, Registry Notary instances, Postgres, Zitadel, a static metadata publisher, and narrated clients together in a single compose topology. It is a non-normative demonstration topology that illustrates how the services connect to each other at runtime; it is not itself a specified component, and it carries no conformance weight against this specification. Registry Lab does not own any normative API or metadata contract; those belong to the runtime service and manifest repositories. It does not provide production deployment guidance; it uses fixture credentials and demo-grade configuration.
+Solmara Lab (`solmara-lab`) is a separately maintained adopter demo for the fictional Republic of
+Solmara. It runs published Registry Relay and Registry Notary images, Postgres, eSignet, static
+metadata, generated synthetic data, and demo clients in local and hosted topologies. It illustrates
+how the formal products connect at runtime, but it is not a specified component and carries no
+conformance weight against this specification. Solmara Lab does not own any normative API or
+metadata contract and does not provide production deployment guidance.
 
 ## 4. Data and contract flow
 
@@ -185,7 +204,9 @@ The two-layer design supports one natural capability sequence: describe what the
 
 The sequence is ordered because metadata must be available before a runtime service can be safely deployed: a caller cannot validate schemas, review claim shapes, or inspect evidence offerings against an opaque service. The portable metadata bundle is the contract; the runtime services enforce it.
 
-Registry Platform supports both runtime services with the shared primitives that make each stage auditable. Registry Lab exercises the full sequence in a local compose environment.
+Registry Platform supports both runtime services with the shared primitives that make each stage
+auditable. The external Solmara Lab adopter demo exercises the full sequence using published stack
+images.
 
 ## Conformance
 

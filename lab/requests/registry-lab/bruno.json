@@ -1,9 +1,0 @@
-{
-  "version": "1",
-  "name": "Registry Lab",
-  "type": "collection",
-  "ignore": [
-    "node_modules",
-    ".git"
-  ]
-}

@@ -43,11 +43,14 @@ write.
       Evidence: [`standards-claims-inventory.md`](notes/standards-claims-inventory.md).
 - [ ] Per-claim evidence recorded (conformance run, test vectors, or interop).
 - [ ] OpenID conformance suite running repeatably against a supported
-      deployment topology (#205). Must not depend on the monorepo `lab/`,
-      which is being replaced by a standalone lab repository (#224). Initial
-      harness and metadata-run evidence:
-      [`openid-conformance-suite.md`](../lab/docs/openid-conformance-suite.md),
-      [`openid-conformance-initial-report.md`](../lab/docs/openid-conformance-initial-report.md).
+      deployment topology (#205). Must not depend on the retired monorepo lab,
+      which was replaced by the standalone
+      [Solmara Lab](https://github.com/registrystack/solmara-lab) (#224).
+      The release-owned [harness and plan mapping](conformance/openid/README.md)
+      no longer depend on either lab. Its
+      [initial report](conformance/openid/initial-report.md) preserves the
+      historical hosted-lab failures but does not yet prove a pinned release
+      topology.
 - [ ] Credentialing, OID4VCI, and status-list interop proof (#57).
 
 ## 4. Adversarial verification

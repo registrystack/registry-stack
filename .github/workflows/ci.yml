@@ -91,7 +91,7 @@ jobs:
                   ;;
               esac
               case "${path}" in
-                release/scripts/check-release-source-model.sh|release/scripts/test_check_release_source_model.py|release/manifests/*|lab/vendor/*|.gitmodules)
+                Cargo.toml|Cargo.lock|release/scripts/check-release-source-model.sh|release/scripts/test_check_release_source_model.py|release/manifests/*)
                   release_source_proof=true
                   ;;
               esac
@@ -252,6 +252,9 @@ jobs:
 
       - name: Test release helper
         run: python3 -m unittest release/scripts/test_registry_release.py
+
+      - name: Test OpenID conformance runner
+        run: python3 -m unittest release/scripts/test_openid_conformance_runner.py
 
       - name: Gate inventory
         run: python3 release/scripts/check-gates-inventory.py

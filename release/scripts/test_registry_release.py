@@ -41,27 +41,17 @@ class RegistryReleaseTest(unittest.TestCase):
             text,
         )
 
-    def test_release_image_packaging_keeps_lab_dockerfiles_source_building(self) -> None:
+    def test_release_image_packaging_uses_release_dockerfiles(self) -> None:
         workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
         release_dockerfiles = [
             "release/docker/Dockerfile.registry-notary",
             "release/docker/Dockerfile.registry-relay",
-        ]
-        lab_dockerfiles = [
-            "lab/Dockerfile.registry-notary",
-            "lab/Dockerfile.registry-relay",
         ]
 
         for dockerfile in release_dockerfiles:
             self.assertIn(dockerfile, workflow)
             text = (ROOT / dockerfile).read_text(encoding="utf-8")
             self.assertIn("dist/image-bin", text)
-
-        for dockerfile in lab_dockerfiles:
-            self.assertNotIn(dockerfile, workflow)
-            text = (ROOT / dockerfile).read_text(encoding="utf-8")
-            self.assertNotIn("dist/image-bin", text)
-            self.assertIn("cargo build --release --locked", text)
 
     def test_release_packaging_excludes_retired_notary_source_sidecar(self) -> None:
         retired_names = (
@@ -89,7 +79,6 @@ class RegistryReleaseTest(unittest.TestCase):
         for dockerfile in (
             "crates/registry-relay/Dockerfile",
             "crates/registry-relay/Dockerfile.demo",
-            "lab/Dockerfile.registry-relay",
             "release/docker/Dockerfile.registry-relay",
         ):
             text = (ROOT / dockerfile).read_text(encoding="utf-8")

@@ -12,7 +12,7 @@ already hold: protected read APIs, governed evidence responses, credentials, and
 audit records, without turning the registry into a shared database.
 
 This repository is the monorepo source of truth for Registry Stack product code,
-release manifests, docs, and lab evidence.
+release manifests, and docs.
 
 > **Status:** Registry Stack is a pre-1.0 technical release for evaluation,
 > integration pilots, and public review. APIs and deployment contracts may
@@ -24,8 +24,8 @@ release manifests, docs, and lab evidence.
 |---|---|
 | Understand the product | [registrystack.org](https://registrystack.org/) |
 | Read the technical docs | [docs.registrystack.org](https://docs.registrystack.org/) |
-| Try it without installing anything | [Hosted lab](https://lab.registrystack.org/) |
-| Run the local demo topology | `cd lab && just quick` |
+| Try it without installing anything | [Hosted Solmara Lab](https://solmara.registrystack.org/) |
+| Run the local demo topology | [Solmara Lab quick start](https://github.com/registrystack/solmara-lab#quick-start) |
 | Work on the monorepo | See [Development](#development) |
 | Review the public roadmap | [ROADMAP.md](ROADMAP.md) |
 | Review release evidence | See [Release And External Inputs](#release-and-external-inputs) |
@@ -43,8 +43,10 @@ Registry Stack is organized around two runtime patterns:
   routes use the same Policy Decision Point pattern for protected reads.
 
 The stack also includes Registry Manifest for portable metadata, Registry
-Platform shared primitives, `registryctl` adopter tooling, Registry Lab demos,
-and release tooling for validating the public source model.
+Platform shared primitives, `registryctl` adopter tooling, and release tooling
+for validating the public source model. The standalone
+[Solmara Lab](https://github.com/registrystack/solmara-lab) provides the adopter
+demo.
 
 ```mermaid
 flowchart LR
@@ -69,10 +71,8 @@ flowchart LR
   material, scripts, performance harnesses, and fixtures that are not normal
   workspace crates.
 - `docs/site/`: the public Registry Stack docs site.
-- `lab/`: Registry Lab compose files, fixtures, demos, tutorials, and source
-  proof scripts.
 - `release/`: stack release manifests, schemas, import audit records, and public
-  release tooling.
+  release and conformance tooling.
 - `external/`: notes for external inputs that intentionally stay outside this
   source tree.
 
@@ -81,9 +81,8 @@ flowchart LR
 Prerequisites:
 
 - Rust toolchain from `rust-toolchain.toml`.
-- Python 3 for release and lab helper tests.
+- Python 3.11 or later for release helper tests and conformance tooling.
 - Node.js 22.12.0 and npm for `docs/site`.
-- Docker Compose and `just` for the full local Lab.
 
 Useful first checks:
 
@@ -98,6 +97,7 @@ Release source checks:
 
 ```bash
 python3 -m unittest release/scripts/test_registry_release.py
+python3 -m unittest release/scripts/test_openid_conformance_runner.py
 release/scripts/registry-release validate release/manifests/registry-stack-beta-6.yaml
 release/scripts/registry-release audit release/manifests/import-map-2026-06-24.yaml
 REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
@@ -128,13 +128,14 @@ Crosswalk remains an external pinned input and is not imported into this
 repository. Release builds use the pinned Git dependency declared in the root
 workspace manifest and record the exact ref in `release/manifests/*.yaml`.
 
-Registry Atlas and the eSignet relay authenticator remain Lab-only external
-inputs unless a later product decision promotes them into Registry Stack.
+Historical release manifests retain immutable Registry Atlas and eSignet relay
+authenticator refs for releases that used them as lab-only external inputs.
 
 Release evidence lives in:
 
 - `release/manifests/`
 - `release/notes/`
+- `release/conformance/`
 - `release/scripts/`
 
 Release assets are published with SHA256 checksums, keyless cosign signatures,
@@ -150,7 +151,7 @@ non-security bugs, questions, and feature discussion. See [SUPPORT.md](SUPPORT.m
 for support expectations and [CONTRIBUTING.md](CONTRIBUTING.md) for contribution
 workflow. Before opening a pull request, run the relevant checks from
 [Development](#development) and keep changes scoped to the owning crate,
-product, docs, lab, or release area. Open issues are triaged with public labels
+product, docs, or release area. Open issues are triaged with public labels
 described in [CONTRIBUTING.md](CONTRIBUTING.md#issue-labels).
 
 ## Security

@@ -162,8 +162,8 @@ export default defineConfig({
     '/projects/registry-notary/reference/': internalRedirect('/products/registry-notary/operator-config-reference/'),
     // The target exists only in the current docset; archives redirect to the latest page.
     '/products/registry-notary/opencrvs-dci-onboarding/': currentDocsetRedirect('/tutorials/verify-opencrvs-claims/'),
-    // registry-manifest, registry-atlas, registry-platform, registry-lab projects/*
-    // redirects removed: targets are deferred from the MVP docs cut.
+    // Retired project routes redirect only when a current replacement exists.
+    // Solmara Lab is an external adopter, not a Registry Stack product.
     '/projects/registry-lab/demo-flow/': internalRedirect('/tutorials/first-run-with-solmara-lab/'),
     // The API reference moved from static Redoc HTML to native, theme-aware,
     // searchable pages. Keep the old shareable links working.

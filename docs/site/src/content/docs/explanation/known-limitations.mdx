@@ -5,6 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
+  - solmara-lab
 last_reviewed: "2026-06-28"
 doc_type: explanation
 locale: en
@@ -76,11 +77,11 @@ These boundaries cut across components. Read them first.
   Federation discovery metadata is not a trust anchor: a published manifest does not bind a
   consumer to trust a JWKS endpoint, federation API host, or peer identity.
   Trust bootstrap stays in the consumer's local policy and Notary peer configuration.
-- Registry Lab and its hosted instance are demonstrations, not infrastructure: The local Registry
-  Lab is a compose-based runnable demonstration that uses fixture credentials and demo-grade
-  configuration and ships no production deployment guidance.
-  Any hosted instance of the lab is likewise a demonstration, not production infrastructure: it
-  carries no uptime or data-retention commitment.
+- Solmara Lab and its hosted instance are demonstrations, not infrastructure: Solmara Lab is a
+  separately maintained adopter demo that uses generated synthetic data and demo configuration.
+  It is not a formal Registry Stack product and provides no production deployment guidance.
+  Any hosted instance of Solmara Lab is likewise a demonstration, not production infrastructure:
+  it carries no uptime or data-retention commitment.
 
 For the rationale behind each of these, follow the linked specifications in each section.
 

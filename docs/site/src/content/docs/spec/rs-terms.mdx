@@ -8,7 +8,7 @@ source_repos:
   - registry-notary
   - registry-platform
   - registry-manifest
-  - registry-lab
+  - solmara-lab
 last_reviewed: "2026-07-07"
 doc_type: specification
 doc_id: RS-TERMS
@@ -60,10 +60,11 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.5.0 | 2026-07-09 | draft | Marked Registry Relay signed response credentials and issuer mode as removed before 1.0. |
 | 0.6.0 | 2026-07-13 | draft | Replaced direct Notary source connectors and sidecars with compiler-pinned Relay consultations and Registry Stack project authoring terms. |
 | 0.6.1 | 2026-07-14 | draft | Added the complete Registry Stack project-authoring vocabulary and clarified compiler-derived credential membership. |
+| 0.7.0 | 2026-07-16 | draft | Defined the formal stack as four products and classified Solmara Lab as a separate adopter demo. |
 
 ## 1. Products
 
-The registry stack comprises five related projects. Product names are Title Case. Repository slugs appear in `monospace` and are always lowercase. The phrase "registry stack" (lowercase) refers to the five-project ensemble.
+The registry stack comprises four formal products. Product names are Title Case. Repository slugs appear in `monospace` and are always lowercase. The phrase "registry stack" (lowercase) refers to the four-product ensemble.
 
 **Registry Platform** (`registry-platform`): Shared Rust workspace for registry security and operational primitives, including auth helpers, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, crypto, Selective Disclosure JWT Verifiable Credential (SD-JWT VC) helpers, and test fixtures. Consumed by both runtime services.
 
@@ -73,7 +74,7 @@ The registry stack comprises five related projects. Product names are Title Case
 
 **Registry Notary** (`registry-notary`): Standalone Rust service for Relay-backed or self-attested claim evaluation, disclosure policy, credential issuance, and audit. It has no direct registry source connector.
 
-**Registry Lab** (`registry-lab`): Compose-based runnable local demonstration of Registry Relay, Registry Notary, shared services, synthetic fixtures, a static metadata publisher, and narrated clients.
+**Solmara Lab** (`solmara-lab`): Separately maintained adopter demo for the fictional Republic of Solmara. It runs published Registry Stack images in local and hosted topologies. Solmara Lab is not a formal Registry Stack product and has no conformance weight in the Registry Stack specifications.
 
 ## 2. Protocol and credential terms
 
@@ -99,7 +100,7 @@ The registry stack comprises five related projects. Product names are Title Case
 
 **DID**: Decentralized Identifier. W3C DID Core 1.0. Registry Relay no longer publishes a DID document. Registry Notary parses `did:jwk` values for credential subjects.
 
-**eSignet**: Open-source identity and authentication service (part of MOSIP). The hosted lab uses eSignet as the authorization server a citizen signs in to before Registry Notary issues a self-attestation credential. Not a Registry Stack product term; included here because it appears in hosted lab documentation.
+**eSignet**: Open-source identity and authentication service (part of MOSIP). The hosted Solmara Lab topology uses eSignet as the authorization server a citizen signs in to before Registry Notary issues a self-attestation credential. Not a Registry Stack product term; included here because it appears in Solmara Lab documentation.
 
 ## 3. Metadata and standards terms
 

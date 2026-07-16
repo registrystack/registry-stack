@@ -6,6 +6,9 @@ owner: registry-docs
 source_repos:
   - registry-relay
   - registry-notary
+  - registry-manifest
+  - registry-platform
+  - solmara-lab
 last_reviewed: "2026-06-20"
 doc_type: explanation
 locale: en
@@ -55,10 +58,11 @@ adaptation into Registry Relay, then binds Registry Notary claims to the resulti
 contract-hashed consultation profiles. Registry Notary does not treat Relay as an arbitrary HTTP
 source.
 
-The wider current stack (Registry Manifest for portable metadata, Registry Platform for shared
-primitives, and Registry Lab for a local compose demo) is described at
-[registrystack.org](https://registrystack.org/). For how the pieces connect at runtime, see the
-[architecture overview](../../explanation/architecture/).
+The other two formal products are Registry Manifest for portable metadata and Registry Platform
+for shared primitives. The external
+[Solmara Lab](https://github.com/registrystack/solmara-lab/tree/00cd51a2be4a405ef75d337ddcede0f9de134b1f)
+adopter project demonstrates the four formal products in local and hosted topologies.
+For how the pieces connect at runtime, see the [architecture overview](../../explanation/architecture/).
 
 ## When to use it
 

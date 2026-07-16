@@ -24,6 +24,18 @@ updates:
           - minor
           - patch
 
+  # The conformance helper lock is a pip-compile requirements file. Its direct
+  # input remains byte-bound to the reviewed upstream suite requirements.
+  - package-ecosystem: pip
+    directory: "/release/conformance/openid"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      conformance-python:
+        patterns:
+          - "*"
+
   # Pinned GitHub Actions used by the workflows.
   - package-ecosystem: github-actions
     directory: "/"
@@ -38,8 +50,8 @@ updates:
   # silently rot; dependabot keeps them current while preserving the pin.
   - package-ecosystem: docker
     directories:
-      - "/lab"
       - "/release/docker"
+      - "/release/conformance/openid"
       - "/crates/registry-relay"
       - "/products/notary"
     schedule:
@@ -47,5 +59,17 @@ updates:
     open-pull-requests-limit: 10
     groups:
       docker-images:
+        patterns:
+          - "*"
+
+  # Docker Compose image pins use a distinct Dependabot ecosystem from
+  # Dockerfiles. Both override filenames match Dependabot's Compose matcher.
+  - package-ecosystem: docker-compose
+    directory: "/release/conformance/openid"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      docker-compose-images:
         patterns:
           - "*"

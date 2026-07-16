@@ -68,88 +68,148 @@ if [[ "${stack_git_root}" != "${stack_root}" ]]; then
 fi
 printf 'release-source registry-stack %s %s dirty=%s\n' "${stack_root}" "${stack_head}" "${stack_dirty}"
 
-external_gitlinks="$(git -C "${stack_root}" ls-files -s -- lab/vendor | awk '$1 == "160000" {n = split($NF, parts, "/"); print parts[n] "=" $2}')"
-RELEASE_EXTERNAL_GITLINKS="${external_gitlinks}" python3 - "${release_dir}"/manifests/registry-stack-*.yaml <<'PY'
-import os
+python3 - "${stack_root}" "${release_dir}"/manifests/registry-stack-*.yaml <<'PY'
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 import yaml
 
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
-REQUIRED_EXTERNALS = (
-    "crosswalk",
-    "esignet-relay-authenticator",
+SEMVER = re.compile(r"^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(?:[-+].*)?$")
+CROSSWALK_REPO = "PublicSchema/crosswalk"
+CROSSWALK_SOURCE_PREFIX = "git+https://github.com/PublicSchema/crosswalk?"
+HISTORICAL_LAB_EXTERNALS = (
     "registry-atlas",
+    "esignet-relay-authenticator",
 )
 
-gitlinks = {}
-for gitlink_line in os.environ.get("RELEASE_EXTERNAL_GITLINKS", "").splitlines():
-    gitlink_name, _, gitlink_sha = gitlink_line.partition("=")
-    if gitlink_name and gitlink_sha:
-        gitlinks[gitlink_name] = gitlink_sha
+stack_root = Path(sys.argv[1])
+manifest_paths = [Path(arg) for arg in sys.argv[2:]]
 
 
-def version_key(manifest):
-    stack = manifest.get("stack", {}) if isinstance(manifest, dict) else {}
-    parts = str(stack.get("version", "")).split(".")
-    if parts != [""] and all(part.isdigit() for part in parts):
-        return tuple(int(part) for part in parts)
-    return ()
+def fail(message: str) -> None:
+    global failed
+    print(f"release source model failed: {message}", file=sys.stderr)
+    failed = True
 
 
-manifests = []
+def parse_semver(value: object, *, manifest: Path) -> tuple[int, int, int] | None:
+    match = SEMVER.fullmatch(str(value or ""))
+    if not match:
+        fail(f"{manifest.name} stack.version must be SemVer")
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def live_crosswalk_ref() -> str | None:
+    cargo_toml = tomllib.loads((stack_root / "Cargo.toml").read_text(encoding="utf-8"))
+    workspace_dependencies = cargo_toml.get("workspace", {}).get("dependencies", {})
+    crosswalk_dependencies = {
+        name: entry
+        for name, entry in workspace_dependencies.items()
+        if name.startswith("crosswalk-")
+    }
+    if not crosswalk_dependencies or not all(
+        isinstance(entry, dict) for entry in crosswalk_dependencies.values()
+    ):
+        fail("Cargo.toml Crosswalk workspace dependencies must use pinned dependency tables")
+        return None
+    refs = {
+        entry.get("rev")
+        for entry in crosswalk_dependencies.values()
+    }
+    repos = {
+        entry.get("git")
+        for entry in crosswalk_dependencies.values()
+    }
+    if len(refs) != 1 or None in refs or not HEX40.fullmatch(next(iter(refs), "")):
+        fail("Cargo.toml Crosswalk workspace dependencies must share one 40-hex rev")
+        return None
+    if repos != {"https://github.com/PublicSchema/crosswalk"}:
+        fail("Cargo.toml Crosswalk workspace dependencies must use the canonical repository")
+        return None
+
+    ref = next(iter(refs))
+    cargo_lock = tomllib.loads((stack_root / "Cargo.lock").read_text(encoding="utf-8"))
+    lock_packages = [
+        package
+        for package in cargo_lock.get("package", [])
+        if isinstance(package, dict)
+        and str(package.get("name", "")).startswith("crosswalk-")
+    ]
+    if not lock_packages:
+        fail("Cargo.lock must contain Crosswalk packages")
+        return None
+    lock_sources = [package.get("source") for package in lock_packages]
+    if not all(
+        isinstance(source, str)
+        and source.startswith(CROSSWALK_SOURCE_PREFIX)
+        and "#" in source
+        for source in lock_sources
+    ):
+        fail("Cargo.lock Crosswalk packages must resolve from the canonical repository")
+        return None
+    lock_refs = {source.rsplit("#", 1)[-1] for source in lock_sources}
+    if lock_refs != {ref}:
+        fail("Cargo.lock Crosswalk packages must resolve the Cargo.toml Crosswalk rev")
+        return None
+    return ref
+
 failed = False
-for arg in sys.argv[1:]:
-    path = Path(arg)
+crosswalk_ref = live_crosswalk_ref()
+loaded_manifests: list[tuple[Path, dict, tuple[int, int, int]]] = []
+for path in manifest_paths:
     if not path.is_file():
-        print(f"release source model failed: no release manifest at {arg}", file=sys.stderr)
-        failed = True
+        fail(f"no release manifest at {path}")
         continue
     manifest = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        fail(f"{path.name} must contain a mapping")
+        continue
+    stack = manifest.get("stack")
+    version = parse_semver(
+        stack.get("version") if isinstance(stack, dict) else None,
+        manifest=path,
+    )
+    if version is not None:
+        loaded_manifests.append((path, manifest, version))
     external = manifest.get("external") if isinstance(manifest, dict) else None
     if not isinstance(external, dict) or not external:
-        print(f"release source model failed: {path.name} has no external section", file=sys.stderr)
-        failed = True
+        fail(f"{path.name} has no external section")
         continue
-    manifests.append((version_key(manifest), path, external))
-    for name in REQUIRED_EXTERNALS:
+    required_externals = ["crosswalk"]
+    artifacts = manifest.get("artifacts")
+    if isinstance(artifacts, dict) and "registry-lab" in artifacts:
+        required_externals.extend(HISTORICAL_LAB_EXTERNALS)
+    for name in required_externals:
         if name not in external:
-            print(
-                f"release source model failed: {path.name} is missing required external.{name}",
-                file=sys.stderr,
-            )
-            failed = True
+            fail(f"{path.name} is missing required external.{name}")
     for name in sorted(external):
         entry = external[name]
         repo = entry.get("repo") if isinstance(entry, dict) else None
         ref = str(entry.get("ref", "")) if isinstance(entry, dict) else ""
         if not repo or not HEX40.fullmatch(ref):
-            print(
-                f"release source model failed: {path.name} external.{name} must record a repo and a 40-hex ref",
-                file=sys.stderr,
-            )
-            failed = True
+            fail(f"{path.name} external.{name} must record a repo and a 40-hex ref")
             continue
         print(f"release-source-external {path.name} {name} {repo} {ref}")
 
-if gitlinks and manifests:
-    _, current_path, current_external = max(manifests, key=lambda item: item[0])
-    for name in sorted(gitlinks):
-        entry = current_external.get(name)
-        if not isinstance(entry, dict):
-            continue
-        ref = str(entry.get("ref", ""))
-        if ref != gitlinks[name]:
-            print(
-                f"release source model failed: {current_path.name} external.{name} ref {ref} "
-                f"does not match committed lab/vendor/{name} gitlink {gitlinks[name]}",
-                file=sys.stderr,
-            )
-            failed = True
-        else:
-            print(f"release-source-external-pin {current_path.name} {name} gitlink={ref}")
+if loaded_manifests and crosswalk_ref is not None:
+    latest_path, latest_manifest, _ = max(loaded_manifests, key=lambda item: item[2])
+    latest_external = latest_manifest.get("external")
+    latest_crosswalk = (
+        latest_external.get("crosswalk", {}) if isinstance(latest_external, dict) else {}
+    )
+    if not isinstance(latest_crosswalk, dict):
+        latest_crosswalk = {}
+    if latest_crosswalk.get("repo") != CROSSWALK_REPO:
+        fail(f"{latest_path.name} external.crosswalk.repo must be {CROSSWALK_REPO}")
+    if latest_crosswalk.get("ref") != crosswalk_ref:
+        fail(
+            f"{latest_path.name} external.crosswalk.ref must match the live Cargo pin {crosswalk_ref}"
+        )
+
 if failed:
     sys.exit(1)
 PY

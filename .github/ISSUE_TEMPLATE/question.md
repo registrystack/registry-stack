@@ -12,4 +12,4 @@ What would you like to understand?
 
 ## Context
 
-Include the docs page, crate, product area, lab path, or workflow you are using.
+Include the docs page, crate, product area, or workflow you are using.

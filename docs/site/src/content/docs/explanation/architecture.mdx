@@ -8,7 +8,7 @@ source_repos:
   - registry-platform
   - registry-relay
   - registry-notary
-  - registry-lab
+  - solmara-lab
 last_reviewed: "2026-07-14"
 doc_type: explanation
 locale: en
@@ -26,14 +26,17 @@ standards_referenced:
   - w3c-did
 ---
 
-The registry stack is organized around two layers: a portable metadata layer and a runtime services layer.
+The formal registry stack has four products: Registry Platform, Registry Manifest, Registry Relay,
+and Registry Notary.
+The stack is organized around two layers: a portable metadata layer and a runtime services layer.
 The metadata layer (Registry Manifest) compiles and renders discovery artifacts that describe what a registry
 exposes, without touching production sources.
 The runtime services layer (Registry Relay, Registry Notary) binds those artifacts to real data, enforces
 access control, evaluates claims, serves delegated evaluation between trusted Notaries, and issues
 credentials.
 Registry Platform provides shared Rust primitives consumed by both runtime services.
-Registry Lab runs the current stack together in a local demo.
+Solmara Lab is a separate adopter project that runs published stack images in local and hosted demo
+topologies. It is not a formal Registry Stack product.
 
 At runtime, Registry Stack exposes source data through two patterns:
 
@@ -56,7 +59,8 @@ updated policy documents without touching deployment config.
        alt="Architecture flow: Registry Platform provides shared primitives. Registry Manifest compiles
             metadata artifacts. Registry Relay binds those artifacts to protected runtime sources.
             Registry Notary evaluates Relay-backed or self-attested claims and issues credentials.
-            Registry Lab wires runtime services into a local compose topology." />
+            The separate Solmara Lab adopter project wires published runtime images into demo
+            topologies." />
 </figure>
 
 ## Data and contract flow
@@ -98,8 +102,9 @@ offerings are inspectable, so metadata comes first.
 
 Shared audit and operational behavior makes Registry Relay and Registry Notary reviewable:
 Registry Platform supplies the shared primitives for authentication, HTTP security, audit envelopes,
-cryptography, and credential support that both runtime services compose. Registry Lab gives reviewers
-a runnable local topology for the current stack.
+cryptography, and credential support that both runtime services compose. The external
+[Solmara Lab](https://github.com/registrystack/solmara-lab/tree/00cd51a2be4a405ef75d337ddcede0f9de134b1f)
+adopter project gives reviewers runnable demo topologies without becoming part of the formal stack.
 
 ## Next
 
