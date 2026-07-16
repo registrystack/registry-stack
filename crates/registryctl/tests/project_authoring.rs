@@ -2730,7 +2730,7 @@ fn generated_snapshot_contracts_activate_through_notary_at_the_authoring_bound()
 
 #[cfg(feature = "relay-contract-test-support")]
 #[test]
-fn script_only_change_moves_the_contract_hash_and_notary_rejects_the_old_pin() {
+fn script_only_change_moves_the_relay_closure_without_forking_the_public_contract() {
     use registry_notary_core::{ClaimEvidenceMode, StandaloneRegistryNotaryConfig};
 
     let temporary = tempfile::tempdir().expect("temporary directory");
@@ -2745,8 +2745,15 @@ fn script_only_change_moves_the_contract_hash_and_notary_rejects_the_old_pin() {
     let first_output = PathBuf::from(first.output.expect("initial build output"));
     let contract_relative =
         "private/relay/config/artifacts/consultation-contracts/health-verification-health.json";
+    let pack_relative = "private/relay/config/artifacts/integration-packs/health-record.json";
+    let binding_relative =
+        "private/relay/config/artifacts/private-bindings/health-verification-health.json";
     let first_contract =
         std::fs::read(first_output.join(contract_relative)).expect("initial contract reads");
+    let first_pack =
+        std::fs::read(first_output.join(pack_relative)).expect("initial integration pack reads");
+    let first_binding =
+        std::fs::read(first_output.join(binding_relative)).expect("initial private binding reads");
     let notary: StandaloneRegistryNotaryConfig = serde_yaml::from_slice(
         &std::fs::read(first_output.join("private/notary/config/notary.yaml"))
             .expect("initial Notary config reads"),
@@ -2787,6 +2794,10 @@ fn script_only_change_moves_the_contract_hash_and_notary_rejects_the_old_pin() {
     let second_output = PathBuf::from(second.output.expect("changed build output"));
     let second_contract =
         std::fs::read(second_output.join(contract_relative)).expect("changed contract reads");
+    let second_pack =
+        std::fs::read(second_output.join(pack_relative)).expect("changed integration pack reads");
+    let second_binding =
+        std::fs::read(second_output.join(binding_relative)).expect("changed private binding reads");
     let second_notary: StandaloneRegistryNotaryConfig = serde_yaml::from_slice(
         &std::fs::read(second_output.join("private/notary/config/notary.yaml"))
             .expect("changed Notary config reads"),
@@ -2810,13 +2821,25 @@ fn script_only_change_moves_the_contract_hash_and_notary_rejects_the_old_pin() {
         .expect("changed consultation")
         .profile
         .contract_hash;
-    assert_ne!(
+    assert_eq!(
         first_hash.as_str(),
         second_hash,
-        "Script bytes are hash-covered"
+        "a script-only implementation change must preserve an unchanged public semantic contract"
+    );
+    assert_eq!(
+        first_contract, second_contract,
+        "the public consultation contract contains semantics, not Relay implementation bytes"
+    );
+    assert_ne!(
+        first_pack, second_pack,
+        "reviewed Script bytes must remain hash-covered by the Relay integration pack"
+    );
+    assert_ne!(
+        first_binding, second_binding,
+        "the Relay private binding must move with its hash-covered integration pack"
     );
     assert!(
-        !registry_notary_server::relay_contract_test_support::verifies_contract_artifact(
+        registry_notary_server::relay_contract_test_support::verifies_contract_artifact(
             &second_contract,
             &first_hash,
             &consultation.profile.id,
@@ -2825,7 +2848,7 @@ fn script_only_change_moves_the_contract_hash_and_notary_rejects_the_old_pin() {
             &input_names,
             &consultation.outputs,
         ),
-        "Notary must reject changed Script bytes under the old contract pin"
+        "Notary verifies the unchanged public semantics while Relay verifies the changed private closure"
     );
 }
 
