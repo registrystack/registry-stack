@@ -55,7 +55,6 @@
   adoption_mode: profiled
   used_by:
     - registry-manifest
-    - registry-lab
   surfaces:
     - public service catalogue rendering
     - channel and form linking
@@ -63,10 +62,8 @@
   evidence_docs:
     - label: Registry Manifest CPSV-AP fixture
       url: https://github.com/registrystack/registry-stack/tree/v0.9.0/products/manifest/fixtures/cpsv-ap
-    - label: Registry Lab service-first discovery docs
-      url: https://github.com/jeremi/registry-lab/blob/5bb84d5b2500a8d37b989e0959e22287250d1e40/docs/service-first-discovery.md
   last_checked: 2026-05-25
-  notes: Registry Manifest emits CPSV-AP service catalogues. Registry Lab demonstrates the static metadata flow. Registry Relay does not expose a current CPSV-AP runtime route.
+  notes: Registry Manifest emits CPSV-AP service catalogues. Registry Relay does not expose a current CPSV-AP runtime route.
 - id: ogc-api-records
   name: OGC API Records
   standards_body: Open Geospatial Consortium
@@ -305,7 +302,6 @@
   used_by:
     - registry-manifest
     - registry-notary
-    - registry-lab
   surfaces:
     - requirement and information requirement metadata
     - evidence type and evidence type list metadata
@@ -490,7 +486,6 @@
   used_by:
     - registry-notary
     - registry-platform
-    - registry-lab
     - solmara-lab
   surfaces:
     - credential offer endpoint
@@ -503,7 +498,7 @@
       url: https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/api.rs
     - label: Registry Platform OID4VCI crate
       url: https://github.com/registrystack/registry-stack/tree/v0.9.0/crates/registry-platform-oid4vci
-    - label: Registry Lab citizen OID4VCI smoke script
+    - label: Historical Registry Lab citizen OID4VCI smoke script
       url: https://github.com/registrystack/registry-stack/blob/v0.9.0/lab/scripts/smoke-citizen-oid4vci.sh
     - label: Solmara Lab hosted OID4VCI smoke
       url: https://github.com/registrystack/solmara-lab/blob/00cd51a2be4a405ef75d337ddcede0f9de134b1f/scripts/smoke-hosted.py
@@ -511,8 +506,9 @@
   notes: >-
     Registry Notary exposes the OID4VCI credential offer, nonce, credential,
     and issuer-metadata routes as a profiled subset of OID4VCI Draft 13. The
-    v0.9.0 hosted lab issuer metadata advertised `format: dc+sd-jwt` for the
-    citizen credential configuration. Registry Platform owns the underlying primitives
+    historical v0.9.0 Registry Lab issuer metadata advertised
+    `format: dc+sd-jwt` for the citizen credential configuration. Registry
+    Platform owns the underlying primitives
     in the `registry-platform-oid4vci` crate. The historical Registry Lab
     exercised the flow through the `just citizen-oid4vci-*` recipes at v0.9.0.
     Solmara Lab checks the current hosted issuer metadata, credential offer,

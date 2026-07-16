@@ -8,7 +8,7 @@ source_repos:
   - registry-platform
   - registry-manifest
   - registry-notary
-  - registry-lab
+  - solmara-lab
 last_reviewed: "2026-07-07"
 doc_type: reference
 locale: en
@@ -106,7 +106,7 @@ Product names are always in English, including on future translated pages.
   <dd>Manifest-level binding that connects an external ecosystem profile or governed evidence pack to a Registry Stack runtime surface. A governed evidence ecosystem binding names the evidence pack metadata and policy identity a runtime service can use for PDP enforcement.</dd>
 
   <dt>eSignet</dt>
-  <dd>Open-source identity and authentication service (part of MOSIP). The hosted lab uses eSignet as the authorization server a citizen signs in to before Registry Notary issues a self-attestation credential.</dd>
+  <dd>Open-source identity and authentication service (part of MOSIP). The hosted Solmara Lab demo uses eSignet as the authorization server a citizen signs in to before Registry Notary issues a self-attestation credential.</dd>
 
   <dt>evidence offering</dt>
   <dd>Metadata entry that describes a verification capability and the access path a client uses to reach it. In the current stack it points a client from Registry Relay metadata to Registry Notary or another evidence service; Relay describes the offering but does not evaluate the claim.</dd>
@@ -196,7 +196,7 @@ Product names are always in English, including on future translated pages.
   <dd>Registry Stack runtime pattern for exposing existing registry source data through scoped, read-only HTTP routes with authentication, authorization, metadata, and audit. Registry Relay implements this pattern.</dd>
 
   <dt>registry stack</dt>
-  <dd>The five current formal stack projects: Registry Platform, <a href="../../products/registry-relay/">Registry Relay</a>, Registry Manifest, <a href="../../products/registry-notary/">Registry Notary</a>, and Registry Lab. Use lowercase when referring to the concept.</dd>
+  <dd>The four formal stack products: Registry Platform, <a href="../../products/registry-relay/">Registry Relay</a>, Registry Manifest, and <a href="../../products/registry-notary/">Registry Notary</a>. Use lowercase when referring to the concept.</dd>
 
   <dt>purpose-bound request</dt>
   <dd>Registry Stack product term for a request that carries or is evaluated against purpose limitation, policy-based access control, or context-aware authorization. Relay records the `Data-Purpose` header in audit records where present.</dd>
@@ -207,8 +207,8 @@ Product names are always in English, including on future translated pages.
   <dt>fail closed</dt>
   <dd>Security posture where missing, malformed, unsupported, stale, or unauditable governed policy inputs result in denial rather than permit.</dd>
 
-  <dt>Registry Lab</dt>
-  <dd>Compose-based runnable local demo of Registry Relay, Registry Notary, shared platform services, synthetic fixtures, and narrated clients. Repo slug: `registry-lab`.</dd>
+  <dt>Solmara Lab</dt>
+  <dd>Separately maintained adopter demo for the fictional Republic of Solmara. It runs published Registry Stack images in local and hosted topologies and is not a formal Registry Stack product. Repo slug: `solmara-lab`.</dd>
 
   <dt>Registry Manifest</dt>
   <dd>Rust workspace for modeling, validating, and rendering standards-facing service, registry, form, and policy metadata without running Registry Relay. Provides a library (`registry-manifest-core`) and a CLI (`registry-manifest-cli`). Repo slug: `registry-manifest`.</dd>
@@ -300,8 +300,8 @@ Product names are always in English, including on future translated pages.
 
 ## Style notes
 
-- Product names (Registry Platform, Registry Relay, Registry Manifest, Registry Notary, Registry Lab) are always title case.
-- Repo slugs (`registry-platform`, `registry-relay`, `registry-manifest`, `registry-notary`, `registry-lab`) are always lowercase and monospace.
+- Formal product names (Registry Platform, Registry Relay, Registry Manifest, Registry Notary) and the adopter demo name (Solmara Lab) are always title case.
+- Repo slugs (`registry-platform`, `registry-relay`, `registry-manifest`, `registry-notary`, `solmara-lab`) are always lowercase and monospace.
 - Legacy underscore forms (`registry_relay`) and old repo names (`decentralized-evidence-demo`) appear only in historical pages or `rename_status` fields.
 - The glossary provides a reference for standards acronyms but does not replace per-page first-use expansion.
 

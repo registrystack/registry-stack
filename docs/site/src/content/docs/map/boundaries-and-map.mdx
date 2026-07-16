@@ -1,6 +1,6 @@
 ---
 title: Boundaries and map
-description: The five current registry stack projects, their responsibilities, flow across them, and what each project does not own.
+description: The four formal Registry Stack products, the separate Solmara Lab adopter demo, and the boundaries between them.
 wide: true
 status: current
 owner: registry-docs
@@ -9,7 +9,7 @@ source_repos:
   - registry-platform
   - registry-manifest
   - registry-notary
-  - registry-lab
+  - solmara-lab
 last_reviewed: "2026-06-20"
 doc_type: explanation
 locale: en
@@ -25,16 +25,19 @@ standards_referenced:
 
 import ProjectMap from '../../../components/ProjectMap.astro';
 
-The current registry stack has five repositories with distinct responsibilities.
+The formal Registry Stack has four products with distinct responsibilities: Registry Platform,
+Registry Manifest, Registry Relay, and Registry Notary.
+Solmara Lab is a separate adopter project that demonstrates the four products together.
 Use this page to decide which repository owns a question before opening implementation docs,
-and to understand how the five repositories connect at runtime.
+and to understand how the products and the external demo connect at runtime.
 
 <figure>
   <img src="../../images/registry-family-map.svg"
-       alt="Five current registry stack projects and how they connect. Registry Platform provides shared
-            primitives. Registry Manifest compiles portable metadata. Registry Relay binds metadata
-            to runtime sources and exposes protected APIs. Registry Notary evaluates claims and
-            issues credentials. Registry Lab runs the runtime services together as a compose topology." />
+       alt="Four formal Registry Stack products and the separate Solmara Lab adopter demo. Registry
+            Platform provides shared primitives. Registry Manifest compiles portable metadata.
+            Registry Relay binds metadata to runtime sources and exposes protected APIs. Registry
+            Notary evaluates claims and issues credentials. Solmara Lab runs published images of
+            the runtime services in demo topologies." />
 </figure>
 
 <ProjectMap />
@@ -44,7 +47,8 @@ and to understand how the five repositories connect at runtime.
 
 ## Flow across the stack
 
-For how the five projects connect at runtime, see the [architecture overview](../../explanation/architecture/).
+For how the four products connect at runtime and how Solmara Lab demonstrates them, see the
+[architecture overview](../../explanation/architecture/).
 
 ## Ownership quick reference
 
@@ -54,7 +58,7 @@ For how the five projects connect at runtime, see the [architecture overview](..
 | How is a CSV, XLSX, Parquet, or PostgreSQL source exposed as authorized entity routes? | [Registry Relay](../../products/registry-relay/) |
 | How is `metadata.yaml` validated or rendered into standards-facing artifacts? | [Registry Manifest](https://github.com/registrystack/registry-stack) |
 | How is a claim evaluated, delegated to a trusted Notary, or turned into an attestation or credential? | [Registry Notary](../../products/registry-notary/) |
-| How do the services run together in a local demo? | [Registry Lab](https://github.com/registrystack/registry-stack/blob/v0.9.0/lab/README.md) |
+| How do the services run together in a local demo? | [Solmara Lab](https://github.com/registrystack/solmara-lab/blob/00cd51a2be4a405ef75d337ddcede0f9de134b1f/README.md) |
 
 Cross-project explanation, standards evidence, and contract indexes live in these docs (not in any one project repo).
 
@@ -158,23 +162,23 @@ in the issued credential.
 {/* Evidence: registry-notary evidence packet, credential issuance section, "W3C Verifiable
      Credentials Data Model: NOT PRESENT". */}
 
-## Registry Lab
+## Solmara Lab
 
-Registry Lab is a compose-based local demo. It does not own:
+Solmara Lab is a separately maintained adopter demo for the fictional Republic of Solmara.
+It runs published Registry Stack images in local and hosted topologies, but it is not a formal
+Registry Stack product. It does not own:
 
-- Production deployment guidance. The demo uses CSV, XLSX, and Parquet fixtures and demo-grade
-  credentials. It is not a reference for production configuration.
-  {/* Evidence: "pre-1.0 technical release for evaluation and integration pilots",
-       lab/README.md:3-5 at tag v0.9.0; synthetic CSV, XLSX, and Parquet fixtures,
-       lab/README.md:659-670; demo credentials, lab/README.md:707-728; projects.yaml,
-       registry-lab does_not_own "Production deployment guidance". */}
+- Production deployment guidance. The demo uses generated synthetic data and demo configuration.
+  It is not a reference for production configuration.
+  {/* Evidence: the pinned Solmara Lab README linked in the ownership table and
+       src/data/projects.yaml, solmara-lab does_not_own "Production deployment guidance". */}
 - Normative API or metadata contracts. API contracts are owned by Registry Relay and Registry
   Notary; metadata contracts are owned by Registry Manifest.
-  {/* Evidence: projects.yaml, registry-lab does_not_own. */}
+  {/* Evidence: src/data/projects.yaml, solmara-lab does_not_own. */}
 - Real product integrations. The services simulate civil, social protection, and health
   registry patterns but are not real integrations with OpenCRVS, OpenSPP, DHIS2, OpenIMIS,
   MOSIP, or other systems.
-  {/* Evidence: registry-lab README, explicit non-goals section. */}
+  {/* Evidence: the pinned Solmara Lab README and src/data/projects.yaml. */}
 
 ## Where to look
 
@@ -185,5 +189,5 @@ When a page needs both, these docs summarize the decision and link to the owning
 
 ## Next
 
-- [Architecture overview](../../explanation/architecture/): how the five projects connect at
-  runtime.
+- [Architecture overview](../../explanation/architecture/): how the four formal products connect
+  at runtime and how the separate Solmara Lab demo consumes them.

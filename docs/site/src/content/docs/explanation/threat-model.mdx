@@ -5,6 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
+  - solmara-lab
 last_reviewed: "2026-07-07"
 doc_type: explanation
 locale: en
@@ -47,7 +48,8 @@ out of the portable artifact entirely.
 
 ## Components and where they sit on the boundaries
 
-Five components sit on or beside the trust boundaries:
+Four formal components sit on or beside the trust boundaries. A separate adopter demo sits
+outside the production trust boundary:
 
 - Registry Manifest: the offline metadata producer. No production data, no auth, no
   secrets. It lives entirely on the describe side of the primary boundary.
@@ -56,10 +58,10 @@ Five components sit on or beside the trust boundaries:
   component that evaluates a modelled question, applies disclosure policy, and issues
   credentials.
 - Registry Platform: the shared security primitives that the runtime services build on.
-- Registry Lab: demonstration only, running on fixture credentials. Treat it as out of
-  scope for production trust: its demo and template integrations are integration examples,
-  not a production freshness or replay-protection profile, and a team copying them into
-  production must add request freshness, expiry, or nonce checks itself.
+- Solmara Lab: a separate adopter demo, running on synthetic data and demo configuration.
+  Treat Solmara Lab as out of scope for production trust. Its demo and template integrations
+  are integration examples, not a production freshness or replay-protection profile, and a
+  team copying them into production must add request freshness, expiry, or nonce checks itself.
 
 Security-critical primitives are concentrated in Registry Platform so that the behavior is
 identical across services and reviewable in one place. This is a deliberate attack-surface

@@ -9,7 +9,6 @@ source_repos:
   - registry-platform
   - registry-manifest
   - registry-notary
-  - registry-lab
 last_reviewed: "2026-06-21"
 doc_type: reference
 locale: en
@@ -32,7 +31,6 @@ A contract is a machine-readable surface that integrators can depend on:
 - **Portable metadata schema**: the `registry-manifest/v1` YAML schema defining datasets, fields, policies, and evidence offerings.
 - **Static publication bundle**: a manifest-generated directory of catalog, SHACL, schema, policy, and evidence offering files that can be hosted without running any service.
 - **Capability query envelope**: the JSON structure returned by `/.well-known/evidence-service` describing a Notary instance's claim catalog and capabilities.
-- **Demo acceptance path**: the sequence of HTTP calls that smoke tests exercise to confirm a running topology is wired correctly.
 
 Each contract has one owning project. When a contract changes, the owning repo is the source of truth. Shared crate APIs belong to Registry Platform; product routes and config behavior belong to the consuming service.
 
@@ -46,14 +44,12 @@ The table is generated from `src/data/contracts.yaml`.
   - `current-source` means the artifact is actively maintained and release-quality.
   - `hand-authored-abstract-contract` means the artifact is hand-authored from the owning repo's source docs and route table, using templated paths and capability tags rather than enumerated runtime instances.
   - `pinned-generated-snapshot` means the artifact was generated from the owning repo and pinned here for stable publication.
-  - `pinned-demo-snapshot` means the artifact is pinned from a demo run, not a release export; treat it as a preview.
 - **Source of truth** links to the module, file, or CLI that produces the artifact.
 - **Consumer note** records the current limitation or regeneration path.
 
 **What the status values mean for you:**
 `hand-authored-abstract-contract` artifacts document the full HTTP surface but leave runtime-shaped fields (such as `{dataset_id}` and `{entity}`) as path parameters. For instance-specific shapes, fetch the runtime OpenAPI route on a configured gateway. Runtime deployments gate that route by default unless `openapi_requires_auth` is disabled for demos or controlled tooling.
 `pinned-generated-snapshot` artifacts are stable for integration: they were produced from the owning repo's pinned source and will not change without an explicit re-pin.
-`pinned-demo-snapshot` artifacts are preview quality: generated from a demo run and may not cover all configurations. Use them to explore the API shape, but regenerate from a running instance before building a production client.
 
 <ContractsTable />
 

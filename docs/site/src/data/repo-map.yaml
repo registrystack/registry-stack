@@ -6,11 +6,11 @@ projects:
   - registry-relay
   - registry-manifest
   - registry-notary
-  - registry-lab
+  - solmara-lab
 current_source_repos:
   registry-platform: ../registry-platform
   registry-relay: ../registry-relay
   registry-manifest: ../registry-manifest
   registry-notary: ../registry-notary
-  registry-lab: ../registry-lab
+  solmara-lab: ../solmara-lab
 rename_plan: ../rename-plan-2026-05-23.md

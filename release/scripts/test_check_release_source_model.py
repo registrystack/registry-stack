@@ -19,6 +19,9 @@ stack:
   release: test
   version: 0.0.1
 
+artifacts:
+  registry-lab: 0.0.1
+
 external:
   crosswalk:
     repo: PublicSchema/crosswalk
@@ -123,6 +126,57 @@ class MonorepoSourceModelTest(unittest.TestCase):
         self.assertNotIn("registry-atlas", result.stdout)
         self.assertNotIn("esignet-relay-authenticator", result.stdout)
 
+    def test_monorepo_mode_requires_externals_for_historical_lab_artifact(self) -> None:
+        with MonorepoFixture() as stack_root:
+            manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
+            manifest.write_text(
+                MANIFEST_YAML.replace(
+                    "  registry-atlas:\n"
+                    "    repo: example/registry-atlas\n"
+                    "    ref: 2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b\n",
+                    "",
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("missing required external.registry-atlas", result.stderr)
+
+    def test_monorepo_mode_rejects_latest_manifest_crosswalk_pin_drift(self) -> None:
+        with MonorepoFixture() as stack_root:
+            manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+                    "4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("external.crosswalk.ref must match the live Cargo pin", result.stderr)
+
+    def test_monorepo_mode_rejects_crosswalk_lock_pin_drift(self) -> None:
+        with MonorepoFixture() as stack_root:
+            cargo_lock = stack_root / "Cargo.lock"
+            cargo_lock.write_text(
+                cargo_lock.read_text(encoding="utf-8").replace(
+                    "#1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+                    "#4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+
+            result = run_monorepo_validator(stack_root)
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Cargo.lock Crosswalk packages must resolve", result.stderr)
+
     def test_monorepo_mode_rejects_missing_crosswalk(self) -> None:
         with MonorepoFixture() as stack_root:
             manifest = stack_root / "release" / "manifests" / "registry-stack-test.yaml"
@@ -161,7 +215,29 @@ class MonorepoFixture:
         git(stack_root, "init")
         configure_identity(stack_root)
         (stack_root / "Cargo.toml").write_text(
-            "[workspace]\nmembers = []\n",
+            "[workspace]\n"
+            "members = []\n\n"
+            "[workspace.dependencies]\n"
+            'crosswalk-core = { git = "https://github.com/PublicSchema/crosswalk", '
+            'rev = "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a" }\n'
+            'crosswalk-functions = { git = "https://github.com/PublicSchema/crosswalk", '
+            'rev = "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a" }\n',
+            encoding="utf-8",
+        )
+        (stack_root / "Cargo.lock").write_text(
+            "version = 4\n\n"
+            "[[package]]\n"
+            'name = "crosswalk-core"\n'
+            'version = "0.0.1"\n'
+            'source = "git+https://github.com/PublicSchema/crosswalk?'
+            'rev=1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a#'
+            '1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"\n\n'
+            "[[package]]\n"
+            'name = "crosswalk-functions"\n'
+            'version = "0.0.1"\n'
+            'source = "git+https://github.com/PublicSchema/crosswalk?'
+            'rev=1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a#'
+            '1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a"\n',
             encoding="utf-8",
         )
         for crate_dir in (

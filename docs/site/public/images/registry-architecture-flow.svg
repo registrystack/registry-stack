@@ -2,7 +2,7 @@
      font-family="'Public Sans', system-ui, -apple-system, BlinkMacSystemFont, sans-serif"
      text-rendering="geometricPrecision">
   <title>Registry architecture flow</title>
-  <desc>Registry Platform provides shared primitives to Relay and Notary. Registry Manifest produces portable metadata contracts. Registry Relay owns registry source access, product-neutral adaptation, protected APIs, and typed consultations. Registry Notary evaluates Relay-backed or self-attested claims and issues credentials. Registry Lab runs runtime services together as a compose-based local demo.</desc>
+  <desc>Registry Platform provides shared primitives to Relay and Notary. Registry Manifest produces portable metadata contracts. Registry Relay owns registry source access, product-neutral adaptation, protected APIs, and typed consultations. Registry Notary evaluates Relay-backed or self-attested claims and issues credentials. The external Solmara Lab adopter demo runs published runtime images together.</desc>
 
   <text x="16" y="22" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">SHARED PRIMITIVES</text>
   <rect x="16" y="30" width="32" height="2" fill="#000091"/>
@@ -20,7 +20,7 @@
   <g fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">
     <text x="16" y="178">CONTRACTS</text>
     <text x="240" y="178">RUNTIME</text>
-    <text x="464" y="178">DEMO</text>
+    <text x="464" y="178">EXTERNAL DEMO</text>
   </g>
   <g fill="#000091">
     <rect x="16" y="186" width="32" height="2"/>
@@ -69,20 +69,20 @@
     <polyline points="454,264 460,268 454,272"/>
   </g>
 
-  <text x="464" y="220" fill="#161616" font-size="14" font-weight="700">Registry Lab</text>
+  <text x="464" y="220" fill="#161616" font-size="14" font-weight="700">Solmara Lab</text>
   <text x="464" y="238" fill="#6a6a6a" font-size="11.5"
-        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">registry-lab</text>
+        font-family="'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace">solmara-lab</text>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="464" y="268">Compose demo that</text>
-    <text x="464" y="286">wires Relay, Notary,</text>
-    <text x="464" y="304">Platform primitives,</text>
-    <text x="464" y="322">and static metadata.</text>
+    <text x="464" y="268">External adopter demo</text>
+    <text x="464" y="286">using published Relay</text>
+    <text x="464" y="304">and Notary images with</text>
+    <text x="464" y="322">static metadata.</text>
   </g>
 
   <line x1="0" y1="486" x2="720" y2="486" stroke="#e5e5e5" stroke-width="1"/>
-  <text x="16" y="508" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">DEMO · REGISTRY LAB</text>
+  <text x="16" y="508" fill="#6a6a6a" font-size="11" font-weight="700" letter-spacing="0.08em">DEMO · SOLMARA LAB</text>
   <rect x="16" y="516" width="32" height="2" fill="#000091"/>
   <g fill="#3a3a3a" font-size="12.5">
-    <text x="160" y="508">Compose demo of the runtime family for local development and reviewer walkthroughs.</text>
+    <text x="160" y="508">External adopter demo for local development and reviewer walkthroughs.</text>
   </g>
 </svg>

@@ -74,12 +74,3 @@
     label: Registry Manifest CLI
     url: https://github.com/registrystack/registry-stack/tree/v0.9.0/crates/registry-manifest-cli
   consumer_note: The bundle can be hosted as static files without running Registry Relay.
-- id: registry-lab.release-check
-  name: Registry Lab Release Check
-  owner: registry-lab
-  status: current-source
-  surface: Compose build, fixture generation, secret generation, static metadata publication, core smoke checks, live Postgres checks, live Zitadel and OIDC checks, Relay consultation checks, raw-secret log checks, and narrated demo flows.
-  source_of_truth:
-    label: Registry Lab README
-    url: https://github.com/registrystack/registry-stack/blob/v0.9.0/lab/README.md
-  consumer_note: Use as a demo acceptance path only; production contracts remain in the owning repos.
