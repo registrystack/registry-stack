@@ -880,12 +880,12 @@ async fn assembled_notary_relay_journey_child() {
     assert_eq!(relay.metadata_calls(), 0);
     assert_eq!(relay.execute_calls(), 0);
     let runtime = runtime
-        .activate_relay()
+        .activate()
         .await
         .expect("Notary activates the pinned Relay profile before serving");
     assert_eq!(relay.metadata_calls(), 1);
     assert_eq!(relay.execute_calls(), 0);
-    let app = crate::notary_router_from_runtime(runtime)
+    let app = crate::notary_shared_router_from_runtime(runtime)
         .expect("activated Registry-backed runtime is serve-ready");
     let notary = TestServer::builder().http_transport().build(app);
 
@@ -1045,11 +1045,11 @@ async fn coordinated_blue_green_journey_child() {
         TRANSITION_AUDIT_SECRET_ENV,
     ))
     .expect("blue Notary compiles")
-    .activate_relay()
+    .activate()
     .await
     .expect("blue Notary activates against blue Relay");
     let blue_notary = TestServer::builder().http_transport().build(
-        crate::notary_router_from_runtime(old_notary)
+        crate::notary_shared_router_from_runtime(old_notary)
             .expect("the complete blue generation has a serving router"),
     );
     assert_generation_ready_and_serving(&blue_notary).await;
@@ -1065,7 +1065,7 @@ async fn coordinated_blue_green_journey_child() {
             TRANSITION_AUDIT_SECRET_ENV,
         ))
         .expect("mixed old Notary configuration compiles")
-        .activate_relay()
+        .activate()
         .await;
     assert!(
         old_notary_green_relay.is_err(),
@@ -1083,7 +1083,7 @@ async fn coordinated_blue_green_journey_child() {
             TRANSITION_AUDIT_SECRET_ENV,
         ))
         .expect("mixed successor Notary configuration compiles")
-        .activate_relay()
+        .activate()
         .await;
     assert!(
         new_notary_blue_relay.is_err(),
@@ -1100,11 +1100,11 @@ async fn coordinated_blue_green_journey_child() {
         TRANSITION_AUDIT_SECRET_ENV,
     ))
     .expect("green Notary compiles")
-    .activate_relay()
+    .activate()
     .await
     .expect("green Notary activates against green Relay");
     let green_notary = TestServer::builder().http_transport().build(
-        crate::notary_router_from_runtime(successor_notary)
+        crate::notary_shared_router_from_runtime(successor_notary)
             .expect("the complete green generation has a serving router"),
     );
     assert_generation_ready_and_serving(&green_notary).await;
@@ -1174,11 +1174,11 @@ async fn coordinated_drain_and_restart_journey_child() {
         RESTART_AUDIT_SECRET_ENV,
     ))
     .expect("old restart Notary compiles")
-    .activate_relay()
+    .activate()
     .await
     .expect("old restart generation activates");
     let old_notary = TestServer::builder().http_transport().build(
-        crate::notary_router_from_runtime(old_notary)
+        crate::notary_shared_router_from_runtime(old_notary)
             .expect("old restart generation has a serving router"),
     );
     assert_generation_ready_and_serving(&old_notary).await;
@@ -1204,7 +1204,7 @@ async fn coordinated_drain_and_restart_journey_child() {
         RESTART_AUDIT_SECRET_ENV,
     ))
     .expect("partially restarted Notary configuration compiles")
-    .activate_relay()
+    .activate()
     .await;
     assert!(
         partial_restart.is_err(),
@@ -1225,11 +1225,11 @@ async fn coordinated_drain_and_restart_journey_child() {
         RESTART_AUDIT_SECRET_ENV,
     ))
     .expect("successor restart Notary compiles")
-    .activate_relay()
+    .activate()
     .await
     .expect("successor restart Notary activates");
     let successor_notary = TestServer::builder().http_transport().build(
-        crate::notary_router_from_runtime(successor_notary)
+        crate::notary_shared_router_from_runtime(successor_notary)
             .expect("complete successor restart has a serving router"),
     );
     assert_generation_ready_and_serving(&successor_notary).await;

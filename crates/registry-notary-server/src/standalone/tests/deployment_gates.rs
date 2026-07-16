@@ -9,7 +9,7 @@
 use super::super::{
     compile_notary_runtime_for_gate_test as compile_notary_runtime,
     compile_notary_runtime_with_provenance_for_gate_test as compile_notary_runtime_with_provenance,
-    notary_router_from_runtime, notary_routers_from_runtime,
+    notary_routers_from_runtime, notary_shared_router_from_runtime,
     standalone_router_for_gate_test as standalone_router, StandaloneServerError,
 };
 use axum::http::StatusCode;
@@ -353,7 +353,8 @@ async fn fetch_posture(config: StandaloneRegistryNotaryConfig) -> Value {
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
     add_ops_read_api_key(&mut config);
     let runtime = compile_notary_runtime(config).expect("runtime compiles for posture");
-    let app = notary_router_from_runtime(runtime).expect("source-free runtime is serve-ready");
+    let app =
+        notary_shared_router_from_runtime(runtime).expect("source-free runtime is serve-ready");
     let server = TestServer::builder().http_transport().build(app);
     let response = server
         .get("/admin/v1/posture?tier=restricted")
@@ -444,6 +445,24 @@ fn source_free_standalone_router_builds_without_relay_activation() {
 }
 
 #[test]
+fn synchronous_router_requires_async_activation_for_postgresql() {
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let config = ConfigBuilder::new(&audit_path(&tmp))
+        .deployment("deployment:\n  profile: production\n  multi_instance: true\n")
+        .build();
+
+    let error = match super::super::standalone_router(config) {
+        Ok(_) => panic!("the synchronous helper must reject PostgreSQL state"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        &error,
+        StandaloneServerError::PostgresqlStateActivationRequired
+    ));
+    assert!(error.to_string().contains("activate().await"));
+}
+
+#[test]
 fn registry_backed_standalone_router_refuses_to_serve_before_activation() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = registry_backed_config(&tmp);
@@ -461,7 +480,7 @@ fn registry_backed_compiled_runtime_cannot_be_routed_before_activation() {
     let runtime = compile_notary_runtime(registry_backed_config(&tmp))
         .expect("Registry-backed runtime compiles before activation");
 
-    let error = match notary_router_from_runtime(runtime) {
+    let error = match notary_shared_router_from_runtime(runtime) {
         Ok(_) => panic!("compiled Registry-backed runtime must not be served before activation"),
         Err(error) => error,
     };
