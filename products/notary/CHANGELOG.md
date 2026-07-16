@@ -13,6 +13,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Notary-owned PostgreSQL schema configured by the top-level `state` block.
   Removed Redis and per-domain storage configuration is rejected without
   aliases. Explicit single-process local development may use `in_memory`.
+- Authentication no longer uses a mode selector. API keys may coexist with
+  OIDC for distinct service and citizen or wallet callers, while each request
+  must present exactly one credential type. Static bearer tokens and OIDC
+  remain mutually exclusive because both use `Authorization: Bearer`.
+- Project authoring now emits only PostgreSQL settings that identify a secret
+  consumer or reflect an authored deployment choice. Connection-pool and
+  timeout policy follow the Notary runtime defaults instead of becoming
+  implementer-owned generated configuration.
+- The embedded server activation API is now
+  `NotaryRuntimeSnapshot::activate()`. The synchronous `standalone_router`
+  helper is limited to explicit local in-memory state; PostgreSQL callers use
+  the compile, activate, then build-router sequence. Router builders now name
+  their exposure explicitly: `notary_public_router_from_runtime`,
+  `notary_shared_router_from_runtime`, or `notary_routers_from_runtime` for
+  separate public and admin listeners.
+- Signed pre-authorized codes now bind the exact offer's transaction-code
+  requirement. Restart or configuration changes cannot remove or add the PIN
+  requirement for a live offer.
+- PostgreSQL now derives effective credential status from database time, so
+  skewed replicas agree on expiry. Revocation remains terminal, and credential
+  expiry supersedes valid or suspended status.
 - Added `registry-notary state install` and `registry-notary state doctor`,
   startup and readiness schema attestation, PostgreSQL 16 through 18 support,
   and active-active transaction semantics for replay, nonce, evaluation,

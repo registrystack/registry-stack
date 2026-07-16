@@ -51,6 +51,11 @@
 
 ### Changed
 
+- BREAKING: consultation acquisition schemas now preserve full dates as the
+  typed `date` shape instead of encoding them as ten-byte strings. This changes
+  typed artifact and contract hashes for profiles with date fields. Regenerate
+  the public contract, integration pack, private binding, and Notary
+  expectation, then deploy the matching Relay and Notary generation together.
 - Private consultation-binding references now pin both canonical raw SHA-256
   and the domain-separated typed artifact hash. Startup verifies both before
   compilation. Legacy product-name inference for OAuth, JWKS, and DCI has been

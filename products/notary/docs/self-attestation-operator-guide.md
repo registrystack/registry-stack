@@ -4,10 +4,9 @@
 
 Self-attestation lets a citizen use their own OIDC token to evaluate, render, or
 issue only the claims that policy allows. The subject is bound to the token.
-This guide is for operators configuring that source-free flow with an identity
-provider and relying-party or wallet clients. Registry-backed citizen evidence
-requires a separately compiled Relay consultation and service policy; it is not
-configured as self-attestation.
+This guide is for operators configuring that flow with an identity provider and
+relying-party or wallet clients. Registry-backed citizen evidence requires a
+separately compiled Relay consultation and service policy.
 
 Use [`oid4vci-wallet-interop.md`](oid4vci-wallet-interop.md) when the caller is
 a wallet using the OID4VCI facade. Use this guide for the shared
@@ -22,7 +21,7 @@ formats, disclosures, and credential profiles.
 
 Notary validates the token, checks client and audience policy, checks subject
 binding, checks scopes and operation allow-lists, then evaluates only the
-configured source-free claims.
+configured subject-bound claims.
 
 ```mermaid
 flowchart TD
@@ -30,8 +29,8 @@ flowchart TD
   V -- "ok" --> C{"Client and audience policy"}
   C -- "ok" --> S{"Subject binding<br/>derive subject from token claim"}
   S -- "ok" --> Sc{"Scopes and operation allow-lists"}
-  Sc -- "ok" --> SourceFree["Evaluate source-free declaration"]
-  SourceFree --> Op
+  Sc -- "ok" --> Bound["Evaluate configured subject-bound claim"]
+  Bound --> Op
   Op["Evaluate, render, or issue within the allow-lists"]
   V -- "fail" --> X["Reject before evaluation"]
   C -- "fail" --> X
@@ -55,7 +54,7 @@ Use self-attestation when:
 - A citizen portal evaluates eligibility from the citizen's own token.
 - A wallet flow issues a credential for the token-bound subject.
 - The identity provider can provide a stable, reviewed subject-binding claim.
-- The evidence service accepts a token-bound source-free declaration for the configured purpose.
+- The evidence service accepts token-bound subject access for the configured purpose.
 
 Do not use it when:
 
@@ -64,8 +63,8 @@ Do not use it when:
   service. Use machine auth for that.
 - Claims require batch evaluation. Batch evaluation is not supported for self-attestation.
 - The source owner has not approved citizen-token driven access.
-- The claim is Registry-backed. Citizen-to-Relay consultation needs a separate
-  reviewed subject-assertion design and is not part of v1.
+- A Registry-backed claim cannot use a compiler-pinned Relay consultation whose
+  inputs are bound to the authenticated requester or target identifiers.
 
 ## Identity provider requirements
 
@@ -112,17 +111,18 @@ auth:
     leeway: 60s
 ```
 
-The `auth` block is additive, so OIDC can coexist with static `api_keys` and
-`bearer_tokens`. Keep machine credentials out of a citizen-facing deployment
-unless a reviewed use case requires both, and grant every credential only its
-exact scopes.
+The `auth` block is additive, so OIDC can coexist with static `api_keys` for
+machine clients. Static `bearer_tokens` cannot coexist with OIDC because both
+use the `Authorization: Bearer` transport. Keep machine credentials out of a
+citizen-facing deployment unless a reviewed use case requires both, and grant
+every credential only its exact scopes.
 
 ## Subject binding
 
 Subject binding is the most important part of the config:
 
 ```yaml
-self_attestation:
+subject_access:
   subject_binding:
     token_claim: civil_id
     claim_source: access_token
@@ -153,7 +153,7 @@ reviewed as part of the product.
 Restrict which OIDC clients can use the flow:
 
 ```yaml
-self_attestation:
+subject_access:
   citizen_clients:
     allowed_client_ids:
       - citizen-portal
@@ -170,7 +170,7 @@ each self-attestation client id must also be listed there.
 Set explicit policy ceilings:
 
 ```yaml
-self_attestation:
+subject_access:
   token_policy:
     required_acr_values:
       - urn:example:loa:substantial
@@ -199,7 +199,7 @@ Guidance:
 Every self-attestation surface is allow-listed:
 
 ```yaml
-self_attestation:
+subject_access:
   allowed_operations:
     evaluate: true
     render: false
@@ -231,18 +231,21 @@ Rules:
 
 ## Delegated self-attestation
 
-Delegated self-attestation is unavailable in v1. Setting
-`self_attestation.delegation.enabled: true` fails configuration validation.
-Do not advertise delegated wallet
-issuance. A future version needs a separately reviewed Relay-bound subject and
-relationship assertion contract before this mode can return.
+Delegated subject access is available only when
+`subject_access.delegation.enabled: true` and
+`subject_access.delegation.allowed_relationships` contains the requested
+relationship. Each allowed relationship names one compiler-pinned Relay-backed
+`proof_claim` and its exact claims, purposes, formats, disclosures, and
+credential profiles. Keep delegation disabled unless that relationship proof
+and its scoped authorization-details contract have been reviewed. The OID4VCI
+credential endpoint does not accept delegated-attestation access tokens.
 
 ## Scope policy
 
 Use scope policy to require citizen tokens to carry an explicit permission:
 
 ```yaml
-self_attestation:
+subject_access:
   scope_policy: required
   required_scopes:
     - registry_notary:self_attest
@@ -262,7 +265,7 @@ controlled demos where client and audience policy are sufficient.
 For browser-based wallets or portals, list exact HTTPS origins:
 
 ```yaml
-self_attestation:
+subject_access:
   allowed_wallet_origins:
     - https://wallet.example.gov
 ```
@@ -272,12 +275,13 @@ for non-browser or backend-mediated flows where CORS is not part of the path.
 
 ## Rate limits
 
-The implemented limiter is in-process:
+Rate-limit counters use the configured Notary state plane. PostgreSQL shares
+the counters across replicas; explicit local in-memory state keeps them in the
+process:
 
 ```yaml
-self_attestation:
+subject_access:
   rate_limits:
-    mode: in_process
     invalid_token_per_client_address_per_minute: 20
     per_principal_per_minute: 30
     subject_mismatch_per_principal_per_hour: 5
@@ -285,15 +289,18 @@ self_attestation:
     credential_issuance_per_principal_per_hour: 10
 ```
 
-All values must be greater than zero. In-process limits are useful guardrails,
-but public deployments should also use gateway and identity-provider controls,
-especially when more than one Notary process is serving traffic.
+All values must be greater than zero. These application limits are guardrails,
+but public deployments should also use gateway and identity-provider controls.
 
 ## Evidence and purpose review
 
-`self_attested` claims perform no Relay or registry-source I/O. Confirm that:
+`self_attested` claims perform no Relay or registry-source I/O.
+`registry_backed` claims use only their exact compiler-pinned consultations.
+Confirm that:
 
-- every allowed claim and dependency is source-free;
+- every `self_attested` claim and dependency is source-free;
+- every `registry_backed` claim maps Relay inputs only from the authenticated
+  requester or target identifiers;
 - claim and request purposes are stable and auditable;
 - caller scopes, client ids, audiences, formats, disclosures, and credential
   profiles are narrowly allow-listed; and
@@ -322,7 +329,7 @@ review the evidence boundary.
 
 | Symptom | Likely cause | Check |
 | --- | --- | --- |
-| Config validation fails | OIDC mode is not enabled or static auth is still present | `auth.mode`, `auth.api_keys`, `auth.bearer_tokens` |
+| Config validation fails | OIDC is missing or a static bearer token is also configured | `auth.oidc`, `auth.bearer_tokens` |
 | Token rejected | Issuer, audience, client id, algorithm, or scope mismatch | Token header and claims, `auth.oidc`, `scope_map` |
 | Subject mismatch | Token claim is missing or caller-supplied identity context conflicts with the derived subject | `subject_binding.token_claim`, token claims, request body identity fields |
 | Userinfo subject not found | `claim_source: userinfo` without a usable endpoint or issuer | `auth.oidc.userinfo_endpoint`, `userinfo_issuers` |
