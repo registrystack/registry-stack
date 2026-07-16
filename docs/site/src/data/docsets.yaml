@@ -9,16 +9,16 @@ docsets:
     description: Current RegistryStack monorepo documentation build.
     products:
       registry-stack:
-        version: v0.9.0
+        version: v0.10.0
         ref: HEAD
       registry-relay:
-        version: v0.9.0
+        version: v0.10.0
         ref: HEAD
       registry-notary:
-        version: v0.9.0
+        version: v0.10.0
         ref: HEAD
       registry-manifest:
-        version: v0.9.0
+        version: v0.10.0
         ref: HEAD
   - id: v0.9.0
     label: v0.9.0

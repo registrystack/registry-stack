@@ -33,17 +33,17 @@ anti-rollback state before starting its binary. The
 
 ## Prerequisites
 
-- Your deployment pins a version tag (`v0.9.0`) or an image digest, never `latest`.
+- Your deployment pins a version tag (`v0.10.0`) or an image digest, never `latest`.
 - You know where your deployment keeps its persistent state. At minimum: the audit log
   directory of each product, the anti-rollback state file if `config_trust` is enabled
-  (`antirollback_state_path`), the PostgreSQL database backing Registry Notary correctness
-  state, its role-provisioning record and sensitive-state key version, and your config files and
-  secrets. For generated and single-node
+  (`antirollback_state_path`), each PostgreSQL database backing Relay consultation or Registry
+  Notary correctness state, the matching role-provisioning and key-lifecycle records, and your
+  config files and secrets. For generated and single-node
   Compose deployments, follow [Back up and restore a deployment](../backup-and-restore/)
   before changing the running containers. Store each release's config and anti-rollback
   state as a separate restore set; do not overwrite an older set with a newer file.
 - You can run the release-verification steps in
-  [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.9.0/SECURITY.md)
+  [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.10.0/SECURITY.md)
   (cosign, and slsa-verifier for releases with provenance).
 
 ## Upgrade
@@ -80,19 +80,29 @@ anti-rollback state before starting its binary. The
 
 4. Back up state that a failed upgrade must not lose: `secrets/local.env`, the audit log
    directory (copy, never truncate or edit; the hash chain makes hand-edited files
-   unverifiable), the anti-rollback state file, the complete Notary PostgreSQL database, and your
-   config and source files as currently deployed. Record hashes and permissions without
-   printing secrets, label the restore set with the running release, and leave it unchanged
-   when the target release creates or updates its own anti-rollback state.
+   unverifiable), the anti-rollback state file, every complete Relay consultation and Notary
+   PostgreSQL database, and your config and source files as currently deployed. Record hashes and
+   permissions without printing secrets, label the restore set with the running release, and
+   leave it unchanged when the target release creates or updates its own state.
 
-5. For a Notary schema upgrade, remove traffic and stop every old Notary writer. Run the target
+5. For a consultation-enabled Relay upgrade, remove Notary caller traffic, stop the active Relay
+   fence holder, and prevent another Relay process from acquiring the fence. Run the target
+   release's `registry-relay consultation bootstrap-state` with the existing database and the
+   exact recorded owner, role connections, lock keys, chain-key epoch, active key, deadline, and
+   retention inputs. The command is a clean-or-attested exact-schema installer, not a general
+   migration framework. Continue only when it reports `installed_or_attested` and `identical`.
+   If it reports capability or keyring drift, abort the upgrade without dropping schemas or
+   changing bootstrap inputs. Start one target Relay without traffic and require `/ready` to
+   return `200` before admitting callers.
+
+6. For a Notary schema upgrade, remove traffic and stop every old Notary writer. Run the target
    release's `state install` as the migration role, then run `state doctor` as the runtime role.
    Do not run old and new Notary binaries concurrently across a schema change. Start one target
    replica without traffic and admit the rest only after every replica attests the same schema
    fingerprint. Keep the old release's binary or image reference, config, database backup, role
    provisioning, and sensitive-state key version until the soak period ends.
 
-6. Verify the new deployment:
+7. Verify the new deployment:
 
    - `/healthz` returns 200 and `/ready` returns 200 on both products.
    - On Registry Relay, a 503 from `/ready` with a `deployment/not_ready` problem body means a
@@ -102,8 +112,9 @@ anti-rollback state before starting its binary. The
      surface's deployment object to confirm whether a gate finding caused the failure.
    - The audit sink is writing: confirm new records appear in the audit log after a probe
      request.
-   - A canary request per critical path: one governed read on Registry Relay, one claim
-     evaluation and, if you issue credentials, one issuance on Registry Notary.
+   - A canary request per critical path: one governed read and, when enabled, one native
+     consultation on Registry Relay; one claim evaluation and, if you issue credentials, one
+     issuance on Registry Notary.
    - Metrics are flowing to your monitoring.
 
    This procedure has been partially exercised against a real topology: the
@@ -113,9 +124,9 @@ anti-rollback state before starting its binary. The
    anti-rollback monotonicity were not exercised by that run. Current Registry Notary releases
    keep replay and nonce correctness state in PostgreSQL.
 
-7. Keep the previous release's artifacts, config, and exact anti-rollback state restore set
-   until the new release has run through your soak period. Only then remove them under your
-   retention policy.
+8. Keep the previous release's artifacts, config, exact anti-rollback state, database backups,
+   role records, and key-lifecycle restore sets until the new release has run through your soak
+   period. Only then remove them under your retention policy.
 
 ## Roll back to the previous release
 
@@ -126,6 +137,11 @@ If the new release misbehaves and the cause is not a config error you can fix fo
    configured path. For Notary, also restore the matching complete database backup, role
    provisioning, and sensitive-state key version. Retain the target release's state separately.
    Never start the previous binary against a newer schema or anti-rollback state file.
+   For a consultation-enabled Relay, reuse the current database only when the previous release's
+   bootstrap command attests the same schema and keyring. Restore a pre-upgrade Relay database
+   only when the target release acknowledged no consultation after that recovery point. If target
+   traffic wrote state, keep the current database and fix forward unless a release-specific
+   recovery procedure proves a safe conversion.
 
 2. Respect the constraints that survive a software roll-back:
 
@@ -136,6 +152,10 @@ If the new release misbehaves and the cause is not a config error you can fix fo
    - The audit chain must stay continuous. Never truncate or rewrite audit files to "match"
      the previous state; the chain verifies across the retained files, and the record of the
      failed upgrade is evidence, not noise.
+   - Relay readiness does not prove restore freshness. A stale Relay database can omit durable
+     consultation audit, replay, quota, materialization, or keyring history while retaining a
+     valid catalog. Keep a questionable recovery point offline and recover forward to the last
+     acknowledged write and external audit watermark.
    - If the upgrade rotated or introduced signing keys and credentials were issued with
      them, keep the new public keys published until those credentials expire; removing them
      breaks verification for holders. This mirrors the rollback plan in the Registry Notary
@@ -163,6 +183,9 @@ If the new release misbehaves and the cause is not a config error you can fix fo
   previous release's exact config and anti-rollback state restore set is in place. Do not
   delete or reinitialize state. If the restored lineage itself has already accepted a newer
   sequence, issue a valid bundle with a higher sequence instead of activating an older one.
+- Relay consultation bootstrap reports capability or keyring drift: the target binary, schema,
+  roles, lock identity, or keyring lifecycle does not match the current database. Keep traffic
+  blocked and restore the matching complete recovery set. Do not drop or rebootstrap the schemas.
 
 ## Next
 

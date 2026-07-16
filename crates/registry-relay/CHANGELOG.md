@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-07-16
+
 ### Added
 
 - Relay's restart-only consultation compiler now accepts the three
@@ -48,6 +50,11 @@
   from the public OpenAPI contract. Configuration and artifacts are
   restart-only, source and state-plane secrets remain environment-backed, and
   no generic proxy or caller-selected source operation is exposed.
+- `registry-relay consultation bootstrap-state` installs or attests the
+  Relay-owned PostgreSQL 16 through 18 consultation state plane before the
+  first replica starts. It binds the schema, isolated owner/runtime/keyring
+  roles, lifecycle settings, and audit-pseudonym key epoch without giving the
+  serving process migration or key-maintenance credentials.
 
 ### Changed
 
@@ -77,6 +84,13 @@
   All three calls share that one fence, retain an individual 10-second
   destination ceiling, remain retry-free, and fit inside the fixed 25-second
   Notary service hop.
+- Consultation-state backup and restore is a whole-database, quiesced
+  operation. Preserve the release, role provisioning, bootstrap inputs,
+  audit-pseudonym key material, and lifecycle settings with the dump; restore
+  into an empty isolated database and rerun `consultation bootstrap-state` with
+  the same inputs before readiness. A snapshot that may predate acknowledged
+  traffic remains quarantined until its durable consultation, quota, dispatch,
+  materialization, and pseudonym state is reconciled.
 
 ## 0.9.0 - 2026-07-10
 

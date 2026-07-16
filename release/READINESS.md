@@ -118,7 +118,11 @@ What 1.0 promises the institutions that run this.
       [v0.8.4 -> v0.9.0 -> v0.8.4 procedure](exercises/upgrade-v0.8.4-to-v0.9.0.md)
       records the beta-11 migration and rollback gate; it does not claim a
       successful run until finalized-source and published-asset evidence are
-      added.
+      added. The
+      [v0.9.0 -> v0.10.0 -> v0.9.0 procedure](exercises/upgrade-v0.9.0-to-v0.10.0.md)
+      adds the stopped-writer Notary Redis-to-PostgreSQL cutover, separate Relay
+      consultation state bootstrap, multi-instance semantics, and typed-state
+      backup and restore gate for beta-12.
 - [ ] Single-node Compose deployment behind an institution-owned reverse proxy,
       IAM, and front rate limiter documented. Evidence:
       [`single-node-compose-behind-proxy.mdx`](../docs/site/src/content/docs/operate/single-node-compose-behind-proxy.mdx)

@@ -268,11 +268,11 @@ This specification is `verified`: every requirement describes shipped behavior a
 - The [standards register](../../reference/standards/) records the adoption mode for SD-JWT VC, OID4VCI, CCCEV, and the other standards listed in `standards_referenced`, including the profiled-subset claims this document refers to.
 - [RS-ARC-G](../rs-arc-g/) Section 3 and Section 5 hold the architectural invariants (REQ-ARC-G-004/007/008/009) that this document refines.
 - Delegated self-attestation access modes, Relay consultation capabilities, stored metadata, and denial reasons are implemented in Registry Notary Core and Server.
-- Delegated relationship configuration validation is implemented in [`config.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-core/src/config.rs).
+- Delegated relationship configuration validation is implemented in [`config.rs`](https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-core/src/config.rs).
 - Request context derivation, stored-evaluation revalidation, OID4VCI delegated-token rejection, explicit target binding, and proof-gated Relay consultations are implemented in Registry Notary Server.
-- OIDC principal derivation from the configured principal claim, without client id, authorized party, or audience fallback (REQ-PR-NOTARY-034), is implemented in [`standalone.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/standalone.rs)'s `principal_from_oidc` function and its `oidc_principal_requires_configured_principal_claim` test.
-- The issuer-bound self-attestation transaction-token gate (REQ-PR-NOTARY-035) is implemented in [`api.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/api.rs)'s `self_attestation_requires_authorization_details` function.
-- The issuer-bound OID4VCI transaction-detail gate (REQ-PR-NOTARY-036) is implemented in [`api.rs`](https://github.com/registrystack/registry-stack/blob/v0.9.0/crates/registry-notary-server/src/api.rs)'s `oid4vci_requires_authorization_details` and `require_oid4vci_issuance_authorization_details` functions.
+- OIDC principal derivation from the configured principal claim, without client id, authorized party, or audience fallback (REQ-PR-NOTARY-034), is implemented in [`standalone.rs`](https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-server/src/standalone.rs)'s `principal_from_oidc` function and its `oidc_principal_requires_configured_principal_claim` test.
+- The issuer-bound self-attestation transaction-token gate (REQ-PR-NOTARY-035) is implemented in [`api.rs`](https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-server/src/api.rs)'s `self_attestation_requires_authorization_details` function.
+- The issuer-bound OID4VCI transaction-detail gate (REQ-PR-NOTARY-036) is implemented in [`api.rs`](https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-server/src/api.rs)'s `oid4vci_requires_authorization_details` and `require_oid4vci_issuance_authorization_details` functions.
 
 ## Next
 

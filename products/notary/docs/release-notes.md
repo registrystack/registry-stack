@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0
+
 - BREAKING: Notary now has one deployable correctness-state backend: typed,
   Notary-owned PostgreSQL configured under `state`. Redis and per-domain
   backend selectors are removed without compatibility aliases. Use explicit
@@ -33,6 +35,16 @@
 - Relay-only, self-attested Notary-only, and combined project deployments are
   modeled separately. A combined project has one logical Relay connection and
   Notary receives no registry destination or source credential.
+- BREAKING: authentication has no mode selector, and `auth.mode` is rejected.
+  API keys and OIDC may coexist for distinct service and citizen or wallet
+  callers, but each request presents exactly one credential type. Static
+  bearer tokens and OIDC remain mutually exclusive because both use
+  `Authorization: Bearer`.
+- Combined projects keep the Relay's public catalog origin separate from the
+  internal Notary connection URL. An explicitly enabled literal IP-loopback
+  HTTP origin is allowed only for the paired Relay inside a shared network
+  namespace; remote HTTP remains invalid and public origins still require
+  HTTPS.
 - Registry-backed claim rules now use `consultation_output` and
   `consultation_matched` with explicit `consultation` and `output` fields.
   The unreleased source-named rule forms are rejected without aliases.
@@ -40,9 +52,16 @@
   `registry-notary-claim-provenance/v2`, exposing only
   `relay_consultation_count`; audit records use the same terminology.
 - Federation configuration and signed results use evaluation and claim-result
-  terminology. Federation profiles remain source-free in this version, and
-  Relay-backed federation remains deferred pending cross-service audit
-  correlation.
+  terminology: configure `evaluation_scopes` and
+  `max_claim_result_age_seconds`, and consume `claim_result_issued_at` plus
+  `federation.stale_claim_result`. Federation profiles remain source-free in
+  this version, and Relay-backed federation remains deferred pending
+  cross-service audit correlation.
+- Release distributions include the standalone Linux amd64
+  `registry-notary-cel-worker`. CEL-enabled binary installations must place it
+  beside `registry-notary` under that exact name. The Notary image includes the
+  same isolated worker and `cel.worker_memory_bytes` remains the bounded
+  operator control.
 - The retired sidecar container, listener inventory, direct-source demo
   configurations, OpenFn caller demo, and direct DCI performance harness are
   removed.

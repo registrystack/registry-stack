@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-docs
-last_reviewed: "2026-07-10"
+last_reviewed: "2026-07-16"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -15,6 +15,32 @@ This page records notable changes to the documentation site and the product vers
 documents.
 Per-product release notes live in each product repository; the entries below link to the
 relevant product pages on this site rather than duplicating release notes.
+
+## 2026-07-16
+
+Documentation updates for the v0.10.0 beta-12 release:
+
+- Advanced current source citations, install commands, and deployment examples to Registry Stack
+  `v0.10.0`.
+- Added the `v0.10.0` archived docset with the four formal products and Crosswalk. Solmara Lab
+  remains a separate adopter demo, not a released Registry Stack artifact.
+- Published the Notary PostgreSQL install, role, migration, retention, backup, restore, recovery,
+  supported-version, restart, and multi-instance contract.
+- Added separate Relay consultation-state backup and restore guidance without sharing Relay roles,
+  schemas, or tables with Notary.
+- Replaced the retired monorepo Lab documentation route with a source-backed Solmara local journey.
+
+Migration notes:
+
+- Notary production correctness state now uses Notary-owned PostgreSQL. The pre-1.0 Redis cutover
+  is a stopped-writer transition with explicit drain and credential-status gates.
+- Registry project authoring now uses `registry-stack.yaml`, explicit integrations, fixtures,
+  service topologies, and environment bindings. Reauthor pre-1.0 project files and review changed
+  RFC 8785 canonical digests before signing.
+- Deploy one Notary authority per Relay trust domain. Identical replicas may share that authority's
+  Notary database, but Relay and Notary retain separate state ownership.
+- Deploy the released Relay Rhai and Notary CEL workers only for their owning product's adapter
+  contract. They are not a shared extension or state framework.
 
 ## 2026-07-10
 

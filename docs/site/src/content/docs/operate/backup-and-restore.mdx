@@ -1,6 +1,6 @@
 ---
 title: Back up and restore a deployment
-description: How to preserve generated secrets, product state, Notary PostgreSQL data, and config-trust files across container recreation and upgrades.
+description: How to preserve generated secrets, Relay and Notary PostgreSQL state, and config-trust files across container recreation and upgrades.
 status: draft
 owner: registry-docs
 source_repos:
@@ -16,8 +16,8 @@ standards_referenced: []
 Use this procedure before you recreate containers, move a host, or upgrade a
 single-node Registry Relay or Registry Notary deployment. Start with `secrets/local.env`
 because losing it rotates generated API credentials, audit HMAC secrets, and the local
-Notary issuer identity; then preserve product state directories, the complete Notary
-PostgreSQL database, config-trust files, and source inputs.
+Notary issuer identity; then preserve product state directories, every enabled product's
+complete PostgreSQL database, config-trust files, and source inputs.
 
 ## When to use this
 
@@ -36,8 +36,8 @@ preauthorization state survives in PostgreSQL.
 
 - Know the project directory that contains `compose.yaml`, `registryctl.yaml`, `secrets/`,
   and `state/`.
-- Know whether the deployment includes Registry Notary and which PostgreSQL database and
-  role-provisioning record it uses.
+- Know whether Relay consultations or Registry Notary are enabled, which PostgreSQL database each
+  product uses, and which role-provisioning record belongs to each database.
 - Stop write traffic or use a filesystem snapshot if you need an exact point-in-time copy of
   audit files.
 - Keep backups encrypted and access-controlled. `secrets/local.env`, audit files,
@@ -88,6 +88,56 @@ If your hand-written config uses different paths, include them in the archive:
   `config_trust.antirollback_state_path`.
 - Source files, metadata manifests, signed bundles, and trust anchors that are mounted
   into the containers.
+
+## Back up Relay consultation PostgreSQL state
+
+Skip this section when Relay has no `consultation` configuration. The ordinary Relay ingest cache
+remains covered by the file archive.
+
+The consultation state plane is a complete Relay-owned correctness boundary. Its
+`relay_state_private` and `relay_state_api` schemas contain durable consultation audit,
+completion and replay decisions, quotas, dispatch fencing, materialization publication state,
+and audit-pseudonym keyring metadata. They are separate from Notary's
+`registry_notary_private` and `registry_notary_api` schemas. Never copy state tables between the
+products.
+
+Remove traffic from Notary callers first, then stop the Relay fence holder and prevent another
+Relay process from starting. If Relay and Notary form one service, keep both products quiesced
+while their backups are taken or use a platform snapshot that gives both product databases one
+coordinated recovery point. A transactionally consistent dump of one live database does not make
+two independently backed-up product databases share a recovery point.
+
+For a database dedicated to Relay and an empty-database restore in the same PostgreSQL cluster,
+where the pre-created roles keep their object identifiers, back up the complete Relay database
+through the migration login:
+
+```sh
+PGSERVICEFILE=/run/registry-relay/pg_service.conf \
+PGSERVICE=registry_relay_migration \
+PGPASSFILE=/run/secrets/registry-relay-migration.pgpass \
+pg_dump --format=custom --no-owner --no-acl \
+  --role=relay_state_owner \
+  --file="$backup_dir/relay-consultation-state.dump" \
+  --dbname=registry_relay
+sha256sum "$backup_dir/relay-consultation-state.dump" \
+  > "$backup_dir/relay-consultation-state.dump.sha256"
+```
+
+If Relay shares a database with another owner, have the database administrator back up the
+complete database with an appropriately privileged backup identity. Do not narrow the backup to
+the two Relay schemas.
+
+Expected output is one checksum line. Store the Relay release, config and signed artifact closure,
+PostgreSQL major, all five role names, the four bound role object identifiers, bootstrap inputs,
+keyring lifecycle settings, PostgreSQL trust root, and retained audit-pseudonym key material with
+the encrypted recovery record. Keep secret values outside the database dump.
+
+For recovery into another PostgreSQL cluster, use a physical backup or cluster-level managed
+snapshot that preserves the PostgreSQL role catalog and its object identifiers. Recreating the
+same role names does not preserve those identifiers, and Relay intentionally rejects the restored
+binding as capability drift. The
+[Relay operations runbook](../../products/registry-relay/ops/) documents the schema and role
+boundary in full.
 
 ## Back up PostgreSQL when Notary is present
 
@@ -169,7 +219,48 @@ if [ -n "$runtime_uid" ] && [ -n "$runtime_gid" ] && [ -d state ]; then
 fi
 ```
 
-## Restore PostgreSQL data
+## Restore Relay consultation PostgreSQL state
+
+Skip this section when no Relay consultation dump or snapshot is present. Keep Relay and every
+Notary caller offline while restoring into an empty, isolated, writable PostgreSQL 16 through 18
+primary.
+
+For a same-cluster logical restore, retain the original owner, runtime, keyring-maintenance, and
+keyring-reader roles and their object identifiers. Restore the complete dump as the original
+owner. For a different cluster, restore the physical backup that includes the original role
+catalog. A logical restore into newly recreated role names is not a supported rebinding path.
+
+```sh
+sha256sum -c "$backup_dir/relay-consultation-state.dump.sha256"
+PGSERVICEFILE=/run/registry-relay/pg_service.conf \
+PGSERVICE=registry_relay_migration \
+PGPASSFILE=/run/secrets/registry-relay-migration.pgpass \
+pg_restore --exit-on-error --single-transaction --no-owner --no-acl \
+  --role=relay_state_owner \
+  --dbname=registry_relay \
+  "$backup_dir/relay-consultation-state.dump"
+```
+
+The checksum command prints `OK`. The restore command must finish without an error before
+bootstrap attestation starts.
+
+After the restore, restore the matching config, artifact closure, PostgreSQL trust root, audit
+HMAC material, and retained audit-pseudonym key material. Rerun
+`registry-relay consultation bootstrap-state` with exactly the same role connections, owner,
+chain-key epoch, lock keys, active key, deadline, and retention inputs recorded with the backup.
+The command must report `installed_or_attested` and `identical`. A drift response means the
+recovery set does not match; do not drop the Relay schemas or change bootstrap inputs to make it
+pass.
+
+Relay startup and `/ready` attest the restored catalog, role grants, keyring, audit, quota,
+materialization, and current serving fence. They do not prove that the recovery point includes
+every write Relay previously acknowledged. If the backup might be stale, keep it offline and use
+write-ahead-log replay or point-in-time recovery until the recovery point covers the last
+acknowledged consultation and external audit watermark. If that cannot be proved, do not resume
+the same consultation workload from the restore. Waiting for the 15-minute batch-child replay
+window does not restore missing audit, quota, materialization, or keyring history.
+
+## Restore Notary PostgreSQL data
 
 Restore the dump into an empty, isolated database with no Notary traffic path. Provision the
 restricted migration login, `NOLOGIN` owner role, and runtime role before the restore:
@@ -223,6 +314,9 @@ run `registry-notary doctor --config <your-notary-config.yaml> --format json`, t
 authenticated claim or credential journey appropriate to that deployment. `registryctl` does not
 provide a product-scoped Notary smoke subcommand. When OID4VCI preauthorization is enabled,
 complete an offer-to-credential journey before admitting traffic.
+For a consultation-enabled Relay, require `/ready` to return `200`, then run one authenticated
+consultation canary while downstream Notary traffic remains blocked. Admit Notary traffic only
+after both product recovery points and the canary have been reconciled.
 
 For a deployment that uses `config_trust`, verify that the restored anti-rollback state still
 matches the configured trust anchor and signed bundle before the service is allowed to serve.
@@ -246,6 +340,8 @@ than the bundle you are trying to boot.
 |---|---|---|
 | Generated API keys no longer work after restore | `secrets/local.env` was regenerated or copied from the wrong project | Restore the original `secrets/local.env`, then restart the containers |
 | Audit records cannot be correlated across the restore | The audit HMAC secret changed | Restore the prior `secrets/local.env`; if the old file is gone, document the break as a key-rotation event |
+| Relay consultation bootstrap reports capability or keyring drift | The restore has different role object identifiers, schema ownership, bootstrap identity, or keyring lifecycle state | Keep traffic blocked and restore the matching complete recovery set; do not drop schemas or reinitialize the keyring |
+| Relay is ready but the recovery point might be stale | Readiness attests the restored state plane but cannot infer missing acknowledged writes | Keep Relay and Notary traffic blocked and recover forward to the last acknowledged write and audit watermark |
 | Notary state doctor rejects the restore | The schema, runtime role, server major, write authority, durability settings, or configured sensitive-state key is invalid | Keep traffic blocked, restore the matching recovery set, and rerun `state install` and `state doctor` |
 | Config bundle startup fails with a rollback code | The anti-rollback state records a newer accepted sequence | Boot a signed bundle with a higher sequence, or follow the break-glass process documented for config trust |
 

@@ -41,6 +41,7 @@ Two consequences follow from that boundary:
 | Relay and Notary audit shipper cursor | Local `registry.audit.ack_cursor.v1` state with the acknowledgement time and last acknowledged chain hash, plus an optional shipper identifier. | The shipper atomically replaces the file after each successful hand-off. The runtime does not expire or rewrite it. | Mount the file read-only for the Registry process, keep it on local storage and at or below 16 KiB, and configure `deployment.evidence.audit_ack_cursor_path`. |
 | Relay ingest cache | Normalized Parquet snapshots under `server.cache_dir`. These snapshots can contain full source rows from configured registries. | No time TTL. A successful refresh keeps the current and immediately previous snapshot for each resource and removes older snapshots best effort. | Place `server.cache_dir` on writable storage with the same data classification as the source rows. |
 | Config-trust anti-rollback state | The last accepted sequence, config and bundle hashes, root version, and optional break-glass pin metadata. Operator names, approval references, and reasons can be sensitive. | The state file is rewritten atomically and has no normal TTL. Break-glass overrides require expiry, and consumed override files are renamed. | Preserve `antirollback_state_path` across upgrades and protect break-glass override files with local root controls. |
+| Relay consultation correctness state | Durable consultation audit, attempts and completions, dispatch permits, quota buckets, materialization publication history, batch-child replay bindings, serving-fence state, and audit-pseudonym keyring metadata. Pseudonymous handles and operational metadata can remain linkable. | Batch-child replay rows expire after `15 minutes` and are pruned on later reservations. Other Relay consultation tables have no general time-based pruning. Keyring retention controls when retired pseudonym key metadata can leave the retained set; it does not delete durable audit rows. | Back up the complete Relay database at a quiesced or coordinated recovery point. Preserve role bindings and key material, and keep any potentially stale restore offline until acknowledged writes are reconciled. |
 | Notary correctness state | Hashed replay and nonce identifiers, evaluations, batch idempotency, credential status, keyed quota pseudonyms, encrypted preauthorization login state, and transaction-code verifiers. Credential identifiers and operational metadata can still be linkable. | Each typed domain has an absolute expiry or bounded window. Consumed nonce tombstones last `60` seconds. Credential status lasts through credential expiry plus `retention_seconds`. | Use the Notary-owned PostgreSQL schema for production and multi-instance deployments. Back up the complete database and keep a potentially stale restore offline through the documented quarantine. |
 | Operator-owned config, source, and secret paths | Runtime configuration, signed bundles, trust anchors, metadata manifests, source files, provenance keys, and secret references. Source files can contain personal data. | Registry Stack does not expire these files, except through the specific audit, cache, replay, status, and break-glass mechanics above. | Mount source data read-only where possible; back up config, trust anchors, anti-rollback state, and secrets through your platform controls. |
 
@@ -86,6 +87,38 @@ Offline `doctor` commands cannot bind a cursor to a live tail and report a fresh
 Never truncate, rewrite, or reserialize audit files as part of cleanup.
 Back them up as files, keep old hash secrets for the audit retention period, and rotate hash
 secrets only as an intentional key-lifecycle event.
+
+## Relay consultation-state retention
+
+When `consultation` is enabled, Registry Relay uses PostgreSQL transactions for durable audit,
+single-holder dispatch fencing, quota decisions, consultation completion, batch-child replay,
+materialization publication, and audit-pseudonym keyring authority. Process restart and fence
+takeover recover unfinished consultation attempts before admission opens.
+
+Relay owns `relay_state_private` and `relay_state_api`. Registry Notary owns
+`registry_notary_private` and `registry_notary_api`. The products do not share tables, migrations,
+runtime roles, or keyrings even when their databases run in one PostgreSQL cluster.
+
+The Relay consultation store excludes registry source rows, raw selectors, source URLs, and source
+credentials. It retains bounded canonical operation state, keyed commitments and pseudonyms,
+audit envelopes, result and publication metadata, and keyring lifecycle metadata. Treat this as
+sensitive operational state. The 15-minute expiry for a batch-child replay row is the only fixed
+row-retention deletion in the consultation protocol. Relay does not automatically prune durable
+audit phases, completed consultation intent, materialization publication history, or quota rows as
+a general retention service.
+
+Set the keyring's audit-event retention interval to the deployment's audit policy. That interval
+prevents retired pseudonym key metadata from leaving the retained key set too early; it does not
+delete audit events or replace the operator's database retention policy. Keep every retained
+pseudonym key value in the secret manager for the same period as the corresponding database and
+audit records.
+
+Back up the complete Relay database after quiescing writers, or use a coordinated platform
+snapshot. Preserve the schema owner, runtime, keyring-maintenance, and keyring-reader role object
+identifiers with the backup. Relay startup and readiness attest schema and keyring consistency but
+cannot detect writes missing from a stale recovery point. The
+[Relay operations runbook](../../products/registry-relay/ops/) and
+[backup and restore procedure](../backup-and-restore/) define the recovery boundary.
 
 ## Notary correctness-state retention
 

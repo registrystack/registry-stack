@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## v0.10.0 - 2026-07-16
+
+### Added
+
+- `registry-platform-canonical-json` is the single shared RFC 8785 JSON
+  Canonicalization Scheme implementation for Registry Stack hashes,
+  signatures, JWK thumbprints, manifests, policies, and generated artifacts.
+- `registry-platform-httputil` now provides the fixed-destination transport,
+  closed JSON response decoding, signed DCI verification, bounded OAuth
+  client-credentials flow, and typed Relay client primitives used by governed
+  consultations.
+- `registry-platform-audit` now provides typed durable-operation and governed
+  pseudonym-keyring contracts for product-owned PostgreSQL state planes.
+
 ### Changed
 
 - BREAKING: `registry-platform-ops` Notary posture now reports the global
@@ -12,6 +26,17 @@
 - `registry-platform-cache` and `registry-platform-replay` retain only bounded
   in-memory implementations for focused tests and explicit single-process
   local development. Product runtimes own typed durable correctness state.
+
+### Security
+
+- Raw signed, hashed, or structurally interpreted JSON now uses the shared
+  strict parser. Duplicate object members and integer tokens that are not
+  exactly representable as IEEE 754 binary64 are rejected before
+  interpretation instead of being silently overwritten or rounded.
+- Public JWK and `did:jwk` parsing is bounded to 64 KiB, rejects duplicate
+  members, and rejects symmetric or asymmetric private members. Non-secret
+  extension metadata remains accepted, so implementers do not need to strip
+  ordinary provider metadata from public keys.
 
 ## v0.9.0 - 2026-07-10
 

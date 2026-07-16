@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0
+
 - Registry Stack project authoring now compiles product-neutral `http`, `script`, and `snapshot`
   integrations. Source product and version labels are interoperability evidence only. They never
   select a Relay executor or enable Rhai. The unreleased country-named authoring API and its
@@ -42,6 +44,27 @@
   private Notary-to-Relay child identity; that header is not part of the public
   OpenAPI contract, and conflicting durable reuse returns
   `409 consultation.batch_child_conflict`.
+- BREAKING: consultation inputs declared as `date` now remain typed dates
+  instead of ten-byte strings. This changes typed artifact and
+  `contract_hash` values for affected profiles. Regenerate the public
+  contract, integration pack, private binding, and Notary expectation, then
+  deploy the matching Relay and Notary generation together.
+- Consultation execution requires a separately owned PostgreSQL 16 through 18
+  state plane. A DBA provisions the database and isolated migration, owner,
+  runtime, keyring-maintenance, and keyring-reader roles, then runs
+  `registry-relay consultation bootstrap-state` before starting the first
+  replica. Serving replicas receive only the runtime credential.
+- Back up the complete consultation database only after quiescing writers, and
+  retain its release, role provisioning, bootstrap inputs, lifecycle settings,
+  and audit-pseudonym key material. Restore into an empty isolated database,
+  rerun `consultation bootstrap-state` with the same inputs, and require a
+  complete readiness attestation before traffic. Keep any potentially stale
+  restore quarantined until acknowledged durable state is reconciled.
+- Maintained DHIS2 and OpenCRVS profiles now fit their complete multi-call work
+  inside fixed absolute deadlines. Notary uses a fixed 25-second internal
+  service hop, so consultation-enabled Relay requires
+  `server.request_timeout` greater than 25 seconds and Registry-backed Notary
+  requires at least 30 seconds.
 - `contract_hash` is the single public content identity for one active profile contract. Lower-level
   build and binding digests remain internal. Product Config Bundle input directories remain
   separate; a signed project-level deployment root that binds Relay and Notary submanifests is
