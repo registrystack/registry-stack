@@ -37,7 +37,7 @@ use ed25519_dalek::{pkcs8::EncodePrivateKey, SigningKey};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use postgres_native_tls::MakeTlsConnector;
 use rand_core::{OsRng, RngCore as _};
-use registry_notary_server::{compile_notary_runtime, notary_router_from_runtime};
+use registry_notary_server::{compile_notary_runtime, notary_shared_router_from_runtime};
 use registry_platform_audit::AuditChainProfile;
 #[cfg(target_os = "linux")]
 use registry_platform_crypto::canonicalize_json;
@@ -582,10 +582,10 @@ async fn run_live_consultation_lifecycle(profile: JourneyProfile) -> Result<(), 
             )?;
             let notary_runtime = compile_notary_runtime(notary_config)
                 .map_err(|_| LiveJourneyError::NotaryActivation)?
-                .activate_relay()
+                .activate()
                 .await
                 .map_err(|_| LiveJourneyError::NotaryActivation)?;
-            let notary_app = notary_router_from_runtime(notary_runtime)
+            let notary_app = notary_shared_router_from_runtime(notary_runtime)
                 .map_err(|_| LiveJourneyError::NotaryActivation)?;
             assert_notary_relay_ready(notary_app.clone()).await?;
 
@@ -714,10 +714,10 @@ async fn run_live_rhai_consultation_lifecycle() -> Result<(), LiveJourneyError> 
             staged.load_notary_config(relay.base_url(), &relay_token_file, &notary_audit_path)?;
         let notary_runtime = compile_notary_runtime(notary_config)
             .map_err(|_| LiveJourneyError::NotaryActivation)?
-            .activate_relay()
+            .activate()
             .await
             .map_err(|_| LiveJourneyError::NotaryActivation)?;
-        let notary_app = notary_router_from_runtime(notary_runtime)
+        let notary_app = notary_shared_router_from_runtime(notary_runtime)
             .map_err(|_| LiveJourneyError::NotaryActivation)?;
         assert_notary_relay_ready(notary_app.clone()).await?;
 

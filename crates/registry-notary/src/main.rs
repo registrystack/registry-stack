@@ -45,8 +45,8 @@ use registry_notary_core::{
     SigningKeyProviderConfig, StandaloneRegistryNotaryConfig, STATE_STORAGE_POSTGRESQL,
 };
 use registry_notary_server::{
-    compile_notary_runtime_with_provenance, notary_router_from_runtime,
-    notary_routers_from_runtime, openapi_document, verify_relay_from_config,
+    compile_notary_runtime_with_provenance, notary_routers_from_runtime,
+    notary_shared_router_from_runtime, openapi_document, verify_relay_from_config,
     EvidenceIssuerRegistry, StandaloneServerError,
 };
 use registry_platform_config::{

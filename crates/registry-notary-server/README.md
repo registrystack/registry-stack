@@ -23,12 +23,28 @@ consultations, renderers, and credential issuance wiring.
 
 ```rust
 use registry_notary_core::StandaloneRegistryNotaryConfig;
-use registry_notary_server::{standalone_router, StandaloneServerError};
+use registry_notary_server::{
+    compile_notary_runtime, notary_public_router_from_runtime, StandaloneServerError,
+};
 
-fn app(config: StandaloneRegistryNotaryConfig) -> Result<axum::Router, StandaloneServerError> {
-    standalone_router(config)
+async fn app(
+    config: StandaloneRegistryNotaryConfig,
+) -> Result<axum::Router, StandaloneServerError> {
+    let runtime = compile_notary_runtime(config)?;
+    let runtime = runtime.activate().await?;
+    notary_public_router_from_runtime(runtime)
 }
 ```
+
+The synchronous `standalone_router` convenience helper is limited to explicit
+local `state.storage: in_memory` configurations. PostgreSQL state and
+Registry-backed claims require the asynchronous activation sequence in the
+example before a listener is built.
+
+The example builds only the public router. Embedders that deliberately select
+`server.admin_listener.mode: shared_with_public` can instead use
+`notary_shared_router_from_runtime`. Dedicated admin listeners require
+`notary_routers_from_runtime` and separate public and admin binds.
 
 ## Features
 

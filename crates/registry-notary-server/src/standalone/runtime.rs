@@ -33,7 +33,7 @@ use registry_notary_core::{
     EvidenceError, EvidencePrincipal, Hashed, PrincipalIdentifier, RateLimitBucket,
     RegistryNotaryAdminListenerMode, RequestIdentifier, SigningKeyConfig, SigningKeyProviderConfig,
     StandaloneRegistryNotaryConfig, SubjectAccessAssuranceClaimSource, SubjectAccessClaimSource,
-    SubjectAccessDenialCode, VerifiedClaimName, VerifiedClaimValue,
+    SubjectAccessDenialCode, VerifiedClaimName, VerifiedClaimValue, STATE_STORAGE_POSTGRESQL,
 };
 use registry_platform_audit::{
     AuditError, AuditKeyHasher, AuditProfile, AuditSink as PlatformAuditSink, ChainState,

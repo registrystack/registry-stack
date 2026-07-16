@@ -19,7 +19,7 @@ pub(crate) async fn run_server(
         loaded.config_source,
         loaded.config_provenance.clone(),
     )?
-    .activate_relay()
+    .activate()
     .await?;
     match admin_mode {
         RegistryNotaryAdminListenerMode::Dedicated => {
@@ -67,7 +67,7 @@ pub(crate) async fn run_server(
             let local_addr: SocketAddr = listener.local_addr()?;
             emit_and_persist_boot_acceptance(&runtime, loaded.pending_bundle_acceptance.as_ref())
                 .await?;
-            let app = notary_router_from_runtime(runtime)?
+            let app = notary_shared_router_from_runtime(runtime)?
                 .layer(TraceLayer::new_for_http().make_span_with(http_trace_span));
             tracing::info!(
                 %local_addr,

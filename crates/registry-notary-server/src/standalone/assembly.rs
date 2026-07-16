@@ -1,18 +1,25 @@
 use super::*;
 
-/// Build a source-free Notary router synchronously.
+/// Build a source-free, explicitly in-memory Notary router synchronously.
 ///
-/// Registry-backed configurations intentionally return
-/// [`StandaloneServerError::RelayNotActivated`]. Processes serving those
-/// configurations must compile the runtime, await
-/// [`NotaryRuntimeSnapshot::activate_relay`], and only then build listeners.
+/// PostgreSQL configurations require asynchronous state-plane activation and
+/// return [`StandaloneServerError::PostgresqlStateActivationRequired`].
+/// Registry-backed in-memory configurations return
+/// [`StandaloneServerError::RelayNotActivated`]. Processes serving either
+/// configuration must compile the runtime, await
+/// [`NotaryRuntimeSnapshot::activate`], and only then build listeners.
 pub fn standalone_router(
     config: StandaloneRegistryNotaryConfig,
 ) -> Result<Router, StandaloneServerError> {
+    if config.state.storage == STATE_STORAGE_POSTGRESQL {
+        return Err(StandaloneServerError::PostgresqlStateActivationRequired);
+    }
     let admin_listener_mode = config.server.admin_listener.mode;
     let runtime = compile_notary_runtime(config)?;
     match admin_listener_mode {
-        RegistryNotaryAdminListenerMode::SharedWithPublic => notary_router_from_runtime(runtime),
+        RegistryNotaryAdminListenerMode::SharedWithPublic => {
+            notary_shared_router_from_runtime(runtime)
+        }
         RegistryNotaryAdminListenerMode::Dedicated | RegistryNotaryAdminListenerMode::Disabled => {
             Ok(notary_routers_from_runtime(runtime)?.public)
         }
@@ -31,11 +38,11 @@ pub struct NotaryRuntimeSnapshot {
 }
 
 impl NotaryRuntimeSnapshot {
-    /// Authenticate to Relay and verify the exact pinned consultation profile.
+    /// Activate PostgreSQL state and any configured Relay consultations.
     ///
-    /// Source-free runtimes complete without reading credentials or performing
-    /// network I/O.
-    pub async fn activate_relay(self) -> Result<Self, StandaloneServerError> {
+    /// Source-free in-memory runtimes complete without reading credentials or
+    /// performing network I/O.
+    pub async fn activate(self) -> Result<Self, StandaloneServerError> {
         self.state_plane.activate().await?;
         let config = self
             .api_state
@@ -124,7 +131,9 @@ pub(super) fn standalone_router_for_gate_test(
     let admin_listener_mode = config.server.admin_listener.mode;
     let runtime = compile_notary_runtime_for_gate_test(config)?;
     match admin_listener_mode {
-        RegistryNotaryAdminListenerMode::SharedWithPublic => notary_router_from_runtime(runtime),
+        RegistryNotaryAdminListenerMode::SharedWithPublic => {
+            notary_shared_router_from_runtime(runtime)
+        }
         RegistryNotaryAdminListenerMode::Dedicated | RegistryNotaryAdminListenerMode::Disabled => {
             Ok(notary_routers_from_runtime(runtime)?.public)
         }
@@ -306,12 +315,6 @@ fn compile_notary_runtime_with_state_override(
     })
 }
 
-pub fn notary_router_from_runtime(
-    snapshot: NotaryRuntimeSnapshot,
-) -> Result<Router, StandaloneServerError> {
-    notary_shared_router_from_runtime(snapshot)
-}
-
 pub fn notary_shared_router_from_runtime(
     snapshot: NotaryRuntimeSnapshot,
 ) -> Result<Router, StandaloneServerError> {
@@ -482,6 +485,10 @@ pub enum StandaloneServerError {
     RelayAlreadyActivated,
     #[error("Relay consultation client was not activated before serving")]
     RelayNotActivated,
+    #[error(
+        "standalone_router supports only explicit local in-memory state; PostgreSQL requires compile_notary_runtime(config)?.activate().await before building routers"
+    )]
+    PostgresqlStateActivationRequired,
     #[error("Relay workload credential is unavailable")]
     RelayCredentialUnavailable,
     #[error("Relay rejected the configured workload credential")]
