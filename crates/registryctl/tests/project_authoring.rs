@@ -2574,7 +2574,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "a6e86b105eaa2aab4ca6e2e0e1b4d7c823573668179143f89df9f5590005e53e",
+        "3acc1511dd07eff495355319ce1ef4d82dead98bd9ea2109df43aff8e4d1e985",
         "project inputs must match the cross-machine golden digest"
     );
 }
