@@ -132,43 +132,41 @@ api_key_hash="$(printf '%s\n' "${api_key}" | "${notary_bin}" hash-api-key --stdi
   2>"${work_dir}/hash-api-key.log")"
 [[ "${api_key_hash}" == sha256:* ]] || fail "API key hash output is invalid"
 
-openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
-  -subj "/CN=Notary conformance CA" \
-  -addext "basicConstraints=critical,CA:TRUE" \
-  -addext "keyUsage=critical,keyCertSign,cRLSign" \
-  -keyout "${work_dir}/ca.key" -out "${work_dir}/ca.crt" \
-  >"${work_dir}/openssl.log" 2>&1
-openssl req -newkey rsa:2048 -nodes -subj "/CN=localhost" \
-  -keyout "${work_dir}/server.key" -out "${work_dir}/server.csr" \
-  >>"${work_dir}/openssl.log" 2>&1
-openssl x509 -req -days 2 -in "${work_dir}/server.csr" \
-  -CA "${work_dir}/ca.crt" -CAkey "${work_dir}/ca.key" -CAcreateserial \
-  -extfile <(printf '%s\n' \
-    'subjectAltName=DNS:localhost,IP:127.0.0.1' \
-    'basicConstraints=critical,CA:FALSE' \
-    'keyUsage=critical,digitalSignature,keyEncipherment' \
-    'extendedKeyUsage=serverAuth') \
-  -out "${work_dir}/server.crt" >>"${work_dir}/openssl.log" 2>&1
-chmod 600 "${work_dir}/server.key"
-openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
-  -subj "/CN=Untrusted Notary conformance CA" \
-  -addext "basicConstraints=critical,CA:TRUE" \
-  -addext "keyUsage=critical,keyCertSign,cRLSign" \
-  -keyout "${work_dir}/untrusted-ca.key" -out "${work_dir}/untrusted-ca.crt" \
-  >>"${work_dir}/openssl.log" 2>&1
-openssl req -newkey rsa:2048 -nodes -subj "/CN=localhost" \
-  -keyout "${work_dir}/untrusted-server.key" -out "${work_dir}/untrusted-server.csr" \
-  >>"${work_dir}/openssl.log" 2>&1
-openssl x509 -req -days 2 -in "${work_dir}/untrusted-server.csr" \
-  -CA "${work_dir}/untrusted-ca.crt" -CAkey "${work_dir}/untrusted-ca.key" \
-  -CAcreateserial \
-  -extfile <(printf '%s\n' \
-    'subjectAltName=DNS:localhost,IP:127.0.0.1' \
-    'basicConstraints=critical,CA:FALSE' \
-    'keyUsage=critical,digitalSignature,keyEncipherment' \
-    'extendedKeyUsage=serverAuth') \
-  -out "${work_dir}/untrusted-server.crt" >>"${work_dir}/openssl.log" 2>&1
-chmod 600 "${work_dir}/untrusted-server.key"
+{
+  openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+    -subj "/CN=Notary conformance CA" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -keyout "${work_dir}/ca.key" -out "${work_dir}/ca.crt"
+  openssl req -newkey rsa:2048 -nodes -subj "/CN=localhost" \
+    -keyout "${work_dir}/server.key" -out "${work_dir}/server.csr"
+  openssl x509 -req -days 2 -in "${work_dir}/server.csr" \
+    -CA "${work_dir}/ca.crt" -CAkey "${work_dir}/ca.key" -CAcreateserial \
+    -extfile <(printf '%s\n' \
+      'subjectAltName=DNS:localhost,IP:127.0.0.1' \
+      'basicConstraints=critical,CA:FALSE' \
+      'keyUsage=critical,digitalSignature,keyEncipherment' \
+      'extendedKeyUsage=serverAuth') \
+    -out "${work_dir}/server.crt"
+  chmod 600 "${work_dir}/server.key"
+  openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+    -subj "/CN=Untrusted Notary conformance CA" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -keyout "${work_dir}/untrusted-ca.key" -out "${work_dir}/untrusted-ca.crt"
+  openssl req -newkey rsa:2048 -nodes -subj "/CN=localhost" \
+    -keyout "${work_dir}/untrusted-server.key" -out "${work_dir}/untrusted-server.csr"
+  openssl x509 -req -days 2 -in "${work_dir}/untrusted-server.csr" \
+    -CA "${work_dir}/untrusted-ca.crt" -CAkey "${work_dir}/untrusted-ca.key" \
+    -CAcreateserial \
+    -extfile <(printf '%s\n' \
+      'subjectAltName=DNS:localhost,IP:127.0.0.1' \
+      'basicConstraints=critical,CA:FALSE' \
+      'keyUsage=critical,digitalSignature,keyEncipherment' \
+      'extendedKeyUsage=serverAuth') \
+    -out "${work_dir}/untrusted-server.crt"
+  chmod 600 "${work_dir}/untrusted-server.key"
+} >"${work_dir}/openssl.log" 2>&1
 
 docker pull "${source_image}" >"${work_dir}/docker-pull.log" 2>&1
 docker pull "${target_image}" >>"${work_dir}/docker-pull.log" 2>&1
