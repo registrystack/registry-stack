@@ -739,7 +739,7 @@ pub fn probe_script_diagnostic(
         .iter_functions()
         .any(|function| function.name == entrypoint && function.params.len() == 1)
     {
-        return validate_xw_calls(script);
+        return validate_host_calls(script);
     }
     let cause = if ast
         .iter_functions()
@@ -758,47 +758,97 @@ pub fn probe_script_diagnostic(
     })
 }
 
-struct XwCall {
+struct ScriptHostCall {
     function: String,
+    canonical_function: String,
     argument_count: usize,
+    byte_index: usize,
     line: usize,
     column: usize,
 }
 
-fn validate_xw_calls(script: &str) -> Result<(), ScriptProbeDiagnostic> {
-    for call in scan_xw_calls(script) {
-        let candidates = xw::XW_V1_FUNCTIONS
-            .iter()
-            .filter(|candidate| {
-                call.function == format!("{}.{}", candidate.namespace, candidate.name)
-            })
-            .collect::<Vec<_>>();
-        if candidates.is_empty() {
-            return Err(ScriptProbeDiagnostic {
-                cause: ScriptProbeCause::UnknownFunction,
-                line: Some(call.line),
-                column: Some(call.column),
-                function: Some(call.function.clone()),
-                valid_signatures: closest_xw_signatures(&call.function),
-            });
-        }
-        if !candidates
-            .iter()
-            .any(|candidate| candidate.accepted_types.len() == call.argument_count)
-        {
-            return Err(ScriptProbeDiagnostic {
-                cause: ScriptProbeCause::UnsupportedFunctionSignature,
-                line: Some(call.line),
-                column: Some(call.column),
-                function: Some(call.function),
-                valid_signatures: candidates
-                    .into_iter()
-                    .map(|candidate| candidate.signature)
-                    .collect(),
-            });
+fn validate_host_calls(script: &str) -> Result<(), ScriptProbeDiagnostic> {
+    let mut calls = scan_host_calls(script, "xw", false);
+    calls.extend(scan_host_calls(script, "source", true));
+    calls.sort_by_key(|call| call.byte_index);
+    for call in calls {
+        if call.canonical_function.starts_with("xw.") {
+            validate_xw_call(call)?;
+        } else {
+            validate_source_host_call(call)?;
         }
     }
     Ok(())
+}
+
+fn validate_xw_call(call: ScriptHostCall) -> Result<(), ScriptProbeDiagnostic> {
+    let candidates = xw::XW_V1_FUNCTIONS
+        .iter()
+        .filter(|candidate| {
+            call.canonical_function == format!("{}.{}", candidate.namespace, candidate.name)
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Err(ScriptProbeDiagnostic {
+            cause: ScriptProbeCause::UnknownFunction,
+            line: Some(call.line),
+            column: Some(call.column),
+            function: Some(call.function),
+            valid_signatures: closest_xw_signatures(&call.canonical_function),
+        });
+    }
+    if candidates
+        .iter()
+        .any(|candidate| candidate.accepted_types.len() == call.argument_count)
+    {
+        return Ok(());
+    }
+    Err(ScriptProbeDiagnostic {
+        cause: ScriptProbeCause::UnsupportedFunctionSignature,
+        line: Some(call.line),
+        column: Some(call.column),
+        function: Some(call.function),
+        valid_signatures: candidates
+            .into_iter()
+            .map(|candidate| candidate.signature)
+            .collect(),
+    })
+}
+
+fn validate_source_host_call(call: ScriptHostCall) -> Result<(), ScriptProbeDiagnostic> {
+    let candidate = SOURCE_HOST_FUNCTIONS
+        .iter()
+        .find(|candidate| call.canonical_function == candidate.authored_name);
+    let Some(candidate) = candidate else {
+        return Err(ScriptProbeDiagnostic {
+            cause: ScriptProbeCause::UnknownFunction,
+            line: Some(call.line),
+            column: Some(call.column),
+            function: Some(call.function),
+            valid_signatures: closest_source_signatures(
+                &call.canonical_function,
+                call.argument_count,
+            ),
+        });
+    };
+    if candidate
+        .signatures
+        .iter()
+        .any(|signature| signature.arity == call.argument_count)
+    {
+        return Ok(());
+    }
+    Err(ScriptProbeDiagnostic {
+        cause: ScriptProbeCause::UnsupportedFunctionSignature,
+        line: Some(call.line),
+        column: Some(call.column),
+        function: Some(call.function),
+        valid_signatures: candidate
+            .signatures
+            .iter()
+            .map(|signature| signature.text)
+            .collect(),
+    })
 }
 
 fn closest_xw_signatures(function: &str) -> Vec<&'static str> {
@@ -820,6 +870,38 @@ fn closest_xw_signatures(function: &str) -> Vec<&'static str> {
     signatures
 }
 
+fn closest_source_signatures(function: &str, argument_count: usize) -> Vec<&'static str> {
+    let mut distance = usize::MAX;
+    let mut candidates = Vec::new();
+    for candidate in SOURCE_HOST_FUNCTIONS {
+        let candidate_distance = edit_distance(function, candidate.authored_name);
+        match candidate_distance.cmp(&distance) {
+            std::cmp::Ordering::Less => {
+                distance = candidate_distance;
+                candidates.clear();
+                candidates.push(candidate);
+            }
+            std::cmp::Ordering::Equal => candidates.push(candidate),
+            std::cmp::Ordering::Greater => {}
+        }
+    }
+    let matching_arity = candidates
+        .iter()
+        .flat_map(|candidate| candidate.signatures)
+        .filter(|signature| signature.arity == argument_count)
+        .map(|signature| signature.text)
+        .collect::<Vec<_>>();
+    if matching_arity.is_empty() {
+        candidates
+            .into_iter()
+            .flat_map(|candidate| candidate.signatures)
+            .map(|signature| signature.text)
+            .collect()
+    } else {
+        matching_arity
+    }
+}
+
 fn edit_distance(left: &str, right: &str) -> usize {
     let mut prior = (0..=right.chars().count()).collect::<Vec<_>>();
     let mut current = vec![0; prior.len()];
@@ -835,44 +917,86 @@ fn edit_distance(left: &str, right: &str) -> usize {
     prior[right.chars().count()]
 }
 
-fn scan_xw_calls(script: &str) -> Vec<XwCall> {
-    let bytes = script.as_bytes();
+fn scan_host_calls(
+    script: &str,
+    namespace: &str,
+    allow_qualified_separator: bool,
+) -> Vec<ScriptHostCall> {
     let mut calls = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
+    scan_host_calls_in_region(
+        script,
+        namespace.as_bytes(),
+        allow_qualified_separator,
+        0,
+        script.len(),
+        0,
+        &mut calls,
+    );
+    calls
+}
+
+fn scan_host_calls_in_region(
+    script: &str,
+    namespace: &[u8],
+    allow_qualified_separator: bool,
+    start: usize,
+    end: usize,
+    depth: usize,
+    calls: &mut Vec<ScriptHostCall>,
+) {
+    if depth > MAX_EXPR_DEPTH {
+        return;
+    }
+    let bytes = script.as_bytes();
+    let mut index = start;
+    while index < end {
         match bytes[index] {
-            b'"' | b'\'' | b'`' => {
+            b'"' | b'\'' => {
                 index = skip_quoted_script_value(bytes, index);
+                continue;
+            }
+            b'`' => {
+                index = scan_interpolated_script_string(
+                    script,
+                    namespace,
+                    allow_qualified_separator,
+                    index,
+                    end,
+                    depth,
+                    calls,
+                );
                 continue;
             }
             b'/' if bytes.get(index + 1) == Some(&b'/') => {
                 index = bytes[index + 2..]
                     .iter()
                     .position(|byte| *byte == b'\n')
-                    .map_or(bytes.len(), |offset| index + 2 + offset + 1);
+                    .map_or(end, |offset| (index + 2 + offset + 1).min(end));
                 continue;
             }
             b'/' if bytes.get(index + 1) == Some(&b'*') => {
-                index = bytes[index + 2..]
-                    .windows(2)
-                    .position(|pair| pair == b"*/")
-                    .map_or(bytes.len(), |offset| index + 2 + offset + 2);
+                index = skip_nested_block_comment(bytes, index, end);
                 continue;
             }
-            b'x' if bytes[index..].starts_with(b"xw")
+            byte if byte == namespace[0]
+                && bytes[index..].starts_with(namespace)
                 && index
                     .checked_sub(1)
                     .and_then(|prior| bytes.get(prior))
                     .is_none_or(|byte| !script_identifier_byte(*byte)) =>
             {
-                if let Some((function, open_parenthesis)) = parse_xw_function(bytes, index) {
+                if let Some((function, canonical_function, open_parenthesis)) =
+                    parse_host_function(bytes, index, namespace, allow_qualified_separator)
+                {
                     if let Some((argument_count, _end)) =
                         count_script_call_arguments(bytes, open_parenthesis)
                     {
                         let (line, column) = script_position(script, index);
-                        calls.push(XwCall {
+                        calls.push(ScriptHostCall {
                             function,
+                            canonical_function,
                             argument_count,
+                            byte_index: index,
                             line,
                             column,
                         });
@@ -883,19 +1007,67 @@ fn scan_xw_calls(script: &str) -> Vec<XwCall> {
         }
         index += 1;
     }
-    calls
 }
 
-fn parse_xw_function(bytes: &[u8], start: usize) -> Option<(String, usize)> {
-    let mut cursor = start + 2;
-    let mut function = String::from("xw");
+fn scan_interpolated_script_string(
+    script: &str,
+    namespace: &[u8],
+    allow_qualified_separator: bool,
+    start: usize,
+    end: usize,
+    depth: usize,
+    calls: &mut Vec<ScriptHostCall>,
+) -> usize {
+    let bytes = script.as_bytes();
+    let mut cursor = start + 1;
+    while cursor < end {
+        match bytes[cursor] {
+            b'\\' => cursor = (cursor + 2).min(end),
+            b'`' => return cursor + 1,
+            b'$' if bytes.get(cursor + 1) == Some(&b'{') => {
+                let expression_start = cursor + 2;
+                let Some(expression_end) =
+                    find_interpolation_end(bytes, expression_start, end, depth)
+                else {
+                    return end;
+                };
+                scan_host_calls_in_region(
+                    script,
+                    namespace,
+                    allow_qualified_separator,
+                    expression_start,
+                    expression_end,
+                    depth + 1,
+                    calls,
+                );
+                cursor = expression_end + 1;
+            }
+            _ => cursor += 1,
+        }
+    }
+    end
+}
+
+fn parse_host_function(
+    bytes: &[u8],
+    start: usize,
+    namespace: &[u8],
+    allow_qualified_separator: bool,
+) -> Option<(String, String, usize)> {
+    let mut cursor = start + namespace.len();
+    let mut function = String::from(std::str::from_utf8(namespace).ok()?);
+    let mut canonical_function = function.clone();
     let mut segments = 0;
     loop {
         cursor = skip_ascii_whitespace(bytes, cursor);
-        if bytes.get(cursor) != Some(&b'.') {
+        let separator = if bytes.get(cursor) == Some(&b'.') {
+            "."
+        } else if allow_qualified_separator && bytes.get(cursor..cursor + 2) == Some(b"::") {
+            "::"
+        } else {
             break;
-        }
-        cursor = skip_ascii_whitespace(bytes, cursor + 1);
+        };
+        cursor = skip_ascii_whitespace(bytes, cursor + separator.len());
         let segment_start = cursor;
         while bytes
             .get(cursor)
@@ -906,12 +1078,60 @@ fn parse_xw_function(bytes: &[u8], start: usize) -> Option<(String, usize)> {
         if cursor == segment_start {
             return None;
         }
-        function.push('.');
-        function.push_str(std::str::from_utf8(&bytes[segment_start..cursor]).ok()?);
+        let segment = std::str::from_utf8(&bytes[segment_start..cursor]).ok()?;
+        function.push_str(separator);
+        function.push_str(segment);
+        canonical_function.push('.');
+        canonical_function.push_str(segment);
         segments += 1;
     }
     cursor = skip_ascii_whitespace(bytes, cursor);
-    (segments > 0 && bytes.get(cursor) == Some(&b'(')).then_some((function, cursor))
+    (segments > 0 && bytes.get(cursor) == Some(&b'(')).then_some((
+        function,
+        canonical_function,
+        cursor,
+    ))
+}
+
+fn find_interpolation_end(bytes: &[u8], start: usize, end: usize, depth: usize) -> Option<usize> {
+    if depth > MAX_EXPR_DEPTH {
+        return None;
+    }
+    let mut cursor = start;
+    let mut braces = 1_usize;
+    while cursor < end {
+        match bytes[cursor] {
+            b'"' | b'\'' => {
+                cursor = skip_quoted_script_value(bytes, cursor);
+                continue;
+            }
+            b'`' => {
+                cursor = skip_interpolated_script_string(bytes, cursor, end, depth + 1);
+                continue;
+            }
+            b'/' if bytes.get(cursor + 1) == Some(&b'/') => {
+                cursor = bytes[cursor + 2..]
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(end, |offset| (cursor + 2 + offset + 1).min(end));
+                continue;
+            }
+            b'/' if bytes.get(cursor + 1) == Some(&b'*') => {
+                cursor = skip_nested_block_comment(bytes, cursor, end);
+                continue;
+            }
+            b'{' => braces += 1,
+            b'}' => {
+                braces = braces.checked_sub(1)?;
+                if braces == 0 {
+                    return Some(cursor);
+                }
+            }
+            _ => {}
+        }
+        cursor += 1;
+    }
+    None
 }
 
 fn count_script_call_arguments(bytes: &[u8], open: usize) -> Option<(usize, usize)> {
@@ -923,9 +1143,14 @@ fn count_script_call_arguments(bytes: &[u8], open: usize) -> Option<(usize, usiz
     let mut has_argument = false;
     while cursor < bytes.len() {
         match bytes[cursor] {
-            b'"' | b'\'' | b'`' => {
+            b'"' | b'\'' => {
                 has_argument = true;
                 cursor = skip_quoted_script_value(bytes, cursor);
+                continue;
+            }
+            b'`' => {
+                has_argument = true;
+                cursor = skip_interpolated_script_string(bytes, cursor, bytes.len(), 0);
                 continue;
             }
             b'/' if bytes.get(cursor + 1) == Some(&b'/') => {
@@ -936,10 +1161,7 @@ fn count_script_call_arguments(bytes: &[u8], open: usize) -> Option<(usize, usiz
                 continue;
             }
             b'/' if bytes.get(cursor + 1) == Some(&b'*') => {
-                cursor = bytes[cursor + 2..]
-                    .windows(2)
-                    .position(|pair| pair == b"*/")
-                    .map_or(bytes.len(), |offset| cursor + 2 + offset + 2);
+                cursor = skip_nested_block_comment(bytes, cursor, bytes.len());
                 continue;
             }
             b'(' => parentheses += 1,
@@ -976,6 +1198,49 @@ fn skip_quoted_script_value(bytes: &[u8], start: usize) -> usize {
         }
     }
     cursor
+}
+
+fn skip_nested_block_comment(bytes: &[u8], start: usize, end: usize) -> usize {
+    let mut cursor = start + 2;
+    let mut depth = 1_usize;
+    while cursor < end {
+        if bytes.get(cursor..cursor + 2) == Some(b"/*") {
+            depth += 1;
+            cursor += 2;
+        } else if bytes.get(cursor..cursor + 2) == Some(b"*/") {
+            depth -= 1;
+            cursor += 2;
+            if depth == 0 {
+                return cursor;
+            }
+        } else {
+            cursor += 1;
+        }
+    }
+    end
+}
+
+fn skip_interpolated_script_string(bytes: &[u8], start: usize, end: usize, depth: usize) -> usize {
+    if depth > MAX_EXPR_DEPTH {
+        return end;
+    }
+    let mut cursor = start + 1;
+    while cursor < end {
+        match bytes[cursor] {
+            b'\\' => cursor = (cursor + 2).min(end),
+            b'`' => return cursor + 1,
+            b'$' if bytes.get(cursor + 1) == Some(&b'{') => {
+                let Some(expression_end) =
+                    find_interpolation_end(bytes, cursor + 2, end, depth + 1)
+                else {
+                    return end;
+                };
+                cursor = expression_end + 1;
+            }
+            _ => cursor += 1,
+        }
+    }
+    end
 }
 
 fn skip_ascii_whitespace(bytes: &[u8], mut cursor: usize) -> usize {
@@ -1517,6 +1782,80 @@ impl SourceApi {
     }
 }
 
+// This code-owned catalogue is shared by preflight diagnostics, authored
+// namespace normalization, and Rhai module registration. It contains only
+// public ABI shape, so diagnostics never need to retain argument values or
+// inspect engine state.
+#[derive(Clone, Copy)]
+struct SourceHostSignature {
+    arity: usize,
+    text: &'static str,
+}
+
+struct SourceHostFunction {
+    authored_name: &'static str,
+    normalized_name: &'static str,
+    module_name: &'static str,
+    signatures: &'static [SourceHostSignature],
+}
+
+const SOURCE_PATH: SourceHostFunction = SourceHostFunction {
+    authored_name: "source.path",
+    normalized_name: "source::path",
+    module_name: "path",
+    signatures: &[SourceHostSignature {
+        arity: 2,
+        text: "source.path(template: string, values: map) -> string",
+    }],
+};
+const SOURCE_GET: SourceHostFunction = SourceHostFunction {
+    authored_name: "source.get",
+    normalized_name: "source::get",
+    module_name: "get",
+    signatures: &[
+        SourceHostSignature {
+            arity: 1,
+            text: "source.get(target: string) -> response",
+        },
+        SourceHostSignature {
+            arity: 2,
+            text: "source.get(target: string, options: map) -> response",
+        },
+    ],
+};
+const SOURCE_POST_JSON: SourceHostFunction = SourceHostFunction {
+    authored_name: "source.post_json",
+    normalized_name: "source::post_json",
+    module_name: "post_json",
+    signatures: &[
+        SourceHostSignature {
+            arity: 2,
+            text: "source.post_json(target: string, body: value) -> response",
+        },
+        SourceHostSignature {
+            arity: 3,
+            text: "source.post_json(target: string, body: value, options: map) -> response",
+        },
+    ],
+};
+const SOURCE_POST_FORM: SourceHostFunction = SourceHostFunction {
+    authored_name: "source.post_form",
+    normalized_name: "source::post_form",
+    module_name: "post_form",
+    signatures: &[
+        SourceHostSignature {
+            arity: 2,
+            text: "source.post_form(target: string, fields: map) -> response",
+        },
+        SourceHostSignature {
+            arity: 3,
+            text: "source.post_form(target: string, fields: map, options: map) -> response",
+        },
+    ],
+};
+const SOURCE_HOST_FUNCTIONS: &[SourceHostFunction] =
+    &[SOURCE_PATH, SOURCE_GET, SOURCE_POST_JSON, SOURCE_POST_FORM];
+
 fn hardened_engine(
     limits: &WorkerLimits,
     deadline: Instant,
@@ -1577,9 +1916,9 @@ fn hardened_engine(
             limits: *limits,
         }));
         let mut source_module = Module::new();
-        source_module.set_native_fn("path", source_path);
+        source_module.set_native_fn(SOURCE_PATH.module_name, source_path);
         let get = Arc::clone(&api);
-        source_module.set_native_fn("get", move |target: &str| {
+        source_module.set_native_fn(SOURCE_GET.module_name, move |target: &str| {
             get.lock()
                 .map_err(|_| rhai_error(WorkerError::IpcFailed))?
                 .call(|call_id| SourceCall::Get {
@@ -1589,7 +1928,7 @@ fn hardened_engine(
                 })
         });
         let get = Arc::clone(&api);
-        source_module.set_native_fn("get", move |target: &str, options: Map| {
+        source_module.set_native_fn(SOURCE_GET.module_name, move |target: &str, options: Map| {
             let options = parse_options(options)?;
             get.lock()
                 .map_err(|_| rhai_error(WorkerError::IpcFailed))?
@@ -1600,22 +1939,25 @@ fn hardened_engine(
                 })
         });
         let post_json = Arc::clone(&api);
-        source_module.set_native_fn("post_json", move |target: &str, body: Dynamic| {
-            let body = from_dynamic::<Value>(&body)
-                .map_err(|_| rhai_error(WorkerError::ContractViolation))?;
-            post_json
-                .lock()
-                .map_err(|_| rhai_error(WorkerError::IpcFailed))?
-                .call(|call_id| SourceCall::PostJson {
-                    call_id,
-                    target: target.to_string(),
-                    body,
-                    options: SourceOptions::default(),
-                })
-        });
+        source_module.set_native_fn(
+            SOURCE_POST_JSON.module_name,
+            move |target: &str, body: Dynamic| {
+                let body = from_dynamic::<Value>(&body)
+                    .map_err(|_| rhai_error(WorkerError::ContractViolation))?;
+                post_json
+                    .lock()
+                    .map_err(|_| rhai_error(WorkerError::IpcFailed))?
+                    .call(|call_id| SourceCall::PostJson {
+                        call_id,
+                        target: target.to_string(),
+                        body,
+                        options: SourceOptions::default(),
+                    })
+            },
+        );
         let post_json = Arc::clone(&api);
         source_module.set_native_fn(
-            "post_json",
+            SOURCE_POST_JSON.module_name,
             move |target: &str, body: Dynamic, options: Map| {
                 let body = from_dynamic::<Value>(&body)
                     .map_err(|_| rhai_error(WorkerError::ContractViolation))?;
@@ -1632,21 +1974,24 @@ fn hardened_engine(
             },
         );
         let post_form = Arc::clone(&api);
-        source_module.set_native_fn("post_form", move |target: &str, fields: Map| {
-            let fields = map_to_values(fields)?;
-            post_form
-                .lock()
-                .map_err(|_| rhai_error(WorkerError::IpcFailed))?
-                .call(|call_id| SourceCall::PostForm {
-                    call_id,
-                    target: target.to_string(),
-                    fields,
-                    options: SourceOptions::default(),
-                })
-        });
+        source_module.set_native_fn(
+            SOURCE_POST_FORM.module_name,
+            move |target: &str, fields: Map| {
+                let fields = map_to_values(fields)?;
+                post_form
+                    .lock()
+                    .map_err(|_| rhai_error(WorkerError::IpcFailed))?
+                    .call(|call_id| SourceCall::PostForm {
+                        call_id,
+                        target: target.to_string(),
+                        fields,
+                        options: SourceOptions::default(),
+                    })
+            },
+        );
         let post_form = Arc::clone(&api);
         source_module.set_native_fn(
-            "post_form",
+            SOURCE_POST_FORM.module_name,
             move |target: &str, fields: Map, options: Map| {
                 let fields = map_to_values(fields)?;
                 let options = parse_options(options)?;
@@ -1828,13 +2173,10 @@ fn parse_fhir_searchset(
 
 /// Rhai reserves `match` and uses `::` for static modules. The reviewed public
 /// ABI deliberately uses language-neutral dotted namespaces, so normalize only
-/// recognized host tokens in code, never inside strings or comments.
+/// recognized host tokens in code, including backtick interpolation expressions,
+/// never inside string literal portions or comments.
 fn normalize_host_namespace_syntax(script: &str) -> String {
     const REPLACEMENTS: &[(&str, &str)] = &[
-        ("source.path", "source::path"),
-        ("source.get", "source::get"),
-        ("source.post_json", "source::post_json"),
-        ("source.post_form", "source::post_form"),
         (
             "protocol.fhir.parse_searchset",
             "protocol_fhir::parse_searchset",
@@ -1848,82 +2190,133 @@ fn normalize_host_namespace_syntax(script: &str) -> String {
         ("failure.source_unavailable", "failure::source_unavailable"),
         ("failure.subject_mismatch", "failure::subject_mismatch"),
     ];
-    let bytes = script.as_bytes();
     let mut output = String::with_capacity(script.len());
-    let mut index = 0;
-    let mut quote = None;
-    let mut line_comment = false;
-    let mut block_comment = false;
-    while index < bytes.len() {
-        if line_comment {
-            output.push(char::from(bytes[index]));
-            if bytes[index] == b'\n' {
-                line_comment = false;
+    normalize_host_region(script, 0, script.len(), 0, REPLACEMENTS, &mut output);
+    output
+}
+
+fn normalize_host_region(
+    script: &str,
+    start: usize,
+    end: usize,
+    depth: usize,
+    replacements: &[(&str, &str)],
+    output: &mut String,
+) {
+    if depth > MAX_EXPR_DEPTH {
+        output.push_str(&script[start..end]);
+        return;
+    }
+    let bytes = script.as_bytes();
+    let mut index = start;
+    while index < end {
+        match bytes[index] {
+            b'"' | b'\'' => {
+                let next = skip_quoted_script_value(bytes, index).min(end);
+                output.push_str(&script[index..next]);
+                index = next;
+                continue;
             }
-            index += 1;
-            continue;
-        }
-        if block_comment {
-            if bytes[index..].starts_with(b"*/") {
-                output.push_str("*/");
-                index += 2;
-                block_comment = false;
-            } else {
-                output.push(char::from(bytes[index]));
-                index += 1;
+            b'`' => {
+                index = normalize_interpolated_script_string(
+                    script,
+                    index,
+                    end,
+                    depth,
+                    replacements,
+                    output,
+                );
+                continue;
             }
-            continue;
-        }
-        if let Some(delimiter) = quote {
-            output.push(char::from(bytes[index]));
-            if bytes[index] == b'\\' && delimiter != b'`' && index + 1 < bytes.len() {
-                output.push(char::from(bytes[index + 1]));
-                index += 2;
-            } else {
-                if bytes[index] == delimiter {
-                    quote = None;
-                }
-                index += 1;
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                let next = bytes[index + 2..]
+                    .iter()
+                    .position(|byte| *byte == b'\n')
+                    .map_or(end, |offset| (index + 2 + offset + 1).min(end));
+                output.push_str(&script[index..next]);
+                index = next;
+                continue;
             }
-            continue;
-        }
-        if bytes[index..].starts_with(b"//") {
-            output.push_str("//");
-            index += 2;
-            line_comment = true;
-            continue;
-        }
-        if bytes[index..].starts_with(b"/*") {
-            output.push_str("/*");
-            index += 2;
-            block_comment = true;
-            continue;
-        }
-        if matches!(bytes[index], b'"' | b'\'' | b'`') {
-            quote = Some(bytes[index]);
-            output.push(char::from(bytes[index]));
-            index += 1;
-            continue;
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                let next = skip_nested_block_comment(bytes, index, end);
+                output.push_str(&script[index..next]);
+                index = next;
+                continue;
+            }
+            _ => {}
         }
         let prior_is_identifier =
             index > 0 && (bytes[index - 1].is_ascii_alphanumeric() || bytes[index - 1] == b'_');
         let replacement = (!prior_is_identifier).then(|| {
-            REPLACEMENTS.iter().find(|(source, _)| {
-                bytes[index..].starts_with(source.as_bytes())
-                    && bytes
-                        .get(index + source.len())
-                        .is_none_or(|next| !next.is_ascii_alphanumeric() && *next != b'_')
-            })
+            SOURCE_HOST_FUNCTIONS
+                .iter()
+                .map(|function| (function.authored_name, function.normalized_name))
+                .chain(replacements.iter().copied())
+                .find(|(source, _)| {
+                    bytes[index..end].starts_with(source.as_bytes())
+                        && bytes
+                            .get(index + source.len())
+                            .is_none_or(|next| !next.is_ascii_alphanumeric() && *next != b'_')
+                })
         });
         if let Some(Some((source, target))) = replacement {
             output.push_str(target);
             index += source.len();
         } else {
-            output.push(char::from(bytes[index]));
-            index += 1;
+            let character = script[index..end]
+                .chars()
+                .next()
+                .expect("index remains on a character boundary");
+            output.push(character);
+            index += character.len_utf8();
         }
     }
-    output
+}
+
+fn normalize_interpolated_script_string(
+    script: &str,
+    start: usize,
+    end: usize,
+    depth: usize,
+    replacements: &[(&str, &str)],
+    output: &mut String,
+) -> usize {
+    let bytes = script.as_bytes();
+    let mut cursor = start + 1;
+    let mut literal_start = start;
+    while cursor < end {
+        match bytes[cursor] {
+            b'\\' => cursor = (cursor + 2).min(end),
+            b'`' => {
+                output.push_str(&script[literal_start..=cursor]);
+                return cursor + 1;
+            }
+            b'$' if bytes.get(cursor + 1) == Some(&b'{') => {
+                output.push_str(&script[literal_start..cursor + 2]);
+                let expression_start = cursor + 2;
+                let Some(expression_end) =
+                    find_interpolation_end(bytes, expression_start, end, depth)
+                else {
+                    output.push_str(&script[expression_start..end]);
+                    return end;
+                };
+                normalize_host_region(
+                    script,
+                    expression_start,
+                    expression_end,
+                    depth + 1,
+                    replacements,
+                    output,
+                );
+                output.push('}');
+                cursor = expression_end + 1;
+                literal_start = cursor;
+            }
+            _ => cursor += 1,
+        }
+    }
+    output.push_str(&script[literal_start..end]);
+    end
 }
 
 fn source_path(template: &str, values: Map) -> Result<String, Box<EvalAltResult>> {
@@ -2509,6 +2902,263 @@ mod tests {
             WorkerLimits::default(),
         )
         .expect("registered nested xw calls pass preflight");
+    }
+
+    #[test]
+    fn script_probe_reports_unknown_source_call_with_authored_location_and_signature() {
+        let diagnostic = probe_script_diagnostic(
+            "fn consult(ctx) {\n  let response = source.gett(\"request-value-marker-9081\");\n  result.no_match()\n}",
+            "consult",
+            WorkerLimits::default(),
+        )
+        .expect_err("unknown source helper rejects during preflight");
+        assert_eq!(diagnostic.cause(), ScriptProbeCause::UnknownFunction);
+        assert_eq!(diagnostic.function(), Some("source.gett"));
+        assert_eq!(diagnostic.line(), Some(2));
+        assert_eq!(diagnostic.column(), Some(18));
+        assert_eq!(
+            diagnostic.valid_signatures(),
+            ["source.get(target: string) -> response"]
+        );
+        let rendered = format!("{diagnostic:?} {diagnostic}");
+        assert!(!rendered.contains("request-value-marker-9081"));
+        assert!(!rendered.contains("Engine"));
+    }
+
+    #[test]
+    fn script_probe_keeps_truly_unknown_source_call_bounded_and_value_free() {
+        let diagnostic = probe_script_diagnostic(
+            r#"fn consult(ctx) {
+                source.teleport(#{ credential: "credential-marker-4412" });
+                source.publish("response-marker-6673");
+                result.no_match()
+            }"#,
+            "consult",
+            WorkerLimits::default(),
+        )
+        .expect_err("the first unknown source helper is the primary diagnostic");
+        assert_eq!(diagnostic.cause(), ScriptProbeCause::UnknownFunction);
+        assert_eq!(diagnostic.function(), Some("source.teleport"));
+        assert_eq!(diagnostic.line(), Some(2));
+        assert!(diagnostic.column().is_some());
+        assert!(!diagnostic.valid_signatures().is_empty());
+        assert!(diagnostic.valid_signatures().len() <= 2);
+        assert!(diagnostic
+            .valid_signatures()
+            .iter()
+            .all(|signature| signature.starts_with("source.")));
+        let rendered = format!("{diagnostic:?} {diagnostic}");
+        assert!(!rendered.contains("credential-marker-4412"));
+        assert!(!rendered.contains("response-marker-6673"));
+        assert!(!rendered.contains("source.publish"));
+    }
+
+    #[test]
+    fn script_probe_checks_source_arity_and_ignores_noncode_text() {
+        let diagnostic = probe_script_diagnostic(
+            r#"fn consult(ctx) {
+                let example = "source.gett(request-value-marker)";
+                // source.teleport(request-value-marker)
+                /* source.publish(request-value-marker) */
+                source.get();
+                result.no_match()
+            }"#,
+            "consult",
+            WorkerLimits::default(),
+        )
+        .expect_err("wrong source signature rejects during preflight");
+        assert_eq!(
+            diagnostic.cause(),
+            ScriptProbeCause::UnsupportedFunctionSignature
+        );
+        assert_eq!(diagnostic.function(), Some("source.get"));
+        assert_eq!(diagnostic.line(), Some(5));
+        assert_eq!(
+            diagnostic.valid_signatures(),
+            [
+                "source.get(target: string) -> response",
+                "source.get(target: string, options: map) -> response",
+            ]
+        );
+
+        probe_script_diagnostic(
+            r#"fn consult(ctx) {
+                let example = "source.gett(request-value-marker)";
+                // source.teleport(request-value-marker)
+                /* source.publish(request-value-marker) */
+                let response = source.get("/reviewed");
+                result.no_match()
+            }"#,
+            "consult",
+            WorkerLimits::default(),
+        )
+        .expect("unknown source calls in comments and strings are ignored");
+    }
+
+    #[test]
+    fn script_probe_normalizes_and_checks_calls_inside_backtick_interpolation() {
+        let known = r#"fn consult(ctx) {
+  let message = `literal source.get("/literal") source.gett(ignored-marker) ${source.get("/reviewed").status}`;
+  result.no_match()
+}"#;
+        let normalized = normalize_host_namespace_syntax(known);
+        assert!(
+            normalized.contains(r#"literal source.get("/literal") source.gett(ignored-marker)"#)
+        );
+        assert!(normalized.contains(r#"${source::get("/reviewed").status}"#));
+        probe_script_diagnostic(known, "consult", WorkerLimits::default())
+            .expect("known source call inside interpolation passes preflight");
+
+        let unknown = r#"fn consult(ctx) {
+  let message = `${source.gett("interpolation-value-marker-1168")}`;
+  result.no_match()
+}"#;
+        let diagnostic = probe_script_diagnostic(unknown, "consult", WorkerLimits::default())
+            .expect_err("unknown source call inside interpolation rejects");
+        assert_eq!(diagnostic.cause(), ScriptProbeCause::UnknownFunction);
+        assert_eq!(diagnostic.function(), Some("source.gett"));
+        assert_eq!(diagnostic.line(), Some(2));
+        assert_eq!(diagnostic.column(), Some(20));
+        assert_eq!(
+            diagnostic.valid_signatures(),
+            ["source.get(target: string) -> response"]
+        );
+        assert!(!format!("{diagnostic:?} {diagnostic}").contains("interpolation-value-marker-1168"));
+
+        let wrong_arity = r#"fn consult(ctx) {
+  let message = `${source.get()}`;
+  result.no_match()
+}"#;
+        let diagnostic = probe_script_diagnostic(wrong_arity, "consult", WorkerLimits::default())
+            .expect_err("wrong source arity inside interpolation rejects");
+        assert_eq!(
+            diagnostic.cause(),
+            ScriptProbeCause::UnsupportedFunctionSignature
+        );
+        assert_eq!(diagnostic.function(), Some("source.get"));
+        assert_eq!(diagnostic.line(), Some(2));
+        assert_eq!(diagnostic.column(), Some(20));
+    }
+
+    #[test]
+    fn script_probe_ignores_host_calls_in_nested_block_comments() {
+        let ordinary = r#"fn consult(ctx) {
+            /* outer source.get("/literal") and source.gett("ordinary-value-marker")
+                `literal ${source.teleport("ordinary-value-marker")}`
+                /* nested xw.text.lowercase("ordinary-value-marker") */
+                source.publish("ordinary-value-marker")
+            */
+            let response = source.get("/reviewed");
+            result.no_match()
+        }"#;
+        let normalized = normalize_host_namespace_syntax(ordinary);
+        assert!(normalized.contains(r#"outer source.get("/literal")"#));
+        assert!(normalized.contains("${source.teleport"));
+        probe_script_diagnostic(ordinary, "consult", WorkerLimits::default())
+            .expect("host-like text in an ordinary nested block comment is ignored");
+
+        let interpolated = r#"fn consult(ctx) {
+            let message = `${
+                /* outer source.get("/literal") and source.gett("interpolation-value-marker")
+                    /* nested xw.text.lowercase("interpolation-value-marker") */
+                    source.publish("interpolation-value-marker")
+                */
+                source.get("/reviewed").status
+            }`;
+            result.no_match()
+        }"#;
+        let normalized = normalize_host_namespace_syntax(interpolated);
+        assert!(normalized.contains(r#"outer source.get("/literal")"#));
+        assert!(normalized.contains(r#"source::get("/reviewed").status"#));
+        probe_script_diagnostic(interpolated, "consult", WorkerLimits::default())
+            .expect("host-like text in an interpolated nested block comment is ignored");
+    }
+
+    #[test]
+    fn script_probe_leaves_unterminated_nested_comment_to_rhai_syntax_diagnostics() {
+        let script = r#"fn consult(ctx) {
+            /* outer
+                /* nested source.gett("nested-value-marker-5529") */
+                source.publish("outer-value-marker-8841")
+            result.no_match()
+        }"#;
+        let diagnostic = probe_script_diagnostic(script, "consult", WorkerLimits::default())
+            .expect_err("Rhai rejects the unterminated outer block comment");
+        assert_eq!(diagnostic.cause(), ScriptProbeCause::SyntaxError);
+        assert_eq!(diagnostic.function(), None);
+        assert!(diagnostic.valid_signatures().is_empty());
+        let rendered = format!("{diagnostic:?} {diagnostic}");
+        assert!(!rendered.contains("nested-value-marker-5529"));
+        assert!(!rendered.contains("outer-value-marker-8841"));
+    }
+
+    #[test]
+    fn script_probe_checks_qualified_source_calls() {
+        probe_script_diagnostic(
+            r#"fn consult(ctx) {
+                let response = source::get("/reviewed");
+                result.no_match()
+            }"#,
+            "consult",
+            WorkerLimits::default(),
+        )
+        .expect("known qualified source call passes preflight");
+
+        let diagnostic = probe_script_diagnostic(
+            "fn consult(ctx) {\n  let response = source::gett(\"qualified-value-marker-7732\");\n  result.no_match()\n}",
+            "consult",
+            WorkerLimits::default(),
+        )
+        .expect_err("unknown qualified source call rejects");
+        assert_eq!(diagnostic.cause(), ScriptProbeCause::UnknownFunction);
+        assert_eq!(diagnostic.function(), Some("source::gett"));
+        assert_eq!(diagnostic.line(), Some(2));
+        assert_eq!(diagnostic.column(), Some(18));
+        assert_eq!(
+            diagnostic.valid_signatures(),
+            ["source.get(target: string) -> response"]
+        );
+        assert!(!format!("{diagnostic:?} {diagnostic}").contains("qualified-value-marker-7732"));
+
+        let diagnostic = probe_script_diagnostic(
+            "fn consult(ctx) {\n  source::post_json(\"/reviewed\");\n  result.no_match()\n}",
+            "consult",
+            WorkerLimits::default(),
+        )
+        .expect_err("wrong qualified source arity rejects");
+        assert_eq!(
+            diagnostic.cause(),
+            ScriptProbeCause::UnsupportedFunctionSignature
+        );
+        assert_eq!(diagnostic.function(), Some("source::post_json"));
+        assert_eq!(diagnostic.line(), Some(2));
+        assert_eq!(diagnostic.column(), Some(3));
+        assert_eq!(
+            diagnostic.valid_signatures(),
+            [
+                "source.post_json(target: string, body: value) -> response",
+                "source.post_json(target: string, body: value, options: map) -> response",
+            ]
+        );
+    }
+
+    #[test]
+    fn script_probe_selects_first_host_call_across_namespaces() {
+        for (script, expected) in [
+            (
+                "fn consult(ctx) {\n  source.gett(\"first\");\n  xw.text.lowercase(\"second\");\n  result.no_match()\n}",
+                "source.gett",
+            ),
+            (
+                "fn consult(ctx) {\n  xw.text.lowercase(\"first\");\n  source.gett(\"second\");\n  result.no_match()\n}",
+                "xw.text.lowercase",
+            ),
+        ] {
+            let diagnostic = probe_script_diagnostic(script, "consult", WorkerLimits::default())
+                .expect_err("first authored unknown host call rejects");
+            assert_eq!(diagnostic.function(), Some(expected));
+            assert_eq!(diagnostic.line(), Some(2));
+        }
     }
 
     #[test]
