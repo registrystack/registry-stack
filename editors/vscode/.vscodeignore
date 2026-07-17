@@ -1,7 +1,11 @@
 .github/**
+.vscode-test.*
 .gitignore
 package-lock.json
 src/**
+test/**
+out/**
 tsconfig.json
+tsconfig.test.json
 node_modules/.cache/**
 **/*.map

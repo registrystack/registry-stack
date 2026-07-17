@@ -12,6 +12,10 @@ These integrations intentionally run alongside each editor's YAML language serve
 `.vscode/settings.json` and `.zed/settings.json` files continue to provide version-matched schema
 validation and YAML completion without duplicating that behavior here.
 
+The language server watches Registry Stack YAML paths for changes made by generators, Git, or
+other tools. An open editor buffer remains authoritative until it is closed, so a filesystem event
+cannot replace unsaved content.
+
 ## Local end-to-end smoke test
 
 Run the commands in this section from the repository root. They build both server entry points and
@@ -67,7 +71,13 @@ The same core behavior has non-GUI coverage:
 ```console
 cargo test --locked -p registry-language-server
 cargo test --locked -p registryctl --test language_server
+cd editors/vscode && npm ci && npm test
 ```
+
+The VS Code test launches the minimum supported VS Code release line in an Extension Host. It
+checks activation, the trust and virtual-workspace declarations, external file reloads, and the
+addition and removal of Registry Stack folders in a multi-root workspace. On headless Linux, run
+it as `xvfb-run -a npm test`, matching CI.
 
 When finished, close the smoke project and remove the temporary directory shown by
 `$REGISTRY_STACK_SMOKE_ROOT` after checking that it is the directory created by `mktemp` above.

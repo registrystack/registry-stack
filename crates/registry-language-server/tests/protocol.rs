@@ -82,13 +82,13 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
         .join("registry-stack.yaml")
         .canonicalize()
         .unwrap();
-    let manifest_uri = Uri::from_file_path(manifest_path).unwrap().to_string();
+    let manifest_uri = Uri::from_file_path(&manifest_path).unwrap().to_string();
     let integration_path = project
         .path()
         .join("integrations/people/integration.yaml")
         .canonicalize()
         .unwrap();
-    let integration_uri = Uri::from_file_path(integration_path).unwrap().to_string();
+    let integration_uri = Uri::from_file_path(&integration_path).unwrap().to_string();
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_registry-language-server"))
         .current_dir(project.path())
@@ -108,7 +108,11 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
             "params": {
                 "processId": null,
                 "rootUri": root_uri,
-                "capabilities": {},
+                "capabilities": {
+                    "workspace": {
+                        "didChangeWatchedFiles": { "dynamicRegistration": true }
+                    }
+                },
                 "workspaceFolders": [{ "uri": root_uri, "name": "demo" }]
             }
         }),
@@ -122,6 +126,31 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
     send(
         &mut stdin,
         json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} }),
+    );
+    let registration = receive(&mut stdout);
+    assert_eq!(
+        registration.get("method").and_then(Value::as_str),
+        Some("client/registerCapability")
+    );
+    assert_eq!(
+        registration
+            .pointer("/params/registrations/0/method")
+            .and_then(Value::as_str),
+        Some("workspace/didChangeWatchedFiles")
+    );
+    assert_eq!(
+        registration
+            .pointer("/params/registrations/0/registerOptions/watchers/0/globPattern")
+            .and_then(Value::as_str),
+        Some("**/*.yaml")
+    );
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": registration.get("id").unwrap(),
+            "result": null
+        }),
     );
     let mut published_missing_reference = false;
     for _ in 0..3 {
@@ -203,11 +232,49 @@ fn serves_definition_references_and_workspace_symbols_over_stdio() {
         Some("active")
     );
 
+    let changed_manifest = fs::read_to_string(&manifest_path)
+        .unwrap()
+        .replace("registry: { id: demo }", "registry: { id: external-demo }");
+    fs::write(&manifest_path, changed_manifest).unwrap();
     send(
         &mut stdin,
-        json!({ "jsonrpc": "2.0", "id": 5, "method": "shutdown", "params": null }),
+        json!({
+            "jsonrpc": "2.0",
+            "method": "workspace/didChangeWatchedFiles",
+            "params": {
+                "changes": [{ "uri": manifest_uri, "type": 2 }]
+            }
+        }),
     );
-    receive_response(&mut stdout, 5);
+    let mut observed_external_change = false;
+    for id in 5..15 {
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "workspace/symbol",
+                "params": { "query": "external-demo" }
+            }),
+        );
+        let reloaded_symbols = receive_response(&mut stdout, id);
+        if reloaded_symbols
+            .pointer("/result/0/name")
+            .and_then(Value::as_str)
+            == Some("external-demo")
+        {
+            observed_external_change = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(observed_external_change);
+
+    send(
+        &mut stdin,
+        json!({ "jsonrpc": "2.0", "id": 15, "method": "shutdown", "params": null }),
+    );
+    receive_response(&mut stdout, 15);
     send(
         &mut stdin,
         json!({ "jsonrpc": "2.0", "method": "exit", "params": null }),

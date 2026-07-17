@@ -29,6 +29,15 @@
   "extensionKind": [
     "workspace"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Registry Stack starts a local executable and reads project files from disk. Trust the workspace before enabling it."
+    },
+    "virtualWorkspaces": {
+      "supported": false
+    }
+  },
   "contributes": {
     "commands": [
       {
@@ -49,18 +58,29 @@
     }
   },
   "scripts": {
-    "compile": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --outfile=dist/extension.js --sourcemap",
-    "check": "tsc -p . --noEmit",
-    "package:dev": "npm run check && npx --yes @vscode/vsce@3.9.2 package --no-dependencies --out registry-stack-dev.vsix",
+    "compile": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --outfile=dist/extension.js --sourcemap --minify",
+    "compile-tests": "tsc -p tsconfig.test.json",
+    "check": "tsc -p . --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "package:dev": "npm run check && vsce package --no-dependencies --out registry-stack-dev.vsix",
+    "pretest": "npm run compile && npm run compile-tests",
+    "test": "vscode-test",
     "vscode:prepublish": "npm run compile"
   },
   "dependencies": {
     "vscode-languageclient": "^10.1.0"
   },
   "devDependencies": {
+    "@types/mocha": "10.0.10",
     "@types/node": "^24.0.0",
     "@types/vscode": "1.91.0",
+    "@vscode/test-cli": "0.0.15",
+    "@vscode/test-electron": "3.0.0",
+    "@vscode/vsce": "3.9.2",
     "esbuild": "0.28.1",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "diff": "8.0.3",
+    "serialize-javascript": "7.0.7"
   }
 }

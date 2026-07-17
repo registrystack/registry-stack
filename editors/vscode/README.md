@@ -5,6 +5,11 @@ This extension starts `registry-language-server` for a workspace whose root cont
 and Registry Stack reference diagnostics. Red Hat YAML remains responsible for YAML syntax,
 schema validation, completion, formatting, and ordinary hover information.
 
+Multi-root workspaces are supported. The extension starts one isolated language-server process for
+each folder whose root contains `registry-stack.yaml`, and it responds when workspace folders are
+added or removed. Because the server executes a local binary and reads local files, the extension
+is disabled in untrusted and virtual workspaces.
+
 ## Package, install, and launch
 
 Prerequisites are Node.js 22, the `code` command-line tool, and the Rust toolchain used by the
@@ -36,8 +41,9 @@ repository. First complete the [shared smoke-project setup](../README.md#local-e
    "registryStack.languageServer.path": "/absolute/path/to/registry-stack/target/debug/registry-language-server"
    ```
 
-4. Run **Registry Stack: Restart Language Server**. Open **View: Toggle Output**, select
-   **Registry Stack Language Server**, and confirm it reports the smoke project as indexed.
+4. Run **Registry Stack: Restart Language Server**. Open **View: Toggle Output**, select the
+   **Registry Stack Language Server (project)** channel, and confirm it reports the smoke project
+   as indexed.
 5. Complete the [shared expected-behavior checklist](../README.md#expected-behavior). VS Code uses
    `F12` for definitions, `Shift+F12` for references, `Cmd+Shift+O`/`Ctrl+Shift+O` for document
    symbols, and `Cmd+T`/`Ctrl+T` for workspace symbols.
@@ -53,15 +59,19 @@ extension can find `registry-language-server` on `PATH`, then fall back to
   **Registry Stack: Restart Language Server**.
 - After changing the extension, rerun `npm run package:dev`, reinstall the VSIX with `--force`,
   and run **Developer: Reload Window**.
+- Run `npm test` after building `registry-language-server` to launch the Extension Host test for
+  multi-root behavior and declared workspace capabilities. On headless Linux, use
+  `xvfb-run -a npm test`.
 
 ## Troubleshooting
 
-- If activation does not occur, confirm the opened workspace root itself contains
-  `registry-stack.yaml`. Opening only a YAML file or a parent directory does not activate it.
+- If activation does not occur, confirm each intended workspace folder root itself contains
+  `registry-stack.yaml` and that VS Code trusts the workspace. Opening only a YAML file or a parent
+  directory does not activate it.
 - If startup reports that no executable was found, verify the workspace setting is an absolute
   path to an executable regular file.
-- If navigation is absent, confirm the file's VS Code language mode is YAML and inspect the
-  **Registry Stack Language Server** output channel.
+- If navigation is absent, confirm the file's VS Code language mode is YAML and inspect the output
+  channel named for that workspace folder.
 - Red Hat YAML still owns schema validation, completion, hover, formatting, and syntax errors. Its
   diagnostics do not indicate a Registry Stack language-server failure.
 

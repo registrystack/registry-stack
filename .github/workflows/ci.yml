@@ -411,12 +411,14 @@ jobs:
         run: |
           npm ci
           npm run package:dev
+          cargo build --locked -p registry-language-server
+          xvfb-run -a npm test
           cmp ../../LICENSE LICENSE
 
       - name: Install Zed extension target
-        run: rustup target add wasm32-wasip1
+        run: rustup target add wasm32-wasip2
 
       - name: Check Zed extension
         run: |
-          cargo check --locked --target wasm32-wasip1 --manifest-path editors/zed/Cargo.toml
+          cargo check --locked --target wasm32-wasip2 --manifest-path editors/zed/Cargo.toml
           cmp LICENSE editors/zed/LICENSE

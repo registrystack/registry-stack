@@ -4,19 +4,22 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 use tokio::sync::{Mutex, RwLock};
 use tower_lsp_server::{
     jsonrpc::Result,
     ls_types::{
-        Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+        Diagnostic, DidChangeTextDocumentParams, DidChangeWatchedFilesParams,
+        DidChangeWatchedFilesRegistrationOptions, DidCloseTextDocumentParams,
         DidOpenTextDocumentParams, DidSaveTextDocumentParams, DocumentSymbol, DocumentSymbolParams,
-        DocumentSymbolResponse, GotoDefinitionParams, GotoDefinitionResponse, InitializeParams,
-        InitializeResult, InitializedParams, Location, MessageType, OneOf, PositionEncodingKind,
-        ReferenceParams, SaveOptions, ServerCapabilities, ServerInfo, SymbolInformation,
-        TextDocumentSyncCapability, TextDocumentSyncKind, TextDocumentSyncOptions, Uri,
-        WorkspaceSymbolParams, WorkspaceSymbolResponse,
+        DocumentSymbolResponse, FileSystemWatcher, GlobPattern, GotoDefinitionParams,
+        GotoDefinitionResponse, InitializeParams, InitializeResult, InitializedParams, Location,
+        MessageType, OneOf, PositionEncodingKind, ReferenceParams, Registration, SaveOptions,
+        ServerCapabilities, ServerInfo, SymbolInformation, TextDocumentSyncCapability,
+        TextDocumentSyncKind, TextDocumentSyncOptions, Uri, WorkspaceSymbolParams,
+        WorkspaceSymbolResponse,
     },
     Client, LanguageServer,
 };
@@ -34,6 +37,7 @@ pub struct Backend {
     client: Client,
     state: RwLock<Option<WorkspaceState>>,
     published_paths: Mutex<BTreeSet<PathBuf>>,
+    supports_dynamic_file_watching: AtomicBool,
 }
 
 impl Backend {
@@ -42,6 +46,7 @@ impl Backend {
             client,
             state: RwLock::new(None),
             published_paths: Mutex::new(BTreeSet::new()),
+            supports_dynamic_file_watching: AtomicBool::new(false),
         }
     }
 
@@ -74,10 +79,10 @@ impl Backend {
         };
 
         let mut published = self.published_paths.lock().await;
+        let current_paths = by_path.keys().cloned().collect::<BTreeSet<_>>();
         for stale_path in published.iter() {
             by_path.entry(stale_path.clone()).or_default();
         }
-        let current_paths = by_path.keys().cloned().collect::<BTreeSet<_>>();
 
         for (path, diagnostics) in by_path {
             if let Some(uri) = Uri::from_file_path(&path) {
@@ -111,10 +116,42 @@ impl Backend {
         drop(state);
         self.publish_diagnostics().await;
     }
+
+    async fn reload_watched_documents(&self, paths: Vec<PathBuf>) {
+        let mut paths = paths
+            .into_iter()
+            .map(|path| normalize_document_path(&path))
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.dedup();
+        let mut state = self.state.write().await;
+        if state.is_none() {
+            *state = paths
+                .iter()
+                .find_map(|path| find_project_root(path))
+                .and_then(|root| WorkspaceState::load(&root).ok());
+        }
+        if let Some(state) = state.as_mut() {
+            for path in paths {
+                state.reload_from_disk(&path);
+            }
+        }
+        drop(state);
+        self.publish_diagnostics().await;
+    }
 }
 
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        let supports_dynamic_file_watching = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.did_change_watched_files.as_ref())
+            .and_then(|capability| capability.dynamic_registration)
+            .unwrap_or(false);
+        self.supports_dynamic_file_watching
+            .store(supports_dynamic_file_watching, Ordering::Relaxed);
         if let Some(root) = project_root_from_initialize(&params) {
             *self.state.write().await = WorkspaceState::load(&root).ok();
         }
@@ -150,6 +187,32 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _params: InitializedParams) {
+        if self.supports_dynamic_file_watching.load(Ordering::Relaxed) {
+            let register_options = serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
+                watchers: vec![FileSystemWatcher {
+                    glob_pattern: GlobPattern::String("**/*.yaml".to_owned()),
+                    kind: None,
+                }],
+            })
+            .expect("watched-file registration options serialize");
+            if let Err(error) = self
+                .client
+                .register_capability(vec![Registration {
+                    id: "registry-stack-yaml-files".to_owned(),
+                    method: "workspace/didChangeWatchedFiles".to_owned(),
+                    register_options: Some(register_options),
+                }])
+                .await
+            {
+                self.client
+                    .log_message(
+                        MessageType::WARNING,
+                        format!("Could not watch Registry Stack YAML files: {error}"),
+                    )
+                    .await;
+            }
+        }
+
         let message = {
             let state = self.state.read().await;
             state
@@ -221,6 +284,17 @@ impl LanguageServer for Backend {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         if let Some(path) = params.text_document.uri.to_file_path() {
             self.reload_closed_document(path.into_owned()).await;
+        }
+    }
+
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let paths = params
+            .changes
+            .into_iter()
+            .filter_map(|change| change.uri.to_file_path().map(|path| path.into_owned()))
+            .collect::<Vec<_>>();
+        if !paths.is_empty() {
+            self.reload_watched_documents(paths).await;
         }
     }
 
@@ -354,6 +428,13 @@ impl WorkspaceState {
             return;
         }
         self.open_versions.remove(path);
+        self.reload_from_disk(path);
+    }
+
+    fn reload_from_disk(&mut self, path: &Path) {
+        if !is_project_document(&self.root, path) || self.open_versions.contains_key(path) {
+            return;
+        }
         match fs::symlink_metadata(path) {
             Ok(metadata)
                 if metadata.file_type().is_file()
@@ -533,5 +614,87 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn reloads_external_changes_from_disk() {
+        let temp = project();
+        let manifest = temp
+            .path()
+            .join("registry-stack.yaml")
+            .canonicalize()
+            .unwrap();
+        let mut state = WorkspaceState::load(temp.path()).unwrap();
+
+        fs::write(
+            &manifest,
+            "version: 1\nregistry: { id: external }\nservices: {}\n",
+        )
+        .unwrap();
+        state.reload_from_disk(&manifest);
+
+        assert!(state
+            .index
+            .workspace_symbols("external")
+            .iter()
+            .any(|symbol| symbol.name == "external"));
+    }
+
+    #[test]
+    fn adds_and_removes_external_project_documents() {
+        let temp = project();
+        let mut state = WorkspaceState::load(temp.path()).unwrap();
+        let entities = temp.path().join("entities");
+        fs::create_dir(&entities).unwrap();
+        let entity = entities.join("person.yaml");
+        fs::write(&entity, "version: 1\nid: person\n").unwrap();
+        let entity = entity.canonicalize().unwrap();
+
+        state.reload_from_disk(&entity);
+        assert!(state
+            .index
+            .workspace_symbols("person")
+            .iter()
+            .any(|symbol| symbol.name == "person"));
+
+        fs::remove_file(&entity).unwrap();
+        state.reload_from_disk(&entity);
+        assert!(state.index.workspace_symbols("person").is_empty());
+    }
+
+    #[test]
+    fn external_changes_do_not_replace_an_open_document() {
+        let temp = project();
+        let manifest = temp
+            .path()
+            .join("registry-stack.yaml")
+            .canonicalize()
+            .unwrap();
+        let mut state = WorkspaceState::load(temp.path()).unwrap();
+        state.update(
+            manifest.clone(),
+            "version: 1\nregistry: { id: unsaved }\nservices: {}\n".to_owned(),
+            2,
+        );
+
+        fs::write(
+            &manifest,
+            "version: 1\nregistry: { id: external }\nservices: {}\n",
+        )
+        .unwrap();
+        state.reload_from_disk(&manifest);
+        assert!(state
+            .index
+            .workspace_symbols("unsaved")
+            .iter()
+            .any(|symbol| symbol.name == "unsaved"));
+        assert!(state.index.workspace_symbols("external").is_empty());
+
+        state.close(&manifest);
+        assert!(state
+            .index
+            .workspace_symbols("external")
+            .iter()
+            .any(|symbol| symbol.name == "external"));
     }
 }

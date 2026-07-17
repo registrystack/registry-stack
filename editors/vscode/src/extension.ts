@@ -11,42 +11,62 @@ import {
   TransportKind,
 } from 'vscode-languageclient/node';
 
-let client: LanguageClient | undefined;
+const clients = new Map<string, LanguageClient>();
+let lifecycle = Promise.resolve();
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   context.subscriptions.push(
     vscode.commands.registerCommand('registryStack.restartLanguageServer', async () => {
-      await restart(context);
+      await enqueueLifecycle(() => restart(context));
     }),
     vscode.workspace.onDidChangeConfiguration(async (event) => {
       if (event.affectsConfiguration('registryStack.languageServer.path')) {
-        await restart(context);
+        await enqueueLifecycle(() => restart(context));
       }
+    }),
+    vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+      await enqueueLifecycle(() => reconcileClients(context));
     }),
   );
 
-  await start(context);
+  await enqueueLifecycle(() => reconcileClients(context));
 }
 
 export async function deactivate(): Promise<void> {
-  await stop();
+  await enqueueLifecycle(stopAll);
 }
 
 async function restart(context: vscode.ExtensionContext): Promise<void> {
-  await stop();
-  await start(context);
+  await stopAll();
+  await reconcileClients(context);
 }
 
-async function start(context: vscode.ExtensionContext): Promise<void> {
-  if (client !== undefined) {
-    return;
+function enqueueLifecycle(operation: () => Promise<void>): Promise<void> {
+  lifecycle = lifecycle.then(operation, operation);
+  return lifecycle;
+}
+
+async function reconcileClients(context: vscode.ExtensionContext): Promise<void> {
+  const projectFolders = findProjectFolders();
+  const desiredKeys = new Set(projectFolders.map(folderKey));
+  for (const key of clients.keys()) {
+    if (!desiredKeys.has(key)) {
+      await stopClient(key);
+    }
   }
 
-  const projectFolder = findProjectFolder();
-  if (projectFolder === undefined) {
-    return;
+  for (const projectFolder of projectFolders) {
+    if (!clients.has(folderKey(projectFolder))) {
+      await startClient(context, projectFolder);
+    }
   }
+}
 
+async function startClient(
+  context: vscode.ExtensionContext,
+  projectFolder: vscode.WorkspaceFolder,
+): Promise<void> {
+  const key = folderKey(projectFolder);
   try {
     const server = resolveServerCommand(context, projectFolder);
     const serverOptions: ServerOptions = {
@@ -75,33 +95,53 @@ async function start(context: vscode.ExtensionContext): Promise<void> {
         },
       ],
       workspaceFolder: projectFolder,
-      outputChannelName: 'Registry Stack Language Server',
+      outputChannelName: `Registry Stack Language Server (${projectFolder.name})`,
     };
 
-    client = new LanguageClient(
-      'registry-stack',
-      'Registry Stack Language Server',
+    const client = new LanguageClient(
+      `registry-stack:${key}`,
+      `Registry Stack Language Server (${projectFolder.name})`,
       serverOptions,
       clientOptions,
     );
+    clients.set(key, client);
     await client.start();
   } catch (error) {
-    client = undefined;
+    clients.delete(key);
     const detail = error instanceof Error ? error.message : String(error);
-    void vscode.window.showErrorMessage(`Registry Stack language server failed to start: ${detail}`);
+    void vscode.window.showErrorMessage(
+      `Registry Stack language server failed to start for ${projectFolder.name}: ${detail}`,
+    );
   }
 }
 
-async function stop(): Promise<void> {
-  const activeClient = client;
-  client = undefined;
-  await activeClient?.dispose();
+async function stopClient(key: string): Promise<void> {
+  const client = clients.get(key);
+  clients.delete(key);
+  await client?.dispose();
 }
 
-function findProjectFolder(): vscode.WorkspaceFolder | undefined {
-  return vscode.workspace.workspaceFolders?.find((folder) =>
-    fs.existsSync(path.join(folder.uri.fsPath, 'registry-stack.yaml')),
-  );
+async function stopAll(): Promise<void> {
+  const activeClients = [...clients.values()];
+  clients.clear();
+  await Promise.all(activeClients.map(async (client) => client.dispose()));
+}
+
+function findProjectFolders(): vscode.WorkspaceFolder[] {
+  return (vscode.workspace.workspaceFolders ?? []).filter((folder) => {
+    if (folder.uri.scheme !== 'file') {
+      return false;
+    }
+    try {
+      return fs.statSync(path.join(folder.uri.fsPath, 'registry-stack.yaml')).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
+function folderKey(folder: vscode.WorkspaceFolder): string {
+  return folder.uri.toString();
 }
 
 function resolveServerCommand(
@@ -161,7 +201,10 @@ function isExecutableFile(candidate: string): boolean {
 function findExecutableOnPath(executable: string): string | undefined {
   const pathEntries = process.env.PATH?.split(path.delimiter) ?? [];
   for (const entry of pathEntries) {
-    const candidate = path.join(entry === '' ? process.cwd() : entry, executable);
+    if (entry === '') {
+      continue;
+    }
+    const candidate = path.join(entry, executable);
     if (isExecutableFile(candidate)) {
       return candidate;
     }

@@ -12,8 +12,8 @@ Zed requires Rust installed through `rustup` to compile development extensions. 
 WebAssembly target from the repository root:
 
 ```console
-rustup target add wasm32-wasip1
-cargo check --locked --target wasm32-wasip1 --manifest-path editors/zed/Cargo.toml
+rustup target add wasm32-wasip2
+cargo check --locked --target wasm32-wasip2 --manifest-path editors/zed/Cargo.toml
 ```
 
 1. Put the freshly built language server on the environment inherited by Zed, then open the smoke
@@ -26,8 +26,9 @@ cargo check --locked --target wasm32-wasip1 --manifest-path editors/zed/Cargo.to
 
 2. Run `zed: install dev extension` from the command palette and select
    `$REGISTRY_STACK_REPO/editors/zed`. Zed compiles and installs the WebAssembly extension.
-3. Run `editor: restart language server`, then `zed: open log`. Confirm the log reports that the
-   Registry Stack project was indexed.
+3. Run `editor: restart language server`, then `dev: open language server logs`. Select
+   `registry-stack` for the smoke project and confirm the server log reports that the project was
+   indexed. Use `zed: open log` instead for extension compilation or launcher failures.
 4. Complete the [shared expected-behavior checklist](../README.md#expected-behavior). Zed uses
    `F12` for definitions, `Alt+Shift+F12` for references, `Cmd+Shift+O`/`Ctrl+Shift+O` for document
    symbols, and `Cmd+T`/`Ctrl+T` for workspace symbols.
@@ -42,7 +43,7 @@ cargo check --locked --target wasm32-wasip1 --manifest-path editors/zed/Cargo.to
 ## Troubleshooting
 
 - If the development extension does not compile, confirm `rustup` owns the active Rust installation
-  and that `cargo check` for `wasm32-wasip1` passes.
+  and that `cargo check` for `wasm32-wasip2` passes.
 - If Zed cannot find the server, close it, export the updated `PATH`, and relaunch it from that
   terminal. The launcher looks for `registry-language-server`, then `registryctl`.
 - Use `dev: open language server logs` to inspect how the server was launched. Use
