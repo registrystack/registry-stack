@@ -45,7 +45,8 @@ fn consult(ctx) {
     );
     let response = source.get(target, #{
         query: #{
-            fields: "trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]"
+            fields: "trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]",
+            includeDeleted: ctx.input.include_inactive
         }
     });
     if response.status == 404 {

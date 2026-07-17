@@ -928,10 +928,10 @@ pub(super) fn validate_delegated_proof_claim_binding(
     let has_target = consultation
         .inputs
         .values()
-        .any(RelayConsultationInput::is_target_derived);
+        .any(RelayConsultationInput::is_authenticated_target_identifier);
     if !has_requester || !has_target {
         return invalid_subject_access(format!(
-            "delegated proof_claim '{}' must map both requester-derived and target-derived Relay inputs",
+            "delegated proof_claim '{}' must map both a requester-derived input and an authenticated target identifier",
             relationship.proof_claim
         ));
     }

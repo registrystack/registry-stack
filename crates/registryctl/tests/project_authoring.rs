@@ -1523,6 +1523,30 @@ fn typed_target_attribute_executes_through_the_offline_notary_journey() {
 }
 
 #[test]
+fn malformed_target_attribute_mapping_preserves_typed_authoring_diagnostics() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("dhis2-tracker", temporary.path());
+    replace_in_file(
+        &project.join("registry-stack.yaml"),
+        "request.target.attributes.include_inactive",
+        "request.target.attributes.IncludeInactive",
+    );
+
+    let report = authoring_diagnostics(&project);
+    assert_eq!(report.status, "invalid");
+    assert_eq!(report.diagnostics.len(), 1, "{report:#?}");
+    assert_eq!(
+        report.diagnostics[0].code,
+        "registryctl.authoring.project.invalid"
+    );
+    assert_eq!(report.diagnostics[0].file, "registry-stack.yaml");
+    assert_eq!(
+        report.diagnostics[0].schema_hint,
+        Some("registryctl authoring schema --kind project > project.schema.json")
+    );
+}
+
+#[test]
 fn check_explain_reports_starter_divergence_and_runtime_abi() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = temporary.path().join("registry-project");
@@ -2433,6 +2457,65 @@ fn project_schema_accepts_sixteen_consultation_inputs_and_rejects_seventeen() {
             serde_json::Value::String("request.target.identifiers.identifier_16".to_string()),
         );
     assert!(!schema.is_valid(&project));
+}
+
+#[test]
+fn project_schema_accepts_only_bounded_scalar_target_attribute_mappings() {
+    let schema: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("schemas/project-authoring/project.schema.json"),
+        )
+        .expect("project schema reads"),
+    )
+    .expect("project schema is JSON");
+    let schema = jsonschema::JSONSchema::options()
+        .with_draft(jsonschema::Draft::Draft202012)
+        .compile(&schema)
+        .expect("project schema compiles");
+    let mut project = serde_json::to_value(read_yaml(
+        &golden("custom-system").join("registry-stack.yaml"),
+    ))
+    .expect("project converts to JSON");
+    let mapping = project
+        .pointer_mut(
+            "/services/household-eligibility/consultations/household/input/household_reference",
+        )
+        .expect("consultation input mapping exists");
+    *mapping = serde_json::json!("request.target.attributes.person_sequence");
+    assert!(schema.is_valid(&project));
+
+    for invalid in [
+        serde_json::json!("request.target.attributes."),
+        serde_json::json!("request.target.attributes.Person_sequence"),
+        serde_json::json!("request.target.attributes.person.sequence"),
+        serde_json::json!(format!("request.target.attributes.{}", "a".repeat(65))),
+        serde_json::json!({ "path": "request.target.attributes.person_sequence" }),
+        serde_json::json!(["request.target.attributes.person_sequence"]),
+        serde_json::json!("x".repeat(129)),
+    ] {
+        *project
+            .pointer_mut(
+                "/services/household-eligibility/consultations/household/input/household_reference",
+            )
+            .expect("consultation input mapping exists") = invalid;
+        assert!(
+            !schema.is_valid(&project),
+            "malformed, nested, or unbounded target attribute mappings fail closed"
+        );
+    }
+
+    *project
+        .pointer_mut("/services/household-eligibility/consultations/household")
+        .expect("consultation exists") = serde_json::json!({
+        "integration": "eligibility",
+        "input": { "household_reference": "request.target.attributes.person_sequence" },
+        "authenticated_identifier": "person_sequence",
+    });
+    assert!(
+        !schema.is_valid(&project),
+        "the closed consultation shape has no attribute-to-authenticated-identifier switch"
+    );
 }
 
 #[test]

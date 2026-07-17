@@ -1537,6 +1537,23 @@ async fn multi_input_profile_forwards_bounded_inputs_and_rejects_partial_maps() 
         ),
         Err(RelayClientError::InvalidRequest)
     ));
+    assert!(matches!(
+        client.canonicalize_execute_inputs(
+            EVALUATION_ID,
+            &BTreeMap::from([
+                (
+                    "tracked_entity".to_string(),
+                    Zeroizing::new("x".repeat(INPUT_VALUE_MAX_BYTES + 1)),
+                ),
+                ("country_code".to_string(), Zeroizing::new("TH".to_string())),
+                (
+                    "birth_date".to_string(),
+                    Zeroizing::new("2000-01-02".to_string()),
+                ),
+            ]),
+        ),
+        Err(RelayClientError::InvalidRequest)
+    ));
     server.shutdown().await;
 }
 

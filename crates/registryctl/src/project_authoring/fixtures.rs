@@ -1771,7 +1771,7 @@ mod fixture_interface_tests {
         assert_eq!(traced_calls.len(), 1);
         assert_eq!(
             traced_calls[0],
-            "call=1 operation=script-source-call method=GET path=/api/tracker/trackedEntities/* query=[fields] headers=[] body=none"
+            "call=1 operation=script-source-call method=GET path=/api/tracker/trackedEntities/* query=[fields,includeDeleted] headers=[] body=none"
         );
         for sensitive in ["A0000000001", "Nia", "REF-0001"] {
             assert!(!traced_calls[0].contains(sensitive));

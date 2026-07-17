@@ -14,6 +14,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   and remediation. Independent files are checked in deterministic order. Safe
   missing declared references aggregate, while unsafe paths, symlinks,
   oversized files, and inspection failures remain terminal.
+- Project consultation inputs now accept the stable
+  `request.target.attributes.<stable-name>` authoring mapping for bounded
+  string, boolean, and integer integration inputs. The committed project JSON
+  Schema and maintained DHIS2 offline journey cover the same closed grammar.
+  Target attributes are caller-supplied request context, not authenticated
+  identifiers.
 
 ### Removed
 

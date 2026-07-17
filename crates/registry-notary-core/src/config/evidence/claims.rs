@@ -221,6 +221,11 @@ impl RelayConsultationInput {
             Self::TargetId | Self::TargetIdentifier(_) | Self::TargetAttribute(_)
         )
     }
+
+    #[must_use]
+    pub const fn is_authenticated_target_identifier(&self) -> bool {
+        matches!(self, Self::TargetId | Self::TargetIdentifier(_))
+    }
 }
 
 impl Serialize for RelayConsultationInput {

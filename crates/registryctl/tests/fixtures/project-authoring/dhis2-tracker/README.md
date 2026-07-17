@@ -19,3 +19,8 @@ consumers. The generated schema can be selected from an editor modeline.
 
 Edit the reviewed `adapter.rhai`, integration contract, and synthetic fixtures
 together. Keep source credentials in the environment binding.
+
+The `include_inactive` boolean is a bounded, typed target attribute supplied by
+the evaluation caller and forwarded through Notary and Relay. It is request
+context only. It is not an authenticated identity or a substitute for the
+`dhis2_tracked_entity` identifier used to select the record.
