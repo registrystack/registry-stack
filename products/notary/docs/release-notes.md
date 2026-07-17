@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: Configuration `${VAR}` expansion now rejects environment variables
+  that are unset or empty. `${VAR:-fallback}` uses its fallback for either
+  state, `${VAR:-}` explicitly expands to empty, and `${VAR:?message}` reports
+  its message for either state. Whitespace-only values remain non-empty.
+
 ## 0.10.0
 
 - BREAKING: Notary now has one deployable correctness-state backend: typed,

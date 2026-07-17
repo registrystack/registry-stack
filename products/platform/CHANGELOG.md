@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- BREAKING: shared configuration `${VAR}` expansion now rejects environment
+  variables that are unset or empty. `${VAR:-fallback}` uses its fallback for
+  either state, `${VAR:-}` explicitly expands to empty, and `${VAR:?message}`
+  reports its message for either state. Whitespace-only values remain non-empty.
+
 ## v0.10.0 - 2026-07-17
 
 ### Added

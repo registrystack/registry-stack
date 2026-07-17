@@ -27,6 +27,15 @@ Unknown fields are rejected. Use the generated configuration from Registry
 Stack project authoring as the source of truth rather than maintaining a
 second handwritten example.
 
+## Environment expansion
+
+Notary expands `${VAR}` expressions before YAML parsing. `${VAR}` requires
+`VAR` to be set to a non-empty value. `${VAR:-fallback}` uses `fallback` when
+`VAR` is unset or empty, including `${VAR:-}` for an explicit empty result.
+`${VAR:?message}` fails with `message` when `VAR` is unset or empty.
+Whitespace-only values are non-empty. Diagnostics name the variable or use the
+supplied message; they never include the variable value.
+
 ## Evidence modes
 
 Every claim uses one sealed evidence mode:

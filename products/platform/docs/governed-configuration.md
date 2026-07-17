@@ -11,6 +11,15 @@ runtime snapshot, validating readiness, and emitting product-specific audit
 events. The platform crate owns the local bundle verification and state
 contracts that should be consistent across services.
 
+## Environment expansion
+
+Shared configuration loaders expand `${VAR}` expressions before YAML parsing.
+`${VAR}` requires `VAR` to be set to a non-empty value. `${VAR:-fallback}`
+uses `fallback` when `VAR` is unset or empty, including `${VAR:-}` for an
+explicit empty result. `${VAR:?message}` fails with `message` when `VAR` is
+unset or empty. Whitespace-only values are non-empty. Diagnostics name the
+variable or use the supplied message; they never include the variable value.
+
 ## Bundle layout
 
 A Registry Config Bundle v1 is a local directory. The verifier reads:

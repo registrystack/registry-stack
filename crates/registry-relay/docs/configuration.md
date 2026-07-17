@@ -28,6 +28,15 @@ standards: {}  # optional, feature-gated adapters
 
 Unknown fields are rejected for most blocks. Config validation runs after YAML parsing and checks ids, scopes, table/entity references, filter references, aggregate references, env var presence, and vocabulary prefixes.
 
+## Environment expansion
+
+Relay expands `${VAR}` expressions before YAML parsing. `${VAR}` requires
+`VAR` to be set to a non-empty value. `${VAR:-fallback}` uses `fallback` when
+`VAR` is unset or empty, including `${VAR:-}` for an explicit empty result.
+`${VAR:?message}` fails with `message` when `VAR` is unset or empty.
+Whitespace-only values are non-empty. Diagnostics name the variable or use the
+supplied message; they never include the variable value.
+
 A minimal entity-serving deployment needs `server` (a listener), `catalog` (public metadata base), `auth` (one auth mode), `audit` (a sink and hash secret), and at least one entry in `datasets`. A consultation-only deployment can use `datasets: []` when the complete `consultation` block activates at least one profile.
 Every other root block is optional.
 This example shows the required shape.

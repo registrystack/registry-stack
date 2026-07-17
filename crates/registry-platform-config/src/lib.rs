@@ -152,19 +152,18 @@ fn resolve_config_env_expression(
 
     match lookup(name) {
         Some(value) if !value.is_empty() => Ok((name, value)),
-        Some(value) if operator.is_empty() => Ok((name, value)),
         _ if operator == ":-" => Ok((name, fallback.to_string())),
         _ if operator == ":?" => {
             if fallback.trim().is_empty() {
                 Err(ConfigEnvExpansionError(format!(
-                    "missing required env var {name}"
+                    "required env var {name} is unset or empty"
                 )))
             } else {
                 Err(ConfigEnvExpansionError(fallback.to_string()))
             }
         }
         _ => Err(ConfigEnvExpansionError(format!(
-            "missing required env var {name}"
+            "required env var {name} is unset or empty"
         ))),
     }
 }
@@ -358,34 +357,105 @@ mod tests {
     }
 
     #[test]
-    fn config_env_expansion_supports_required_and_default_values() {
-        let expanded = expand_config_env_vars_with(
-            "base: ${BASE_URL:?missing base}\noptional: ${OPTIONAL_URL:-https://fallback.example}\n",
-            |name| match name {
-                "BASE_URL" => Some("https://registry.example".to_string()),
-                _ => None,
+    fn config_env_expansion_distinguishes_unset_empty_and_whitespace_values() {
+        struct Case {
+            name: &'static str,
+            expression: &'static str,
+            value: Option<&'static str>,
+            expected: Result<&'static str, &'static str>,
+        }
+
+        for case in [
+            Case {
+                name: "plain expression rejects an unset value",
+                expression: "${VALUE}",
+                value: None,
+                expected: Err("required env var VALUE is unset or empty"),
             },
-        )
-        .expect("config expands");
+            Case {
+                name: "plain expression rejects an empty value",
+                expression: "${VALUE}",
+                value: Some(""),
+                expected: Err("required env var VALUE is unset or empty"),
+            },
+            Case {
+                name: "plain expression preserves whitespace-only value",
+                expression: "${VALUE}",
+                value: Some("   "),
+                expected: Ok("\"   \""),
+            },
+            Case {
+                name: "fallback applies to an unset value",
+                expression: "${VALUE:-fallback}",
+                value: None,
+                expected: Ok("\"fallback\""),
+            },
+            Case {
+                name: "fallback applies to an empty value",
+                expression: "${VALUE:-fallback}",
+                value: Some(""),
+                expected: Ok("\"fallback\""),
+            },
+            Case {
+                name: "non-empty value wins over fallback",
+                expression: "${VALUE:-fallback}",
+                value: Some("configured"),
+                expected: Ok("\"configured\""),
+            },
+            Case {
+                name: "explicit empty fallback applies to an unset value",
+                expression: "${VALUE:-}",
+                value: None,
+                expected: Ok("\"\""),
+            },
+            Case {
+                name: "explicit empty fallback applies to an empty value",
+                expression: "${VALUE:-}",
+                value: Some(""),
+                expected: Ok("\"\""),
+            },
+            Case {
+                name: "required message applies to an unset value",
+                expression: "${VALUE:?configure VALUE}",
+                value: None,
+                expected: Err("configure VALUE"),
+            },
+            Case {
+                name: "required message applies to an empty value",
+                expression: "${VALUE:?configure VALUE}",
+                value: Some(""),
+                expected: Err("configure VALUE"),
+            },
+            Case {
+                name: "blank required message identifies an unset value",
+                expression: "${VALUE:?}",
+                value: None,
+                expected: Err("required env var VALUE is unset or empty"),
+            },
+            Case {
+                name: "blank required message identifies an empty value",
+                expression: "${VALUE:?}",
+                value: Some(""),
+                expected: Err("required env var VALUE is unset or empty"),
+            },
+            Case {
+                name: "unsupported syntax remains invalid",
+                expression: "${VALUE-fallback}",
+                value: Some("configured"),
+                expected: Err("invalid env var name in config expression: VALUE-fallback"),
+            },
+        ] {
+            let actual = expand_config_env_vars_with(case.expression, |_| {
+                case.value.map(ToString::to_string)
+            })
+            .map_err(|error| error.to_string());
 
-        assert!(expanded.contains("base: \"https://registry.example\""));
-        assert!(expanded.contains("optional: \"https://fallback.example\""));
-    }
-
-    #[test]
-    fn config_env_expansion_rejects_missing_required_value() {
-        let err = expand_config_env_vars_with("${BASE_URL:?missing base}", |_| None)
-            .expect_err("missing required env var is rejected");
-
-        assert_eq!(err.to_string(), "missing base");
-    }
-
-    #[test]
-    fn config_env_expansion_allows_empty_plain_value() {
-        let expanded = expand_config_env_vars_with("${BASE_URL}", |_| Some(String::new()))
-            .expect("empty env var is allowed for plain expressions");
-
-        assert_eq!(expanded, "\"\"");
+            let actual = actual
+                .as_ref()
+                .map(|value| value.as_str())
+                .map_err(|error| error.as_str());
+            assert_eq!(actual, case.expected, "{}", case.name);
+        }
     }
 
     #[test]
