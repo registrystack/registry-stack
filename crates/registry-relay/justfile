@@ -117,8 +117,16 @@ container-security:
     python3 scripts/check_security_assurance.py dockerfile-secrets
 
 # Run the monorepo CI preflight for Registry Relay.
-ci-preflight:
+ci-preflight: config-schema-check
     scripts/ci-preflight.sh
+
+# Reproduce the committed Draft 2020-12 runtime configuration schema.
+config-schema-generate:
+    cargo run --quiet --locked --bin registry-relay -- schema --format json > ../../schemas/registry-relay.config.schema.json
+
+# Fail when the product-owned runtime schema has drifted from Config.
+config-schema-check:
+    tmp_schema="$(mktemp)"; trap 'rm -f "$tmp_schema"' EXIT; cargo run --quiet --locked --bin registry-relay -- schema --format json > "$tmp_schema"; cmp -s ../../schemas/registry-relay.config.schema.json "$tmp_schema" || { diff -u ../../schemas/registry-relay.config.schema.json "$tmp_schema"; exit 1; }
 
 # Run the full CI gate locally: monorepo preflight, Docker build contract,
 # fmt-check, default/all-feature lint, default/all-feature tests, and cargo-deny.

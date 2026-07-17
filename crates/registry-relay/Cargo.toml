@@ -76,6 +76,7 @@ tokio-util = { version = "0.7" }
 # ─── serialization / config ──────────────────────────────────────────────────
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
+schemars.workspace = true
 rhai.workspace = true
 crosswalk-functions = { workspace = true, features = ["date", "redaction"] }
 # Optional Crosswalk CEL mapping support. Disabled by default so the core VC
@@ -154,7 +155,7 @@ insta = { version = "1", features = ["json"] }
 # don't multiply build-time copies.
 zip = { version = "8", default-features = false, features = ["deflate"] }
 # Validates payloads in standards-adapter tests.
-jsonschema = { version = "0.18" }
+jsonschema = { version = "0.18", features = ["draft202012"] }
 # Ed25519 key generation for tests so they can mint fresh keypairs and
 # convert them to/from JWK without shelling out to openssl.
 ed25519-dalek = { version = "2", features = ["pkcs8", "rand_core"] }

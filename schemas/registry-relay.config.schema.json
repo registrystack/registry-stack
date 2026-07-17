@@ -1,0 +1,3418 @@
+{
+  "$defs": {
+    "AccessRights": {
+      "description": "Access rights classification, mirrors DCAT-AP `dcterms:accessRights`.",
+      "enum": [
+        "public",
+        "restricted",
+        "non_public"
+      ],
+      "type": "string"
+    },
+    "AdmsStatus": {
+      "description": "BRegDCAT-AP `adms:status` vocabulary. Maps to the EU ADMS status codelists.",
+      "enum": [
+        "under_development",
+        "completed",
+        "deprecated",
+        "withdrawn"
+      ],
+      "type": "string"
+    },
+    "AggregateAccessConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregate_only_execution": {
+          "default": false,
+          "type": "boolean"
+        },
+        "aggregate_scope": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata_scope": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "AggregateConfig": {
+      "additionalProperties": false,
+      "description": "Aggregate declaration: group-by columns, measures, disclosure\ncontrol.",
+      "properties": {
+        "access": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AggregateAccessConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "allowed_filters": {
+          "items": {
+            "$ref": "#/$defs/AllowedFilter"
+          },
+          "type": "array"
+        },
+        "default_group_by": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": {
+          "type": "string"
+        },
+        "dimensions": {
+          "items": {
+            "$ref": "#/$defs/AggregateDimensionConfig"
+          },
+          "type": "array"
+        },
+        "disclosure_control": {
+          "$ref": "#/$defs/DisclosureControlConfig"
+        },
+        "group_by": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/AggregateId"
+        },
+        "indicators": {
+          "items": {
+            "$ref": "#/$defs/AggregateIndicatorConfig"
+          },
+          "type": "array"
+        },
+        "joins": {
+          "description": "Legacy entity-local aggregate fields. These stay parseable while\nthe public surface moves to dataset-level aggregates.",
+          "items": {
+            "$ref": "#/$defs/AggregateJoinConfig"
+          },
+          "type": "array"
+        },
+        "measures": {
+          "items": {
+            "$ref": "#/$defs/AggregateMeasure"
+          },
+          "type": "array"
+        },
+        "required_filter_bindings": {
+          "description": "Principal-derived bindings that both satisfy the required filter gate\nand are applied to the aggregate query.",
+          "items": {
+            "$ref": "#/$defs/RequiredFilterBindingConfig"
+          },
+          "type": "array"
+        },
+        "required_filters": {
+          "default": [],
+          "description": "Alternative fields or dimensions that can satisfy the aggregate gate. A\nprincipal-bound equality filter on any listed field is sufficient, so\nlist multiple fields only when each is an acceptable boundary.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source_entity": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "spatial": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AggregateSpatialConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "temporal_field": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "description",
+        "disclosure_control"
+      ],
+      "type": "object"
+    },
+    "AggregateDimensionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "codelist": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "field": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "field"
+      ],
+      "type": "object"
+    },
+    "AggregateFunction": {
+      "description": "Aggregate function. V1 supports the basic set plus the\noptional functions (`median`, `count_distinct`, `stddev`).",
+      "enum": [
+        "count",
+        "sum",
+        "avg",
+        "min",
+        "max",
+        "median",
+        "count_distinct",
+        "stddev"
+      ],
+      "type": "string"
+    },
+    "AggregateId": {
+      "description": "Aggregate identifier within a resource.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    },
+    "AggregateIndicatorConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "column": {
+          "type": "string"
+        },
+        "decimals": {
+          "default": null,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "definition_uri": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "frequency": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "function": {
+          "$ref": "#/$defs/AggregateFunction"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "unit_measure": {
+          "type": "string"
+        },
+        "unit_mult": {
+          "default": null,
+          "format": "int32",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "function",
+        "column",
+        "unit_measure"
+      ],
+      "type": "object"
+    },
+    "AggregateJoinConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "relationship": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "relationship"
+      ],
+      "type": "object"
+    },
+    "AggregateMeasure": {
+      "additionalProperties": false,
+      "description": "One measure inside an aggregate.",
+      "properties": {
+        "column": {
+          "type": "string"
+        },
+        "function": {
+          "$ref": "#/$defs/AggregateFunction"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "function",
+        "column"
+      ],
+      "type": "object"
+    },
+    "AggregateSpatialConfig": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "bbox_fields": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SpatialBboxFieldsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "collection_id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "dimension": {
+              "type": "string"
+            },
+            "geometry_entity": {
+              "type": "string"
+            },
+            "geometry_field": {
+              "type": "string"
+            },
+            "geometry_id_field": {
+              "type": "string"
+            },
+            "max_geometry_vertices": {
+              "default": 10000,
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mode": {
+              "const": "admin_area",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "dimension",
+            "geometry_entity",
+            "geometry_id_field",
+            "geometry_field"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AllowedFilter": {
+      "additionalProperties": false,
+      "description": "A single allowed filter: field name + permitted operators.",
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "ops": {
+          "items": {
+            "$ref": "#/$defs/FilterOp"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "field",
+        "ops"
+      ],
+      "type": "object"
+    },
+    "ApiKeyConfig": {
+      "additionalProperties": false,
+      "description": "One configured API key, identified by an id and a fingerprint reference.\nThe raw key never appears in config.",
+      "properties": {
+        "fingerprint": {
+          "$ref": "#/$defs/CredentialFingerprintSchema"
+        },
+        "id": {
+          "type": "string"
+        },
+        "scopes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "fingerprint"
+      ],
+      "type": "object"
+    },
+    "AttributeReleaseProfile": {
+      "additionalProperties": false,
+      "description": "A governed identity attribute-release profile. A profile is a\nprojection-limited, exactly-one-subject lookup that maps a configured set of\nsource fields (or CEL-computed expressions) into a minimised\nOIDC/UserInfo-style claim bundle. It is *optionally* purpose-bound: a profile\nthat declares a `purpose` requires a matching `data-purpose` at resolve time;\none that omits it does not. Identified globally by the `(id, version)` pair;\nboth are required path segments at resolve time.",
+      "properties": {
+        "claims": {
+          "description": "Claims released on success. Non-empty; at least one `required`.",
+          "items": {
+            "$ref": "#/$defs/ReleaseClaimConfig"
+          },
+          "type": "array"
+        },
+        "description": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Profile identifier, lower-kebab/snake (`^[a-z][a-z0-9_-]*$`). Globally\nunique with `version`.",
+          "type": "string"
+        },
+        "purpose": {
+          "default": null,
+          "description": "Data-purpose this profile is bound to. Required (and must be a member\nof the entity's `governed_policy.permitted_purposes`) when the backing\nentity declares any permitted purposes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "release_conditions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReleaseConditionsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional CEL release-condition gate evaluated before projection."
+        },
+        "release_scope": {
+          "description": "Dataset-bound scope a caller must hold to invoke this release. Must\ndiffer from the entity's `read_scope`.",
+          "type": "string"
+        },
+        "response": {
+          "$ref": "#/$defs/ReleaseResponseConfig",
+          "description": "Response envelope controls."
+        },
+        "subject": {
+          "$ref": "#/$defs/ReleaseSubjectConfig",
+          "description": "How the subject is identified and looked up."
+        },
+        "title": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "description": "Profile version. Globally unique with `id`; no silent \"latest\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "release_scope",
+        "subject",
+        "claims"
+      ],
+      "type": "object"
+    },
+    "AuditConfig": {
+      "description": "Audit configuration. Sink choice gates further fields via the\ntagged `AuditSinkConfig` enum. The enum is flattened onto the\ncontaining struct so that the YAML `sink:` key acts as the\ndiscriminator, matching the public example configuration.\n\n`deny_unknown_fields` is deliberately omitted here: `serde` does\nnot support combining it with `#[serde(flatten)]` on an internally\ntagged enum (unknown keys in `audit` are caught by the enum's own\n`deny_unknown_fields`).",
+      "oneOf": [
+        {
+          "properties": {
+            "sink": {
+              "const": "stdout",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sink"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "rotate": {
+              "$ref": "#/$defs/RotateConfig"
+            },
+            "sink": {
+              "const": "file",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sink",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "sink": {
+              "const": "syslog",
+              "type": "string"
+            }
+          },
+          "required": [
+            "sink"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "chain": {
+          "default": false,
+          "type": "boolean"
+        },
+        "format": {
+          "$ref": "#/$defs/AuditFormat"
+        },
+        "hash_secret_env": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuditHashSecretEnvironmentNameSchema"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Name of the environment variable holding the per-deploy secret\nused to HMAC sensitive audit values (single-record primary keys,\nsensitive query parameters). Runtime startup fails closed when\nthis field is unset, empty, or points to a missing, empty, or\nweak secret. Direct middleware tests can opt into the explicit\nunkeyed dev-only hasher without using runtime config."
+        },
+        "include_health": {
+          "default": false,
+          "description": "Include `/healthz` liveness probes in the audit stream. `/ready` is\nalways excluded because auditing it would advance the chain after its\nzero-backlog shipping check and self-invalidate the next probe.",
+          "type": "boolean"
+        },
+        "write_policy": {
+          "$ref": "#/$defs/AuditWritePolicySchema",
+          "default": "fail_closed",
+          "description": "Behavior when an audit record fails to write.\n\n`fail_closed` (default) fails the request with a stable error code so\nthat no request outcome is returned without a durable audit record.\n`availability_first` logs the failure and lets the request succeed for\ndeployments that explicitly accept best-effort audit durability.\nPer-route-family selection is out of scope; this is a single\ndeployment-wide policy."
+        }
+      },
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "AuditFormat": {
+      "description": "Audit serialisation format. JSONL is the only V1 format.",
+      "oneOf": [
+        {
+          "const": "jsonl",
+          "description": "JSON Lines: one record per line, UTF-8, LF-terminated.",
+          "type": "string"
+        }
+      ]
+    },
+    "AuditHashSecretEnvironmentNameSchema": {
+      "pattern": "^[^=\\x00]*[^=\\x00\\x09-\\x0D\\x20\\x85\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000][^=\\x00]*$",
+      "type": "string"
+    },
+    "AuditPseudonymKeyIdSchema": {
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+      "type": "string"
+    },
+    "AuditPseudonymMaterialCatalogConfig": {
+      "description": "Bounded startup catalog of audit-pseudonym material references.\n\nThe 1..=32 bound and cross-entry uniqueness are enforced by config\nvalidation and repeated by the material provider before loading secrets.",
+      "items": {
+        "$ref": "#/$defs/AuditPseudonymMaterialConfig"
+      },
+      "type": "array"
+    },
+    "AuditPseudonymMaterialConfig": {
+      "additionalProperties": false,
+      "description": "One public epoch id bound to one secret source reference.",
+      "properties": {
+        "key_id": {
+          "$ref": "#/$defs/AuditPseudonymKeyIdSchema"
+        },
+        "source": {
+          "$ref": "#/$defs/AuditPseudonymSecretSourceConfig"
+        }
+      },
+      "required": [
+        "key_id",
+        "source"
+      ],
+      "type": "object"
+    },
+    "AuditPseudonymSecretEnvironmentName": {
+      "description": "Portable environment-variable name used only as a secret reference.\n\nDebug output is redacted even though the name is not itself key material,\npreventing configuration diagnostics from disclosing secret topology.",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
+      "type": "string"
+    },
+    "AuditPseudonymSecretSourceConfig": {
+      "description": "Closed v1 set of audit-pseudonym secret source providers.\n\nThe configured name is a reference only. Secret values cannot be embedded\nin this model and are loaded exactly once during runtime compilation.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/AuditPseudonymSecretEnvironmentName"
+            },
+            "provider": {
+              "const": "environment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "name"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AuditWritePolicySchema": {
+      "enum": [
+        "availability_first",
+        "fail_closed",
+        "fail_closed_route_families"
+      ],
+      "type": "string"
+    },
+    "AuthConfig": {
+      "additionalProperties": false,
+      "description": "Authentication configuration. Exactly one of `api_keys` and `oidc`\nis consumed at startup, gated by `mode`; cross-field validation in\n[`validate`] enforces that only the active block is populated.",
+      "properties": {
+        "api_keys": {
+          "items": {
+            "$ref": "#/$defs/ApiKeyConfig"
+          },
+          "type": "array"
+        },
+        "failure_throttle": {
+          "$ref": "#/$defs/AuthFailureThrottleConfig",
+          "description": "Local, coarse, in-process throttle on repeated authentication\nfailures from one client address. Disabled by default."
+        },
+        "mode": {
+          "$ref": "#/$defs/AuthMode"
+        },
+        "oidc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OidcConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "type": "object"
+    },
+    "AuthFailureThrottleConfig": {
+      "additionalProperties": false,
+      "description": "Local backstop against repeated authentication failures from a single\nclient address. This is not the primary defense: ingress rate limiting\nin front of the relay (declared via `deployment.evidence.ingress_rate_limit`)\nis expected to absorb abusive traffic before it reaches this process.\nDisabled by default so deployments that never set this block observe no\nbehavior change.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "max_failures": {
+          "default": 20,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "window_seconds": {
+          "default": 60,
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "AuthMode": {
+      "description": "Authentication mode tag. Drives the provider built at startup in\n`crate::auth`. A given deployment runs in exactly one mode at a time;\nmixed-mode operation is not supported.",
+      "oneOf": [
+        {
+          "const": "api_key",
+          "description": "Hashed shared secret in an environment variable.",
+          "type": "string"
+        },
+        {
+          "const": "oidc",
+          "description": "Bearer JWT validated against an external OIDC / OAuth2 provider.",
+          "type": "string"
+        }
+      ]
+    },
+    "CatalogConfig": {
+      "additionalProperties": false,
+      "description": "Catalog-level metadata surfaced by `/metadata/*` and DCAT outputs.",
+      "properties": {
+        "authority_type": {
+          "default": null,
+          "description": "BRegDCAT-AP: type IRI for the `foaf:Agent` publisher. When set, emits\n`dcterms:type` on the publisher node.\n\nBRegDCAT-AP 2.1.0 SHACL checks publisher type values against the ADMS\npublishertype scheme (`http://purl.org/adms/publishertype/...`).\nThe relay does not enforce a vocabulary: any IRI passes through.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base_url": {
+          "type": "string"
+        },
+        "default_spatial_coverage": {
+          "default": null,
+          "description": "BRegDCAT-AP: default `dcterms:spatial` IRI applied to datasets that\ndo not declare their own `spatial_coverage`. Typically an EU\nauthority country IRI under\n`http://publications.europa.eu/resource/authority/country/`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "participant_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "publisher": {
+          "type": "string"
+        },
+        "publisher_iri": {
+          "default": null,
+          "description": "BRegDCAT-AP: identifier IRI for the `foaf:Agent` publisher. Use a\ncontrolled-vocabulary corporate body IRI when publishing strict\nBRegDCAT-AP.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "base_url",
+        "publisher"
+      ],
+      "type": "object"
+    },
+    "ClaimSensitivity": {
+      "description": "Closed privacy-sensitivity classification for a released claim. This is a\nseparate, release-specific taxonomy and is intentionally not the\ndataset-level `Sensitivity` enum.",
+      "enum": [
+        "direct_identifier",
+        "personal",
+        "public",
+        "pseudonymous"
+      ],
+      "type": "string"
+    },
+    "ConfigTrustConfig": {
+      "additionalProperties": false,
+      "description": "Optional signed configuration bundle trust state.\n\nSimple local deployments omit this block. Bundle-aware deployments pin the\nlocal trust anchor, bundle, and anti-rollback state paths explicitly.",
+      "properties": {
+        "antirollback_state_path": {
+          "type": "string"
+        },
+        "break_glass_override_path": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bundle_path": {
+          "type": "string"
+        },
+        "trust_anchor_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "trust_anchor_path",
+        "bundle_path",
+        "antirollback_state_path"
+      ],
+      "type": "object"
+    },
+    "ConsultationArtifactClosureConfig": {
+      "additionalProperties": false,
+      "description": "Complete artifact catalog for all consultations enabled at one restart.",
+      "properties": {
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/ConsultationEvidenceArtifactConfig"
+          },
+          "type": "array"
+        },
+        "integration_packs": {
+          "items": {
+            "$ref": "#/$defs/ConsultationTypedArtifactReferenceConfig"
+          },
+          "type": "array"
+        },
+        "private_bindings": {
+          "items": {
+            "$ref": "#/$defs/ConsultationTypedArtifactReferenceConfig"
+          },
+          "type": "array"
+        },
+        "public_contracts": {
+          "items": {
+            "$ref": "#/$defs/ConsultationTypedArtifactReferenceConfig"
+          },
+          "type": "array"
+        },
+        "rhai_scripts": {
+          "items": {
+            "$ref": "#/$defs/ConsultationArtifactReferenceConfig"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "public_contracts",
+        "integration_packs",
+        "private_bindings",
+        "evidence"
+      ],
+      "type": "object"
+    },
+    "ConsultationArtifactReferenceConfig": {
+      "additionalProperties": false,
+      "description": "One hash-pinned private binding or standalone Rhai script.",
+      "properties": {
+        "path": {
+          "description": "Normalized bundle-root-relative path.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "Raw file hash recorded by Registry Config Bundle v1.",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ConsultationClientClaimSelectorConfig": {
+      "description": "Closed set of verified OAuth claims that may identify Registry Notary.",
+      "enum": [
+        "azp",
+        "client_id"
+      ],
+      "type": "string"
+    },
+    "ConsultationConfig": {
+      "additionalProperties": false,
+      "description": "Restart-only activation configuration for governed consultations.\n\nThe block is all-or-nothing: validation requires OIDC authentication, the\nexact authorized consultation workload, PostgreSQL state-plane identity, an artifact closure,\nand immutable, versioned secret references. PostgreSQL intentionally stores\nno secret-derived verifier, so replacing audit-pseudonym material behind an\nexisting reference requires a new key id.",
+      "properties": {
+        "artifacts": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConsultationArtifactClosureConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Complete restart-only source-plan artifact closure.\n\nEvery public contract in this catalog is an enabled consultation. A\nnon-local deployment may activate the catalog only from a verified\nRegistry Config Bundle v1. Local development still pins every file by\nhash, but intentionally has no signing requirement."
+        },
+        "audit_pseudonym_materials": {
+          "$ref": "#/$defs/AuditPseudonymMaterialCatalogConfig"
+        },
+        "authorized_workload": {
+          "$ref": "#/$defs/ConsultationWorkloadConfig",
+          "description": "Exact OIDC claims that identify the only caller allowed to execute\nconsultation profiles. The issuer is inherited from `auth.oidc`; the\nworkload, scope, tenant, and registry bindings come from each compiled\nprofile."
+        },
+        "source_credentials": {
+          "$ref": "#/$defs/ConsultationSourceCredentialCatalogConfig",
+          "description": "Complete restart-only catalog of source credentials referenced by the\ncompiled consultation plans.\n\nV1 accepts environment-backed HTTP Basic and OAuth client credentials.\nEmpty is valid when no compiled source plan uses source authentication."
+        },
+        "state_plane": {
+          "$ref": "#/$defs/ConsultationStatePlaneConfig",
+          "description": "Dedicated PostgreSQL control-plane connection and deployment identity."
+        }
+      },
+      "required": [
+        "authorized_workload",
+        "state_plane",
+        "audit_pseudonym_materials"
+      ],
+      "type": "object"
+    },
+    "ConsultationCredentialEnvironmentName": {
+      "description": "Portable environment-variable name used only as a credential reference.",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
+      "type": "string"
+    },
+    "ConsultationDatabaseUrlEnvironmentName": {
+      "description": "Portable environment-variable name that resolves the state-plane URL.",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
+      "type": "string"
+    },
+    "ConsultationEvidenceArtifactConfig": {
+      "additionalProperties": false,
+      "description": "One bounded, hash-pinned integration evidence file.",
+      "properties": {
+        "class": {
+          "$ref": "#/$defs/ConsultationEvidenceClassConfig"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "class",
+        "path",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ConsultationEvidenceClassConfig": {
+      "description": "Closed evidence classes understood by consultation source-plan v1.",
+      "enum": [
+        "conformance",
+        "negative_security",
+        "minimization"
+      ],
+      "type": "string"
+    },
+    "ConsultationSourceCredentialCatalogConfig": {
+      "description": "Bounded source-credential references loaded only during runtime startup.\n\nThe catalog contains references, never credential values. Full one-to-one\nclosure against the compiled source-plan registry is enforced before any\nenvironment variable is read.",
+      "items": {
+        "$ref": "#/$defs/ConsultationSourceCredentialConfig"
+      },
+      "type": "array"
+    },
+    "ConsultationSourceCredentialConfig": {
+      "description": "Closed V1 source-credential provider configuration.\n\nEnvironment names are opaque references and are redacted from `Debug`.\nThere is deliberately no field capable of carrying an embedded username,\npassword, bearer token, or provider-specific extension.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "generation": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "password_env": {
+              "$ref": "#/$defs/ConsultationCredentialEnvironmentName"
+            },
+            "ref": {
+              "$ref": "#/$defs/ConsultationSourceCredentialReference"
+            },
+            "type": {
+              "const": "basic",
+              "type": "string"
+            },
+            "username_env": {
+              "$ref": "#/$defs/ConsultationCredentialEnvironmentName"
+            }
+          },
+          "required": [
+            "type",
+            "ref",
+            "generation",
+            "username_env",
+            "password_env"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "generation": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ref": {
+              "$ref": "#/$defs/ConsultationSourceCredentialReference"
+            },
+            "token_env": {
+              "$ref": "#/$defs/ConsultationCredentialEnvironmentName"
+            },
+            "type": {
+              "const": "static_bearer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "ref",
+            "generation",
+            "token_env"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "generation": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ref": {
+              "$ref": "#/$defs/ConsultationSourceCredentialReference"
+            },
+            "type": {
+              "const": "api_key_header",
+              "type": "string"
+            },
+            "value_env": {
+              "$ref": "#/$defs/ConsultationCredentialEnvironmentName"
+            }
+          },
+          "required": [
+            "type",
+            "ref",
+            "generation",
+            "value_env"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "generation": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ref": {
+              "$ref": "#/$defs/ConsultationSourceCredentialReference"
+            },
+            "type": {
+              "const": "api_key_query",
+              "type": "string"
+            },
+            "value_env": {
+              "$ref": "#/$defs/ConsultationCredentialEnvironmentName"
+            }
+          },
+          "required": [
+            "type",
+            "ref",
+            "generation",
+            "value_env"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "client_id_env": {
+              "$ref": "#/$defs/ConsultationCredentialEnvironmentName"
+            },
+            "client_secret_env": {
+              "$ref": "#/$defs/ConsultationCredentialEnvironmentName"
+            },
+            "generation": {
+              "format": "uint64",
+              "maximum": 18446744073709551615,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "ref": {
+              "$ref": "#/$defs/ConsultationSourceCredentialReference"
+            },
+            "type": {
+              "const": "oauth_client_credentials",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "ref",
+            "generation",
+            "client_id_env",
+            "client_secret_env"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ConsultationSourceCredentialReference": {
+      "description": "Exact private-binding credential reference grammar.",
+      "pattern": "^[a-z][a-z0-9._-]{0,95}$",
+      "type": "string"
+    },
+    "ConsultationStatePlaneConfig": {
+      "additionalProperties": false,
+      "description": "Required PostgreSQL state-plane activation settings.\n\nThe database URL itself cannot be embedded in YAML. Only the name of an\nenvironment variable may be configured. Debug output also redacts that\nreference and the optional trust-root path so diagnostics do not disclose\ndeployment secret topology.",
+      "properties": {
+        "audit_pseudonym_keyring_lock_key": {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        },
+        "chain_key_epoch_id": {
+          "type": "string"
+        },
+        "database_url_env": {
+          "$ref": "#/$defs/ConsultationDatabaseUrlEnvironmentName"
+        },
+        "root_certificate_path": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "serving_fence_lock_key": {
+          "format": "int64",
+          "maximum": 9223372036854775807,
+          "minimum": -9223372036854775808,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "database_url_env",
+        "chain_key_epoch_id",
+        "serving_fence_lock_key",
+        "audit_pseudonym_keyring_lock_key"
+      ],
+      "type": "object"
+    },
+    "ConsultationTypedArtifactReferenceConfig": {
+      "additionalProperties": false,
+      "description": "One hash-pinned public contract or reviewed integration pack.",
+      "properties": {
+        "hash": {
+          "description": "Domain-separated typed artifact hash consumed by the source-plan compiler.",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "path": {
+          "description": "Normalized bundle-root-relative path.",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "Raw file hash recorded by Registry Config Bundle v1.",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "hash",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ConsultationWorkloadConfig": {
+      "additionalProperties": false,
+      "description": "Exact fixed OIDC binding for one authorized consultation workload.\n\nThere is deliberately no automatic client-claim selection. Deployments\nmust name exactly one verified claim, and later runtime compilation binds\nthis configuration to the issuer from `auth.oidc`.",
+      "properties": {
+        "audience": {
+          "type": "string"
+        },
+        "client_claim_selector": {
+          "$ref": "#/$defs/ConsultationClientClaimSelectorConfig"
+        },
+        "client_value": {
+          "type": "string"
+        },
+        "principal_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "audience",
+        "client_claim_selector",
+        "client_value",
+        "principal_id"
+      ],
+      "type": "object"
+    },
+    "CorsConfig": {
+      "additionalProperties": false,
+      "description": "CORS allowlist; default-deny per Section 17 item 7.",
+      "properties": {
+        "allowed_origins": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "CredentialFingerprintSchema": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/RuntimeEnvironmentNameSchema"
+            },
+            "provider": {
+              "const": "env",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "provider": {
+              "const": "file",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "CsvFormatConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "delimiter": {
+          "default": null,
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "header_row": {
+          "default": null,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "quote": {
+          "default": null,
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DatasetConfig": {
+      "additionalProperties": false,
+      "description": "A single dataset declaration.",
+      "properties": {
+        "access_rights": {
+          "$ref": "#/$defs/AccessRights"
+        },
+        "aggregates": {
+          "items": {
+            "$ref": "#/$defs/AggregateConfig"
+          },
+          "type": "array"
+        },
+        "applicable_legislation": {
+          "default": [],
+          "description": "DCAT-AP `dcatap:applicableLegislation` IRIs. This is evidence\npublished for standard consumers, not an application-specific\nauthorization or source-of-truth verdict.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "conforms_to": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "defaults": {
+          "$ref": "#/$defs/DatasetDefaultsConfig"
+        },
+        "description": {
+          "type": "string"
+        },
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/EntityConfig"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/DatasetId"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "public_services": {
+          "description": "CPSV public services that produce this dataset. Registry Relay emits\nthem as standard `cpsv:PublicService` nodes; consumers decide how to\ninterpret that evidence.",
+          "items": {
+            "$ref": "#/$defs/PublicServiceConfig"
+          },
+          "type": "array"
+        },
+        "sensitivity": {
+          "$ref": "#/$defs/Sensitivity"
+        },
+        "spatial_coverage": {
+          "default": null,
+          "description": "BRegDCAT-AP: `dct:spatial` IRI for this dataset. Overrides the\ncatalog-level `default_spatial_coverage` when set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AdmsStatus"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "BRegDCAT-AP: `adms:status` for this dataset. Defaults to\n`UnderDevelopment` when not set: it is the weakest ADMS lifecycle\nclaim and forces an explicit opt-in to anything stronger."
+        },
+        "tables": {
+          "items": {
+            "$ref": "#/$defs/ResourceConfig"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        },
+        "update_frequency": {
+          "$ref": "#/$defs/UpdateFrequency"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "description",
+        "owner",
+        "sensitivity",
+        "access_rights",
+        "update_frequency"
+      ],
+      "type": "object"
+    },
+    "DatasetDefaultsConfig": {
+      "additionalProperties": false,
+      "description": "Optional table defaults for reducing repetition within one dataset.",
+      "properties": {
+        "materialization": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MaterializationMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "refresh": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RefreshConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DatasetId": {
+      "description": "Dataset identifier. Lower-snake, starts with a letter.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    },
+    "DeploymentConfig": {
+      "additionalProperties": false,
+      "description": "Operator-declared deployment posture.\n\nThe profile is an explicit assurance claim, never inferred from\nenvironment or network position. When `profile` is absent the deployment\nis undeclared and refuses startup. A profile value that is not one of the\nknown variants fails startup (fail closed on typos).",
+      "properties": {
+        "evidence": {
+          "$ref": "#/$defs/DeploymentEvidenceConfig",
+          "description": "Operator declarations of assurance evidence the runtime cannot observe\nfor itself (out-of-band ingress rate limiting, API-key rotation).\nAbsent declarations leave the corresponding gates active."
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DeploymentProfileSchema"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "waivers": {
+          "description": "Per-deployment waivers. Each names one finding id, a free-text reason,\nand a mandatory expiry date. Expired waivers stop suppressing their\nfinding and raise `deployment.waiver_expired`.",
+          "items": {
+            "$ref": "#/$defs/DeploymentWaiverConfig"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "DeploymentEvidenceConfig": {
+      "additionalProperties": false,
+      "description": "Operator-asserted assurance evidence for conditions the runtime cannot\nobserve directly. Each flag defaults to `false`, meaning \"no evidence\ndeclared\", which keeps the corresponding gate active until the operator\nasserts the control is in place out of band.",
+      "properties": {
+        "api_key_rotation": {
+          "default": false,
+          "description": "Operator asserts an API-key rotation process is in place.",
+          "type": "boolean"
+        },
+        "audit_ack_cursor_path": {
+          "default": null,
+          "description": "Optional path to a `registry.audit.ack_cursor.v1` file maintained by\nwhatever ships audit events off-host. When set, the runtime reads it to\nobserve shipping freshness and surfaces it as posture shipping health;\nabsent, shipping health stays `unverified` and only the declared\nshipping target is reported.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "audit_ack_max_age_secs": {
+          "default": null,
+          "description": "Optional freshness window in seconds for the ack cursor's `acked_at`\ntimestamp. Defaults to `DEFAULT_AUDIT_ACK_MAX_AGE` (900) when unset. A\nwindow without `audit_ack_cursor_path` is rejected at load, since a\nfreshness window is meaningless without a cursor to observe.",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "audit_offhost_shipping": {
+          "default": false,
+          "description": "Operator asserts audit records are shipped off-host (for example to a\nlog collector or SIEM) rather than relying solely on local retention.",
+          "type": "boolean"
+        },
+        "ingress_rate_limit": {
+          "default": false,
+          "description": "Operator asserts ingress rate limiting is enforced (for example by a\ngateway or reverse proxy in front of the relay).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "DeploymentProfileSchema": {
+      "enum": [
+        "local",
+        "hosted_lab",
+        "production",
+        "evidence_grade"
+      ],
+      "type": "string"
+    },
+    "DeploymentWaiverConfig": {
+      "additionalProperties": false,
+      "description": "One declared waiver. `expires` is an ISO 8601 `YYYY-MM-DD` date; format is\nvalidated at load time. Reasons must not carry secrets.",
+      "properties": {
+        "expires": {
+          "type": "string"
+        },
+        "finding": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "finding",
+        "reason",
+        "expires"
+      ],
+      "type": "object"
+    },
+    "DisclosureControlConfig": {
+      "additionalProperties": false,
+      "description": "Disclosure control settings per aggregate. Defaults to\n`min_group_size: 5`, `suppression: omit`.",
+      "properties": {
+        "method": {
+          "default": [
+            "k-anonymity"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "min_cell_size": {
+          "default": 5,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_group_size": {
+          "default": null,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "report_suppressed_rows": {
+          "default": false,
+          "type": "boolean"
+        },
+        "suppression": {
+          "$ref": "#/$defs/Suppression"
+        }
+      },
+      "type": "object"
+    },
+    "EcosystemBindingSelectorConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "EntityAccessConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "aggregate_scope": {
+          "type": "string"
+        },
+        "evidence_verification_scope": {
+          "default": "",
+          "type": "string"
+        },
+        "metadata_scope": {
+          "type": "string"
+        },
+        "read_scope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "metadata_scope",
+        "aggregate_scope",
+        "read_scope"
+      ],
+      "type": "object"
+    },
+    "EntityApiConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_expansions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowed_filters": {
+          "items": {
+            "$ref": "#/$defs/AllowedFilter"
+          },
+          "type": "array"
+        },
+        "default_limit": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "governed_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GovernedPolicyConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_limit": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "require_purpose_header": {
+          "default": false,
+          "type": "boolean"
+        },
+        "required_filter_bindings": {
+          "description": "Principal-derived bindings that both satisfy the required filter gate\nand are applied to the query.",
+          "items": {
+            "$ref": "#/$defs/RequiredFilterBindingConfig"
+          },
+          "type": "array"
+        },
+        "required_filters": {
+          "default": [],
+          "description": "Alternative fields that can satisfy the row-scope gate. A\nprincipal-bound equality filter on any listed field is sufficient, so\nlist multiple fields only when each is an acceptable boundary.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "default_limit",
+        "max_limit"
+      ],
+      "type": "object"
+    },
+    "EntityConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/EntityAccessConfig"
+        },
+        "aggregates": {
+          "items": {
+            "$ref": "#/$defs/AggregateConfig"
+          },
+          "type": "array"
+        },
+        "api": {
+          "$ref": "#/$defs/EntityApiConfig"
+        },
+        "attribute_release_profiles": {
+          "description": "Governed identity attribute-release profiles attached to this entity.\nEach profile resolves exactly one subject and returns only the\nconfigured, minimised claims. Empty by default (feature opt-in).",
+          "items": {
+            "$ref": "#/$defs/AttributeReleaseProfile"
+          },
+          "type": "array"
+        },
+        "concept_uri": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/EntityFieldConfig"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "relationships": {
+          "items": {
+            "$ref": "#/$defs/EntityRelationshipConfig"
+          },
+          "type": "array"
+        },
+        "spatial": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EntitySpatialConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "table": {
+          "$ref": "#/$defs/ResourceId"
+        },
+        "title": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "table",
+        "access",
+        "api"
+      ],
+      "type": "object"
+    },
+    "EntityFieldConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "codelist": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "concept_uri": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "from": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "language": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "sensitive": {
+          "default": false,
+          "type": "boolean"
+        },
+        "unit": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "EntityRelationshipConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "concept_uri": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "foreign_key": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/RelationshipKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind",
+        "target",
+        "foreign_key"
+      ],
+      "type": "object"
+    },
+    "EntitySpatialConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "bbox_fields": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpatialBboxFieldsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collection_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "datetime_field": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "geometry": {
+          "$ref": "#/$defs/SpatialGeometryConfig"
+        },
+        "max_bbox_degrees": {
+          "default": 5.0,
+          "format": "double",
+          "type": "number"
+        },
+        "max_geometry_vertices": {
+          "default": 10000,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "title": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "geometry"
+      ],
+      "type": "object"
+    },
+    "FieldConfig": {
+      "additionalProperties": false,
+      "description": "One column in a resource schema. Physical type and optional\nsemantic annotations used by catalog and schema metadata.",
+      "properties": {
+        "codelist": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "concept_uri": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "language": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "nullable": {
+          "default": false,
+          "type": "boolean"
+        },
+        "sensitive": {
+          "default": false,
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/FieldType"
+        },
+        "unit": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "type": "object"
+    },
+    "FieldType": {
+      "description": "Physical type of a column. The set is fixed in V1; semantic types\nare carried via `concept_uri`.",
+      "enum": [
+        "string",
+        "number",
+        "integer",
+        "boolean",
+        "date",
+        "timestamp"
+      ],
+      "type": "string"
+    },
+    "FilterOp": {
+      "description": "Filter operator opted into per field.",
+      "enum": [
+        "eq",
+        "in",
+        "gte",
+        "lte",
+        "between"
+      ],
+      "type": "string"
+    },
+    "GovernedPolicyConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_assurance": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "max_source_age_seconds": {
+          "default": null,
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "minimum_assurance": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permitted_jurisdictions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "permitted_purposes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "redaction_fields": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "require_consent": {
+          "default": false,
+          "type": "boolean"
+        },
+        "require_legal_basis": {
+          "default": false,
+          "type": "boolean"
+        },
+        "trusted_context": {
+          "$ref": "#/$defs/GovernedTrustedContextConfig"
+        }
+      },
+      "type": "object"
+    },
+    "GovernedTrustedContextConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "asserted_assurance": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "consent_ref": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "jurisdiction": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "legal_basis_ref": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_observed_age_seconds": {
+          "default": null,
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "HumantimeDuration": {
+      "description": "One or more non-negative integer duration components separated by one ASCII space; supported units are ns, us, ms, s, m, h, d, and w",
+      "maxLength": 255,
+      "pattern": "^[0-9]{1,10}(?:ns|us|ms|s|m|h|d|w)(?: [0-9]{1,10}(?:ns|us|ms|s|m|h|d|w))*$",
+      "type": "string"
+    },
+    "InstanceConfig": {
+      "additionalProperties": false,
+      "description": "Stable deployment identity surfaced in redacted operations posture.",
+      "properties": {
+        "environment": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "default": "registry-relay-local",
+          "type": "string"
+        },
+        "jurisdiction": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MaterializationMode": {
+      "description": "How a configured private table is registered for query planning.",
+      "enum": [
+        "snapshot"
+      ],
+      "type": "string"
+    },
+    "MetadataConfig": {
+      "additionalProperties": false,
+      "description": "Optional split metadata manifest loaded alongside the runtime config.",
+      "properties": {
+        "ecosystem_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EcosystemBindingSelectorConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/MetadataSourceConfig"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "type": "object"
+    },
+    "MetadataSourceConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "OidcAlgorithm": {
+      "description": "JWS signature algorithms accepted by the OIDC verifier. Symmetric\nalgorithms (`HS*`) and `none` are intentionally absent: shared-secret\nJWTs are unsafe between a resource server and an IdP, and `none`\ndisables verification entirely.\n\nYAML values are the canonical JWA `alg` strings (`RS256`, `ES256`,\n`EdDSA`), case-sensitive.",
+      "enum": [
+        "RS256",
+        "ES256",
+        "EdDSA"
+      ],
+      "type": "string"
+    },
+    "OidcConfig": {
+      "additionalProperties": false,
+      "description": "OIDC / OAuth2 resource-server configuration. The relay validates\nincoming bearer JWTs against a configured external IdP. No tokens\nare minted here.",
+      "properties": {
+        "allow_dev_insecure_fetch_urls": {
+          "default": false,
+          "description": "Development-only escape hatch that permits loopback HTTP issuer,\ndiscovery, and JWKS URLs. Private non-loopback networks and cloud\nmetadata endpoints remain denied by the platform fetch policy.",
+          "type": "boolean"
+        },
+        "allowed_algorithms": {
+          "description": "Signature algorithms accepted by the verifier. Defaults to\nRS256, ES256, EdDSA. HS\\* and `none` are intentionally absent\nfrom [`OidcAlgorithm`].",
+          "items": {
+            "$ref": "#/$defs/OidcAlgorithm"
+          },
+          "type": "array"
+        },
+        "allowed_clients": {
+          "default": [],
+          "description": "Optional allowlist of client identifiers, matched against the\ntoken's `azp` (preferred) or `client_id` claim. Empty list\nmeans any client is accepted.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allowed_token_types": {
+          "default": [
+            "JWT",
+            "at+jwt"
+          ],
+          "description": "Accepted `typ` JOSE header values. Defaults to `JWT` and\n`at+jwt` (RFC 9068). ID tokens (`id+jwt`) are not access tokens\nand are rejected by default. Tokens without `typ` are rejected by\nthe shared verifier.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "audiences": {
+          "description": "One or more accepted `aud` values. Tokens with no `aud`, or\nwhose `aud` does not intersect this list, are rejected.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "discovery_url": {
+          "default": null,
+          "description": "OIDC discovery document URL\n(`.well-known/openid-configuration`). The JWKS URL is resolved\nfrom `jwks_uri` in the discovered document.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "issuer": {
+          "description": "Issuer URL. Compared verbatim against the JWT `iss` claim.",
+          "type": "string"
+        },
+        "jwks_cache_ttl": {
+          "$ref": "#/$defs/HumantimeDuration",
+          "default": {
+            "nanos": 0,
+            "secs": 600
+          },
+          "description": "JWKS cache TTL. Default 10 minutes. The provider also refreshes\non unknown `kid` (rate-limited) so this controls the steady-state\nrotation pickup latency, not the upper bound."
+        },
+        "jwks_url": {
+          "default": null,
+          "description": "JWKS endpoint. Either this or `discovery_url` must be set.\n`discovery_url` takes precedence: when both are configured the\nvalidator rejects the document.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "leeway": {
+          "$ref": "#/$defs/HumantimeDuration",
+          "default": {
+            "nanos": 0,
+            "secs": 60
+          },
+          "description": "Clock skew tolerance applied to `exp` and (when present) `nbf`.\nDefault 60 seconds. Bounded at 5 minutes by validation."
+        },
+        "scope_claim": {
+          "default": "scope",
+          "description": "JWT claim whose value carries scopes. Defaults to `scope`, the\nRFC 8693 / RFC 9068 space-separated form. Some IdPs use `scp`\nor `permissions`; the value may be a string, an array of strings,\nor an object keyed by scope name.",
+          "type": "string"
+        },
+        "scope_map": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Optional rename map: `external_scope -> internal_scope`. Applied\nafter parsing the scope claim, before scope-based access checks\nrun. Useful for adapting IdP role names (`role:foo`) to the\nrelay's `<dataset_id>:<level>` shape.",
+          "type": "object"
+        },
+        "scope_object_required_keys": {
+          "default": [],
+          "description": "Keys that must be present inside object-valued role claim values\nbefore the role key is treated as an active scope. Object-valued\nclaims grant no scopes when this list is empty.\nThis is useful for IdPs such as Zitadel where role values are\nkeyed by organization id.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "issuer",
+        "audiences"
+      ],
+      "type": "object"
+    },
+    "ParquetFormatConfig": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "PostgresEnvironmentNameSchema": {
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+      "type": "string"
+    },
+    "PostgresTableConfig": {
+      "additionalProperties": false,
+      "description": "Structured database table reference. Keeping schema/name separate\navoids parsing dotted identifiers and leaves quoting to connectors.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "schema": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "schema",
+        "name"
+      ],
+      "type": "object"
+    },
+    "PublicServiceConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
+    "RefreshConfig": {
+      "description": "Refresh policy. Tagged on `mode:`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Poll source mtime on `interval` and re-ingest on change.",
+          "properties": {
+            "interval": {
+              "$ref": "#/$defs/HumantimeDuration",
+              "default": {
+                "nanos": 0,
+                "secs": 60
+              }
+            },
+            "mode": {
+              "const": "mtime",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Unconditionally re-ingest on `interval`.",
+          "properties": {
+            "interval": {
+              "$ref": "#/$defs/HumantimeDuration"
+            },
+            "mode": {
+              "const": "interval",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "interval"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Re-ingest only on explicit admin call.",
+          "properties": {
+            "mode": {
+              "const": "manual",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "RelationshipKind": {
+      "enum": [
+        "belongs_to",
+        "has_many",
+        "has_one"
+      ],
+      "type": "string"
+    },
+    "ReleaseClaimConfig": {
+      "additionalProperties": false,
+      "description": "A single released claim. Exactly one of `source_field` or `expression`\nmust be set: a claim is either a direct source-field projection or a\nCEL-computed value.",
+      "properties": {
+        "expression": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReleaseExpressionConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "CEL-computed claim value. XOR with `source_field`."
+        },
+        "format": {
+          "default": null,
+          "description": "Optional value format hint.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "locale": {
+          "default": null,
+          "description": "Optional locale hint.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Released claim name (lower-snake).",
+          "type": "string"
+        },
+        "required": {
+          "default": false,
+          "description": "Whether the claim must be present; a missing required claim denies.",
+          "type": "boolean"
+        },
+        "sensitivity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClaimSensitivity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional privacy sensitivity label."
+        },
+        "shareable": {
+          "default": true,
+          "description": "Whether the claim may be shared downstream. Defaults to true.",
+          "type": "boolean"
+        },
+        "source_field": {
+          "default": null,
+          "description": "Source field projected into the claim. XOR with `expression`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "ReleaseConditionsConfig": {
+      "additionalProperties": false,
+      "description": "CEL release-condition gate. When present, the predicate must hold before\nany claim is projected; failure fails closed (subject denied).",
+      "properties": {
+        "denied_code": {
+          "default": null,
+          "description": "Optional internal audit code for a release-condition denial.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expression": {
+          "$ref": "#/$defs/ReleaseExpressionConfig"
+        }
+      },
+      "required": [
+        "expression"
+      ],
+      "type": "object"
+    },
+    "ReleaseExpressionConfig": {
+      "additionalProperties": false,
+      "description": "A single CEL expression evaluated over the subject's source projection.",
+      "properties": {
+        "cel": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cel"
+      ],
+      "type": "object"
+    },
+    "ReleaseResponseConfig": {
+      "additionalProperties": false,
+      "description": "Response-envelope controls for an attribute-release profile.",
+      "properties": {
+        "include_source_metadata": {
+          "default": false,
+          "description": "Whether to include profile-sourced metadata in the response body.",
+          "type": "boolean"
+        },
+        "max_age_seconds": {
+          "default": null,
+          "description": "Optional cache lifetime hint for the released bundle, in seconds.",
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ReleaseSubjectConfig": {
+      "additionalProperties": false,
+      "description": "Subject-identification controls for an attribute-release profile.",
+      "properties": {
+        "cardinality": {
+          "$ref": "#/$defs/SubjectCardinality",
+          "description": "Expected subject cardinality. Defaults to exactly one."
+        },
+        "id_type": {
+          "default": null,
+          "description": "Optional accepted identifier type label.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "input": {
+          "description": "Request input that carries the subject identifier.",
+          "type": "string"
+        },
+        "source_field": {
+          "description": "Source field used to match the subject. Must be an exposed entity field.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "input",
+        "source_field"
+      ],
+      "type": "object"
+    },
+    "RequiredFilterBindingConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/RequiredFilterBindingSource"
+        }
+      },
+      "required": [
+        "field"
+      ],
+      "type": "object"
+    },
+    "RequiredFilterBindingSource": {
+      "enum": [
+        "principal_id"
+      ],
+      "type": "string"
+    },
+    "ResourceAccessConfig": {
+      "additionalProperties": false,
+      "description": "Resource-level scope assignments. Private tables are not exposed as row\nresources in beta; row access is configured on public entities.",
+      "properties": {
+        "aggregate_scope": {
+          "type": "string"
+        },
+        "metadata_scope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "metadata_scope",
+        "aggregate_scope"
+      ],
+      "type": "object"
+    },
+    "ResourceApiConfig": {
+      "additionalProperties": false,
+      "description": "Resource-level API knobs: per-field filter allowlist, limit caps,\nand the `Data-Purpose` requirement.",
+      "properties": {
+        "allowed_filters": {
+          "items": {
+            "$ref": "#/$defs/AllowedFilter"
+          },
+          "type": "array"
+        },
+        "default_limit": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_limit": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "require_purpose_header": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "default_limit",
+        "max_limit"
+      ],
+      "type": "object"
+    },
+    "ResourceConfig": {
+      "additionalProperties": false,
+      "description": "One private storage table under a dataset.\n\nThe public API should not expose these ids. Entity config maps one\nresource into one domain resource, with optional field renaming and\nrelationship declarations.",
+      "properties": {
+        "access": {
+          "$ref": "#/$defs/ResourceAccessConfig"
+        },
+        "aggregates": {
+          "items": {
+            "$ref": "#/$defs/AggregateConfig"
+          },
+          "type": "array"
+        },
+        "api": {
+          "$ref": "#/$defs/ResourceApiConfig"
+        },
+        "id": {
+          "$ref": "#/$defs/ResourceId"
+        },
+        "materialization": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MaterializationMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "primary_key": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "refresh": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RefreshConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "schema": {
+          "$ref": "#/$defs/SchemaConfig"
+        },
+        "source": {
+          "$ref": "#/$defs/SourceConfig"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "schema"
+      ],
+      "type": "object"
+    },
+    "ResourceFormatConfig": {
+      "additionalProperties": false,
+      "description": "Storage table format override. If omitted, ingest infers the format\nfrom the source file extension.",
+      "properties": {
+        "csv": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CsvFormatConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parquet": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ParquetFormatConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "xlsx": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/XlsxFormatConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ResourceId": {
+      "description": "Resource identifier within a dataset.",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "type": "string"
+    },
+    "RotateConfig": {
+      "additionalProperties": false,
+      "description": "In-process rotation for the `file` audit sink.",
+      "properties": {
+        "max_files": {
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_size_mb": {
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "max_size_mb",
+        "max_files"
+      ],
+      "type": "object"
+    },
+    "RuntimeEnvironmentNameSchema": {
+      "pattern": "^[^=\\x00]+$",
+      "type": "string"
+    },
+    "SchemaConfig": {
+      "additionalProperties": false,
+      "description": "Declared resource schema. `strict` is the spec's `strict_schema`\nflag; on mismatch ingestion refuses to register the resource.",
+      "properties": {
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/FieldConfig"
+          },
+          "type": "array"
+        },
+        "strict": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "fields"
+      ],
+      "type": "object"
+    },
+    "Sensitivity": {
+      "description": "Sensitivity classification. Operator-defined values cover common\npersonal and public dataset classifications in V1.",
+      "enum": [
+        "public",
+        "internal",
+        "personal",
+        "confidential",
+        "secret"
+      ],
+      "type": "string"
+    },
+    "ServerConfig": {
+      "additionalProperties": false,
+      "description": "HTTP listener and adjacent server-wide knobs.",
+      "properties": {
+        "admin_bind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SocketAddr"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "bind": {
+          "$ref": "#/$defs/SocketAddr"
+        },
+        "cache_dir": {
+          "default": "./cache",
+          "type": "string"
+        },
+        "cors": {
+          "$ref": "#/$defs/CorsConfig"
+        },
+        "http1_header_read_timeout": {
+          "$ref": "#/$defs/HumantimeDuration",
+          "default": {
+            "nanos": 0,
+            "secs": 10
+          }
+        },
+        "max_connections": {
+          "default": 1024,
+          "format": "uint",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_source_file_bytes": {
+          "default": 268435456,
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "openapi_requires_auth": {
+          "default": true,
+          "type": "boolean"
+        },
+        "request_body_timeout": {
+          "$ref": "#/$defs/HumantimeDuration",
+          "default": {
+            "nanos": 0,
+            "secs": 10
+          }
+        },
+        "request_timeout": {
+          "$ref": "#/$defs/HumantimeDuration",
+          "default": {
+            "nanos": 0,
+            "secs": 30
+          }
+        },
+        "trust_proxy": {
+          "$ref": "#/$defs/TrustProxyConfig"
+        },
+        "xlsx_max_file_bytes": {
+          "default": 268435456,
+          "format": "uint64",
+          "maximum": 18446744073709551615,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "bind"
+      ],
+      "type": "object"
+    },
+    "SocketAddr": {
+      "description": "Canonical dotted-decimal IPv4 or bracketed IPv6 plus a decimal port from 0 through 65535",
+      "oneOf": [
+        {
+          "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9]):(?:0|[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$",
+          "type": "string"
+        },
+        {
+          "pattern": "^\\[(?:(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,7}:|(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,5}(?::[0-9A-Fa-f]{1,4}){1,2}|(?:[0-9A-Fa-f]{1,4}:){1,4}(?::[0-9A-Fa-f]{1,4}){1,3}|(?:[0-9A-Fa-f]{1,4}:){1,3}(?::[0-9A-Fa-f]{1,4}){1,4}|(?:[0-9A-Fa-f]{1,4}:){1,2}(?::[0-9A-Fa-f]{1,4}){1,5}|[0-9A-Fa-f]{1,4}:(?:(?::[0-9A-Fa-f]{1,4}){1,6})|:(?:(?::[0-9A-Fa-f]{1,4}){1,7}|:))\\]:(?:0|[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$",
+          "type": "string"
+        }
+      ]
+    },
+    "SourceConfig": {
+      "description": "Source plugin selection. Tagged on `type:` so HTTP, S3, or additional\ndatabase variants can land additively later.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "format": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResourceFormatConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "const": "file",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "change_token_sql": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "connect_timeout": {
+              "$ref": "#/$defs/HumantimeDuration",
+              "default": {
+                "nanos": 0,
+                "secs": 5
+              }
+            },
+            "connection_env": {
+              "$ref": "#/$defs/PostgresEnvironmentNameSchema"
+            },
+            "query": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "query_timeout": {
+              "$ref": "#/$defs/HumantimeDuration",
+              "default": {
+                "nanos": 0,
+                "secs": 30
+              }
+            },
+            "table": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PostgresTableConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "postgres",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "connection_env"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SpatialBboxFieldsConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "max_x": {
+          "type": "string"
+        },
+        "max_y": {
+          "type": "string"
+        },
+        "min_x": {
+          "type": "string"
+        },
+        "min_y": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "min_x",
+        "min_y",
+        "max_x",
+        "max_y"
+      ],
+      "type": "object"
+    },
+    "SpatialGeometryConfig": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "crs": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "point",
+              "type": "string"
+            },
+            "latitude_field": {
+              "type": "string"
+            },
+            "longitude_field": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "longitude_field",
+            "latitude_field",
+            "crs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "crs": {
+              "type": "string"
+            },
+            "field": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "geojson",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field",
+            "crs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "crs": {
+              "type": "string"
+            },
+            "field": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "wkt",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field",
+            "crs"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "crs": {
+              "type": "string"
+            },
+            "field": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "wkb",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field",
+            "crs"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "SpdciDisabilityRegistryConfig": {
+      "additionalProperties": false,
+      "description": "Runtime binding from SP DCI Disability Registry sync APIs to one\nconfigured Registry Relay entity.",
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/DatasetId"
+        },
+        "disabled_positive_values": {
+          "default": [
+            "approved",
+            "yes",
+            "true",
+            "disabled"
+          ],
+          "description": "Case-insensitive values interpreted as disabled.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "disabled_status_field": {
+          "default": "disability_status",
+          "description": "Entity field whose value determines the SP DCI disabled response.",
+          "type": "string"
+        },
+        "entity": {
+          "type": "string"
+        },
+        "query_field": {
+          "default": "id",
+          "description": "Entity field filtered when the SP DCI query key is present.",
+          "type": "string"
+        },
+        "query_key": {
+          "default": "member.member_identifier",
+          "description": "Query key accepted from SP DCI `disabled_criteria.query`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset",
+        "entity"
+      ],
+      "type": "object"
+    },
+    "SpdciRegistryConfig": {
+      "additionalProperties": false,
+      "description": "Runtime binding from a DCI registry sync search API to one configured\nRegistry Relay entity.",
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/DatasetId"
+        },
+        "default_limit": {
+          "default": 100,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "entity": {
+          "type": "string"
+        },
+        "expression_fields": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "DCI expression or predicate attribute to entity field mappings.",
+          "type": "object"
+        },
+        "identifiers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "DCI identifier type to entity field mappings for `idtype-value`.",
+          "type": "object"
+        },
+        "record_type": {
+          "default": "spdci-extensions-dci:DisabledPerson",
+          "type": "string"
+        },
+        "registry_type": {
+          "default": "ns:org:RegistryType:DR",
+          "type": "string"
+        },
+        "response_fields": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "SP DCI output path to entity field mappings for direct response\nprojection. A CEL mapping takes precedence when both are set.",
+          "type": "object"
+        },
+        "response_mapping_path": {
+          "default": null,
+          "description": "Optional local CEL mapping document used to shape response records.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "response_schema_path": {
+          "default": null,
+          "description": "Optional local JSON Schema used to validate shaped response records.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "dataset",
+        "entity"
+      ],
+      "type": "object"
+    },
+    "SpdciStandardsConfig": {
+      "additionalProperties": false,
+      "description": "Social Protection Digital Convergence Initiative (SP DCI) adapter\nconfiguration.",
+      "properties": {
+        "disability_registry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpdciDisabilityRegistryConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "registries": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SpdciRegistryConfig"
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "StandardsConfig": {
+      "additionalProperties": false,
+      "description": "External standards adapters layered over configured entities.",
+      "properties": {
+        "spdci": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpdciStandardsConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SubjectCardinality": {
+      "description": "Expected number of subjects a release lookup may match.",
+      "enum": [
+        "one",
+        "many"
+      ],
+      "type": "string"
+    },
+    "Suppression": {
+      "description": "Disclosure suppression strategy.",
+      "oneOf": [
+        {
+          "const": "omit",
+          "description": "Remove rows below the threshold from the response entirely.",
+          "type": "string"
+        },
+        {
+          "const": "mask",
+          "description": "Keep the group key, null out the measures.",
+          "type": "string"
+        },
+        {
+          "const": "null",
+          "description": "Standards-facing alias for `mask`: values are represented as JSON null.",
+          "type": "string"
+        }
+      ]
+    },
+    "TrustProxyConfig": {
+      "additionalProperties": false,
+      "description": "`X-Forwarded-For` policy. Until the `ipnet` crate lands in deps we\nkeep CIDR specs as strings and validate format in\n[`validate::run`].",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "trusted_proxies": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "UpdateFrequency": {
+      "description": "Update cadence; mirrors DCAT-AP `dcterms:accrualPeriodicity`. The\nV1 set is the codes used by the example plus the common alternates.",
+      "enum": [
+        "continuous",
+        "daily",
+        "weekly",
+        "termly",
+        "monthly",
+        "quarterly",
+        "annual",
+        "irregular",
+        "as_needed",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "XlsxFormatConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "data_range": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "header_row": {
+          "default": null,
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sheet": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/registry-relay/registry-relay.config.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Root configuration document. Parsed from YAML at startup.",
+  "properties": {
+    "audit": {
+      "$ref": "#/$defs/AuditConfig"
+    },
+    "auth": {
+      "$ref": "#/$defs/AuthConfig"
+    },
+    "catalog": {
+      "$ref": "#/$defs/CatalogConfig"
+    },
+    "config_trust": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ConfigTrustConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "consultation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ConsultationConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional governed consultation runtime configuration.\n\nConsultation configuration is restart-only. In particular, audit\npseudonym material is never hot-swapped into an active runtime."
+    },
+    "datasets": {
+      "items": {
+        "$ref": "#/$defs/DatasetConfig"
+      },
+      "type": "array"
+    },
+    "deployment": {
+      "$ref": "#/$defs/DeploymentConfig",
+      "description": "Operator-declared deployment profile, gate waivers, and assurance\nevidence. Omitting the profile leaves the deployment undeclared, which\nrefuses startup. Use `profile: local` as the explicit development opt-out."
+    },
+    "instance": {
+      "$ref": "#/$defs/InstanceConfig"
+    },
+    "metadata": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MetadataConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "server": {
+      "$ref": "#/$defs/ServerConfig"
+    },
+    "standards": {
+      "$ref": "#/$defs/StandardsConfig",
+      "description": "Optional external standards adapters. The config model is parsed\nin every build so feature-disabled binaries can reject it with a\nstable taxonomy code."
+    },
+    "vocabularies": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "type": "object"
+    }
+  },
+  "required": [
+    "server",
+    "catalog",
+    "auth",
+    "audit",
+    "datasets"
+  ],
+  "title": "Registry Relay config",
+  "type": "object"
+}

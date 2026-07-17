@@ -8,6 +8,7 @@ use std::path::{Component, Path, PathBuf};
 
 use registry_platform_config::{read_config_file_limited, sha256_uri, VerifiedConfigBundle};
 use registry_platform_ops::{is_sha256_config_hash, ConfigSource, DeploymentProfile};
+use schemars::JsonSchema;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -23,14 +24,16 @@ const MAX_ENABLED_PROFILES: usize = 64;
 const MAX_TOTAL_ARTIFACT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// One hash-pinned public contract or reviewed integration pack.
-#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ConsultationTypedArtifactReferenceConfig {
     /// Normalized bundle-root-relative path.
     pub path: PathBuf,
     /// Domain-separated typed artifact hash consumed by the source-plan compiler.
+    #[schemars(pattern(r"^sha256:[0-9a-f]{64}$"))]
     pub hash: String,
     /// Raw file hash recorded by Registry Config Bundle v1.
+    #[schemars(pattern(r"^sha256:[0-9a-f]{64}$"))]
     pub sha256: String,
 }
 
@@ -44,12 +47,13 @@ impl fmt::Debug for ConsultationTypedArtifactReferenceConfig {
 }
 
 /// One hash-pinned private binding or standalone Rhai script.
-#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ConsultationArtifactReferenceConfig {
     /// Normalized bundle-root-relative path.
     pub path: PathBuf,
     /// Raw file hash recorded by Registry Config Bundle v1.
+    #[schemars(pattern(r"^sha256:[0-9a-f]{64}$"))]
     pub sha256: String,
 }
 
@@ -63,7 +67,7 @@ impl fmt::Debug for ConsultationArtifactReferenceConfig {
 }
 
 /// Closed evidence classes understood by consultation source-plan v1.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ConsultationEvidenceClassConfig {
     Conformance,
@@ -72,11 +76,12 @@ pub enum ConsultationEvidenceClassConfig {
 }
 
 /// One bounded, hash-pinned integration evidence file.
-#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ConsultationEvidenceArtifactConfig {
     pub class: ConsultationEvidenceClassConfig,
     pub path: PathBuf,
+    #[schemars(pattern(r"^sha256:[0-9a-f]{64}$"))]
     pub sha256: String,
 }
 
@@ -91,7 +96,7 @@ impl fmt::Debug for ConsultationEvidenceArtifactConfig {
 }
 
 /// Complete artifact catalog for all consultations enabled at one restart.
-#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ConsultationArtifactClosureConfig {
     pub public_contracts: Vec<ConsultationTypedArtifactReferenceConfig>,

@@ -1,5 +1,602 @@
 # Registry Relay configuration guide
 
+The following canonical paths are derived from the complete deserialization schema.
+Named properties use dot notation, `[]` denotes array items, and `.*` denotes map values.
+This inventory is checked in both directions so neither the schema nor this reference can gain a key
+without the other.
+
+{/* registry-relay-config-key-paths:start */}
+```text
+audit
+audit.chain
+audit.format
+audit.hash_secret_env
+audit.include_health
+audit.path
+audit.rotate
+audit.rotate.max_files
+audit.rotate.max_size_mb
+audit.sink
+audit.write_policy
+auth
+auth.api_keys
+auth.api_keys[]
+auth.api_keys[].fingerprint
+auth.api_keys[].fingerprint.name
+auth.api_keys[].fingerprint.path
+auth.api_keys[].fingerprint.provider
+auth.api_keys[].id
+auth.api_keys[].scopes
+auth.api_keys[].scopes[]
+auth.failure_throttle
+auth.failure_throttle.enabled
+auth.failure_throttle.max_failures
+auth.failure_throttle.window_seconds
+auth.mode
+auth.oidc
+auth.oidc.allow_dev_insecure_fetch_urls
+auth.oidc.allowed_algorithms
+auth.oidc.allowed_algorithms[]
+auth.oidc.allowed_clients
+auth.oidc.allowed_clients[]
+auth.oidc.allowed_token_types
+auth.oidc.allowed_token_types[]
+auth.oidc.audiences
+auth.oidc.audiences[]
+auth.oidc.discovery_url
+auth.oidc.issuer
+auth.oidc.jwks_cache_ttl
+auth.oidc.jwks_url
+auth.oidc.leeway
+auth.oidc.scope_claim
+auth.oidc.scope_map
+auth.oidc.scope_map.*
+auth.oidc.scope_object_required_keys
+auth.oidc.scope_object_required_keys[]
+catalog
+catalog.authority_type
+catalog.base_url
+catalog.default_spatial_coverage
+catalog.participant_id
+catalog.publisher
+catalog.publisher_iri
+catalog.title
+config_trust
+config_trust.antirollback_state_path
+config_trust.break_glass_override_path
+config_trust.bundle_path
+config_trust.trust_anchor_path
+consultation
+consultation.artifacts
+consultation.artifacts.evidence
+consultation.artifacts.evidence[]
+consultation.artifacts.evidence[].class
+consultation.artifacts.evidence[].path
+consultation.artifacts.evidence[].sha256
+consultation.artifacts.integration_packs
+consultation.artifacts.integration_packs[]
+consultation.artifacts.integration_packs[].hash
+consultation.artifacts.integration_packs[].path
+consultation.artifacts.integration_packs[].sha256
+consultation.artifacts.private_bindings
+consultation.artifacts.private_bindings[]
+consultation.artifacts.private_bindings[].hash
+consultation.artifacts.private_bindings[].path
+consultation.artifacts.private_bindings[].sha256
+consultation.artifacts.public_contracts
+consultation.artifacts.public_contracts[]
+consultation.artifacts.public_contracts[].hash
+consultation.artifacts.public_contracts[].path
+consultation.artifacts.public_contracts[].sha256
+consultation.artifacts.rhai_scripts
+consultation.artifacts.rhai_scripts[]
+consultation.artifacts.rhai_scripts[].path
+consultation.artifacts.rhai_scripts[].sha256
+consultation.audit_pseudonym_materials
+consultation.audit_pseudonym_materials[]
+consultation.audit_pseudonym_materials[].key_id
+consultation.audit_pseudonym_materials[].source
+consultation.audit_pseudonym_materials[].source.name
+consultation.audit_pseudonym_materials[].source.provider
+consultation.authorized_workload
+consultation.authorized_workload.audience
+consultation.authorized_workload.client_claim_selector
+consultation.authorized_workload.client_value
+consultation.authorized_workload.principal_id
+consultation.source_credentials
+consultation.source_credentials[]
+consultation.source_credentials[].client_id_env
+consultation.source_credentials[].client_secret_env
+consultation.source_credentials[].generation
+consultation.source_credentials[].password_env
+consultation.source_credentials[].ref
+consultation.source_credentials[].token_env
+consultation.source_credentials[].type
+consultation.source_credentials[].username_env
+consultation.source_credentials[].value_env
+consultation.state_plane
+consultation.state_plane.audit_pseudonym_keyring_lock_key
+consultation.state_plane.chain_key_epoch_id
+consultation.state_plane.database_url_env
+consultation.state_plane.root_certificate_path
+consultation.state_plane.serving_fence_lock_key
+datasets
+datasets[]
+datasets[].access_rights
+datasets[].aggregates
+datasets[].aggregates[]
+datasets[].aggregates[].access
+datasets[].aggregates[].access.aggregate_only_execution
+datasets[].aggregates[].access.aggregate_scope
+datasets[].aggregates[].access.metadata_scope
+datasets[].aggregates[].allowed_filters
+datasets[].aggregates[].allowed_filters[]
+datasets[].aggregates[].allowed_filters[].field
+datasets[].aggregates[].allowed_filters[].ops
+datasets[].aggregates[].allowed_filters[].ops[]
+datasets[].aggregates[].default_group_by
+datasets[].aggregates[].default_group_by[]
+datasets[].aggregates[].description
+datasets[].aggregates[].dimensions
+datasets[].aggregates[].dimensions[]
+datasets[].aggregates[].dimensions[].codelist
+datasets[].aggregates[].dimensions[].field
+datasets[].aggregates[].dimensions[].id
+datasets[].aggregates[].dimensions[].label
+datasets[].aggregates[].disclosure_control
+datasets[].aggregates[].disclosure_control.method
+datasets[].aggregates[].disclosure_control.method[]
+datasets[].aggregates[].disclosure_control.min_cell_size
+datasets[].aggregates[].disclosure_control.min_group_size
+datasets[].aggregates[].disclosure_control.report_suppressed_rows
+datasets[].aggregates[].disclosure_control.suppression
+datasets[].aggregates[].group_by
+datasets[].aggregates[].group_by[]
+datasets[].aggregates[].id
+datasets[].aggregates[].indicators
+datasets[].aggregates[].indicators[]
+datasets[].aggregates[].indicators[].column
+datasets[].aggregates[].indicators[].decimals
+datasets[].aggregates[].indicators[].definition_uri
+datasets[].aggregates[].indicators[].frequency
+datasets[].aggregates[].indicators[].function
+datasets[].aggregates[].indicators[].id
+datasets[].aggregates[].indicators[].label
+datasets[].aggregates[].indicators[].unit_measure
+datasets[].aggregates[].indicators[].unit_mult
+datasets[].aggregates[].joins
+datasets[].aggregates[].joins[]
+datasets[].aggregates[].joins[].relationship
+datasets[].aggregates[].measures
+datasets[].aggregates[].measures[]
+datasets[].aggregates[].measures[].column
+datasets[].aggregates[].measures[].function
+datasets[].aggregates[].measures[].name
+datasets[].aggregates[].required_filter_bindings
+datasets[].aggregates[].required_filter_bindings[]
+datasets[].aggregates[].required_filter_bindings[].field
+datasets[].aggregates[].required_filter_bindings[].source
+datasets[].aggregates[].required_filters
+datasets[].aggregates[].required_filters[]
+datasets[].aggregates[].source_entity
+datasets[].aggregates[].spatial
+datasets[].aggregates[].spatial.bbox_fields
+datasets[].aggregates[].spatial.bbox_fields.max_x
+datasets[].aggregates[].spatial.bbox_fields.max_y
+datasets[].aggregates[].spatial.bbox_fields.min_x
+datasets[].aggregates[].spatial.bbox_fields.min_y
+datasets[].aggregates[].spatial.collection_id
+datasets[].aggregates[].spatial.dimension
+datasets[].aggregates[].spatial.geometry_entity
+datasets[].aggregates[].spatial.geometry_field
+datasets[].aggregates[].spatial.geometry_id_field
+datasets[].aggregates[].spatial.max_geometry_vertices
+datasets[].aggregates[].spatial.mode
+datasets[].aggregates[].temporal_field
+datasets[].aggregates[].title
+datasets[].applicable_legislation
+datasets[].applicable_legislation[]
+datasets[].conforms_to
+datasets[].conforms_to[]
+datasets[].defaults
+datasets[].defaults.materialization
+datasets[].defaults.refresh
+datasets[].defaults.refresh.interval
+datasets[].defaults.refresh.mode
+datasets[].description
+datasets[].entities
+datasets[].entities[]
+datasets[].entities[].access
+datasets[].entities[].access.aggregate_scope
+datasets[].entities[].access.evidence_verification_scope
+datasets[].entities[].access.metadata_scope
+datasets[].entities[].access.read_scope
+datasets[].entities[].aggregates
+datasets[].entities[].aggregates[]
+datasets[].entities[].aggregates[].access
+datasets[].entities[].aggregates[].access.aggregate_only_execution
+datasets[].entities[].aggregates[].access.aggregate_scope
+datasets[].entities[].aggregates[].access.metadata_scope
+datasets[].entities[].aggregates[].allowed_filters
+datasets[].entities[].aggregates[].allowed_filters[]
+datasets[].entities[].aggregates[].allowed_filters[].field
+datasets[].entities[].aggregates[].allowed_filters[].ops
+datasets[].entities[].aggregates[].allowed_filters[].ops[]
+datasets[].entities[].aggregates[].default_group_by
+datasets[].entities[].aggregates[].default_group_by[]
+datasets[].entities[].aggregates[].description
+datasets[].entities[].aggregates[].dimensions
+datasets[].entities[].aggregates[].dimensions[]
+datasets[].entities[].aggregates[].dimensions[].codelist
+datasets[].entities[].aggregates[].dimensions[].field
+datasets[].entities[].aggregates[].dimensions[].id
+datasets[].entities[].aggregates[].dimensions[].label
+datasets[].entities[].aggregates[].disclosure_control
+datasets[].entities[].aggregates[].disclosure_control.method
+datasets[].entities[].aggregates[].disclosure_control.method[]
+datasets[].entities[].aggregates[].disclosure_control.min_cell_size
+datasets[].entities[].aggregates[].disclosure_control.min_group_size
+datasets[].entities[].aggregates[].disclosure_control.report_suppressed_rows
+datasets[].entities[].aggregates[].disclosure_control.suppression
+datasets[].entities[].aggregates[].group_by
+datasets[].entities[].aggregates[].group_by[]
+datasets[].entities[].aggregates[].id
+datasets[].entities[].aggregates[].indicators
+datasets[].entities[].aggregates[].indicators[]
+datasets[].entities[].aggregates[].indicators[].column
+datasets[].entities[].aggregates[].indicators[].decimals
+datasets[].entities[].aggregates[].indicators[].definition_uri
+datasets[].entities[].aggregates[].indicators[].frequency
+datasets[].entities[].aggregates[].indicators[].function
+datasets[].entities[].aggregates[].indicators[].id
+datasets[].entities[].aggregates[].indicators[].label
+datasets[].entities[].aggregates[].indicators[].unit_measure
+datasets[].entities[].aggregates[].indicators[].unit_mult
+datasets[].entities[].aggregates[].joins
+datasets[].entities[].aggregates[].joins[]
+datasets[].entities[].aggregates[].joins[].relationship
+datasets[].entities[].aggregates[].measures
+datasets[].entities[].aggregates[].measures[]
+datasets[].entities[].aggregates[].measures[].column
+datasets[].entities[].aggregates[].measures[].function
+datasets[].entities[].aggregates[].measures[].name
+datasets[].entities[].aggregates[].required_filter_bindings
+datasets[].entities[].aggregates[].required_filter_bindings[]
+datasets[].entities[].aggregates[].required_filter_bindings[].field
+datasets[].entities[].aggregates[].required_filter_bindings[].source
+datasets[].entities[].aggregates[].required_filters
+datasets[].entities[].aggregates[].required_filters[]
+datasets[].entities[].aggregates[].source_entity
+datasets[].entities[].aggregates[].spatial
+datasets[].entities[].aggregates[].spatial.bbox_fields
+datasets[].entities[].aggregates[].spatial.bbox_fields.max_x
+datasets[].entities[].aggregates[].spatial.bbox_fields.max_y
+datasets[].entities[].aggregates[].spatial.bbox_fields.min_x
+datasets[].entities[].aggregates[].spatial.bbox_fields.min_y
+datasets[].entities[].aggregates[].spatial.collection_id
+datasets[].entities[].aggregates[].spatial.dimension
+datasets[].entities[].aggregates[].spatial.geometry_entity
+datasets[].entities[].aggregates[].spatial.geometry_field
+datasets[].entities[].aggregates[].spatial.geometry_id_field
+datasets[].entities[].aggregates[].spatial.max_geometry_vertices
+datasets[].entities[].aggregates[].spatial.mode
+datasets[].entities[].aggregates[].temporal_field
+datasets[].entities[].aggregates[].title
+datasets[].entities[].api
+datasets[].entities[].api.allowed_expansions
+datasets[].entities[].api.allowed_expansions[]
+datasets[].entities[].api.allowed_filters
+datasets[].entities[].api.allowed_filters[]
+datasets[].entities[].api.allowed_filters[].field
+datasets[].entities[].api.allowed_filters[].ops
+datasets[].entities[].api.allowed_filters[].ops[]
+datasets[].entities[].api.default_limit
+datasets[].entities[].api.governed_policy
+datasets[].entities[].api.governed_policy.allowed_assurance
+datasets[].entities[].api.governed_policy.allowed_assurance[]
+datasets[].entities[].api.governed_policy.max_source_age_seconds
+datasets[].entities[].api.governed_policy.minimum_assurance
+datasets[].entities[].api.governed_policy.permitted_jurisdictions
+datasets[].entities[].api.governed_policy.permitted_jurisdictions[]
+datasets[].entities[].api.governed_policy.permitted_purposes
+datasets[].entities[].api.governed_policy.permitted_purposes[]
+datasets[].entities[].api.governed_policy.redaction_fields
+datasets[].entities[].api.governed_policy.redaction_fields[]
+datasets[].entities[].api.governed_policy.require_consent
+datasets[].entities[].api.governed_policy.require_legal_basis
+datasets[].entities[].api.governed_policy.trusted_context
+datasets[].entities[].api.governed_policy.trusted_context.asserted_assurance
+datasets[].entities[].api.governed_policy.trusted_context.consent_ref
+datasets[].entities[].api.governed_policy.trusted_context.jurisdiction
+datasets[].entities[].api.governed_policy.trusted_context.legal_basis_ref
+datasets[].entities[].api.governed_policy.trusted_context.source_observed_age_seconds
+datasets[].entities[].api.max_limit
+datasets[].entities[].api.require_purpose_header
+datasets[].entities[].api.required_filter_bindings
+datasets[].entities[].api.required_filter_bindings[]
+datasets[].entities[].api.required_filter_bindings[].field
+datasets[].entities[].api.required_filter_bindings[].source
+datasets[].entities[].api.required_filters
+datasets[].entities[].api.required_filters[]
+datasets[].entities[].attribute_release_profiles
+datasets[].entities[].attribute_release_profiles[]
+datasets[].entities[].attribute_release_profiles[].claims
+datasets[].entities[].attribute_release_profiles[].claims[]
+datasets[].entities[].attribute_release_profiles[].claims[].expression
+datasets[].entities[].attribute_release_profiles[].claims[].expression.cel
+datasets[].entities[].attribute_release_profiles[].claims[].format
+datasets[].entities[].attribute_release_profiles[].claims[].locale
+datasets[].entities[].attribute_release_profiles[].claims[].name
+datasets[].entities[].attribute_release_profiles[].claims[].required
+datasets[].entities[].attribute_release_profiles[].claims[].sensitivity
+datasets[].entities[].attribute_release_profiles[].claims[].shareable
+datasets[].entities[].attribute_release_profiles[].claims[].source_field
+datasets[].entities[].attribute_release_profiles[].description
+datasets[].entities[].attribute_release_profiles[].id
+datasets[].entities[].attribute_release_profiles[].purpose
+datasets[].entities[].attribute_release_profiles[].release_conditions
+datasets[].entities[].attribute_release_profiles[].release_conditions.denied_code
+datasets[].entities[].attribute_release_profiles[].release_conditions.expression
+datasets[].entities[].attribute_release_profiles[].release_conditions.expression.cel
+datasets[].entities[].attribute_release_profiles[].release_scope
+datasets[].entities[].attribute_release_profiles[].response
+datasets[].entities[].attribute_release_profiles[].response.include_source_metadata
+datasets[].entities[].attribute_release_profiles[].response.max_age_seconds
+datasets[].entities[].attribute_release_profiles[].subject
+datasets[].entities[].attribute_release_profiles[].subject.cardinality
+datasets[].entities[].attribute_release_profiles[].subject.id_type
+datasets[].entities[].attribute_release_profiles[].subject.input
+datasets[].entities[].attribute_release_profiles[].subject.source_field
+datasets[].entities[].attribute_release_profiles[].title
+datasets[].entities[].attribute_release_profiles[].version
+datasets[].entities[].concept_uri
+datasets[].entities[].description
+datasets[].entities[].fields
+datasets[].entities[].fields[]
+datasets[].entities[].fields[].codelist
+datasets[].entities[].fields[].concept_uri
+datasets[].entities[].fields[].from
+datasets[].entities[].fields[].language
+datasets[].entities[].fields[].name
+datasets[].entities[].fields[].sensitive
+datasets[].entities[].fields[].unit
+datasets[].entities[].name
+datasets[].entities[].relationships
+datasets[].entities[].relationships[]
+datasets[].entities[].relationships[].concept_uri
+datasets[].entities[].relationships[].foreign_key
+datasets[].entities[].relationships[].kind
+datasets[].entities[].relationships[].name
+datasets[].entities[].relationships[].target
+datasets[].entities[].spatial
+datasets[].entities[].spatial.bbox_fields
+datasets[].entities[].spatial.bbox_fields.max_x
+datasets[].entities[].spatial.bbox_fields.max_y
+datasets[].entities[].spatial.bbox_fields.min_x
+datasets[].entities[].spatial.bbox_fields.min_y
+datasets[].entities[].spatial.collection_id
+datasets[].entities[].spatial.datetime_field
+datasets[].entities[].spatial.description
+datasets[].entities[].spatial.geometry
+datasets[].entities[].spatial.geometry.crs
+datasets[].entities[].spatial.geometry.field
+datasets[].entities[].spatial.geometry.kind
+datasets[].entities[].spatial.geometry.latitude_field
+datasets[].entities[].spatial.geometry.longitude_field
+datasets[].entities[].spatial.max_bbox_degrees
+datasets[].entities[].spatial.max_geometry_vertices
+datasets[].entities[].spatial.title
+datasets[].entities[].table
+datasets[].entities[].title
+datasets[].id
+datasets[].owner
+datasets[].public_services
+datasets[].public_services[]
+datasets[].public_services[].description
+datasets[].public_services[].id
+datasets[].public_services[].title
+datasets[].sensitivity
+datasets[].spatial_coverage
+datasets[].status
+datasets[].tables
+datasets[].tables[]
+datasets[].tables[].access
+datasets[].tables[].access.aggregate_scope
+datasets[].tables[].access.metadata_scope
+datasets[].tables[].aggregates
+datasets[].tables[].aggregates[]
+datasets[].tables[].aggregates[].access
+datasets[].tables[].aggregates[].access.aggregate_only_execution
+datasets[].tables[].aggregates[].access.aggregate_scope
+datasets[].tables[].aggregates[].access.metadata_scope
+datasets[].tables[].aggregates[].allowed_filters
+datasets[].tables[].aggregates[].allowed_filters[]
+datasets[].tables[].aggregates[].allowed_filters[].field
+datasets[].tables[].aggregates[].allowed_filters[].ops
+datasets[].tables[].aggregates[].allowed_filters[].ops[]
+datasets[].tables[].aggregates[].default_group_by
+datasets[].tables[].aggregates[].default_group_by[]
+datasets[].tables[].aggregates[].description
+datasets[].tables[].aggregates[].dimensions
+datasets[].tables[].aggregates[].dimensions[]
+datasets[].tables[].aggregates[].dimensions[].codelist
+datasets[].tables[].aggregates[].dimensions[].field
+datasets[].tables[].aggregates[].dimensions[].id
+datasets[].tables[].aggregates[].dimensions[].label
+datasets[].tables[].aggregates[].disclosure_control
+datasets[].tables[].aggregates[].disclosure_control.method
+datasets[].tables[].aggregates[].disclosure_control.method[]
+datasets[].tables[].aggregates[].disclosure_control.min_cell_size
+datasets[].tables[].aggregates[].disclosure_control.min_group_size
+datasets[].tables[].aggregates[].disclosure_control.report_suppressed_rows
+datasets[].tables[].aggregates[].disclosure_control.suppression
+datasets[].tables[].aggregates[].group_by
+datasets[].tables[].aggregates[].group_by[]
+datasets[].tables[].aggregates[].id
+datasets[].tables[].aggregates[].indicators
+datasets[].tables[].aggregates[].indicators[]
+datasets[].tables[].aggregates[].indicators[].column
+datasets[].tables[].aggregates[].indicators[].decimals
+datasets[].tables[].aggregates[].indicators[].definition_uri
+datasets[].tables[].aggregates[].indicators[].frequency
+datasets[].tables[].aggregates[].indicators[].function
+datasets[].tables[].aggregates[].indicators[].id
+datasets[].tables[].aggregates[].indicators[].label
+datasets[].tables[].aggregates[].indicators[].unit_measure
+datasets[].tables[].aggregates[].indicators[].unit_mult
+datasets[].tables[].aggregates[].joins
+datasets[].tables[].aggregates[].joins[]
+datasets[].tables[].aggregates[].joins[].relationship
+datasets[].tables[].aggregates[].measures
+datasets[].tables[].aggregates[].measures[]
+datasets[].tables[].aggregates[].measures[].column
+datasets[].tables[].aggregates[].measures[].function
+datasets[].tables[].aggregates[].measures[].name
+datasets[].tables[].aggregates[].required_filter_bindings
+datasets[].tables[].aggregates[].required_filter_bindings[]
+datasets[].tables[].aggregates[].required_filter_bindings[].field
+datasets[].tables[].aggregates[].required_filter_bindings[].source
+datasets[].tables[].aggregates[].required_filters
+datasets[].tables[].aggregates[].required_filters[]
+datasets[].tables[].aggregates[].source_entity
+datasets[].tables[].aggregates[].spatial
+datasets[].tables[].aggregates[].spatial.bbox_fields
+datasets[].tables[].aggregates[].spatial.bbox_fields.max_x
+datasets[].tables[].aggregates[].spatial.bbox_fields.max_y
+datasets[].tables[].aggregates[].spatial.bbox_fields.min_x
+datasets[].tables[].aggregates[].spatial.bbox_fields.min_y
+datasets[].tables[].aggregates[].spatial.collection_id
+datasets[].tables[].aggregates[].spatial.dimension
+datasets[].tables[].aggregates[].spatial.geometry_entity
+datasets[].tables[].aggregates[].spatial.geometry_field
+datasets[].tables[].aggregates[].spatial.geometry_id_field
+datasets[].tables[].aggregates[].spatial.max_geometry_vertices
+datasets[].tables[].aggregates[].spatial.mode
+datasets[].tables[].aggregates[].temporal_field
+datasets[].tables[].aggregates[].title
+datasets[].tables[].api
+datasets[].tables[].api.allowed_filters
+datasets[].tables[].api.allowed_filters[]
+datasets[].tables[].api.allowed_filters[].field
+datasets[].tables[].api.allowed_filters[].ops
+datasets[].tables[].api.allowed_filters[].ops[]
+datasets[].tables[].api.default_limit
+datasets[].tables[].api.max_limit
+datasets[].tables[].api.require_purpose_header
+datasets[].tables[].id
+datasets[].tables[].materialization
+datasets[].tables[].primary_key
+datasets[].tables[].refresh
+datasets[].tables[].refresh.interval
+datasets[].tables[].refresh.mode
+datasets[].tables[].schema
+datasets[].tables[].schema.fields
+datasets[].tables[].schema.fields[]
+datasets[].tables[].schema.fields[].codelist
+datasets[].tables[].schema.fields[].concept_uri
+datasets[].tables[].schema.fields[].language
+datasets[].tables[].schema.fields[].name
+datasets[].tables[].schema.fields[].nullable
+datasets[].tables[].schema.fields[].sensitive
+datasets[].tables[].schema.fields[].type
+datasets[].tables[].schema.fields[].unit
+datasets[].tables[].schema.strict
+datasets[].tables[].source
+datasets[].tables[].source.change_token_sql
+datasets[].tables[].source.connect_timeout
+datasets[].tables[].source.connection_env
+datasets[].tables[].source.format
+datasets[].tables[].source.format.csv
+datasets[].tables[].source.format.csv.delimiter
+datasets[].tables[].source.format.csv.header_row
+datasets[].tables[].source.format.csv.quote
+datasets[].tables[].source.format.parquet
+datasets[].tables[].source.format.xlsx
+datasets[].tables[].source.format.xlsx.data_range
+datasets[].tables[].source.format.xlsx.header_row
+datasets[].tables[].source.format.xlsx.sheet
+datasets[].tables[].source.path
+datasets[].tables[].source.query
+datasets[].tables[].source.query_timeout
+datasets[].tables[].source.table
+datasets[].tables[].source.table.name
+datasets[].tables[].source.table.schema
+datasets[].tables[].source.type
+datasets[].title
+datasets[].update_frequency
+deployment
+deployment.evidence
+deployment.evidence.api_key_rotation
+deployment.evidence.audit_ack_cursor_path
+deployment.evidence.audit_ack_max_age_secs
+deployment.evidence.audit_offhost_shipping
+deployment.evidence.ingress_rate_limit
+deployment.profile
+deployment.waivers
+deployment.waivers[]
+deployment.waivers[].expires
+deployment.waivers[].finding
+deployment.waivers[].reason
+instance
+instance.environment
+instance.id
+instance.jurisdiction
+instance.owner
+metadata
+metadata.ecosystem_binding
+metadata.ecosystem_binding.id
+metadata.ecosystem_binding.version
+metadata.source
+metadata.source.digest
+metadata.source.path
+server
+server.admin_bind
+server.bind
+server.cache_dir
+server.cors
+server.cors.allowed_origins
+server.cors.allowed_origins[]
+server.http1_header_read_timeout
+server.max_connections
+server.max_source_file_bytes
+server.openapi_requires_auth
+server.request_body_timeout
+server.request_timeout
+server.trust_proxy
+server.trust_proxy.enabled
+server.trust_proxy.trusted_proxies
+server.trust_proxy.trusted_proxies[]
+server.xlsx_max_file_bytes
+standards
+standards.spdci
+standards.spdci.disability_registry
+standards.spdci.disability_registry.dataset
+standards.spdci.disability_registry.disabled_positive_values
+standards.spdci.disability_registry.disabled_positive_values[]
+standards.spdci.disability_registry.disabled_status_field
+standards.spdci.disability_registry.entity
+standards.spdci.disability_registry.query_field
+standards.spdci.disability_registry.query_key
+standards.spdci.registries
+standards.spdci.registries.*
+standards.spdci.registries.*.dataset
+standards.spdci.registries.*.default_limit
+standards.spdci.registries.*.entity
+standards.spdci.registries.*.expression_fields
+standards.spdci.registries.*.expression_fields.*
+standards.spdci.registries.*.identifiers
+standards.spdci.registries.*.identifiers.*
+standards.spdci.registries.*.record_type
+standards.spdci.registries.*.registry_type
+standards.spdci.registries.*.response_fields
+standards.spdci.registries.*.response_fields.*
+standards.spdci.registries.*.response_mapping_path
+standards.spdci.registries.*.response_schema_path
+vocabularies
+vocabularies.*
+```
+{/* registry-relay-config-key-paths:end */}
+
 `registry-relay` is configured by one YAML document. The binary chooses the first available source:
 
 1. `--config <path>`
@@ -28,6 +625,16 @@ standards: {}  # optional, feature-gated adapters
 
 Unknown fields are rejected for most blocks. Config validation runs after YAML parsing and checks ids, scopes, table/entity references, filter references, aggregate references, env var presence, and vocabulary prefixes.
 
+The complete deserialization-oriented Draft 2020-12 schema is committed at
+[`schemas/registry-relay.config.schema.json`](../../../schemas/registry-relay.config.schema.json).
+Reproduce it from this directory with `just config-schema-generate`, verify
+drift with `just config-schema-check`, or print the exact same bytes with
+`registry-relay schema --format json`. The schema checks document structure,
+closed objects, tagged variants, scalar shapes, and constrained reference
+syntax. `registry-relay doctor` remains authoritative for environment and
+secret availability, filesystem and source access, activation rules, and
+cross-field runtime validation.
+
 ## Environment expansion
 
 Relay expands `${VAR}` expressions before YAML parsing. `${VAR}` requires
@@ -36,6 +643,21 @@ Relay expands `${VAR}` expressions before YAML parsing. `${VAR}` requires
 `${VAR:?message}` fails with `message` when `VAR` is unset or empty.
 Whitespace-only values are non-empty. Diagnostics name the variable or use the
 supplied message; they never include the variable value.
+
+Environment-reference fields follow the invariant of their runtime consumer:
+
+- `auth.api_keys[].fingerprint.name` accepts any non-empty operating-system
+  environment name except names containing `=` or NUL. It does not impose an
+  identifier grammar or a 128-byte limit, and its consumer permits
+  whitespace-only names.
+- `audit.hash_secret_env` uses the same operating-system name rules but must
+  contain at least one non-whitespace character, matching the audit runtime's
+  fail-closed empty-name check. Names containing dots or hyphens remain valid.
+- Postgres `connection_env` uses `[A-Za-z_][A-Za-z0-9_]*`, matching source
+  validation, without an artificial length limit.
+- Consultation database, credential, and pseudonym secret references use the
+  portable `[A-Za-z_][A-Za-z0-9_]{0,127}` grammar enforced during
+  deserialization and consultation operations.
 
 A minimal entity-serving deployment needs `server` (a listener), `catalog` (public metadata base), `auth` (one auth mode), `audit` (a sink and hash secret), and at least one entry in `datasets`. A consultation-only deployment can use `datasets: []` when the complete `consultation` block activates at least one profile.
 Every other root block is optional.
@@ -203,11 +825,28 @@ server:
     trusted_proxies: []
 ```
 
-`bind` is the public data-plane listener. `admin_bind` is optional and must be private in production. `cache_dir` must be writable by the process. Source data must be mounted read-only.
+`bind` is the public data-plane listener.
+`admin_bind` is optional and must be private in production.
+Listener addresses use canonical dotted-decimal IPv4 or bracketed hexadecimal
+IPv6 followed by a canonical decimal port from `0` through `65535`.
+IPv4-embedded IPv6 and IPv6 zone identifiers are outside this portable config
+grammar.
+`cache_dir` must be writable by the process.
+Source data must be mounted read-only.
 
 `openapi_requires_auth` defaults to `true`. Set it to `false` only for local testing or controlled tooling environments that need unauthenticated access to `/openapi.json`; the unauthenticated document includes the full configured OpenAPI surface.
 
 `request_timeout` bounds total request service time after HTTP headers are parsed. `request_body_timeout` bounds body reads for handlers that consume a request body. `http1_header_read_timeout` closes incomplete HTTP/1 headers before request work is admitted, and `max_connections` caps concurrent accepted sockets per listener. All timeouts must be non-zero and `max_connections` must be greater than zero.
+
+Every duration field uses the same stable humantime subset.
+A value contains one or more non-negative integer components of at most 10
+digits, separated by one ASCII space, with units `ns`, `us`, `ms`, `s`, `m`,
+`h`, `d`, or `w`.
+The complete value is at most 255 bytes.
+Examples include `30s`, `10m`, `1h`, and `2h 37m`.
+Bare numbers, negative or fractional components, long unit aliases, adjacent
+components such as `1h30m`, and repeated spaces are rejected by both runtime
+deserialization and the JSON Schema.
 
 HTTP/2 connections use the same finite connection cap and keepalive timeout. If production terminates HTTP/2 at a reverse proxy, configure bounded proxy header/body read timeouts and per-client connection limits before forwarding to Registry Relay.
 
@@ -582,7 +1221,7 @@ audit:
   hash_secret_env: REGISTRY_RELAY_AUDIT_HASH_SECRET
 ```
 
-`hash_secret_env` is required at runtime and must name an environment variable containing at least 32 bytes of deployment-specific random secret material. Startup fails closed when it is missing, empty, unset, or weak.
+`hash_secret_env` is required at runtime and must be a non-whitespace environment variable name containing no `=` or NUL. The named variable must contain at least 32 bytes of deployment-specific random secret material. Startup fails closed when the name is missing or whitespace-only, or when the variable is unset, empty, or weak.
 
 Registry Relay uses this secret to pseudonymize sensitive audit handles. Values for
 configured sensitive fields, record primary keys, table identifiers, and

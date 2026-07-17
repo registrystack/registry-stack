@@ -27,12 +27,14 @@ use std::time::Duration;
 use registry_platform_audit::pseudonym_keyring::AuditPseudonymKeyId;
 use registry_platform_authcommon::CredentialFingerprintRef;
 use registry_platform_ops::{AuditWritePolicy, DeploymentProfile};
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub mod capabilities;
 mod consultation_artifacts;
 pub mod governed;
 pub mod loader;
+pub mod schema;
 #[cfg(test)]
 #[doc(hidden)]
 pub mod test_support;
@@ -55,7 +57,7 @@ pub(crate) const MAX_AUDIT_PSEUDONYM_MATERIALS: usize = 32;
 pub(crate) const MAX_CONSULTATION_SOURCE_CREDENTIALS: usize = 128;
 
 /// Root configuration document. Parsed from YAML at startup.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
@@ -95,10 +97,11 @@ pub struct Config {
 /// environment or network position. When `profile` is absent the deployment
 /// is undeclared and refuses startup. A profile value that is not one of the
 /// known variants fails startup (fail closed on typos).
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DeploymentConfig {
     #[serde(default)]
+    #[schemars(with = "Option<schema::DeploymentProfileSchema>")]
     pub profile: Option<DeploymentProfile>,
     /// Per-deployment waivers. Each names one finding id, a free-text reason,
     /// and a mandatory expiry date. Expired waivers stop suppressing their
@@ -114,7 +117,7 @@ pub struct DeploymentConfig {
 
 /// One declared waiver. `expires` is an ISO 8601 `YYYY-MM-DD` date; format is
 /// validated at load time. Reasons must not carry secrets.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DeploymentWaiverConfig {
     pub finding: String,
@@ -126,7 +129,7 @@ pub struct DeploymentWaiverConfig {
 /// observe directly. Each flag defaults to `false`, meaning "no evidence
 /// declared", which keeps the corresponding gate active until the operator
 /// asserts the control is in place out of band.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DeploymentEvidenceConfig {
     /// Operator asserts ingress rate limiting is enforced (for example by a
@@ -156,7 +159,7 @@ pub struct DeploymentEvidenceConfig {
 }
 
 /// Stable deployment identity surfaced in redacted operations posture.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InstanceConfig {
     #[serde(default = "default_instance_id")]
@@ -188,7 +191,7 @@ fn default_instance_id() -> String {
 ///
 /// Simple local deployments omit this block. Bundle-aware deployments pin the
 /// local trust anchor, bundle, and anti-rollback state paths explicitly.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigTrustConfig {
     pub trust_anchor_path: PathBuf,
@@ -199,7 +202,7 @@ pub struct ConfigTrustConfig {
 }
 
 /// Optional split metadata manifest loaded alongside the runtime config.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MetadataConfig {
     pub source: MetadataSourceConfig,
@@ -207,7 +210,7 @@ pub struct MetadataConfig {
     pub ecosystem_binding: Option<EcosystemBindingSelectorConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MetadataSourceConfig {
     pub path: PathBuf,
@@ -215,7 +218,7 @@ pub struct MetadataSourceConfig {
     pub digest: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct EcosystemBindingSelectorConfig {
     pub id: String,
@@ -224,7 +227,7 @@ pub struct EcosystemBindingSelectorConfig {
 }
 
 /// External standards adapters layered over configured entities.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct StandardsConfig {
     #[serde(default)]
@@ -233,7 +236,7 @@ pub struct StandardsConfig {
 
 /// Social Protection Digital Convergence Initiative (SP DCI) adapter
 /// configuration.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SpdciStandardsConfig {
     #[serde(default)]
@@ -244,7 +247,7 @@ pub struct SpdciStandardsConfig {
 
 /// Runtime binding from a DCI registry sync search API to one configured
 /// Registry Relay entity.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SpdciRegistryConfig {
     pub dataset: DatasetId,
@@ -275,7 +278,7 @@ pub struct SpdciRegistryConfig {
 
 /// Runtime binding from SP DCI Disability Registry sync APIs to one
 /// configured Registry Relay entity.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SpdciDisabilityRegistryConfig {
     pub dataset: DatasetId,
@@ -326,11 +329,14 @@ fn default_spdci_search_limit() -> u32 {
 }
 
 /// HTTP listener and adjacent server-wide knobs.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ServerConfig {
+    #[serde(deserialize_with = "schema::deserialize_socket_addr")]
+    #[schemars(with = "schema::SocketAddrSchema")]
     pub bind: SocketAddr,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "schema::deserialize_optional_socket_addr")]
+    #[schemars(with = "Option<schema::SocketAddrSchema>")]
     pub admin_bind: Option<SocketAddr>,
     #[serde(default = "default_openapi_requires_auth")]
     pub openapi_requires_auth: bool,
@@ -344,14 +350,23 @@ pub struct ServerConfig {
     pub trust_proxy: TrustProxyConfig,
     #[serde(default)]
     pub cors: CorsConfig,
-    #[serde(default = "default_request_timeout", with = "humantime_serde")]
+    #[serde(
+        default = "default_request_timeout",
+        deserialize_with = "schema::deserialize_duration"
+    )]
+    #[schemars(with = "schema::HumantimeDurationSchema")]
     pub request_timeout: Duration,
-    #[serde(default = "default_request_body_timeout", with = "humantime_serde")]
+    #[serde(
+        default = "default_request_body_timeout",
+        deserialize_with = "schema::deserialize_duration"
+    )]
+    #[schemars(with = "schema::HumantimeDurationSchema")]
     pub request_body_timeout: Duration,
     #[serde(
         default = "default_http1_header_read_timeout",
-        with = "humantime_serde"
+        deserialize_with = "schema::deserialize_duration"
     )]
+    #[schemars(with = "schema::HumantimeDurationSchema")]
     pub http1_header_read_timeout: Duration,
     #[serde(default = "default_max_connections")]
     pub max_connections: usize,
@@ -392,7 +407,7 @@ fn default_max_source_file_bytes() -> u64 {
 /// `X-Forwarded-For` policy. Until the `ipnet` crate lands in deps we
 /// keep CIDR specs as strings and validate format in
 /// [`validate::run`].
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct TrustProxyConfig {
     #[serde(default)]
@@ -402,7 +417,7 @@ pub struct TrustProxyConfig {
 }
 
 /// CORS allowlist; default-deny per Section 17 item 7.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CorsConfig {
     #[serde(default)]
@@ -410,7 +425,7 @@ pub struct CorsConfig {
 }
 
 /// Catalog-level metadata surfaced by `/metadata/*` and DCAT outputs.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogConfig {
     pub title: String,
@@ -442,7 +457,7 @@ pub struct CatalogConfig {
 /// Authentication configuration. Exactly one of `api_keys` and `oidc`
 /// is consumed at startup, gated by `mode`; cross-field validation in
 /// [`validate`] enforces that only the active block is populated.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AuthConfig {
     pub mode: AuthMode,
@@ -462,7 +477,7 @@ pub struct AuthConfig {
 /// is expected to absorb abusive traffic before it reaches this process.
 /// Disabled by default so deployments that never set this block observe no
 /// behavior change.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AuthFailureThrottleConfig {
     #[serde(default)]
@@ -494,7 +509,7 @@ fn default_auth_failure_throttle_window_seconds() -> u64 {
 /// Authentication mode tag. Drives the provider built at startup in
 /// `crate::auth`. A given deployment runs in exactly one mode at a time;
 /// mixed-mode operation is not supported.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthMode {
     /// Hashed shared secret in an environment variable.
@@ -505,10 +520,11 @@ pub enum AuthMode {
 
 /// One configured API key, identified by an id and a fingerprint reference.
 /// The raw key never appears in config.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ApiKeyConfig {
     pub id: String,
+    #[schemars(with = "schema::CredentialFingerprintSchema")]
     pub fingerprint: CredentialFingerprintRef,
     #[serde(default)]
     pub scopes: Vec<String>,
@@ -517,7 +533,7 @@ pub struct ApiKeyConfig {
 /// OIDC / OAuth2 resource-server configuration. The relay validates
 /// incoming bearer JWTs against a configured external IdP. No tokens
 /// are minted here.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct OidcConfig {
     /// Issuer URL. Compared verbatim against the JWT `iss` claim.
@@ -548,11 +564,19 @@ pub struct OidcConfig {
     /// JWKS cache TTL. Default 10 minutes. The provider also refreshes
     /// on unknown `kid` (rate-limited) so this controls the steady-state
     /// rotation pickup latency, not the upper bound.
-    #[serde(default = "default_oidc_jwks_cache_ttl", with = "humantime_serde")]
+    #[serde(
+        default = "default_oidc_jwks_cache_ttl",
+        deserialize_with = "schema::deserialize_duration"
+    )]
+    #[schemars(with = "schema::HumantimeDurationSchema")]
     pub jwks_cache_ttl: Duration,
     /// Clock skew tolerance applied to `exp` and (when present) `nbf`.
     /// Default 60 seconds. Bounded at 5 minutes by validation.
-    #[serde(default = "default_oidc_leeway", with = "humantime_serde")]
+    #[serde(
+        default = "default_oidc_leeway",
+        deserialize_with = "schema::deserialize_duration"
+    )]
+    #[schemars(with = "schema::HumantimeDurationSchema")]
     pub leeway: Duration,
     /// JWT claim whose value carries scopes. Defaults to `scope`, the
     /// RFC 8693 / RFC 9068 space-separated form. Some IdPs use `scp`
@@ -593,7 +617,7 @@ pub struct OidcConfig {
 ///
 /// YAML values are the canonical JWA `alg` strings (`RS256`, `ES256`,
 /// `EdDSA`), case-sensitive.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 pub enum OidcAlgorithm {
     #[serde(rename = "RS256")]
     Rs256,
@@ -634,7 +658,7 @@ fn default_oidc_token_types() -> Vec<String> {
 /// and immutable, versioned secret references. PostgreSQL intentionally stores
 /// no secret-derived verifier, so replacing audit-pseudonym material behind an
 /// existing reference requires a new key id.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ConsultationConfig {
     /// Exact OIDC claims that identify the only caller allowed to execute
@@ -689,7 +713,7 @@ impl ConsultationConfig {
 /// There is deliberately no automatic client-claim selection. Deployments
 /// must name exactly one verified claim, and later runtime compilation binds
 /// this configuration to the issuer from `auth.oidc`.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ConsultationWorkloadConfig {
     pub audience: String,
@@ -699,7 +723,7 @@ pub struct ConsultationWorkloadConfig {
 }
 
 /// Closed set of verified OAuth claims that may identify Registry Notary.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ConsultationClientClaimSelectorConfig {
     Azp,
@@ -723,7 +747,7 @@ impl ConsultationClientClaimSelectorConfig {
 /// environment variable may be configured. Debug output also redacts that
 /// reference and the optional trust-root path so diagnostics do not disclose
 /// deployment secret topology.
-#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ConsultationStatePlaneConfig {
     pub database_url_env: ConsultationDatabaseUrlEnvironmentName,
@@ -751,8 +775,11 @@ impl fmt::Debug for ConsultationStatePlaneConfig {
 }
 
 /// Portable environment-variable name that resolves the state-plane URL.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct ConsultationDatabaseUrlEnvironmentName(String);
+#[derive(Clone, PartialEq, Eq, Hash, JsonSchema)]
+#[serde(transparent)]
+pub struct ConsultationDatabaseUrlEnvironmentName(
+    #[schemars(pattern(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$"))] String,
+);
 
 impl ConsultationDatabaseUrlEnvironmentName {
     fn parse(value: String) -> Result<Self, &'static str> {
@@ -787,7 +814,7 @@ impl fmt::Debug for ConsultationDatabaseUrlEnvironmentName {
 /// The catalog contains references, never credential values. Full one-to-one
 /// closure against the compiled source-plan registry is enforced before any
 /// environment variable is read.
-#[derive(Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Default, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(transparent)]
 pub struct ConsultationSourceCredentialCatalogConfig(Vec<ConsultationSourceCredentialConfig>);
 
@@ -812,7 +839,7 @@ impl fmt::Debug for ConsultationSourceCredentialCatalogConfig {
 /// Environment names are opaque references and are redacted from `Debug`.
 /// There is deliberately no field capable of carrying an embedded username,
 /// password, bearer token, or provider-specific extension.
-#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ConsultationSourceCredentialConfig {
     Basic {
@@ -939,8 +966,11 @@ impl fmt::Debug for ConsultationSourceCredentialConfig {
 }
 
 /// Exact private-binding credential reference grammar.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ConsultationSourceCredentialReference(Box<str>);
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, JsonSchema)]
+#[serde(transparent)]
+pub struct ConsultationSourceCredentialReference(
+    #[schemars(pattern(r"^[a-z][a-z0-9._-]{0,95}$"))] Box<str>,
+);
 
 impl ConsultationSourceCredentialReference {
     fn parse(value: String) -> Result<Self, &'static str> {
@@ -978,8 +1008,11 @@ fn is_consultation_source_credential_reference(value: &str) -> bool {
 }
 
 /// Portable environment-variable name used only as a credential reference.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ConsultationCredentialEnvironmentName(String);
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, JsonSchema)]
+#[serde(transparent)]
+pub struct ConsultationCredentialEnvironmentName(
+    #[schemars(pattern(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$"))] String,
+);
 
 impl ConsultationCredentialEnvironmentName {
     fn parse(value: String) -> Result<Self, &'static str> {
@@ -1013,7 +1046,7 @@ impl fmt::Debug for ConsultationCredentialEnvironmentName {
 ///
 /// The 1..=32 bound and cross-entry uniqueness are enforced by config
 /// validation and repeated by the material provider before loading secrets.
-#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(transparent)]
 pub struct AuditPseudonymMaterialCatalogConfig(Vec<AuditPseudonymMaterialConfig>);
 
@@ -1031,9 +1064,10 @@ impl fmt::Debug for AuditPseudonymMaterialCatalogConfig {
 }
 
 /// One public epoch id bound to one secret source reference.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AuditPseudonymMaterialConfig {
+    #[schemars(with = "schema::AuditPseudonymKeyIdSchema")]
     pub key_id: AuditPseudonymKeyId,
     pub source: AuditPseudonymSecretSourceConfig,
 }
@@ -1042,7 +1076,7 @@ pub struct AuditPseudonymMaterialConfig {
 ///
 /// The configured name is a reference only. Secret values cannot be embedded
 /// in this model and are loaded exactly once during runtime compilation.
-#[derive(Clone, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(tag = "provider", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuditPseudonymSecretSourceConfig {
     Environment {
@@ -1074,8 +1108,11 @@ impl fmt::Debug for AuditPseudonymSecretSourceConfig {
 ///
 /// Debug output is redacted even though the name is not itself key material,
 /// preventing configuration diagnostics from disclosing secret topology.
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct AuditPseudonymSecretEnvironmentName(String);
+#[derive(Clone, PartialEq, Eq, Hash, JsonSchema)]
+#[serde(transparent)]
+pub struct AuditPseudonymSecretEnvironmentName(
+    #[schemars(pattern(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$"))] String,
+);
 
 impl AuditPseudonymSecretEnvironmentName {
     fn parse(value: String) -> Result<Self, &'static str> {
@@ -1129,7 +1166,8 @@ fn is_portable_environment_name(value: &str) -> bool {
 /// not support combining it with `#[serde(flatten)]` on an internally
 /// tagged enum (unknown keys in `audit` are caught by the enum's own
 /// `deny_unknown_fields`).
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
+#[schemars(extend("unevaluatedProperties" = false))]
 pub struct AuditConfig {
     #[serde(flatten)]
     pub sink: AuditSinkConfig,
@@ -1151,6 +1189,7 @@ pub struct AuditConfig {
     /// Per-route-family selection is out of scope; this is a single
     /// deployment-wide policy.
     #[serde(default = "default_audit_write_policy")]
+    #[schemars(with = "schema::AuditWritePolicySchema")]
     pub write_policy: AuditWritePolicy,
     /// Name of the environment variable holding the per-deploy secret
     /// used to HMAC sensitive audit values (single-record primary keys,
@@ -1159,6 +1198,7 @@ pub struct AuditConfig {
     /// weak secret. Direct middleware tests can opt into the explicit
     /// unkeyed dev-only hasher without using runtime config.
     #[serde(default)]
+    #[schemars(with = "Option<schema::AuditHashSecretEnvironmentNameSchema>")]
     pub hash_secret_env: Option<String>,
 }
 
@@ -1171,7 +1211,7 @@ fn default_audit_write_policy() -> AuditWritePolicy {
 }
 
 /// Audit serialisation format. JSONL is the only V1 format.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum AuditFormat {
@@ -1181,7 +1221,7 @@ pub enum AuditFormat {
 
 /// Audit sink tagged on `sink:` per the YAML example. `file` carries
 /// the rotation policy inline.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "sink", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum AuditSinkConfig {
@@ -1195,7 +1235,7 @@ pub enum AuditSinkConfig {
 }
 
 /// In-process rotation for the `file` audit sink.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RotateConfig {
     pub max_size_mb: u64,
@@ -1214,7 +1254,7 @@ impl Default for RotateConfig {
 }
 
 /// BRegDCAT-AP `adms:status` vocabulary. Maps to the EU ADMS status codelists.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AdmsStatus {
     UnderDevelopment,
@@ -1224,7 +1264,7 @@ pub enum AdmsStatus {
 }
 
 /// A single dataset declaration.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetConfig {
     pub id: DatasetId,
@@ -1265,7 +1305,7 @@ pub struct DatasetConfig {
     pub aggregates: Vec<AggregateConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PublicServiceConfig {
     #[serde(default)]
@@ -1276,7 +1316,7 @@ pub struct PublicServiceConfig {
 }
 
 /// Optional table defaults for reducing repetition within one dataset.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DatasetDefaultsConfig {
     #[serde(default)]
@@ -1294,7 +1334,7 @@ impl DatasetConfig {
 
 /// Source plugin selection. Tagged on `type:` so HTTP, S3, or additional
 /// database variants can land additively later.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum SourceConfig {
@@ -1304,6 +1344,7 @@ pub enum SourceConfig {
         format: Option<ResourceFormatConfig>,
     },
     Postgres {
+        #[schemars(with = "schema::PostgresEnvironmentNameSchema")]
         connection_env: String,
         #[serde(default)]
         table: Option<PostgresTableConfig>,
@@ -1311,9 +1352,17 @@ pub enum SourceConfig {
         query: Option<String>,
         #[serde(default)]
         change_token_sql: Option<String>,
-        #[serde(default = "default_postgres_connect_timeout", with = "humantime_serde")]
+        #[serde(
+            default = "default_postgres_connect_timeout",
+            deserialize_with = "schema::deserialize_duration"
+        )]
+        #[schemars(with = "schema::HumantimeDurationSchema")]
         connect_timeout: Duration,
-        #[serde(default = "default_postgres_query_timeout", with = "humantime_serde")]
+        #[serde(
+            default = "default_postgres_query_timeout",
+            deserialize_with = "schema::deserialize_duration"
+        )]
+        #[schemars(with = "schema::HumantimeDurationSchema")]
         query_timeout: Duration,
     },
 }
@@ -1329,7 +1378,7 @@ impl SourceConfig {
 
 /// Structured database table reference. Keeping schema/name separate
 /// avoids parsing dotted identifiers and leaves quoting to connectors.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PostgresTableConfig {
     pub schema: String,
@@ -1345,18 +1394,23 @@ fn default_postgres_query_timeout() -> Duration {
 }
 
 /// Refresh policy. Tagged on `mode:`.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum RefreshConfig {
     /// Poll source mtime on `interval` and re-ingest on change.
     Mtime {
-        #[serde(default = "default_mtime_interval", with = "humantime_serde")]
+        #[serde(
+            default = "default_mtime_interval",
+            deserialize_with = "schema::deserialize_duration"
+        )]
+        #[schemars(with = "schema::HumantimeDurationSchema")]
         interval: Duration,
     },
     /// Unconditionally re-ingest on `interval`.
     Interval {
-        #[serde(with = "humantime_serde")]
+        #[serde(deserialize_with = "schema::deserialize_duration")]
+        #[schemars(with = "schema::HumantimeDurationSchema")]
         interval: Duration,
     },
     /// Re-ingest only on explicit admin call.
@@ -1369,7 +1423,7 @@ fn default_mtime_interval() -> Duration {
 }
 
 /// How a configured private table is registered for query planning.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MaterializationMode {
     Snapshot,
@@ -1380,7 +1434,7 @@ pub enum MaterializationMode {
 /// The public API should not expose these ids. Entity config maps one
 /// resource into one domain resource, with optional field renaming and
 /// relationship declarations.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceConfig {
     pub id: ResourceId,
@@ -1402,7 +1456,7 @@ pub struct ResourceConfig {
 
 /// Storage table format override. If omitted, ingest infers the format
 /// from the source file extension.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceFormatConfig {
     #[serde(default)]
@@ -1413,7 +1467,7 @@ pub struct ResourceFormatConfig {
     pub parquet: Option<ParquetFormatConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CsvFormatConfig {
     #[serde(default)]
@@ -1424,7 +1478,7 @@ pub struct CsvFormatConfig {
     pub quote: Option<u8>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct XlsxFormatConfig {
     #[serde(default)]
@@ -1435,7 +1489,7 @@ pub struct XlsxFormatConfig {
     pub data_range: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ParquetFormatConfig {}
 
@@ -1511,7 +1565,7 @@ impl ResourceConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EntityConfig {
     pub name: String,
@@ -1546,7 +1600,7 @@ pub struct EntityConfig {
 /// that declares a `purpose` requires a matching `data-purpose` at resolve time;
 /// one that omits it does not. Identified globally by the `(id, version)` pair;
 /// both are required path segments at resolve time.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AttributeReleaseProfile {
     /// Profile identifier, lower-kebab/snake (`^[a-z][a-z0-9_-]*$`). Globally
@@ -1579,7 +1633,7 @@ pub struct AttributeReleaseProfile {
 }
 
 /// Subject-identification controls for an attribute-release profile.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseSubjectConfig {
     /// Request input that carries the subject identifier.
@@ -1595,7 +1649,7 @@ pub struct ReleaseSubjectConfig {
 }
 
 /// Expected number of subjects a release lookup may match.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SubjectCardinality {
     One,
@@ -1608,7 +1662,7 @@ fn default_subject_cardinality() -> SubjectCardinality {
 
 /// CEL release-condition gate. When present, the predicate must hold before
 /// any claim is projected; failure fails closed (subject denied).
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseConditionsConfig {
     pub expression: ReleaseExpressionConfig,
@@ -1618,7 +1672,7 @@ pub struct ReleaseConditionsConfig {
 }
 
 /// A single CEL expression evaluated over the subject's source projection.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseExpressionConfig {
     pub cel: String,
@@ -1627,7 +1681,7 @@ pub struct ReleaseExpressionConfig {
 /// A single released claim. Exactly one of `source_field` or `expression`
 /// must be set: a claim is either a direct source-field projection or a
 /// CEL-computed value.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseClaimConfig {
     /// Released claim name (lower-snake).
@@ -1662,7 +1716,7 @@ fn default_claim_shareable() -> bool {
 /// Closed privacy-sensitivity classification for a released claim. This is a
 /// separate, release-specific taxonomy and is intentionally not the
 /// dataset-level `Sensitivity` enum.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaimSensitivity {
     DirectIdentifier,
@@ -1672,7 +1726,7 @@ pub enum ClaimSensitivity {
 }
 
 /// Response-envelope controls for an attribute-release profile.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseResponseConfig {
     /// Whether to include profile-sourced metadata in the response body.
@@ -1685,7 +1739,7 @@ pub struct ReleaseResponseConfig {
 
 pub const CRS84: &str = "http://www.opengis.net/def/crs/OGC/1.3/CRS84";
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EntitySpatialConfig {
     #[serde(default)]
@@ -1705,7 +1759,7 @@ pub struct EntitySpatialConfig {
     pub max_geometry_vertices: u32,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SpatialGeometryConfig {
     Point {
@@ -1727,7 +1781,7 @@ pub enum SpatialGeometryConfig {
     },
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SpatialBboxFieldsConfig {
     pub min_x: String,
@@ -1744,7 +1798,7 @@ fn default_max_geometry_vertices() -> u32 {
     10_000
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EntityFieldConfig {
     pub name: String,
@@ -1762,7 +1816,7 @@ pub struct EntityFieldConfig {
     pub language: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EntityRelationshipConfig {
     pub name: String,
@@ -1773,7 +1827,7 @@ pub struct EntityRelationshipConfig {
     pub concept_uri: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RelationshipKind {
     BelongsTo,
@@ -1781,7 +1835,7 @@ pub enum RelationshipKind {
     HasOne,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EntityAccessConfig {
     pub metadata_scope: String,
@@ -1791,7 +1845,7 @@ pub struct EntityAccessConfig {
     pub evidence_verification_scope: String,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EntityApiConfig {
     pub default_limit: u32,
@@ -1815,7 +1869,7 @@ pub struct EntityApiConfig {
     pub allowed_expansions: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RequiredFilterBindingConfig {
     pub field: String,
@@ -1823,14 +1877,14 @@ pub struct RequiredFilterBindingConfig {
     pub source: RequiredFilterBindingSource,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RequiredFilterBindingSource {
     #[default]
     PrincipalId,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct GovernedPolicyConfig {
     #[serde(default)]
@@ -1853,7 +1907,7 @@ pub struct GovernedPolicyConfig {
     pub trusted_context: GovernedTrustedContextConfig,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct GovernedTrustedContextConfig {
     #[serde(default)]
@@ -1870,7 +1924,7 @@ pub struct GovernedTrustedContextConfig {
 
 /// Declared resource schema. `strict` is the spec's `strict_schema`
 /// flag; on mismatch ingestion refuses to register the resource.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct SchemaConfig {
     #[serde(default)]
@@ -1880,7 +1934,7 @@ pub struct SchemaConfig {
 
 /// One column in a resource schema. Physical type and optional
 /// semantic annotations used by catalog and schema metadata.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FieldConfig {
     pub name: String,
@@ -1901,7 +1955,7 @@ pub struct FieldConfig {
 
 /// Physical type of a column. The set is fixed in V1; semantic types
 /// are carried via `concept_uri`.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldType {
     String,
@@ -1914,7 +1968,7 @@ pub enum FieldType {
 
 /// Resource-level scope assignments. Private tables are not exposed as row
 /// resources in beta; row access is configured on public entities.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceAccessConfig {
     pub metadata_scope: String,
@@ -1923,7 +1977,7 @@ pub struct ResourceAccessConfig {
 
 /// Resource-level API knobs: per-field filter allowlist, limit caps,
 /// and the `Data-Purpose` requirement.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceApiConfig {
     pub default_limit: u32,
@@ -1946,7 +2000,7 @@ impl Default for ResourceApiConfig {
 }
 
 /// A single allowed filter: field name + permitted operators.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AllowedFilter {
     pub field: String,
@@ -1954,7 +2008,7 @@ pub struct AllowedFilter {
 }
 
 /// Filter operator opted into per field.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum FilterOp {
     Eq,
@@ -1966,7 +2020,7 @@ pub enum FilterOp {
 
 /// Aggregate declaration: group-by columns, measures, disclosure
 /// control.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AggregateConfig {
     pub id: AggregateId,
@@ -2009,7 +2063,7 @@ pub struct AggregateConfig {
     pub disclosure_control: DisclosureControlConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AggregateAccessConfig {
     #[serde(default)]
@@ -2020,7 +2074,7 @@ pub struct AggregateAccessConfig {
     pub aggregate_only_execution: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AggregateDimensionConfig {
     pub id: String,
@@ -2030,7 +2084,7 @@ pub struct AggregateDimensionConfig {
     pub codelist: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AggregateIndicatorConfig {
     pub id: String,
@@ -2048,7 +2102,7 @@ pub struct AggregateIndicatorConfig {
     pub definition_uri: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AggregateSpatialConfig {
     AdminArea {
@@ -2065,14 +2119,14 @@ pub enum AggregateSpatialConfig {
     },
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AggregateJoinConfig {
     pub relationship: String,
 }
 
 /// One measure inside an aggregate.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AggregateMeasure {
     pub name: String,
@@ -2082,7 +2136,7 @@ pub struct AggregateMeasure {
 
 /// Aggregate function. V1 supports the basic set plus the
 /// optional functions (`median`, `count_distinct`, `stddev`).
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AggregateFunction {
     Count,
@@ -2097,7 +2151,7 @@ pub enum AggregateFunction {
 
 /// Disclosure control settings per aggregate. Defaults to
 /// `min_group_size: 5`, `suppression: omit`.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DisclosureControlConfig {
     #[serde(default = "default_disclosure_methods")]
@@ -2128,7 +2182,7 @@ impl DisclosureControlConfig {
 }
 
 /// Disclosure suppression strategy.
-#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Suppression {
     /// Remove rows below the threshold from the response entirely.
@@ -2142,7 +2196,7 @@ pub enum Suppression {
 
 /// Sensitivity classification. Operator-defined values cover common
 /// personal and public dataset classifications in V1.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Sensitivity {
@@ -2154,7 +2208,7 @@ pub enum Sensitivity {
 }
 
 /// Access rights classification, mirrors DCAT-AP `dcterms:accessRights`.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum AccessRights {
@@ -2165,7 +2219,7 @@ pub enum AccessRights {
 
 /// Update cadence; mirrors DCAT-AP `dcterms:accrualPeriodicity`. The
 /// V1 set is the codes used by the example plus the common alternates.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum UpdateFrequency {
@@ -2186,19 +2240,19 @@ pub enum UpdateFrequency {
 // ---------------------------------------------------------------------
 
 /// Dataset identifier. Lower-snake, starts with a letter.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(transparent)]
-pub struct DatasetId(String);
+pub struct DatasetId(#[schemars(pattern(r"^[a-z][a-z0-9_]*$"))] String);
 
 /// Resource identifier within a dataset.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(transparent)]
-pub struct ResourceId(String);
+pub struct ResourceId(#[schemars(pattern(r"^[a-z][a-z0-9_]*$"))] String);
 
 /// Aggregate identifier within a resource.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Deserialize, JsonSchema, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[serde(transparent)]
-pub struct AggregateId(String);
+pub struct AggregateId(#[schemars(pattern(r"^[a-z][a-z0-9_]*$"))] String);
 
 macro_rules! impl_id {
     ($ty:ident) => {
