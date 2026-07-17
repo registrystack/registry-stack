@@ -1,0 +1,7 @@
+.github/**
+.gitignore
+package-lock.json
+src/**
+tsconfig.json
+node_modules/.cache/**
+**/*.map

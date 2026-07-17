@@ -24,6 +24,7 @@ include_dir = "0.7"
 ipnet.workspace = true
 rcgen.workspace = true
 registry-config-report = { workspace = true }
+registry-language-server.workspace = true
 registry-notary-core.workspace = true
 registry-notary-server = { workspace = true, features = ["registry-notary-cel"] }
 registry-platform-authcommon = { workspace = true }

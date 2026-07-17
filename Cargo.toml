@@ -24,6 +24,7 @@ members = [
     "crates/registry-notary",
     "crates/registry-notary-worker-harness",
     "crates/registry-relay",
+    "crates/registry-language-server",
     "crates/registryctl",
     "products/notary/xtask",
 ]
@@ -51,6 +52,7 @@ unsafe_code = "forbid"
 
 [workspace.dependencies]
 registry-config-report = { path = "crates/registry-config-report", version = "0.10.0" }
+registry-language-server = { path = "crates/registry-language-server", version = "0.10.0" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.10.0" }
 registry-notary-client = { path = "crates/registry-notary-client", version = "0.10.0" }
 registry-notary-core = { path = "crates/registry-notary-core", version = "0.10.0" }
@@ -146,6 +148,9 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 tokio-util = { version = "0.7" }
 toml = { version = "1.1" }
 tower = { version = "0.5" }
+tower-lsp-server = { version = "0.23" }
+tree-sitter = { version = "0.26" }
+tree-sitter-yaml = { version = "0.7.2" }
 tower-http = { version = "0.7", features = ["cors", "limit", "request-id", "set-header", "timeout", "trace"] }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }

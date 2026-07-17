@@ -1,0 +1,22 @@
+[package]
+name = "registry-language-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Cross-file navigation and reference diagnostics for Registry Stack project YAML."
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-std"] }
+tower-lsp-server.workspace = true
+tree-sitter.workspace = true
+tree-sitter-yaml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

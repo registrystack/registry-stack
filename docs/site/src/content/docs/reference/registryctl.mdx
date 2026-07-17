@@ -51,6 +51,7 @@ complete workflow and generated trust boundary.
 | `authoring xw --format editor` | Print generated editor metadata for the `xw.v1` function surface. |
 | `authoring schema --kind <kind>` | Print a strict project, environment, integration, fixture, or entity JSON Schema. |
 | `authoring editor --project-dir <dir>` | Create or verify version-matched VS Code and Zed schema configuration. Defaults to the current directory. |
+| `authoring language-server` | Run Registry Stack navigation and reference diagnostics over the Language Server Protocol on standard input and output. |
 | `build --project-dir <dir> --environment <name>` | Emit deterministic unsigned Config Bundle input directories for the products in the selected topology. |
 | `build --against <bundle> --anchor <anchor>` | Build against an explicitly verified signed baseline. Both flags are required together. |
 
@@ -133,11 +134,19 @@ The generated `.vscode/settings.json` and `.zed/settings.json` reserve the five 
 table. Open the Registry Stack project directory as the editor root. In VS Code, install or accept
 the workspace recommendation for Red Hat YAML. Zed includes YAML language-server support.
 
+The source distribution also contains Registry Stack extensions for VS Code and Zed. Both launch
+the same semantic server, either as `registry-language-server` or through
+`registryctl authoring language-server`. The extensions add cross-file definitions, references,
+workspace and document symbols, and missing, duplicate, or ambiguous reference diagnostics. They
+run alongside the YAML language server, which continues to own syntax, schemas, completion, hover,
+and formatting.
+
 The shared YAML language server interprets configured paths as suffix matches at any depth. A file
 such as `notes.yaml` keeps its normal schema detection and formatting, but a nested copy such as
 `examples/environments/local.yaml` receives the Registry Stack environment schema. Do not reuse
-the five reserved layouts for unrelated YAML inside the opened project. Exact worktree-root routing
-requires the later editor extensions rather than portable 1.0 workspace settings.
+the five reserved layouts for unrelated YAML inside the opened project. The Registry Stack
+extensions restrict semantic indexing to the project root and documented authored-file layouts;
+portable schema settings continue to use suffix matching.
 
 Completion, hover descriptions, the document outline, and inline validation then use the matching
 Registry Stack schemas. To smoke-test the association, add an unknown top-level key to an

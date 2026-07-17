@@ -47,6 +47,9 @@ allow = [
     "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
+    # MIT-0 removes MIT's attribution condition. It is used by `borrow-or-share`,
+    # a transitive dependency of the language server's URI implementation.
+    "MIT-0",
     # MPL-2.0 is weak, file-level copyleft: its obligations attach only to the
     # MPL-licensed files themselves, not to code that merely depends on them.
     # Allowed workspace-wide; the motivating dependency is `smartstring`,

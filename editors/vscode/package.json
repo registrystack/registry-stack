@@ -1,0 +1,64 @@
+{
+  "name": "registry-stack",
+  "displayName": "Registry Stack",
+  "description": "Cross-file navigation and reference diagnostics for Registry Stack YAML projects.",
+  "version": "0.1.0",
+  "publisher": "registrystack",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/registrystack/registry-stack"
+  },
+  "engines": {
+    "vscode": "^1.91.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "keywords": [
+    "registry-stack",
+    "yaml",
+    "language-server"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:registry-stack.yaml",
+    "onCommand:registryStack.restartLanguageServer"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "registryStack.restartLanguageServer",
+        "title": "Registry Stack: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "title": "Registry Stack",
+      "properties": {
+        "registryStack.languageServer.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "description": "Path to the registry-language-server executable. Relative paths resolve from the Registry Stack project root. When empty, the extension uses its bundled binary or searches PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "check": "tsc -p . --noEmit",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^10.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/vscode": "^1.91.0",
+    "typescript": "^5.9.3"
+  }
+}

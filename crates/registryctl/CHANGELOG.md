@@ -23,6 +23,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `registryctl init --from` now installs deterministic project-local JSON Schemas and VS Code and
   Zed workspace mappings. `registryctl authoring editor` verifies or safely refreshes the same
   version-matched setup for an existing project.
+- `registryctl authoring language-server` now provides bounded cross-file definitions, references,
+  symbols, and reference diagnostics for Registry Stack project YAML. Thin source extensions for
+  VS Code and Zed launch the same server alongside their existing YAML language servers.
 
 ### Changed
 

@@ -163,6 +163,12 @@ fn main() -> Result<()> {
                     project_directory: project_dir,
                 })?,
             )?,
+            AuthoringCommand::LanguageServer => {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?
+                    .block_on(registry_language_server::run_stdio());
+            }
         },
         Commands::Build {
             project_dir,
@@ -796,6 +802,8 @@ enum AuthoringCommand {
         #[arg(long, default_value = ".")]
         project_dir: PathBuf,
     },
+    /// Run cross-file Registry Stack navigation over the Language Server Protocol.
+    LanguageServer,
 }
 
 #[derive(Debug, Parser)]
@@ -1178,6 +1186,15 @@ mod tests {
             Commands::Authoring {
                 command: AuthoringCommand::Editor { project_dir }
             } if project_dir == std::path::Path::new(".")
+        ));
+
+        let language_server =
+            Cli::try_parse_from(["registryctl", "authoring", "language-server"]).unwrap();
+        assert!(matches!(
+            language_server.command,
+            Commands::Authoring {
+                command: AuthoringCommand::LanguageServer
+            }
         ));
 
         let build = Cli::try_parse_from([
