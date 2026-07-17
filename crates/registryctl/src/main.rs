@@ -478,8 +478,8 @@ fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false)
             {
-                let self_attested = notary
-                    .get("self_attested_services")
+                let source_free_evaluation = notary
+                    .get("source_free_evaluation_services")
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0);
                 let relay_backed = notary
@@ -490,9 +490,9 @@ fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<
                     output,
                     "  Notary authority: {}, {}",
                     render_count(
-                        self_attested,
-                        "source-free self-attested service",
-                        "source-free self-attested services"
+                        source_free_evaluation,
+                        "source-free evaluation service",
+                        "source-free evaluation services"
                     ),
                     render_count(
                         relay_backed,
@@ -1105,36 +1105,72 @@ mod tests {
     fn human_check_report_identifies_single_product_topologies_and_authority() {
         let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/project-authoring");
-        for (project, topology, authority) in [
-            (
-                "relay-only-records",
-                "topology: Relay-only",
-                "Relay authority: 0 source integrations, 1 records API service, 1 materialized entity definition",
-            ),
-            (
-                "notary-only-self-attested",
-                "topology: Notary-only",
-                "Notary authority: 1 source-free self-attested service, 0 compiler-pinned Relay-backed services",
-            ),
-        ] {
-            let report = registryctl::check_registry_project(&ProjectCheckOptions {
-                project_directory: fixtures.join(project),
-                environment: "local".to_string(),
-                explain: true,
-                against: None,
-                anchor: None,
-            })
-            .expect("single-product project checks");
-            let rendered = render_check_report(&report, false).expect("report renders");
-            assert!(rendered.contains(topology), "{rendered}");
-            assert!(rendered.contains(authority), "{rendered}");
-            if project == "notary-only-self-attested" {
-                assert!(
-                    rendered.contains("Relay source authority: not applicable"),
-                    "{rendered}"
-                );
-            }
-        }
+        let relay_report = registryctl::check_registry_project(&ProjectCheckOptions {
+            project_directory: fixtures.join("relay-only-records"),
+            environment: "local".to_string(),
+            explain: true,
+            against: None,
+            anchor: None,
+        })
+        .expect("Relay-only project checks");
+        let relay_rendered = render_check_report(&relay_report, false).expect("report renders");
+        assert!(relay_rendered.contains("topology: Relay-only"));
+        assert!(relay_rendered.contains(
+            "Relay authority: 0 source integrations, 1 records API service, 1 materialized entity definition"
+        ));
+
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = temporary.path().join("notary-only-evaluation");
+        std::fs::create_dir_all(project.join("environments"))
+            .expect("environment directory creates");
+        std::fs::write(
+            project.join("registry-stack.yaml"),
+            r#"version: 1
+registry: { id: fictional-evaluation-registry }
+services:
+  applicant-evaluation:
+    kind: evidence
+    version: 1
+    purpose: application-processing
+    legal_basis: application-processing
+    consent: not_required
+    access: { scopes: ["evidence:application:read"] }
+    claims:
+      application-complete:
+        cel: "true"
+        value: { type: boolean }
+        disclosure: predicate
+    credential_profiles: {}
+"#,
+        )
+        .expect("project writes");
+        std::fs::write(
+            project.join("environments/local.yaml"),
+            r#"version: 1
+callers:
+  application-service:
+    api_key_fingerprint: { secret: APPLICATION_SERVICE_TOKEN_HASH }
+    scopes: ["evidence:application:read"]
+deployment:
+  profile: local
+  notary: { service: evaluation-notary }
+"#,
+        )
+        .expect("environment writes");
+        let notary_report = registryctl::check_registry_project(&ProjectCheckOptions {
+            project_directory: project,
+            environment: "local".to_string(),
+            explain: true,
+            against: None,
+            anchor: None,
+        })
+        .expect("Notary-only evaluation project checks");
+        let notary_rendered = render_check_report(&notary_report, false).expect("report renders");
+        assert!(notary_rendered.contains("topology: Notary-only"));
+        assert!(notary_rendered.contains(
+            "Notary authority: 1 source-free evaluation service, 0 compiler-pinned Relay-backed services"
+        ));
+        assert!(notary_rendered.contains("Relay source authority: not applicable"));
     }
 
     #[test]

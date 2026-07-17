@@ -1030,10 +1030,10 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                 }
                 ClaimEvidence::SelfAttested => {
                     if claim.output.is_some() {
-                        bail!("self-attested claims cannot reference Relay outputs");
+                        bail!("source-free claims cannot reference Relay outputs");
                     }
                     if claim.value.is_none() {
-                        bail!("self-attested claims require an explicit value contract");
+                        bail!("source-free claims require an explicit value contract");
                     }
                     let roots = cel_member_roots(
                         claim
@@ -1046,7 +1046,7 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
                         .keys()
                         .any(|name| roots.contains(name.as_str()))
                     {
-                        bail!("self-attested claims cannot depend on Relay consultations");
+                        bail!("source-free claims cannot depend on Relay consultations");
                     }
                 }
             }
@@ -1060,13 +1060,19 @@ fn validate_project_shape(project: &RegistryProject) -> Result<()> {
             }
             validate_disclosure(&claim.disclosure)?;
         }
-        for credential in service.credential_profiles.values() {
+        for (credential_id, credential) in &service.credential_profiles {
             if credential.claims.is_empty() {
                 bail!("credential claim allow-list must not be empty");
             }
-            for claim in &credential.claims {
-                if !service.claims.contains_key(claim) {
-                    bail!("credential references an unknown claim");
+            for claim_id in &credential.claims {
+                let claim = service
+                    .claims
+                    .get(claim_id)
+                    .ok_or_else(|| anyhow!("credential references an unknown claim"))?;
+                if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
+                    bail!(
+                        "credential profile {service_id}.{credential_id} selects source-free claim {claim_id}; credential profiles require registry-backed claim evidence"
+                    );
                 }
             }
         }
@@ -2299,10 +2305,13 @@ fn validate_oid4vci_binding(
     if credential.claims.len() != 1 {
         bail!("OID4VCI v1 credential profiles must select exactly one claim");
     }
-    service
+    let claim = service
         .claims
         .get(&credential.claims[0])
         .ok_or_else(|| anyhow!("OID4VCI credential profile claim is absent"))?;
+    if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
+        bail!("OID4VCI credential profiles require registry-backed claim evidence");
+    }
     if normalize_credential_format(&credential.format) != "application/dc+sd-jwt" {
         bail!("OID4VCI credential profile format must be dc+sd-jwt");
     }

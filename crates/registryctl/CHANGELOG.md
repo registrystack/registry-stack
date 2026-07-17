@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- BREAKING: project authoring no longer accepts credential profiles or OID4VCI
+  configurations that select source-free claims. Credential capability now
+  requires registry-backed claim evidence from an exact compiler-pinned Relay
+  consultation; source-free claims remain available only for evaluation when
+  no credential profile selects them.
+
 ## [0.10.0] - 2026-07-17
 
 ### Added
