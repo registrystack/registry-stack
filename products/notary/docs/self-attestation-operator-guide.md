@@ -1,9 +1,12 @@
 # Self-attestation operator guide
 
-> **Page type:** How-to · **Product:** Registry Notary · **Layer:** credential · **Audience:** operator
+> **Page type:** How-to · **Product:** Registry Notary · **Layer:** evaluation, credential · **Audience:** operator
 
-Self-attestation lets a citizen use their own OIDC token to evaluate, render, or
-issue only the claims that policy allows. The subject is bound to the token.
+Self-attestation lets a citizen use their own OIDC token to evaluate or render
+only the claims that policy allows. It can authorize credential issuance only
+when every credential claim is registry-backed and the stored evaluation
+retains the exact compiler-pinned Relay execution provenance. Source-free
+claims are evaluation-only. The subject is bound to the token.
 This guide is for operators configuring that flow with an identity provider and
 relying-party or wallet clients. Registry-backed citizen evidence requires a
 separately compiled Relay consultation and service policy.
@@ -19,6 +22,9 @@ The core guarantee is that a citizen token can only be used for the exact self
 authorized by policy, and only for explicitly allowed claims, purposes,
 formats, disclosures, and credential profiles.
 
+The credential-profile allow-lists apply only to registry-backed claims. They
+do not turn a `self_attested` claim into issuable evidence.
+
 Notary validates the token, checks client and audience policy, checks subject
 binding, checks scopes and operation allow-lists, then evaluates only the
 configured subject-bound claims.
@@ -31,7 +37,7 @@ flowchart TD
   S -- "ok" --> Sc{"Scopes and operation allow-lists"}
   Sc -- "ok" --> Bound["Evaluate configured subject-bound claim"]
   Bound --> Op
-  Op["Evaluate, render, or issue within the allow-lists"]
+  Op["Evaluate or render within the allow-lists"]
   V -- "fail" --> X["Reject before evaluation"]
   C -- "fail" --> X
   S -- "conflicting caller identity" --> X
@@ -52,7 +58,8 @@ caller-supplied identity context is rejected before claim evaluation.
 Use self-attestation when:
 
 - A citizen portal evaluates eligibility from the citizen's own token.
-- A wallet flow issues a credential for the token-bound subject.
+- A wallet flow issues a credential for the token-bound subject from a
+  compiler-pinned Relay-backed evaluation.
 - The identity provider can provide a stable, reviewed subject-binding claim.
 - The evidence service accepts token-bound subject access for the configured purpose.
 
@@ -185,7 +192,8 @@ subject_access:
 Guidance:
 
 - Keep access-token lifetime short for public citizen flows.
-- Keep evaluation age short so a credential is issued from fresh evidence.
+- Keep evaluation age short so a registry-backed credential is issued from
+  fresh evidence.
 - Set credential validity to the period the issuing agency wants verifiers to
   accept the wallet-held VC. Use credential status or another lifecycle surface
   for long-lived credentials.
@@ -221,6 +229,9 @@ subject_access:
 Rules:
 
 - Enable only operations the citizen flow actually needs.
+- `issue_credential: true` requires every allowed claim and credential-profile
+  claim to use `registry_backed`. Use `issue_credential: false` for a
+  source-free service.
 - Include the canonical claim-result JSON format for the internal evaluation
   that backs issuance. The named credential profile separately selects
   `application/dc+sd-jwt` as the credential output.
@@ -239,9 +250,16 @@ Delegated subject access is available only when
 `subject_access.delegation.allowed_relationships` contains the requested
 relationship. Each allowed relationship names one compiler-pinned Relay-backed
 `proof_claim` and its exact claims, purposes, formats, disclosures, and
-credential profiles. Keep delegation disabled unless that relationship proof
-and its scoped authorization-details contract have been reviewed. The OID4VCI
-credential endpoint does not accept delegated-attestation access tokens.
+no credential profiles. Delegated self-attestation is evaluation and rendering
+only in 1.0. Both `/v1/credentials` and the OID4VCI credential endpoint reject
+delegated evaluations. Keep delegation disabled unless that relationship proof
+and its scoped authorization-details contract have been reviewed.
+
+Configuration load rejects a delegated relationship `credential_profiles`
+entry or a credential-profile binding on a delegated claim. To keep delegated
+evaluation, remove that credential capability. To issue a credential, model a
+separate registry-backed, non-delegated claim and bind it through
+`subject_access.credential_profiles`.
 
 ## Scope policy
 
@@ -302,11 +320,13 @@ but public deployments should also use gateway and identity-provider controls.
 Confirm that:
 
 - every `self_attested` claim and dependency is source-free;
+- no `self_attested` claim appears in `allowed_claims`, a credential profile,
+  or an OID4VCI projection when credential issuance is configured;
 - every `registry_backed` claim maps Relay inputs only from the authenticated
   requester or target identifiers;
 - claim and request purposes are stable and auditable;
-- caller scopes, client ids, audiences, formats, disclosures, and credential
-  profiles are narrowly allow-listed; and
+- caller scopes, client ids, audiences, formats, disclosures, and any
+  registry-backed credential profiles are narrowly allow-listed; and
 - the evidence service does not present self-attestation as registry-verified evidence.
 
 Use [`source-claim-modeling-guide.md`](source-claim-modeling-guide.md) to
@@ -319,6 +339,8 @@ review the evidence boundary.
 - `normalize: exact` is acceptable for the identifier format.
 - `scope_policy: required` is used unless there is a documented reason not to.
 - All allow-lists are narrow and reference existing claims and profiles.
+- Source-free services set `issue_credential: false` and configure no
+  credential profiles or OID4VCI credential configurations.
 - Batch is disabled.
 - Credential profiles use DID holder binding with proof of possession.
 - Wallet origins are exact HTTPS origins, or empty for non-browser flows.
@@ -337,6 +359,8 @@ review the evidence boundary.
 | Subject mismatch | Token claim is missing or caller-supplied identity context conflicts with the derived subject | `subject_binding.token_claim`, token claims, request body identity fields |
 | Userinfo subject not found | `claim_source: userinfo` without a usable endpoint or issuer | `auth.oidc.userinfo_endpoint`, `userinfo_issuers` |
 | Delegation config rejected | Delegated authorization does not match the compiled service policy | Check requester, target, relationship, purpose, and authorization details |
-| Credential issuance denied | Profile or claim missing from allow-lists | `allowed_claims`, `credential_profiles`, claim/profile cross references |
+| Delegated credential config rejected | A delegated relationship or delegated claim still carries a credential-profile binding | Remove the delegated credential capability, or use a registry-backed non-delegated credential claim |
+| Credential config rejected | A source-free claim or mixed profile was exposed for issuance | Use only mutually bound `registry_backed` claims in `allowed_claims`, credential profiles, and OID4VCI projections |
+| Credential issuance denied after upgrade | The evaluation is legacy, source-free, or its stored Relay execution pins do not match | Re-evaluate the exact registry-backed claims under the active configuration |
 | Batch request denied | Batch evaluation is not supported for self-attestation | Keep `batch_evaluate: false` |
 | Works locally but fails active-active | `state.storage: in_memory` is process-local | Add gateway limits and install PostgreSQL correctness state |

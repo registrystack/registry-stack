@@ -33,7 +33,7 @@
       "label": "Registry Notary OpenAPI generator",
       "url": "https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-server/src/openapi.rs"
     },
-    "consumer_note": "Generate with `cargo run -p registry-notary -- openapi`."
+    "consumer_note": "Generate with `cargo run -p registry-notary -- openapi`. Both direct and OID4VCI credential routes require a fresh non-delegated stored evaluation with exact claim pins and normalized unique Relay execution records for every selected root's registry-backed dependency closure."
   },
   {
     "id": "registry-notary.oid4vci",
@@ -45,7 +45,7 @@
       "label": "Registry Notary OID4VCI routes",
       "url": "https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registry-notary-server/src/api.rs"
     },
-    "consumer_note": "OID4VCI flow advertising `dc+sd-jwt` credential format. Solmara Lab checks the hosted issuer metadata, credential offer, nonce, authorization redirect, and unauthenticated denial paths through `just hosted-smoke`. Full OID4VCI Draft 13 `vc+sd-jwt` wallet conformance is not asserted at this version."
+    "consumer_note": "OID4VCI flow advertising `dc+sd-jwt` credential format. Credential configurations accept non-delegated registry-backed claims only and issuance verifies the exact dependency-closure Relay execution provenance before signing. Solmara Lab checks the hosted issuer metadata, credential offer, nonce, authorization redirect, and unauthenticated denial paths through `just hosted-smoke`. Full OID4VCI Draft 13 `vc+sd-jwt` wallet conformance is not asserted at this version."
   },
   {
     "id": "registry-notary.federated-evaluation",

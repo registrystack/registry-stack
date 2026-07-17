@@ -68,6 +68,7 @@ fn test_claim_result(
             },
         ),
         relay_consultation_ids: BTreeSet::new(),
+        own_issuance_provenance: None,
     }
 }
 

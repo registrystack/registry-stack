@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-notary
   - registry-platform
-last_reviewed: "2026-07-07"
+last_reviewed: "2026-07-17"
 doc_type: specification
 doc_id: RS-DM-CLAIM
 category: normative
@@ -41,6 +41,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.3.2 | 2026-07-14 | draft | Aligned credential eligibility with Registry Stack project authoring: profiles declare claims once, and the compiler derives the product-level reverse index. |
 | 0.3.3 | 2026-07-17 | draft | Made omitted claim `formats` default to the canonical claim-result JSON representation and made an explicitly empty list a configuration-load error. |
 | 0.3.4 | 2026-07-17 | draft | Made the evaluation response-format set closed: the canonical claim-result JSON format is required, CCCEV-shaped JSON-LD is the only additional renderer, and credential issuance formats are rejected. |
+| 0.4.0 | 2026-07-17 | draft | Restricted credential membership to mutually bound registry-backed claims and made source-free claims evaluation-only. |
 
 ## 1. Scope and references
 
@@ -83,7 +84,7 @@ flowchart TD
     rule -.-> creds
 ```
 
-The diagram restates the model: a claim receives either compiler-pinned Relay outputs or permitted self-attestation inputs, a single rule decides the value, and the disclosure policy, formats, and credential profiles govern the result. A claim definition describes one decision or one extracted value; a claim that tries to return a whole record over-collects and is hard to authorize.
+The diagram restates the model: a claim receives either compiler-pinned Relay outputs or permitted self-attestation inputs, a single rule decides the value, and the disclosure policy and formats govern the result. Credential profiles may select only registry-backed claims. A claim definition describes one decision or one extracted value; a claim that tries to return a whole record over-collects and is hard to authorize.
 
 REQ-DM-CLAIM-001: A claim definition MUST carry a stable identifier (`id`); the `id` is the reference callers use to evaluate the claim and the reference a credential profile uses to name it. The `id` SHOULD be stable, specific, and unique across the configuration.
 
@@ -138,8 +139,10 @@ reverse claim-to-profile index required by Registry Notary's product configurati
 
 REQ-DM-CLAIM-010: A credential profile MUST list at least one claim. The Registry Stack project
 compiler MUST derive each listed claim's product-level `credential_profiles` reverse index from
-that membership and MUST reject unknown claims. Registry Notary MUST issue a claim only when the
-compiled profile membership and derived reverse index agree. The issued credential is an SD-JWT VC
+that membership and MUST reject unknown or source-free claims. Registry Notary MUST require every
+credential profile claim, credential-capable subject-access allow-list entry, and OID4VCI projection
+to resolve through mutually consistent bindings to non-delegated `registry_backed` evidence. Delegated relationship and dependent-claim credential bindings MUST be rejected. Registry Notary MUST issue a claim only when the
+compiled profile membership and derived reverse index agree and exact compiler pins plus normalized unique Relay execution records are retained for its full dependency closure. Those private execution identifiers MUST be retained only for a credential-capable selection, not for a registry-backed evaluation-only claim. The issued credential is an SD-JWT VC
 bound to its holder by `did:jwk`, per REQ-PR-NOTARY-013 and REQ-PR-NOTARY-015.
 
 ## 9. Batch behavior

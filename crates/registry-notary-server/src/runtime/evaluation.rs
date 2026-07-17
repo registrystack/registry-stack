@@ -27,6 +27,11 @@ struct PreparedRegistryBatchItem {
     evaluation_capability: EvaluationCapability,
 }
 
+struct EvaluatedRegistryClaims {
+    views: Vec<ClaimResultView>,
+    issuance_provenance: Option<StoredIssuanceProvenance>,
+}
+
 pub(crate) fn registry_backed_batch_requested(
     evidence: &EvidenceConfig,
     request: &BatchEvaluateRequest,
@@ -170,6 +175,7 @@ impl RegistryNotaryRuntime {
                 "json_ld_vc_issuance",
                 "data_integrity_proofs",
                 "credential_status",
+                "delegated_credential_issuance",
                 "mso_mdoc",
                 "openid4vci_full_issuer"
             ]
@@ -539,6 +545,8 @@ impl RegistryNotaryRuntime {
                 policy,
             )
             .await?;
+        let issuance_provenance =
+            stored_issuance_provenance(&evidence, &request.claims, &claim_versions, &internal)?;
         let views = request
             .claims
             .iter()
@@ -560,7 +568,7 @@ impl RegistryNotaryRuntime {
             .as_ref()
             .and_then(|metadata| metadata.evaluation_expires_at.as_deref())
             .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
-            .unwrap_or(now + time::Duration::minutes(15));
+            .unwrap_or_else(|| default_stored_evaluation_expires_at(now));
         let client_id = stored_evaluation_client_id(principal, subject_access.as_ref());
         store
             .insert(registry_notary_core::StoredEvaluation {
@@ -574,6 +582,7 @@ impl RegistryNotaryRuntime {
                 created_at: format_time(now),
                 expires_at: format_time(expires_at),
                 request_hash,
+                issuance_provenance,
                 subject_access,
             })
             .await?;
@@ -799,10 +808,10 @@ impl RegistryNotaryRuntime {
                     // Retain per-subject evaluations on the calling task. An
                     // idempotent batch publishes these and its completed
                     // response together after all subjects finish.
-                    if let Some(first) = results.first() {
-                        let now_parsed = OffsetDateTime::parse(&first.issued_at, &Rfc3339)
-                            .unwrap_or(OffsetDateTime::now_utc());
-                        let expires_at = now_parsed + time::Duration::minutes(15);
+                    if !results.is_empty() {
+                        // Retention is a Notary storage lifecycle. It does not
+                        // inherit any evidence observation timestamp.
+                        let stored_at = OffsetDateTime::now_utc();
                         retained_evaluations.push(registry_notary_core::StoredEvaluation {
                             client_id: principal.principal_id.clone(),
                             purpose: subject_purposes[input_index].clone(),
@@ -814,9 +823,12 @@ impl RegistryNotaryRuntime {
                                 .map(|view| view.format.clone())
                                 .unwrap_or_default(),
                             results: results.clone(),
-                            created_at: first.issued_at.clone(),
-                            expires_at: format_time(expires_at),
+                            created_at: format_time(stored_at),
+                            expires_at: format_time(default_stored_evaluation_expires_at(
+                                stored_at,
+                            )),
                             request_hash: request_hash.clone(),
+                            issuance_provenance: None,
                             subject_access: None,
                         });
                     }
@@ -1084,7 +1096,8 @@ impl RegistryNotaryRuntime {
                 })
                 .transpose()?;
             match result {
-                Ok(results) => {
+                Ok(evaluated) => {
+                    let results = evaluated.views;
                     succeeded += 1;
                     let evaluation_id = results.first().map(|result| result.evaluation_id.clone());
                     let claim_results = results
@@ -1092,8 +1105,9 @@ impl RegistryNotaryRuntime {
                         .map(|result| batch_claim_result(&evidence, result))
                         .collect::<Result<Vec<_>, EvidenceError>>()?;
                     if let Some(first) = results.first() {
-                        let now = OffsetDateTime::parse(&first.issued_at, &Rfc3339)
-                            .unwrap_or_else(|_| OffsetDateTime::now_utc());
+                        // Relay acquisition time belongs to claim provenance;
+                        // evaluation retention starts when Notary stores it.
+                        let stored_at = OffsetDateTime::now_utc();
                         retained_evaluations.push(registry_notary_core::StoredEvaluation {
                             client_id: principal.principal_id.clone(),
                             purpose: subject_purposes[input_index].clone(),
@@ -1102,9 +1116,12 @@ impl RegistryNotaryRuntime {
                             disclosure: stored_disclosure(&results),
                             format: first.format.clone(),
                             results: results.clone(),
-                            created_at: first.issued_at.clone(),
-                            expires_at: format_time(now + time::Duration::minutes(15)),
+                            created_at: format_time(stored_at),
+                            expires_at: format_time(default_stored_evaluation_expires_at(
+                                stored_at,
+                            )),
                             request_hash: request_hash.clone(),
+                            issuance_provenance: evaluated.issuance_provenance,
                             subject_access: None,
                         });
                     }
@@ -1152,7 +1169,7 @@ impl RegistryNotaryRuntime {
         evidence: Arc<EvidenceConfig>,
         item: PreparedRegistryBatchItem,
         #[cfg(feature = "registry-notary-cel")] cel_concurrency: Option<Arc<Semaphore>>,
-    ) -> Result<Vec<ClaimResultView>, EvidenceError> {
+    ) -> Result<EvaluatedRegistryClaims, EvidenceError> {
         let now = OffsetDateTime::now_utc();
         let internal = self
             .evaluate_claims_dag(
@@ -1171,7 +1188,14 @@ impl RegistryNotaryRuntime {
                 EvaluationPolicy::default(),
             )
             .await?;
-        item.request
+        let issuance_provenance = stored_issuance_provenance(
+            &evidence,
+            &item.request.claims,
+            &item.claim_versions,
+            &internal,
+        )?;
+        let views = item
+            .request
             .claims
             .iter()
             .map(|claim_ref| {
@@ -1187,7 +1211,11 @@ impl RegistryNotaryRuntime {
                     &item.format,
                 )
             })
-            .collect()
+            .collect::<Result<Vec<_>, EvidenceError>>()?;
+        Ok(EvaluatedRegistryClaims {
+            views,
+            issuance_provenance,
+        })
     }
 
     /// Like `evaluate` but without writing the per-subject evaluation to the
@@ -1588,6 +1616,93 @@ fn relay_expected_result(
         .map_err(|_| EvidenceError::InvalidRequest)
 }
 
+fn stored_issuance_provenance(
+    evidence: &EvidenceConfig,
+    selected_claims: &[ClaimRef],
+    claim_versions: &ClaimVersionSelections,
+    internal: &BTreeMap<String, ClaimResultInternal>,
+) -> Result<Option<StoredIssuanceProvenance>, EvidenceError> {
+    // Retain restricted Relay identifiers only when the selected roots share
+    // an actual credential profile. Root configuration validation closes both
+    // sides of these bindings and validates the registry-backed dependency
+    // closure. OID4VCI configurations use the same profile binding.
+    let credential_capable = evidence
+        .credential_profiles
+        .iter()
+        .any(|(profile_id, profile)| {
+            selected_claims.iter().all(|claim_ref| {
+                find_claim_for_selection(evidence, claim_ref, claim_versions).is_ok_and(|claim| {
+                    claim
+                        .credential_profiles
+                        .iter()
+                        .any(|candidate| candidate == profile_id)
+                        && profile
+                            .allowed_claims
+                            .iter()
+                            .any(|candidate| candidate == &claim.id)
+                })
+            })
+        });
+    if !credential_capable {
+        return Ok(None);
+    }
+
+    let levels = build_claim_levels(evidence, selected_claims, claim_versions)?;
+    let closure = levels.iter().flatten().collect::<Vec<_>>();
+    if closure.len() > MAX_CLAIM_DEPENDENCY_NODES_V1 {
+        return Err(EvidenceError::RuleEvaluationFailed);
+    }
+    for claim_id in &closure {
+        if !find_claim_for_selection(evidence, claim_id.as_str(), claim_versions)?
+            .evidence_mode
+            .is_registry_backed()
+        {
+            return Ok(None);
+        }
+    }
+
+    let mut claims = Vec::with_capacity(closure.len());
+    let mut consultations: BTreeMap<String, StoredIssuanceConsultationProvenance> = BTreeMap::new();
+    for claim_id in closure {
+        let provenance = internal
+            .get(claim_id.as_str())
+            .and_then(|result| result.own_issuance_provenance.clone())
+            .ok_or(EvidenceError::RuleEvaluationFailed)?;
+        match consultations.get(&provenance.consultation.consultation_id) {
+            Some(existing) if existing.acquired_at != provenance.consultation.acquired_at => {
+                return Err(EvidenceError::RuleEvaluationFailed);
+            }
+            Some(_) => {}
+            None => {
+                consultations.insert(
+                    provenance.consultation.consultation_id.clone(),
+                    provenance.consultation.clone(),
+                );
+            }
+        }
+        let result = internal
+            .get(claim_id.as_str())
+            .ok_or(EvidenceError::RuleEvaluationFailed)?;
+        let mut claim = provenance.claim;
+        claim.execution_binding = issuance_execution_binding(
+            &claim,
+            &provenance.consultation,
+            &result.evaluation_id,
+            &format_time(result.issued_at),
+            &result.provenance,
+        )?;
+        claims.push(claim);
+    }
+    Ok(Some(StoredIssuanceProvenance {
+        claims,
+        consultations: consultations.into_values().collect(),
+    }))
+}
+
+fn default_stored_evaluation_expires_at(stored_at: OffsetDateTime) -> OffsetDateTime {
+    stored_at + time::Duration::minutes(15)
+}
+
 /// Derive the evaluation policy identity for provenance from stored
 /// subject-access metadata. Self-attestation results are produced under the
 /// canonical `subject-access` evaluation policy; the version and hash come
@@ -1657,60 +1772,83 @@ pub(super) async fn evaluate_claim_task(
         }
     }
     let delegated_proof_claim = ctx.evaluation_capability.is_delegated_proof_claim(claim_id);
-    let (consultation_outputs, observed_at, mut relay_consultation_ids) = match &claim.evidence_mode
-    {
-        ClaimEvidenceMode::SelfAttested => (BTreeMap::new(), None, BTreeSet::new()),
-        ClaimEvidenceMode::RegistryBacked { .. } => {
-            require_relay_consultation_capability(&ctx.evaluation_capability, &claim.id)?;
-            let plan = ctx
-                .relay_plan
-                .as_ref()
-                .ok_or(EvidenceError::EvidenceNotAvailable)?;
-            let result = plan.consult(&claim.id).await.map_err(|_| {
-                if delegated_proof_claim {
-                    delegated_proof_denied()
-                } else {
-                    EvidenceError::EvidenceNotAvailable
-                }
-            })?;
-            let relay_outcome = result.outcome();
-            let consultation_outputs_result = match relay_outcome {
-                RuntimeRelayOutcome::Match => materialize_relay_match(&claim, &result),
-                RuntimeRelayOutcome::NoMatch
-                    if matches!(&claim.rule, RuleConfig::ConsultationOutput { .. })
-                        && registry_claim_has_typed_outputs(&claim) =>
-                {
-                    materialize_relay_absence(&claim)
-                }
-                RuntimeRelayOutcome::NoMatch
-                    if matches!(&claim.rule, RuleConfig::ConsultationOutput { .. }) =>
-                {
-                    Err(EvidenceError::EvidenceNotAvailable)
-                }
-                RuntimeRelayOutcome::NoMatch if matches!(&claim.rule, RuleConfig::Cel { .. }) => {
-                    materialize_relay_absence(&claim)
-                }
-                RuntimeRelayOutcome::NoMatch => Ok(BTreeMap::new()),
-                RuntimeRelayOutcome::Ambiguous => Err(EvidenceError::EvidenceNotAvailable),
-            };
-            let consultation_outputs = consultation_outputs_result.map_err(|error| {
-                if delegated_proof_claim {
-                    if relay_outcome == RuntimeRelayOutcome::NoMatch {
-                        delegated_relationship_unproven()
-                    } else {
+    let (consultation_outputs, observed_at, mut relay_consultation_ids, own_issuance_provenance) =
+        match &claim.evidence_mode {
+            ClaimEvidenceMode::SelfAttested => (BTreeMap::new(), None, BTreeSet::new(), None),
+            ClaimEvidenceMode::RegistryBacked { consultations } => {
+                require_relay_consultation_capability(&ctx.evaluation_capability, &claim.id)?;
+                let (_, consultation) = consultations
+                    .first_key_value()
+                    .filter(|_| consultations.len() == 1)
+                    .ok_or(EvidenceError::RuleEvaluationFailed)?;
+                let plan = ctx
+                    .relay_plan
+                    .as_ref()
+                    .ok_or(EvidenceError::EvidenceNotAvailable)?;
+                let result = plan.consult(&claim.id).await.map_err(|_| {
+                    if delegated_proof_claim {
                         delegated_proof_denied()
+                    } else {
+                        EvidenceError::EvidenceNotAvailable
                     }
-                } else {
-                    error
-                }
-            })?;
-            (
-                consultation_outputs,
-                Some(result.acquired_at()),
-                BTreeSet::from([result.consultation_id().to_string()]),
-            )
-        }
-    };
+                })?;
+                let relay_outcome = result.outcome();
+                let consultation_outputs_result = match relay_outcome {
+                    RuntimeRelayOutcome::Match => materialize_relay_match(&claim, &result),
+                    RuntimeRelayOutcome::NoMatch
+                        if matches!(&claim.rule, RuleConfig::ConsultationOutput { .. })
+                            && registry_claim_has_typed_outputs(&claim) =>
+                    {
+                        materialize_relay_absence(&claim)
+                    }
+                    RuntimeRelayOutcome::NoMatch
+                        if matches!(&claim.rule, RuleConfig::ConsultationOutput { .. }) =>
+                    {
+                        Err(EvidenceError::EvidenceNotAvailable)
+                    }
+                    RuntimeRelayOutcome::NoMatch
+                        if matches!(&claim.rule, RuleConfig::Cel { .. }) =>
+                    {
+                        materialize_relay_absence(&claim)
+                    }
+                    RuntimeRelayOutcome::NoMatch => Ok(BTreeMap::new()),
+                    RuntimeRelayOutcome::Ambiguous => Err(EvidenceError::EvidenceNotAvailable),
+                };
+                let consultation_outputs = consultation_outputs_result.map_err(|error| {
+                    if delegated_proof_claim {
+                        if relay_outcome == RuntimeRelayOutcome::NoMatch {
+                            delegated_relationship_unproven()
+                        } else {
+                            delegated_proof_denied()
+                        }
+                    } else {
+                        error
+                    }
+                })?;
+                let acquired_at = result.acquired_at();
+                let consultation_id = result.consultation_id().to_string();
+                (
+                    consultation_outputs,
+                    Some(acquired_at),
+                    BTreeSet::from([consultation_id.clone()]),
+                    Some(ClaimIssuanceProvenanceInternal {
+                        claim: StoredIssuanceClaimProvenance {
+                            claim_id: claim.id.clone(),
+                            claim_version: claim.version.clone(),
+                            relay_profile_id: consultation.profile.id.clone(),
+                            relay_contract_hash: consultation.profile.contract_hash.clone(),
+                            canonical_purpose: ctx.purpose.clone(),
+                            consultation_id: consultation_id.clone(),
+                            execution_binding: String::new(),
+                        },
+                        consultation: StoredIssuanceConsultationProvenance {
+                            consultation_id,
+                            acquired_at: format_time(acquired_at),
+                        },
+                    }),
+                )
+            }
+        };
     // Relay acquisition time pins the result to the consultation evidence.
     let issued_at = observed_at.unwrap_or(ctx.now);
     let value_result = match &claim.rule {
@@ -1814,6 +1952,7 @@ pub(super) async fn evaluate_claim_task(
         expires_at: None,
         provenance,
         relay_consultation_ids,
+        own_issuance_provenance,
     })
 }
 

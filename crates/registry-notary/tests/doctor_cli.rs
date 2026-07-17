@@ -103,6 +103,20 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
 "#
         .to_string()
     };
+    let relay = if options.unbound_credential_profile {
+        let token_file = tmp.path().join("relay.jwt");
+        std::fs::write(&token_file, b"opaque-test-token").expect("Relay token file writes");
+        format!(
+            r#"  relay:
+    base_url: https://relay.internal.example
+    workload_client_id: registry-notary
+    token_file: {}
+"#,
+            token_file.display()
+        )
+    } else {
+        String::new()
+    };
     let credential_profiles = if options.unbound_credential_profile {
         r#"  credential_profiles:
     unbound_sd_jwt:
@@ -127,10 +141,24 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
       version: "1.0"
       subject_type: person
       evidence_mode:
-        type: self_attested
+        type: registry_backed
+        consultations:
+          person_status:
+            profile:
+              id: doctor.person-status.exact
+              contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            inputs:
+              subject_id: target.id
+            outputs:
+              active: { type: boolean, nullable: true }
+      purpose: credential-issuance-test
+      required_scopes:
+        - registry:evidence
+      value:
+        type: boolean
       rule:
-        type: cel
-        expression: "true"
+        type: consultation_matched
+        consultation: person_status
       formats:
         - application/vnd.registry-notary.claim-result+json
       credential_profiles:
@@ -159,7 +187,7 @@ server:
 {deployment}{state}{audit}evidence:
   enabled: true
   service_id: doctor-json-test
-  signing_keys:
+{relay}  signing_keys:
     issuer:
       provider: local_jwk_env
       private_jwk_env: TEST_DOCTOR_JSON_ISSUER_JWK

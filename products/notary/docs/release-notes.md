@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- BREAKING: Direct and OID4VCI credential issuance now require a fresh,
+  non-delegated stored evaluation with an exact compiler pin for every claim in
+  each selected root's registry-backed dependency closure and one normalized
+  record per unique Relay execution. Source-free and delegated claims are
+  evaluation-only and cannot be configured for credential issuance. Existing
+  evaluations remain readable and renderable but must be re-evaluated before issuance. See the
+  [credential issuance trust-boundary migration](credential-issuance-migration.md).
 - BREAKING: Configuration `${VAR}` expansion now rejects environment variables
   that are unset or empty. `${VAR:-fallback}` uses its fallback for either
   state, `${VAR:-}` explicitly expands to empty, and `${VAR:?message}` reports

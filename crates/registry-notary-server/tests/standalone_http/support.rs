@@ -2,9 +2,10 @@
 //! Standalone Registry Notary tests that do not link Registry Relay.
 
 pub(super) use axum::body::Bytes;
+pub(super) use axum::extract::{Request, State};
 pub(super) use axum::http::{header, Method, StatusCode};
 pub(super) use axum::routing::get;
-pub(super) use axum::Router;
+pub(super) use axum::{Json, Router};
 pub(super) use axum_test::TestServer;
 pub(super) use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 pub(super) use base64::Engine;
@@ -20,7 +21,8 @@ pub(super) use registry_notary_core::{
 #[cfg(feature = "registry-notary-cel")]
 pub(super) use registry_notary_core::{Oid4vciCredentialClaimConfig, RuleConfig};
 pub(super) use registry_notary_server::{
-    compile_notary_runtime, notary_routers_from_runtime, openapi_document, standalone_router,
+    compile_notary_runtime, notary_routers_from_runtime, notary_shared_router_from_runtime,
+    openapi_document, StandaloneServerError,
 };
 pub(super) use registry_platform_audit::{
     verify_jsonl_lines_with_hasher, AuditChainHasher, AuditEnvelope,
@@ -28,16 +30,15 @@ pub(super) use registry_platform_audit::{
 pub(super) use registry_platform_authcommon::{
     CredentialFingerprintProvider, CredentialFingerprintRef,
 };
+pub(super) use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 #[cfg(feature = "registry-notary-cel")]
 pub(super) use registry_platform_crypto::{did_jwk_from_public_jwk, verify};
-pub(super) use registry_platform_crypto::{sign, PrivateJwk};
 pub(super) use registry_platform_testing::{
     fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, sign_openid4vci_proof_jwt,
     MockHttpUpstream, MockIdp, FEDERATION_PROTOCOL, FEDERATION_REQUEST_JWT_TYPE,
 };
 pub(super) use serde::Deserialize;
 pub(super) use serde_json::{json, Value};
-#[cfg(feature = "registry-notary-cel")]
 pub(super) use sha2::{Digest, Sha256};
 pub(super) use std::collections::BTreeMap;
 pub(super) use std::collections::BTreeSet;
@@ -53,6 +54,179 @@ pub(super) use ulid::Ulid;
 pub(super) const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 pub(super) const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
 pub(super) const TEST_HOLDER_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA"}"#;
+pub(super) const TEST_RELAY_PROFILE_ID: &str = "example.person-status.exact";
+pub(super) const TEST_RELAY_CONTRACT_DOMAIN: &[u8] = b"registry.relay.consultation-contract.v1\0";
+
+#[derive(Clone)]
+struct TestRelayState {
+    contract: Value,
+    contract_hash: String,
+}
+
+pub(super) fn test_relay_contract() -> Value {
+    let mut contract: Value = serde_json::from_str(include_str!(
+        "../../../registry-relay/profiles/dhis2-2.41.9-enrollment-status/public-contract.json"
+    ))
+    .expect("test Relay contract parses");
+    contract["id"] = json!(TEST_RELAY_PROFILE_ID);
+    contract["spec"]["inputs"] = json!({
+        "subject_id": {
+            "role": "selector",
+            "type": "string",
+            "maxLength": 256,
+            "x-registry-max-bytes": 256,
+            "x-registry-canonicalization": "identity"
+        }
+    });
+    contract["spec"]["authorization"]["required_scope"] = json!("subject_access");
+    contract["spec"]["authorization"]["purposes"] = json!(["citizen_subject_access"]);
+    contract["spec"]["acquisition"]["fields"] = json!({
+        "active": { "type": "boolean", "nullable": true },
+        "birth_date": { "type": "date", "nullable": true },
+        "given_name": { "type": "string", "nullable": true, "max_bytes": 64 }
+    });
+    contract["spec"]["output"] = json!({
+        "active": { "type": "boolean", "nullable": true },
+        "birth_date": { "type": "date", "nullable": true },
+        "given_name": { "type": "string", "nullable": true, "max_bytes": 64 }
+    });
+    contract
+}
+
+pub(super) fn test_relay_contract_hash() -> String {
+    let canonical = canonicalize_json(&test_relay_contract()).expect("contract canonicalizes");
+    let mut hasher = Sha256::new();
+    hasher.update(TEST_RELAY_CONTRACT_DOMAIN);
+    hasher.update(canonical);
+    let mut encoded = String::from("sha256:");
+    for byte in hasher.finalize() {
+        use std::fmt::Write as _;
+        write!(&mut encoded, "{byte:02x}").expect("hash encoding cannot fail");
+    }
+    encoded
+}
+
+async fn test_relay_metadata(State(state): State<TestRelayState>) -> Json<Value> {
+    Json(json!({
+        "contract_hash": state.contract_hash,
+        "contract": state.contract,
+    }))
+}
+
+async fn test_relay_execute(State(state): State<TestRelayState>, request: Request) -> Json<Value> {
+    let evaluation_id = request
+        .headers()
+        .get("registry-notary-evaluation-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("Notary sends a canonical evaluation id")
+        .to_string();
+    let acquired_at = registry_notary_server::format_time(OffsetDateTime::now_utc());
+    Json(json!({
+        "schema": "registry.relay.consultation-result.v1",
+        "consultation_id": Ulid::new().to_string(),
+        "notary_evaluation_id": evaluation_id,
+        "profile": {
+            "id": TEST_RELAY_PROFILE_ID,
+            "contract_hash": state.contract_hash,
+        },
+        "outcome": "match",
+        "outputs": {
+            "active": true,
+            "birth_date": "2016-01-15",
+            "given_name": "Miguel",
+        },
+        "provenance": {
+            "acquired_at": acquired_at,
+            "source_observed_at": null,
+            "source_revision": null,
+            "acquisition_class": "source_projected_exact",
+            "integration": {
+                "id": "dhis2.tracker.enrollment-status",
+                "revision": 1
+            },
+            "consent": {
+                "outcome": "not_required",
+                "verifier_id": null,
+                "verifier_revision": null,
+                "checked_at": null,
+                "expires_at": null,
+                "revocation_status": "not_applicable"
+            }
+        }
+    }))
+}
+
+async fn start_test_relay() -> String {
+    let state = TestRelayState {
+        contract: test_relay_contract(),
+        contract_hash: test_relay_contract_hash(),
+    };
+    let app = Router::new()
+        .route(
+            "/v1/consultations/example.person-status.exact",
+            get(test_relay_metadata),
+        )
+        .route(
+            "/v1/consultations/example.person-status.exact/execute",
+            axum::routing::post(test_relay_execute),
+        )
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("test Relay binds");
+    let address = listener.local_addr().expect("test Relay has an address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("test Relay serves");
+    });
+    format!("http://{address}/")
+}
+
+fn test_relay_token() -> String {
+    let header = json!({
+        "alg": "RS256",
+        "kid": "relay-test-key",
+        "typ": "at+jwt",
+        "x5t": "relay-test-thumbprint",
+    });
+    let claims = json!({
+        "iss": "https://issuer.example.test",
+        "aud": ["registry-relay"],
+        "sub": "registry-notary",
+        "azp": "registry-notary",
+        "client_id": "registry-notary",
+        "scope": "subject_access",
+        "iat": 1_700_000_000_i64,
+        "nbf": 1_700_000_000_i64,
+        "exp": 4_102_444_800_i64,
+        "jti": "standalone-http-relay-test-token",
+    });
+    format!(
+        "{}.{}.{}",
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header serializes")),
+        URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).expect("claims serialize")),
+        URL_SAFE_NO_PAD.encode(b"relay-test-signature")
+    )
+}
+
+pub(super) async fn standalone_router(
+    mut config: StandaloneRegistryNotaryConfig,
+) -> Result<Router, StandaloneServerError> {
+    let admin_listener_mode = config.server.admin_listener.mode;
+    if let Some(relay) = config.evidence.relay.as_mut() {
+        std::fs::write(&relay.token_file, test_relay_token())
+            .expect("test Relay workload token writes");
+        relay.base_url = start_test_relay().await;
+    }
+    let runtime = compile_notary_runtime(config)?.activate().await?;
+    match admin_listener_mode {
+        RegistryNotaryAdminListenerMode::SharedWithPublic => {
+            notary_shared_router_from_runtime(runtime)
+        }
+        RegistryNotaryAdminListenerMode::Dedicated | RegistryNotaryAdminListenerMode::Disabled => {
+            Ok(notary_routers_from_runtime(runtime)?.public)
+        }
+    }
+}
 #[derive(Debug, Deserialize)]
 pub(super) struct ExposureManifest {
     pub(super) endpoints: Vec<ExposureEndpoint>,

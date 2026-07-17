@@ -6,7 +6,7 @@ pub(crate) fn claim_ids(claims: &[ClaimRef]) -> Vec<String> {
     claims.iter().map(|claim| claim.id.clone()).collect()
 }
 
-pub(super) fn requested_claim_versions(
+pub(crate) fn requested_claim_versions(
     claims: &[ClaimRef],
 ) -> Result<ClaimVersionSelections, EvidenceError> {
     let mut versions = BTreeMap::new();
@@ -65,7 +65,7 @@ pub(super) fn find_claim_for_selection<'a>(
 ///
 /// Cycle and unknown-dep validation already happened at config load; we still
 /// guard with bounded iterations so a malformed config cannot infinite-loop.
-pub(super) fn build_claim_levels(
+pub(crate) fn build_claim_levels(
     evidence: &EvidenceConfig,
     requested: &[ClaimRef],
     claim_versions: &ClaimVersionSelections,

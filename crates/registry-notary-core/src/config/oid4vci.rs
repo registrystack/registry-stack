@@ -809,6 +809,11 @@ pub(super) fn validate_oid4vci_credential_claim_reference<'a>(
                 "credential configuration '{configuration_id}' references unknown claim '{claim_id}'"
             ),
         })?;
+    if !claim.evidence_mode.is_registry_backed() {
+        return invalid_oid4vci(format!(
+            "credential configuration '{configuration_id}' maps source-free claim '{claim_id}' to credential profile '{credential_profile_id}'; OID4VCI credential claims must be registry_backed"
+        ));
+    }
     if !claim
         .credential_profiles
         .iter()

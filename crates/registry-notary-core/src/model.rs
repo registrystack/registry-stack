@@ -1470,6 +1470,17 @@ pub struct StoredEvaluation {
     pub created_at: String,
     pub expires_at: String,
     pub request_hash: String,
+    /// Private issuance-only Relay provenance for the selected dependency closure.
+    ///
+    /// This is deliberately separate from public [`ClaimProvenance`]. It is
+    /// persisted only for credential-capable selections so a later credential
+    /// request can prove that every fact being signed came from the exact
+    /// compiler-pinned Relay consultation. Evaluation-only selections retain
+    /// no private Relay execution identifiers. Evaluations written before this
+    /// field existed remain readable, but are not credential-issuable and must
+    /// be evaluated again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuance_provenance: Option<StoredIssuanceProvenance>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject_access: Option<StoredSubjectAccessMetadata>,
 }
@@ -1493,6 +1504,85 @@ impl StoredEvaluation {
         } else {
             self.claim_refs.clone()
         }
+    }
+}
+
+/// Bounded private provenance retained for credential issuance.
+///
+/// The runtime admits at most the v1 claim-closure bound and the issuance
+/// verifier rejects an over-sized or incomplete set before any signer or
+/// credential-status side effect. Consultation identifiers remain restricted
+/// state and never appear in evaluation, render, or credential responses.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StoredIssuanceProvenance {
+    pub claims: Vec<StoredIssuanceClaimProvenance>,
+    /// Unique Relay executions referenced by the claim closure.
+    ///
+    /// Keeping executions separate permits one coalesced Relay consultation to
+    /// support several claim pins without duplicating the restricted execution
+    /// record. A missing empty legacy field is readable but nonissuable.
+    #[serde(default)]
+    pub consultations: Vec<StoredIssuanceConsultationProvenance>,
+}
+
+impl std::fmt::Debug for StoredIssuanceProvenance {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StoredIssuanceProvenance")
+            .field("claim_count", &self.claims.len())
+            .field("consultation_count", &self.consultations.len())
+            .finish()
+    }
+}
+
+/// The exact compiler pin and successful Relay execution for one claim in a
+/// selected root's dependency closure. This restricted persistence shape is
+/// not a public API model.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StoredIssuanceClaimProvenance {
+    pub claim_id: String,
+    pub claim_version: String,
+    pub relay_profile_id: String,
+    pub relay_contract_hash: String,
+    pub canonical_purpose: String,
+    pub consultation_id: String,
+    /// Deterministic SHA-256 commitment over this compiler pin, its Relay
+    /// execution record, and the claim result provenance produced by the
+    /// evaluation. A missing legacy value remains readable but is not
+    /// credential-issuable.
+    #[serde(default)]
+    pub execution_binding: String,
+}
+
+impl std::fmt::Debug for StoredIssuanceClaimProvenance {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StoredIssuanceClaimProvenance")
+            .field("claim_id", &self.claim_id)
+            .field("claim_version", &self.claim_version)
+            .field("relay_profile_id", &self.relay_profile_id)
+            .field("relay_contract_hash", &self.relay_contract_hash)
+            .field("canonical_purpose", &self.canonical_purpose)
+            .field("consultation_id", &"[REDACTED]")
+            .field("execution_binding", &self.execution_binding)
+            .finish()
+    }
+}
+
+/// One unique successful Relay execution retained for issuance verification.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StoredIssuanceConsultationProvenance {
+    pub consultation_id: String,
+    pub acquired_at: String,
+}
+
+impl std::fmt::Debug for StoredIssuanceConsultationProvenance {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("StoredIssuanceConsultationProvenance")
+            .field("consultation_id", &"[REDACTED]")
+            .field("acquired_at", &"[REDACTED]")
+            .finish()
     }
 }
 
@@ -2510,6 +2600,7 @@ mod tests {
             stored.selected_claim_refs(),
             vec![ClaimRef::from("person-is-alive")]
         );
+        assert!(stored.issuance_provenance.is_none());
         assert!(stored.subject_access.is_none());
     }
 }

@@ -7,6 +7,98 @@ use super::{
 };
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+pub(super) async fn direct_registry_dependency_journey_evaluates_and_issues_over_http() {
+    set_audit_secret();
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = subject_access_oidc_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config.subject_access.allowed_operations.issue_credential = true;
+    let mut dependency = config.evidence.claims[0].clone();
+    dependency.id = "civil-record-active".to_string();
+    dependency.title = "Civil record active".to_string();
+    dependency.depends_on.clear();
+    dependency.credential_profiles.clear();
+    config.evidence.claims[0].depends_on = vec![dependency.id.clone()];
+    config.evidence.claims.push(dependency);
+
+    let app = standalone_router(config)
+        .await
+        .expect("validated config activates the HTTP Relay adapter");
+    let server = TestServer::builder().http_transport().build(app);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "subject_access",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    let authorization = format!("Bearer {token}");
+    let evaluate = server
+        .post("/v1/evaluations")
+        .add_header("authorization", authorization.clone())
+        .json(&json!({
+            "target": person_identifier_target("national_id", "person-1"),
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "format": "application/vnd.registry-notary.claim-result+json"
+        }))
+        .await;
+    evaluate.assert_status_ok();
+    let evaluated: Value = evaluate.json();
+    assert_eq!(evaluated["results"][0]["value"], json!(true));
+    assert_eq!(
+        evaluated["results"][0]["provenance"]["used"]["relay_consultation_count"],
+        json!(1),
+        "the root and dependency share one exact Relay execution"
+    );
+    let evaluation_id = evaluated["results"][0]["evaluation_id"]
+        .as_str()
+        .expect("evaluation id returned")
+        .to_string();
+    let holder_id = holder_did_jwk();
+    let proof =
+        sign_direct_holder_proof(&holder_id, &evaluation_id, "registry-dependency-http-jti-1");
+    let issue = server
+        .post("/v1/credentials")
+        .add_header("authorization", authorization)
+        .json(&json!({
+            "evaluation_id": evaluation_id,
+            "credential_profile": "civil_status_sd_jwt",
+            "format": "application/dc+sd-jwt",
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "holder": {
+                "binding": "did",
+                "id": holder_id,
+                "proof": proof
+            }
+        }))
+        .await;
+    issue.assert_status_ok();
+    let issued: Value = issue.json();
+    assert_eq!(issued["credential_profile"], json!("civil_status_sd_jwt"));
+    assert!(issued["credential"]
+        .as_str()
+        .is_some_and(|credential| credential.contains('~')));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_redacted() {
     set_audit_secret();
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);

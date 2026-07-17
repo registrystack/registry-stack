@@ -113,7 +113,9 @@ use crate::{
     preauth_state::{LoginState, PreauthorizationStateError},
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::{
-        claim_ids, claim_semantics_metadata, validate_batch_subject_limit, EvaluationAuditSnapshot,
+        build_claim_levels, claim_ids, claim_semantics_metadata, requested_claim_versions,
+        require_issuable_evaluation_provenance, require_registry_backed_credential_claims,
+        validate_batch_subject_limit, EvaluationAuditSnapshot,
     },
     standalone::{
         generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge, pre_auth_audit_event,

@@ -18,6 +18,10 @@ const BATCH_WAIT_MAX_MILLIS: u64 = 1_000;
 // accepted by the clean 1.0 storage contract.
 const STORED_RECORD_VERSION: i16 = 2;
 
+#[cfg(all(test, feature = "registry-notary-cel"))]
+type EvaluationReadTamper =
+    Box<dyn FnOnce(&mut registry_notary_core::StoredEvaluation) + Send + 'static>;
+
 enum IdempotencyRecord {
     InFlight {
         request_hash: String,
@@ -59,6 +63,8 @@ pub struct EvidenceStore {
     state_plane: Option<Arc<NotaryStatePlaneHandle>>,
     evaluations: Mutex<HashMap<String, registry_notary_core::StoredEvaluation>>,
     idempotency: Mutex<HashMap<String, IdempotencyRecord>>,
+    #[cfg(all(test, feature = "registry-notary-cel"))]
+    next_read_tamper: Mutex<Option<EvaluationReadTamper>>,
 }
 
 impl Default for EvidenceStore {
@@ -67,6 +73,8 @@ impl Default for EvidenceStore {
             state_plane: None,
             evaluations: Mutex::new(HashMap::new()),
             idempotency: Mutex::new(HashMap::new()),
+            #[cfg(all(test, feature = "registry-notary-cel"))]
+            next_read_tamper: Mutex::new(None),
         }
     }
 }
@@ -346,6 +354,19 @@ impl EvidenceStore {
         get_postgres_evaluation(state_plane, evaluation_id, client_id).await
     }
 
+    /// Install a one-shot in-memory read mutation for issuance tamper tests.
+    /// Production builds have no corresponding hook.
+    #[cfg(all(test, feature = "registry-notary-cel"))]
+    pub(crate) fn tamper_next_read(
+        &self,
+        tamper: impl FnOnce(&mut registry_notary_core::StoredEvaluation) + Send + 'static,
+    ) {
+        *self
+            .next_read_tamper
+            .lock()
+            .expect("evidence read-tamper mutex is not poisoned") = Some(Box::new(tamper));
+    }
+
     pub(super) async fn reserve_idempotent_batch(
         &self,
         key: String,
@@ -397,6 +418,17 @@ impl EvidenceStore {
             .get(evaluation_id)
             .filter(|evaluation| evaluation.client_id == client_id)
             .cloned()?;
+        #[cfg(all(test, feature = "registry-notary-cel"))]
+        let mut evaluation = evaluation;
+        #[cfg(all(test, feature = "registry-notary-cel"))]
+        if let Some(tamper) = self
+            .next_read_tamper
+            .lock()
+            .expect("evidence read-tamper mutex is not poisoned")
+            .take()
+        {
+            tamper(&mut evaluation);
+        }
         let expires_at = OffsetDateTime::parse(&evaluation.expires_at, &Rfc3339).ok()?;
         (expires_at > OffsetDateTime::now_utc()).then_some(evaluation)
     }

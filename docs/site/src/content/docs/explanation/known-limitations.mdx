@@ -108,10 +108,11 @@ Read the full context in the [Registry Notary protocol](../../spec/rs-pr-notary/
   The capability-discovery document (`/.well-known/evidence-service`) declares
   `openid4vci.support: not_full_issuer` (announcing it is not a full issuer); this flag lives
   there rather than in the OID4VCI credential-issuer metadata.
-- Delegated-attestation issuance is limited to the direct path: The OID4VCI transaction-token path
-  for delegated attestation is rejected at the credential endpoint.
-  Direct credential issuance via `/v1/credentials` is supported when the stored evaluation's
-  access mode is delegated-attestation and the relationship allow-lists the credential profile.
+- Delegated self-attestation is evaluation-only: Both `/v1/credentials` and the OID4VCI
+  credential endpoint reject delegated evaluations in 1.0.
+  Configuration load rejects delegated relationship `credential_profiles` and credential-profile
+  bindings on delegated claims. Remove that capability to keep delegated evaluation, or issue a
+  separately modeled registry-backed, non-delegated claim.
 - No revocation flow, no issuer-metadata discovery endpoint, no erasure workflow: The RS-* specs
   define no revocation flow.
   The credential-status surface is optional and off by default; when an operator enables it, the

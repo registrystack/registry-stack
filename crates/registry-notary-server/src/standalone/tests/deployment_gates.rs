@@ -11,6 +11,7 @@ use super::super::{
     compile_notary_runtime_with_provenance_for_gate_test as compile_notary_runtime_with_provenance,
     notary_routers_from_runtime, notary_shared_router_from_runtime,
     standalone_router_for_gate_test as standalone_router, StandaloneServerError,
+    standalone_router_with_ready_relay_for_gate_test,
 };
 use axum::http::StatusCode;
 use axum_test::TestServer;
@@ -22,7 +23,34 @@ use registry_platform_authcommon::{CredentialFingerprintProvider, CredentialFing
 use registry_platform_ops::ConfigSource;
 use registry_platform_testing::fixtures::ED25519_PRIVATE_JWK;
 use serde_json::{json, Value};
-use std::path::Path;
+use std::{path::Path, sync::Arc};
+
+#[derive(Debug)]
+struct GateReadyRelay;
+
+#[async_trait::async_trait]
+impl crate::runtime::ActivatedRelayConsultations for GateReadyRelay {
+    async fn check_ready(&self) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    fn validate(
+        &self,
+        _key: &crate::runtime::consultation::ConsultationGroupKeyV1,
+    ) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    async fn execute(
+        &self,
+        _key: &crate::runtime::consultation::ConsultationGroupKeyV1,
+    ) -> Result<
+        crate::runtime::consultation::RuntimeRelayConsultationResult,
+        crate::relay_client::RelayClientError,
+    > {
+        Err(crate::relay_client::RelayClientError::TransportUnavailable)
+    }
+}
 
 const AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 static SHIPPING_CURSOR_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -208,12 +236,78 @@ impl ConfigBuilder {
         }
     }
 
-    fn claim_credential_profiles(&self) -> &'static str {
-        if self.credential_signer {
-            "      credential_profiles:\n        - gates_sd_jwt\n"
-        } else {
-            ""
+    fn relay_section(&self) -> String {
+        if !self.credential_signer {
+            return String::new();
         }
+        let token_path = Path::new(&self.audit_path)
+            .with_file_name("gates-relay.jwt")
+            .display()
+            .to_string();
+        format!(
+            concat!(
+                "  relay:\n",
+                "    base_url: http://127.0.0.1:1\n",
+                "    workload_client_id: registry-notary\n",
+                "    token_file: \"{}\"\n",
+                "    allow_insecure_localhost: true\n",
+            ),
+            token_path,
+        )
+    }
+
+    fn claim_section(&self) -> &'static str {
+        if self.credential_signer {
+            return concat!(
+                "    - id: farmed-land-size\n",
+                "      title: Farmed land size\n",
+                "      version: 2026-05\n",
+                "      subject_type: person\n",
+                "      evidence_mode:\n",
+                "        type: registry_backed\n",
+                "        consultations:\n",
+                "          farmed_land:\n",
+                "            profile:\n",
+                "              id: example.farmed-land-size.exact\n",
+                "              contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                "            inputs:\n",
+                "              subject_id: target.id\n",
+                "            outputs:\n",
+                "              active: { type: boolean, nullable: false }\n",
+                "      purpose: test\n",
+                "      required_scopes: [farmer_registry:evidence_verification]\n",
+                "      value:\n",
+                "        type: boolean\n",
+                "      rule:\n",
+                "        type: consultation_matched\n",
+                "        consultation: farmed_land\n",
+                "      disclosure:\n",
+                "        default: value\n",
+                "        allowed: [value, redacted]\n",
+                "      formats:\n",
+                "        - application/vnd.registry-notary.claim-result+json\n",
+                "      credential_profiles:\n",
+                "        - gates_sd_jwt\n",
+            );
+        }
+        concat!(
+            "    - id: farmed-land-size\n",
+            "      title: Farmed land size\n",
+            "      version: 2026-05\n",
+            "      subject_type: person\n",
+            "      evidence_mode:\n",
+            "        type: self_attested\n",
+            "      value:\n",
+            "        type: boolean\n",
+            "      rule:\n",
+            "        type: cel\n",
+            "        expression: \"true\"\n",
+            "      disclosure:\n",
+            "        default: value\n",
+            "        allowed: [value, redacted]\n",
+            "      formats:\n",
+            "        - application/vnd.registry-notary.claim-result+json\n",
+        )
     }
 
     fn federation_section(&self) -> &'static str {
@@ -274,31 +368,16 @@ impl ConfigBuilder {
   enabled: true
   service_id: evidence.test
   api_base_url: https://evidence.example.test
-{signing}
+{relay}{signing}
   claims:
-    - id: farmed-land-size
-      title: Farmed land size
-      version: 2026-05
-      subject_type: person
-      evidence_mode:
-        type: self_attested
-      value:
-        type: boolean
-      rule:
-        type: cel
-        expression: "true"
-      disclosure:
-        default: value
-        allowed: [value, redacted]
-      formats:
-        - application/vnd.registry-notary.claim-result+json
-{claim_credential_profiles}
+{claim}
 {deployment}{federation}"#,
             server = self.server_section(),
             state = state,
             audit = self.audit_section(),
+            relay = self.relay_section(),
             signing = self.signing_section(),
-            claim_credential_profiles = self.claim_credential_profiles(),
+            claim = self.claim_section(),
             deployment = self.deployment_block,
             federation = self.federation_section(),
         );
@@ -688,7 +767,9 @@ async fn production_unapproved_local_signer_reports_readiness_failure() {
         .deployment("deployment:\n  profile: production\n")
         .build();
 
-    let app = standalone_router(config).await.expect("production local signer config still starts");
+    let app = standalone_router_with_ready_relay_for_gate_test(config, Arc::new(GateReadyRelay))
+        .await
+        .expect("production local signer config still starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
@@ -727,7 +808,9 @@ async fn production_file_watch_signer_requires_custody_approval() {
         .deployment("deployment:\n  profile: production\n")
         .build();
 
-    let app = standalone_router(config).await.expect("production file-watch signer config starts");
+    let app = standalone_router_with_ready_relay_for_gate_test(config, Arc::new(GateReadyRelay))
+        .await
+        .expect("production file-watch signer config starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
@@ -781,7 +864,9 @@ async fn production_signer_custody_approval_is_visible_in_readiness() {
         )
         .build();
 
-    let app = standalone_router(config).await.expect("approved local signer config starts");
+    let app = standalone_router_with_ready_relay_for_gate_test(config, Arc::new(GateReadyRelay))
+        .await
+        .expect("approved local signer config starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status_ok();

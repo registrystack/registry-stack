@@ -457,23 +457,6 @@ pub(in crate::config) fn validate_self_attested_dependency_modes(
     Ok(())
 }
 
-pub(in crate::config) fn validate_registry_backed_dependency_modes(
-    claims: &[ClaimDefinition],
-) -> Result<(), EvidenceConfigError> {
-    for claim in claims
-        .iter()
-        .filter(|claim| claim.evidence_mode.is_registry_backed())
-    {
-        if !claim.depends_on.is_empty() {
-            return invalid_claim_evidence_mode(
-                claim,
-                "the initial registry_backed journey cannot declare depends_on; one claim maps only its pinned Relay consultation",
-            );
-        }
-    }
-    Ok(())
-}
-
 pub(in crate::config) fn validate_relay_activation_shape(
     claims: &[ClaimDefinition],
 ) -> Result<(), EvidenceConfigError> {
