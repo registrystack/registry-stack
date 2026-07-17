@@ -243,9 +243,28 @@ impl StandaloneRegistryNotaryConfig {
             }
             // REQ-DM-CLAIM-009: omitted formats deserialize to the canonical
             // claim-result representation, but an authored empty list cannot
-            // render any response and must fail before startup.
+            // render any response and must fail before startup. The response
+            // format set is closed: credential issuance formats do not render
+            // evaluation responses.
             if claim.formats.is_empty() {
                 return Err(EvidenceConfigError::EmptyClaimFormats {
+                    claim: claim.id.clone(),
+                });
+            }
+            for format in &claim.formats {
+                if format != FORMAT_CLAIM_RESULT_JSON && format != FORMAT_CCCEV_JSONLD {
+                    return Err(EvidenceConfigError::UnsupportedClaimFormat {
+                        claim: claim.id.clone(),
+                        format: format.clone(),
+                    });
+                }
+            }
+            if !claim
+                .formats
+                .iter()
+                .any(|format| format == FORMAT_CLAIM_RESULT_JSON)
+            {
+                return Err(EvidenceConfigError::MissingCanonicalClaimFormat {
                     claim: claim.id.clone(),
                 });
             }

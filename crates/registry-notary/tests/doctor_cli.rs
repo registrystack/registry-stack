@@ -132,7 +132,7 @@ fn write_config_with_options(tmp: &TempDir, options: TestConfigOptions<'_>) -> P
         type: cel
         expression: "true"
       formats:
-        - application/dc+sd-jwt
+        - application/vnd.registry-notary.claim-result+json
       credential_profiles:
         - unbound_sd_jwt
 "#,
@@ -197,15 +197,15 @@ fn write_invalid_config(tmp: &TempDir) -> PathBuf {
     path
 }
 
-fn write_config_with_empty_claim_formats(tmp: &TempDir) -> PathBuf {
+fn write_config_with_claim_formats(tmp: &TempDir, claim_id: &str, formats: &[&str]) -> PathBuf {
     let path = write_config(tmp);
     let mut config: registry_notary_core::StandaloneRegistryNotaryConfig =
         serde_norway::from_str(&std::fs::read_to_string(&path).expect("config reads"))
             .expect("config parses");
-    config.evidence.claims = vec![serde_norway::from_str(
+    let mut claim: registry_notary_core::ClaimDefinition = serde_norway::from_str(&format!(
         r#"
-id: empty-format
-title: Empty format claim
+id: {claim_id}
+title: Claim format validation
 version: "1.0"
 subject_type: person
 evidence_mode:
@@ -213,16 +213,21 @@ evidence_mode:
 rule:
   type: cel
   expression: "true"
-formats: []
 "#,
-    )
-    .expect("claim YAML parses")];
+    ))
+    .expect("claim YAML parses");
+    claim.formats = formats.iter().map(ToString::to_string).collect();
+    config.evidence.claims = vec![claim];
     std::fs::write(
         &path,
         serde_norway::to_string(&config).expect("config serializes"),
     )
     .expect("config writes");
     path
+}
+
+fn write_config_with_empty_claim_formats(tmp: &TempDir) -> PathBuf {
+    write_config_with_claim_formats(tmp, "empty-format", &[])
 }
 
 fn doctor_command(config_path: &Path, env_file: Option<&Path>) -> Command {
@@ -1071,5 +1076,101 @@ fn doctor_json_reports_empty_claim_formats_with_remediation() {
     assert!(
         message.contains("omit formats"),
         "remediation is reported: {message}"
+    );
+}
+
+#[test]
+fn doctor_json_reports_sd_jwt_claim_format_with_remediation() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_claim_formats(&tmp, "sd-jwt-format", &["application/dc+sd-jwt"]);
+
+    let output = doctor_command(&config, None)
+        .args(["--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        !output.status.success(),
+        "doctor must reject SD-JWT formats"
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    let diagnostic = diagnostic_with_code(&report, "failed").expect("failure diagnostic");
+    let message = diagnostic["message"].as_str().expect("message string");
+    assert!(
+        message.contains("sd-jwt-format"),
+        "claim id is reported: {message}"
+    );
+    assert!(
+        message.contains("application/dc+sd-jwt") && message.contains("credential_profiles"),
+        "offending format and remediation are reported: {message}"
+    );
+}
+
+#[test]
+fn doctor_json_reports_unknown_claim_format_with_remediation() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_claim_formats(
+        &tmp,
+        "unknown-format",
+        &[
+            "application/vnd.registry-notary.claim-result+json",
+            "application/example+json",
+        ],
+    );
+
+    let output = doctor_command(&config, None)
+        .args(["--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        !output.status.success(),
+        "doctor must reject unknown formats"
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    let diagnostic = diagnostic_with_code(&report, "failed").expect("failure diagnostic");
+    let message = diagnostic["message"].as_str().expect("message string");
+    assert!(
+        message.contains("unknown-format"),
+        "claim id is reported: {message}"
+    );
+    assert!(
+        message.contains("application/example+json") && message.contains("supported formats"),
+        "offending format and remediation are reported: {message}"
+    );
+}
+
+#[test]
+fn doctor_json_reports_missing_canonical_claim_format_with_remediation() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_claim_formats(
+        &tmp,
+        "missing-canonical",
+        &["application/ld+json; profile=\"cccev\""],
+    );
+
+    let output = doctor_command(&config, None)
+        .args(["--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(
+        !output.status.success(),
+        "doctor must reject formats without the canonical renderer"
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    let diagnostic = diagnostic_with_code(&report, "failed").expect("failure diagnostic");
+    let message = diagnostic["message"].as_str().expect("message string");
+    assert!(
+        message.contains("missing-canonical"),
+        "claim id is reported: {message}"
+    );
+    assert!(
+        message.contains("application/vnd.registry-notary.claim-result+json")
+            && message.contains("add it"),
+        "canonical format and remediation are reported: {message}"
     );
 }

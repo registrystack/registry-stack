@@ -80,8 +80,13 @@ Relay outputs are never credentials or public claims by themselves.
 
 `formats` is optional for each claim. When omitted, Notary uses
 `application/vnd.registry-notary.claim-result+json`, the canonical evaluation
-response format. Do not set `formats: []`: it is invalid configuration. List
-one or more formats only when the claim needs an explicit response-format set.
+response format. An explicit list must include that format and may otherwise
+contain only `application/ld+json; profile="cccev"`. Do not set `formats: []`,
+an unknown format, or `application/dc+sd-jwt`: all are invalid configuration.
+SD-JWT VC belongs in a credential profile's issuance `format`, not a claim's
+evaluation response-format list. The same separation applies to
+`subject_access.allowed_formats`: list evaluation renderers there and select
+the credential output through `credential_profiles`.
 
 ## Authentication and delegation
 

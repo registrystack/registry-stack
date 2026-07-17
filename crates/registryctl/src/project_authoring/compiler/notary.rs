@@ -78,16 +78,11 @@ fn generated_notary_config(
                 .filter(|(_, credential)| credential.claims.iter().any(|id| id == claim_id))
                 .map(|(credential, _)| bounded_join_id(&[service_id, credential]))
                 .collect::<Result<Vec<_>>>()?;
-            let mut formats = vec!["application/vnd.registry-notary.claim-result+json".to_string()];
-            formats.extend(
-                service
-                    .credential_profiles
-                    .values()
-                    .filter(|credential| credential.claims.iter().any(|id| id == claim_id))
-                    .map(|credential| normalize_credential_format(&credential.format)),
-            );
-            formats.sort();
-            formats.dedup();
+            // Claim formats describe evaluation renderers, not credential
+            // issuance. SD-JWT VC stays on the credential profile it belongs
+            // to, so every generated claim retains the canonical evaluation
+            // response format.
+            let formats = vec!["application/vnd.registry-notary.claim-result+json".to_string()];
             let (default_disclosure, allowed_disclosures) = expanded_disclosure(&claim.disclosure);
             let (evidence_mode, value_type, nullable, rule) =
                 match inferred_claim_evidence(service, claim)? {
@@ -436,7 +431,7 @@ fn add_oid4vci_config(
         },
         "allowed_purposes": [service.purpose],
         "allowed_claims": [claim_id],
-        "allowed_formats": ["application/dc+sd-jwt"],
+        "allowed_formats": ["application/vnd.registry-notary.claim-result+json"],
         "allowed_disclosures": allowed_disclosures,
         "scope_policy": "disabled",
         "required_scopes": [],

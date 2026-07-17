@@ -357,7 +357,6 @@ subject_access:
     - person-is-alive
   allowed_formats:
     - application/vnd.registry-notary.claim-result+json
-    - application/dc+sd-jwt
   allowed_disclosures:
     - value
     - redacted
@@ -451,10 +450,7 @@ pub(super) fn add_subject_access_projection_claim(
         .to_string(),
         bindings: Default::default(),
     };
-    claim.formats = vec![
-        "application/vnd.registry-notary.claim-result+json".to_string(),
-        "application/dc+sd-jwt".to_string(),
-    ];
+    claim.formats = vec!["application/vnd.registry-notary.claim-result+json".to_string()];
     claim.credential_profiles = vec!["civil_status_sd_jwt".to_string()];
     config.evidence.claims.push(claim);
     config

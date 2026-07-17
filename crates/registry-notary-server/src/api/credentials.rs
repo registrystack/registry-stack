@@ -156,7 +156,7 @@ pub(super) async fn issue_credential(
         Ok(profile) => profile,
         Err(error) => return evidence_error_response(error),
     };
-    if evaluation.format != FORMAT_SD_JWT_VC {
+    if evaluation.format != FORMAT_CLAIM_RESULT_JSON {
         return credential_denial_response_for_evaluation(
             &state,
             EvidenceError::EvaluationBindingMismatch,
@@ -176,7 +176,7 @@ pub(super) async fn issue_credential(
             .disclosure
             .as_deref()
             .unwrap_or(&evaluation.disclosure),
-        request.format.as_deref().unwrap_or(&evaluation.format),
+        &evaluation.format,
         Some(profile_id),
     ) {
         return credential_denial_response_for_evaluation(

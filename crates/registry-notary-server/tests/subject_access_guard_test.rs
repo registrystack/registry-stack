@@ -312,7 +312,6 @@ evidence:
         allowed: [redacted]
       formats:
         - {FORMAT_CLAIM_RESULT_JSON}
-        - {FORMAT_SD_JWT_VC}
       credential_profiles:
         - civil_status_sd_jwt
 subject_access:
@@ -342,7 +341,6 @@ subject_access:
     - person-is-alive
   allowed_formats:
     - {FORMAT_CLAIM_RESULT_JSON}
-    - {FORMAT_SD_JWT_VC}
   allowed_disclosures:
     - redacted
   required_scopes:
@@ -636,7 +634,7 @@ async fn subject_access_credential_issuance_hides_other_principal_evaluation_ids
             "target": subject_access_target(),
             "claims": ["person-is-alive"],
             "disclosure": "redacted",
-            "format": FORMAT_SD_JWT_VC
+            "format": FORMAT_CLAIM_RESULT_JSON
         }))
         .await;
     evaluate.assert_status_ok();
@@ -740,7 +738,7 @@ async fn subject_access_credential_issuance_requires_holder_proof_and_hides_civi
             "target": subject_access_target(),
             "claims": ["person-is-alive"],
             "disclosure": "redacted",
-            "format": FORMAT_SD_JWT_VC
+            "format": FORMAT_CLAIM_RESULT_JSON
         }))
         .await;
     evaluate.assert_status_ok();
@@ -851,7 +849,7 @@ async fn subject_access_credential_issuance_rejects_disallowed_profile() {
             "target": subject_access_target(),
             "claims": ["person-is-alive"],
             "disclosure": "redacted",
-            "format": FORMAT_SD_JWT_VC
+            "format": FORMAT_CLAIM_RESULT_JSON
         }))
         .await;
     evaluate.assert_status_ok();

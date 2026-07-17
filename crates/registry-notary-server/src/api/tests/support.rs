@@ -364,7 +364,6 @@
     fn oid4vci_evidence_config() -> EvidenceConfig {
         let mut evidence = evidence_config();
         let claim = evidence.claims.first_mut().expect("claim exists");
-        claim.formats.push(FORMAT_SD_JWT_VC.to_string());
         claim
             .credential_profiles
             .push("civil_status_sd_jwt".to_string());
@@ -819,7 +818,7 @@ evaluation_profiles:
             claim_ids: vec!["claim-a".to_string()],
             claim_refs: Vec::new(),
             disclosure: "redacted".to_string(),
-            format: FORMAT_SD_JWT_VC.to_string(),
+            format: FORMAT_CLAIM_RESULT_JSON.to_string(),
             results: Vec::new(),
             created_at: "1970-01-01T00:00:00Z".to_string(),
             expires_at: "1970-01-01T00:00:00Z".to_string(),
@@ -845,7 +844,7 @@ evaluation_profiles:
             satisfied: Some(true),
             disclosure: "predicate".to_string(),
             redacted_fields: Vec::new(),
-            format: FORMAT_SD_JWT_VC.to_string(),
+            format: FORMAT_CLAIM_RESULT_JSON.to_string(),
             issued_at: "2026-05-23T00:00:00Z".to_string(),
             expires_at: None,
             provenance: registry_notary_core::ClaimProvenance::new(

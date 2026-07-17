@@ -1104,13 +1104,6 @@ pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
             vec!["registry_notary:admin".to_string()],
         );
     config.subject_access.allowed_operations.issue_credential = true;
-    config
-        .evidence
-        .claims
-        .first_mut()
-        .expect("person-is-alive claim exists")
-        .formats
-        .push("application/dc+sd-jwt".to_string());
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");
@@ -1468,13 +1461,6 @@ pub(super) async fn oid4vci_credential_route_rejects_replayed_nonce() {
         &idp.jwks_uri(),
     );
     config.subject_access.allowed_operations.issue_credential = true;
-    config
-        .evidence
-        .claims
-        .first_mut()
-        .expect("person-is-alive claim exists")
-        .formats
-        .push("application/dc+sd-jwt".to_string());
     let app = standalone_router(config)
         .await
         .expect("standalone router builds");

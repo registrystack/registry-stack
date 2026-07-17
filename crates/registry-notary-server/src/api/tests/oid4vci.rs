@@ -629,17 +629,8 @@ async fn oid4vci_token_error_fails_closed_when_denial_audit_fails() {
 #[tokio::test]
 async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
     let store = Arc::new(EvidenceStore::default());
-    let mut subject_access = subject_access_config();
-    subject_access
-        .allowed_formats
-        .push(FORMAT_SD_JWT_VC.to_string());
+    let subject_access = subject_access_config();
     let mut evidence = evidence_config();
-    evidence
-        .claims
-        .first_mut()
-        .expect("claim exists")
-        .formats
-        .push(FORMAT_SD_JWT_VC.to_string());
     evidence
         .claims
         .first_mut()
@@ -829,17 +820,8 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
 #[tokio::test]
 async fn oid4vci_rejects_holder_key_equal_to_issuer_key_before_side_effects() {
     let store = Arc::new(EvidenceStore::default());
-    let mut subject_access = subject_access_config();
-    subject_access
-        .allowed_formats
-        .push(FORMAT_SD_JWT_VC.to_string());
+    let subject_access = subject_access_config();
     let mut evidence = evidence_config();
-    evidence
-        .claims
-        .first_mut()
-        .expect("claim exists")
-        .formats
-        .push(FORMAT_SD_JWT_VC.to_string());
     evidence
         .claims
         .first_mut()
@@ -1013,7 +995,7 @@ fn oid4vci_issuance_authorization_details_bind_selected_configuration() {
     assert_eq!(details.locations, vec![evidence.service_id.clone()]);
     assert_eq!(details.claims, vec![ClaimRef::from("person-is-alive")]);
     assert_eq!(details.disclosure.as_deref(), Some("predicate"));
-    assert_eq!(details.format.as_deref(), Some(FORMAT_SD_JWT_VC));
+    assert_eq!(details.format.as_deref(), Some(FORMAT_CLAIM_RESULT_JSON));
     assert_eq!(details.purpose.as_deref(), Some("citizen_subject_access"));
     assert_eq!(details.access_mode, Some(AccessMode::SubjectBound));
     let subject = details.subject.as_ref().expect("subject binding is set");

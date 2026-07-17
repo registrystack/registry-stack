@@ -3580,8 +3580,7 @@ fn farmer_under_4ha_claim_example() -> Value {
         },
         "formats": [
             "application/vnd.registry-notary.claim-result+json",
-            "application/ld+json; profile=\"cccev\"",
-            "application/dc+sd-jwt"
+            "application/ld+json; profile=\"cccev\""
         ],
         "disclosure": {
             "default": "predicate",

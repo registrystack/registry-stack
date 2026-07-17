@@ -184,7 +184,6 @@ self_attestation:
     - person-is-alive
   allowed_formats:
     - application/vnd.registry-notary.claim-result+json
-    - application/dc+sd-jwt
   allowed_disclosures:
     - predicate
     - value
@@ -523,7 +522,7 @@ bounded operational details:
   "self_attestation": {
     "enabled": true,
     "allowed_claim_ids": ["person-is-alive"],
-    "allowed_formats": ["application/vnd.registry-notary.claim-result+json", "application/dc+sd-jwt"],
+    "allowed_formats": ["application/vnd.registry-notary.claim-result+json"],
     "credential_profile_ids": ["civil_status_sd_jwt"]
   }
 }
