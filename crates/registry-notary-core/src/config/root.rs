@@ -241,6 +241,14 @@ impl StandaloneRegistryNotaryConfig {
                     allowed: claim.disclosure.allowed.clone(),
                 });
             }
+            // REQ-DM-CLAIM-009: omitted formats deserialize to the canonical
+            // claim-result representation, but an authored empty list cannot
+            // render any response and must fail before startup.
+            if claim.formats.is_empty() {
+                return Err(EvidenceConfigError::EmptyClaimFormats {
+                    claim: claim.id.clone(),
+                });
+            }
         }
         // Registry Notary currently resolves holder material only from
         // did:jwk. Reject any other configured method so discovery metadata

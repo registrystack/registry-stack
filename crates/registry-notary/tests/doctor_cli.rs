@@ -197,6 +197,34 @@ fn write_invalid_config(tmp: &TempDir) -> PathBuf {
     path
 }
 
+fn write_config_with_empty_claim_formats(tmp: &TempDir) -> PathBuf {
+    let path = write_config(tmp);
+    let mut config: registry_notary_core::StandaloneRegistryNotaryConfig =
+        serde_norway::from_str(&std::fs::read_to_string(&path).expect("config reads"))
+            .expect("config parses");
+    config.evidence.claims = vec![serde_norway::from_str(
+        r#"
+id: empty-format
+title: Empty format claim
+version: "1.0"
+subject_type: person
+evidence_mode:
+  type: self_attested
+rule:
+  type: cel
+  expression: "true"
+formats: []
+"#,
+    )
+    .expect("claim YAML parses")];
+    std::fs::write(
+        &path,
+        serde_norway::to_string(&config).expect("config serializes"),
+    )
+    .expect("config writes");
+    path
+}
+
 fn doctor_command(config_path: &Path, env_file: Option<&Path>) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_registry-notary"));
     command.arg("--config").arg(config_path);
@@ -1018,5 +1046,30 @@ fn doctor_json_reports_config_parse_failure_without_text_preamble() {
     assert_eq!(
         String::from_utf8(output.stderr).expect("stderr is utf8"),
         ""
+    );
+}
+
+#[test]
+fn doctor_json_reports_empty_claim_formats_with_remediation() {
+    let tmp = TempDir::new().expect("tempdir");
+    let config = write_config_with_empty_claim_formats(&tmp);
+
+    let output = doctor_command(&config, None)
+        .args(["--format", "json"])
+        .output()
+        .expect("doctor runs");
+
+    assert!(!output.status.success(), "doctor must reject empty formats");
+    let report: Value = serde_json::from_slice(&output.stdout).expect("doctor emits JSON");
+    assert_product_diagnostic_report(&report);
+    let diagnostic = diagnostic_with_code(&report, "failed").expect("failure diagnostic");
+    let message = diagnostic["message"].as_str().expect("message string");
+    assert!(
+        message.contains("empty-format"),
+        "claim id is reported: {message}"
+    );
+    assert!(
+        message.contains("omit formats"),
+        "remediation is reported: {message}"
     );
 }
