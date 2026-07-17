@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+      - release/1.0
     paths:
       - .github/workflows/notary-postgres-conformance.yml
       - Cargo.lock
