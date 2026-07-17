@@ -110,6 +110,8 @@ pub enum AuthError {
     InvalidCredential,
     #[error("malformed credential")]
     MalformedCredential,
+    #[error("multiple credentials")]
+    MultipleCredentials,
     /// `required` is the scope name from configuration. It is operator
     /// visible (not a secret) but is sanitised before being placed in
     /// the rendered detail message.
@@ -176,6 +178,8 @@ pub enum AuthError {
 pub enum ConsultationError {
     #[error("invalid consultation request")]
     InvalidRequest,
+    #[error("multiple authentication credentials")]
+    MultipleCredentials,
     #[error("consultation batch child conflicts with durable state")]
     Conflict,
     #[error("consultation contract does not match the active profile")]
@@ -693,6 +697,7 @@ impl AuthError {
             AuthError::MissingCredential => "auth.missing_credential",
             AuthError::InvalidCredential => "auth.invalid_credential",
             AuthError::MalformedCredential => "auth.malformed_credential",
+            AuthError::MultipleCredentials => "auth.multiple_credentials",
             AuthError::ScopeDenied { .. } => "auth.scope_denied",
             AuthError::PurposeRequired => "auth.purpose_required",
             AuthError::PurposeDenied => "auth.purpose_denied",
@@ -722,6 +727,7 @@ impl AuthError {
             | AuthError::AudienceMismatch
             | AuthError::KidUnknown
             | AuthError::AlgorithmNotAllowed => StatusCode::UNAUTHORIZED,
+            AuthError::MultipleCredentials => StatusCode::BAD_REQUEST,
             AuthError::ScopeDenied { .. }
             | AuthError::PurposeDenied
             | AuthError::AdminRequired
@@ -737,6 +743,7 @@ impl AuthError {
             AuthError::MissingCredential => "Missing credential",
             AuthError::InvalidCredential => "Invalid credential",
             AuthError::MalformedCredential => "Malformed credential",
+            AuthError::MultipleCredentials => "Multiple credentials",
             AuthError::ScopeDenied { .. } => "Scope denied",
             AuthError::PurposeRequired => "Purpose header required",
             AuthError::PurposeDenied => "Purpose denied",
@@ -763,6 +770,9 @@ impl AuthError {
                 "credential did not match any configured key".to_string()
             }
             AuthError::MalformedCredential => "credential header was not parseable".to_string(),
+            AuthError::MultipleCredentials => {
+                "provide exactly one authentication credential".to_string()
+            }
             AuthError::ScopeDenied { required } => {
                 let safe = sanitise_operator_string(required, MAX_SCOPE_NAME_LEN);
                 truncate(format!("required scope: {safe}"), MAX_DETAIL_LEN)
@@ -804,6 +814,7 @@ impl ConsultationError {
     fn code(&self) -> &'static str {
         match self {
             Self::InvalidRequest => "consultation.invalid_request",
+            Self::MultipleCredentials => "auth.multiple_credentials",
             Self::Conflict => "consultation.batch_child_conflict",
             Self::ContractMismatch => "consultation.contract_mismatch",
             Self::InvalidCredentials => "auth.invalid_credentials",
@@ -816,7 +827,7 @@ impl ConsultationError {
 
     fn http_status(&self) -> StatusCode {
         match self {
-            Self::InvalidRequest => StatusCode::BAD_REQUEST,
+            Self::InvalidRequest | Self::MultipleCredentials => StatusCode::BAD_REQUEST,
             Self::Conflict | Self::ContractMismatch => StatusCode::CONFLICT,
             Self::InvalidCredentials => StatusCode::UNAUTHORIZED,
             Self::Denied => StatusCode::FORBIDDEN,
@@ -829,6 +840,7 @@ impl ConsultationError {
     fn title(&self) -> &'static str {
         match self {
             Self::InvalidRequest => "Invalid consultation request",
+            Self::MultipleCredentials => "Multiple credentials",
             Self::Conflict => "Consultation batch child conflict",
             Self::ContractMismatch => "Consultation contract mismatch",
             Self::InvalidCredentials => "Invalid credentials",
@@ -842,6 +854,7 @@ impl ConsultationError {
     fn detail(&self) -> &'static str {
         match self {
             Self::InvalidRequest => "the consultation request is invalid",
+            Self::MultipleCredentials => "provide exactly one authentication credential",
             Self::Conflict => "the batch child identity conflicts with a prior request",
             Self::ContractMismatch => "the requested contract is not active for this profile",
             Self::InvalidCredentials => "service authentication failed",

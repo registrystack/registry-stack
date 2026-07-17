@@ -15,6 +15,7 @@
 //! by the audit track.
 
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -282,6 +283,87 @@ async fn x_api_key_admits_request_and_populates_principal() {
     let value: Value = serde_json::from_str(&body_str).expect("JSON");
     assert_eq!(value["principal_id"].as_str(), Some(CLIENT_ID));
     assert_eq!(value["auth_mode"].as_str(), Some("api_key"));
+}
+
+fn ambiguity_probe_router(dispatches: Arc<AtomicUsize>) -> Router {
+    let handler_dispatches = Arc::clone(&dispatches);
+    auth_layer(
+        Router::new().route(
+            "/dispatch-probe",
+            get(move || {
+                let handler_dispatches = Arc::clone(&handler_dispatches);
+                async move {
+                    handler_dispatches.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        ),
+        build_provider(),
+    )
+}
+
+#[tokio::test]
+async fn authorization_and_x_api_key_are_rejected_before_valid_credentials_dispatch() {
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let response = ambiguity_probe_router(Arc::clone(&dispatches))
+        .oneshot(
+            Request::builder()
+                .uri("/dispatch-probe")
+                .header("Authorization", format!("Bearer {VALID_KEY}"))
+                .header("x-api-key", VALID_KEY)
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("service responds");
+
+    let problem = assert_problem_response(
+        response,
+        StatusCode::BAD_REQUEST,
+        "auth.multiple_credentials",
+        VALID_KEY,
+    )
+    .await;
+    assert_eq!(
+        problem["detail"],
+        "provide exactly one authentication credential"
+    );
+    assert_eq!(dispatches.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn malformed_authorization_and_valid_x_api_key_are_rejected_before_dispatch() {
+    const MALFORMED_AUTHORIZATION_MARKER: &str = "malformed-authorization-marker";
+    let dispatches = Arc::new(AtomicUsize::new(0));
+    let response = ambiguity_probe_router(Arc::clone(&dispatches))
+        .oneshot(
+            Request::builder()
+                .uri("/dispatch-probe")
+                .header(
+                    "Authorization",
+                    format!("Basic {MALFORMED_AUTHORIZATION_MARKER}"),
+                )
+                .header("x-api-key", VALID_KEY)
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("service responds");
+
+    let problem = assert_problem_response(
+        response,
+        StatusCode::BAD_REQUEST,
+        "auth.multiple_credentials",
+        VALID_KEY,
+    )
+    .await;
+    let rendered = problem.to_string();
+    assert!(!rendered.contains(MALFORMED_AUTHORIZATION_MARKER));
+    assert_eq!(
+        problem["detail"],
+        "provide exactly one authentication credential"
+    );
+    assert_eq!(dispatches.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

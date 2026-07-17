@@ -419,6 +419,7 @@ impl OfflineNotaryHarness {
         };
         let principal = authenticate_api_key(
             &RequestCredentials {
+                api_key_present: api_key.is_some(),
                 api_key,
                 authorization_present: false,
                 bearer_token: None,

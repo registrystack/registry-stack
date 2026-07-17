@@ -30,6 +30,7 @@ impl std::fmt::Debug for ResolvedCredential {
 #[derive(Debug, Clone, Default)]
 pub(in super::super) struct RequestCredentials {
     pub(in super::super) api_key: Option<String>,
+    pub(in super::super) api_key_present: bool,
     pub(in super::super) authorization_present: bool,
     pub(in super::super) bearer_token: Option<String>,
     pub(in super::super) id_token: Option<String>,
@@ -37,12 +38,13 @@ pub(in super::super) struct RequestCredentials {
 
 impl RequestCredentials {
     pub(in super::super) fn credential_type_count(&self) -> usize {
-        usize::from(self.api_key.is_some())
+        usize::from(self.api_key_present || self.api_key.is_some())
             + usize::from(self.authorization_present || self.bearer_token.is_some())
     }
 
     pub(in super::super) fn are_absent(&self) -> bool {
         self.api_key.is_none()
+            && !self.api_key_present
             && !self.authorization_present
             && self.bearer_token.is_none()
             && self.id_token.is_none()
@@ -105,22 +107,19 @@ pub(in super::super) fn resolve_credentials(
 }
 
 pub(in super::super) fn request_credentials(request: &Request) -> RequestCredentials {
-    let authorization = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(header_str);
+    let headers = request.headers();
+    let authorization = headers.get(header::AUTHORIZATION).and_then(header_str);
     RequestCredentials {
-        api_key: request
-            .headers()
+        api_key: headers
             .get("x-api-key")
             .and_then(header_str)
             .map(ToOwned::to_owned),
-        authorization_present: authorization.is_some(),
+        api_key_present: headers.contains_key("x-api-key"),
+        authorization_present: headers.contains_key(header::AUTHORIZATION),
         bearer_token: authorization
             .and_then(|raw| parse_bearer_token(raw).ok())
             .map(ToOwned::to_owned),
-        id_token: request
-            .headers()
+        id_token: headers
             .get(OIDC_ID_TOKEN_HEADER)
             .and_then(header_str)
             .map(ToOwned::to_owned),

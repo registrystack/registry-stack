@@ -1239,9 +1239,9 @@ fn consultation_denial_reason(
             | "auth.kid_unknown"
             | "auth.algorithm_not_allowed",
         ) => Some(ConsultationDenialReason::InvalidCredentials),
-        Some("consultation.invalid_request" | "auth.purpose_required") => {
-            Some(ConsultationDenialReason::InvalidRequest)
-        }
+        Some(
+            "consultation.invalid_request" | "auth.multiple_credentials" | "auth.purpose_required",
+        ) => Some(ConsultationDenialReason::InvalidRequest),
         Some(
             "consultation.denied"
             | "auth.scope_denied"
@@ -1813,6 +1813,10 @@ mod tests {
         );
         assert_eq!(
             consultation_denial_reason(StatusCode::BAD_REQUEST, Some("auth.purpose_required")),
+            Some(ConsultationDenialReason::InvalidRequest)
+        );
+        assert_eq!(
+            consultation_denial_reason(StatusCode::BAD_REQUEST, Some("auth.multiple_credentials")),
             Some(ConsultationDenialReason::InvalidRequest)
         );
         assert_eq!(

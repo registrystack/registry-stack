@@ -27,6 +27,7 @@ fn all_variants() -> Vec<Error> {
         Error::Auth(AuthError::MissingCredential),
         Error::Auth(AuthError::InvalidCredential),
         Error::Auth(AuthError::MalformedCredential),
+        Error::Auth(AuthError::MultipleCredentials),
         Error::Auth(AuthError::ScopeDenied {
             required: "social_registry:rows".to_string(),
         }),
@@ -145,6 +146,7 @@ fn expected_table() -> Vec<(&'static str, StatusCode)> {
         ("auth.missing_credential", StatusCode::UNAUTHORIZED),
         ("auth.invalid_credential", StatusCode::UNAUTHORIZED),
         ("auth.malformed_credential", StatusCode::UNAUTHORIZED),
+        ("auth.multiple_credentials", StatusCode::BAD_REQUEST),
         ("auth.scope_denied", StatusCode::FORBIDDEN),
         ("auth.purpose_required", StatusCode::BAD_REQUEST),
         ("auth.purpose_denied", StatusCode::FORBIDDEN),

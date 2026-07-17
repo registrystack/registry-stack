@@ -5,7 +5,8 @@
 //!
 //! 1. Read `Authorization: Bearer <jwt>`. OIDC does not accept the
 //!    `x-api-key` header; that header is the API-key provider's legacy
-//!    surface only.
+//!    surface only. If both headers are present, reject the request before
+//!    parsing either value so credential precedence cannot vary by provider.
 //! 2. Decode the JOSE header. Reject tokens whose `typ` is missing or not in
 //!    the configured allowlist (defaults to `JWT` / `at+jwt`), whose `alg`
 //!    is not in the configured allowlist (defaults to RS256/ES256/EdDSA;
@@ -63,6 +64,9 @@ use super::jwks::{JwksCache, JwksFetcher};
 
 /// HTTP authentication scheme accepted by the OIDC provider.
 const BEARER_SCHEME: &str = "Bearer";
+
+/// Legacy API-key channel whose simultaneous presence is always ambiguous.
+const X_API_KEY: &str = "x-api-key";
 
 /// Bearer-JWT verifier built from one [`OidcConfig`] block.
 ///
@@ -295,9 +299,13 @@ impl AuthProvider for OidcAuth {
 }
 
 fn extract_bearer(headers: &HeaderMap) -> Result<Zeroizing<String>, AuthError> {
-    let value = headers
-        .get(header::AUTHORIZATION)
-        .ok_or(AuthError::MissingCredential)?;
+    let authorization = headers.get(header::AUTHORIZATION);
+    let api_key = headers.get(X_API_KEY);
+    let value = match (authorization, api_key) {
+        (Some(_), Some(_)) => return Err(AuthError::MultipleCredentials),
+        (Some(value), None) => value,
+        (None, Some(_)) | (None, None) => return Err(AuthError::MissingCredential),
+    };
     let raw = value.to_str().map_err(|_| AuthError::MalformedCredential)?;
     // RFC 7235 §2.1: auth scheme is case-insensitive. RFC 6750 §2.1 requires
     // exactly one SP between the scheme and the token.
@@ -407,6 +415,7 @@ fn auth_error_code(err: &AuthError) -> &'static str {
         AuthError::MissingCredential => "auth.missing_credential",
         AuthError::InvalidCredential => "auth.invalid_credential",
         AuthError::MalformedCredential => "auth.malformed_credential",
+        AuthError::MultipleCredentials => "auth.multiple_credentials",
         AuthError::ScopeDenied { .. } => "auth.scope_denied",
         AuthError::PurposeRequired => "auth.purpose_required",
         AuthError::PurposeDenied => "auth.purpose_denied",
@@ -1453,6 +1462,29 @@ mod tests {
             .await
             .expect_err("x-api-key ignored for oidc");
         assert!(matches!(err, AuthError::MissingCredential));
+    }
+
+    #[test]
+    fn authorization_and_x_api_key_are_ambiguous_before_parsing() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Bearer valid-token".parse().unwrap());
+        headers.insert(X_API_KEY, "valid-api-key".parse().unwrap());
+
+        let err = extract_bearer(&headers).expect_err("two raw credential headers are ambiguous");
+        assert!(matches!(err, AuthError::MultipleCredentials));
+    }
+
+    #[test]
+    fn non_utf8_authorization_and_x_api_key_are_ambiguous_before_parsing() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            axum::http::HeaderValue::from_bytes(b"Bearer \xff").expect("opaque header value"),
+        );
+        headers.insert(X_API_KEY, "valid-api-key".parse().unwrap());
+
+        let err = extract_bearer(&headers).expect_err("presence wins over malformed content");
+        assert!(matches!(err, AuthError::MultipleCredentials));
     }
 
     #[tokio::test]
