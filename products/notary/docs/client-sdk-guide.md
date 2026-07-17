@@ -755,6 +755,13 @@ Issue a credential when a successful evaluation should become a credential
 artifact, such as an SD-JWT VC. Credential bodies are sensitive. Do not log
 them, and note that Rust redacts credential bodies from `Debug`.
 
+The evaluation must be newly created from non-delegated registry-backed claims
+and retain an exact compiler pin for every claim in each selected root's
+dependency closure, plus one execution record for every unique Relay
+consultation ULID. Source-free, delegated, and older stored evaluations remain
+renderable but are not issuable. Re-evaluate after upgrading before calling
+either the direct issuance or OID4VCI credential endpoint.
+
 ```python
 credential = client.issue_credential_request({
     "evaluation_id": "eval-1",

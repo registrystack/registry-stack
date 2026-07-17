@@ -9,6 +9,14 @@
 > access no longer describes the delegated self-attestation work. Current
 > operator guidance lives in `docs/self-attestation-operator-guide.md`; the
 > OID4VCI facade still rejects delegated attestation transaction tokens.
+>
+> **Credential supersession note (2026-07-17).** Source-free credential
+> issuance described below is removed. Source-free claims are evaluation-only.
+> Direct and OID4VCI issuance now require a fresh, non-delegated stored
+> evaluation with exact compiler pins and unique Relay execution records for
+> every selected root's registry-backed dependency closure. Delegated
+> self-attestation is evaluation-only in 1.0.
+> See `docs/credential-issuance-migration.md` for current operator guidance.
 
 Current status: implemented for evaluation, render, credential issuance, batch
 denial, rate-limit guard, and OpenID4VCI facade integration in 0.3.0. External

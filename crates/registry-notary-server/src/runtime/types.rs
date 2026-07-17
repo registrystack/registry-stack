@@ -17,6 +17,7 @@ pub(super) struct ClaimResultInternal {
     pub(super) expires_at: Option<OffsetDateTime>,
     pub(super) provenance: ClaimProvenance,
     pub(super) relay_consultation_ids: BTreeSet<String>,
+    pub(super) own_issuance_provenance: Option<ClaimIssuanceProvenanceInternal>,
 }
 
 impl std::fmt::Debug for ClaimResultInternal {
@@ -35,6 +36,23 @@ impl std::fmt::Debug for ClaimResultInternal {
             .field("expires_at", &self.expires_at)
             .field("provenance", &self.provenance)
             .field("relay_consultation_ids", &"[REDACTED]")
+            .field("own_issuance_provenance", &self.own_issuance_provenance)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct ClaimIssuanceProvenanceInternal {
+    pub(super) claim: StoredIssuanceClaimProvenance,
+    pub(super) consultation: StoredIssuanceConsultationProvenance,
+}
+
+impl std::fmt::Debug for ClaimIssuanceProvenanceInternal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ClaimIssuanceProvenanceInternal")
+            .field("claim", &self.claim)
+            .field("consultation", &self.consultation)
             .finish()
     }
 }

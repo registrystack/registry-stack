@@ -22,6 +22,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- BREAKING: direct and OID4VCI credential issuance now accept only newly
+  evaluated, non-delegated registry-backed claims with one exact compiler pin
+  for every claim in each selected root's dependency closure and one normalized
+  record per unique Relay execution. A deterministic SHA-256 binding now
+  cross-checks every pin against its execution and claim provenance before
+  signer access. Restricted Relay identifiers are retained only for evaluations
+  whose selected roots share a validated credential profile. Source-free,
+  delegated, and registry-backed evaluation-only claims cannot be
+  configured for credential issuance. Existing stored evaluations remain
+  readable and renderable but must be re-evaluated before issuance. No database
+  migration or correctness-state schema change is required.
 - BREAKING: configuration `${VAR}` expansion now rejects environment variables
   that are unset or empty. `${VAR:-fallback}` uses its fallback for either
   state, `${VAR:-}` explicitly expands to empty, and `${VAR:?message}` reports

@@ -346,7 +346,7 @@ fn build_openapi_document() -> Value {
                 "post": {
                     "summary": "Issue a credential through OpenID4VCI",
                     "operationId": "issueOid4vciCredential",
-                    "description": "Issues a dc+sd-jwt credential for an authenticated subject-access principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+                    "description": "Issues a dc+sd-jwt credential for an authenticated direct subject-access principal only after a fresh non-delegated registry-backed evaluation records exact compiler pins and normalized unique Relay executions for every selected root's dependency closure. Source-free, delegated, and legacy evaluations are not issuable. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
                     "security": [
                         { "bearerAuth": [] }
                     ],
@@ -720,6 +720,7 @@ fn build_openapi_document() -> Value {
             "/v1/credentials": {
                 "post": {
                     "summary": "Issue a credential from a stored evaluation",
+                    "description": "Issues only when a fresh non-delegated registry-backed evaluation has exact compiler pins and normalized unique Relay executions for every selected root's dependency closure, matching the active configuration and public evaluation result. Source-free, delegated, and legacy evaluations remain renderable but are not issuable.",
                     "operationId": "issueCredential",
                     "requestBody": {
                         "required": true,
@@ -3380,6 +3381,7 @@ fn discovery_example() -> Value {
                 "json_ld_vc_issuance",
                 "data_integrity_proofs",
                 "credential_status",
+                "delegated_credential_issuance",
                 "mso_mdoc",
                 "openid4vci_full_issuer"
             ]
@@ -4397,7 +4399,7 @@ mod tests {
         );
         assert_eq!(
             doc["paths"]["/oid4vci/credential"]["post"]["description"],
-            json!("Issues a dc+sd-jwt credential for an authenticated subject-access principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.")
+            json!("Issues a dc+sd-jwt credential for an authenticated direct subject-access principal only after a fresh non-delegated registry-backed evaluation records exact compiler pins and normalized unique Relay executions for every selected root's dependency closure. Source-free, delegated, and legacy evaluations are not issuable. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.")
         );
         assert_eq!(
             doc["components"]["schemas"]["TokenRequest"]["type"],

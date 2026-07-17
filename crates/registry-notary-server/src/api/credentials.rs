@@ -166,6 +166,20 @@ pub(super) async fn issue_credential(
             Some((profile_id, profile)),
         );
     }
+    if evaluation
+        .subject_access
+        .as_ref()
+        .is_some_and(|metadata| metadata.access_mode == AccessMode::DelegatedAttestation)
+    {
+        return credential_denial_response_for_evaluation(
+            &state,
+            subject_access_denied(SubjectAccessDenialCode::ProfileDenied),
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            Some((profile_id, profile)),
+        );
+    }
     if let Err(error) = require_subject_access_stored_access(
         &state,
         evidence,
@@ -177,7 +191,7 @@ pub(super) async fn issue_credential(
             .as_deref()
             .unwrap_or(&evaluation.disclosure),
         &evaluation.format,
-        Some(profile_id),
+        true,
     ) {
         return credential_denial_response_for_evaluation(
             &state,
@@ -199,22 +213,11 @@ pub(super) async fn issue_credential(
                 Some((profile_id, profile)),
             );
         }
-        let profile_policy = match evaluation.subject_access.as_ref() {
-            Some(metadata) if metadata.access_mode == AccessMode::DelegatedAttestation => {
-                require_delegated_attestation_credential_profile_policy(
-                    &state.subject_access,
-                    metadata,
-                    profile_id,
-                    profile,
-                )
-            }
-            _ => require_subject_access_credential_profile_policy(
-                &state.subject_access,
-                profile_id,
-                profile,
-            ),
-        };
-        if let Err(error) = profile_policy {
+        if let Err(error) = require_subject_access_credential_profile_policy(
+            &state.subject_access,
+            profile_id,
+            profile,
+        ) {
             return credential_denial_response_for_evaluation(
                 &state,
                 error,
@@ -282,6 +285,18 @@ pub(super) async fn issue_credential(
             );
         }
     };
+    if let Err(error) =
+        require_issuable_evaluation_provenance(evidence, &request.evaluation_id, &evaluation)
+    {
+        return credential_denial_response_for_evaluation(
+            &state,
+            error,
+            &request.evaluation_id,
+            &evaluation,
+            &principal,
+            Some((profile_id, profile)),
+        );
+    }
     let holder_id = request
         .holder
         .as_ref()

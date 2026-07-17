@@ -25,7 +25,9 @@ Most human-facing commands also perform a once-per-day update check; see
 Project authoring commands work on a Registry Stack project containing `registry-stack.yaml`,
 integration definitions and fixtures, and explicit environment bindings.
 One project defines one registry trust domain. Its deployment topology can be Relay only, Notary
-only, or Relay and Notary together; independent registries use separate projects.
+only, or Relay and Notary together; independent registries use separate projects. Notary-only
+source-free claims are evaluation-only. Credential issuance requires the combined topology and
+exact Relay-backed evaluation provenance.
 The [Registry Stack project authoring guide](../../tutorials/author-registry-project/) covers the
 complete workflow and generated trust boundary.
 
@@ -251,7 +253,7 @@ output directly.
 Use the project-authoring `init --from`, `test`, `check`, and `build` commands for Relay-only,
 Notary-only, and combined deployments. Registry Notary does not have a direct-source project
 generator. Registry-backed Notary claims consume compiler-pinned Relay consultations, while a
-Notary-only project contains source-free or self-attested claims.
+Notary-only project contains source-free or self-attested evaluation-only claims.
 
 ## Lifecycle
 

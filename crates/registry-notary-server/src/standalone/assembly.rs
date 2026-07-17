@@ -173,6 +173,28 @@ pub(super) async fn standalone_router_for_gate_test(
 }
 
 #[cfg(test)]
+pub(super) async fn standalone_router_with_ready_relay_for_gate_test(
+    config: StandaloneRegistryNotaryConfig,
+    activated: Arc<dyn crate::runtime::ActivatedRelayConsultations>,
+) -> Result<Router, StandaloneServerError> {
+    let admin_listener_mode = config.server.admin_listener.mode;
+    let mut runtime = compile_notary_runtime_for_gate_test(config)?;
+    runtime
+        .api_state
+        .install_activated_relay(activated)
+        .map_err(|_| StandaloneServerError::RelayAlreadyActivated)?;
+    runtime.verify_retained_audit_chain().await;
+    match admin_listener_mode {
+        RegistryNotaryAdminListenerMode::SharedWithPublic => {
+            notary_shared_router_from_runtime(runtime)
+        }
+        RegistryNotaryAdminListenerMode::Dedicated | RegistryNotaryAdminListenerMode::Disabled => {
+            Ok(notary_routers_from_runtime(runtime)?.public)
+        }
+    }
+}
+
+#[cfg(test)]
 pub(super) fn compile_notary_runtime_with_provenance_for_gate_test(
     config: StandaloneRegistryNotaryConfig,
     config_source: ConfigSource,

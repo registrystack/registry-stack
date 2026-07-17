@@ -34,7 +34,8 @@ For exact routes and schemas, read the generated API reference. For setup and op
 Registry Notary implements the claim-evaluation and credential-issuance parts of the Evidence
 Gateway pattern. It is a standalone service for claim evaluation, disclosure policy, credential
 issuance, and audit. A Notary-only deployment supports source-free and self-attested claims.
-Registry-backed claims use a combined deployment in which Notary calls Registry Relay.
+Those claims are evaluation-only. Registry-backed claims use a combined deployment in which
+Notary calls Registry Relay, and only those claims can enter credential issuance.
 Callers discover its capabilities and claim catalog at `GET /.well-known/evidence-service`.
 This route requires authentication (the same `x-api-key` or `Authorization: Bearer` token as other
 evaluation routes); it is not a public discovery endpoint.
@@ -74,6 +75,17 @@ Notary issues SD-JWT VC credentials:
 Issuance and holder-proof helpers come from Registry Platform; Notary owns the credential profile,
 claim selection, and route workflow. Notary does **not** emit W3C Verifiable Credentials Data Model
 envelopes: the format is SD-JWT, not a W3C VC JSON object.
+
+Both issuance routes require a newly stored, non-delegated evaluation with
+exact compiler pins and normalized unique Relay execution records for every
+selected root's registry-backed dependency closure. Each pin has a
+deterministic SHA-256 binding to its execution and exact claim provenance;
+issuance recomputes it before signer access. This detects partial stored-record
+mutation but is not a keyed authenticity anchor. Private execution ids are
+stored only for evaluations whose roots share a validated credential profile.
+Legacy, source-free, and
+delegated evaluations remain renderable but are nonissuable and must be
+re-evaluated.
 
 ## CCCEV rendering
 

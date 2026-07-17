@@ -126,6 +126,8 @@ pub enum EvidenceConfigError {
          claim; an empty list would permit any claim at issuance"
     )]
     EmptyAllowedClaims { profile: String },
+    #[error("invalid credential claim binding: {reason}")]
+    InvalidCredentialClaimBinding { reason: String },
     /// Registry Notary currently issues only SD-JWT VC credentials using the
     /// current `application/dc+sd-jwt` media type. Reject aliases and profile
     /// labels so operator config cannot drift from the wire contract.

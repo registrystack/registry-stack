@@ -256,6 +256,72 @@ async fn oid4vci_credential_rejects_delegated_transaction_token() {
 }
 
 #[tokio::test]
+async fn oid4vci_source_free_bypass_denies_before_nonce_or_signer_access() {
+    let store = Arc::new(EvidenceStore::default());
+    let evidence = Arc::new(oid4vci_evidence_config());
+    assert!(evidence.claims[0].evidence_mode.is_self_attested());
+    let subject_access = Arc::new(subject_access_config());
+    let mut oid4vci = oid4vci_config();
+    oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
+    let oid4vci = Arc::new(oid4vci);
+    let sign_count = Arc::new(AtomicUsize::new(0));
+    let state = Arc::new(RegistryNotaryApiState::new_with_subject_access_and_oid4vci(
+        Arc::clone(&evidence),
+        Arc::clone(&subject_access),
+        Arc::clone(&oid4vci),
+        AuditKeyHasher::unkeyed_dev_only(),
+        Arc::clone(&store),
+        Arc::new(CountingIssuerResolver {
+            sign_count: Arc::clone(&sign_count),
+        }),
+    ));
+    let nonce = "source-free-bypass-nonce";
+    let (nonce_scope, nonce_key) =
+        reserve_oid4vci_test_nonce(&state, "person_is_alive_sd_jwt", nonce).await;
+    let proof = sign_oid4vci_proof(&state.oid4vci.credential_issuer, nonce);
+
+    let response = oid4vci_credential(
+        Some(Extension(Arc::clone(&state))),
+        Some(Extension(oid4vci_authorized_principal(
+            &evidence,
+            &subject_access,
+            &oid4vci,
+            "person_is_alive_sd_jwt",
+            &["subject_access", "person_is_alive"],
+        ))),
+        Some(Extension(validated_oid4vci_proof(
+            &state,
+            &proof,
+            Some(nonce),
+        ))),
+        Json(Oid4vciCredentialRequest {
+            format: SD_JWT_VC_FORMAT.to_string(),
+            credential_identifier: Some("person_is_alive_sd_jwt".to_string()),
+            credential_configuration_id: None,
+            vct: None,
+            proof: registry_platform_oid4vci::CredentialRequestProof {
+                proof_type: PROOF_TYPE_JWT.to_string(),
+                jwt: proof,
+            },
+            proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(sign_count.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        state
+            .replay
+            .nonce_store()
+            .consume_nonce(&nonce_scope, &nonce_key)
+            .await
+            .expect("nonce store is available"),
+        ReplayInsertOutcome::Inserted
+    ));
+}
+
+#[tokio::test]
 async fn oid4vci_credential_scope_prevents_cross_configuration_issuance_before_nonce_consume() {
     let store = Arc::new(EvidenceStore::default());
     let evidence = Arc::new(oid4vci_evidence_config());
@@ -627,39 +693,56 @@ async fn oid4vci_token_error_fails_closed_when_denial_audit_fails() {
 
 #[cfg(feature = "registry-notary-cel")]
 #[tokio::test]
-async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
+async fn oid4vci_projected_registry_credential_issues_and_rejects_nonce_replay() {
     let store = Arc::new(EvidenceStore::default());
-    let subject_access = subject_access_config();
-    let mut evidence = evidence_config();
+    let mut subject_access = subject_access_config();
+    subject_access
+        .allowed_claims
+        .push("person-is-registered".to_string());
+    let mut evidence = registry_backed_oid4vci_evidence_with_dependency();
+    let mut registered = evidence.claims[0].clone();
+    registered.id = "person-is-registered".to_string();
+    registered.title = "Person is registered".to_string();
+    evidence.claims.push(registered);
     evidence
-        .claims
-        .first_mut()
-        .expect("claim exists")
         .credential_profiles
-        .push("civil_status_sd_jwt".to_string());
-    evidence.credential_profiles.insert(
-        "civil_status_sd_jwt".to_string(),
-        serde_json::from_value(json!({
-            "format": FORMAT_SD_JWT_VC,
-            "issuer": "did:web:issuer.example",
-            "signing_key": "issuer-key",
-            "vct": "https://issuer.example/credentials/civil-status",
-            "validity_seconds": 600,
-            "holder_binding": {
-                "mode": "did",
-                "proof_of_possession": "required",
-                "allowed_did_methods": ["did:jwk"]
-            },
-            "allowed_claims": ["person-is-alive"],
-            "disclosure": { "allowed": ["predicate"] }
-        }))
-        .expect("profile parses"),
-    );
+        .get_mut("civil_status_sd_jwt")
+        .expect("credential profile exists")
+        .allowed_claims
+        .push("person-is-registered".to_string());
     let mut oid4vci = oid4vci_config();
     oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
+    let configuration = oid4vci
+        .credential_configurations
+        .get_mut("person_is_alive_sd_jwt")
+        .expect("credential configuration exists");
+    configuration.claim_id = None;
+    configuration.claims = vec![
+        registry_notary_core::Oid4vciCredentialClaimConfig {
+            id: "person-is-alive".to_string(),
+            output_path: vec!["person_alive".to_string()],
+            display_name: "Person is alive".to_string(),
+            sd: "always".to_string(),
+        },
+        registry_notary_core::Oid4vciCredentialClaimConfig {
+            id: "person-is-registered".to_string(),
+            output_path: vec!["person_registered".to_string()],
+            display_name: "Person is registered".to_string(),
+            sd: "always".to_string(),
+        },
+    ];
     let evidence = Arc::new(evidence);
     let subject_access = Arc::new(subject_access);
     let oid4vci = Arc::new(oid4vci);
+    require_registry_backed_credential_claims(
+        &evidence,
+        &oid4vci
+            .credential_configurations
+            .get("person_is_alive_sd_jwt")
+            .unwrap()
+            .credential_claim_ids(),
+    )
+    .expect("positive fixture has registry-backed credential roots and dependency");
     let state = Arc::new(RegistryNotaryApiState::new_with_subject_access_and_oid4vci(
         Arc::clone(&evidence),
         Arc::clone(&subject_access),
@@ -668,6 +751,10 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
         Arc::clone(&store),
         Arc::new(StaticIssuerResolver),
     ));
+    let relay = Arc::new(RegistryCredentialRelay::default());
+    state
+        .install_activated_relay(relay.clone())
+        .expect("registry credential Relay activates once");
     let missing_nonce = oid4vci_credential(
         Some(Extension(Arc::clone(&state))),
         Some(Extension(fresh_oidc_principal(
@@ -768,21 +855,38 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
         proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
     };
     let validated_proof = validated_oid4vci_proof(&state, &proof, Some(nonce));
+    let authorized_principal = oid4vci_authorized_principal(
+        &evidence,
+        &subject_access,
+        &oid4vci,
+        "person_is_alive_sd_jwt",
+        &["subject_access", "person_is_alive"],
+    );
+    let classified_principal =
+        classify_subject_access_principal(&subject_access, &authorized_principal)
+            .expect("OIDC principal classifies as subject access");
+    let stored_client_id =
+        stored_evaluation_client_id(&state, &classified_principal).expect("stored owner resolves");
 
     let response = oid4vci_credential(
         Some(Extension(Arc::clone(&state))),
-        Some(Extension(oid4vci_authorized_principal(
-            &evidence,
-            &subject_access,
-            &oid4vci,
-            "person_is_alive_sd_jwt",
-            &["subject_access", "person_is_alive"],
-        ))),
+        Some(Extension(authorized_principal.clone())),
         Some(Extension(validated_proof.clone())),
         Json(request.clone()),
     )
     .await;
 
+    let denial = response
+        .extensions()
+        .get::<EvidenceAuditContext>()
+        .and_then(|audit| audit.denial_code)
+        .map(|code| code.as_str().to_string());
+    assert_eq!(
+        relay.calls.load(Ordering::SeqCst),
+        2,
+        "registry Relay must execute before issuance response: {}, denial={denial:?}",
+        response.status(),
+    );
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -795,16 +899,67 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
             .is_some_and(|credential| credential.contains('~')),
         "expected compact SD-JWT credential: {body}"
     );
+    let evaluation_id = relay
+        .evaluation_ids
+        .lock()
+        .expect("evaluation id lock is not poisoned")
+        .first()
+        .cloned()
+        .expect("Relay observed the projected evaluation id");
+    let stored = store
+        .get(&evaluation_id, &stored_client_id)
+        .await
+        .expect("stored evaluation read succeeds")
+        .expect("projected registry evaluation is stored");
+    let issuance = stored
+        .issuance_provenance
+        .expect("projected evaluation stores private issuance provenance");
+    assert_eq!(issuance.claims.len(), 3);
+    assert_eq!(issuance.consultations.len(), 2);
+    let claim_ids = issuance
+        .claims
+        .iter()
+        .map(|entry| entry.claim_id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        claim_ids,
+        BTreeSet::from([
+            "civil-record-active",
+            "person-is-alive",
+            "person-is-registered",
+        ])
+    );
+    assert!(issuance.claims.iter().all(|entry| {
+        let expected_pin = if entry.claim_id == "civil-record-active" {
+            (
+                "example.civil-record.exact",
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )
+        } else {
+            (
+                "example.person-status.exact",
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+        };
+        entry.claim_version == "1"
+            && entry.relay_profile_id == expected_pin.0
+            && entry.relay_contract_hash == expected_pin.1
+            && entry.canonical_purpose == "citizen_subject_access"
+            && ulid::Ulid::from_string(&entry.consultation_id).is_ok()
+            && entry.execution_binding.starts_with("sha256:")
+    }));
+    assert!(issuance.consultations.iter().all(|execution| {
+        ulid::Ulid::from_string(&execution.consultation_id).is_ok()
+            && OffsetDateTime::parse(&execution.acquired_at, &Rfc3339).is_ok()
+    }));
+    assert!(stored
+        .results
+        .iter()
+        .all(|result| { result.provenance.used.relay_consultation_count == 2 }));
 
     let replay = oid4vci_credential(
         Some(Extension(Arc::clone(&state))),
-        Some(Extension(oid4vci_authorized_principal(
-            &evidence,
-            &subject_access,
-            &oid4vci,
-            "person_is_alive_sd_jwt",
-            &["subject_access", "person_is_alive"],
-        ))),
+        Some(Extension(authorized_principal)),
         Some(Extension(validated_proof)),
         Json(request),
     )
@@ -817,35 +972,167 @@ async fn oid4vci_credential_issues_sd_jwt_and_rejects_nonce_replay() {
     assert_eq!(replay_body["error"], "invalid_proof");
 }
 
+#[cfg(feature = "registry-notary-cel")]
 #[tokio::test]
-async fn oid4vci_rejects_holder_key_equal_to_issuer_key_before_side_effects() {
+async fn oid4vci_rejects_tampered_dependency_catalog_before_signing() {
+    let store = Arc::new(EvidenceStore::default());
+    let subject_access = Arc::new(subject_access_config());
+    let mut evidence = registry_backed_oid4vci_evidence_with_dependency();
+    let duplicate_dependency = evidence
+        .claims
+        .iter()
+        .find(|claim| claim.id == "civil-record-active")
+        .cloned()
+        .expect("dependency exists");
+    evidence.claims.push(duplicate_dependency);
+    let evidence = Arc::new(evidence);
+    let mut oid4vci = oid4vci_config();
+    oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
+    oid4vci.nonce.enabled = false;
+    let oid4vci = Arc::new(oid4vci);
+    let sign_count = Arc::new(AtomicUsize::new(0));
+    let state = Arc::new(RegistryNotaryApiState::new_with_subject_access_and_oid4vci(
+        Arc::clone(&evidence),
+        Arc::clone(&subject_access),
+        Arc::clone(&oid4vci),
+        AuditKeyHasher::unkeyed_dev_only(),
+        store,
+        Arc::new(CountingIssuerResolver {
+            sign_count: Arc::clone(&sign_count),
+        }),
+    ));
+    let relay = Arc::new(RegistryCredentialRelay::default());
+    state
+        .install_activated_relay(relay.clone())
+        .expect("registry credential Relay activates once");
+    let proof = sign_oid4vci_proof_without_nonce(&state.oid4vci.credential_issuer);
+    let response = oid4vci_credential(
+        Some(Extension(Arc::clone(&state))),
+        Some(Extension(oid4vci_authorized_principal(
+            &evidence,
+            &subject_access,
+            &oid4vci,
+            "person_is_alive_sd_jwt",
+            &["subject_access", "person_is_alive"],
+        ))),
+        Some(Extension(validated_oid4vci_proof(&state, &proof, None))),
+        Json(Oid4vciCredentialRequest {
+            format: SD_JWT_VC_FORMAT.to_string(),
+            credential_identifier: Some("person_is_alive_sd_jwt".to_string()),
+            credential_configuration_id: None,
+            vct: None,
+            proof: registry_platform_oid4vci::CredentialRequestProof {
+                proof_type: PROOF_TYPE_JWT.to_string(),
+                jwt: proof,
+            },
+            proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(relay.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(sign_count.load(Ordering::SeqCst), 0);
+}
+
+#[cfg(feature = "registry-notary-cel")]
+#[tokio::test]
+async fn oid4vci_dependency_execution_tampering_is_denied_before_signing() {
+    for tamper_acquired_at in [true, false] {
+        let store = Arc::new(EvidenceStore::default());
+        let subject_access = Arc::new(subject_access_config());
+        let evidence = Arc::new(registry_backed_oid4vci_evidence_with_dependency());
+        let mut oid4vci = oid4vci_config();
+        oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
+        oid4vci.nonce.enabled = false;
+        let oid4vci = Arc::new(oid4vci);
+        let sign_count = Arc::new(AtomicUsize::new(0));
+        let state = Arc::new(RegistryNotaryApiState::new_with_subject_access_and_oid4vci(
+            Arc::clone(&evidence),
+            Arc::clone(&subject_access),
+            Arc::clone(&oid4vci),
+            AuditKeyHasher::unkeyed_dev_only(),
+            Arc::clone(&store),
+            Arc::new(CountingIssuerResolver {
+                sign_count: Arc::clone(&sign_count),
+            }),
+        ));
+        let relay = Arc::new(RegistryCredentialRelay::default());
+        state
+            .install_activated_relay(relay.clone())
+            .expect("registry credential Relay activates once");
+        store.tamper_next_read(move |evaluation| {
+            let issuance = evaluation
+                .issuance_provenance
+                .as_mut()
+                .expect("OID evaluation retained a credential-capable closure");
+            if tamper_acquired_at {
+                let dependency_execution_id = issuance
+                    .claims
+                    .iter()
+                    .find(|claim| claim.claim_id == "civil-record-active")
+                    .expect("dependency pin exists")
+                    .consultation_id
+                    .clone();
+                issuance
+                    .consultations
+                    .iter_mut()
+                    .find(|execution| execution.consultation_id == dependency_execution_id)
+                    .expect("dependency execution exists")
+                    .acquired_at = "2026-05-23T00:00:01Z".to_string();
+            } else {
+                let dependency_index = issuance
+                    .claims
+                    .iter()
+                    .position(|claim| claim.claim_id == "civil-record-active")
+                    .expect("dependency pin exists");
+                let root_index = issuance
+                    .claims
+                    .iter()
+                    .position(|claim| claim.claim_id == "person-is-alive")
+                    .expect("root pin exists");
+                let dependency_id = issuance.claims[dependency_index].consultation_id.clone();
+                issuance.claims[dependency_index].consultation_id =
+                    issuance.claims[root_index].consultation_id.clone();
+                issuance.claims[root_index].consultation_id = dependency_id;
+            }
+        });
+        let proof = sign_oid4vci_proof_without_nonce(&state.oid4vci.credential_issuer);
+        let response = oid4vci_credential(
+            Some(Extension(Arc::clone(&state))),
+            Some(Extension(oid4vci_authorized_principal(
+                &evidence,
+                &subject_access,
+                &oid4vci,
+                "person_is_alive_sd_jwt",
+                &["subject_access", "person_is_alive"],
+            ))),
+            Some(Extension(validated_oid4vci_proof(&state, &proof, None))),
+            Json(Oid4vciCredentialRequest {
+                format: SD_JWT_VC_FORMAT.to_string(),
+                credential_identifier: Some("person_is_alive_sd_jwt".to_string()),
+                credential_configuration_id: None,
+                vct: None,
+                proof: registry_platform_oid4vci::CredentialRequestProof {
+                    proof_type: PROOF_TYPE_JWT.to_string(),
+                    jwt: proof,
+                },
+                proofs: registry_platform_oid4vci::CredentialRequestProofs::default(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(relay.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(sign_count.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn oid4vci_rejects_holder_key_equal_to_issuer_key_after_registry_evaluation() {
     let store = Arc::new(EvidenceStore::default());
     let subject_access = subject_access_config();
-    let mut evidence = evidence_config();
-    evidence
-        .claims
-        .first_mut()
-        .expect("claim exists")
-        .credential_profiles
-        .push("civil_status_sd_jwt".to_string());
-    evidence.credential_profiles.insert(
-        "civil_status_sd_jwt".to_string(),
-        serde_json::from_value(json!({
-            "format": FORMAT_SD_JWT_VC,
-            "issuer": "did:web:issuer.example",
-            "signing_key": "issuer-key",
-            "vct": "https://issuer.example/credentials/civil-status",
-            "validity_seconds": 600,
-            "holder_binding": {
-                "mode": "did",
-                "proof_of_possession": "required",
-                "allowed_did_methods": ["did:jwk"]
-            },
-            "allowed_claims": ["person-is-alive"],
-            "disclosure": { "allowed": ["predicate"] }
-        }))
-        .expect("profile parses"),
-    );
+    let evidence = registry_backed_oid4vci_evidence_config();
     let mut oid4vci = oid4vci_config();
     oid4vci.accepted_token_audiences = vec!["registry-notary-citizen".to_string()];
     let evidence = Arc::new(evidence);
@@ -859,6 +1146,10 @@ async fn oid4vci_rejects_holder_key_equal_to_issuer_key_before_side_effects() {
         Arc::clone(&store),
         Arc::new(HolderIssuerResolver),
     ));
+    let relay = Arc::new(RegistryCredentialRelay::default());
+    state
+        .install_activated_relay(relay.clone())
+        .expect("registry credential Relay activates once");
     let nonce = "nonce-equal-key";
     let nonce_key = state
         .subject_access_rate_keys
@@ -911,6 +1202,17 @@ async fn oid4vci_rejects_holder_key_equal_to_issuer_key_before_side_effects() {
     )
     .await;
 
+    let denial = response
+        .extensions()
+        .get::<EvidenceAuditContext>()
+        .and_then(|audit| audit.denial_code)
+        .map(|code| code.as_str().to_string());
+    assert_eq!(
+        relay.calls.load(Ordering::SeqCst),
+        1,
+        "registry Relay must execute before holder and issuer keys are compared: {}, denial={denial:?}",
+        response.status(),
+    );
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert!(matches!(
         state
@@ -919,7 +1221,7 @@ async fn oid4vci_rejects_holder_key_equal_to_issuer_key_before_side_effects() {
             .consume_nonce(&nonce_scope, &nonce_key)
             .await
             .expect("nonce store is available"),
-        ReplayInsertOutcome::Inserted
+        ReplayInsertOutcome::AlreadySeen
     ));
 }
 

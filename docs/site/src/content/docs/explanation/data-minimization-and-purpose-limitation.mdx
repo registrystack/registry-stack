@@ -86,6 +86,17 @@ anything about the person.
 
 When the system issues a credential rather than returning a direct answer, minimization continues
 at presentation time.
+Issuance also requires one exact compiler pin for every registry-backed claim
+in each selected root's dependency closure, plus one normalized execution
+record per unique Relay consultation ULID. Notary retains those private Relay
+ids and acquisition times only when all selected roots share a mutually
+validated credential profile; registry-backed evaluation-only claims retain no
+private issuance provenance. A deterministic unkeyed SHA-256 binding detects
+partial mutation between a claim pin, execution record, and claim provenance,
+but is not an authenticity anchor against an operator able to rewrite all
+committed fields and the digest. A source-free,
+delegated, or legacy evaluation cannot cross the
+credential trust boundary.
 Issued credentials are SD-JWT VC: a verifiable-credential format in which the signed body carries
 only a SHA-256 digest of each selectively disclosable field, so a field the holder does not
 present stays hidden, and the holder controls what is revealed.

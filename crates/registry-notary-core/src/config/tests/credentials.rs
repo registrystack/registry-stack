@@ -26,6 +26,7 @@ allowed_claims:
         .evidence
         .credential_profiles
         .insert("test-profile".to_string(), profile);
+    add_registry_credential_claim(&mut config, "some-claim", "test-profile");
     assert!(
         config.validate().is_ok(),
         "did:jwk only should pass validation"
@@ -242,6 +243,7 @@ allowed_claims:
         .evidence
         .credential_profiles
         .insert("test-profile".to_string(), profile);
+    add_registry_credential_claim(&mut config, "some-claim", "test-profile");
 
     config
         .validate()
@@ -398,6 +400,7 @@ allowed_claims:
         .evidence
         .credential_profiles
         .insert("test-profile".to_string(), profile);
+    add_registry_credential_claim(&mut config, "some-claim", "test-profile");
 
     config.validate().expect("PKCS#11 key shape validates");
 }
@@ -431,6 +434,7 @@ allowed_claims:
         .evidence
         .credential_profiles
         .insert("test-profile".to_string(), profile);
+    add_registry_credential_claim(&mut config, "some-claim", "test-profile");
 
     config.validate().expect("file-watch key shape validates");
 }

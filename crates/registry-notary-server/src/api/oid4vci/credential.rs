@@ -44,6 +44,9 @@ pub(in crate::api) async fn oid4vci_credential(
             Err(error) => return oid4vci_error_response(error),
         };
     let configuration_claim_ids = configuration.credential_claim_ids();
+    if require_registry_backed_credential_claims(evidence, &configuration_claim_ids).is_err() {
+        return oid4vci_error_response(Oid4vciWireError::AccessDenied);
+    }
     if requested_attestation_access_mode(&principal) == AccessMode::DelegatedAttestation {
         let mut response = oid4vci_error_response(Oid4vciWireError::AccessDenied);
         attach_oid4vci_subject_access_denial_audit(
@@ -107,16 +110,6 @@ pub(in crate::api) async fn oid4vci_credential(
         Some(profile) => profile,
         None => return oid4vci_error_response(Oid4vciWireError::UnsupportedCredentialType),
     };
-    let issuer = match state
-        .issuer_resolver()
-        .issuer(&configuration.credential_profile)
-    {
-        Ok(issuer) => issuer,
-        Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
-    };
-    if holder_key_matches_issuer_key(&validated_proof.holder_jwk, &issuer.public_jwk()) {
-        return oid4vci_error_response(Oid4vciWireError::InvalidProof);
-    }
     if let Some(nonce) = expected_nonce {
         let key = match state.subject_access_rate_keys.oid4vci_nonce(
             &state.oid4vci.credential_issuer,
@@ -272,7 +265,7 @@ pub(in crate::api) async fn oid4vci_credential(
         &evaluation.claim_ids,
         &evaluation.disclosure,
         &evaluation.format,
-        Some(configuration.credential_profile.as_str()),
+        true,
     ) {
         return oid4vci_error_response(oid4vci_error_from_evidence(&error));
     }
@@ -285,6 +278,21 @@ pub(in crate::api) async fn oid4vci_credential(
         profile,
     ) {
         return oid4vci_error_response(oid4vci_error_from_evidence(&error));
+    }
+    if let Err(error) =
+        require_issuable_evaluation_provenance(evidence, &evaluation_id, &evaluation)
+    {
+        return oid4vci_error_response(oid4vci_error_from_evidence(&error));
+    }
+    let issuer = match state
+        .issuer_resolver()
+        .issuer(&configuration.credential_profile)
+    {
+        Ok(issuer) => issuer,
+        Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
+    };
+    if holder_key_matches_issuer_key(&validated_proof.holder_jwk, &issuer.public_jwk()) {
+        return oid4vci_error_response(Oid4vciWireError::InvalidProof);
     }
     let iat = earliest_issued_at(&evaluation.results).unwrap_or_else(OffsetDateTime::now_utc);
     let credential_id = state

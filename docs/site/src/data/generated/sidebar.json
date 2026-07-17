@@ -108,6 +108,10 @@
             "slug": "products/registry-notary/credential-lifecycle-status"
           },
           {
+            "label": "Credential issuance migration",
+            "slug": "products/registry-notary/credential-issuance-migration"
+          },
+          {
             "label": "Signing key provider",
             "slug": "products/registry-notary/signing-key-provider"
           },

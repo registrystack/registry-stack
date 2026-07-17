@@ -237,6 +237,7 @@
                 "json_ld_vc_issuance",
                 "data_integrity_proofs",
                 "credential_status",
+                "delegated_credential_issuance",
                 "mso_mdoc",
                 "openid4vci_full_issuer"
             ])

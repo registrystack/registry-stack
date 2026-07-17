@@ -949,14 +949,36 @@ pub(super) async fn admin_scope_is_instance_global_across_credential_profiles() 
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK_2", TEST_HOLDER_JWK);
 
+    let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = notary_only_config(
+    let mut config = subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
     );
     enable_shared_admin_listener(&mut config);
     enable_credential_status(&mut config);
+    config.auth.api_keys.push(EvidenceCredentialConfig {
+        id: "caseworker".to_string(),
+        fingerprint: env_fingerprint_ref("TEST_EVIDENCE_API_KEY_HASH"),
+        scopes: vec!["farmer_registry:evidence_verification".to_string()],
+        authorization_details: None,
+    });
+    let subject_access_holder_binding = config
+        .evidence
+        .credential_profiles
+        .get("civil_status_sd_jwt")
+        .expect("subject-access credential profile exists")
+        .holder_binding
+        .clone();
+    config.evidence.credential_profiles.clear();
+    config.evidence.signing_keys.remove("issuer-key");
+    config.subject_access.credential_profiles = vec![
+        "issuer_one_sd_jwt".to_string(),
+        "issuer_two_sd_jwt".to_string(),
+    ];
     config.auth.api_keys.push(EvidenceCredentialConfig {
         id: "admin".to_string(),
         fingerprint: env_fingerprint_ref("TEST_EVIDENCE_ADMIN_KEY_HASH"),
@@ -988,8 +1010,8 @@ pub(super) async fn admin_scope_is_instance_global_across_credential_profiles() 
             signing_key: "issuer-one-key".to_string(),
             vct: "http://127.0.0.1:4325/credentials/issuer-one".to_string(),
             validity_seconds: 600,
-            holder_binding: Default::default(),
-            allowed_claims: vec!["farmed-land-size".to_string()],
+            holder_binding: subject_access_holder_binding.clone(),
+            allowed_claims: vec!["person-is-alive".to_string()],
             disclosure: Default::default(),
         },
     );
@@ -1001,11 +1023,21 @@ pub(super) async fn admin_scope_is_instance_global_across_credential_profiles() 
             signing_key: "issuer-two-key".to_string(),
             vct: "http://127.0.0.1:4325/credentials/issuer-two".to_string(),
             validity_seconds: 600,
-            holder_binding: Default::default(),
-            allowed_claims: vec!["farmed-land-size".to_string()],
+            holder_binding: subject_access_holder_binding,
+            allowed_claims: vec!["person-is-alive".to_string()],
             disclosure: Default::default(),
         },
     );
+    config
+        .evidence
+        .claims
+        .iter_mut()
+        .find(|claim| claim.id == "person-is-alive")
+        .expect("registry-backed credential claim exists")
+        .credential_profiles = vec![
+        "issuer_one_sd_jwt".to_string(),
+        "issuer_two_sd_jwt".to_string(),
+    ];
 
     let server = TestServer::builder().http_transport().build(
         standalone_router(config)

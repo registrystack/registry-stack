@@ -319,6 +319,14 @@ repos:
           - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
             standards_referenced: [sd-jwt-vc, w3c-did]
             last_reviewed: unreviewed
+      - src: products/notary/docs/credential-issuance-migration.md
+        dest: products/registry-notary/credential-issuance-migration
+        label: Credential issuance migration
+        nav_order: 85
+        doc_type: how-to
+        last_reviewed: "2026-07-17"
+        standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
+        exclude_docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/signing-key-provider.md
         archive_src: docs/signing-key-provider.md
         dest: products/registry-notary/signing-key-provider

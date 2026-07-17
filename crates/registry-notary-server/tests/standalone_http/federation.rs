@@ -243,7 +243,7 @@ pub(super) fn audit_records(path: &std::path::Path) -> Vec<Value> {
 }
 
 pub(super) fn subject_access_oidc_config(
-    _base_url: &str,
+    base_url: &str,
     audit_path: &str,
     issuer: &str,
     jwks_uri: &str,
@@ -258,6 +258,7 @@ state:
 
 server:
   bind: 127.0.0.1:0
+  request_timeout: 30s
 auth:
   oidc:
     issuer: "{issuer}"
@@ -286,6 +287,11 @@ evidence:
   enabled: true
   service_id: evidence.test
   api_base_url: https://evidence.example.test
+  relay:
+    base_url: "{base_url}"
+    workload_client_id: registry-notary
+    token_file: "{audit_path}.relay-token"
+    allow_insecure_localhost: true
   signing_keys:
     issuer-key:
       provider: local_jwk_env
@@ -316,13 +322,26 @@ evidence:
       version: 2026-05
       subject_type: person
       evidence_mode:
-        type: self_attested
+        type: registry_backed
+        consultations:
+          person_status:
+            profile:
+              id: {TEST_RELAY_PROFILE_ID}
+              contract_hash: {contract_hash}
+            inputs:
+              subject_id: request.target.identifiers.national_id
+            outputs:
+              active: {{ type: boolean, nullable: true }}
+              birth_date: {{ type: date, nullable: true }}
+              given_name: {{ type: string, nullable: true, max_bytes: 64 }}
       purpose: citizen_subject_access
+      required_scopes:
+        - subject_access
       value:
         type: boolean
       rule:
-        type: cel
-        expression: "true"
+        type: consultation_matched
+        consultation: person_status
       disclosure:
         default: value
         allowed: [value, redacted]
@@ -372,7 +391,8 @@ subject_access:
     subject_mismatch_per_principal_per_hour: 5
     per_holder_per_hour: 10
     credential_issuance_per_principal_per_hour: 5
-"#
+"#,
+        contract_hash = test_relay_contract_hash(),
     );
     serde_norway::from_str(&raw).expect("subject-access config deserializes")
 }
@@ -441,14 +461,10 @@ pub(super) fn add_subject_access_projection_claim(
     claim.id = claim_id.to_string();
     claim.title = title.to_string();
     claim.value.value_type = value_type.to_string();
-    claim.rule = RuleConfig::Cel {
-        expression: match output_name {
-            "given_name" => "'Miguel'",
-            "birth_date" => "'2016-01-15'",
-            _ => panic!("unsupported self-attested projection output: {output_name}"),
-        }
-        .to_string(),
-        bindings: Default::default(),
+    claim.value.nullable = true;
+    claim.rule = RuleConfig::ConsultationOutput {
+        consultation: "person_status".to_string(),
+        output: output_name.to_string(),
     };
     claim.formats = vec!["application/vnd.registry-notary.claim-result+json".to_string()];
     claim.credential_profiles = vec!["civil_status_sd_jwt".to_string()];
