@@ -44,6 +44,7 @@ const APPROVAL_STATE_PATH: &str = "approval/project-state.json";
 const MAX_AUTHORED_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_LIVE_RESPONSE_BYTES: u64 = 1024 * 1024;
 const MAX_FIXTURES: usize = 128;
+const MAX_ENVIRONMENTS: usize = 64;
 const MAX_OPERATIONS: usize = 16;
 const MAX_OUTPUTS: usize = 64;
 const MAX_CLAIMS: usize = 64;
@@ -59,6 +60,7 @@ const RELEASED_SCRIPT_RUNTIMES: &[ReleasedScriptRuntime] = &[ReleasedScriptRunti
 // public API or visibility expansion.
 include!("project_authoring/model.rs");
 include!("project_authoring/authoring_contract.rs");
+include!("project_authoring/diagnostics.rs");
 include!("project_authoring/commands.rs");
 include!("project_authoring/compiler/artifacts.rs");
 include!("project_authoring/compiler/relay.rs");

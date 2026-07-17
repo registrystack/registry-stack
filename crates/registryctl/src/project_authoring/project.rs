@@ -165,8 +165,6 @@ fn load_registry_project(root: &Path, environment: Option<&str>) -> Result<Loade
 }
 
 fn project_content_digest(root: &Path, authored_hasher: &Sha256) -> Result<String> {
-    const MAX_ENVIRONMENTS: usize = 64;
-
     let directory = root.join("environments");
     if !directory.exists() {
         return Ok(format!(

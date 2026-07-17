@@ -35,9 +35,11 @@ use zeroize::Zeroizing;
 mod project_authoring;
 
 pub use project_authoring::{
-    build_registry_project, check_registry_project, init_registry_project, test_registry_project,
-    test_registry_project_selected, ProjectBuildOptions, ProjectCheckOptions, ProjectCommandReport,
-    ProjectInitOptions, ProjectStarter, ProjectTestOptions, ProjectTestSelection, SemanticChange,
+    build_registry_project, check_registry_project, init_registry_project,
+    render_project_authoring_diagnostics, test_registry_project, test_registry_project_selected,
+    ProjectAuthoringDiagnostic, ProjectAuthoringDiagnostics, ProjectBuildOptions,
+    ProjectCheckOptions, ProjectCommandReport, ProjectInitOptions, ProjectStarter,
+    ProjectTestOptions, ProjectTestSelection, SemanticChange,
 };
 
 pub use crate::sample::Sample;

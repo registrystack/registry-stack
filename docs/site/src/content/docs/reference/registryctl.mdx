@@ -41,7 +41,7 @@ complete workflow and generated trust boundary.
 | `test --environment <name> --live` | After offline fixtures pass, send one governed evaluation through a deployed Notary. The environment must be explicitly non-production. |
 | `check --project-dir <dir> --environment <name>` | Validate fixtures and the generated configuration for the project's Relay-only, Notary-only, or combined topology without writing build output. |
 | `check --explain` | Include the redacted acquisition, authorization, output, claim, and disclosure plan. |
-| `check --format json` | Emit the machine-readable check report instead of the default human-readable review report. |
+| `check --format json` | Emit the machine-readable success report or typed invalid-project diagnostics instead of the default human-readable report. |
 | `check --against <bundle> --anchor <anchor>` | Verify a signed product baseline and compare against its signed human review plus internal approval state. Both flags are required together. |
 | `authoring xw --format reference` | Print the generated `xw.v1` function reference for Script authors. |
 | `authoring xw --format editor` | Print generated editor metadata for the `xw.v1` function surface. |
@@ -64,6 +64,24 @@ Their `semantic_changes` entries identify changed `claim`, `integration`, `servi
 `operator_security`, and `disclosure` dimensions. The authorized bundle signer reviews that report;
 Registry Stack does not create a separate reviewer workflow.
 Generated files are written under `.registry-stack/build/<environment>/` only by `build`.
+
+For invalid authoring, `check` exits nonzero and reports a nonempty typed diagnostic list.
+The default human output and `--format json` use the same diagnostics, stable codes, normalized
+project-relative authored files, safe causes, and remediation. YAML syntax and unknown-field
+diagnostics include a 1-based location and schema command when available. Script diagnostics can
+include a static released-signature suggestion.
+
+The diagnostic list is sorted and deduplicated deterministically, then capped at 64 entries with a
+`registryctl.authoring.diagnostics.truncated` entry. Safe missing entity and integration references
+aggregate. Unsafe paths, symlinks, oversized files, and files that cannot be safely inspected stop
+later inspection. This boundary check covers all environment YAML files included in the project
+digest, including environments that are not selected. Diagnostics omit authored scalar values,
+origins, secret references, fixture inputs and observations, Script arguments, and parser internals.
+If any diagnostic exists, `check` does not compile, validate generated product configuration,
+execute fixtures, or write build output.
+
+{/* Evidence: crates/registryctl/src/project_authoring/diagnostics.rs and
+    crates/registryctl/tests/project_authoring.rs. */}
 
 ### Canonical starter sequences
 

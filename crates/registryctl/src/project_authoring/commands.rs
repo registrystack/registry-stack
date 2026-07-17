@@ -694,10 +694,27 @@ fn contains_sensitive_request_key(value: &Value) -> bool {
 
 pub fn check_registry_project(options: &ProjectCheckOptions) -> Result<ProjectCommandReport> {
     validate_baseline_pair(options.against.as_deref(), options.anchor.as_deref())?;
+    let diagnostics = collect_project_authoring_diagnostics(
+        &options.project_directory,
+        options.environment.as_str(),
+    );
+    if !diagnostics.diagnostics.is_empty() {
+        return Err(anyhow::Error::new(diagnostics));
+    }
     let loaded = load_registry_project(
         &options.project_directory,
         Some(options.environment.as_str()),
-    )?;
+    )
+    .map_err(|_| {
+        anyhow::Error::new(finalized_diagnostics(vec![invalid_diagnostic(
+            "registryctl.authoring.project.invalid",
+            PROJECT_FILE,
+            None,
+            "The project could not be loaded safely after authoring diagnostics.",
+            "Keep the project tree stable, then run project check again.",
+            Some(PROJECT_SCHEMA_HINT),
+        )]))
+    })?;
     preflight_project_rhai_scripts(&loaded)?;
     let baseline = load_verified_baseline(
         options.against.as_deref(),

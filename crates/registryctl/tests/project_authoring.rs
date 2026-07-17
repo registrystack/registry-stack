@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 
 use registryctl::{
     add_config_anchor_key, build_registry_project, check_registry_project, init_config_anchor,
-    init_registry_project, sign_config_bundle, test_registry_project,
-    test_registry_project_selected, verify_config_bundle_cli, BundleSignOptions,
-    ProjectBuildOptions, ProjectCheckOptions, ProjectInitOptions, ProjectStarter,
-    ProjectTestOptions, ProjectTestSelection,
+    init_registry_project, render_project_authoring_diagnostics, sign_config_bundle,
+    test_registry_project, test_registry_project_selected, verify_config_bundle_cli,
+    BundleSignOptions, ProjectAuthoringDiagnostics, ProjectBuildOptions, ProjectCheckOptions,
+    ProjectInitOptions, ProjectStarter, ProjectTestOptions, ProjectTestSelection,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -19,6 +19,709 @@ fn golden(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/project-authoring")
         .join(name)
+}
+
+fn authoring_diagnostics(project: &Path) -> ProjectAuthoringDiagnostics {
+    check_registry_project(&ProjectCheckOptions {
+        project_directory: project.to_path_buf(),
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("invalid project returns typed authoring diagnostics")
+    .downcast::<ProjectAuthoringDiagnostics>()
+    .expect("error is the typed authoring diagnostics report")
+}
+
+fn assert_authoring_diagnostic(error: &anyhow::Error, code: &str) {
+    let report = error
+        .downcast_ref::<ProjectAuthoringDiagnostics>()
+        .expect("error is a typed authoring diagnostics report");
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == code),
+        "missing {code}: {report:#?}"
+    );
+}
+
+#[test]
+fn project_check_aggregates_script_host_call_and_environment_diagnostics_safely() {
+    const ARGUMENT_MARKER: &str = "argument-marker-383";
+    const ENVIRONMENT_MARKER: &str = "environment-secret-marker-383";
+    const FIXTURE_MARKER: &str = "fixture-value-marker-383";
+    const RESPONSE_MARKER: &str = "source-response-marker-383";
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("dhis2-script", temporary.path());
+    let script_path = project.join("integrations/health-record/adapter.rhai");
+    std::fs::write(
+        &script_path,
+        format!(
+            "fn consult(ctx) {{\n    let response = source.gett(\"{ARGUMENT_MARKER}\");\n    result.no_match()\n}}\n"
+        ),
+    )
+    .expect("invalid Script writes");
+
+    let environment_path = project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["integrations"]["health-record"]["source"]["credential"]["generation"] =
+        serde_yaml::Value::Number(0.into());
+    environment["integrations"]["health-record"]["source"]["credential"]["username"]["secret"] =
+        serde_yaml::Value::String(ENVIRONMENT_MARKER.to_string());
+    write_yaml(&environment_path, &environment);
+
+    let fixture_path = project.join("integrations/health-record/fixtures/match.yaml");
+    let mut fixture = read_yaml(&fixture_path);
+    fixture["variables"]["diagnostic_marker"] =
+        serde_yaml::Value::String(FIXTURE_MARKER.to_string());
+    fixture["interactions"][0]["respond"]["body"]["diagnostic_marker"] =
+        serde_yaml::Value::String(RESPONSE_MARKER.to_string());
+    write_yaml(&fixture_path, &fixture);
+
+    let report = authoring_diagnostics(&project);
+    assert_eq!(report.status, "invalid");
+    assert_eq!(report.diagnostics.len(), 2, "{report:#?}");
+    let script = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "registryctl.authoring.script.unknown_function")
+        .expect("one Script diagnostic");
+    assert_eq!(script.file, "integrations/health-record/adapter.rhai");
+    assert_eq!(script.field, Some("capability.script.file"));
+    assert_eq!((script.line, script.column), (Some(2), Some(20)));
+    assert_eq!(
+        script.suggestion,
+        Some("source.get(target: string) -> response")
+    );
+    assert_eq!(
+        report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code.starts_with("registryctl.authoring.script."))
+            .count(),
+        1
+    );
+    assert_eq!(
+        report
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "registryctl.authoring.environment.invalid")
+            .count(),
+        1
+    );
+    assert!(!project.join(".registry-stack/build").exists());
+
+    let human = render_project_authoring_diagnostics(&report);
+    let json = serde_json::to_string_pretty(&report).expect("diagnostics serialize");
+    let debug = format!("{report:#?}");
+    for rendered in [&human, &json, &debug] {
+        assert_eq!(
+            rendered
+                .matches("registryctl.authoring.script.unknown_function")
+                .count(),
+            1,
+            "{rendered}"
+        );
+        for forbidden in [
+            ARGUMENT_MARKER,
+            ENVIRONMENT_MARKER,
+            FIXTURE_MARKER,
+            RESPONSE_MARKER,
+            "https://health-registry.invalid",
+            "HEALTH_REGISTRY_PASSWORD",
+            "Engine",
+            "EvalAltResult",
+            &project.display().to_string(),
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "leaked {forbidden}: {rendered}"
+            );
+        }
+    }
+}
+
+#[test]
+fn project_check_keeps_script_probe_stable_across_metadata_and_ignores_non_calls() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("dhis2-script", temporary.path());
+    let script_path = project.join("integrations/health-record/adapter.rhai");
+    replace_in_file(
+        &script_path,
+        "fn consult(ctx) {\n",
+        "fn consult(ctx) {\n    let text = \"source.gett(argument-marker)\";\n    // source.gett(\"argument-marker\")\n",
+    );
+    check_registry_project(&ProjectCheckOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect("valid source.get and non-call text remain clean");
+
+    std::fs::write(
+        &script_path,
+        r#"fn consult(ctx) {
+    let first = source.gett("first-argument-marker");
+    let second = source.publish("second-argument-marker");
+    result.no_match()
+}
+"#,
+    )
+    .expect("two invalid calls write");
+    let baseline = authoring_diagnostics(&project);
+    let script = baseline
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code.starts_with("registryctl.authoring.script."))
+        .expect("Script diagnostic");
+    assert_eq!((script.line, script.column), (Some(2), Some(17)));
+    assert_eq!(
+        script.suggestion,
+        Some("source.get(target: string) -> response")
+    );
+
+    let integration_path = project.join("integrations/health-record/integration.yaml");
+    let mut integration = read_yaml(&integration_path);
+    integration["source"]["product"] =
+        serde_yaml::Value::String("unrelated-product-metadata".to_string());
+    integration["source"]["versions"] =
+        serde_yaml::from_str("unverified: [9.9]\n").expect("version metadata");
+    write_yaml(&integration_path, &integration);
+    assert_eq!(authoring_diagnostics(&project), baseline);
+}
+
+#[test]
+fn project_check_root_parse_gates_references_but_keeps_selected_environment_syntax() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    std::fs::write(project.join("registry-stack.yaml"), "version: [\n")
+        .expect("invalid project root writes");
+    std::fs::write(project.join("environments/local.yaml"), "version: [\n")
+        .expect("invalid environment writes");
+    std::fs::write(
+        project.join("integrations/eligibility/integration.yaml"),
+        "also: [\n",
+    )
+    .expect("invalid integration writes");
+
+    let report = authoring_diagnostics(&project);
+    assert_eq!(report.diagnostics.len(), 2, "{report:#?}");
+    assert_eq!(report.diagnostics[0].file, "environments/local.yaml");
+    assert_eq!(report.diagnostics[1].file, "registry-stack.yaml");
+    assert!(report
+        .diagnostics
+        .iter()
+        .all(|diagnostic| diagnostic.code == "registryctl.authoring.yaml.invalid_syntax"));
+}
+
+#[test]
+fn project_check_reports_two_independent_environment_errors_once_each() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let environment_path = project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["integrations"]["eligibility"]["source"]["origin"] =
+        serde_yaml::Value::String("http://unsafe-origin-marker.invalid".to_string());
+    environment["integrations"]["eligibility"]["source"]["credential"]["generation"] =
+        serde_yaml::Value::Number(0.into());
+    write_yaml(&environment_path, &environment);
+
+    let report = authoring_diagnostics(&project);
+    assert_eq!(report.diagnostics.len(), 2, "{report:#?}");
+    assert_eq!(
+        report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.field)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            Some("integrations.source.credential"),
+            Some("integrations.source.origin"),
+        ])
+    );
+    assert!(report
+        .diagnostics
+        .iter()
+        .all(|diagnostic| diagnostic.code == "registryctl.authoring.environment.invalid"));
+    assert!(!serde_json::to_string(&report)
+        .expect("environment diagnostics serialize")
+        .contains("unsafe-origin-marker"));
+}
+
+#[test]
+fn project_check_orders_independent_fixture_errors_and_caps_deterministically() {
+    let make = |root: &Path, reverse: bool, count: usize| {
+        let project = copy_project("custom-system", root);
+        let directory = project.join("integrations/eligibility/fixtures");
+        let indices: Vec<_> = if reverse {
+            (0..count).rev().collect()
+        } else {
+            (0..count).collect()
+        };
+        for index in indices {
+            std::fs::write(
+                directory.join(format!("broken-{index:03}.yaml")),
+                "name: [\n",
+            )
+            .expect("broken fixture writes");
+        }
+        project
+    };
+    let first_root = tempfile::tempdir().expect("first temporary directory");
+    let second_root = tempfile::tempdir().expect("second temporary directory");
+    let first_project = make(first_root.path(), false, 70);
+    let second_project = make(second_root.path(), true, 70);
+    reverse_yaml_mapping(
+        &second_project.join("integrations/eligibility/integration.yaml"),
+        &["outputs"],
+    );
+    reverse_yaml_mapping(
+        &second_project.join("registry-stack.yaml"),
+        &["services", "household-eligibility", "claims"],
+    );
+    let first = authoring_diagnostics(&first_project);
+    let repeated = authoring_diagnostics(&first_project);
+    let second = authoring_diagnostics(&second_project);
+    assert_eq!(first, repeated);
+    assert_eq!(first, second);
+    assert_eq!(first.diagnostics.len(), 64);
+    assert_eq!(
+        first
+            .diagnostics
+            .last()
+            .expect("truncation diagnostic")
+            .code,
+        "registryctl.authoring.diagnostics.truncated"
+    );
+    assert_eq!(
+        serde_json::to_vec(&first).expect("first diagnostics serialize"),
+        serde_json::to_vec(&second).expect("second diagnostics serialize")
+    );
+    assert_eq!(
+        render_project_authoring_diagnostics(&first),
+        render_project_authoring_diagnostics(&second)
+    );
+}
+
+#[test]
+fn project_check_collects_separate_integration_and_fixture_yaml_errors() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    duplicate_project_integration(&project, "eligibility", "secondary");
+    std::fs::write(
+        project.join("integrations/secondary/integration.yaml"),
+        "version: [\n",
+    )
+    .expect("invalid integration writes");
+    let fixture_path = project.join("integrations/eligibility/fixtures/eligible.yaml");
+    let mut fixture = std::fs::read_to_string(&fixture_path).expect("fixture reads");
+    fixture.push_str("unknown_authoring_field: true\n");
+    std::fs::write(&fixture_path, fixture).expect("unknown fixture field writes");
+
+    let report = authoring_diagnostics(&project);
+    assert_eq!(report.diagnostics.len(), 2, "{report:#?}");
+    let integration = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.file == "integrations/secondary/integration.yaml")
+        .expect("integration syntax diagnostic");
+    assert_eq!(
+        integration.code,
+        "registryctl.authoring.yaml.invalid_syntax"
+    );
+    assert!(integration.line.is_some());
+    assert!(integration.column.is_some());
+    assert_eq!(
+        integration.schema_hint,
+        Some("registryctl authoring schema --kind integration > integration.schema.json")
+    );
+    let fixture = report
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.file.ends_with("fixtures/eligible.yaml"))
+        .expect("fixture unknown-field diagnostic");
+    assert_eq!(fixture.code, "registryctl.authoring.yaml.unknown_field");
+    assert!(fixture.line.is_some());
+    assert!(fixture.column.is_some());
+    assert_eq!(
+        fixture.schema_hint,
+        Some("registryctl authoring schema --kind fixture > fixture.schema.json")
+    );
+}
+
+#[test]
+fn project_check_single_error_report_is_concise_and_typed() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let fixture = project.join("integrations/eligibility/fixtures/eligible.yaml");
+    std::fs::write(&fixture, "name: [\n").expect("invalid fixture writes");
+    let report = authoring_diagnostics(&project);
+    assert_eq!(report.diagnostics.len(), 1, "{report:#?}");
+    let human = render_project_authoring_diagnostics(&report);
+    assert!(human.starts_with("Registry Stack project is invalid: 1 authoring diagnostic\n"));
+    assert_eq!(
+        human
+            .matches("registryctl.authoring.yaml.invalid_syntax")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn project_check_cli_renders_the_same_typed_diagnostic_in_human_and_json() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    std::fs::write(
+        project.join("integrations/eligibility/fixtures/eligible.yaml"),
+        "name: [\n",
+    )
+    .expect("invalid fixture writes");
+    let run = |format: &str| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_registryctl"))
+            .args([
+                "check",
+                "--project-dir",
+                project.to_str().expect("project path is Unicode"),
+                "--environment",
+                "local",
+                "--format",
+                format,
+            ])
+            .env("REGISTRYCTL_NO_UPDATE_CHECK", "1")
+            .output()
+            .expect("registryctl check executes")
+    };
+    let human = run("human");
+    let json = run("json");
+    assert!(!human.status.success());
+    assert!(!json.status.success());
+    assert!(
+        human.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&human.stderr)
+    );
+    assert!(
+        json.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&json.stderr)
+    );
+    let human = String::from_utf8(human.stdout).expect("human output is UTF-8");
+    let json: serde_json::Value =
+        serde_json::from_slice(&json.stdout).expect("JSON output is typed diagnostics");
+    let diagnostics = json["diagnostics"]
+        .as_array()
+        .expect("diagnostics is an array");
+    assert_eq!(diagnostics.len(), 1);
+    let code = diagnostics[0]["code"]
+        .as_str()
+        .expect("diagnostic code is a string");
+    assert_eq!(human.matches(code).count(), 1);
+    let report = authoring_diagnostics(&project);
+    assert_eq!(
+        human.trim_end(),
+        render_project_authoring_diagnostics(&report)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn project_check_cli_rejects_an_unselected_environment_symlink_with_typed_output() {
+    use std::os::unix::fs::symlink;
+
+    const TARGET_MARKER: &str = "unselected-environment-target-marker";
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let target = temporary.path().join(format!("{TARGET_MARKER}.yaml"));
+    std::fs::write(&target, "version: 1\n").expect("symlink target writes");
+    symlink(&target, project.join("environments/zzz.yaml"))
+        .expect("unselected environment symlink creates");
+
+    let fixture_path = project.join("integrations/eligibility/fixtures/eligible.yaml");
+    let mut fixture = read_yaml(&fixture_path);
+    fixture["expect"]["outputs"]["approved"] = serde_yaml::Value::Bool(false);
+    write_yaml(&fixture_path, &fixture);
+
+    let run = |format: &str| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_registryctl"))
+            .args([
+                "check",
+                "--project-dir",
+                project.to_str().expect("project path is Unicode"),
+                "--environment",
+                "local",
+                "--format",
+                format,
+            ])
+            .env("REGISTRYCTL_NO_UPDATE_CHECK", "1")
+            .output()
+            .expect("registryctl check executes")
+    };
+    let human = run("human");
+    let json = run("json");
+    assert!(!human.status.success());
+    assert!(!json.status.success());
+    assert!(human.stderr.is_empty());
+    assert!(json.stderr.is_empty());
+
+    let human = String::from_utf8(human.stdout).expect("human output is UTF-8");
+    let json_text = String::from_utf8(json.stdout).expect("JSON output is UTF-8");
+    let json: serde_json::Value =
+        serde_json::from_str(&json_text).expect("invalid project output is typed JSON");
+    assert_eq!(json["status"], "invalid");
+    assert_eq!(
+        json["diagnostics"]
+            .as_array()
+            .expect("diagnostic list")
+            .len(),
+        1
+    );
+    assert_eq!(
+        json["diagnostics"][0]["code"],
+        "registryctl.authoring.path.unsafe"
+    );
+    assert_eq!(json["diagnostics"][0]["file"], "environments/zzz.yaml");
+    for rendered in [&human, &json_text] {
+        assert!(!rendered.contains("Error:"), "{rendered}");
+        assert!(!rendered.contains(TARGET_MARKER), "{rendered}");
+        assert!(
+            !rendered.contains(&temporary.path().display().to_string()),
+            "{rendered}"
+        );
+    }
+    assert_eq!(
+        human.matches("registryctl.authoring.path.unsafe").count(),
+        1
+    );
+    assert!(!project.join(".registry-stack/build").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn project_check_cli_reports_malformed_root_before_unselected_environment_boundary() {
+    use std::os::unix::fs::symlink;
+
+    const TARGET_MARKER: &str = "unselected-root-order-target-marker";
+    const REFERENCE_MARKER: &str = "reference-chasing-marker";
+    const FIXTURE_MARKER: &str = "fixture-execution-marker";
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    std::fs::write(project.join("registry-stack.yaml"), "version: [\n")
+        .expect("malformed project root writes");
+    std::fs::write(
+        project.join("integrations/eligibility/integration.yaml"),
+        format!("{REFERENCE_MARKER}: [\n"),
+    )
+    .expect("malformed referenced integration writes");
+    std::fs::write(
+        project.join("integrations/eligibility/fixtures/eligible.yaml"),
+        format!("{FIXTURE_MARKER}: [\n"),
+    )
+    .expect("malformed fixture writes");
+    let target = temporary.path().join(format!("{TARGET_MARKER}.yaml"));
+    std::fs::write(&target, "version: 1\n").expect("symlink target writes");
+    symlink(&target, project.join("environments/zzz.yaml"))
+        .expect("unselected environment symlink creates");
+
+    let run = |format: &str| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_registryctl"))
+            .args([
+                "check",
+                "--project-dir",
+                project.to_str().expect("project path is Unicode"),
+                "--environment",
+                "local",
+                "--format",
+                format,
+            ])
+            .env("REGISTRYCTL_NO_UPDATE_CHECK", "1")
+            .output()
+            .expect("registryctl check executes")
+    };
+    let human = run("human");
+    let json = run("json");
+    let repeated_json = run("json");
+    assert!(!human.status.success());
+    assert!(!json.status.success());
+    assert!(!repeated_json.status.success());
+    assert!(human.stderr.is_empty());
+    assert!(json.stderr.is_empty());
+    assert!(repeated_json.stderr.is_empty());
+    assert_eq!(json.stdout, repeated_json.stdout);
+
+    let human = String::from_utf8(human.stdout).expect("human output is UTF-8");
+    let json_text = String::from_utf8(json.stdout).expect("JSON output is UTF-8");
+    let json: serde_json::Value =
+        serde_json::from_str(&json_text).expect("malformed root output is typed JSON");
+    let diagnostics = json["diagnostics"].as_array().expect("diagnostic list");
+    assert_eq!(diagnostics.len(), 1, "{json:#}");
+    assert_eq!(
+        diagnostics[0]["code"],
+        "registryctl.authoring.yaml.invalid_syntax"
+    );
+    assert_eq!(diagnostics[0]["file"], "registry-stack.yaml");
+    for rendered in [&human, &json_text] {
+        assert!(!rendered.contains("Error:"), "{rendered}");
+        assert!(!rendered.contains("environments/zzz.yaml"), "{rendered}");
+        assert!(!rendered.contains(TARGET_MARKER), "{rendered}");
+        assert!(!rendered.contains(REFERENCE_MARKER), "{rendered}");
+        assert!(!rendered.contains(FIXTURE_MARKER), "{rendered}");
+        assert!(
+            !rendered.contains(&temporary.path().display().to_string()),
+            "{rendered}"
+        );
+    }
+    assert_eq!(
+        human
+            .matches("registryctl.authoring.yaml.invalid_syntax")
+            .count(),
+        1
+    );
+    assert!(!project.join(".registry-stack/build").exists());
+}
+
+#[test]
+fn project_check_collects_all_safe_missing_integration_references_without_cascades() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let project_path = project.join("registry-stack.yaml");
+    let mut authored = read_yaml(&project_path);
+    authored["integrations"]["eligibility"]["file"] =
+        serde_yaml::Value::String("integrations/zeta/missing.yaml".to_string());
+    authored["integrations"]
+        .as_mapping_mut()
+        .expect("integration map")
+        .insert(
+            serde_yaml::Value::String("alpha".to_string()),
+            serde_yaml::from_str("file: integrations/alpha/missing.yaml\n")
+                .expect("missing integration reference"),
+        );
+    write_yaml(&project_path, &authored);
+
+    let report = authoring_diagnostics(&project);
+    assert_eq!(report, authoring_diagnostics(&project));
+    assert_eq!(report.diagnostics.len(), 2, "{report:#?}");
+    assert_eq!(
+        report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.file.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "integrations/alpha/missing.yaml",
+            "integrations/zeta/missing.yaml",
+        ]
+    );
+    assert!(report.diagnostics.iter().all(|diagnostic| {
+        diagnostic.code == "registryctl.authoring.file.unreadable"
+            && diagnostic.field == Some("integrations.file")
+            && diagnostic.line.is_none()
+            && diagnostic.column.is_none()
+    }));
+    let json = serde_json::to_string(&report).expect("missing references serialize");
+    assert_eq!(
+        json.matches("registryctl.authoring.file.unreadable")
+            .count(),
+        2
+    );
+    assert!(!json.contains("project.invalid"));
+    assert!(!json.contains("environment.invalid"));
+    assert!(!json.contains(&temporary.path().display().to_string()));
+}
+
+#[test]
+fn project_check_collects_missing_entity_and_integration_references_together() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("snapshot-exact", temporary.path());
+    std::fs::remove_file(project.join("entities/people.yaml")).expect("referenced entity removes");
+    std::fs::remove_file(project.join("integrations/person-snapshot/integration.yaml"))
+        .expect("referenced integration removes");
+
+    let report = authoring_diagnostics(&project);
+    assert_eq!(report.diagnostics.len(), 2, "{report:#?}");
+    assert_eq!(
+        report
+            .diagnostics
+            .iter()
+            .map(|diagnostic| (diagnostic.file.as_str(), diagnostic.field))
+            .collect::<Vec<_>>(),
+        vec![
+            ("entities/people.yaml", Some("entities.file")),
+            (
+                "integrations/person-snapshot/integration.yaml",
+                Some("integrations.file"),
+            ),
+        ]
+    );
+    assert!(report
+        .diagnostics
+        .iter()
+        .all(|diagnostic| diagnostic.code == "registryctl.authoring.file.unreadable"));
+}
+
+#[test]
+fn project_check_unsafe_inputs_are_terminal_and_value_free() {
+    let traversal_root = tempfile::tempdir().expect("traversal temporary directory");
+    let traversal = copy_project("custom-system", traversal_root.path());
+    let project_path = traversal.join("registry-stack.yaml");
+    let mut project = read_yaml(&project_path);
+    project["integrations"]["eligibility"]["file"] =
+        serde_yaml::Value::String("../unsafe-marker/integration.yaml".to_string());
+    write_yaml(&project_path, &project);
+    let traversal_report = authoring_diagnostics(&traversal);
+    assert_eq!(traversal_report.diagnostics.len(), 1);
+    assert_eq!(
+        traversal_report.diagnostics[0].code,
+        "registryctl.authoring.path.unsafe"
+    );
+    assert!(!format!("{traversal_report:#?}").contains("unsafe-marker"));
+
+    let missing_root = tempfile::tempdir().expect("missing temporary directory");
+    let missing = copy_project("custom-system", missing_root.path());
+    std::fs::remove_file(missing.join("integrations/eligibility/integration.yaml"))
+        .expect("referenced file removes");
+    let missing_report = authoring_diagnostics(&missing);
+    assert_eq!(missing_report.diagnostics.len(), 1);
+    assert_eq!(
+        missing_report.diagnostics[0].code,
+        "registryctl.authoring.file.unreadable"
+    );
+
+    let oversized_root = tempfile::tempdir().expect("oversized temporary directory");
+    let oversized = copy_project("custom-system", oversized_root.path());
+    std::fs::write(
+        oversized.join("integrations/eligibility/integration.yaml"),
+        vec![b' '; 1024 * 1024 + 1],
+    )
+    .expect("oversized authored file writes");
+    let oversized_report = authoring_diagnostics(&oversized);
+    assert_eq!(oversized_report.diagnostics.len(), 1);
+    assert_eq!(
+        oversized_report.diagnostics[0].code,
+        "registryctl.authoring.file.too_large"
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let symlink_root = tempfile::tempdir().expect("symlink temporary directory");
+        let symlinked = copy_project("custom-system", symlink_root.path());
+        let integration = symlinked.join("integrations/eligibility/integration.yaml");
+        let target = symlinked.join("integrations/eligibility/integration-target.yaml");
+        std::fs::rename(&integration, &target).expect("integration target renames");
+        symlink(&target, &integration).expect("integration symlink creates");
+        let symlink_report = authoring_diagnostics(&symlinked);
+        assert_eq!(symlink_report.diagnostics.len(), 1);
+        assert_eq!(
+            symlink_report.diagnostics[0].code,
+            "registryctl.authoring.path.unsafe"
+        );
+    }
 }
 
 #[test]
@@ -1159,7 +1862,7 @@ fn project_integrations_share_one_logical_source_without_conflating_protocol_hel
         anchor: None,
     })
     .expect_err("two source data origins in one project fail closed");
-    assert!(format!("{error:#}").contains("same logical source data origin"));
+    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
 
     let helper_root = tempfile::tempdir().expect("protocol-helper temporary directory");
     let protocol_helper = copy_project("opencrvs", helper_root.path());
@@ -1985,8 +2688,7 @@ fn relay_authorization_bindings_follow_authored_service_topology() {
         anchor: None,
     })
     .expect_err("Relay consultation without a Notary workload must fail");
-    assert!(format!("{error:#}")
-        .contains("Notary-to-Relay connection is required exactly for Relay consultations"));
+    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
 
     let missing_records_client_root = tempfile::tempdir().expect("temporary directory");
     let missing_records_client =
@@ -2004,8 +2706,7 @@ fn relay_authorization_bindings_follow_authored_service_topology() {
         anchor: None,
     })
     .expect_err("records publication without an admitted client must fail");
-    assert!(format!("{error:#}")
-        .contains("records_api service requires at least one admitted Relay OIDC client"));
+    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
 }
 
 #[test]
@@ -2314,7 +3015,7 @@ fn api_key_interfaces_keep_values_environment_only_and_use_the_stable_auth_type(
         anchor: None,
     })
     .expect_err("environment auth-type compatibility alias must fail");
-    assert!(format!("{error:#}").contains("unknown field `type`"));
+    assert_authoring_diagnostic(&error, "registryctl.authoring.yaml.unknown_field");
 }
 
 #[test]
@@ -3158,7 +3859,8 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
             anchor: None,
         })
         .unwrap_err();
-        assert!(format!("{error:#}").contains(expected), "{name}: {error:#}");
+        let _ = (name, expected);
+        assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
     }
 }
 
@@ -3211,9 +3913,7 @@ fn hosted_notary_can_use_an_explicit_loopback_relay_connection() {
         anchor: None,
     })
     .expect_err("private-network cleartext Notary-to-Relay URL must fail");
-    assert!(format!("{error:#}").contains(
-        "Notary-to-Relay base URL must be an exact HTTPS origin or HTTP IP-loopback origin"
-    ));
+    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
 }
 
 #[test]
@@ -3255,7 +3955,7 @@ fn issuance_accepts_a_full_verification_method_kid() {
         anchor: None,
     })
     .unwrap_err();
-    assert!(format!("{error:#}").contains("issuance signing_kid must be one bounded token"));
+    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
 }
 
 #[test]
@@ -3272,12 +3972,7 @@ fn source_free_credential_profiles_fail_check_and_build() {
         anchor: None,
     })
     .expect_err("check must reject a source-free credential profile");
-    assert!(
-        format!("{check_error:#}").contains(
-            "credential profile applicant-evaluation.application-declaration selects source-free claim application-complete"
-        ),
-        "{check_error:#}"
-    );
+    assert_authoring_diagnostic(&check_error, "registryctl.authoring.project.invalid");
 
     let build_error = build_registry_project(&ProjectBuildOptions {
         project_directory: project,
@@ -3319,12 +4014,7 @@ fn credential_profiles_reject_mixed_registry_backed_and_source_free_evidence() {
         anchor: None,
     })
     .expect_err("mixed registry-backed and source-free credential evidence must fail");
-    assert!(
-        format!("{error:#}").contains(
-            "credential profile household-eligibility.household-eligibility selects source-free claim applicant-declaration"
-        ),
-        "{error:#}"
-    );
+    assert_authoring_diagnostic(&error, "registryctl.authoring.project.invalid");
 }
 
 #[test]
@@ -3347,10 +4037,7 @@ fn oid4vci_rejects_source_free_credential_selection() {
         anchor: None,
     })
     .expect_err("OID4VCI must not select source-free credential evidence");
-    assert!(
-        format!("{error:#}").contains("credential profiles require registry-backed claim evidence"),
-        "{error:#}"
-    );
+    assert_authoring_diagnostic(&error, "registryctl.authoring.project.invalid");
 }
 
 #[test]
@@ -3542,7 +4229,8 @@ fn authored_oid4vci_binding_rejects_open_or_incoherent_trust_topologies() {
             anchor: None,
         })
         .expect_err("incoherent OID4VCI binding must fail closed");
-        assert!(format!("{error:#}").contains(expected), "{name}: {error:#}");
+        let _ = (name, expected);
+        assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
     }
 
     for (name, scopes, expected) in [
@@ -3588,7 +4276,15 @@ fn authored_oid4vci_binding_rejects_open_or_incoherent_trust_topologies() {
             anchor: None,
         })
         .expect_err("OID4VCI service without exactly one access scope must fail closed");
-        assert!(format!("{error:#}").contains(expected), "{name}: {error:#}");
+        let _ = expected;
+        assert_authoring_diagnostic(
+            &error,
+            if name == "no access scope" {
+                "registryctl.authoring.project.invalid"
+            } else {
+                "registryctl.authoring.environment.invalid"
+            },
+        );
     }
 }
 
@@ -3686,9 +4382,7 @@ fn source_free_evaluation_without_credential_profiles_omits_issuance_and_signing
         anchor: None,
     })
     .expect_err("credential profiles without issuance must fail");
-    assert!(format!("{error:#}").contains(
-        "environment issuance binding is required exactly when credential profiles exist"
-    ));
+    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
 
     let unexpected_issuance_root = tempfile::tempdir().expect("temporary directory");
     let unexpected_issuance = copy_project("custom-system", unexpected_issuance_root.path());
@@ -3705,9 +4399,7 @@ fn source_free_evaluation_without_credential_profiles_omits_issuance_and_signing
         anchor: None,
     })
     .expect_err("issuance without credential profiles must fail");
-    assert!(format!("{error:#}").contains(
-        "environment issuance binding is required exactly when credential profiles exist"
-    ));
+    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
 }
 
 #[test]
@@ -3768,7 +4460,7 @@ response_fields: { eligible: eligible }
         anchor: None,
     })
     .expect_err("standards must not widen the explicit records projection");
-    assert!(format!("{error:#}").contains("must be explicitly projected"));
+    assert_authoring_diagnostic(&error, "registryctl.authoring.project.invalid");
 
     authored_project["services"]["people-records"]["api"]["projection"]
         .as_sequence_mut()
@@ -3836,7 +4528,7 @@ fn records_environment_mapping_fails_closed() {
         anchor: None,
     })
     .expect_err("non-injective physical mapping must fail");
-    assert!(format!("{error:#}").contains("must be injective"));
+    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
 
     let missing = temporary.path().join("missing");
     copy_tree(&golden("snapshot-exact"), &missing);
@@ -3853,7 +4545,7 @@ fn records_environment_mapping_fails_closed() {
         anchor: None,
     })
     .expect_err("missing logical field mapping must fail");
-    assert!(format!("{error:#}").contains("every logical field exactly once"));
+    assert_authoring_diagnostic(&error, "registryctl.authoring.environment.invalid");
 
     let physical = temporary.path().join("physical");
     copy_tree(&golden("snapshot-exact"), &physical);
@@ -3869,7 +4561,7 @@ fn records_environment_mapping_fails_closed() {
         anchor: None,
     })
     .expect_err("physical provider member in logical records must fail");
-    assert!(format!("{error:#}").contains("unknown field"));
+    assert_authoring_diagnostic(&error, "registryctl.authoring.yaml.unknown_field");
 }
 
 #[test]
@@ -4161,7 +4853,7 @@ fn authored_request_literals_cannot_smuggle_secret_material() {
     })
     .expect_err("secret-shaped request field must fail closed");
     let diagnostic = format!("{error:#}");
-    assert!(diagnostic.contains("cannot carry credential material"));
+    assert_authoring_diagnostic(&error, "registryctl.authoring.integration.invalid");
     assert!(!diagnostic.contains(SECRET_SENTINEL));
     assert!(!project.join(".registry-stack/build").exists());
 
@@ -4182,7 +4874,7 @@ fn authored_request_literals_cannot_smuggle_secret_material() {
         })
         .expect_err("credential-bearing header must fail closed");
         let diagnostic = format!("{error:#}");
-        assert!(diagnostic.contains("closed non-credential allow-list"));
+        assert_authoring_diagnostic(&error, "registryctl.authoring.integration.invalid");
         assert!(!diagnostic.contains(SECRET_SENTINEL));
         assert!(!project.join(".registry-stack/build").exists());
     }
