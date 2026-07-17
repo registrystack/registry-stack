@@ -45,7 +45,9 @@ pub(super) async fn additive_api_key_and_oidc_authenticate_on_the_same_router() 
         "scope": "farmer_registry:evidence_verification",
     }));
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let denied = server.get("/v1/claims").await;
@@ -164,7 +166,9 @@ pub(super) async fn oidc_metrics_scope_can_scrape_metrics_but_non_metrics_cannot
         "scope": "metrics_read",
     }));
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let non_metrics = server
@@ -202,6 +206,7 @@ pub(super) async fn jwks_is_public_and_contains_no_private_members() {
         &idp.issuer(),
         &idp.jwks_uri(),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -232,6 +237,7 @@ pub(super) async fn oidc_subject_access_evaluates_renders_and_audits_access_mode
         &idp.issuer(),
         &idp.jwks_uri(),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();

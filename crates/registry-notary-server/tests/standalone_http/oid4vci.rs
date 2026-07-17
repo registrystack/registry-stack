@@ -21,6 +21,7 @@ pub(super) async fn oid4vci_metadata_offer_and_nonce_are_public() {
         &idp.issuer(),
         &idp.jwks_uri(),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -95,7 +96,9 @@ pub(super) async fn oid4vci_nonce_is_rate_limited_before_reservation() {
         .subject_access
         .rate_limits
         .invalid_token_per_client_address_per_minute = 2;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     server
@@ -145,7 +148,9 @@ pub(super) async fn oid4vci_type_metadata_is_public_and_matches_configured_vct()
         "127.0.0.1".parse().expect("ipv4 loopback parses"),
         "::1".parse().expect("ipv6 loopback parses"),
     ];
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     // Serve with connect-info so the forwarded-host trust gate can see the
     // loopback peer; a plain `Router` over http_transport injects no
     // `ConnectInfo`, which would make the trust gate reject every request.
@@ -253,7 +258,9 @@ pub(super) async fn oid4vci_type_metadata_normalizes_forwarded_scheme_and_host_c
         "127.0.0.1".parse().expect("ipv4 loopback parses"),
         "::1".parse().expect("ipv6 loopback parses"),
     ];
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     // Serve with connect-info so the forwarded-host trust gate can see the
     // loopback peer; a plain `Router` over http_transport injects no
     // `ConnectInfo`, which would make the trust gate reject every request.
@@ -301,7 +308,9 @@ pub(super) async fn oid4vci_type_metadata_supports_nested_paths_and_public_404s(
         .get_mut("person_is_alive_sd_jwt")
         .expect("credential configuration exists")
         .vct = nested_vct.to_string();
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let nested = server
@@ -362,7 +371,9 @@ pub(super) async fn oid4vci_type_metadata_supports_path_prefixed_issuer_behind_s
         "127.0.0.1".parse().expect("ipv4 loopback parses"),
         "::1".parse().expect("ipv6 loopback parses"),
     ];
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     // Serve with connect-info so the forwarded-host trust gate can see the
     // loopback peer; a plain `Router` over http_transport injects no
     // `ConnectInfo`, which would make the trust gate reject every request.
@@ -398,7 +409,9 @@ pub(super) async fn oid4vci_type_metadata_is_not_served_when_oid4vci_is_disabled
         &idp.jwks_uri(),
     );
     config.oid4vci.enabled = false;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     server
@@ -431,7 +444,9 @@ pub(super) async fn oid4vci_type_metadata_well_known_is_public_and_matches_confi
         "127.0.0.1".parse().expect("ipv4 loopback parses"),
         "::1".parse().expect("ipv6 loopback parses"),
     ];
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     // Serve with connect-info so the forwarded-host trust gate can see the
     // loopback peer; a plain `Router` over http_transport injects no
     // `ConnectInfo`, which would make the trust gate reject every request.
@@ -500,7 +515,9 @@ pub(super) async fn oid4vci_type_metadata_well_known_supports_nested_paths_and_p
         .get_mut("person_is_alive_sd_jwt")
         .expect("credential configuration exists")
         .vct = nested_vct.to_string();
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let nested = server
@@ -537,7 +554,9 @@ pub(super) async fn oid4vci_type_metadata_well_known_is_not_served_when_oid4vci_
         &idp.jwks_uri(),
     );
     config.oid4vci.enabled = false;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     server
@@ -565,7 +584,9 @@ pub(super) async fn oid4vci_type_metadata_well_known_keeps_protected_routes_auth
         &idp.jwks_uri(),
     );
     enable_credential_status(&mut config);
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     server
@@ -601,7 +622,9 @@ pub(super) async fn oid4vci_type_metadata_well_known_serves_wallet_cors() {
         &idp.jwks_uri(),
     );
     config.server.cors.allowed_origins = vec!["https://ops.example.test".to_string()];
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let type_metadata = server
@@ -659,7 +682,9 @@ pub(super) async fn public_probe_routes_remain_public_except_metrics() {
         &idp.jwks_uri(),
     );
     enable_credential_status(&mut config);
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     server.get("/healthz").await.assert_status_ok();
@@ -730,7 +755,9 @@ pub(super) async fn manifest_public_protected_routes_are_mounted_behind_auth() {
         &idp.jwks_uri(),
     );
     enable_credential_status(&mut config);
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     for endpoint in manifest.endpoints.iter().filter(|endpoint| {
@@ -780,7 +807,9 @@ pub(super) async fn service_document_advertises_credential_status_when_enabled()
         audit_path.to_str().expect("audit path is UTF-8"),
     );
     enable_credential_status(&mut config);
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -837,9 +866,11 @@ pub(super) async fn credential_status_admin_edges_return_expected_http_statuses(
         scopes: vec!["registry_notary:admin".to_string()],
         authorization_details: None,
     });
-    let enabled_server = TestServer::builder()
-        .http_transport()
-        .build(standalone_router(enabled_config).expect("enabled router builds"));
+    let enabled_server = TestServer::builder().http_transport().build(
+        standalone_router(enabled_config)
+            .await
+            .expect("enabled router builds"),
+    );
 
     let invalid_status = enabled_server
         .post("/admin/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
@@ -877,9 +908,11 @@ pub(super) async fn credential_status_admin_edges_return_expected_http_statuses(
             scopes: vec!["registry_notary:admin".to_string()],
             authorization_details: None,
         });
-    let disabled_server = TestServer::builder()
-        .http_transport()
-        .build(standalone_router(disabled_config).expect("disabled router builds"));
+    let disabled_server = TestServer::builder().http_transport().build(
+        standalone_router(disabled_config)
+            .await
+            .expect("disabled router builds"),
+    );
 
     let disabled = disabled_server
         .post("/admin/v1/credentials/urn:ulid:01HX0000000000000000000000/status")
@@ -974,9 +1007,11 @@ pub(super) async fn admin_scope_is_instance_global_across_credential_profiles() 
         },
     );
 
-    let server = TestServer::builder()
-        .http_transport()
-        .build(standalone_router(config).expect("standalone router builds"));
+    let server = TestServer::builder().http_transport().build(
+        standalone_router(config)
+            .await
+            .expect("standalone router builds"),
+    );
 
     // Credential ids standing in for credentials issued under each profile.
     // The admin credential-status route takes no profile parameter, so this
@@ -1027,6 +1062,7 @@ pub(super) async fn disabled_oid4vci_credential_route_stays_hidden_for_malformed
         &idp.issuer(),
         &idp.jwks_uri(),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -1075,7 +1111,9 @@ pub(super) async fn oid4vci_credential_route_issues_holder_bound_sd_jwt() {
         .expect("person-is-alive claim exists")
         .formats
         .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let missing_status = server
@@ -1322,7 +1360,9 @@ pub(super) async fn oid4vci_field_projection_issues_separate_disclosures() {
         &idp.jwks_uri(),
     );
     enable_oid4vci_field_projection(&mut config);
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let metadata = server
@@ -1435,7 +1475,9 @@ pub(super) async fn oid4vci_credential_route_rejects_replayed_nonce() {
         .expect("person-is-alive claim exists")
         .formats
         .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let nonce = server
@@ -1527,7 +1569,9 @@ pub(super) async fn oid4vci_malformed_proof_is_rejected_before_oidc_auth() {
         .as_mut()
         .expect("oidc config exists")
         .userinfo_endpoint = Some(userinfo_endpoint);
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({

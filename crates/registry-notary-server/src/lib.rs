@@ -38,7 +38,7 @@ pub(crate) use problem::PROBLEM_TYPE_BASE_URL;
 
 pub use api::{
     router, EvidenceAuditContext, EvidenceErrorCodeContext, EvidenceIssuerResolver,
-    RegistryNotaryApiState,
+    RegistryNotaryApiState, AUDIT_CHAIN_INCONSISTENT_CODE,
 };
 pub use machine_quota::{MachineQuotaExceeded, MachineQuotaLimiter};
 pub use openapi::openapi_document;

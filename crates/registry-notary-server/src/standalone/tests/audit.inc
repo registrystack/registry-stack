@@ -216,6 +216,192 @@
     }
 
     #[tokio::test]
+    async fn eager_audit_verification_accepts_valid_retained_chain() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let path = tmp.path().join("audit.jsonl");
+        {
+            let audit = AuditPipeline::for_sink_dev_only(Arc::new(JsonlFileSink::new(&path)));
+            audit.emit(&audit_event()).await.expect("audit write succeeds");
+        }
+
+        let audit = AuditPipeline::for_sink_dev_only(Arc::new(JsonlFileSink::new(&path)));
+        audit
+            .verify_chain_eager()
+            .await
+            .expect("valid retained chain verifies");
+        assert!(audit.chain_healthy());
+    }
+
+    #[tokio::test]
+    async fn integrity_failure_latches_audit_readiness_monotonically() {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        let path = tmp.path().join("audit.jsonl");
+        {
+            let audit = AuditPipeline::for_sink_dev_only(Arc::new(JsonlFileSink::new(&path)));
+            audit.emit(&audit_event()).await.expect("audit write succeeds");
+        }
+        let original = std::fs::read_to_string(&path).expect("audit reads");
+        std::fs::write(&path, original.replace("allowed", "tampered"))
+            .expect("audit is tampered");
+
+        let audit = AuditPipeline::for_sink_dev_only(Arc::new(JsonlFileSink::new(&path)));
+        let error = audit
+            .verify_chain_eager()
+            .await
+            .expect_err("tampered chain fails verification");
+        assert!(matches!(error, AuditError::ChainVerification(_)));
+        assert!(!audit.chain_healthy());
+
+        std::fs::write(&path, original).expect("valid retained chain is restored");
+        audit
+            .verify_chain_eager()
+            .await
+            .expect("restored chain verifies");
+        assert!(
+            !audit.chain_healthy(),
+            "integrity failure remains latched until process restart"
+        );
+    }
+
+    #[derive(Default)]
+    struct TransientTailFailureSink {
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl PlatformAuditSink for TransientTailFailureSink {
+        async fn write(
+            &self,
+            _envelope: &registry_platform_audit::AuditEnvelope,
+        ) -> Result<(), AuditError> {
+            Ok(())
+        }
+
+        async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(None)
+        }
+
+        async fn tail_hash_with_hasher(
+            &self,
+            _hasher: &registry_platform_audit::AuditChainHasher,
+        ) -> Result<Option<[u8; 32]>, AuditError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(AuditError::Io(std::io::Error::other(
+                    "transient retained-chain read failure",
+                )));
+            }
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_eager_verification_failure_recovers_without_poisoning_readiness() {
+        let audit = AuditPipeline::for_sink_dev_only(Arc::new(TransientTailFailureSink::default()));
+
+        let error = audit
+            .verify_chain_eager()
+            .await
+            .expect_err("first retained-chain read fails");
+        assert!(matches!(error, AuditError::Io(_)));
+        assert!(
+            audit.chain_healthy(),
+            "I/O failure must not poison audit readiness"
+        );
+
+        audit
+            .verify_chain_eager()
+            .await
+            .expect("later retained-chain read recovers");
+        assert!(audit.chain_healthy());
+    }
+
+    #[derive(Default)]
+    struct TransientJsonWriteFailureSink {
+        writes: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl PlatformAuditSink for TransientJsonWriteFailureSink {
+        async fn write(
+            &self,
+            _envelope: &registry_platform_audit::AuditEnvelope,
+        ) -> Result<(), AuditError> {
+            if self.writes.fetch_add(1, Ordering::SeqCst) == 0 {
+                let error = serde_json::from_str::<Value>("{")
+                    .expect_err("malformed JSON creates a test error");
+                return Err(AuditError::Json(error));
+            }
+            Ok(())
+        }
+
+        async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(None)
+        }
+
+        async fn tail_hash_with_hasher(
+            &self,
+            _hasher: &registry_platform_audit::AuditChainHasher,
+        ) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_json_audit_failure_recovers_without_poisoning_readiness() {
+        let audit =
+            AuditPipeline::for_sink_dev_only(Arc::new(TransientJsonWriteFailureSink::default()));
+
+        let error = audit
+            .emit(&audit_event())
+            .await
+            .expect_err("first audit write reports a JSON failure");
+        assert!(matches!(error, AuditError::Json(_)));
+        assert!(audit.chain_healthy());
+
+        audit
+            .emit(&audit_event())
+            .await
+            .expect("later audit write recovers");
+        assert!(audit.chain_healthy());
+    }
+
+    struct ForkFailureSink;
+
+    #[async_trait]
+    impl PlatformAuditSink for ForkFailureSink {
+        async fn write(
+            &self,
+            _envelope: &registry_platform_audit::AuditEnvelope,
+        ) -> Result<(), AuditError> {
+            Err(AuditError::ChainForkDetected {
+                expected: registry_platform_audit::OptionalHashHex(None),
+                found: registry_platform_audit::OptionalHashHex(Some([7; 32])),
+            })
+        }
+
+        async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(None)
+        }
+
+        async fn tail_hash_with_hasher(
+            &self,
+            _hasher: &registry_platform_audit::AuditChainHasher,
+        ) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn write_time_chain_fork_latches_audit_readiness() {
+        let audit = AuditPipeline::for_sink_dev_only(Arc::new(ForkFailureSink));
+        audit
+            .emit(&audit_event())
+            .await
+            .expect_err("forked append is rejected");
+        assert!(!audit.chain_healthy());
+    }
+
+    #[tokio::test]
     async fn audit_pipeline_file_sink_uses_configured_rotation() {
         let tmp = tempfile::TempDir::new().expect("tempdir");
         let path = tmp.path().join("audit.jsonl");

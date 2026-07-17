@@ -20,6 +20,7 @@ pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_red
         &idp.issuer(),
         &idp.jwks_uri(),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
@@ -271,7 +272,9 @@ pub(super) async fn direct_credentials_issue_creates_retrievable_status_record()
         .expect("person-is-alive claim exists")
         .formats
         .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -388,7 +391,9 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
         .push("application/dc+sd-jwt".to_string());
     assert!(config.subject_access.allowed_operations.evaluate);
     assert!(!config.subject_access.allowed_operations.issue_credential);
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -533,7 +538,9 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
         .expect("person-is-alive claim exists")
         .formats
         .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -783,7 +790,9 @@ pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacte
         .expect("person-is-alive claim exists")
         .formats
         .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -940,7 +949,9 @@ pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_bound
         .expect("person-is-alive claim exists")
         .formats
         .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -1078,7 +1089,9 @@ pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_red
         .expect("person-is-alive claim exists")
         .formats
         .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -1204,7 +1217,9 @@ pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted()
         .expect("person-is-alive claim exists")
         .formats
         .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -1385,6 +1400,7 @@ pub(super) async fn subject_access_subject_mismatch_audit_names_token_claim_not_
         &idp.issuer(),
         &idp.jwks_uri(),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();

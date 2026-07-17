@@ -7,12 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `registry-notary audit quarantine` as an offline recovery path for an
+  inconsistent file-backed audit chain. The command takes the existing
+  single-writer lock, retains the corrupt chain under a timestamped suffix,
+  and starts a keyed `audit.chain.break` segment linked to the last verified
+  local record.
+
 ### Changed
 
 - BREAKING: configuration `${VAR}` expansion now rejects environment variables
   that are unset or empty. `${VAR:-fallback}` uses its fallback for either
   state, `${VAR:-}` explicitly expands to empty, and `${VAR:?message}` reports
   its message for either state. Whitespace-only values remain non-empty.
+- Notary now verifies its retained audit chain during runtime activation.
+  Confirmed chain forks and verification failures latch `/ready` at `503` with
+  the bounded code `audit.chain.inconsistent` until offline recovery and a
+  process restart. `/healthz` remains `200`; transient I/O, JSON, secret, and
+  other operational failures do not permanently poison readiness. Governed
+  signed-bundle acceptance remains write-before-persist and write-before-serve.
+  Embedders must now await `standalone_router`; all router construction paths
+  reject runtimes that have not attempted retained-chain verification.
 - Omitted claim `formats` now defaults to the canonical
   `application/vnd.registry-notary.claim-result+json` evaluation response
   format. An explicitly empty `formats: []` is rejected at configuration load

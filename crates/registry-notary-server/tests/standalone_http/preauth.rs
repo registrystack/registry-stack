@@ -22,6 +22,7 @@ pub(super) async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing()
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -76,6 +77,7 @@ pub(super) async fn preauth_offer_start_returns_429_when_login_state_store_is_fu
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -122,7 +124,9 @@ pub(super) async fn preauth_offer_start_requests_userinfo_subject_binding_claim_
         .as_mut()
         .expect("oidc config exists")
         .userinfo_endpoint = Some(format!("{}/userinfo", token_upstream.url()));
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let start = server
@@ -168,6 +172,7 @@ pub(super) async fn preauth_offer_start_rejects_unknown_configuration_id() {
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -193,6 +198,7 @@ pub(super) async fn preauth_callback_mints_pre_authorized_offer_with_tx_code() {
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -232,7 +238,9 @@ pub(super) async fn preauth_callback_omits_tx_code_when_optional() {
         .subject_access
         .rate_limits
         .tx_code_attempts_per_code_per_minute = 0;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let page = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
@@ -273,6 +281,7 @@ pub(super) async fn preauth_callback_accepts_esignet_id_token_without_typ_header
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -397,7 +406,9 @@ pub(super) async fn preauth_client_assertion_is_rs256_signed_when_rp_key_is_rsa(
             password_env: String::new(),
         },
     );
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let (code, _pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
@@ -459,6 +470,7 @@ pub(super) async fn preauth_token_endpoint_issues_access_token_and_c_nonce() {
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -614,7 +626,9 @@ pub(super) async fn preauth_callback_binds_subject_from_userinfo_when_claim_sour
         .as_mut()
         .expect("oidc config exists")
         .userinfo_endpoint = Some(format!("{}/userinfo", token_upstream.url()));
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     // The id_token (minted by drive_offer_to_code) carries no individual_id;
@@ -670,7 +684,9 @@ pub(super) async fn preauth_callback_denies_when_userinfo_lacks_subject_binding_
         .as_mut()
         .expect("oidc config exists")
         .userinfo_endpoint = Some(format!("{}/userinfo", token_upstream.url()));
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     // userinfo JWS bound to the subject but without the binding claim.
@@ -737,6 +753,7 @@ pub(super) async fn preauth_code_is_single_use() {
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -764,6 +781,7 @@ pub(super) async fn preauth_token_rejects_wrong_and_missing_tx_code() {
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -813,7 +831,9 @@ pub(super) async fn preauth_token_accepts_missing_tx_code_when_optional() {
         .subject_access
         .rate_limits
         .tx_code_attempts_per_code_per_minute = 0;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let page = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
@@ -860,7 +880,9 @@ pub(super) async fn preauth_signed_required_policy_and_lockout_survive_optional_
         .subject_access
         .rate_limits
         .tx_code_attempts_per_code_per_minute = 2;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let issued = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
@@ -895,6 +917,7 @@ pub(super) async fn preauth_signed_optional_policy_survives_required_runtime_con
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -925,6 +948,7 @@ pub(super) async fn preauth_token_rejects_missing_or_non_boolean_signed_tx_code_
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -969,7 +993,9 @@ pub(super) async fn preauth_repeated_wrong_pins_lock_the_code() {
         .subject_access
         .rate_limits
         .tx_code_attempts_per_code_per_minute = 2;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
@@ -1004,6 +1030,7 @@ pub(super) async fn preauth_token_rejects_wrong_and_missing_grant_cleanly() {
         &format!("{}/authorize", idp.issuer()),
         &format!("{}/token", token_upstream.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -1050,7 +1077,9 @@ pub(super) async fn preauth_random_code_flood_is_throttled_per_client_address() 
         .subject_access
         .rate_limits
         .invalid_token_per_client_address_per_minute = 2;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     // Random codes from one socket peer: caller-supplied forwarding headers do
@@ -1088,6 +1117,7 @@ pub(super) async fn preauth_disabled_returns_404_and_offer_is_authorization_code
         &idp.issuer(),
         &idp.jwks_uri(),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -1242,6 +1272,7 @@ pub(super) async fn preauth_trust_anchor_rejects_wrong_key_and_credential_key_no
         &idp,
         &token_upstream,
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -1292,7 +1323,9 @@ pub(super) async fn preauth_transaction_token_jti_denials_are_stable_and_redacte
         &token_upstream,
     );
     config.auth.access_token_signing.token_typ = NOTARY_TRANSACTION_TOKEN_JWT_TYP.to_string();
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let missing_jti_token = mint_notary_access_token(
@@ -1408,6 +1441,7 @@ pub(super) async fn preauth_trust_anchor_isolates_esignet_and_notary_paths() {
         &idp,
         &token_upstream,
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -1450,6 +1484,7 @@ pub(super) async fn preauth_existing_esignet_token_still_authenticates_credentia
         &idp,
         &token_upstream,
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -1489,6 +1524,7 @@ pub(super) async fn preauth_notary_access_token_with_empty_authorization_details
         &idp,
         &token_upstream,
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -1541,6 +1577,7 @@ pub(super) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
         &idp,
         &token_upstream,
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -1700,6 +1737,7 @@ pub(super) async fn preauth_credential_subject_and_evaluation_match_esignet_toke
         &baseline_idp,
         &baseline_token_upstream,
     ))
+    .await
     .expect("baseline router builds");
     let baseline_server = TestServer::builder().http_transport().build(baseline_app);
 
@@ -1759,6 +1797,7 @@ pub(super) async fn preauth_credential_subject_and_evaluation_match_esignet_toke
         &preauth_idp,
         &preauth_token_upstream,
     ))
+    .await
     .expect("preauth router builds");
     let preauth_server = TestServer::builder().http_transport().build(preauth_app);
 
@@ -1865,6 +1904,7 @@ pub(super) async fn preauth_callback_and_token_audit_events_carry_only_hashes() 
         &idp,
         &token_upstream,
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 

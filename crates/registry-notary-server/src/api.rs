@@ -26,6 +26,7 @@ use status::*;
 
 pub(crate) use admin::{ConfigApplyPosture, ConfigEmergencyPosture};
 pub(crate) use audit::{evidence_error_response, evidence_error_response_with_request_id};
+pub use probes::AUDIT_CHAIN_INCONSISTENT_CODE;
 #[cfg(test)]
 use state::{ApiRuntimeSnapshot, IssuerRuntimeBundle};
 pub use state::{EvidenceIssuerResolver, RegistryNotaryApiState};
