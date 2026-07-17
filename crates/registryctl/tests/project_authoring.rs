@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 
 use registryctl::{
     add_config_anchor_key, build_registry_project, check_registry_project, init_config_anchor,
-    init_registry_project, render_project_authoring_diagnostics, sign_config_bundle,
-    test_registry_project, test_registry_project_selected, verify_config_bundle_cli,
-    BundleSignOptions, ProjectAuthoringDiagnostics, ProjectBuildOptions, ProjectCheckOptions,
-    ProjectInitOptions, ProjectStarter, ProjectTestOptions, ProjectTestSelection,
+    init_registry_project, render_project_authoring_diagnostics, setup_registry_project_editor,
+    sign_config_bundle, test_registry_project, test_registry_project_selected,
+    verify_config_bundle_cli, BundleSignOptions, InitSource, ProjectAuthoringDiagnostics,
+    ProjectBuildOptions, ProjectCheckOptions, ProjectEditorSetupOptions, ProjectInitOptions,
+    ProjectSchemaKind, ProjectStarter, ProjectTestOptions, ProjectTestSelection,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -1457,13 +1458,30 @@ fn all_advertised_starters_initialize_and_test_without_source_access() {
         })
         .expect("starter initializes");
         assert_eq!(initialized.status, "initialized");
-        let provenance = initialized
-            .explanation
-            .as_ref()
-            .expect("starter initialization reports provenance");
-        assert_eq!(provenance["state"], "matches");
-        assert!(provenance["id"].as_str().is_some());
-        assert_eq!(provenance["release"], env!("CARGO_PKG_VERSION"));
+        let InitSource::Starter {
+            id,
+            release,
+            content_state,
+            ..
+        } = initialized.source
+        else {
+            panic!("starter initialization reports starter provenance");
+        };
+        assert!(!id.is_empty());
+        assert_eq!(release, env!("CARGO_PKG_VERSION"));
+        assert_eq!(content_state, "matches");
+        assert_eq!(
+            initialized.artifacts.editor_manifest,
+            Some(project.join(".registry-stack-editor/manifest.json"))
+        );
+        for path in [
+            ".registry-stack-editor/manifest.json",
+            ".vscode/settings.json",
+            ".vscode/extensions.json",
+            ".zed/settings.json",
+        ] {
+            assert!(project.join(path).is_file(), "{starter:?} missing {path}");
+        }
         let tested = test_registry_project(&ProjectTestOptions {
             project_directory: project,
             environment: None,
@@ -1543,6 +1561,371 @@ fn malformed_target_attribute_mapping_preserves_typed_authoring_diagnostics() {
     assert_eq!(
         report.diagnostics[0].schema_hint,
         Some("registryctl authoring schema --kind project > project.schema.json")
+    );
+}
+
+#[test]
+fn editor_setup_writes_exact_local_schema_mappings_and_manifest() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("editor-project");
+    std::fs::create_dir(&project).expect("project directory creates");
+    std::fs::write(project.join("registry-stack.yaml"), b"[not: valid: yaml")
+        .expect("invalid authored YAML marker writes");
+
+    let report = setup_registry_project_editor(&ProjectEditorSetupOptions {
+        project_directory: project.clone(),
+    })
+    .expect("editor setup does not require valid authored YAML");
+    assert_eq!(report.status, "configured");
+    assert_eq!(report.files.len(), 9);
+
+    let expected_mappings = ProjectSchemaKind::ALL
+        .into_iter()
+        .map(|kind| {
+            (
+                format!("./.registry-stack-editor/schemas/{}", kind.filename()),
+                kind.file_glob().to_string(),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let vscode: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(project.join(".vscode/settings.json")).expect("VS Code settings read"),
+    )
+    .expect("VS Code settings are JSON");
+    let zed: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(project.join(".zed/settings.json")).expect("Zed settings read"),
+    )
+    .expect("Zed settings are JSON");
+    let expected_mappings = serde_json::to_value(&expected_mappings).expect("mappings serialize");
+    assert_eq!(vscode["yaml.schemas"], expected_mappings);
+    assert_eq!(
+        zed.pointer("/lsp/yaml-language-server/settings/yaml/schemas")
+            .expect("Zed YAML schema settings use the required nested shape"),
+        &expected_mappings
+    );
+    assert_eq!(
+        vscode.as_object().expect("VS Code settings object").len(),
+        1,
+        "SchemaStore and formatter settings must remain untouched"
+    );
+
+    let extensions: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(project.join(".vscode/extensions.json")).expect("extensions read"),
+    )
+    .expect("extensions are JSON");
+    assert_eq!(
+        extensions,
+        serde_json::json!({ "recommendations": ["redhat.vscode-yaml"] })
+    );
+
+    let schema_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/project-authoring");
+    for kind in ProjectSchemaKind::ALL {
+        let generated = std::fs::read(
+            project
+                .join(".registry-stack-editor/schemas")
+                .join(kind.filename()),
+        )
+        .expect("generated schema reads");
+        assert_eq!(generated, kind.document().as_bytes(), "{kind:?}");
+        assert_eq!(
+            generated,
+            std::fs::read(schema_root.join(kind.filename())).expect("source schema reads"),
+            "{kind:?} must use the exact release schema bytes"
+        );
+    }
+
+    let manifest: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(project.join(".registry-stack-editor/manifest.json"))
+            .expect("manifest reads"),
+    )
+    .expect("manifest is JSON");
+    assert_eq!(
+        manifest["format"], "registry.stack.editor-manifest",
+        "manifest format is a stable refresh boundary"
+    );
+    assert_eq!(manifest["version"], 1);
+    assert_eq!(manifest["registryctl_version"], env!("CARGO_PKG_VERSION"));
+    let schemas = manifest["schemas"].as_array().expect("manifest schemas");
+    assert_eq!(schemas.len(), ProjectSchemaKind::ALL.len());
+    for kind in ProjectSchemaKind::ALL {
+        let relative = format!("schemas/{}", kind.filename());
+        let schema = schemas
+            .iter()
+            .find(|schema| schema["path"] == relative)
+            .expect("schema has one manifest entry");
+        assert_eq!(schema["file_glob"], kind.file_glob());
+        assert_eq!(
+            schema["sha256"],
+            format!(
+                "sha256:{}",
+                hex::encode(Sha256::digest(kind.document().as_bytes()))
+            )
+        );
+    }
+
+    for settings_path in [
+        ".registry-stack-editor/manifest.json",
+        ".vscode/settings.json",
+        ".vscode/extensions.json",
+        ".zed/settings.json",
+    ] {
+        let contents =
+            std::fs::read_to_string(project.join(settings_path)).expect("generated JSON reads");
+        assert!(!contents.contains(&project.display().to_string()));
+        assert!(!contents.contains("$HOME"));
+        assert!(!contents.contains("secret"));
+        assert!(!contents.contains("\"tasks\""));
+        assert!(!contents.contains("\"command\""));
+    }
+}
+
+#[test]
+fn editor_setup_refreshes_a_verified_prior_schema_bundle() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("editor-project");
+    std::fs::create_dir(&project).expect("project directory creates");
+    std::fs::write(project.join("registry-stack.yaml"), b"invalid-yaml: [")
+        .expect("project marker writes");
+    let options = ProjectEditorSetupOptions {
+        project_directory: project.clone(),
+    };
+    setup_registry_project_editor(&options).expect("initial editor setup passes");
+
+    let schema_path = project.join(".registry-stack-editor/schemas/project.schema.json");
+    let mut prior_schema = std::fs::read(&schema_path).expect("schema reads");
+    prior_schema.extend_from_slice(b"\n");
+    std::fs::write(&schema_path, &prior_schema).expect("prior schema writes");
+    let manifest_path = project.join(".registry-stack-editor/manifest.json");
+    let mut prior_manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).expect("manifest reads"))
+            .expect("manifest parses");
+    prior_manifest["registryctl_version"] = serde_json::json!("0.9.0");
+    let schema = prior_manifest["schemas"]
+        .as_array_mut()
+        .expect("manifest schemas")
+        .iter_mut()
+        .find(|schema| schema["path"] == "schemas/project.schema.json")
+        .expect("project schema manifest entry");
+    schema["sha256"] = serde_json::json!(format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(&prior_schema))
+    ));
+    let mut prior_manifest_bytes =
+        serde_json::to_vec_pretty(&prior_manifest).expect("prior manifest serializes");
+    prior_manifest_bytes.push(b'\n');
+    std::fs::write(&manifest_path, prior_manifest_bytes).expect("prior manifest writes");
+
+    setup_registry_project_editor(&options).expect("verified prior bundle refreshes");
+    assert_eq!(
+        std::fs::read(&schema_path).expect("refreshed schema reads"),
+        ProjectSchemaKind::Project.document().as_bytes()
+    );
+    let refreshed: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).expect("refreshed manifest reads"))
+            .expect("refreshed manifest parses");
+    assert_eq!(refreshed["registryctl_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        refreshed["schemas"]
+            .as_array()
+            .expect("refreshed schemas")
+            .iter()
+            .find(|schema| schema["path"] == "schemas/project.schema.json")
+            .expect("refreshed project schema")["sha256"],
+        format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(
+                ProjectSchemaKind::Project.document().as_bytes()
+            ))
+        )
+    );
+}
+
+#[test]
+fn editor_setup_refuses_tampered_schema_or_manifest_evidence() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+
+    let tampered_schema_project = temporary.path().join("tampered-schema");
+    std::fs::create_dir(&tampered_schema_project).expect("project directory creates");
+    std::fs::write(
+        tampered_schema_project.join("registry-stack.yaml"),
+        b"invalid-yaml: [",
+    )
+    .expect("project marker writes");
+    let schema_options = ProjectEditorSetupOptions {
+        project_directory: tampered_schema_project.clone(),
+    };
+    let schema_report =
+        setup_registry_project_editor(&schema_options).expect("initial editor setup passes");
+    let schema_path =
+        tampered_schema_project.join(".registry-stack-editor/schemas/project.schema.json");
+    let mut tampered_schema = std::fs::read(&schema_path).expect("schema reads");
+    tampered_schema.extend_from_slice(b"tampered");
+    std::fs::write(&schema_path, &tampered_schema).expect("tampered schema writes");
+    let before_schema_failure = schema_report
+        .files
+        .iter()
+        .map(|path| {
+            (
+                path.clone(),
+                std::fs::read(tampered_schema_project.join(path)).expect("managed file reads"),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let error = setup_registry_project_editor(&schema_options)
+        .expect_err("schema changed without its manifest must be preserved");
+    assert!(
+        format!("{error:#}").contains("project.schema.json"),
+        "{error:#}"
+    );
+    for (path, expected) in before_schema_failure {
+        assert_eq!(
+            std::fs::read(tampered_schema_project.join(path)).expect("managed file still reads"),
+            expected
+        );
+    }
+
+    let tampered_manifest_project = temporary.path().join("tampered-manifest");
+    std::fs::create_dir(&tampered_manifest_project).expect("project directory creates");
+    std::fs::write(
+        tampered_manifest_project.join("registry-stack.yaml"),
+        b"invalid-yaml: [",
+    )
+    .expect("project marker writes");
+    let manifest_options = ProjectEditorSetupOptions {
+        project_directory: tampered_manifest_project.clone(),
+    };
+    setup_registry_project_editor(&manifest_options).expect("initial editor setup passes");
+    let manifest_path = tampered_manifest_project.join(".registry-stack-editor/manifest.json");
+    let mut tampered_manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).expect("manifest reads"))
+            .expect("manifest parses");
+    tampered_manifest["registryctl_version"] = serde_json::json!("0.9.0");
+    tampered_manifest["schemas"][0]["sha256"] =
+        serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+    let mut tampered_manifest_bytes =
+        serde_json::to_vec_pretty(&tampered_manifest).expect("tampered manifest serializes");
+    tampered_manifest_bytes.push(b'\n');
+    std::fs::write(&manifest_path, &tampered_manifest_bytes).expect("tampered manifest writes");
+    let project_schema_before = std::fs::read(
+        tampered_manifest_project.join(".registry-stack-editor/schemas/project.schema.json"),
+    )
+    .expect("project schema reads");
+    let error = setup_registry_project_editor(&manifest_options)
+        .expect_err("manifest hash without matching schema must be preserved");
+    assert!(format!("{error:#}").contains("manifest hash"), "{error:#}");
+    assert_eq!(
+        std::fs::read(&manifest_path).expect("tampered manifest still reads"),
+        tampered_manifest_bytes
+    );
+    assert_eq!(
+        std::fs::read(
+            tampered_manifest_project.join(".registry-stack-editor/schemas/project.schema.json")
+        )
+        .expect("project schema still reads"),
+        project_schema_before
+    );
+}
+
+#[test]
+fn editor_setup_is_byte_identical_on_explicit_rerun() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("editor-project");
+    std::fs::create_dir(&project).expect("project directory creates");
+    std::fs::write(
+        project.join("registry-stack.yaml"),
+        b"invalid-yaml-is-accepted: [",
+    )
+    .expect("project marker writes");
+    let options = ProjectEditorSetupOptions {
+        project_directory: project.clone(),
+    };
+    let first = setup_registry_project_editor(&options).expect("initial editor setup passes");
+    let before = first
+        .files
+        .iter()
+        .map(|path| {
+            (
+                path.clone(),
+                std::fs::read(project.join(path)).expect("generated file reads"),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    let second = setup_registry_project_editor(&options).expect("identical rerun passes");
+    assert_eq!(second.files, first.files);
+    for (path, expected) in before {
+        assert_eq!(
+            std::fs::read(project.join(&path)).expect("rerun output reads"),
+            expected,
+            "{path} changed on rerun"
+        );
+    }
+}
+
+#[test]
+fn editor_setup_conflicts_are_preflighted_without_partial_writes() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("editor-project");
+    std::fs::create_dir_all(project.join(".vscode")).expect("VS Code directory creates");
+    std::fs::create_dir_all(project.join(".zed")).expect("Zed directory creates");
+    std::fs::write(project.join("registry-stack.yaml"), b"not-valid-yaml: [")
+        .expect("project marker writes");
+    let vscode = b"{\n  \"editor.formatOnSave\": true\n}\n";
+    let zed = b"{\n  \"format_on_save\": \"on\"\n}\n";
+    std::fs::write(project.join(".vscode/settings.json"), vscode)
+        .expect("conflicting VS Code settings write");
+    std::fs::write(project.join(".zed/settings.json"), zed)
+        .expect("conflicting Zed settings write");
+
+    let error = setup_registry_project_editor(&ProjectEditorSetupOptions {
+        project_directory: project.clone(),
+    })
+    .expect_err("nonmatching settings must require a manual merge");
+    let diagnostic = error.to_string();
+    assert!(diagnostic.contains(".vscode/settings.json"), "{diagnostic}");
+    assert!(diagnostic.contains(".zed/settings.json"), "{diagnostic}");
+    assert!(diagnostic.contains("manually"), "{diagnostic}");
+    assert_eq!(
+        std::fs::read(project.join(".vscode/settings.json")).expect("VS Code settings preserved"),
+        vscode
+    );
+    assert_eq!(
+        std::fs::read(project.join(".zed/settings.json")).expect("Zed settings preserved"),
+        zed
+    );
+    assert!(!project.join(".registry-stack-editor").exists());
+    assert!(!project.join(".vscode/extensions.json").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn editor_setup_rejects_symlinked_output_ancestors_without_writes() {
+    use std::os::unix::fs::symlink;
+
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = temporary.path().join("editor-project");
+    let outside = temporary.path().join("outside");
+    std::fs::create_dir(&project).expect("project directory creates");
+    std::fs::create_dir(&outside).expect("outside directory creates");
+    std::fs::write(project.join("registry-stack.yaml"), b"not-valid-yaml: [")
+        .expect("project marker writes");
+    symlink(&outside, project.join(".zed")).expect("Zed ancestor symlink creates");
+
+    let error = setup_registry_project_editor(&ProjectEditorSetupOptions {
+        project_directory: project.clone(),
+    })
+    .expect_err("symlinked output ancestor must fail closed");
+    let diagnostic = error.to_string();
+    assert!(diagnostic.contains("symlink"), "{diagnostic}");
+    assert!(diagnostic.contains(".zed"), "{diagnostic}");
+    assert!(!project.join(".registry-stack-editor").exists());
+    assert!(!project.join(".vscode").exists());
+    assert!(
+        std::fs::read_dir(outside)
+            .expect("outside directory reads")
+            .next()
+            .is_none(),
+        "symlink destination must remain untouched"
     );
 }
 

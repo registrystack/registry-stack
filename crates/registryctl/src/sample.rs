@@ -10,6 +10,14 @@ pub enum Sample {
     Benefits,
 }
 
+impl Sample {
+    pub(crate) const fn id(self) -> &'static str {
+        match self {
+            Self::Benefits => "benefits",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Cell {
     Text(&'static str),

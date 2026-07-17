@@ -52,10 +52,18 @@ Create the project workspace:
 registryctl init --from opencrvs-dci --project-dir opencrvs-project
 ```
 
-The JSON report contains:
+The result confirms the initialized project and next command:
 
 ```text
-"status": "initialized"
+Initialized Registry Stack project "fictional-civil-registry".
+  Directory: opencrvs-project
+  Starter: opencrvs-dci (Registry Stack 0.10.0)
+  Starter content: matches bundled digest
+  Editor support: VS Code and Zed (opencrvs-project/.registry-stack-editor/manifest.json)
+
+Next:
+  cd opencrvs-project
+  registryctl test --project-dir .
 ```
 
 The project contains one combined topology. Relay owns the OpenCRVS integration and consultation.

@@ -73,6 +73,20 @@ registryctl init relay my-first-api --sample benefits
 cd my-first-api
 ```
 
+The initialization step prints this result before the shell changes directory:
+
+```text
+Initialized Relay spreadsheet API "my-first-api".
+  Directory: my-first-api
+  Sample: benefits
+  Bruno collection: my-first-api/bruno/registry-api
+
+Next:
+  cd my-first-api
+  registryctl doctor --profile local --format json
+  registryctl start
+```
+
 The sample workbook has three sheets:
 
 - `Households`: household registration and district attributes.

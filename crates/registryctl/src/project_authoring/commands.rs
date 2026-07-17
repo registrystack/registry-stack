@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-pub fn init_registry_project(options: &ProjectInitOptions) -> Result<ProjectCommandReport> {
+pub fn init_registry_project(options: &ProjectInitOptions) -> Result<crate::InitReport> {
     if options.directory.exists() {
         let metadata = fs::symlink_metadata(&options.directory)
             .context("failed to inspect project destination")?;
@@ -31,15 +31,26 @@ pub fn init_registry_project(options: &ProjectInitOptions) -> Result<ProjectComm
     if provenance.content_digest != project.project_content_digest {
         bail!("embedded project starter content digest is invalid");
     }
-    Ok(ProjectCommandReport {
+    setup_registry_project_editor(&ProjectEditorSetupOptions {
+        project_directory: options.directory.clone(),
+    })?;
+    Ok(crate::InitReport {
+        schema_version: crate::INIT_REPORT_SCHEMA_VERSION,
         status: "initialized",
         project: project.project.registry.id.clone(),
-        environment: None,
-        fixtures: Vec::new(),
-        semantic_changes: Vec::new(),
-        baseline: "initial_without_baseline",
-        output: Some(options.directory.display().to_string()),
-        explanation: Some(starter_explanation(&project)),
+        project_kind: crate::InitProjectKind::RegistryProject,
+        output: options.directory.clone(),
+        source: crate::InitSource::Starter {
+            id: provenance.id.clone(),
+            release: provenance.release.clone(),
+            content_digest: provenance.content_digest.clone(),
+            content_state: "matches",
+        },
+        artifacts: crate::InitArtifacts {
+            project_file: options.directory.join(PROJECT_FILE),
+            bruno_collection: None,
+            editor_manifest: Some(options.directory.join(EDITOR_MANIFEST_PATH)),
+        },
     })
 }
 

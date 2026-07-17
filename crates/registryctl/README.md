@@ -24,6 +24,10 @@ registryctl start
 registryctl smoke
 ```
 
+Initialization prints the created project, notable artifacts, and next commands. Add
+`--format json` to either `init relay` or `init --from` for the versioned
+`registryctl.init.v1` machine-readable report.
+
 The generated project contains a local Registry Relay configuration, sample
 XLSX workbook, Compose file, project manifest, local demo credentials, and an
 optional Bruno API collection.
@@ -46,10 +50,16 @@ and Notary inputs. Available starters are `http`, `dhis2-tracker`,
 
 ```sh
 registryctl init --from http --project-dir registry-project
+registryctl authoring editor --project-dir registry-project
 registryctl test --project-dir registry-project
 registryctl check --project-dir registry-project --environment local --explain
 registryctl build --project-dir registry-project --environment local
 ```
+
+Initialization copies the five schemas embedded in `registryctl`, configures project-relative VS
+Code and Zed schema mappings, and reports the generated editor manifest. The explicit
+`authoring editor` command verifies the setup and safely refreshes an unchanged generated bundle
+after an upgrade.
 
 The authoring contract accepts one to eight exact selector inputs and up to
 sixteen typed inputs in total. Canonical selectors have a fixed 4096-byte

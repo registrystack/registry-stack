@@ -59,6 +59,7 @@ const RELEASED_SCRIPT_RUNTIMES: &[ReleasedScriptRuntime] = &[ReleasedScriptRunti
 // authoring compiler can retain one closed internal type system without a
 // public API or visibility expansion.
 include!("project_authoring/model.rs");
+include!("project_authoring/editor.rs");
 include!("project_authoring/authoring_contract.rs");
 include!("project_authoring/diagnostics.rs");
 include!("project_authoring/commands.rs");

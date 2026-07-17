@@ -91,6 +91,7 @@ export async function buildProjectStarterMatrix(repoRoot = defaultRepoRoot) {
       fixture: fixture.name,
       commands: [
         `registryctl init --from ${source.starter} --project-dir ${projectDir}`,
+        `registryctl authoring editor --project-dir ${projectDir}`,
         `registryctl test --project-dir ${projectDir} ${selection} --trace`,
         `registryctl test --project-dir ${projectDir} ${selection} --watch`,
         `registryctl test --project-dir ${projectDir}`,

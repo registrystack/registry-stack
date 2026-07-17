@@ -20,6 +20,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   Schema and maintained DHIS2 offline journey cover the same closed grammar.
   Target attributes are caller-supplied request context, not authenticated
   identifiers.
+- `registryctl init --from` now installs deterministic project-local JSON Schemas and VS Code and
+  Zed workspace mappings. `registryctl authoring editor` verifies or safely refreshes the same
+  version-matched setup for an existing project.
+
+### Changed
+
+- `registryctl init --from` and `registryctl init relay` now print concise human-readable results
+  with tailored next commands. Both forms accept `--format json` for the versioned
+  `registryctl.init.v1` machine-readable report.
 
 ### Removed
 

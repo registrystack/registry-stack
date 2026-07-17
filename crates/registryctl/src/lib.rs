@@ -36,9 +36,10 @@ mod project_authoring;
 
 pub use project_authoring::{
     build_registry_project, check_registry_project, init_registry_project,
-    render_project_authoring_diagnostics, test_registry_project, test_registry_project_selected,
-    ProjectAuthoringDiagnostic, ProjectAuthoringDiagnostics, ProjectBuildOptions,
-    ProjectCheckOptions, ProjectCommandReport, ProjectInitOptions, ProjectStarter,
+    render_project_authoring_diagnostics, setup_registry_project_editor, test_registry_project,
+    test_registry_project_selected, ProjectAuthoringDiagnostic, ProjectAuthoringDiagnostics,
+    ProjectBuildOptions, ProjectCheckOptions, ProjectCommandReport, ProjectEditorSetupOptions,
+    ProjectEditorSetupReport, ProjectInitOptions, ProjectSchemaKind, ProjectStarter,
     ProjectTestOptions, ProjectTestSelection, SemanticChange,
 };
 
@@ -73,6 +74,48 @@ const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
 const PROJECT_SCHEMA_VERSION: &str = "registryctl/v1";
 const CONFIG_BUNDLE_SIGNATURE_SCHEMA: &str = "registry.platform.config_bundle_signatures.v1";
 const CONFIG_TRUST_ANCHOR_SCHEMA: &str = "registry.platform.config_trust_anchor.v1";
+const INIT_REPORT_SCHEMA_VERSION: &str = "registryctl.init.v1";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InitProjectKind {
+    RegistryProject,
+    RelaySpreadsheetApi,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InitSource {
+    Starter {
+        id: String,
+        release: String,
+        content_digest: String,
+        content_state: &'static str,
+    },
+    Sample {
+        id: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct InitArtifacts {
+    pub project_file: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bruno_collection: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editor_manifest: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct InitReport {
+    pub schema_version: &'static str,
+    pub status: &'static str,
+    pub project: String,
+    pub project_kind: InitProjectKind,
+    pub output: PathBuf,
+    pub source: InitSource,
+    pub artifacts: InitArtifacts,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -905,7 +948,7 @@ pub fn init_spreadsheet_api(
     dir: &Path,
     sample: Sample,
     image_lock: &RegistryctlImageLock,
-) -> Result<()> {
+) -> Result<InitReport> {
     match sample {
         Sample::Benefits => init_benefits_project(dir, image_lock),
     }
@@ -1249,14 +1292,13 @@ pub fn smoke_project(project_dir: &Path) -> Result<()> {
     }
 }
 
-pub fn bruno_generate_project(project_dir: &Path, force: bool) -> Result<()> {
+pub fn bruno_generate_project(project_dir: &Path, force: bool) -> Result<PathBuf> {
     let project = Project::load(project_dir)?;
     let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
     let collection_dir = project_dir.join(BRUNO_COLLECTION_DIR);
     let files = bruno_files(&project, &secrets)?;
     write_generated_files(project_dir, &collection_dir, files, force)?;
-    println!("Bruno collection: {}", collection_dir.display());
-    Ok(())
+    Ok(collection_dir)
 }
 
 pub fn bruno_open_project(project_dir: &Path) -> Result<()> {
@@ -1732,7 +1774,7 @@ impl SecretRedactor {
     }
 }
 
-fn init_benefits_project(dir: &Path, image_lock: &RegistryctlImageLock) -> Result<()> {
+fn init_benefits_project(dir: &Path, image_lock: &RegistryctlImageLock) -> Result<InitReport> {
     if dir.exists() {
         let mut entries =
             fs::read_dir(dir).with_context(|| format!("failed to inspect {}", dir.display()))?;
@@ -1763,8 +1805,22 @@ fn init_benefits_project(dir: &Path, image_lock: &RegistryctlImageLock) -> Resul
     write_text(dir.join("secrets/local.env"), &credentials.env_file())?;
     write_text(dir.join("output/.gitkeep"), "")?;
     sample::write_benefits_workbook(&dir.join("data/benefits_casework.xlsx"))?;
-    bruno_generate_project(dir, false)?;
-    Ok(())
+    let bruno_collection = bruno_generate_project(dir, false)?;
+    Ok(InitReport {
+        schema_version: INIT_REPORT_SCHEMA_VERSION,
+        status: "initialized",
+        project: generated_project_name(dir),
+        project_kind: InitProjectKind::RelaySpreadsheetApi,
+        output: dir.to_path_buf(),
+        source: InitSource::Sample {
+            id: Sample::Benefits.id().to_string(),
+        },
+        artifacts: InitArtifacts {
+            project_file: dir.join("registryctl.yaml"),
+            bruno_collection: Some(bruno_collection),
+            editor_manifest: None,
+        },
+    })
 }
 
 fn write_text(path: PathBuf, contents: &str) -> Result<()> {
@@ -2773,11 +2829,7 @@ struct LocalSection<'a> {
 }
 
 fn registryctl_manifest(dir: &Path, image_lock: &RegistryctlImageLock) -> Result<String> {
-    let name = dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("my-first-api")
-        .to_string();
+    let name = generated_project_name(dir);
     let manifest = ProjectManifest {
         schema_version: PROJECT_SCHEMA_VERSION,
         project: ProjectSection {
@@ -2802,6 +2854,13 @@ fn registryctl_manifest(dir: &Path, image_lock: &RegistryctlImageLock) -> Result
         },
     };
     serde_yaml::to_string(&manifest).context("failed to render registryctl manifest")
+}
+
+fn generated_project_name(dir: &Path) -> String {
+    dir.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("my-first-api")
+        .to_string()
 }
 
 fn compose_yaml(image_lock: &RegistryctlImageLock) -> String {
