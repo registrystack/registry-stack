@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Omitted claim `formats` now defaults to the canonical
+  `application/vnd.registry-notary.claim-result+json` evaluation response
+  format. An explicitly empty `formats: []` is rejected at configuration load
+  with the claim id and remediation.
+
 ## [0.10.0] - 2026-07-17
 
 ### Added

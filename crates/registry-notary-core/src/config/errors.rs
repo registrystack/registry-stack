@@ -75,6 +75,11 @@ pub enum EvidenceConfigError {
         default: String,
         allowed: Vec<String>,
     },
+    #[error(
+        "claim '{claim}' formats must not be empty; omit formats to use the default \
+         application/vnd.registry-notary.claim-result+json representation, or list one or more response formats"
+    )]
+    EmptyClaimFormats { claim: String },
     #[error("allowed purpose must not be empty")]
     InvalidPurpose,
     #[error("concurrency.subjects must be >= 1")]

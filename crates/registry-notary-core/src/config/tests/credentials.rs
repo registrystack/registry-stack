@@ -839,6 +839,53 @@ pub(super) fn disclosure_default_outside_allowed_is_rejected() {
 }
 
 #[test]
+pub(super) fn omitted_claim_formats_default_to_claim_result_json() {
+    let claim = minimal_claim("default-format");
+
+    assert_eq!(
+        claim.formats,
+        vec![FORMAT_CLAIM_RESULT_JSON.to_string()],
+        "omitted formats must retain the canonical evaluation representation"
+    );
+}
+
+#[test]
+pub(super) fn explicit_empty_claim_formats_are_rejected() {
+    let mut config = minimal_config();
+    let claim: ClaimDefinition = serde_norway::from_str(
+        r#"
+id: empty-format
+title: Empty format claim
+version: "1.0"
+subject_type: person
+evidence_mode:
+  type: self_attested
+rule:
+  type: cel
+  expression: "true"
+formats: []
+"#,
+    )
+    .expect("claim YAML is valid");
+    config.evidence.claims = vec![claim];
+
+    let err = config
+        .validate()
+        .expect_err("an explicitly empty formats list must fail validation");
+    match &err {
+        EvidenceConfigError::EmptyClaimFormats { claim } => {
+            assert_eq!(claim, "empty-format");
+        }
+        other => panic!("unexpected error variant: {other}"),
+    }
+    let message = err.to_string();
+    assert!(
+        message.contains("empty-format") && message.contains("omit formats"),
+        "error must name the claim and explain how to use the default: {message}"
+    );
+}
+
+#[test]
 pub(super) fn empty_allowed_claims_is_rejected() {
     // A credential profile with an empty allowed_claims would silently
     // accept every claim at issue time (see api.rs `is_empty()` short

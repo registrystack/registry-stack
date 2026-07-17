@@ -6,6 +6,10 @@ use super::*;
 pub const MAX_CLAIM_DEPENDENCY_NODES_V1: usize = 64;
 pub const MAX_CLAIM_DEPENDENCY_EDGES_V1: usize = 256;
 
+fn default_claim_formats() -> Vec<String> {
+    vec![FORMAT_CLAIM_RESULT_JSON.to_string()]
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimDefinition {
@@ -35,7 +39,10 @@ pub struct ClaimDefinition {
     pub operations: ClaimOperationsConfig,
     #[serde(default)]
     pub disclosure: DisclosureConfig,
-    #[serde(default)]
+    /// Omitting this field keeps existing authored claims renderable using the
+    /// canonical claim-result representation. An explicitly empty list is
+    /// rejected during configuration validation.
+    #[serde(default = "default_claim_formats")]
     pub formats: Vec<String>,
     #[serde(default)]
     pub credential_profiles: Vec<String>,

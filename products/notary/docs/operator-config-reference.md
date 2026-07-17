@@ -69,6 +69,11 @@ Disclosure remains a Notary decision. Credential profiles own ordered claim
 membership, issuance format, holder binding, validity, and allowed disclosure.
 Relay outputs are never credentials or public claims by themselves.
 
+`formats` is optional for each claim. When omitted, Notary uses
+`application/vnd.registry-notary.claim-result+json`, the canonical evaluation
+response format. Do not set `formats: []`: it is invalid configuration. List
+one or more formats only when the claim needs an explicit response-format set.
+
 ## Authentication and delegation
 
 Authentication has no mode selector. The configured methods define the
