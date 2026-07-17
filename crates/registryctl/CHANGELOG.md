@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `registryctl check` now returns a bounded typed authoring diagnostic
+  list for invalid projects. Human and JSON output use the same stable codes,
+  project-relative files, safe locations, schema hints, causes, suggestions,
+  and remediation. Independent files are checked in deterministic order. Safe
+  missing declared references aggregate, while unsafe paths, symlinks,
+  oversized files, and inspection failures remain terminal.
+
 ### Removed
 
 - BREAKING: project authoring no longer accepts credential profiles or OID4VCI

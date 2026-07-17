@@ -96,6 +96,32 @@ pub struct ProjectCommandReport {
     pub explanation: Option<Value>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectAuthoringDiagnostics {
+    pub status: &'static str,
+    pub diagnostics: Vec<ProjectAuthoringDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectAuthoringDiagnostic {
+    pub code: &'static str,
+    pub file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema_hint: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<&'static str>,
+    pub cause: &'static str,
+    pub remediation: &'static str,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FixtureReport {

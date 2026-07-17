@@ -105,7 +105,25 @@ fn main() -> Result<()> {
                 explain: explain || format == ProjectReportFormat::Human,
                 against,
                 anchor,
-            })?;
+            });
+            let report = match report {
+                Ok(report) => report,
+                Err(error) => {
+                    if let Some(report) =
+                        error.downcast_ref::<registryctl::ProjectAuthoringDiagnostics>()
+                    {
+                        match format {
+                            ProjectReportFormat::Human => println!(
+                                "{}",
+                                registryctl::render_project_authoring_diagnostics(report)
+                            ),
+                            ProjectReportFormat::Json => print_json(report)?,
+                        }
+                        std::process::exit(1);
+                    }
+                    return Err(error);
+                }
+            };
             match format {
                 ProjectReportFormat::Human => {
                     println!("{}", render_check_report(&report, explain)?)

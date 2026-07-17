@@ -61,6 +61,19 @@ or combined deployment. `test` additionally executes deterministic,
 request-aware source fixtures without granting fixture YAML network,
 credential, filesystem, or worker authority.
 
+When `check` finds invalid authoring, it reports independent problems together
+with stable diagnostic codes and normalized project-relative files. JSON and
+human output contain the same typed diagnostics. Syntax diagnostics include a
+safe 1-based location and authoring-schema command when available. Script
+diagnostics can include a static released-signature suggestion. Diagnostics do
+not echo YAML values, source origins, secret references, fixture observations,
+or Script arguments. Safe missing entity and integration references aggregate.
+Unsafe paths, symlinks, oversized files, and files that cannot be safely
+inspected stop later inspection. The same boundary check covers every
+environment YAML file included in the project digest, even when that
+environment is not selected. Any diagnostic prevents compilation, generated
+product validation, fixture execution, and build output.
+
 `script` uses the release-gated Rhai v1 authoring ABI. Its offline conformance
 fixtures use the isolated implementation-owned worker harness, and deployment
 uses the same fixed source authority, budgets, and reviewed script closure.
