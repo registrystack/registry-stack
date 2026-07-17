@@ -255,6 +255,20 @@ Notary-only, and combined deployments. Registry Notary does not have a direct-so
 generator. Registry-backed Notary claims consume compiler-pinned Relay consultations, while a
 Notary-only project contains source-free or self-attested evaluation-only claims.
 
+### Next-release local Notary add-on
+
+The `release/1.0` source line adds `registryctl add notary`. This command is not in the published
+`v0.10.0` CLI. From a generated `benefits` spreadsheet project, it creates an editable authored
+project under `notary/project/`, adds a private consultation Relay and local Notary services, and
+generates local-only evaluator and workload credentials. It refuses an existing Notary directory
+or a second invocation instead of overwriting authored work.
+
+`registryctl start` and `registryctl restart` validate and rebuild this add-on from the authored
+project before starting it. Registryctl validates the fixed local runtime overrides with the
+production product models and publishes one complete generated bundle, so services do not observe
+a partially updated contract. The command is a tutorial convenience for the generated benefits
+workbook, not a custom-registry import command.
+
 ## Lifecycle
 
 Lifecycle commands run against the project in the current working directory.
@@ -263,6 +277,7 @@ Lifecycle commands run against the project in the current working directory.
 | --- | --- |
 | `start` | Start the local project with Docker Compose and wait for readiness. |
 | `stop` | Stop the local project. |
+| `restart` | Stop the local project, rebuild an added Notary project when present, then start and wait for readiness. |
 | `status` | Print local runtime status, including health and readiness probes. |
 
 ## Inspect

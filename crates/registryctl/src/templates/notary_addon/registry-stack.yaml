@@ -1,0 +1,25 @@
+version: 1
+registry: { id: tutorial-benefits-registry }
+integrations:
+  person-demographics: { file: integrations/person-demographics/integration.yaml }
+entities:
+  person: { file: entities/person.yaml }
+services:
+  registration-verification:
+    kind: evidence
+    version: 1
+    purpose: https://example.local/purpose/tutorial
+    legal_basis: public-service-delivery
+    consent: not_required
+    access: { scopes: ["benefits_casework:evidence"] }
+    consultations:
+      enrollment:
+        integration: person-demographics
+        input:
+          given_name: request.target.attributes.given_name
+          family_name: request.target.attributes.family_name
+          date_of_birth: request.target.attributes.date_of_birth
+    claims:
+      person-registration-accepted:
+        cel: enrollment.matched && enrollment.registration_status == "active"
+        disclosure: predicate

@@ -1,0 +1,113 @@
+services:
+  registry-consultation-db:
+    image: postgres@sha256:7a396fd264a2067788b6551122b50f162bf6136312c7fc9d74381cb92c648382
+    environment:
+      POSTGRES_DB: registry_relay
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_USER: postgres
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /var/lib/postgresql/tls
+        cp /run/registry-tls/server.crt /var/lib/postgresql/tls/server.crt
+        cp /run/registry-tls/server.key /var/lib/postgresql/tls/server.key
+        chown postgres:postgres /var/lib/postgresql/tls/server.crt /var/lib/postgresql/tls/server.key
+        chmod 0644 /var/lib/postgresql/tls/server.crt
+        chmod 0600 /var/lib/postgresql/tls/server.key
+        exec docker-entrypoint.sh postgres -c ssl=on -c ssl_cert_file=/var/lib/postgresql/tls/server.crt -c ssl_key_file=/var/lib/postgresql/tls/server.key
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres -d registry_relay]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - ./notary/postgres-init.sql:/docker-entrypoint-initdb.d/10-registry-relay.sql:ro
+      - ./secrets/consultation-postgres.crt:/run/registry-tls/server.crt:ro
+      - ./secrets/consultation-postgres.key:/run/registry-tls/server.key:ro
+      - registry-consultation-db:/var/lib/postgresql/data
+    networks: [registry-notary-internal]
+
+  registry-relay-consultation-bootstrap:
+    image: {{relay_image}}
+    user: "${REGISTRY_STACK_RUNTIME_UID:-65532}:${REGISTRY_STACK_RUNTIME_GID:-65532}"
+    env_file:
+      - ./secrets/local.env
+    command:
+      - consultation
+      - bootstrap-state
+      - --config
+      - /etc/registry-relay/relay.yaml
+      - --migration-database-url-env
+      - REGISTRY_RELAY_STATE_MIGRATION_URL
+      - --owner-role
+      - relay_state_owner
+      - --keyring-maintenance-database-url-env
+      - REGISTRY_RELAY_STATE_KEYRING_MAINTENANCE_URL
+      - --keyring-reader-database-url-env
+      - REGISTRY_RELAY_STATE_KEYRING_READER_URL
+      - --active-key-id
+      - epoch-1
+      - --active-write-deadline-unix-ms
+      - "4102444800000"
+      - --audit-event-retention-ms
+      - "604800000"
+    volumes:
+      - ./notary/project/.registry-stack/build/local/private/relay/config:/etc/registry-relay:ro
+      - ./secrets/consultation-postgres.crt:/run/registry-tls/state-plane-ca.pem:ro
+    depends_on:
+      registry-consultation-db:
+        condition: service_healthy
+    networks: [registry-notary-internal]
+
+  registry-notary-jwks:
+    image: busybox@sha256:6be969a074d06073a62ad8ccfd2ad6ec2790cae25d519d8df255ba24819d96f0
+    command: [httpd, -f, -p, "8083", -h, /srv/jwks]
+    ports:
+      - "4255:8081"
+    volumes:
+      - ./notary/jwks.json:/srv/jwks/jwks.json:ro
+    networks: [registry-notary-public, registry-notary-internal]
+
+  registry-notary:
+    image: {{notary_image}}
+    user: "${REGISTRY_STACK_RUNTIME_UID:-65532}:${REGISTRY_STACK_RUNTIME_GID:-65532}"
+    env_file:
+      - ./secrets/local.env
+    command: [--config, /etc/registry-notary/notary.yaml]
+    network_mode: service:registry-notary-jwks
+    volumes:
+      - ./notary/project/.registry-stack/build/local/private/notary/config:/etc/registry-notary:ro
+      - ./secrets/notary-relay.jwt:/run/secrets/notary-relay.jwt:ro
+    depends_on:
+      registry-relay-consultation:
+        condition: service_healthy
+
+  registry-relay-consultation:
+    image: {{relay_image}}
+    user: "${REGISTRY_STACK_RUNTIME_UID:-65532}:${REGISTRY_STACK_RUNTIME_GID:-65532}"
+    env_file:
+      - ./secrets/local.env
+    command: [--config, /etc/registry-relay/relay.yaml]
+    network_mode: service:registry-notary-jwks
+    volumes:
+      - ./notary/project/.registry-stack/build/local/private/relay/config:/etc/registry-relay:ro
+      - ./data/benefits_casework.xlsx:/var/lib/registry/benefits_casework.xlsx:ro
+      - ./secrets/consultation-postgres.crt:/run/registry-tls/state-plane-ca.pem:ro
+      - ./state/relay-consultation/cache:/var/lib/registry-relay/cache
+    depends_on:
+      registry-relay-consultation-bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      test: [CMD, /usr/local/bin/registry-relay, healthcheck, --url, http://127.0.0.1:8082/ready]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  registry-consultation-db: {}
+
+networks:
+  registry-notary-public: {}
+  registry-notary-internal:
+    internal: true

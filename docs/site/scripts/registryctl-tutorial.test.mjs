@@ -67,6 +67,7 @@ content-type: application/json\r
 \r
 {"observations":[{"district":"south","count":2},{"district":"north","count":2}]}
 ${HTTP_STATUS_PREFIX}200
+source-under-test images rebound
 `;
   assertHttpStatus(output, 200);
   assertJsonSubset(output, {
@@ -84,7 +85,7 @@ test('rebinds generated project images without changing ports', () => {
   try {
     writeFileSync(
       join(directory, 'compose.yaml'),
-      'services:\n  registry-relay:\n    image: relay:old\n    ports: ["4242:8080"]\n  registry-notary:\n    image: notary:old\n',
+      'services:\n  registry-relay:\n    image: relay:old\n    ports: ["4242:8080"]\n  registry-relay-consultation:\n    image: relay:old\n  registry-relay-consultation-bootstrap:\n    image: relay:old\n  registry-notary:\n    image: notary:old\n',
     );
     writeFileSync(
       join(directory, 'registryctl.yaml'),
@@ -96,6 +97,8 @@ test('rebinds generated project images without changing ports', () => {
     const compose = parse(readFileSync(join(directory, 'compose.yaml'), 'utf8'));
     const manifest = parse(readFileSync(join(directory, 'registryctl.yaml'), 'utf8'));
     assert.equal(compose.services['registry-relay'].image, 'relay:source');
+    assert.equal(compose.services['registry-relay-consultation'].image, 'relay:source');
+    assert.equal(compose.services['registry-relay-consultation-bootstrap'].image, 'relay:source');
     assert.equal(compose.services['registry-notary'].image, 'notary:source');
     assert.deepEqual(compose.services['registry-relay'].ports, ['4242:8080']);
     assert.equal(manifest.runtime.relay_image, 'relay:source');

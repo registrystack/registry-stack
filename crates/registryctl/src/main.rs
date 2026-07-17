@@ -61,6 +61,15 @@ fn main() -> Result<()> {
                 OutputFormat::Json => print_json(&report)?,
             }
         }
+        Commands::Add { command } => match command {
+            AddCommand::Notary => {
+                let image_lock = registryctl::load_registryctl_image_lock()?;
+                print_json(&registryctl::add_notary_to_project(
+                    &std::env::current_dir()?,
+                    &image_lock,
+                )?)?;
+            }
+        },
         Commands::Test {
             project_dir,
             environment,
@@ -819,6 +828,11 @@ enum Commands {
         #[command(subcommand)]
         command: Option<Box<InitCommand>>,
     },
+    /// Add another local Registry Stack product to the current project.
+    Add {
+        #[command(subcommand)]
+        command: AddCommand,
+    },
     /// Run every project integration fixture offline.
     Test {
         /// Project workspace root.
@@ -922,6 +936,12 @@ enum Commands {
         #[command(subcommand)]
         command: BrunoCommand,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum AddCommand {
+    /// Add a local Notary and private consultation Relay over the benefits workbook.
+    Notary,
 }
 
 impl Commands {
@@ -1431,6 +1451,18 @@ deployment:
         let cli = Cli::try_parse_from(["registryctl", "restart"]).unwrap();
 
         assert!(matches!(cli.command, Commands::Restart));
+    }
+
+    #[test]
+    fn add_notary_cli_parses() {
+        let cli = Cli::try_parse_from(["registryctl", "add", "notary"]).unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Add {
+                command: AddCommand::Notary
+            }
+        ));
     }
 
     #[test]

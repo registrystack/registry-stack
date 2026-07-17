@@ -1,0 +1,10 @@
+name: unknown-person
+classification: synthetic
+input: { given_name: Nobody, family_name: Here, date_of_birth: "2019-02-03" }
+interactions:
+  - expect: { method: GET, path: /snapshot }
+    respond: { status: 200, body: [] }
+expect:
+  outcome: no_match
+  outputs: {}
+  claims: { person-registration-accepted: false }

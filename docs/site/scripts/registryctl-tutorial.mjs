@@ -149,8 +149,35 @@ export function parseJsonOutput(output) {
     if (value[index] === '{' || value[index] === '[') starts.push(index);
   }
   for (const start of starts) {
+    const opening = value[start];
+    const closing = opening === '{' ? '}' : ']';
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let end = null;
+    for (let index = start; index < value.length; index += 1) {
+      const character = value[index];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === '\\') escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') {
+        inString = true;
+      } else if (character === opening) {
+        depth += 1;
+      } else if (character === closing) {
+        depth -= 1;
+        if (depth === 0) {
+          end = index + 1;
+          break;
+        }
+      }
+    }
+    if (end === null) continue;
     try {
-      return JSON.parse(value.slice(start).trim());
+      return JSON.parse(value.slice(start, end));
     } catch {
       // Try the next JSON-looking boundary. HTTP headers can precede the body.
     }
@@ -211,12 +238,20 @@ export function rebindProjectImages(projectDirectory, relayImage, notaryImage) {
   const manifestPath = resolve(projectDirectory, 'registryctl.yaml');
   const compose = readYamlDocument(composePath);
   const composeValue = compose.toJS();
-  const hasRelay = composeValue?.services?.['registry-relay'] !== undefined;
-  const hasNotary = composeValue?.services?.['registry-notary'] !== undefined;
+  const relayServices = [
+    'registry-relay',
+    'registry-relay-consultation',
+    'registry-relay-consultation-bootstrap',
+  ].filter((service) => composeValue?.services?.[service] !== undefined);
+  const notaryServices = ['registry-notary'].filter(
+    (service) => composeValue?.services?.[service] !== undefined,
+  );
+  const hasRelay = relayServices.length > 0;
+  const hasNotary = notaryServices.length > 0;
   invariant(hasRelay || hasNotary, `${composePath} has no Registry Stack product services`);
 
-  if (hasRelay) compose.setIn(['services', 'registry-relay', 'image'], relayImage);
-  if (hasNotary) compose.setIn(['services', 'registry-notary', 'image'], notaryImage);
+  for (const service of relayServices) compose.setIn(['services', service, 'image'], relayImage);
+  for (const service of notaryServices) compose.setIn(['services', service, 'image'], notaryImage);
   writeYamlDocument(composePath, compose);
 
   const manifest = readYamlDocument(manifestPath);
@@ -354,6 +389,15 @@ async function main([command, ...args]) {
     case 'assert-json-subset': {
       invariant(args.length === 2, 'usage: assert-json-subset <output> <expected-json>');
       assertJsonSubset(read(args[0]), JSON.parse(args[1]));
+      return;
+    }
+    case 'assert-json-fence-subset': {
+      invariant(
+        args.length === 4,
+        'usage: assert-json-fence-subset <output> <tutorial> <heading> <occurrence>',
+      );
+      const expected = findFence(read(args[1]), args[2], 'json', Number(args[3])).content;
+      assertJsonSubset(read(args[0]), JSON.parse(expected));
       return;
     }
     case 'rebind-project': {
