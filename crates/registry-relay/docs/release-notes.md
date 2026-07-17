@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Relay permanently marks public readiness unavailable with the stable
+  `audit.chain.inconsistent` code after retained-audit-chain verification or
+  write-time fork detection. Transient audit I/O failures do not change
+  readiness.
+
 ## 0.10.0
 
 - Registry Stack project authoring now compiles product-neutral `http`, `script`, and `snapshot`

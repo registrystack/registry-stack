@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Relay now permanently reports `/ready` as unavailable with
+  `audit.chain.inconsistent` after detecting a retained-chain verification
+  failure or a write-time foreign append. Transient audit I/O failures retain
+  their existing request-level policy and do not poison readiness.
+
 ## 0.10.0 - 2026-07-17
 
 ### Added

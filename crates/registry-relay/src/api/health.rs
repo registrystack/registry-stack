@@ -145,15 +145,15 @@ fn resource_not_ready_response(
     response
 }
 
-/// 503 problem response raised when the retained audit chain failed startup
-/// verification and requires operator recovery (#196). The recovery path is
+/// 503 problem response raised when the retained audit chain has an integrity
+/// failure and requires operator recovery (#196, #299). The recovery path is
 /// `registry-relay audit quarantine`.
 fn audit_chain_not_ready_response() -> Response {
     let body = Json(json!({
         "type": format!("{}audit/chain_inconsistent", crate::error::PROBLEM_TYPE_BASE),
         "title": "Audit chain inconsistent",
         "status": 503,
-        "detail": "the retained audit chain failed startup verification and requires operator recovery",
+        "detail": "the retained audit chain has an integrity failure and requires operator recovery",
         "code": crate::audit::AUDIT_CHAIN_INCONSISTENT_CODE,
     }));
     let mut response = (StatusCode::SERVICE_UNAVAILABLE, body).into_response();
