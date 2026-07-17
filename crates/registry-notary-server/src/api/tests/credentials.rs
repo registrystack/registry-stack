@@ -69,7 +69,7 @@ async fn issue_credential_fails_closed_when_status_record_write_fails() {
             claim_ids: vec!["person-is-alive".to_string()],
             claim_refs: Vec::new(),
             disclosure: "predicate".to_string(),
-            format: FORMAT_SD_JWT_VC.to_string(),
+            format: FORMAT_CLAIM_RESULT_JSON.to_string(),
             results: vec![claim_result_view(
                 "eval-status-write-fails",
                 "person-is-alive",
@@ -155,7 +155,7 @@ async fn issue_credential_rejects_purpose_mismatch() {
             claim_ids: vec!["person-is-alive".to_string()],
             claim_refs: Vec::new(),
             disclosure: "predicate".to_string(),
-            format: FORMAT_SD_JWT_VC.to_string(),
+            format: FORMAT_CLAIM_RESULT_JSON.to_string(),
             results: vec![claim_result_view(
                 "eval-purpose-mismatch",
                 "person-is-alive",

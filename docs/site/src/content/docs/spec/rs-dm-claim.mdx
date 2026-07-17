@@ -40,6 +40,7 @@ The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 
 | 0.3.1 | 2026-07-14 | draft | Updated load-time validation limits after duplicate ids, disclosure defaults, evidence-mode rules, and registry-backed output types became startup checks. |
 | 0.3.2 | 2026-07-14 | draft | Aligned credential eligibility with Registry Stack project authoring: profiles declare claims once, and the compiler derives the product-level reverse index. |
 | 0.3.3 | 2026-07-17 | draft | Made omitted claim `formats` default to the canonical claim-result JSON representation and made an explicitly empty list a configuration-load error. |
+| 0.3.4 | 2026-07-17 | draft | Made the evaluation response-format set closed: the canonical claim-result JSON format is required, CCCEV-shaped JSON-LD is the only additional renderer, and credential issuance formats are rejected. |
 
 ## 1. Scope and references
 
@@ -127,7 +128,7 @@ REQ-DM-CLAIM-008: Registry Notary MUST apply a claim's `default` disclosure mode
 
 A claim's `formats` list declares the response formats it can render, and its value descriptor declares the type the evaluated value takes.
 
-REQ-DM-CLAIM-009: A claim MUST be renderable as the claim-result JSON media type, and MAY additionally declare CCCEV-shaped JSON-LD in its `formats` (the data-model form of REQ-PR-NOTARY-011). When `formats` is omitted, Registry Notary uses the claim-result JSON media type. An explicitly empty `formats` list MUST be rejected at configuration load. SD-JWT VC issuance is governed by credential profiles, not by the evaluation render `formats` list. A claim declares the type its evaluated value takes; where that type is one Registry Notary recognizes, the evaluated value MUST conform to it or the evaluation is refused rather than returned.
+REQ-DM-CLAIM-009: A claim's `formats` MUST include `application/vnd.registry-notary.claim-result+json`, and MAY additionally include only `application/ld+json; profile="cccev"` (the data-model form of REQ-PR-NOTARY-011). When `formats` is omitted, Registry Notary uses the claim-result JSON media type. An explicitly empty list, an unknown format, or a list that omits the canonical format MUST be rejected at configuration load. SD-JWT VC issuance uses `application/dc+sd-jwt` in credential profiles and MUST NOT appear in a claim evaluation render `formats` list. A claim declares the type its evaluated value takes; where that type is one Registry Notary recognizes, the evaluated value MUST conform to it or the evaluation is refused rather than returned.
 
 ## 8. Credential eligibility
 

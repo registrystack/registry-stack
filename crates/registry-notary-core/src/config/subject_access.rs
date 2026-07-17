@@ -155,7 +155,6 @@ impl SubjectAccessConfig {
                 profile,
                 &claim_ids,
                 &allowed_claim_ids,
-                &allowed_formats,
                 self.token_policy.max_credential_validity_seconds,
             )?;
         }
@@ -771,7 +770,6 @@ pub(super) fn validate_subject_access_profile(
     profile: &CredentialProfileConfig,
     claim_ids: &HashSet<&str>,
     allowed_claim_ids: &HashSet<&str>,
-    allowed_formats: &HashSet<&str>,
     max_credential_validity_seconds: u64,
 ) -> Result<(), EvidenceConfigError> {
     if profile.validity_seconds <= 0 {
@@ -789,12 +787,6 @@ pub(super) fn validate_subject_access_profile(
     if validity_seconds > max_credential_validity_seconds {
         return invalid_subject_access(format!(
             "credential profile '{profile_id}' validity_seconds must not exceed the subject-access ceiling"
-        ));
-    }
-    if !allowed_formats.contains(profile.format.as_str()) {
-        return invalid_subject_access(format!(
-            "credential profile '{profile_id}' uses unallowed format '{}'",
-            profile.format
         ));
     }
     if profile.holder_binding.mode != "did" {
@@ -867,12 +859,9 @@ pub(super) fn validate_subject_access_allow_lists_are_supported(
         let supported_by_claim = allowed_claims
             .iter()
             .any(|claim| claim.formats.iter().any(|candidate| candidate == format));
-        let supported_by_profile = allowed_profiles
-            .iter()
-            .any(|profile| profile.format == *format);
-        if !supported_by_claim && !supported_by_profile {
+        if !supported_by_claim {
             return invalid_subject_access(format!(
-                "allowed_formats entry '{format}' is not supported by any allowed claim or profile"
+                "allowed_formats entry '{format}' is not supported by any allowed claim"
             ));
         }
     }
@@ -1046,12 +1035,9 @@ pub(super) fn validate_delegated_attestation_allow_lists_are_supported(
         let supported_by_claim = allowed_claims
             .iter()
             .any(|claim| claim.formats.iter().any(|candidate| candidate == format));
-        let supported_by_profile = allowed_profiles
-            .iter()
-            .any(|profile| profile.format == *format);
-        if !supported_by_claim && !supported_by_profile {
+        if !supported_by_claim {
             return invalid_subject_access(format!(
-                "subject_access.delegation allowed_formats entry '{format}' is not supported by any allowed claim or profile"
+                "subject_access.delegation allowed_formats entry '{format}' is not supported by any allowed claim"
             ));
         }
     }

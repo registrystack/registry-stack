@@ -37,7 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Omitted claim `formats` now defaults to the canonical
   `application/vnd.registry-notary.claim-result+json` evaluation response
   format. An explicitly empty `formats: []` is rejected at configuration load
-  with the claim id and remediation.
+  with the claim id and remediation. Explicit lists must include the canonical
+  format and may otherwise contain only `application/ld+json; profile="cccev"`.
+  SD-JWT VC is a credential-profile issuance format, not a claim evaluation
+  renderer. Subject-access `allowed_formats` now follows the same evaluation
+  boundary and no longer needs to repeat the credential profile's output
+  format.
 
 ## [0.10.0] - 2026-07-17
 

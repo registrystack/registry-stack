@@ -522,7 +522,7 @@ pub(super) async fn preauth_token_endpoint_issues_access_token_and_c_nonce() {
     );
     assert_eq!(
         claims["authorization_details"][0]["format"],
-        json!("application/dc+sd-jwt")
+        json!("application/vnd.registry-notary.claim-result+json")
     );
     assert_eq!(
         claims["authorization_details"][0]["purpose"],
@@ -1619,6 +1619,7 @@ pub(super) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
         .await;
     credential.assert_status_ok();
     let credential_body: Value = credential.json();
+    assert_eq!(credential_body["format"], json!("dc+sd-jwt"));
     let sd_jwt = credential_body["credential"]
         .as_str()
         .expect("credential issued");

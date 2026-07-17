@@ -3889,8 +3889,7 @@
                       "evidence_type_iri": "https://demo.example.gov/evidence-types/smallholder-farmer",
                       "formats": [
                         "application/vnd.registry-notary.claim-result+json",
-                        "application/ld+json; profile=\"cccev\"",
-                        "application/dc+sd-jwt"
+                        "application/ld+json; profile=\"cccev\""
                       ],
                       "id": "farmer-under-4ha",
                       "oots": null,
@@ -4010,8 +4009,7 @@
                   "evidence_type_iri": "https://demo.example.gov/evidence-types/smallholder-farmer",
                   "formats": [
                     "application/vnd.registry-notary.claim-result+json",
-                    "application/ld+json; profile=\"cccev\"",
-                    "application/dc+sd-jwt"
+                    "application/ld+json; profile=\"cccev\""
                   ],
                   "id": "farmer-under-4ha",
                   "oots": null,

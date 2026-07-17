@@ -210,7 +210,7 @@ subject_access:
   allowed_claims:
     - birth-record-exists
   allowed_formats:
-    - application/dc+sd-jwt
+    - application/vnd.registry-notary.claim-result+json
   allowed_disclosures:
     - value
     - redacted
@@ -221,6 +221,9 @@ subject_access:
 Rules:
 
 - Enable only operations the citizen flow actually needs.
+- Include the canonical claim-result JSON format for the internal evaluation
+  that backs issuance. The named credential profile separately selects
+  `application/dc+sd-jwt` as the credential output.
 - `batch_evaluate` must remain false; batch evaluation is not supported.
 - `allowed_claims` must reference existing claims.
 - `credential_profiles` must reference existing profiles.

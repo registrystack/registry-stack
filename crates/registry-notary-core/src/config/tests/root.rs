@@ -596,7 +596,6 @@ evidence:
           - value
       formats:
         - application/vnd.registry-notary.claim-result+json
-        - application/dc+sd-jwt
       credential_profiles:
         - civil_status_sd_jwt
 auth:
@@ -644,7 +643,6 @@ subject_access:
     - date-of-birth
   allowed_formats:
     - application/vnd.registry-notary.claim-result+json
-    - application/dc+sd-jwt
   allowed_disclosures:
     - value
   required_scopes:
@@ -743,10 +741,7 @@ token_file: /run/secrets/registry-notary-relay.jwt
             target_id_type: Some("civil_registration_id".to_string()),
             allowed_claims: vec!["dependent-date-of-birth".to_string()],
             allowed_purposes: vec!["dependent_attestation".to_string()],
-            allowed_formats: vec![
-                "application/vnd.registry-notary.claim-result+json".to_string(),
-                "application/dc+sd-jwt".to_string(),
-            ],
+            allowed_formats: vec!["application/vnd.registry-notary.claim-result+json".to_string()],
             allowed_disclosures: vec!["value".to_string()],
             credential_profiles: vec!["civil_status_sd_jwt".to_string()],
         }],

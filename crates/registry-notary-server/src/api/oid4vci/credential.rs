@@ -198,7 +198,7 @@ pub(in crate::api) async fn oid4vci_credential(
             .map(|claim_id| ClaimRef::from(claim_id.as_str()))
             .collect(),
         disclosure: None,
-        format: Some(FORMAT_SD_JWT_VC.to_string()),
+        format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
         purpose: None,
     };
     let mut request = request;
@@ -545,7 +545,7 @@ pub(in crate::api) fn oid4vci_issuance_authorization_details(
         locations: vec![evidence.service_id.clone()],
         claims,
         disclosure: Some(disclosure),
-        format: Some(FORMAT_SD_JWT_VC.to_string()),
+        format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
         purpose: Some(purpose),
         subject: Some(registry_notary_core::EvidenceAuthorizationSubject {
             binding_claim: config.subject_binding.token_claim.clone(),

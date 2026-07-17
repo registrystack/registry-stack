@@ -3405,7 +3405,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "3acc1511dd07eff495355319ce1ef4d82dead98bd9ea2109df43aff8e4d1e985",
+        "b2b6a70bc5e15f330f81d069af55024ea8473c637ed33d4a9d364a6e0f091fc6",
         "project inputs must match the cross-machine golden digest"
     );
 }
@@ -4256,6 +4256,13 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
     assert_eq!(
         notary["subject_access"]["allowed_claims"][0].as_str(),
         Some("household-record-exists")
+    );
+    assert_eq!(
+        notary["subject_access"]["allowed_formats"],
+        serde_yaml::from_str::<serde_yaml::Value>(
+            "[application/vnd.registry-notary.claim-result+json]"
+        )
+        .expect("canonical evaluation format parses")
     );
     assert_eq!(
         notary["subject_access"]["allowed_wallet_origins"][0].as_str(),

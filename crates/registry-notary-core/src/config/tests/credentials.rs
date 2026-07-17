@@ -886,6 +886,129 @@ formats: []
 }
 
 #[test]
+pub(super) fn canonical_claim_format_is_valid() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("canonical-format");
+    claim.formats = vec![FORMAT_CLAIM_RESULT_JSON.to_string()];
+    config.evidence.claims = vec![claim];
+
+    config
+        .validate()
+        .expect("the canonical evaluation format must validate");
+}
+
+#[test]
+pub(super) fn canonical_and_cccev_claim_formats_are_valid() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("canonical-and-cccev");
+    claim.formats = vec![
+        FORMAT_CLAIM_RESULT_JSON.to_string(),
+        FORMAT_CCCEV_JSONLD.to_string(),
+    ];
+    config.evidence.claims = vec![claim];
+
+    config
+        .validate()
+        .expect("the canonical and CCCEV evaluation formats must validate");
+}
+
+#[test]
+pub(super) fn cccev_without_canonical_claim_format_is_rejected() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("cccev-only");
+    claim.formats = vec![FORMAT_CCCEV_JSONLD.to_string()];
+    config.evidence.claims = vec![claim];
+
+    let err = config
+        .validate()
+        .expect_err("CCCEV-only formats must fail validation");
+    match &err {
+        EvidenceConfigError::MissingCanonicalClaimFormat { claim } => {
+            assert_eq!(claim, "cccev-only");
+        }
+        other => panic!("unexpected error variant: {other}"),
+    }
+    let message = err.to_string();
+    assert!(
+        message.contains("cccev-only") && message.contains(FORMAT_CLAIM_RESULT_JSON),
+        "error must name the claim and canonical format: {message}"
+    );
+}
+
+#[test]
+pub(super) fn sd_jwt_vc_claim_format_is_rejected_before_canonical_omission() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("sd-jwt-only");
+    claim.formats = vec![FORMAT_SD_JWT_VC.to_string()];
+    config.evidence.claims = vec![claim];
+
+    let err = config
+        .validate()
+        .expect_err("SD-JWT VC is not an evaluation response format");
+    match &err {
+        EvidenceConfigError::UnsupportedClaimFormat { claim, format } => {
+            assert_eq!(claim, "sd-jwt-only");
+            assert_eq!(format, FORMAT_SD_JWT_VC);
+        }
+        other => panic!("unexpected error variant: {other}"),
+    }
+    let message = err.to_string();
+    assert!(
+        message.contains("credential_profiles") && message.contains(FORMAT_SD_JWT_VC),
+        "error must identify SD-JWT VC and its configuration home: {message}"
+    );
+}
+
+#[test]
+pub(super) fn mixed_claim_formats_reject_the_first_unsupported_format() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("mixed-formats");
+    claim.formats = vec![
+        FORMAT_CLAIM_RESULT_JSON.to_string(),
+        FORMAT_SD_JWT_VC.to_string(),
+        "application/example+json".to_string(),
+    ];
+    config.evidence.claims = vec![claim];
+
+    let err = config
+        .validate()
+        .expect_err("mixed formats must reject the unsupported SD-JWT VC entry");
+    match &err {
+        EvidenceConfigError::UnsupportedClaimFormat { claim, format } => {
+            assert_eq!(claim, "mixed-formats");
+            assert_eq!(format, FORMAT_SD_JWT_VC);
+        }
+        other => panic!("unexpected error variant: {other}"),
+    }
+}
+
+#[test]
+pub(super) fn unknown_claim_format_is_rejected() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("unknown-format");
+    claim.formats = vec![
+        FORMAT_CLAIM_RESULT_JSON.to_string(),
+        "application/example+json".to_string(),
+    ];
+    config.evidence.claims = vec![claim];
+
+    let err = config
+        .validate()
+        .expect_err("unknown evaluation formats must fail validation");
+    match &err {
+        EvidenceConfigError::UnsupportedClaimFormat { claim, format } => {
+            assert_eq!(claim, "unknown-format");
+            assert_eq!(format, "application/example+json");
+        }
+        other => panic!("unexpected error variant: {other}"),
+    }
+    assert!(
+        err.to_string().contains("application/example+json"),
+        "error must name the offending format: {err}"
+    );
+}
+
+#[test]
 pub(super) fn empty_allowed_claims_is_rejected() {
     // A credential profile with an empty allowed_claims would silently
     // accept every claim at issue time (see api.rs `is_empty()` short
