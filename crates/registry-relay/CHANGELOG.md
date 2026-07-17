@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Relay now publishes a reproducible, product-owned Draft 2020-12 schema for
+  the complete runtime configuration. `registry-relay schema --format json`
+  prints the committed artifact byte for byte, and local CI checks schema drift,
+  maintained runtime fixtures, strict nested and tagged shapes, and exact
+  bidirectional configuration-reference key paths. Schema and runtime parsing
+  now share bounded listener-address and duration string grammars, integer
+  widths have explicit JSON Schema bounds, and environment references reflect
+  their consumer-specific runtime invariants.
 - BREAKING: configuration `${VAR}` expansion now rejects environment variables
   that are unset or empty. `${VAR:-fallback}` uses its fallback for either
   state, `${VAR:-}` explicitly expands to empty, and `${VAR:?message}` reports
