@@ -213,6 +213,8 @@ require_literal() {
 
 require_literal "$REPO_ROOT/src/content/docs/tutorials/author-registry-project.mdx" \
 	'registryctl init --from http --project-dir registry-project'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/author-registry-project.mdx" \
+	'registryctl authoring editor --project-dir registry-project'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-fhir-r4.mdx" \
 	'outputs:'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-fhir-r4.mdx" \

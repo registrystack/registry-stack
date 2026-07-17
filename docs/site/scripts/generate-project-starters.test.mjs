@@ -31,17 +31,18 @@ test('derives all advertised starter selections from committed golden workspaces
   );
 });
 
-test('emits one canonical six-command sequence for every starter', async () => {
+test('emits one canonical seven-command sequence for every starter', async () => {
   const starters = await buildProjectStarterMatrix(repoRoot);
 
   assert.equal(starters.length, starterSources.length);
   for (const starter of starters) {
-    assert.equal(starter.commands.length, 6);
+    assert.equal(starter.commands.length, 7);
     assert.match(starter.commands[0], /^registryctl init --from /);
-    assert.match(starter.commands[1], / --trace$/);
-    assert.match(starter.commands[2], / --watch$/);
-    assert.match(starter.commands[3], /^registryctl test --project-dir [^ ]+$/);
-    assert.match(starter.commands[4], / --environment local --explain$/);
-    assert.match(starter.commands[5], / --environment local$/);
+    assert.match(starter.commands[1], /^registryctl authoring editor --project-dir /);
+    assert.match(starter.commands[2], / --trace$/);
+    assert.match(starter.commands[3], / --watch$/);
+    assert.match(starter.commands[4], /^registryctl test --project-dir [^ ]+$/);
+    assert.match(starter.commands[5], / --environment local --explain$/);
+    assert.match(starter.commands[6], / --environment local$/);
   }
 });

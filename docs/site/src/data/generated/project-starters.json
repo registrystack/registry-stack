@@ -8,6 +8,7 @@
     "fixture": "active-person",
     "commands": [
       "registryctl init --from http --project-dir http-project",
+      "registryctl authoring editor --project-dir http-project",
       "registryctl test --project-dir http-project --integration person-record --fixture active-person --trace",
       "registryctl test --project-dir http-project --integration person-record --fixture active-person --watch",
       "registryctl test --project-dir http-project",
@@ -24,6 +25,7 @@
     "fixture": "complete-health-match",
     "commands": [
       "registryctl init --from dhis2-tracker --project-dir dhis2-project",
+      "registryctl authoring editor --project-dir dhis2-project",
       "registryctl test --project-dir dhis2-project --integration health-record --fixture complete-health-match --trace",
       "registryctl test --project-dir dhis2-project --integration health-record --fixture complete-health-match --watch",
       "registryctl test --project-dir dhis2-project",
@@ -40,6 +42,7 @@
     "fixture": "birth-record-match",
     "commands": [
       "registryctl init --from opencrvs-dci --project-dir opencrvs-project",
+      "registryctl authoring editor --project-dir opencrvs-project",
       "registryctl test --project-dir opencrvs-project --integration birth-record --fixture birth-record-match --trace",
       "registryctl test --project-dir opencrvs-project --integration birth-record --fixture birth-record-match --watch",
       "registryctl test --project-dir opencrvs-project",
@@ -56,6 +59,7 @@
     "fixture": "coverage-active",
     "commands": [
       "registryctl init --from fhir-r4 --project-dir fhir-project",
+      "registryctl authoring editor --project-dir fhir-project",
       "registryctl test --project-dir fhir-project --integration coverage --fixture coverage-active --trace",
       "registryctl test --project-dir fhir-project --integration coverage --fixture coverage-active --watch",
       "registryctl test --project-dir fhir-project",
@@ -72,6 +76,7 @@
     "fixture": "snapshot-match",
     "commands": [
       "registryctl init --from snapshot --project-dir snapshot-project",
+      "registryctl authoring editor --project-dir snapshot-project",
       "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-match --trace",
       "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-match --watch",
       "registryctl test --project-dir snapshot-project",

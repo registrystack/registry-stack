@@ -5,17 +5,18 @@ synthetic DHIS2 Tracker wire shape. Product and version metadata do not select
 the Rhai runtime.
 
 ```bash
+registryctl authoring editor --project-dir .
 registryctl test --project-dir . --integration health-record --fixture complete-health-match --trace
 registryctl test --project-dir . --integration health-record --fixture complete-health-match --watch
 registryctl test --project-dir .
 registryctl check --project-dir . --environment local --explain
 registryctl build --project-dir . --environment local
 registryctl authoring xw --format reference
-registryctl authoring schema --kind integration > integration.schema.json
 ```
 
 `check` is human-readable by default. Use `--format json` only for machine
-consumers. The generated schema can be selected from an editor modeline.
+consumers. Editor setup uses the five schemas copied from this `registryctl`
+build for VS Code and Zed.
 
 Edit the reviewed `adapter.rhai`, integration contract, and synthetic fixtures
 together. Keep source credentials in the environment binding.

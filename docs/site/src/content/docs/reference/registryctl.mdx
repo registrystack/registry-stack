@@ -15,7 +15,7 @@ import ProjectStarterSequence from '../../../components/ProjectStarterSequence.a
 
 `registryctl` is the local adopter command-line tool for Registry Stack. It creates a local project, starts and stops the generated services, and runs validation and smoke checks against them.
 
-This page lists commands released in registryctl `v0.10.0`.
+This page lists commands in the current `registryctl` source.
 Run `registryctl <command> --help` for the built-in usage text.
 Most human-facing commands also perform a once-per-day update check; see
 [Update check](#update-check).
@@ -33,6 +33,7 @@ complete workflow and generated trust boundary.
 | --- | --- |
 | `init --from <starter>` | Copy `http`, `dhis2-tracker`, `opencrvs-dci`, `fhir-r4`, or `snapshot` into a local workspace. |
 | `init --project-dir <dir>` | Destination for `init --from`. Defaults to the current directory. |
+| `init --format json` | Emit the versioned machine-readable initialization report instead of the default human-readable result. |
 | `test --project-dir <dir>` | Compile and run every integration fixture through the Relay decoder and configured claim evaluator offline. Defaults to the current directory. |
 | `test --integration <id> --fixture <name>` | Select one integration fixture. `--fixture` requires `--integration`. |
 | `test --trace` | Include the safe synthetic interaction trace in the JSON report. |
@@ -46,12 +47,16 @@ complete workflow and generated trust boundary.
 | `authoring xw --format reference` | Print the generated `xw.v1` function reference for Script authors. |
 | `authoring xw --format editor` | Print generated editor metadata for the `xw.v1` function surface. |
 | `authoring schema --kind <kind>` | Print a strict project, environment, integration, fixture, or entity JSON Schema. |
+| `authoring editor --project-dir <dir>` | Create or verify version-matched VS Code and Zed schema configuration. Defaults to the current directory. |
 | `build --project-dir <dir> --environment <name>` | Emit deterministic unsigned Config Bundle input directories for the products in the selected topology. |
 | `build --against <bundle> --anchor <anchor>` | Build against an explicitly verified signed baseline. Both flags are required together. |
 
-`init`, non-watch `test`, and `build` print JSON reports. `check` prints a human-readable review
-report by default and accepts `--format json` for automation. Watch mode prints one concise
-pass/fail summary per run.
+`init` prints a concise human-readable result and tailored next commands by default.
+Use `--format json` with either initialization form to emit only a `registryctl.init.v1` report on
+standard output. The JSON report contains the project identity and kind, destination,
+initialization source, and notable artifact paths. Non-watch `test` and `build` print JSON reports.
+`check` prints a human-readable review report by default and accepts `--format json` for
+automation. Watch mode prints one concise pass/fail summary per run.
 An initialized starter records its starter ID, Registry Stack release, and
 authored-content digest in `registry-stack.yaml`. `init` verifies that digest,
 and `check --explain` reports `matches` or `diverged` together with the current
@@ -91,34 +96,50 @@ documentation copy.
 
 <ProjectStarterSequence />
 
-### Project authoring schemas
+### VS Code and Zed editor setup
 
-The pre-1.0 schemas are versioned JSON Schema Draft 2020-12 documents in the matching
-Registry Stack source checkout. The binary installer does not install a separate schema bundle.
-Use the files from the exact source revision that produced your `registryctl` binary:
+`init --from` creates schema-driven editing support with every starter. For a project created by an
+earlier `registryctl`, create or verify the same files with:
 
-| Authored file | Schema file | Versioned schema id |
-| --- | --- | --- |
-| `registry-stack.yaml` | `crates/registryctl/schemas/project-authoring/project.schema.json` | `https://registrystack.example/schemas/project-authoring/project.v1.json` |
-| `integrations/*/integration.yaml` | `crates/registryctl/schemas/project-authoring/integration.schema.json` | `https://registrystack.example/schemas/project-authoring/integration.v1.json` |
-| `integrations/*/fixtures/*.yaml` | `crates/registryctl/schemas/project-authoring/fixture.schema.json` | `https://registrystack.example/schemas/project-authoring/fixture.v1.json` |
-| `environments/*.yaml` | `crates/registryctl/schemas/project-authoring/environment.schema.json` | `https://registrystack.example/schemas/project-authoring/environment.v1.json` |
-| `entities/*.yaml` | `crates/registryctl/schemas/project-authoring/entity.schema.json` | `https://registrystack.example/schemas/project-authoring/entity.v1.json` |
-
-For example, a VS Code workspace inside the Registry Stack checkout can associate the project
-schema in `.vscode/settings.json`:
-
-```json
-{
-  "yaml.schemas": {
-    "./crates/registryctl/schemas/project-authoring/project.schema.json": [
-      "**/registry-stack.yaml"
-    ]
-  }
-}
+```sh
+registryctl authoring editor --project-dir <project>
 ```
 
-Add the other four schema paths with their authored-file patterns from the table.
+The command copies the five JSON Schema Draft 2020-12 documents embedded in the running
+`registryctl`. It records the binary version and schema SHA-256 values in
+`.registry-stack-editor/manifest.json`, so the project does not depend on a source checkout, a
+mutable branch, or network schema retrieval.
+
+| Authored file | Project-local schema |
+| --- | --- |
+| `registry-stack.yaml` | `.registry-stack-editor/schemas/project.schema.json` |
+| `environments/*.yaml` | `.registry-stack-editor/schemas/environment.schema.json` |
+| `integrations/*/integration.yaml` | `.registry-stack-editor/schemas/integration.schema.json` |
+| `integrations/*/fixtures/*.yaml` | `.registry-stack-editor/schemas/fixture.schema.json` |
+| `entities/*.yaml` | `.registry-stack-editor/schemas/entity.schema.json` |
+
+The generated `.vscode/settings.json` and `.zed/settings.json` reserve the five path suffixes in the
+table. Open the Registry Stack project directory as the editor root. In VS Code, install or accept
+the workspace recommendation for Red Hat YAML. Zed includes YAML language-server support.
+
+The shared YAML language server interprets configured paths as suffix matches at any depth. A file
+such as `notes.yaml` keeps its normal schema detection and formatting, but a nested copy such as
+`examples/environments/local.yaml` receives the Registry Stack environment schema. Do not reuse
+the five reserved layouts for unrelated YAML inside the opened project. Exact worktree-root routing
+requires the later editor extensions rather than portable 1.0 workspace settings.
+
+Completion, hover descriptions, the document outline, and inline validation then use the matching
+Registry Stack schemas. To smoke-test the association, add an unknown top-level key to an
+integration or change its `version` from the integer `1` to a string. The editor must diagnose the
+temporary edit. Remove it before running `registryctl test`.
+
+Editor setup is idempotent when every target is unchanged. On a `registryctl` upgrade, it refreshes
+a prior generated schema bundle only after the manifest shape and every available schema hash have
+been verified. Custom editor settings, malformed manifests, and schema files that disagree with
+their manifest are preserved as conflicts. The command stages all changes and rolls them back if
+publication fails. Preserve custom settings and install the mappings manually, or restore the
+expected generated files before rerunning the command. Automatic JSON-with-comments merging is not
+part of the 1.0 setup.
 
 For a project that deploys Notary, `environments/*.yaml` can set the existing
 dedicated-worker memory ceiling explicitly:
@@ -219,6 +240,13 @@ not need the lock. Registryctl `v0.8.4` predates the image-lock contract.
 | --- | --- |
 | `init relay <dir>` | Create a local Relay-backed spreadsheet API project in `<dir>`. |
 | `init relay --sample <sample>` | Sample project to generate. Defaults to `benefits`. |
+| `init relay --format json` | Emit the same `registryctl.init.v1` machine-readable report used by `init --from`. |
+
+The human-readable result identifies the generated Bruno collection and gives the validation and
+start commands. The JSON result contains no progress text, so another program can parse standard
+output directly.
+
+{/* Evidence: crates/registryctl/src/main.rs and crates/registryctl/tests/init_output.rs. */}
 
 Use the project-authoring `init --from`, `test`, `check`, and `build` commands for Relay-only,
 Notary-only, and combined deployments. Registry Notary does not have a direct-source project

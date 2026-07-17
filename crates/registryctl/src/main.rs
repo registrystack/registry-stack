@@ -4,8 +4,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use registryctl::{
-    BundleSignOptions, DeploymentProfile, DoctorFormat, ProjectBuildOptions, ProjectCheckOptions,
-    ProjectCommandReport, ProjectInitOptions, ProjectStarter, ProjectTestOptions,
+    BundleSignOptions, DeploymentProfile, DoctorFormat, InitProjectKind, InitReport, InitSource,
+    ProjectBuildOptions, ProjectCheckOptions, ProjectCommandReport, ProjectEditorSetupOptions,
+    ProjectInitOptions, ProjectSchemaKind, ProjectStarter, ProjectTestOptions,
     ProjectTestSelection, Sample,
 };
 
@@ -32,29 +33,34 @@ fn main() -> Result<()> {
         Commands::Init {
             from,
             project_dir,
+            format,
             command,
-        } => match (from, command) {
-            (Some(starter), None) => {
-                print_json(&registryctl::init_registry_project(&ProjectInitOptions {
+        } => {
+            let report = match (from, command) {
+                (Some(starter), None) => registryctl::init_registry_project(&ProjectInitOptions {
                     starter,
                     directory: project_dir,
-                })?)?
-            }
-            (None, Some(command)) => {
-                let image_lock = registryctl::load_registryctl_image_lock()?;
-                match *command {
-                    InitCommand::Relay { dir, sample } => {
-                        registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?;
-                    }
-                    InitCommand::SpreadsheetApi { dir, sample } => {
-                        registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?;
+                })?,
+                (None, Some(command)) => {
+                    let image_lock = registryctl::load_registryctl_image_lock()?;
+                    match *command {
+                        InitCommand::Relay { dir, sample } => {
+                            registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?
+                        }
+                        InitCommand::SpreadsheetApi { dir, sample } => {
+                            registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?
+                        }
                     }
                 }
+                _ => anyhow::bail!(
+                    "init requires exactly one of --from or a legacy product subcommand"
+                ),
+            };
+            match format {
+                OutputFormat::Human => println!("{}", render_init_report(&report)?),
+                OutputFormat::Json => print_json(&report)?,
             }
-            _ => {
-                anyhow::bail!("init requires exactly one of --from or a legacy product subcommand")
-            }
-        },
+        }
         Commands::Test {
             project_dir,
             environment,
@@ -102,7 +108,7 @@ fn main() -> Result<()> {
             let report = registryctl::check_registry_project(&ProjectCheckOptions {
                 project_directory: project_dir,
                 environment,
-                explain: explain || format == ProjectReportFormat::Human,
+                explain: explain || format == OutputFormat::Human,
                 against,
                 anchor,
             });
@@ -113,11 +119,11 @@ fn main() -> Result<()> {
                         error.downcast_ref::<registryctl::ProjectAuthoringDiagnostics>()
                     {
                         match format {
-                            ProjectReportFormat::Human => println!(
+                            OutputFormat::Human => println!(
                                 "{}",
                                 registryctl::render_project_authoring_diagnostics(report)
                             ),
-                            ProjectReportFormat::Json => print_json(report)?,
+                            OutputFormat::Json => print_json(report)?,
                         }
                         std::process::exit(1);
                     }
@@ -125,10 +131,10 @@ fn main() -> Result<()> {
                 }
             };
             match format {
-                ProjectReportFormat::Human => {
+                OutputFormat::Human => {
                     println!("{}", render_check_report(&report, explain)?)
                 }
-                ProjectReportFormat::Json => print_json(&report)?,
+                OutputFormat::Json => print_json(&report)?,
             }
         }
         Commands::Authoring { command } => match command {
@@ -143,6 +149,11 @@ fn main() -> Result<()> {
                 ),
             },
             AuthoringCommand::Schema { kind } => print!("{}", kind.document()),
+            AuthoringCommand::Editor { project_dir } => print_json(
+                &registryctl::setup_registry_project_editor(&ProjectEditorSetupOptions {
+                    project_directory: project_dir,
+                })?,
+            )?,
         },
         Commands::Build {
             project_dir,
@@ -237,7 +248,9 @@ fn main() -> Result<()> {
         },
         Commands::Bruno { command } => match command {
             BrunoCommand::Generate { force } => {
-                registryctl::bruno_generate_project(&std::env::current_dir()?, force)?;
+                let collection =
+                    registryctl::bruno_generate_project(&std::env::current_dir()?, force)?;
+                println!("Bruno collection: {}", human_path(&collection));
             }
             BrunoCommand::Open => registryctl::bruno_open_project(&std::env::current_dir()?)?,
             BrunoCommand::Run => registryctl::bruno_run_project(&std::env::current_dir()?)?,
@@ -329,6 +342,87 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
         serde_json::to_string_pretty(value).context("failed to render JSON output")?
     );
     Ok(())
+}
+
+fn render_init_report(report: &InitReport) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let project_kind = match report.project_kind {
+        InitProjectKind::RegistryProject => "Registry Stack project",
+        InitProjectKind::RelaySpreadsheetApi => "Relay spreadsheet API",
+    };
+    let mut output = String::new();
+    writeln!(output, "Initialized {project_kind} {:?}.", report.project)?;
+    writeln!(output, "  Directory: {}", human_path(&report.output))?;
+    match &report.source {
+        InitSource::Starter {
+            id,
+            release,
+            content_state,
+            ..
+        } => {
+            writeln!(output, "  Starter: {id} (Registry Stack {release})")?;
+            writeln!(output, "  Starter content: {content_state} bundled digest")?;
+        }
+        InitSource::Sample { id } => writeln!(output, "  Sample: {id}")?,
+    }
+    if let Some(collection) = &report.artifacts.bruno_collection {
+        writeln!(output, "  Bruno collection: {}", human_path(collection))?;
+    }
+    if let Some(manifest) = &report.artifacts.editor_manifest {
+        writeln!(
+            output,
+            "  Editor support: VS Code and Zed ({})",
+            human_path(manifest)
+        )?;
+    }
+
+    writeln!(output, "\nNext:")?;
+    if report.output != std::path::Path::new(".") {
+        writeln!(output, "  cd {}", human_path(&report.output))?;
+    }
+    match report.project_kind {
+        InitProjectKind::RegistryProject => {
+            writeln!(output, "  registryctl test --project-dir .")?;
+        }
+        InitProjectKind::RelaySpreadsheetApi => {
+            writeln!(output, "  registryctl doctor --profile local --format json")?;
+            writeln!(output, "  registryctl start")?;
+        }
+    }
+    Ok(output.trim_end().to_string())
+}
+
+fn human_path(path: &std::path::Path) -> String {
+    let mut value = path.display().to_string();
+    if path.is_relative() && value.starts_with('-') {
+        value.insert_str(0, "./");
+    }
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "/._-".contains(character))
+    {
+        value
+    } else {
+        let mut escaped = String::with_capacity(value.len());
+        for character in value.chars() {
+            match character {
+                '\\' => escaped.push_str("\\\\"),
+                '\'' => escaped.push_str("\\'"),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                character if character.is_control() => {
+                    use std::fmt::Write as _;
+                    write!(escaped, "\\u{:04x}", character as u32)
+                        .expect("writing to a String cannot fail");
+                }
+                character => escaped.push(character),
+            }
+        }
+        format!("$'{escaped}'")
+    }
 }
 
 fn render_test_summary(report: &ProjectCommandReport) -> String {
@@ -664,7 +758,7 @@ fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum ProjectReportFormat {
+enum OutputFormat {
     Human,
     Json,
 }
@@ -673,31 +767,6 @@ enum ProjectReportFormat {
 enum XwFormat {
     Reference,
     Editor,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum ProjectSchemaKind {
-    Project,
-    Environment,
-    Integration,
-    Fixture,
-    Entity,
-}
-
-impl ProjectSchemaKind {
-    const fn document(self) -> &'static str {
-        match self {
-            Self::Project => include_str!("../schemas/project-authoring/project.schema.json"),
-            Self::Environment => {
-                include_str!("../schemas/project-authoring/environment.schema.json")
-            }
-            Self::Integration => {
-                include_str!("../schemas/project-authoring/integration.schema.json")
-            }
-            Self::Fixture => include_str!("../schemas/project-authoring/fixture.schema.json"),
-            Self::Entity => include_str!("../schemas/project-authoring/entity.schema.json"),
-        }
-    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -711,6 +780,12 @@ enum AuthoringCommand {
     Schema {
         #[arg(long, value_enum)]
         kind: ProjectSchemaKind,
+    },
+    /// Install deterministic local schema mappings for VS Code and Zed.
+    Editor {
+        /// Project workspace root containing registry-stack.yaml.
+        #[arg(long, default_value = ".")]
+        project_dir: PathBuf,
     },
 }
 
@@ -738,6 +813,9 @@ enum Commands {
         /// Destination for a project workspace initialized with --from.
         #[arg(long, default_value = ".")]
         project_dir: PathBuf,
+        /// Human-readable result, or machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human", global = true)]
+        format: OutputFormat,
         #[command(subcommand)]
         command: Option<Box<InitCommand>>,
     },
@@ -778,7 +856,7 @@ enum Commands {
         explain: bool,
         /// Human-readable review report, or deliberate machine-readable JSON.
         #[arg(long, value_enum, default_value = "human")]
-        format: ProjectReportFormat,
+        format: OutputFormat,
         /// Previously signed product Config Bundle with review and internal approval state.
         #[arg(long)]
         against: Option<PathBuf>,
@@ -882,8 +960,29 @@ mod tests {
             Commands::Init {
                 from: Some(ProjectStarter::Http),
                 project_dir,
+                format: OutputFormat::Human,
                 command: None,
             } if project_dir == std::path::Path::new("registry-project")
+        ));
+
+        let relay_init = Cli::try_parse_from([
+            "registryctl",
+            "init",
+            "relay",
+            "my-first-api",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            relay_init.command,
+            Commands::Init {
+                from: None,
+                format: OutputFormat::Json,
+                command: Some(command),
+                ..
+            } if matches!(command.as_ref(), InitCommand::Relay { dir, .. }
+                if dir == std::path::Path::new("my-first-api"))
         ));
 
         let test = Cli::try_parse_from([
@@ -966,7 +1065,7 @@ mod tests {
                 project_dir,
                 environment,
                 explain: true,
-                format: ProjectReportFormat::Human,
+                format: OutputFormat::Human,
                 against: Some(against),
                 anchor: Some(anchor),
             } if project_dir == std::path::Path::new("registry-project")
@@ -989,7 +1088,7 @@ mod tests {
         assert!(matches!(
             json_check.command,
             Commands::Check {
-                format: ProjectReportFormat::Json,
+                format: OutputFormat::Json,
                 explain: false,
                 ..
             }
@@ -1038,6 +1137,28 @@ mod tests {
             schema_document["title"],
             "Registry Stack project integration v1"
         );
+
+        let editor = Cli::try_parse_from([
+            "registryctl",
+            "authoring",
+            "editor",
+            "--project-dir",
+            "registry-project",
+        ])
+        .unwrap();
+        assert!(matches!(
+            editor.command,
+            Commands::Authoring {
+                command: AuthoringCommand::Editor { project_dir }
+            } if project_dir == std::path::Path::new("registry-project")
+        ));
+        let default_editor = Cli::try_parse_from(["registryctl", "authoring", "editor"]).unwrap();
+        assert!(matches!(
+            default_editor.command,
+            Commands::Authoring {
+                command: AuthoringCommand::Editor { project_dir }
+            } if project_dir == std::path::Path::new(".")
+        ));
 
         let build = Cli::try_parse_from([
             "registryctl",

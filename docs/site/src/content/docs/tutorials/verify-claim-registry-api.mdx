@@ -39,10 +39,18 @@ Create a local Registry Stack project:
 registryctl init --from http --project-dir registry-claim-project
 ```
 
-The report contains:
+The result confirms the initialized project and next command:
 
 ```text
-"status": "initialized"
+Initialized Registry Stack project "fictional-citizen-registry".
+  Directory: registry-claim-project
+  Starter: http (Registry Stack 0.10.0)
+  Starter content: matches bundled digest
+  Editor support: VS Code and Zed (registry-claim-project/.registry-stack-editor/manifest.json)
+
+Next:
+  cd registry-claim-project
+  registryctl test --project-dir .
 ```
 
 The authored `registry-stack.yaml` defines one evidence service. Its consultation maps a bounded
