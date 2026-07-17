@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- BREAKING: configuration `${VAR}` expansion now rejects environment variables
+  that are unset or empty. `${VAR:-fallback}` uses its fallback for either
+  state, `${VAR:-}` explicitly expands to empty, and `${VAR:?message}` reports
+  its message for either state. Whitespace-only values remain non-empty.
 - Omitted claim `formats` now defaults to the canonical
   `application/vnd.registry-notary.claim-result+json` evaluation response
   format. An explicitly empty `formats: []` is rejected at configuration load

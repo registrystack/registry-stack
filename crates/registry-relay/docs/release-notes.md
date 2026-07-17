@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- BREAKING: Configuration `${VAR}` expansion now rejects environment variables
+  that are unset or empty. `${VAR:-fallback}` uses its fallback for either
+  state, `${VAR:-}` explicitly expands to empty, and `${VAR:?message}` reports
+  its message for either state. Whitespace-only values remain non-empty.
 - Relay permanently marks public readiness unavailable with the stable
   `audit.chain.inconsistent` code after retained-audit-chain verification or
   write-time fork detection. Transient audit I/O failures do not change
