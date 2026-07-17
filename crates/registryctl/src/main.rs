@@ -1278,46 +1278,8 @@ mod tests {
             "Relay authority: 0 source integrations, 1 records API service, 1 materialized entity definition"
         ));
 
-        let temporary = tempfile::tempdir().expect("temporary directory");
-        let project = temporary.path().join("notary-only-evaluation");
-        std::fs::create_dir_all(project.join("environments"))
-            .expect("environment directory creates");
-        std::fs::write(
-            project.join("registry-stack.yaml"),
-            r#"version: 1
-registry: { id: fictional-evaluation-registry }
-services:
-  applicant-evaluation:
-    kind: evidence
-    version: 1
-    purpose: application-processing
-    legal_basis: application-processing
-    consent: not_required
-    access: { scopes: ["evidence:application:read"] }
-    claims:
-      application-complete:
-        cel: "true"
-        value: { type: boolean }
-        disclosure: predicate
-    credential_profiles: {}
-"#,
-        )
-        .expect("project writes");
-        std::fs::write(
-            project.join("environments/local.yaml"),
-            r#"version: 1
-callers:
-  application-service:
-    api_key_fingerprint: { secret: APPLICATION_SERVICE_TOKEN_HASH }
-    scopes: ["evidence:application:read"]
-deployment:
-  profile: local
-  notary: { service: evaluation-notary }
-"#,
-        )
-        .expect("environment writes");
         let notary_report = registryctl::check_registry_project(&ProjectCheckOptions {
-            project_directory: project,
+            project_directory: fixtures.join("notary-only-evaluation"),
             environment: "local".to_string(),
             explain: true,
             against: None,
@@ -1333,35 +1295,117 @@ deployment:
     }
 
     #[test]
-    fn project_test_watch_reruns_each_maintained_starter_after_an_authored_change() {
-        let starters = [
-            (ProjectStarter::Http, "person-record", "active-person"),
-            (
-                ProjectStarter::Dhis2Tracker,
-                "health-record",
-                "complete-health-match",
-            ),
-            (
-                ProjectStarter::OpencrvsDci,
-                "birth-record",
-                "birth-record-match",
-            ),
-            (ProjectStarter::FhirR4, "coverage", "coverage-active"),
-            (
-                ProjectStarter::Snapshot,
-                "person-snapshot",
-                "snapshot-match",
-            ),
-        ];
+    fn project_test_watch_reruns_each_maintained_fixture_journey_after_an_authored_change() {
+        fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Result<()> {
+            std::fs::create_dir_all(destination)?;
+            for entry in std::fs::read_dir(source)? {
+                let entry = entry?;
+                let target = destination.join(entry.file_name());
+                if entry.file_type()?.is_dir() {
+                    copy_directory(&entry.path(), &target)?;
+                } else {
+                    std::fs::copy(entry.path(), target)?;
+                }
+            }
+            Ok(())
+        }
 
-        for (starter, integration, fixture) in starters {
-            let temporary = tempfile::tempdir().expect("temporary directory");
-            let project_directory = temporary.path().join("registry-project");
-            registryctl::init_registry_project(&ProjectInitOptions {
+        let manifest_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let repository_root = manifest_root.join("../..");
+        let catalog: serde_yaml::Value = serde_yaml::from_slice(
+            &std::fs::read(manifest_root.join("tests/fixtures/project-authoring-journeys.yaml"))
+                .expect("project-authoring journey catalog reads"),
+        )
+        .expect("project-authoring journey catalog parses");
+        let mut journeys = Vec::new();
+        for workspace in catalog["workspaces"]
+            .as_sequence()
+            .expect("catalog workspaces")
+        {
+            if !workspace["steps"]
+                .as_sequence()
+                .expect("catalog steps")
+                .iter()
+                .any(|step| step.as_str() == Some("watch"))
+            {
+                continue;
+            }
+            assert_eq!(
+                workspace["classification"].as_str(),
+                Some("maintained"),
+                "watch is a maintained authoring journey"
+            );
+            let starter = workspace["starter"].as_str().map(|starter| match starter {
+                "http" => ProjectStarter::Http,
+                "dhis2-tracker" => ProjectStarter::Dhis2Tracker,
+                "opencrvs-dci" => ProjectStarter::OpencrvsDci,
+                "fhir-r4" => ProjectStarter::FhirR4,
+                "snapshot" => ProjectStarter::Snapshot,
+                other => panic!("unknown catalog starter {other}"),
+            });
+            let id = workspace["id"].as_str().expect("watch id").to_string();
+            let project_dir = workspace["project_dir"]
+                .as_str()
+                .expect("watch project directory")
+                .to_string();
+            let source = repository_root.join(
+                workspace["source"]
+                    .as_str()
+                    .expect("catalog workspace source"),
+            );
+            let project: serde_yaml::Value = serde_yaml::from_slice(
+                &std::fs::read(source.join("registry-stack.yaml")).expect("catalog project reads"),
+            )
+            .expect("catalog project parses");
+            let integrations = project["integrations"]
+                .as_mapping()
+                .expect("watch journey integrations");
+            assert_eq!(integrations.len(), 1, "watch journey integration");
+            let (integration, reference) = integrations.iter().next().expect("watch integration");
+            let integration = integration.as_str().expect("integration id").to_string();
+            let integration_file = reference["file"].as_str().expect("integration file");
+            let fixture_file = workspace["focused_fixture_file"]
+                .as_str()
+                .expect("focused fixture file");
+            let fixture_path = source
+                .join(integration_file)
+                .parent()
+                .expect("integration directory")
+                .join("fixtures")
+                .join(fixture_file);
+            let fixture: serde_yaml::Value =
+                serde_yaml::from_slice(&std::fs::read(fixture_path).expect("watch fixture reads"))
+                    .expect("watch fixture parses");
+            journeys.push((
+                id,
                 starter,
-                directory: project_directory.clone(),
-            })
-            .expect("maintained starter initializes");
+                source,
+                project_dir,
+                integration,
+                fixture["name"]
+                    .as_str()
+                    .expect("watch fixture name")
+                    .to_string(),
+            ));
+        }
+        assert_eq!(
+            journeys.len(),
+            9,
+            "every maintained fixture journey watches"
+        );
+
+        for (id, starter, source, project_dir, integration, fixture) in journeys {
+            let temporary = tempfile::tempdir().expect("temporary directory");
+            let project_directory = temporary.path().join(project_dir);
+            if let Some(starter) = starter {
+                registryctl::init_registry_project(&ProjectInitOptions {
+                    starter,
+                    directory: project_directory.clone(),
+                })
+                .expect("maintained starter initializes");
+            } else {
+                copy_directory(&source, &project_directory).expect("maintained non-starter copies");
+            }
 
             let mut observed_runs = 0;
             watch_project_tests_until(
@@ -1371,9 +1415,9 @@ deployment:
                     live: false,
                 },
                 ProjectTestSelection {
-                    integration: Some(integration.to_string()),
-                    fixture: Some(fixture.to_string()),
-                    trace: true,
+                    integration: Some(integration),
+                    fixture: Some(fixture),
+                    trace: false,
                 },
                 |completed_runs, root| {
                     observed_runs = completed_runs;
@@ -1393,7 +1437,7 @@ deployment:
                 },
             )
             .expect("offline watch reruns after an authored project file changes");
-            assert_eq!(observed_runs, 2, "{starter:?}");
+            assert_eq!(observed_runs, 2, "{id}");
         }
     }
 

@@ -12,6 +12,7 @@ standards_referenced: []
 ---
 
 import ProjectStarterSequence from '../../../components/ProjectStarterSequence.astro';
+import ProjectWorkspaceJourneys from '../../../components/ProjectWorkspaceJourneys.astro';
 
 `registryctl` is the local adopter command-line tool for Registry Stack. It creates a local project, starts and stops the generated services, and runs validation and smoke checks against them.
 
@@ -97,6 +98,14 @@ selectors in this generated matrix come from the committed starter workspace, no
 documentation copy.
 
 <ProjectStarterSequence />
+
+### Maintained and conformance workspaces
+
+The following workspaces are checked-in authoring evidence, not additional public starters.
+Their command lists contain only the workflow steps supported by each workspace.
+OpenSPP remains offline-fixture-only pending the owner-run holdout in GH#357.
+
+<ProjectWorkspaceJourneys />
 
 ### VS Code and Zed editor setup
 
