@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-last_reviewed: "2026-06-28"
+last_reviewed: "2026-07-17"
 doc_type: tutorial
 locale: en
 standards_referenced:
@@ -18,11 +18,11 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 Registry Relay turns a tabular source you already hold, such as a spreadsheet or a database
 table, into a protected, read-only API without copying the data out.
 Use this tutorial to start a protected registry API on your machine.
-You will create a local project from a tiny benefits workbook, make one denied request, make one
-allowed request, and inspect the contract Registry Stack generated.
+You will create a local project from a tiny benefits workbook, compare operational and restricted
+identity reads, and inspect the contract Registry Stack generated.
 
 <QuickstartMeta
-  outcome="A protected local API over a benefits workbook, with anonymous access denied, an authorized record read succeeding, and an edited disclosure rule enforced."
+  outcome="A protected local API over a benefits workbook, with operational and restricted identity reads separated, one canonical birth date retained, and an edited disclosure rule enforced."
   time="About 15 minutes after Docker is installed"
   level="Local single-node"
   prerequisites={['registryctl 0.10.0', 'A Docker Compose provider', 'curl']}
@@ -90,8 +90,12 @@ Next:
 The sample workbook has three sheets:
 
 - `Households`: household registration and district attributes.
-- `Persons`: household members, eligibility status, and sensitive identity fields.
+- `Persons`: household members, dates of birth, registration status, and identity fields.
 - `Applications`: benefit applications, decisions, verification flags, and review dates.
+
+The workbook stores `date_of_birth`, not a second, time-dependent `age_band` value. Registry Notary
+can derive an age or age band for a specific evaluation date when a relying party does not need the
+birth date itself.
 
 ## Start the local stack
 
@@ -126,6 +130,9 @@ PASS metadata key can list datasets
 PASS metadata key cannot read rows
 PASS row read without Data-Purpose returns 400
 PASS row reader can read filtered records
+PASS row reader cannot read restricted identity fields
+PASS identity reader with unpermitted Data-Purpose returns 403
+PASS identity reader can read one restricted identity record
 PASS anonymous caller can fetch runtime OpenAPI
 ```
 
@@ -193,9 +200,28 @@ curl -sS -G \
   http://127.0.0.1:4242/v1/datasets/benefits_casework/entities/person/records
 ```
 
-The response includes synthetic people from household `hh-1001`.
-Sensitive source columns such as full names, national identifiers, and addresses are not exposed as
-public entity fields in this sample.
+The response includes four synthetic people from household `hh-1001`.
+Each record contains the canonical birth date and no stored age band. This abridged response shows
+the first record; three more person records are omitted:
+
+```json
+{
+  "data": [
+    {
+      "date_of_birth": "1989-05-14",
+      "household_id": "hh-1001",
+      "id": "per-2001",
+      "registration_status": "active",
+      "relationship_to_head": "head"
+    }
+  ],
+  "pagination": { "has_more": false }
+}
+```
+
+This proves that the operational `person` projection returns the requested household records without
+full names or national identifiers. The operational `household` projection also excludes the address.
+Those values are available through separate restricted projections in the next section.
 [The person records operation in the running API docs](http://127.0.0.1:4242/docs#tag/benefits-casework-person/GET/v1/datasets/benefits_casework/entities/person/records)
 documents the `household_id` filter and the required `Data-Purpose` header.
 
@@ -212,16 +238,84 @@ curl -i -G \
 Relay refuses this with `403 Forbidden` and the code `auth.scope_denied`.
 The key is valid, but it does not have row-read scope.
 
+## Read restricted identity fields
+
+First, try to read the identity projection with the operational row key:
+
+```sh
+curl -i \
+  -H "Authorization: Bearer $ROW_READER_RAW" \
+  -H "Data-Purpose: https://example.local/purpose/identity-verification" \
+  'http://127.0.0.1:4242/v1/datasets/benefits_casework/entities/person_identity/records/per-2001?expand=household_contact'
+```
+
+Relay returns `403 Forbidden` with `auth.scope_denied`. The row key can read the operational
+projection, but it does not hold the separate `benefits_casework:identity_release` scope.
+
+The response body looks like this; the generated `request_id` is omitted:
+
+```json
+{
+  "type": "https://id.registrystack.org/problems/registry-relay/auth/scope_denied",
+  "title": "Scope denied",
+  "status": 403,
+  "detail": "required scope: benefits_casework:identity_release",
+  "code": "auth.scope_denied"
+}
+```
+
+Now make the same single-subject request with the identity key:
+
+```sh
+curl -sS \
+  -H "Authorization: Bearer $IDENTITY_READER_RAW" \
+  -H "Data-Purpose: https://example.local/purpose/identity-verification" \
+  'http://127.0.0.1:4242/v1/datasets/benefits_casework/entities/person_identity/records/per-2001?expand=household_contact'
+```
+
+Relay returns the synthetic person's `given_name`, `family_name`, and `national_id`, plus the
+household's `address_line` in the expanded `household_contact` object. The restricted projections
+accept only their identity-verification purpose and cap each collection response at one record.
+
+The response is:
+
+```json
+{
+  "family_name": "Elm",
+  "given_name": "Fae",
+  "household_contact": {
+    "address_line": "595 River Rd, Southvale",
+    "id": "hh-1001"
+  },
+  "household_id": "hh-1001",
+  "id": "per-2001",
+  "national_id": "FAKE-856648"
+}
+```
+
+This proves that the additional identity scope and permitted purpose unlock access to the restricted
+projection, including its configured household relationship.
+
+The response cap is not row-level authorization. This local identity key can read every record in
+the restricted projections, one page at a time. In a deployed registry, issue this scope only to a
+role allowed to read those identity fields, or add principal-bound row policy through your IAM
+design. The declared purpose is an additional policy gate, not a substitute for that authorization.
+
+This route is appropriate when an authorized caseworker needs the source fields. When another
+system needs only an age threshold or age band, use Notary to derive that result from
+`date_of_birth` without returning the birth date or the rest of the row.
+
 ## Inspect the generated contract
 
 Now that the API works, inspect what `registryctl` generated:
 
 ```sh
-sed -n '1,180p' relay/config.yaml
+sed -n '1,520p' relay/config.yaml
 ```
 
 The generated Relay contract defines the local service metadata, API-key scopes, source tables,
-public entities, filters, relationships, aggregates, and audit sink.
+operational and restricted projections, purpose allowlists, filters, relationships, aggregates,
+and audit sink.
 Raw keys stay in `secrets/local.env`.
 
 Open the runtime API reference:
@@ -244,11 +338,12 @@ This request returns household counts by district and applies the configured dis
 ```sh
 curl -sS \
   -H "Authorization: Bearer $AGGREGATE_READER_RAW" \
+  -H "Data-Purpose: https://example.local/purpose/tutorial" \
   http://127.0.0.1:4242/v1/datasets/benefits_casework/aggregates/by_district
 ```
 
 The response is `200 OK`, and the workbook has four districts, but only two appear.
-The important fields look like this; other fields are omitted, and the order of
+This abridged response shows the important fields; other fields are omitted, and the order of
 observations can vary:
 
 ```json
@@ -295,12 +390,22 @@ Run the aggregate request from the previous section again:
 ```sh
 curl -sS \
   -H "Authorization: Bearer $AGGREGATE_READER_RAW" \
+  -H "Data-Purpose: https://example.local/purpose/tutorial" \
   http://127.0.0.1:4242/v1/datasets/benefits_casework/aggregates/by_district
 ```
 
 The response is still `200 OK`, but `observations` is now an empty array: no district
 holds three households, so the rule suppresses every group.
 An empty result is the only signal; suppressed groups are omitted, not marked.
+
+```json
+{
+  "disclosure_control": { "min_cell_size": 3, "suppression": "omit" },
+  "observations": []
+}
+```
+
+This proves that the configuration edit changed the API response without changing the workbook.
 
 Now try to weaken the rule instead.
 Set `min_group_size` to 1 and restart again:
@@ -357,13 +462,17 @@ anonymous read was refused with `401` (`auth.missing_credential`), an authorized
 only the rows you asked for, and a key that lacked the row-read scope was refused with `403`
 (`auth.scope_denied`). Relay read the workbook in place and never wrote back to it: the data
 stayed where it started, and only an authorized, scoped request got an answer out.
+The workbook stored one canonical date of birth rather than a drifting age band. Operational reads
+excluded names, national identifiers, and addresses, while a separate identity key and purpose
+allowed a one-subject read of those fields.
 You then raised the aggregate disclosure floor and watched every group disappear, and
 Relay refused to start when the floor dropped under 2 on personal data.
 
 ## Next
 
-- [Evaluate a claim with Registry Notary](../verify-claim-registry-api/): add Notary to this same
-  project and answer a narrow question without exposing the source row.
+- [Evaluate a registry-backed claim locally](../verify-claim-registry-api/): add Notary to this same
+  project, match by name and date of birth, and evaluate registration acceptance without exposing
+  the source row.
 - [Author an HTTP Registry Stack project](../author-registry-project/): adapt a source through
   Relay and compile Notary claims against the exact consultation contract.
 

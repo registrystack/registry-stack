@@ -1,0 +1,10 @@
+name: nia-stone-pending
+classification: synthetic
+input: { given_name: Nia, family_name: Stone, date_of_birth: "1998-03-05" }
+interactions:
+  - expect: { method: GET, path: /snapshot }
+    respond: { status: 200, body: { registration_status: pending } }
+expect:
+  outcome: match
+  outputs: { registration_status: pending }
+  claims: { person-registration-accepted: false }

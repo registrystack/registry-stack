@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Execute the deployable Relay adopter tutorial against checked-out source.
+# Execute the deployable Relay and Notary adopter tutorials against checked-out source.
 # This is a source-under-test CI gate: it builds registryctl and the release
 # product image shapes from the current checkout. It deliberately does not run
 # the published installer or release assets; the fresh-reader release proof is
@@ -14,6 +14,7 @@ SITE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$SITE_ROOT/../.." && pwd)"
 HELPER="$SITE_ROOT/scripts/registryctl-tutorial.mjs"
 RELAY_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx"
+NOTARY_TUTORIAL="$SITE_ROOT/src/content/docs/tutorials/verify-claim-registry-api.mdx"
 BUILDER_IMAGE="rust:1.95-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb"
 LINUX_TARGET="$REPO_ROOT/target/registryctl-tutorial-linux-amd64"
 CARGO_HOME_DIR="$REPO_ROOT/target/registryctl-tutorial-cargo-home"
@@ -190,11 +191,18 @@ run_block() {
 	case "$expected" in
 	success)
 			if ((status != 0)); then
-				if [[ -f "$PWD/compose.yaml" ]]; then
-					local diagnostic
-					diagnostic="$WORK_ROOT/command-$(printf '%03d' "$COMMAND_COUNTER")-compose.log"
-				docker compose -p "$COMPOSE_PROJECT_NAME" -f "$PWD/compose.yaml" \
-					logs --no-color --tail 100 >"$diagnostic" 2>&1 || true
+			if [[ -f "$PWD/compose.yaml" ]]; then
+				local diagnostic
+				diagnostic="$WORK_ROOT/command-$(printf '%03d' "$COMMAND_COUNTER")-compose.log"
+				{
+					docker compose -p "$COMPOSE_PROJECT_NAME" -f "$PWD/compose.yaml" ps --all
+					for service in $(docker compose -p "$COMPOSE_PROJECT_NAME" -f "$PWD/compose.yaml" \
+						ps --all --services); do
+						printf '\n[%s]\n' "$service"
+						docker compose -p "$COMPOSE_PROJECT_NAME" -f "$PWD/compose.yaml" \
+							logs --no-color --tail 40 "$service"
+					done
+				} >"$diagnostic" 2>&1 || true
 				printf '\n--- sanitized Compose log tail ---\n' >&2
 				sanitize_output "$diagnostic" >&2
 			fi
@@ -275,6 +283,10 @@ assert_json_subset() {
 	node "$HELPER" assert-json-subset "$1" "$2"
 }
 
+assert_json_fence_subset() {
+	node "$HELPER" assert-json-fence-subset "$1" "$2" "$3" "$4"
+}
+
 build_source_under_test
 export DOCKER_DEFAULT_PLATFORM=linux/amd64
 
@@ -286,7 +298,7 @@ run_relay_tutorial() {
 	mkdir -p "$tutorial_root"
 
 	node "$HELPER" assert-layout "$RELAY_TUTORIAL" \
-		'["Install registryctl","Create the sample project","Start the local stack","Run the smoke check","Load local demo keys","Make one denied request","Make one allowed request","Read one protected record","Read one protected record","Inspect the generated contract","Inspect the generated contract","Run an aggregate","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Stop the stack"]'
+		'["Install registryctl","Create the sample project","Start the local stack","Run the smoke check","Load local demo keys","Make one denied request","Make one allowed request","Read one protected record","Read one protected record","Read restricted identity fields","Read restricted identity fields","Inspect the generated contract","Inspect the generated contract","Run an aggregate","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Change the disclosure rule","Stop the stack"]'
 	node "$HELPER" extract-shell "$RELAY_TUTORIAL" "$blocks"
 
 	expected_install=$'curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.10.0/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.10.0 bash\nregistryctl --version'
@@ -313,7 +325,7 @@ run_relay_tutorial() {
 	assert_fence_lines "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Run the smoke check' text 1
 	[[ -s output/smoke-results.json ]] || { printf 'Relay smoke report is missing\n' >&2; exit 1; }
 	run_block 'Relay 5: Load local demo keys' "$blocks/05.sh" success
-	[[ -n "${METADATA_READER_RAW:-}" && -n "${ROW_READER_RAW:-}" && -n "${AGGREGATE_READER_RAW:-}" ]] || {
+	[[ -n "${METADATA_READER_RAW:-}" && -n "${ROW_READER_RAW:-}" && -n "${AGGREGATE_READER_RAW:-}" && -n "${IDENTITY_READER_RAW:-}" ]] || {
 		printf 'required Relay tutorial credentials were not loaded\n' >&2
 		exit 1
 	}
@@ -324,34 +336,111 @@ run_relay_tutorial() {
 	assert_contains "$LAST_OUTPUT" benefits_casework
 	run_block 'Relay 8: Read one protected record' "$blocks/08.sh" success
 	assert_http "$LAST_OUTPUT" 200
-	assert_contains "$LAST_OUTPUT" per-2001 hh-1001
+	assert_contains "$LAST_OUTPUT" per-2001 hh-1001 date_of_birth
+	assert_not_contains "$LAST_OUTPUT" age_band eligibility_status is_primary_applicant
+	assert_json_fence_subset "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Read one protected record' 1
 	run_block 'Relay 9: Refuse metadata-only row read' "$blocks/09.sh" success
 	assert_problem "$LAST_OUTPUT" 403 auth.scope_denied
-	run_block 'Relay 10: Inspect the generated contract' "$blocks/10.sh" success
-	run_block 'Relay 11: Open the runtime API reference' "$blocks/11.sh" success
-	assert_fence_lines "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Inspect the generated contract' text 1
-	run_block 'Relay 12: Run an aggregate' "$blocks/12.sh" success
+	run_block 'Relay 10: Refuse operational key on identity projection' "$blocks/10.sh" success
+	assert_problem "$LAST_OUTPUT" 403 auth.scope_denied
+	assert_json_fence_subset "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Read restricted identity fields' 1
+	run_block 'Relay 11: Read restricted identity projection' "$blocks/11.sh" success
 	assert_http "$LAST_OUTPUT" 200
-	assert_json_subset "$LAST_OUTPUT" '{"disclosure_control":{"min_cell_size":2,"suppression":"omit"},"observations":[{"district":"north","household_count":2},{"district":"south","household_count":2}]}'
+	assert_contains "$LAST_OUTPUT" Fae Elm FAKE-856648 '595 River Rd, Southvale'
+	assert_json_fence_subset "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Read restricted identity fields' 2
+	run_block 'Relay 12: Inspect the generated contract' "$blocks/12.sh" success
+	run_block 'Relay 13: Open the runtime API reference' "$blocks/13.sh" success
+	assert_fence_lines "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Inspect the generated contract' text 1
+	run_block 'Relay 14: Run an aggregate' "$blocks/14.sh" success
+	assert_http "$LAST_OUTPUT" 200
+	assert_json_fence_subset "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Run an aggregate' 1
 
 	node "$HELPER" set-relay-min-group-size relay/config.yaml benefits_casework by_district 3
-	run_block 'Relay 13: Restart with a stronger disclosure floor' "$blocks/13.sh" success
-	run_block 'Relay 14: Verify all aggregate groups are suppressed' "$blocks/14.sh" success
+	run_block 'Relay 15: Restart with a stronger disclosure floor' "$blocks/15.sh" success
+	run_block 'Relay 16: Verify all aggregate groups are suppressed' "$blocks/16.sh" success
 	assert_http "$LAST_OUTPUT" 200
-	assert_json_subset "$LAST_OUTPUT" '{"disclosure_control":{"min_cell_size":3,"suppression":"omit"},"observations":[]}'
+	assert_json_fence_subset "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Change the disclosure rule' 1
 
 	node "$HELPER" set-relay-min-group-size relay/config.yaml benefits_casework by_district 1
-	run_block 'Relay 15: Reject a disclosure floor below the invariant' "$blocks/15.sh" failure
+	run_block 'Relay 17: Reject a disclosure floor below the invariant' "$blocks/17.sh" failure
 	assert_contains "$LAST_OUTPUT" 'Relay did not become healthy and ready before timeout'
-	run_block 'Relay 16: Explain the rejected configuration' "$blocks/16.sh" success
+	run_block 'Relay 18: Explain the rejected configuration' "$blocks/18.sh" success
 	assert_contains "$LAST_OUTPUT" config.validation_error 'min_cell_size >= 2'
 
 	node "$HELPER" set-relay-min-group-size relay/config.yaml benefits_casework by_district 2
-	run_block 'Relay 17: Restore the valid disclosure floor' "$blocks/17.sh" success
+	run_block 'Relay 19: Restore the valid disclosure floor' "$blocks/19.sh" success
 	assert_fence_lines "$LAST_OUTPUT" "$RELAY_TUTORIAL" 'Start the local stack' text 1
-	run_block 'Relay 18: Stop the stack' "$blocks/18.sh" success
+	run_block 'Relay 20: Stop the stack' "$blocks/20.sh" success
 	cleanup_stack "$tutorial_root/my-first-api" "$project_name"
 	node "$HELPER" assert-ports-free 4242 4255
 }
 
 run_relay_tutorial
+
+run_notary_tutorial() {
+	local blocks="$WORK_ROOT/notary-blocks"
+	local tutorial_root="$WORK_ROOT/relay-reader"
+	local project_dir="$tutorial_root/my-first-api"
+	local project_name="registryctl-notary-$RUN_ID"
+	local edited_claim="$WORK_ROOT/registry-stack-accept-pending.yaml"
+
+	node "$HELPER" assert-layout "$NOTARY_TUTORIAL" \
+		'["Add Notary to the project","Inspect the claim","Start Relay and Notary","Load the evaluator key","Evaluate an accepted active registration","Reject a pending registration","Try a non-matching date of birth","Edit the claim rule","Evaluate the edited rule","Stop the stack"]'
+	node "$HELPER" extract-shell "$NOTARY_TUTORIAL" "$blocks"
+
+	export COMPOSE_PROJECT_NAME="$project_name"
+	PROJECT_DIRS+=("$project_dir")
+	PROJECT_NAMES+=("$project_name")
+	CURRENT_SECRET_FILE="$project_dir/secrets/local.env"
+	cd "$project_dir"
+
+	run_block 'Notary 1: Add Notary to the project' "$blocks/01.sh" success
+	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Add Notary to the project' 1
+	assert_contains "$LAST_OUTPUT" http://127.0.0.1:4255 notary/project/registry-stack.yaml
+	run_block 'Notary 2: Inspect the claim' "$blocks/02.sh" success
+	assert_fence_lines "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Inspect the claim' yaml 1
+	assert_contains "$LAST_OUTPUT" request.target.attributes.given_name request.target.attributes.date_of_birth person-registration-accepted
+	run_block 'Notary 3: Start Relay and Notary' "$blocks/03.sh" success
+	assert_fence_lines "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Start Relay and Notary' text 1
+	run_block 'Notary 4: Load the evaluator key' "$blocks/04.sh" success
+	[[ -n "${TUTORIAL_EVALUATOR_RAW:-}" ]] || {
+		printf 'Notary tutorial evaluator credential was not loaded\n' >&2
+		exit 1
+	}
+	run_block 'Notary 5: Evaluate an accepted active registration' "$blocks/05.sh" success
+	assert_http "$LAST_OUTPUT" 200
+	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Evaluate an accepted active registration' 1
+	assert_not_contains "$LAST_OUTPUT" Jo Elm 2019-02-03 '"active"'
+	run_block 'Notary 6: Reject a pending registration' "$blocks/06.sh" success
+	assert_http "$LAST_OUTPUT" 200
+	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Reject a pending registration' 1
+	assert_not_contains "$LAST_OUTPUT" Nia Stone 1998-03-05 '"pending"'
+	run_block 'Notary 7: Try a non-matching date of birth' "$blocks/07.sh" success
+	assert_http "$LAST_OUTPUT" 200
+	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Try a non-matching date of birth' 1
+	assert_not_contains "$LAST_OUTPUT" Jo Elm 2019-02-04 '"active"'
+
+	node "$HELPER" replace-once \
+		notary/project/registry-stack.yaml \
+		'enrollment.registration_status == "active"' \
+		'(enrollment.registration_status == "active" || enrollment.registration_status == "pending")' \
+		"$edited_claim"
+	mv "$edited_claim" notary/project/registry-stack.yaml
+	node "$HELPER" replace-once \
+		notary/project/integrations/person-demographics/fixtures/pending.yaml \
+		'claims: { person-registration-accepted: false }' \
+		'claims: { person-registration-accepted: true }' \
+		"$edited_claim"
+	mv "$edited_claim" notary/project/integrations/person-demographics/fixtures/pending.yaml
+	run_block 'Notary 8: Restart with the edited claim rule' "$blocks/08.sh" success
+	assert_contains "$LAST_OUTPUT" 'Relay API:' 'Notary API:'
+	run_block 'Notary 9: Evaluate the edited rule' "$blocks/09.sh" success
+	assert_http "$LAST_OUTPUT" 200
+	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Evaluate the edited rule' 1
+	assert_not_contains "$LAST_OUTPUT" Nia Stone 1998-03-05 '"pending"'
+	run_block 'Notary 10: Stop the stack' "$blocks/10.sh" success
+	cleanup_stack "$project_dir" "$project_name"
+	node "$HELPER" assert-ports-free 4242 4255
+}
+
+run_notary_tutorial

@@ -265,7 +265,12 @@ fn generated_evidence(
         .collect()
 }
 
-fn write_compiled_project(root: &Path, output: &Path, compiled: &CompiledProject) -> Result<()> {
+fn write_compiled_project(
+    root: &Path,
+    output: &Path,
+    compiled: &CompiledProject,
+    runtime_identity: Option<crate::RuntimeIdentity>,
+) -> Result<()> {
     let expected_parent = root.join(BUILD_ROOT);
     let parent = output
         .parent()
@@ -313,6 +318,15 @@ fn write_compiled_project(root: &Path, output: &Path, compiled: &CompiledProject
             &approval_state_bytes,
         )?;
     }
+    if let Some(identity) = runtime_identity {
+        // The temporary build root is freshly created owner-only state and is
+        // not published until the rename below. Privileged ownership changes
+        // are confined to the two config trees mounted into containers, so a
+        // failure leaves the prior published build untouched.
+        for relative in ["private/relay/config", "private/notary/config"] {
+            assign_unpublished_runtime_input_owner(&temporary.join(relative), identity)?;
+        }
+    }
 
     let backup = expected_parent.join(format!(".{name}.previous-{}", std::process::id()));
     if backup.exists() {
@@ -334,6 +348,52 @@ fn write_compiled_project(root: &Path, output: &Path, compiled: &CompiledProject
         fs::remove_dir_all(&backup)
             .with_context(|| format!("failed to remove prior build {}", backup.display()))?;
     }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn assign_unpublished_runtime_input_owner(
+    path: &Path,
+    identity: crate::RuntimeIdentity,
+) -> Result<()> {
+    use std::os::unix::fs::{lchown, MetadataExt};
+
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect unpublished runtime input {}", path.display()))?;
+    if metadata.file_type().is_symlink() || (!metadata.is_dir() && !metadata.is_file()) {
+        bail!(
+            "unpublished runtime input contains an unsupported file type: {}",
+            path.display()
+        );
+    }
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path)
+            .with_context(|| format!("failed to read unpublished runtime input {}", path.display()))?
+        {
+            let child = entry
+                .with_context(|| {
+                    format!("failed to read an entry under unpublished runtime input {}", path.display())
+                })?
+                .path();
+            assign_unpublished_runtime_input_owner(&child, identity)?;
+        }
+    }
+    if metadata.uid() != identity.uid || metadata.gid() != identity.gid {
+        lchown(path, Some(identity.uid), Some(identity.gid)).with_context(|| {
+            format!(
+                "failed to assign unpublished runtime input {} to {}:{}; the prior generated build remains active",
+                path.display(), identity.uid, identity.gid
+            )
+        })?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn assign_unpublished_runtime_input_owner(
+    _path: &Path,
+    _identity: crate::RuntimeIdentity,
+) -> Result<()> {
     Ok(())
 }
 

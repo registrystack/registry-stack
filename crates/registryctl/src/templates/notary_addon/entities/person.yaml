@@ -1,0 +1,32 @@
+version: 1
+id: person
+revision: 1
+primary_key: person_id
+schema:
+  type: object
+  additionalProperties: false
+  required:
+    - person_id
+    - household_id
+    - given_name
+    - family_name
+    - date_of_birth
+    - relationship_to_head
+    - registration_status
+    - national_id
+  properties:
+    person_id: { type: string, maxLength: 64 }
+    household_id: { type: string, maxLength: 64 }
+    given_name: { type: string, maxLength: 80 }
+    family_name: { type: string, maxLength: 80 }
+    # SnapshotExact keys currently use byte-exact UTF-8 comparison. The request
+    # input below still validates this value as an ISO date.
+    date_of_birth: { type: string, maxLength: 10 }
+    relationship_to_head: { type: string, maxLength: 32 }
+    registration_status: { type: string, maxLength: 32 }
+    national_id: { type: string, maxLength: 64 }
+materialization:
+  max_records: 10000
+  max_bytes: 16MiB
+  refresh: manual
+  retain_generations: 2

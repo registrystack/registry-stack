@@ -753,6 +753,28 @@ pub fn check_registry_project(options: &ProjectCheckOptions) -> Result<ProjectCo
 }
 
 pub fn build_registry_project(options: &ProjectBuildOptions) -> Result<ProjectCommandReport> {
+    build_registry_project_inner(options, false, None)
+}
+
+/// Build the closed local tutorial runtime in one atomic publication.
+///
+/// These overrides are fixed in reviewed `registryctl` code, are not authored
+/// extension input, and are revalidated with the production product models
+/// before publication. Applying them before `write_compiled_project` prevents
+/// containers from observing the compiler's PostgreSQL defaults between the
+/// generated build and the tutorial's in-memory runtime configuration.
+pub(crate) fn build_registry_project_for_local_tutorial(
+    options: &ProjectBuildOptions,
+    runtime_identity: Option<crate::RuntimeIdentity>,
+) -> Result<ProjectCommandReport> {
+    build_registry_project_inner(options, true, runtime_identity)
+}
+
+fn build_registry_project_inner(
+    options: &ProjectBuildOptions,
+    local_tutorial_runtime: bool,
+    runtime_identity: Option<crate::RuntimeIdentity>,
+) -> Result<ProjectCommandReport> {
     validate_baseline_pair(options.against.as_deref(), options.anchor.as_deref())?;
     let loaded = load_registry_project(
         &options.project_directory,
@@ -764,7 +786,10 @@ pub fn build_registry_project(options: &ProjectBuildOptions) -> Result<ProjectCo
         options.anchor.as_deref(),
         &loaded,
     )?;
-    let compiled = compile_project(&loaded, baseline.as_ref())?;
+    let mut compiled = compile_project(&loaded, baseline.as_ref())?;
+    if local_tutorial_runtime {
+        apply_local_tutorial_runtime_overrides(&mut compiled)?;
+    }
     validate_generated_product_configs(&compiled)?;
     let fixtures = execute_all_fixtures(&loaded, &compiled, None, None, false)?;
     require_passing_fixtures(&fixtures)?;
@@ -772,7 +797,7 @@ pub fn build_registry_project(options: &ProjectBuildOptions) -> Result<ProjectCo
         .root
         .join(BUILD_ROOT)
         .join(options.environment.as_str());
-    write_compiled_project(&loaded.root, &output, &compiled)?;
+    write_compiled_project(&loaded.root, &output, &compiled, runtime_identity)?;
     Ok(ProjectCommandReport {
         status: "built",
         project: loaded.project.registry.id.clone(),
@@ -787,6 +812,45 @@ pub fn build_registry_project(options: &ProjectBuildOptions) -> Result<ProjectCo
         output: Some(output.display().to_string()),
         explanation: None,
     })
+}
+
+fn apply_local_tutorial_runtime_overrides(compiled: &mut CompiledProject) -> Result<()> {
+    let notary = compiled
+        .notary_private
+        .get_mut(Path::new("config/notary.yaml"))
+        .ok_or_else(|| anyhow!("generated local Notary config is absent"))?;
+    let mut notary_config: serde_yaml::Value = serde_yaml::from_slice(notary)
+        .context("generated local Notary config did not parse")?;
+    notary_config["server"]["bind"] =
+        serde_yaml::Value::String("0.0.0.0:8081".to_string());
+    notary_config["state"] = serde_yaml::from_str("storage: in_memory\n")?;
+    notary_config["evidence"]["signing_keys"] = serde_yaml::from_str(&format!(
+        "relay-workload:\n  provider: local_jwk_env\n  private_jwk_env: {}\n  alg: EdDSA\n  kid: {}\n  status: active\n",
+        super::NOTARY_RELAY_WORKLOAD_JWK_ENV,
+        super::NOTARY_RELAY_WORKLOAD_KID,
+    ))?;
+    *notary = serde_yaml::to_string(&notary_config)
+        .context("failed to render local Notary config")?
+        .into_bytes()
+        .into_boxed_slice();
+
+    let relay = compiled
+        .relay_private
+        .get_mut(Path::new("config/relay.yaml"))
+        .ok_or_else(|| anyhow!("generated local consultation Relay config is absent"))?;
+    let mut relay_config: serde_yaml::Value = serde_yaml::from_slice(relay)
+        .context("generated local consultation Relay config did not parse")?;
+    relay_config["server"]["bind"] =
+        serde_yaml::Value::String("0.0.0.0:8082".to_string());
+    relay_config["auth"]["oidc"]["allow_dev_insecure_fetch_urls"] =
+        serde_yaml::Value::Bool(true);
+    relay_config["consultation"]["state_plane"]["root_certificate_path"] =
+        serde_yaml::Value::String("/run/registry-tls/state-plane-ca.pem".to_string());
+    *relay = serde_yaml::to_string(&relay_config)
+        .context("failed to render local consultation Relay config")?
+        .into_bytes()
+        .into_boxed_slice();
+    Ok(())
 }
 
 fn require_passing_fixtures(fixtures: &[FixtureReport]) -> Result<()> {

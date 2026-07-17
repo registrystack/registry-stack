@@ -1,0 +1,14 @@
+name: ambiguous-person
+classification: synthetic
+input: { given_name: Sam, family_name: Example, date_of_birth: "2019-02-03" }
+interactions:
+  - expect: { method: GET, path: /snapshot }
+    respond:
+      status: 200
+      body:
+        - { registration_status: active }
+        - { registration_status: inactive }
+expect:
+  outcome: ambiguous
+  outputs: {}
+  claims: {}
