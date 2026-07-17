@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-writer lock, retains the corrupt chain under a timestamped suffix,
   and starts a keyed `audit.chain.break` segment linked to the last verified
   local record.
+- Registry-backed Relay consultations can now bind bounded scalar inputs from
+  `request.target.attributes.<stable-name>`. Notary preserves string, boolean,
+  and integer types through single and batch evaluation and Relay requests.
+  Target attributes remain caller-supplied context and cannot satisfy an
+  authenticated target-identifier requirement for delegated subject access.
 
 ### Changed
 

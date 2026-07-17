@@ -17,6 +17,9 @@ input:
     type: string
     maxLength: 64
     pattern: "^[A-Za-z][A-Za-z0-9]{10}$"
+  include_inactive:
+    role: parameter
+    type: boolean
 
 capability:
   script:

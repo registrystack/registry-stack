@@ -1,6 +1,6 @@
 name: health-no-match
 classification: synthetic
-input: { tracked_entity: A0000000001 }
+input: { tracked_entity: A0000000001, include_inactive: true }
 variables: { as_of_date: 2026-01-01 }
 interactions:
   - expect:
@@ -8,6 +8,7 @@ interactions:
       path: /api/tracker/trackedEntities/A0000000001
       query:
         fields: trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]
+        includeDeleted: true
     respond: { status: 404, body: {} }
 expect:
   outcome: no_match

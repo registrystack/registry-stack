@@ -282,6 +282,55 @@ inputs:
 }
 
 #[test]
+fn consultation_accepts_closed_target_attributes() {
+    let consultation: RelayConsultationConfig = serde_norway::from_str(&format!(
+        r#"
+profile:
+  id: example.birth-record.exact
+  contract_hash: {CONTRACT_HASH}
+inputs:
+  given_name: request.target.attributes.given_name
+  family_name: request.target.attributes.family_name
+  birthdate: request.target.attributes.birthdate
+outputs:
+  exists: {{ type: boolean, nullable: false }}
+"#,
+    ))
+    .expect("closed target attribute mappings parse");
+    assert!(consultation.inputs["given_name"].is_target_derived());
+    assert!(
+        !consultation.inputs["given_name"].is_authenticated_target_identifier(),
+        "caller-supplied target attributes are not authenticated identifiers"
+    );
+    assert_eq!(
+        consultation.inputs["birthdate"].request_context_path(),
+        "target.attributes.birthdate"
+    );
+
+    for invalid in [
+        "request.target.attributes.",
+        "request.target.attributes.GivenName",
+        "request.target.attributes.family-name",
+        "request.target.attributes.name.given",
+        "request.target.attributes.given name",
+    ] {
+        let yaml = format!(
+            r#"
+profile:
+  id: example.birth-record.exact
+  contract_hash: {CONTRACT_HASH}
+inputs:
+  value: {invalid}
+outputs:
+  exists: {{ type: boolean, nullable: false }}
+"#,
+        );
+        serde_norway::from_str::<RelayConsultationConfig>(&yaml)
+            .expect_err("open target attribute mapping is rejected");
+    }
+}
+
+#[test]
 fn consultation_accepts_only_closed_requester_identifiers() {
     let consultation: RelayConsultationConfig = serde_norway::from_str(&format!(
         r#"
@@ -987,14 +1036,26 @@ fn delegated_relay_proof_requires_requester_target_boolean_and_purpose_alignment
         .inputs
         .retain(|_, input| input.is_target_derived());
     let reason = expect_subject_access_error(&missing_requester);
-    assert!(reason.contains("requester-derived and target-derived"));
+    assert!(reason.contains("authenticated target identifier"));
 
     let mut missing_target = valid_delegated_subject_access_config();
     delegated_proof_consultation_mut(&mut missing_target)
         .inputs
         .retain(|_, input| input.is_requester_derived());
     let reason = expect_subject_access_error(&missing_target);
-    assert!(reason.contains("requester-derived and target-derived"));
+    assert!(reason.contains("authenticated target identifier"));
+
+    let mut caller_supplied_attribute = valid_delegated_subject_access_config();
+    let consultation = delegated_proof_consultation_mut(&mut caller_supplied_attribute);
+    consultation.inputs.remove("target_id");
+    consultation.inputs.insert(
+        "target_context".to_string(),
+        RelayConsultationInput::TargetAttribute(
+            "request.target.attributes.person_sequence".to_string(),
+        ),
+    );
+    let reason = expect_subject_access_error(&caller_supplied_attribute);
+    assert!(reason.contains("authenticated target identifier"));
 
     let mut non_boolean = valid_delegated_subject_access_config();
     let proof = non_boolean

@@ -348,9 +348,15 @@
       "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["from", "type"], "properties": { "from": { "type": "string", "pattern": "^request\\.variables\\.[a-z][a-z0-9._-]{0,95}$" }, "type": { "const": "date" } } }
     },
     "consultations": {
-      "description": "Relay consultations and their bindings to target request identifiers.",
+      "description": "Relay consultations and their closed bindings to target request identifiers or caller-supplied target attributes.",
       "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/stableId" },
-      "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["integration", "input"], "properties": { "integration": { "$ref": "#/$defs/stableId" }, "input": { "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "type": "string", "pattern": "^request\\.target\\.(?:id|identifiers\\.[A-Za-z][A-Za-z0-9._-]{0,95})$" } } } }
+      "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["integration", "input"], "properties": { "integration": { "$ref": "#/$defs/stableId" }, "input": { "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "$ref": "#/$defs/targetRequestMapping" } } } }
+    },
+    "targetRequestMapping": {
+      "description": "Closed target request binding. Attribute values are bounded typed caller-supplied context, not authenticated identifiers.",
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^request\\.target\\.(?:id|identifiers\\.[A-Za-z][A-Za-z0-9._-]{0,95}|attributes\\.[a-z][a-z0-9_]{0,63})$"
     },
     "claimValue": {
       "description": "Explicit claim value type, nullability, and encoded-size bound for source-free evaluation. A source-free claim cannot be selected by a credential profile.",

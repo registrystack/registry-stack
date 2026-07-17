@@ -1,5 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#[test]
+fn request_context_scalars_preserve_supported_types() {
+    assert_eq!(canonical_request_scalar(&json!("Ada")), Some("Ada".to_string()));
+    assert_eq!(canonical_request_scalar(&json!(true)), Some("true".to_string()));
+    assert_eq!(canonical_request_scalar(&json!(-42)), Some("-42".to_string()));
+    assert_eq!(canonical_request_scalar(&json!(1.5)), None);
+    assert_eq!(canonical_request_scalar(&Value::Null), None);
+    assert_eq!(canonical_request_scalar(&json!(["Ada"])), None);
+    assert_eq!(canonical_request_scalar(&json!({ "name": "Ada" })), None);
+    assert_eq!(canonical_request_scalar(&json!(u64::MAX)), None);
+}
+
 #[derive(Debug)]
 struct FixedRelayConsultation {
     calls: AtomicU64,
@@ -126,6 +138,66 @@ impl ActivatedRelayConsultations for BatchIdentityRelay {
             .lock()
             .expect("child identity lock is not poisoned")
             .push(child_identity.as_str().to_string());
+        RuntimeRelayConsultationResult::new(
+            Ulid::new(),
+            RuntimeRelayOutcome::Match,
+            Some(status_match_data()?),
+            OffsetDateTime::UNIX_EPOCH,
+        )
+    }
+}
+
+#[derive(Debug, Default)]
+struct TypedInputRelay {
+    single_inputs: Mutex<Vec<BTreeMap<String, String>>>,
+    batch_inputs: Mutex<Vec<BTreeMap<String, String>>>,
+}
+
+fn observed_inputs(key: &ConsultationGroupKeyV1) -> BTreeMap<String, String> {
+    key.canonical_inputs()
+        .iter()
+        .map(|(name, value)| (name.clone(), value.to_string()))
+        .collect()
+}
+
+#[async_trait::async_trait]
+impl ActivatedRelayConsultations for TypedInputRelay {
+    async fn check_ready(&self) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    fn validate(
+        &self,
+        _key: &ConsultationGroupKeyV1,
+    ) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    async fn execute(
+        &self,
+        key: &ConsultationGroupKeyV1,
+    ) -> Result<RuntimeRelayConsultationResult, crate::relay_client::RelayClientError> {
+        self.single_inputs
+            .lock()
+            .expect("single input lock is not poisoned")
+            .push(observed_inputs(key));
+        RuntimeRelayConsultationResult::new(
+            Ulid::new(),
+            RuntimeRelayOutcome::Match,
+            Some(status_match_data()?),
+            OffsetDateTime::UNIX_EPOCH,
+        )
+    }
+
+    async fn execute_batch(
+        &self,
+        key: &ConsultationGroupKeyV1,
+        _child_identity: &consultation::BatchChildIdentityV1,
+    ) -> Result<RuntimeRelayConsultationResult, crate::relay_client::RelayClientError> {
+        self.batch_inputs
+            .lock()
+            .expect("batch input lock is not poisoned")
+            .push(observed_inputs(key));
         RuntimeRelayConsultationResult::new(
             Ulid::new(),
             RuntimeRelayOutcome::Match,
@@ -1261,6 +1333,123 @@ fn registry_batch_request(claims: Vec<ClaimRef>) -> BatchEvaluateRequest {
 fn enable_registry_batch(claim: &mut ClaimDefinition) {
     claim.operations.batch_evaluate.enabled = true;
     claim.operations.batch_evaluate.max_subjects = 4;
+}
+
+#[tokio::test]
+async fn typed_target_attributes_are_canonical_in_single_and_batch_plans() {
+    let mut claim = registry_claim(
+        "enrollment-status",
+        RuleConfig::ConsultationOutput {
+            consultation: "enrollment".to_string(),
+            output: "registration_status".to_string(),
+        },
+        "string",
+    );
+    enable_registry_batch(&mut claim);
+    let ClaimEvidenceMode::RegistryBacked { consultations } = &mut claim.evidence_mode else {
+        panic!("claim is registry backed")
+    };
+    let inputs = &mut consultations
+        .get_mut("enrollment")
+        .expect("consultation exists")
+        .inputs;
+    inputs.insert(
+        "include_inactive".to_string(),
+        RelayConsultationInput::TargetAttribute(
+            "request.target.attributes.include_inactive".to_string(),
+        ),
+    );
+    inputs.insert(
+        "person_sequence".to_string(),
+        RelayConsultationInput::TargetAttribute(
+            "request.target.attributes.person_sequence".to_string(),
+        ),
+    );
+
+    let mut evidence = (*test_evidence(vec![claim])).clone();
+    evidence.allowed_purposes = vec!["test".to_string()];
+    evidence.inline_batch_limit = 4;
+    let evidence = Arc::new(evidence);
+    let activated = Arc::new(TypedInputRelay::default());
+    let bound: Arc<dyn ActivatedRelayConsultations> = activated.clone();
+    let runtime = RegistryNotaryRuntime::new().with_activated_relay(Some(bound));
+    let mut principal = machine_principal();
+    principal.scopes = vec!["registry:evidence".to_string()];
+
+    let mut single = test_request("enrollment-status");
+    let single_target = single.target.as_mut().expect("single target exists");
+    single_target
+        .attributes
+        .insert("include_inactive".to_string(), json!(true));
+    single_target
+        .attributes
+        .insert("person_sequence".to_string(), json!(42));
+    runtime
+        .evaluate(
+            Arc::clone(&evidence),
+            &EvidenceStore::default(),
+            &principal,
+            single,
+            None,
+        )
+        .await
+        .expect("single evaluation preserves typed target scalars");
+
+    let mut batch = registry_batch_request(vec![ClaimRef::from("enrollment-status")]);
+    for (index, item) in batch.items.iter_mut().enumerate() {
+        item.target
+            .attributes
+            .insert("include_inactive".to_string(), json!(index == 0));
+        item.target
+            .attributes
+            .insert("person_sequence".to_string(), json!(index + 1));
+    }
+    runtime
+        .batch_evaluate(
+            evidence,
+            &EvidenceStore::default(),
+            &principal,
+            batch,
+            BatchEvaluateOptions {
+                idempotency_key: Some("typed-target-attributes"),
+                ..BatchEvaluateOptions::default()
+            },
+        )
+        .await
+        .expect("batch evaluation preserves typed target scalars");
+
+    assert_eq!(
+        *activated
+            .single_inputs
+            .lock()
+            .expect("single input lock is not poisoned"),
+        vec![BTreeMap::from([
+            ("include_inactive".to_string(), "true".to_string()),
+            ("person_sequence".to_string(), "42".to_string()),
+            ("tracked_entity".to_string(), "person-1".to_string()),
+        ])]
+    );
+    let mut batch_inputs = activated
+        .batch_inputs
+        .lock()
+        .expect("batch input lock is not poisoned")
+        .clone();
+    batch_inputs.sort_by(|left, right| left["person_sequence"].cmp(&right["person_sequence"]));
+    assert_eq!(
+        batch_inputs,
+        vec![
+            BTreeMap::from([
+                ("include_inactive".to_string(), "true".to_string()),
+                ("person_sequence".to_string(), "1".to_string()),
+                ("tracked_entity".to_string(), "person-1".to_string()),
+            ]),
+            BTreeMap::from([
+                ("include_inactive".to_string(), "false".to_string()),
+                ("person_sequence".to_string(), "2".to_string()),
+                ("tracked_entity".to_string(), "person-1".to_string()),
+            ]),
+        ]
+    );
 }
 
 #[tokio::test]
