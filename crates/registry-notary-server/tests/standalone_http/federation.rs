@@ -679,6 +679,7 @@ pub(super) async fn federation_route_is_not_mounted_until_enabled() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -710,7 +711,9 @@ pub(super) async fn federation_evaluation_returns_signed_response_and_rejects_re
     add_admin_api_key(&mut config);
     add_metrics_read_api_key(&mut config);
     enable_shared_admin_listener(&mut config);
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let token = federation_request_jwt(
         "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6",
@@ -839,7 +842,9 @@ pub(super) async fn federation_stale_claim_result_returns_signed_evaluation_erro
         &format!("{}/jwks", peer_jwks.url()),
     );
     config.federation.evaluation_profiles[0].max_claim_result_age_seconds = Some(0);
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -887,7 +892,9 @@ pub(super) async fn federation_auth_exempt_route_still_requires_valid_jws() {
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     );
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -930,6 +937,7 @@ pub(super) async fn federation_two_standalone_notaries_smoke() {
             "https://agency-b.example.gov",
             &format!("{}/jwks", agency_b_jwks.url()),
         ))
+        .await
         .expect("agency A standalone router builds"),
     );
     let agency_b = TestServer::builder().http_transport().build(
@@ -942,6 +950,7 @@ pub(super) async fn federation_two_standalone_notaries_smoke() {
             "https://agency-a.example.gov",
             &format!("{}/jwks", agency_a_jwks.url()),
         ))
+        .await
         .expect("agency B standalone router builds"),
     );
     agency_b.get("/healthz").await.assert_status_ok();
@@ -987,6 +996,7 @@ pub(super) async fn federation_denial_happens_before_claim_evaluation() {
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let token = federation_request_jwt(
@@ -1201,7 +1211,9 @@ pub(super) async fn assert_federation_emergency_denylist_blocks_before_claim_eva
             .node_ids
             .push("did:web:agency-b.example.gov".to_string());
     }
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let request_jti = if deny_kid {
         "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7R0"
@@ -1245,6 +1257,7 @@ pub(super) async fn federation_request_claims_must_match_profile_before_claim_ev
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let token = federation_request_jwt_with_claims(
@@ -1298,6 +1311,7 @@ pub(super) async fn federation_audit_write_failure_replaces_signed_success() {
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let token = federation_request_jwt(

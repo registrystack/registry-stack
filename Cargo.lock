@@ -5229,6 +5229,7 @@ dependencies = [
  "registry-config-report",
  "registry-notary-core",
  "registry-notary-server",
+ "registry-platform-audit",
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-ops",

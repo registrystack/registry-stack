@@ -352,9 +352,12 @@ async fn fetch_posture(config: StandaloneRegistryNotaryConfig) -> Value {
     let mut config = config;
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
     add_ops_read_api_key(&mut config);
-    let runtime = compile_notary_runtime(config).expect("runtime compiles for posture");
-    let app =
-        notary_shared_router_from_runtime(runtime).expect("source-free runtime is serve-ready");
+    let runtime = compile_notary_runtime(config)
+        .expect("runtime compiles for posture")
+        .activate()
+        .await
+        .expect("source-free runtime activates");
+    let app = notary_shared_router_from_runtime(runtime).expect("activated runtime is serve-ready");
     let server = TestServer::builder().http_transport().build(app);
     let response = server
         .get("/admin/v1/posture?tier=restricted")
@@ -434,25 +437,27 @@ fn expect_compile_rejected(
     }
 }
 
-#[test]
-fn source_free_standalone_router_builds_without_relay_activation() {
+#[tokio::test]
+async fn source_free_standalone_router_builds_without_relay_activation() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
         .deployment("deployment:\n  profile: local\n")
         .build();
 
-    let _router = standalone_router(config).expect("source-free router builds synchronously");
+    let _router = standalone_router(config)
+        .await
+        .expect("source-free router verifies its audit chain and builds");
 }
 
-#[test]
-fn synchronous_router_requires_async_activation_for_postgresql() {
+#[tokio::test]
+async fn standalone_router_requires_full_activation_for_postgresql() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
         .deployment("deployment:\n  profile: production\n  multi_instance: true\n")
         .build();
 
-    let error = match super::super::standalone_router(config) {
-        Ok(_) => panic!("the synchronous helper must reject PostgreSQL state"),
+    let error = match super::super::standalone_router(config).await {
+        Ok(_) => panic!("standalone_router must reject PostgreSQL state"),
         Err(error) => error,
     };
     assert!(matches!(
@@ -462,12 +467,12 @@ fn synchronous_router_requires_async_activation_for_postgresql() {
     assert!(error.to_string().contains("activate().await"));
 }
 
-#[test]
-fn registry_backed_standalone_router_refuses_to_serve_before_activation() {
+#[tokio::test]
+async fn registry_backed_standalone_router_refuses_to_serve_before_activation() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = registry_backed_config(&tmp);
 
-    let error = match standalone_router(config) {
+    let error = match standalone_router(config).await {
         Ok(_) => panic!("Registry-backed standalone router must require Relay activation"),
         Err(error) => error,
     };
@@ -475,16 +480,19 @@ fn registry_backed_standalone_router_refuses_to_serve_before_activation() {
 }
 
 #[test]
-fn registry_backed_compiled_runtime_cannot_be_routed_before_activation() {
+fn compiled_runtime_cannot_be_routed_before_audit_verification() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let runtime = compile_notary_runtime(registry_backed_config(&tmp))
         .expect("Registry-backed runtime compiles before activation");
 
     let error = match notary_shared_router_from_runtime(runtime) {
-        Ok(_) => panic!("compiled Registry-backed runtime must not be served before activation"),
+        Ok(_) => panic!("compiled runtime must not be served before audit verification"),
         Err(error) => error,
     };
-    assert!(matches!(error, StandaloneServerError::RelayNotActivated));
+    assert!(matches!(
+        error,
+        StandaloneServerError::AuditChainVerificationRequired
+    ));
 }
 
 #[test]
@@ -602,7 +610,7 @@ async fn production_multi_instance_postgresql_default_is_state_ready() {
         .build();
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
 
-    let app = standalone_router(config).expect("production PostgreSQL config starts in harness");
+    let app = standalone_router(config).await.expect("production PostgreSQL config starts in harness");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status_ok();
@@ -680,7 +688,7 @@ async fn production_unapproved_local_signer_reports_readiness_failure() {
         .deployment("deployment:\n  profile: production\n")
         .build();
 
-    let app = standalone_router(config).expect("production local signer config still starts");
+    let app = standalone_router(config).await.expect("production local signer config still starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
@@ -719,7 +727,7 @@ async fn production_file_watch_signer_requires_custody_approval() {
         .deployment("deployment:\n  profile: production\n")
         .build();
 
-    let app = standalone_router(config).expect("production file-watch signer config starts");
+    let app = standalone_router(config).await.expect("production file-watch signer config starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
@@ -738,7 +746,7 @@ async fn production_federation_signer_is_reported_by_surface() {
         .deployment("deployment:\n  profile: production\n")
         .build();
 
-    let app = standalone_router(config).expect("production federation signer config starts");
+    let app = standalone_router(config).await.expect("production federation signer config starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
@@ -773,7 +781,7 @@ async fn production_signer_custody_approval_is_visible_in_readiness() {
         )
         .build();
 
-    let app = standalone_router(config).expect("approved local signer config starts");
+    let app = standalone_router(config).await.expect("approved local signer config starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status_ok();
@@ -957,7 +965,10 @@ async fn evidence_grade_readiness_rechecks_cursor_binding_and_recovers() {
     add_ops_read_api_key(&mut config);
     let runtime =
         compile_notary_runtime_with_provenance(config, ConfigSource::SignedBundleFile, None)
-            .expect("signed evidence-grade runtime compiles");
+            .expect("signed evidence-grade runtime compiles")
+            .activate()
+            .await
+            .expect("signed evidence-grade runtime activates");
     let routers = notary_routers_from_runtime(runtime).expect("source-free runtime is serve-ready");
     let server = TestServer::builder().http_transport().build(routers.public);
     let admin_server = TestServer::builder().http_transport().build(routers.admin);

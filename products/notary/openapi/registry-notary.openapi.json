@@ -1,6 +1,56 @@
 {
   "components": {
     "schemas": {
+      "AuditChainInconsistentProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "audit.chain.inconsistent"
+            ],
+            "type": "string"
+          },
+          "detail": {
+            "enum": [
+              "the retained audit chain has an integrity failure and requires operator recovery"
+            ],
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              503
+            ],
+            "format": "int32",
+            "type": "integer"
+          },
+          "title": {
+            "enum": [
+              "Audit chain inconsistent"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "https://id.registrystack.org/problems/registry-notary/audit/chain-inconsistent"
+            ],
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code",
+          "request_id"
+        ],
+        "type": "object"
+      },
       "BatchClaimResultView": {
         "additionalProperties": false,
         "properties": {
@@ -1312,6 +1362,68 @@
         ],
         "type": "object"
       },
+      "ReadinessCheckProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "checks": {
+            "$ref": "#/components/schemas/ReadinessChecks"
+          },
+          "code": {
+            "enum": [
+              "readiness.not_ready"
+            ],
+            "type": "string"
+          },
+          "detail": {
+            "enum": [
+              "one or more readiness checks are not ready"
+            ],
+            "type": "string"
+          },
+          "readiness_status": {
+            "enum": [
+              "degraded",
+              "not_ready"
+            ],
+            "type": "string"
+          },
+          "request_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              503
+            ],
+            "format": "int32",
+            "type": "integer"
+          },
+          "title": {
+            "enum": [
+              "Evidence runtime is not ready"
+            ],
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "https://id.registrystack.org/problems/registry-notary/readiness/not-ready"
+            ],
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "detail",
+          "code",
+          "request_id",
+          "readiness_status",
+          "checks"
+        ],
+        "type": "object"
+      },
       "ReadinessChecks": {
         "additionalProperties": false,
         "properties": {
@@ -1369,50 +1481,15 @@
         "type": "object"
       },
       "ReadinessProblem": {
-        "additionalProperties": false,
-        "properties": {
-          "checks": {
-            "$ref": "#/components/schemas/ReadinessChecks"
+        "description": "Bounded readiness failures. Audit-chain integrity failures do not expose audit records, paths, hashes, or verification details.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ReadinessCheckProblem"
           },
-          "code": {
-            "type": "string"
-          },
-          "detail": {
-            "type": "string"
-          },
-          "readiness_status": {
-            "enum": [
-              "degraded",
-              "not_ready"
-            ],
-            "type": "string"
-          },
-          "request_id": {
-            "type": "string"
-          },
-          "status": {
-            "format": "int32",
-            "type": "integer"
-          },
-          "title": {
-            "type": "string"
-          },
-          "type": {
-            "format": "uri",
-            "type": "string"
+          {
+            "$ref": "#/components/schemas/AuditChainInconsistentProblem"
           }
-        },
-        "required": [
-          "type",
-          "title",
-          "status",
-          "detail",
-          "code",
-          "request_id",
-          "readiness_status",
-          "checks"
-        ],
-        "type": "object"
+        ]
       },
       "ReadinessResponse": {
         "additionalProperties": false,
@@ -3426,66 +3503,82 @@
           "503": {
             "content": {
               "application/problem+json": {
-                "example": {
-                  "checks": {
-                    "degraded": 1,
-                    "failed": 1,
-                    "ok": 1,
-                    "relay": {
-                      "failed": 1,
-                      "ok": 0,
-                      "total": 1
-                    },
-                    "signing_providers": {
-                      "custody": {
-                        "active_provider_counts": {
-                          "local_jwk_env": 1
+                "examples": {
+                  "auditChainInconsistent": {
+                    "summary": "The retained audit chain failed integrity verification",
+                    "value": {
+                      "code": "audit.chain.inconsistent",
+                      "detail": "the retained audit chain has an integrity failure and requires operator recovery",
+                      "request_id": "01J00000000000000000000000",
+                      "status": 503,
+                      "title": "Audit chain inconsistent",
+                      "type": "https://id.registrystack.org/problems/registry-notary/audit/chain-inconsistent"
+                    }
+                  },
+                  "notReady": {
+                    "summary": "A runtime readiness check is not ready",
+                    "value": {
+                      "checks": {
+                        "degraded": 1,
+                        "failed": 1,
+                        "ok": 1,
+                        "relay": {
+                          "failed": 1,
+                          "ok": 0,
+                          "total": 1
                         },
-                        "custody_approval_required": true,
-                        "custody_approved": false,
-                        "local_software_signing_provider_count": 1,
-                        "signing_provider_count": 1,
-                        "surfaces": {
-                          "access_token_issuance": {
-                            "enabled": false,
-                            "local_software_signing_provider_count": 0,
-                            "signing_provider_count": 0,
-                            "unapproved_signing_provider_count": 0
-                          },
-                          "credential_issuance": {
+                        "signing_providers": {
+                          "custody": {
+                            "active_provider_counts": {
+                              "local_jwk_env": 1
+                            },
+                            "custody_approval_required": true,
+                            "custody_approved": false,
                             "local_software_signing_provider_count": 1,
                             "signing_provider_count": 1,
+                            "surfaces": {
+                              "access_token_issuance": {
+                                "enabled": false,
+                                "local_software_signing_provider_count": 0,
+                                "signing_provider_count": 0,
+                                "unapproved_signing_provider_count": 0
+                              },
+                              "credential_issuance": {
+                                "local_software_signing_provider_count": 1,
+                                "signing_provider_count": 1,
+                                "unapproved_signing_provider_count": 1
+                              },
+                              "federation": {
+                                "enabled": false,
+                                "local_software_signing_provider_count": 0,
+                                "signing_provider_count": 0,
+                                "unapproved_signing_provider_count": 0
+                              }
+                            },
                             "unapproved_signing_provider_count": 1
                           },
-                          "federation": {
-                            "enabled": false,
-                            "local_software_signing_provider_count": 0,
-                            "signing_provider_count": 0,
-                            "unapproved_signing_provider_count": 0
-                          }
+                          "failed": 0,
+                          "ok": 1,
+                          "total": 1
                         },
-                        "unapproved_signing_provider_count": 1
+                        "total": 3
                       },
-                      "failed": 0,
-                      "ok": 1,
-                      "total": 1
-                    },
-                    "total": 3
-                  },
-                  "code": "readiness.not_ready",
-                  "detail": "one or more readiness checks are not ready",
-                  "readiness_status": "not_ready",
-                  "request_id": "01J00000000000000000000000",
-                  "status": 503,
-                  "title": "Evidence runtime is not ready",
-                  "type": "https://id.registrystack.org/problems/registry-notary/readiness/not-ready"
+                      "code": "readiness.not_ready",
+                      "detail": "one or more readiness checks are not ready",
+                      "readiness_status": "not_ready",
+                      "request_id": "01J00000000000000000000000",
+                      "status": 503,
+                      "title": "Evidence runtime is not ready",
+                      "type": "https://id.registrystack.org/problems/registry-notary/readiness/not-ready"
+                    }
+                  }
                 },
                 "schema": {
                   "$ref": "#/components/schemas/ReadinessProblem"
                 }
               }
             },
-            "description": "Evidence runtime is not ready or is degraded"
+            "description": "Evidence runtime is not ready, is degraded, or has an inconsistent audit chain"
           }
         },
         "security": [],

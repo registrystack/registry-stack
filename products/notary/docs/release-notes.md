@@ -6,6 +6,13 @@
   that are unset or empty. `${VAR:-fallback}` uses its fallback for either
   state, `${VAR:-}` explicitly expands to empty, and `${VAR:?message}` reports
   its message for either state. Whitespace-only values remain non-empty.
+- Registry Notary now verifies the retained audit chain during activation and
+  reports confirmed integrity failures as `audit.chain.inconsistent` on
+  `/ready` without exposing audit contents. Stop the process and use
+  `registry-notary audit quarantine` with the deployed configuration to retain
+  the corrupt files and open a tamper-evident break segment. The single-writer
+  lock prevents online recovery, and signed-bundle acceptance audit failures
+  still prevent bundle persistence and serving.
 
 ## 0.10.0
 

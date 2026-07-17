@@ -36,10 +36,20 @@ async fn app(
 }
 ```
 
-The synchronous `standalone_router` convenience helper is limited to explicit
-local `state.storage: in_memory` configurations. PostgreSQL state and
-Registry-backed claims require the asynchronous activation sequence in the
-example before a listener is built.
+The asynchronous `standalone_router` convenience helper is limited to explicit
+local `state.storage: in_memory` configurations and must be awaited:
+
+```rust
+let router = registry_notary_server::standalone_router(config).await?;
+```
+
+Both construction paths eagerly verify the retained audit chain before a
+router can be returned. Confirmed integrity failures latch `/ready` until the
+operator performs offline quarantine recovery and restarts the process. The
+runtime-to-router functions reject snapshots that have not passed through this
+verification boundary. PostgreSQL state and Registry-backed claims require the
+full asynchronous activation sequence in the example before a listener is
+built.
 
 The example builds only the public router. Embedders that deliberately select
 `server.admin_listener.mode: shared_with_public` can instead use
@@ -176,10 +186,11 @@ Every topology still enforces the application scope checks.
 
 ## Audit Configuration
 
-`standalone_router` builds the audit pipeline from
-`StandaloneRegistryNotaryConfig.audit`. The pipeline writes one redacted,
-tamper-evident JSON envelope per security-relevant event and fails closed if the
-configured hash secret is unavailable.
+`standalone_router(...).await` builds the audit pipeline from
+`StandaloneRegistryNotaryConfig.audit` and eagerly verifies retained records
+before returning. The pipeline writes one redacted, tamper-evident JSON
+envelope per security-relevant event and fails closed if the configured hash
+secret is unavailable.
 
 ```yaml
 audit:

@@ -50,6 +50,41 @@ Review diagnostics and logs for accidental disclosure. They must not contain
 tokens, secret paths, selectors, request bodies, source responses, claim
 values, credential material, or script values.
 
+### Recover an inconsistent audit chain
+
+Registry Notary verifies the retained audit chain during runtime activation.
+A confirmed chain fork or verification failure keeps `/ready` at `503` with
+the code `audit.chain.inconsistent`; `/healthz` remains a process-liveness
+probe. The readiness response does not expose audit records, paths, hashes, or
+verification details.
+
+Recovery is an offline operator action. Registry Notary does not repair the
+chain automatically at startup.
+
+1. Stop the Registry Notary process and confirm that no replacement process
+   holds the audit volume's single-writer lock.
+2. Preserve the audit volume and the off-host copy according to the incident
+   evidence procedure.
+3. Run the quarantine command with the same configuration and secret sources
+   used by the stopped process:
+
+   ```sh
+   registry-notary audit quarantine \
+     --config <generated-notary.yaml> \
+     --reason "<incident-or-change-reference>" \
+     --operator "<operator-id>"
+   ```
+
+4. Retain every file named with the reported `corrupt-<timestamp>` suffix.
+   The command moves the retained chain aside and starts a new segment with a
+   keyed `audit.chain.break` record linked to the last verified local record.
+5. Start Registry Notary, then verify `/ready` before admitting traffic.
+
+The command refuses to run against `stdout` or `syslog`, and it refuses to run
+while the server owns the file sink lock. A signed-bundle acceptance record
+must still be written before bundle state is persisted or traffic is served.
+An audit failure during that write aborts the governed boot.
+
 ## Signing keys
 
 Approve custody for every credential, access-token, or federation signing role
