@@ -49,8 +49,9 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p .",
+    "compile": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --outfile=dist/extension.js --sourcemap",
     "check": "tsc -p . --noEmit",
+    "package:dev": "npm run check && npx --yes @vscode/vsce@3.9.2 package --no-dependencies --out registry-stack-dev.vsix",
     "vscode:prepublish": "npm run compile"
   },
   "dependencies": {
@@ -58,7 +59,8 @@
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
-    "@types/vscode": "^1.91.0",
+    "@types/vscode": "1.91.0",
+    "esbuild": "0.28.1",
     "typescript": "^5.9.3"
   }
 }

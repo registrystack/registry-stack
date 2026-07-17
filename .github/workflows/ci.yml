@@ -410,7 +410,7 @@ jobs:
         working-directory: editors/vscode
         run: |
           npm ci
-          npm run check
+          npm run package:dev
           cmp ../../LICENSE LICENSE
 
       - name: Install Zed extension target
