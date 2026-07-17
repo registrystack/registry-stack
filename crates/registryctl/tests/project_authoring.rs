@@ -428,7 +428,7 @@ fn relay_only_and_notary_only_projects_complete_their_applicable_journeys() {
     .expect("Relay-only project builds");
 
     let notary_root = tempfile::tempdir().expect("Notary-only temporary directory");
-    let notary = copy_project("notary-only-self-attested", notary_root.path());
+    let notary = create_source_free_evaluation_project(notary_root.path());
     test_registry_project(&ProjectTestOptions {
         project_directory: notary.clone(),
         environment: None,
@@ -1573,7 +1573,6 @@ fn strict_project_authoring_schemas_compile_and_accept_every_golden() {
             "snapshot-with-records",
             "relay-only-records",
             "relay-only-materialization",
-            "notary-only-self-attested",
         ]
         .map(golden),
     );
@@ -2936,12 +2935,16 @@ fn records_and_snapshot_share_one_generated_materialization() {
 
 #[test]
 fn relay_only_and_notary_only_projects_emit_only_selected_products() {
-    for (project_name, present, absent) in [
-        ("relay-only-records", "relay", "notary"),
-        ("notary-only-self-attested", "notary", "relay"),
+    for (project_name, present, absent, source_free_evaluation) in [
+        ("relay-only-records", "relay", "notary", false),
+        ("notary-only-evaluation", "notary", "relay", true),
     ] {
         let temporary = tempfile::tempdir().expect("temporary directory");
-        let project = copy_project(project_name, temporary.path());
+        let project = if source_free_evaluation {
+            create_source_free_evaluation_project(temporary.path())
+        } else {
+            copy_project(project_name, temporary.path())
+        };
         let build = build_registry_project(&ProjectBuildOptions {
             project_directory: project,
             environment: "local".to_string(),
@@ -3256,6 +3259,101 @@ fn issuance_accepts_a_full_verification_method_kid() {
 }
 
 #[test]
+fn source_free_credential_profiles_fail_check_and_build() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = create_source_free_evaluation_project(temporary.path());
+    add_source_free_credential_capability(&project);
+
+    let check_error = check_registry_project(&ProjectCheckOptions {
+        project_directory: project.clone(),
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("check must reject a source-free credential profile");
+    assert!(
+        format!("{check_error:#}").contains(
+            "credential profile applicant-evaluation.application-declaration selects source-free claim application-complete"
+        ),
+        "{check_error:#}"
+    );
+
+    let build_error = build_registry_project(&ProjectBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect_err("build must reject a source-free credential profile");
+    assert!(
+        format!("{build_error:#}")
+            .contains("credential profiles require registry-backed claim evidence"),
+        "{build_error:#}"
+    );
+}
+
+#[test]
+fn credential_profiles_reject_mixed_registry_backed_and_source_free_evidence() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let project_path = project.join("registry-stack.yaml");
+    let mut document = read_yaml(&project_path);
+    let service = &mut document["services"]["household-eligibility"];
+    service["claims"]["applicant-declaration"] =
+        serde_yaml::from_str("cel: 'true'\nvalue: { type: boolean }\ndisclosure: predicate\n")
+            .expect("source-free claim");
+    service["credential_profiles"]["household-eligibility"]["claims"]
+        .as_sequence_mut()
+        .expect("credential profile claims")
+        .push(serde_yaml::Value::String(
+            "applicant-declaration".to_string(),
+        ));
+    write_yaml(&project_path, &document);
+
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("mixed registry-backed and source-free credential evidence must fail");
+    assert!(
+        format!("{error:#}").contains(
+            "credential profile household-eligibility.household-eligibility selects source-free claim applicant-declaration"
+        ),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn oid4vci_rejects_source_free_credential_selection() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = create_source_free_evaluation_project(temporary.path());
+    add_source_free_credential_capability(&project);
+    author_oid4vci_binding(
+        &project,
+        "applicant-evaluation",
+        "application-declaration",
+        "example_person_id",
+    );
+
+    let error = check_registry_project(&ProjectCheckOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        explain: false,
+        against: None,
+        anchor: None,
+    })
+    .expect_err("OID4VCI must not select source-free credential evidence");
+    assert!(
+        format!("{error:#}").contains("credential profiles require registry-backed claim evidence"),
+        "{error:#}"
+    );
+}
+
+#[test]
 fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
     let temporary = tempfile::tempdir().expect("temporary directory");
     let project = copy_project("custom-system", temporary.path());
@@ -3372,7 +3470,7 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
     );
 
     let plain_root = tempfile::tempdir().expect("plain temporary directory");
-    let plain = copy_project("notary-only-self-attested", plain_root.path());
+    let plain = create_source_free_evaluation_project(plain_root.path());
     let build = build_registry_project(&ProjectBuildOptions {
         project_directory: plain,
         environment: "local".to_string(),
@@ -3422,12 +3520,18 @@ fn authored_oid4vci_binding_rejects_open_or_incoherent_trust_topologies() {
         ),
     ] {
         let temporary = tempfile::tempdir().expect("temporary directory");
-        let project = copy_project("notary-only-self-attested", temporary.path());
+        let project = copy_project("custom-system", temporary.path());
+        let project_path = project.join("registry-stack.yaml");
+        let mut document = read_yaml(&project_path);
+        document["services"]["household-eligibility"]["credential_profiles"]
+            ["household-eligibility"]["claims"] = serde_yaml::from_str("[household-record-exists]")
+            .expect("single registry-backed credential claim");
+        write_yaml(&project_path, &document);
         author_oid4vci_binding(
             &project,
-            "applicant-declaration",
-            "applicant-declaration",
-            "example_person_id",
+            "household-eligibility",
+            "household-eligibility",
+            "household_reference",
         );
         merge_environment_yaml(&project.join("environments/local.yaml"), mutate);
         let error = check_registry_project(&ProjectCheckOptions {
@@ -3509,7 +3613,7 @@ claims:
 credential_profiles: {}
 "#,
     )
-    .expect("self-attested evaluation service");
+    .expect("source-free evaluation service");
     write_yaml(&project_path, &authored_project);
 
     let environment_path = project.join("environments/local.yaml");
@@ -3538,21 +3642,9 @@ credential_profiles: {}
 }
 
 #[test]
-fn notary_without_credential_profiles_omits_issuance_and_signing_keys() {
+fn source_free_evaluation_without_credential_profiles_omits_issuance_and_signing_keys() {
     let temporary = tempfile::tempdir().expect("temporary directory");
-    let project = copy_project("notary-only-self-attested", temporary.path());
-    let project_path = project.join("registry-stack.yaml");
-    let mut authored_project = read_yaml(&project_path);
-    authored_project["services"]["applicant-declaration"]["credential_profiles"] =
-        serde_yaml::from_str("{}\n").expect("empty credential profiles");
-    write_yaml(&project_path, &authored_project);
-    let environment_path = project.join("environments/local.yaml");
-    let mut environment = read_yaml(&environment_path);
-    environment
-        .as_mapping_mut()
-        .expect("environment mapping")
-        .remove(serde_yaml::Value::String("issuance".to_string()));
-    write_yaml(&environment_path, &environment);
+    let project = create_source_free_evaluation_project(temporary.path());
 
     let check = check_registry_project(&ProjectCheckOptions {
         project_directory: project.clone(),
@@ -3578,7 +3670,7 @@ fn notary_without_credential_profiles_omits_issuance_and_signing_keys() {
         .is_some_and(serde_yaml::Mapping::is_empty));
 
     let missing_issuance_root = tempfile::tempdir().expect("temporary directory");
-    let missing_issuance = copy_project("notary-only-self-attested", missing_issuance_root.path());
+    let missing_issuance = copy_project("custom-system", missing_issuance_root.path());
     let missing_issuance_environment = missing_issuance.join("environments/local.yaml");
     let mut environment = read_yaml(&missing_issuance_environment);
     environment
@@ -3599,11 +3691,10 @@ fn notary_without_credential_profiles_omits_issuance_and_signing_keys() {
     ));
 
     let unexpected_issuance_root = tempfile::tempdir().expect("temporary directory");
-    let unexpected_issuance =
-        copy_project("notary-only-self-attested", unexpected_issuance_root.path());
+    let unexpected_issuance = copy_project("custom-system", unexpected_issuance_root.path());
     let project_path = unexpected_issuance.join("registry-stack.yaml");
     let mut authored_project = read_yaml(&project_path);
-    authored_project["services"]["applicant-declaration"]["credential_profiles"] =
+    authored_project["services"]["household-eligibility"]["credential_profiles"] =
         serde_yaml::from_str("{}\n").expect("empty credential profiles");
     write_yaml(&project_path, &authored_project);
     let error = check_registry_project(&ProjectCheckOptions {
@@ -5041,6 +5132,75 @@ fn copy_project(name: &str, temporary: &Path) -> PathBuf {
     let destination = temporary.join(name);
     copy_tree(&golden(name), &destination);
     destination
+}
+
+fn create_source_free_evaluation_project(temporary: &Path) -> PathBuf {
+    let project = temporary.join("notary-only-evaluation");
+    std::fs::create_dir_all(project.join("environments"))
+        .expect("evaluation-only project directory creates");
+    let authored_project = serde_yaml::from_str(
+        r#"version: 1
+registry: { id: fictional-evaluation-registry }
+services:
+  applicant-evaluation:
+    kind: evidence
+    version: 1
+    purpose: application-processing
+    legal_basis: application-processing
+    consent: not_required
+    access: { scopes: ["evidence:application:read"] }
+    claims:
+      application-complete:
+        cel: "true"
+        value: { type: boolean }
+        disclosure: predicate
+    credential_profiles: {}
+"#,
+    )
+    .expect("evaluation-only project parses");
+    write_yaml(&project.join("registry-stack.yaml"), &authored_project);
+    let environment = serde_yaml::from_str(
+        r#"version: 1
+callers:
+  application-service:
+    api_key_fingerprint: { secret: APPLICATION_SERVICE_TOKEN_HASH }
+    scopes: ["evidence:application:read"]
+deployment:
+  profile: local
+  notary: { service: evaluation-notary }
+"#,
+    )
+    .expect("evaluation-only environment parses");
+    write_yaml(&project.join("environments/local.yaml"), &environment);
+    project
+}
+
+fn add_source_free_credential_capability(project: &Path) {
+    let project_path = project.join("registry-stack.yaml");
+    let mut authored_project = read_yaml(&project_path);
+    authored_project["services"]["applicant-evaluation"]["credential_profiles"] =
+        serde_yaml::from_str(
+            r#"application-declaration:
+  format: dc+sd-jwt
+  type: https://credentials.invalid/application-declaration/v1
+  validity: 5m
+  claims: [application-complete]
+"#,
+        )
+        .expect("source-free credential profile");
+    write_yaml(&project_path, &authored_project);
+
+    let environment_path = project.join("environments/local.yaml");
+    let mut environment = read_yaml(&environment_path);
+    environment["issuance"] = serde_yaml::from_str(
+        r#"issuer: did:web:evaluation-notary.invalid
+signing_kid: project-issuer-key
+signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
+generation: 1
+"#,
+    )
+    .expect("source-free issuance binding");
+    write_yaml(&environment_path, &environment);
 }
 
 fn author_oid4vci_binding(project: &Path, service: &str, profile: &str, id_type: &str) {
