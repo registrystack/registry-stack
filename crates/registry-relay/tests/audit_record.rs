@@ -8,13 +8,14 @@
 
 use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
 use axum::middleware::{from_fn, Next};
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::Extension;
 use axum::Router;
 use registry_relay::audit::{
@@ -1381,6 +1382,322 @@ async fn middleware_captures_error_code_from_auth_short_circuit() {
     let parsed = captured_record(&records[0]);
     assert_eq!(parsed["error_code"], "auth.missing_credential");
     assert_eq!(parsed["principal_id"], Value::Null);
+}
+
+#[tokio::test]
+async fn ambiguous_credentials_emit_one_redacted_denial_without_handler_dispatch() {
+    use registry_relay::auth::api_key::{ApiKeyAuth, ApiKeyEntry};
+    use registry_relay::auth::middleware::auth_layer;
+    use sha2::{Digest, Sha256};
+
+    const VALID_API_KEY: &str = "audit-ambiguity-api-key-marker";
+    const MALFORMED_AUTHORIZATION: &str = "audit-ambiguity-authorization-marker";
+    const PRINCIPAL_MARKER: &str = "audit-ambiguity-principal-marker";
+    const SCOPE_MARKER: &str = "audit-ambiguity-scope-marker";
+
+    let fingerprint = format!(
+        "sha256:{}",
+        hex_lower_local(&Sha256::digest(VALID_API_KEY.as_bytes()))
+    );
+    let provider = Arc::new(ApiKeyAuth::new(vec![ApiKeyEntry::new(
+        PRINCIPAL_MARKER.to_string(),
+        ScopeSet::from_iter([SCOPE_MARKER]),
+        fingerprint,
+    )
+    .expect("test fingerprint parses")]));
+    let handler_dispatches = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&handler_dispatches);
+    let (sink, pipeline) = in_memory_pipeline();
+    let protected = auth_layer(
+        Router::new().route(
+            "/probe",
+            get(move || {
+                let counter = Arc::clone(&counter);
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::NO_CONTENT
+                }
+            }),
+        ),
+        provider,
+    );
+    let app = Router::new()
+        .merge(protected)
+        .layer(from_fn(audit_layer))
+        .layer(Extension(pipeline));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/probe")
+                .header("authorization", format!("Basic {MALFORMED_AUTHORIZATION}"))
+                .header("x-api-key", VALID_API_KEY)
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("request completes");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), 16 * 1024)
+        .await
+        .expect("bounded response body reads");
+    let problem: Value = serde_json::from_slice(&body).expect("problem body is JSON");
+    assert_eq!(problem["code"], "auth.multiple_credentials");
+    assert_eq!(
+        problem["detail"],
+        "provide exactly one authentication credential"
+    );
+    let body = String::from_utf8(body.to_vec()).expect("problem body is UTF-8");
+    for marker in [
+        VALID_API_KEY,
+        MALFORMED_AUTHORIZATION,
+        PRINCIPAL_MARKER,
+        SCOPE_MARKER,
+    ] {
+        assert!(
+            !body.contains(marker),
+            "problem body leaked marker {marker}"
+        );
+    }
+
+    assert_eq!(handler_dispatches.load(Ordering::SeqCst), 0);
+    let records = sink.snapshot();
+    assert_eq!(records.len(), 1);
+    for marker in [
+        VALID_API_KEY,
+        MALFORMED_AUTHORIZATION,
+        PRINCIPAL_MARKER,
+        SCOPE_MARKER,
+    ] {
+        assert!(
+            !records[0].contains(marker),
+            "audit record leaked marker {marker}"
+        );
+    }
+    let parsed = captured_record(&records[0]);
+    assert_eq!(parsed["status_code"], 400);
+    assert_eq!(parsed["error_code"], "auth.multiple_credentials");
+    assert_eq!(parsed["principal_id"], Value::Null);
+    assert_eq!(parsed["auth_mode"], Value::Null);
+    assert_eq!(parsed["scopes_used"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn consultation_routes_preserve_ambiguous_auth_code_without_dispatch_or_disclosure() {
+    use std::collections::BTreeMap;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use ed25519_dalek::pkcs8::EncodePrivateKey;
+    use ed25519_dalek::SigningKey;
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    use rand_core::OsRng;
+    use registry_relay::auth::middleware::auth_layer;
+    use registry_relay::auth::oidc::{static_fetcher, OidcAuth};
+    use registry_relay::auth::AuthProvider;
+    use registry_relay::config::{OidcAlgorithm, OidcConfig};
+
+    const PROFILE_ROUTE: &str = "/v1/consultations/{profile_id}";
+    const EXECUTE_ROUTE: &str = "/v1/consultations/{profile_id}/execute";
+    const ISSUER: &str = "https://idp.example.test/realms/consultation";
+    const AUDIENCE: &str = "registry-relay-consultation";
+    const KID: &str = "consultation-ambiguity-kid";
+    const VALID_API_KEY: &str = "consultation-ambiguity-api-key-marker";
+    const MALFORMED_AUTHORIZATION: &str = "consultation-ambiguity-auth-marker";
+    const PRINCIPAL_MARKER: &str = "consultation-ambiguity-principal-marker";
+    const SCOPE_MARKER: &str = "consultation-ambiguity-scope-marker";
+
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let verifying_key = signing_key.verifying_key();
+    let jwks = serde_json::from_value(serde_json::json!({
+        "keys": [{
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "use": "sig",
+            "alg": "EdDSA",
+            "kid": KID,
+            "x": URL_SAFE_NO_PAD.encode(verifying_key.as_bytes()),
+        }]
+    }))
+    .expect("test JWKS parses");
+    let config = OidcConfig {
+        issuer: ISSUER.to_string(),
+        audiences: vec![AUDIENCE.to_string()],
+        jwks_url: None,
+        discovery_url: None,
+        allow_dev_insecure_fetch_urls: false,
+        allowed_algorithms: vec![OidcAlgorithm::EdDsa],
+        jwks_cache_ttl: Duration::from_secs(600),
+        leeway: Duration::from_secs(60),
+        scope_claim: "scope".to_string(),
+        scope_map: BTreeMap::new(),
+        scope_object_required_keys: Vec::new(),
+        allowed_clients: Vec::new(),
+        allowed_token_types: vec!["JWT".to_string(), "at+jwt".to_string()],
+    };
+    let provider = Arc::new(OidcAuth::new(&config, static_fetcher(jwks)));
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time is after epoch")
+        .as_secs();
+    let mut header = Header::new(Algorithm::EdDSA);
+    header.kid = Some(KID.to_string());
+    header.typ = Some("JWT".to_string());
+    let private_key = signing_key
+        .to_pkcs8_der()
+        .expect("Ed25519 private key encodes");
+    let valid_bearer = encode(
+        &header,
+        &serde_json::json!({
+            "iss": ISSUER,
+            "aud": AUDIENCE,
+            "sub": PRINCIPAL_MARKER,
+            "scope": SCOPE_MARKER,
+            "iat": now,
+            "exp": now + 300,
+        }),
+        &EncodingKey::from_ed_der(private_key.as_bytes()),
+    )
+    .expect("valid OIDC bearer token mints");
+
+    let mut single_credential_headers = axum::http::HeaderMap::new();
+    single_credential_headers.insert(
+        axum::http::header::AUTHORIZATION,
+        format!("Bearer {valid_bearer}")
+            .parse()
+            .expect("bearer header parses"),
+    );
+    let authentication = provider
+        .authenticate(&single_credential_headers, IpAddr::V4(Ipv4Addr::LOCALHOST))
+        .await
+        .expect("single signed OIDC bearer authenticates");
+    assert_eq!(authentication.principal_id, PRINCIPAL_MARKER);
+    assert!(authentication.scopes.contains(SCOPE_MARKER));
+
+    let handler_or_source_dispatches = Arc::new(AtomicUsize::new(0));
+    let profile_dispatches = Arc::clone(&handler_or_source_dispatches);
+    let execute_dispatches = Arc::clone(&handler_or_source_dispatches);
+    let (sink, pipeline) = in_memory_pipeline();
+    let protected = auth_layer(
+        Router::new()
+            .route(
+                PROFILE_ROUTE,
+                get(move || {
+                    let counter = Arc::clone(&profile_dispatches);
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NO_CONTENT
+                    }
+                }),
+            )
+            .route(
+                EXECUTE_ROUTE,
+                post(move || {
+                    let counter = Arc::clone(&execute_dispatches);
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        StatusCode::NO_CONTENT
+                    }
+                }),
+            ),
+        provider,
+    );
+    let app = Router::new()
+        .merge(protected)
+        .layer(from_fn(audit_layer))
+        .layer(Extension(pipeline));
+
+    let cases = [
+        (
+            Method::GET,
+            "/v1/consultations/profile-marker",
+            format!("Bearer {valid_bearer}"),
+        ),
+        (
+            Method::POST,
+            "/v1/consultations/profile-marker/execute",
+            format!("Basic {MALFORMED_AUTHORIZATION}"),
+        ),
+    ];
+    for (case_index, (method, uri, authorization)) in cases.into_iter().enumerate() {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(uri)
+                    .header("authorization", authorization)
+                    .header("x-api-key", VALID_API_KEY)
+                    .body(Body::empty())
+                    .expect("consultation request builds"),
+            )
+            .await
+            .expect("consultation request completes");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .expect("bounded response body reads");
+        let problem: Value = serde_json::from_slice(&body).expect("problem body is JSON");
+        assert_eq!(problem["code"], "auth.multiple_credentials");
+        assert_eq!(
+            problem["detail"],
+            "provide exactly one authentication credential"
+        );
+        let body = String::from_utf8(body.to_vec()).expect("problem body is UTF-8");
+        for marker in [
+            valid_bearer.as_str(),
+            VALID_API_KEY,
+            MALFORMED_AUTHORIZATION,
+            PRINCIPAL_MARKER,
+            SCOPE_MARKER,
+        ] {
+            assert!(
+                !body.contains(marker),
+                "problem body leaked marker {marker}"
+            );
+        }
+
+        assert_eq!(
+            handler_or_source_dispatches.load(Ordering::SeqCst),
+            0,
+            "authentication denial must precede handler and source dispatch"
+        );
+        let records = sink.snapshot();
+        assert_eq!(
+            records.len(),
+            case_index + 1,
+            "each denial emits exactly one audit record"
+        );
+        let record = records.last().expect("the denial audit is captured");
+        for marker in [
+            valid_bearer.as_str(),
+            VALID_API_KEY,
+            MALFORMED_AUTHORIZATION,
+            PRINCIPAL_MARKER,
+            SCOPE_MARKER,
+        ] {
+            assert!(
+                !record.contains(marker),
+                "audit record leaked marker {marker}"
+            );
+        }
+        let parsed = captured_record(record);
+        assert_eq!(parsed["status_code"], 400);
+        assert_eq!(parsed["error_code"], "auth.multiple_credentials");
+        assert_eq!(parsed["principal_id"], Value::Null);
+        assert_eq!(parsed["auth_mode"], Value::Null);
+        assert_eq!(parsed["scopes_used"], serde_json::json!([]));
+    }
+
+    assert_eq!(handler_or_source_dispatches.load(Ordering::SeqCst), 0);
+    let records = sink.snapshot();
+    assert_eq!(
+        records.len(),
+        2,
+        "each denial emits exactly one audit record"
+    );
 }
 
 #[tokio::test]

@@ -250,6 +250,7 @@ fn auth_error_response(error: AuthError, consultation_operation: bool) -> Respon
         | AuthError::KidUnknown
         | AuthError::AlgorithmNotAllowed
         | AuthError::ClientNotAllowed => (ConsultationError::InvalidCredentials, None),
+        AuthError::MultipleCredentials => (ConsultationError::MultipleCredentials, None),
         AuthError::PurposeRequired => (ConsultationError::InvalidRequest, None),
         AuthError::ScopeDenied { .. } | AuthError::PurposeDenied | AuthError::AdminRequired => {
             (ConsultationError::Denied, None)
@@ -438,6 +439,12 @@ mod tests {
                 || AuthError::MalformedCredential,
                 StatusCode::UNAUTHORIZED,
                 "auth.invalid_credentials",
+                None,
+            ),
+            (
+                || AuthError::MultipleCredentials,
+                StatusCode::BAD_REQUEST,
+                "auth.multiple_credentials",
                 None,
             ),
             (

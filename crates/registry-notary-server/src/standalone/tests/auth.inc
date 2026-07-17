@@ -355,6 +355,7 @@
         };
         let request = RequestCredentials {
             api_key: Some("api-token".to_string()),
+            api_key_present: true,
             authorization_present: true,
             bearer_token: Some("bearer-token".to_string()),
             id_token: None,
@@ -382,6 +383,7 @@
         };
         let request = RequestCredentials {
             api_key: Some("api-token".to_string()),
+            api_key_present: true,
             authorization_present: true,
             bearer_token: None,
             id_token: None,
@@ -395,22 +397,97 @@
         assert!(matches!(err, EvidenceError::MultipleCredentials));
     }
 
+    #[tokio::test]
+    async fn request_credentials_counts_non_utf8_authorization_header_presence() {
+        let authenticator = Authenticator {
+            api_keys: vec![ResolvedCredential {
+                id: "api-client".to_string(),
+                fingerprint: registry_platform_authcommon::fingerprint_api_key("api-token"),
+                scopes: vec!["farmer_registry:evidence_verification".to_string()],
+                authorization_details: None,
+            }],
+            bearer_tokens: Vec::new(),
+            oidc: None,
+        };
+        let mut request = Request::builder()
+            .uri("/v1/claims")
+            .header("x-api-key", "api-token")
+            .body(Body::empty())
+            .expect("request builds");
+        request.headers_mut().insert(
+            header::AUTHORIZATION,
+            axum::http::HeaderValue::from_bytes(b"\xff").expect("opaque header value is valid"),
+        );
+
+        let credentials = request_credentials(&request);
+        assert!(credentials.authorization_present);
+        assert!(credentials.api_key_present);
+        assert!(credentials.bearer_token.is_none());
+        assert_eq!(credentials.api_key.as_deref(), Some("api-token"));
+        assert_eq!(credentials.credential_type_count(), 2);
+
+        let err = authenticator
+            .authenticate(credentials, &ReplayStores::memory())
+            .await
+            .expect_err("raw credential channel presence must reject ambiguity");
+        assert!(matches!(err, EvidenceError::MultipleCredentials));
+    }
+
+    #[tokio::test]
+    async fn request_credentials_counts_non_utf8_api_key_header_presence() {
+        let authenticator = Authenticator {
+            api_keys: Vec::new(),
+            bearer_tokens: vec![ResolvedCredential {
+                id: "bearer-client".to_string(),
+                fingerprint: registry_platform_authcommon::fingerprint_api_key("bearer-token"),
+                scopes: vec!["farmer_registry:evidence_verification".to_string()],
+                authorization_details: None,
+            }],
+            oidc: None,
+        };
+        let mut request = Request::builder()
+            .uri("/v1/claims")
+            .header(header::AUTHORIZATION, "Bearer bearer-token")
+            .body(Body::empty())
+            .expect("request builds");
+        request.headers_mut().insert(
+            "x-api-key",
+            axum::http::HeaderValue::from_bytes(b"\xff").expect("opaque header value is valid"),
+        );
+
+        let credentials = request_credentials(&request);
+        assert!(credentials.api_key_present);
+        assert!(credentials.api_key.is_none());
+        assert!(credentials.authorization_present);
+        assert_eq!(credentials.bearer_token.as_deref(), Some("bearer-token"));
+        assert_eq!(credentials.credential_type_count(), 2);
+
+        let err = authenticator
+            .authenticate(credentials, &ReplayStores::memory())
+            .await
+            .expect_err("raw credential channel presence must reject ambiguity");
+        assert!(matches!(err, EvidenceError::MultipleCredentials));
+    }
+
     #[test]
     fn oidc_id_token_is_supplemental_not_a_separate_auth_mode() {
         let oidc_request = RequestCredentials {
             api_key: None,
+            api_key_present: false,
             authorization_present: true,
             bearer_token: Some("access-token".to_string()),
             id_token: Some("id-token".to_string()),
         };
         let api_key_and_bearer = RequestCredentials {
             api_key: Some("api-token".to_string()),
+            api_key_present: true,
             authorization_present: true,
             bearer_token: Some("bearer-token".to_string()),
             id_token: None,
         };
         let api_key_and_malformed_authorization = RequestCredentials {
             api_key: Some("api-token".to_string()),
+            api_key_present: true,
             authorization_present: true,
             bearer_token: None,
             id_token: None,
@@ -434,6 +511,7 @@
         };
         let request = RequestCredentials {
             api_key: Some("api-token".to_string()),
+            api_key_present: true,
             authorization_present: false,
             bearer_token: None,
             id_token: None,
@@ -474,6 +552,7 @@
         };
         let request = RequestCredentials {
             api_key: Some("api-token".to_string()),
+            api_key_present: true,
             authorization_present: false,
             bearer_token: None,
             id_token: None,
@@ -942,6 +1021,7 @@
         };
         let request = RequestCredentials {
             api_key: Some("api-token".to_string()),
+            api_key_present: true,
             authorization_present: false,
             bearer_token: None,
             id_token: None,
@@ -952,6 +1032,7 @@
         let error = authenticate_static(
             &RequestCredentials {
                 api_key: Some(rejected_secret.to_string()),
+                api_key_present: true,
                 authorization_present: false,
                 bearer_token: None,
                 id_token: None,

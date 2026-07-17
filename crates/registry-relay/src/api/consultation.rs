@@ -1565,6 +1565,11 @@ mod tests {
                 "consultation.invalid_request",
             ),
             (
+                ConsultationError::MultipleCredentials,
+                StatusCode::BAD_REQUEST,
+                "auth.multiple_credentials",
+            ),
+            (
                 ConsultationError::InvalidCredentials,
                 StatusCode::UNAUTHORIZED,
                 "auth.invalid_credentials",
@@ -1615,6 +1620,7 @@ mod tests {
     async fn consultation_problems_render_scrubbed_rfc_9457_json() {
         for variant in [
             ConsultationError::InvalidRequest,
+            ConsultationError::MultipleCredentials,
             ConsultationError::InvalidCredentials,
             ConsultationError::Conflict,
             ConsultationError::ContractMismatch,

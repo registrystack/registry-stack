@@ -699,7 +699,8 @@ fn is_closed_consultation_error(response: &Response) -> bool {
         (
             StatusCode::BAD_REQUEST,
             Some("consultation.invalid_request")
-        ) | (StatusCode::UNAUTHORIZED, Some("auth.invalid_credentials"))
+        ) | (StatusCode::BAD_REQUEST, Some("auth.multiple_credentials"))
+            | (StatusCode::UNAUTHORIZED, Some("auth.invalid_credentials"))
             | (StatusCode::FORBIDDEN, Some("consultation.denied"))
             | (
                 StatusCode::NOT_FOUND,
@@ -1377,6 +1378,15 @@ mod tests {
 
         let cases = [
             Case {
+                source_status: StatusCode::BAD_REQUEST,
+                source_code: Some("auth.multiple_credentials"),
+                expected_status: StatusCode::BAD_REQUEST,
+                expected_code: "auth.multiple_credentials",
+                allow: None,
+                retry_after: None,
+                expected_retry_after: None,
+            },
+            Case {
                 source_status: StatusCode::GATEWAY_TIMEOUT,
                 source_code: Some("internal.timeout"),
                 expected_status: StatusCode::SERVICE_UNAVAILABLE,
@@ -1453,7 +1463,11 @@ mod tests {
         for case in cases {
             let app = Router::new()
                 .fallback(move || async move {
-                    let mut response = case.source_status.into_response();
+                    let mut response = if case.source_code == Some("auth.multiple_credentials") {
+                        Error::from(ConsultationError::MultipleCredentials).into_response()
+                    } else {
+                        case.source_status.into_response()
+                    };
                     if let Some(code) = case.source_code {
                         response
                             .extensions_mut()

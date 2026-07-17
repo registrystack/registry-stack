@@ -1496,6 +1496,11 @@ fn consultation_profile_responses() -> Value {
             "Consultation profile contract metadata.",
             "ConsultationProfileMetadata"
         ),
+        "400": consultation_problem_response(
+            400,
+            "auth.multiple_credentials",
+            "The request contains more than one primary authentication credential."
+        ),
         "401": consultation_problem_response(
             401,
             "auth.invalid_credentials",
@@ -1522,11 +1527,7 @@ fn consultation_profile_responses() -> Value {
 fn consultation_execute_responses(success_description: &str, success_schema: &str) -> Value {
     json!({
         "200": consultation_success_response(success_description, success_schema),
-        "400": consultation_problem_response(
-            400,
-            "consultation.invalid_request",
-            "The consultation request is invalid."
-        ),
+        "400": consultation_bad_request_response(),
         "401": consultation_problem_response(
             401,
             "auth.invalid_credentials",
@@ -1549,6 +1550,44 @@ fn consultation_execute_responses(success_description: &str, success_schema: &st
             "consultation.unavailable",
             "The consultation cannot be completed safely."
         )
+    })
+}
+
+fn consultation_bad_request_response() -> Value {
+    json!({
+        "description": "The consultation request is invalid or contains more than one primary authentication credential. Stable codes: `consultation.invalid_request`, `auth.multiple_credentials`.",
+        "content": {
+            "application/problem+json": {
+                "schema": {
+                    "oneOf": [
+                        {
+                            "allOf": [
+                                { "$ref": "#/components/schemas/ProblemDetails" },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "status": { "const": 400 },
+                                        "code": { "const": "consultation.invalid_request" }
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "allOf": [
+                                { "$ref": "#/components/schemas/ProblemDetails" },
+                                {
+                                    "type": "object",
+                                    "properties": {
+                                        "status": { "const": 400 },
+                                        "code": { "const": "auth.multiple_credentials" }
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
     })
 }
 
@@ -1890,7 +1929,7 @@ fn security_schemes(config: &Config) -> Value {
                 "type": "apiKey",
                 "in": "header",
                 "name": "x-api-key",
-                "description": "Compatibility API-key header accepted by API-key deployments. `Authorization: Bearer` takes precedence when both headers are present.",
+                "description": "Compatibility API-key header accepted by API-key deployments. Send exactly one primary credential channel: either this header or `Authorization: Bearer`. Requests containing both are rejected with the generic `auth.multiple_credentials` response before either credential is parsed or validated, without revealing whether either credential is valid.",
             }),
         );
     }
@@ -5904,7 +5943,7 @@ mod tests {
                 .keys()
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
-            ["200", "401", "403", "404", "503"]
+            ["200", "400", "401", "403", "404", "503"]
         );
         assert_eq!(
             execute["post"]["responses"]
@@ -5938,7 +5977,6 @@ mod tests {
         }));
 
         let expected_codes = [
-            ("400", "consultation.invalid_request"),
             ("401", "auth.invalid_credentials"),
             ("403", "consultation.denied"),
             ("404", "consultation.profile_not_found"),
@@ -5952,6 +5990,26 @@ mod tests {
                 code
             );
         }
+        let bad_request_codes = execute_op["responses"]["400"]["content"]
+            ["application/problem+json"]["schema"]["oneOf"]
+            .as_array()
+            .expect("400 response variants")
+            .iter()
+            .map(|variant| {
+                variant["allOf"][1]["properties"]["code"]["const"]
+                    .as_str()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            bad_request_codes,
+            ["consultation.invalid_request", "auth.multiple_credentials"]
+        );
+        assert_eq!(
+            profile["get"]["responses"]["400"]["content"]["application/problem+json"]["schema"]
+                ["allOf"][1]["properties"]["code"]["const"],
+            "auth.multiple_credentials"
+        );
         assert_eq!(
             execute_op["responses"]["409"]["content"]["application/problem+json"]["schema"]
                 ["oneOf"][0]["allOf"][1]["properties"]["code"]["const"],
