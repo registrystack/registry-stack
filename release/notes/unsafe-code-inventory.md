@@ -4,6 +4,10 @@ Issue: [#202](https://github.com/registrystack/registry-stack/issues/202)
 
 Generated: 2026-07-09
 
+Citation refresh: 2026-07-17. This refresh verified the current source
+locations; it did not rerun the historical scan or `cargo geiger` review
+described below.
+
 This is the release-readiness inventory for first-party unsafe Rust in the
 Registry Stack workspace. It records where first-party release crates do not
 inherit the workspace `unsafe_code = "forbid"` lint, what unsafe surface remains,
@@ -62,12 +66,12 @@ Reason: unsafe `std::env::set_var` and `std::env::remove_var` calls in
 
 Unsafe surface:
 
-- `crates/registry-notary/src/main.rs:4558`
-- `crates/registry-notary/src/main.rs:4579`
-- `crates/registry-notary/src/main.rs:4590`
-- `crates/registry-notary/src/main.rs:4610`
-- `crates/registry-notary/src/main.rs:4621`
-- `crates/registry-notary/src/main.rs:4643`
+- `crates/registry-notary/src/doctor/tests.rs:408`
+- `crates/registry-notary/src/doctor/tests.rs:429`
+- `crates/registry-notary/src/doctor/tests.rs:440`
+- `crates/registry-notary/src/doctor/tests.rs:460`
+- `crates/registry-notary/src/doctor/tests.rs:471`
+- `crates/registry-notary/src/doctor/tests.rs:493`
 
 Review notes:
 
@@ -85,28 +89,29 @@ Reason: unsafe `std::env::set_var` and `std::env::remove_var` calls in
 
 Unsafe surface:
 
-- `crates/registry-notary-server/src/standalone.rs:8057`
-- `crates/registry-notary-server/src/standalone.rs:8148`
-- `crates/registry-notary-server/src/standalone.rs:8183`
-- `crates/registry-notary-server/src/standalone.rs:8260`
-- `crates/registry-notary-server/src/standalone.rs:8369`
-- `crates/registry-notary-server/tests/deployment_gates_test.rs:28`
-- `crates/registry-notary-server/tests/deployment_gates_test.rs:218`
-- `crates/registry-notary-server/tests/deployment_gates_test.rs:236`
-- `crates/registry-notary-server/tests/demo_config.rs:29`
-- `crates/registry-notary-server/tests/demo_config.rs:66`
-- `crates/registry-notary-server/tests/demo_config.rs:125`
-- `crates/registry-notary-server/tests/demo_config.rs:183`
-- `crates/registry-notary-server/tests/demo_config.rs:306`
-- `crates/registry-notary-server/tests/demo_config.rs:408`
-- `crates/registry-notary-server/tests/demo_config.rs:475`
-- `crates/registry-notary-server/tests/decentralized_cross_source_cel.rs:246`
-- `crates/registry-notary-server/tests/decentralized_cross_source_cel.rs:389`
+- `crates/registry-notary-server/src/standalone/tests/signing.inc:455`
+- `crates/registry-notary-server/src/standalone/tests/signing.inc:546`
+- `crates/registry-notary-server/src/standalone/tests/signing.inc:581`
+- `crates/registry-notary-server/src/standalone/tests/signing.inc:658`
+- `crates/registry-notary-server/src/standalone/tests/signing.inc:767`
+- `crates/registry-notary-server/src/standalone/tests/deployment_gates.rs:36`
+- `crates/registry-notary-server/src/standalone/tests/deployment_gates.rs:307`
+- `crates/registry-notary-server/src/standalone/tests/deployment_gates.rs:325`
+- `crates/registry-notary-server/src/state_plane/migration.rs:2944`
+- `crates/registry-notary-server/src/state_plane/migration.rs:3007`
+- `crates/registry-notary-server/src/state_plane/migration.rs:3038`
+- `crates/registry-notary-server/src/state_plane/migration.rs:4210`
+- `crates/registry-notary-server/src/state_plane/migration.rs:4241`
+- `crates/registry-notary-server/src/state_plane/migration.rs:4274`
+- `crates/registry-notary-server/src/state_plane/migration.rs:4303`
+- `crates/registry-notary-server/src/state_plane/migration.rs:4454`
+- `crates/registry-notary-server/src/state_plane/migration.rs:4463`
+- `crates/registry-notary-server/src/state_plane/migration.rs:4465`
 
 Review notes:
 
 - The unsafe calls are test-only environment mutation for deployment gates,
-  demo config loading, CEL worker setup, and PKCS#11 or key diagnostics.
+  state-plane migration and encryption checks, and PKCS#11 or key diagnostics.
 - No runtime unsafe surface was found in this crate outside test code.
 - Future cleanup should reduce process-wide environment mutation in tests.
 
