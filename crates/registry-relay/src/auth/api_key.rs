@@ -3,7 +3,8 @@
 //!
 //! ## Verification flow
 //!
-//! 1. Read `Authorization: Bearer <token>` or `x-api-key: <token>`.
+//! 1. Require exactly one of `Authorization: Bearer <token>` or
+//!    `x-api-key: <token>` to be present.
 //! 2. Hash the presented high-entropy key with SHA-256.
 //! 3. Look up the fingerprint in the configured in-memory key map.
 //!    On no match, return `AuthError::InvalidCredential`.
@@ -18,9 +19,10 @@
 //! * No retention of generated keys. Operators can use the relay binary's
 //!   provisioning command, then store only `sha256:<hex>` fingerprints in
 //!   secret storage and rotate by rolling config plus secret changes together.
-//! * No credential source is preferred for security reasons. When both
-//!   headers are present, `Authorization` wins because it is the standard
-//!   HTTP auth surface.
+//! * No credential source is preferred. Requests carrying both primary
+//!   credential headers are rejected from header presence alone, before
+//!   either value is parsed or verified. This prevents fallback, precedence,
+//!   and credential-validity oracles.
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -191,21 +193,28 @@ impl AuthProvider for ApiKeyAuth {
 ///
 /// Returns:
 /// * `AuthError::MissingCredential` if neither header is present.
+/// * `AuthError::MultipleCredentials` if both headers are present. This check
+///   happens before either header value is parsed.
 /// * `AuthError::MalformedCredential` if the chosen header is not UTF-8,
 ///   has a malformed `Bearer` value, or carries an empty token.
 ///
 /// The returned token is wrapped in [`Zeroizing`] so its bytes are
 /// scrubbed when the caller drops it.
 fn extract_credential(headers: &HeaderMap) -> Result<Zeroizing<String>, AuthError> {
-    if let Some(value) = headers.get(header::AUTHORIZATION) {
-        return extract_bearer_value(value);
+    let authorization = headers.get(header::AUTHORIZATION);
+    let api_key = headers.get(X_API_KEY);
+    match (authorization, api_key) {
+        (Some(_), Some(_)) => Err(AuthError::MultipleCredentials),
+        (Some(value), None) => extract_bearer_value(value),
+        (None, Some(value)) => {
+            let token = value.to_str().map_err(|_| AuthError::MalformedCredential)?;
+            if token.is_empty() {
+                return Err(AuthError::MalformedCredential);
+            }
+            Ok(Zeroizing::new(token.to_string()))
+        }
+        (None, None) => Err(AuthError::MissingCredential),
     }
-    let value = headers.get(X_API_KEY).ok_or(AuthError::MissingCredential)?;
-    let token = value.to_str().map_err(|_| AuthError::MalformedCredential)?;
-    if token.is_empty() {
-        return Err(AuthError::MalformedCredential);
-    }
-    Ok(Zeroizing::new(token.to_string()))
 }
 
 fn extract_bearer_value(value: &axum::http::HeaderValue) -> Result<Zeroizing<String>, AuthError> {
@@ -318,12 +327,21 @@ mod tests {
     }
 
     #[test]
-    fn authorization_header_wins_over_x_api_key() {
+    fn valid_authorization_and_x_api_key_are_rejected_before_verification() {
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Bearer from-auth".parse().unwrap());
         headers.insert(X_API_KEY, "from-x-api-key".parse().unwrap());
-        let token = extract_credential(&headers).expect("token extracted");
-        assert_eq!(&*token, "from-auth");
+        let err = extract_credential(&headers).expect_err("ambiguous credentials rejected");
+        assert!(matches!(err, AuthError::MultipleCredentials));
+    }
+
+    #[test]
+    fn malformed_authorization_and_valid_x_api_key_are_rejected_from_presence() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::AUTHORIZATION, "Basic malformed".parse().unwrap());
+        headers.insert(X_API_KEY, "valid-api-key".parse().unwrap());
+        let err = extract_credential(&headers).expect_err("ambiguous credentials rejected");
+        assert!(matches!(err, AuthError::MultipleCredentials));
     }
 
     #[test]

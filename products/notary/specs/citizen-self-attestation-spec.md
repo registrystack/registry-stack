@@ -9,6 +9,14 @@
 > access no longer describes the delegated self-attestation work. Current
 > operator guidance lives in `docs/self-attestation-operator-guide.md`; the
 > OID4VCI facade still rejects delegated attestation transaction tokens.
+>
+> **Credential supersession note (2026-07-17).** Source-free credential
+> issuance described below is removed. Source-free claims are evaluation-only.
+> Direct and OID4VCI issuance now require a fresh, non-delegated stored
+> evaluation with exact compiler pins and unique Relay execution records for
+> every selected root's registry-backed dependency closure. Delegated
+> self-attestation is evaluation-only in 1.0.
+> See `docs/credential-issuance-migration.md` for current operator guidance.
 
 Current status: implemented for evaluation, render, credential issuance, batch
 denial, rate-limit guard, and OpenID4VCI facade integration in 0.3.0. External
@@ -184,7 +192,6 @@ self_attestation:
     - person-is-alive
   allowed_formats:
     - application/vnd.registry-notary.claim-result+json
-    - application/dc+sd-jwt
   allowed_disclosures:
     - predicate
     - value
@@ -449,7 +456,7 @@ For `POST /v1/evaluations`:
 6. Continue through the existing claim evaluation pipeline.
 
 The guard placement is part of the contract. In
-`crates/registry-notary-server/src/api.rs::evaluate`, the self-attestation
+`crates/registry-notary-server/src/api/evaluations.rs::evaluate`, the self-attestation
 guard must run after request parsing, authentication, principal construction,
 and claim selection, but before calling the runtime evaluation path or any code
 that can invoke a Relay client. Denials from this guard still
@@ -523,7 +530,7 @@ bounded operational details:
   "self_attestation": {
     "enabled": true,
     "allowed_claim_ids": ["person-is-alive"],
-    "allowed_formats": ["application/vnd.registry-notary.claim-result+json", "application/dc+sd-jwt"],
+    "allowed_formats": ["application/vnd.registry-notary.claim-result+json"],
     "credential_profile_ids": ["civil_status_sd_jwt"]
   }
 }
@@ -1040,7 +1047,7 @@ Definition of Done:
 ### Stage 3: Evaluation Guard
 
 - Add a self-attestation guard before Relay consultations in evaluate.
-- Place the guard in `api.rs::evaluate` after request parsing, authentication,
+- Place the guard in `api/evaluations.rs::evaluate` after request parsing, authentication,
   principal construction, and claim selection, but before the runtime evaluation
   path or any Relay consultation.
 - Add `EvaluationCapability` to the runtime evaluation context with
@@ -1206,7 +1213,7 @@ The feature is done only when all of the following are true:
   authorization, and ambiguous citizen or machine classification fails closed.
 - Configured assurance policy fails closed when `acr` or `auth_time` is missing
   or unacceptable.
-- The self-attestation guard runs in `api.rs::evaluate` before any runtime
+- The self-attestation guard runs in `api/evaluations.rs::evaluate` before any runtime
   evaluation or Relay consultation.
 - Citizen tokens never receive direct machine-client Relay consultation scopes; Relay
   consultations use only `EvaluationCapability::SelfAttestation` after all citizen guards
@@ -1255,7 +1262,7 @@ unless self-attestation is enabled.
 
 Parallel workers:
 
-- Worker A owns `api.rs::evaluate` guard placement and access-mode
+- Worker A owns `api/evaluations.rs::evaluate` guard placement and access-mode
   classification.
 - Worker B owns subject-binding, allow-list, fixed claim-profile purpose, and
   alternate-subject rejection tests.

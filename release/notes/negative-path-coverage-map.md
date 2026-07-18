@@ -4,6 +4,10 @@ Issue: [#200](https://github.com/registrystack/registry-stack/issues/200)
 
 Generated: 2026-07-10
 
+Citation refresh: 2026-07-17. This refresh verified that the named public
+anchors resolve in the current tree; it did not rerun the historical evidence
+collection behind this map.
+
 This is the public release-readiness map for negative-path coverage. It maps
 the internal checklist row identifiers to public evidence or disposition without
 copying adversarial scenario detail into the public repository.
@@ -124,8 +128,8 @@ public evidence or disposition.
   public scenario detail remains intentionally omitted.
 - `NP-19`: Covered.
   Public anchors:
-  `crates/registry-notary-server/src/api.rs::issue_credential_rejects_purpose_mismatch`
-  and `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`.
+  `crates/registry-notary-server/src/api/tests/credentials.rs::issue_credential_rejects_purpose_mismatch`
+  and `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`.
   Disposition: purpose mismatch is denied before credential signing, and the
   direct `/v1/credentials` product route now returns a stable problem response,
   emits a redacted `credential_denied` audit record with self-attestation access
@@ -133,8 +137,8 @@ public evidence or disposition.
 - `NP-20`: Covered.
   Public anchors:
   `crates/registry-platform-sdjwt/src/lib.rs::holder_proof_rejects_wrong_type_and_dangerous_headers`,
-  `crates/registry-notary-server/src/api.rs::strict_credential_issue_rejects_oid4vci_proof_shape`,
-  and `crates/registry-notary-server/tests/standalone_http.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`.
+  `crates/registry-notary-server/src/api/tests/credentials.rs::strict_credential_issue_rejects_oid4vci_proof_shape`,
+  and `crates/registry-notary-server/tests/standalone_http/credentials.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`.
   Disposition: platform holder-proof validation and the direct
   `/v1/credentials` product route both reject the wrong proof class, return the
   stable `credential.holder_proof_required` problem, emit a redacted
@@ -150,9 +154,9 @@ public evidence or disposition.
   denial behavior.
 - `NP-22`: Covered.
   Public anchors:
-  `crates/registry-notary-server/src/standalone.rs::notary_transaction_token_auth_consumes_jti_once`,
-  `crates/registry-notary-server/src/standalone.rs::consume_notary_token_jti_rejects_missing_jti_for_transaction_typ`,
-  and `crates/registry-notary-server/tests/standalone_http.rs::preauth_transaction_token_jti_denials_are_stable_and_redacted`.
+  `crates/registry-notary-server/src/standalone/tests/auth.inc::notary_transaction_token_auth_consumes_jti_once`,
+  `crates/registry-notary-server/src/standalone/tests/auth.inc::consume_notary_token_jti_rejects_missing_jti_for_transaction_typ`,
+  and `crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_transaction_token_jti_denials_are_stable_and_redacted`.
   Disposition: single-use transaction-token `jti` enforcement, missing-`jti`
   fail-closed behavior, replay denial, product-surface HTTP audit parity, and
   response/audit redaction are covered.
@@ -165,24 +169,38 @@ public evidence or disposition.
   before treating it as release evidence.
 - `NP-24`: Partial.
   Public anchors:
-  `crates/registry-notary-server/src/standalone.rs::source_json_reader_rejects_oversized_body`,
-  `crates/registry-notary-server/src/standalone.rs::http_sources_reject_private_source_urls_before_fetch`,
-  and `crates/registry-notary-server/src/standalone.rs::http_sources_reject_cloud_metadata_source_urls_before_fetch`.
-  Disposition: Notary behavior is covered; Relay handling is a deliberate
-  product difference that needs explicit release sign-off.
+  `crates/registry-notary-server/src/standalone/tests/auth.inc::static_auth_rejects_multiple_credential_headers`,
+  `crates/registry-notary-server/src/standalone/tests/auth.inc::static_auth_rejects_api_key_with_malformed_authorization_header`,
+  `crates/registry-notary-server/tests/standalone_http/preauth.rs::preauth_transaction_token_jti_denials_are_stable_and_redacted`,
+  and `crates/registry-relay/src/auth/api_key.rs::authorization_header_wins_over_x_api_key`.
+  Disposition: Notary rejects API-key plus Bearer credentials and API-key plus
+  malformed Authorization as multiple credentials before choosing or falling
+  back to either source. The API-key-plus-Bearer HTTP path returns the stable
+  `auth.multiple_credentials` denial, emits a matching redacted audit record,
+  and does not disclose raw credential values. The malformed-Authorization
+  plus-valid-API-key case is unit-only and still needs equivalent HTTP response
+  and audit evidence. Relay currently diverges: when both credential headers
+  are present, Authorization takes precedence over `x-api-key`. That product
+  difference remains open for release sign-off or follow-up.
 - `NP-25`: Covered.
   Public anchors: `crates/registry-notary-core/src/deployment.rs` and
-  `crates/registry-notary-server/tests/deployment_gates_test.rs`.
+  `crates/registry-notary-server/src/standalone/tests/deployment_gates.rs`.
   Disposition: current Notary startup gates require an explicit deployment
   profile, keep `local` as the development opt-out, and reject unknown profile
   values.
 - `NP-26`: Partial.
-  Public anchors: `crates/registry-notary-core/src/config.rs`,
-  `crates/registry-notary-core/src/deployment.rs`,
-  `crates/registry-notary-server/src/standalone.rs`, and
-  `crates/registry-notary-server/tests/standalone_http.rs`.
-  Disposition: verify against the post-#314 signed-bundle surface before
-  release sign-off.
+  Public anchors:
+  `crates/registry-notary-core/src/config/evidence/relay.rs`,
+  `crates/registry-notary-core/src/config/tests/relay.rs::relay_connection_requires_https_origin_or_explicit_loopback`,
+  `crates/registry-notary-core/src/config/tests/relay.rs::relay_token_file_and_private_cidrs_are_exact_and_bounded`,
+  `crates/registry-notary-server/src/relay_client.rs`,
+  and `crates/registry-notary-server/src/relay_client/tests.rs::status_size_redirect_and_retry_behavior_is_closed`.
+  Disposition: the retired direct-source and sidecar network model is not
+  release evidence. The active Relay consultation boundary validates one
+  configured HTTPS origin with an explicit loopback exception, bounds the
+  private CIDR exception list and both metadata and result response bodies, and
+  rejects redirects without retrying. Keep open for release sign-off against
+  the redesigned Notary-to-Relay ownership split.
 - `NP-27`: Covered.
   Public anchors:
   `crates/registry-notary-server/src/runtime/tests/evaluation.rs::registry_backed_preflight_denial_makes_zero_relay_calls`,
@@ -194,17 +212,17 @@ public evidence or disposition.
   `forwarded = false`, and response/audit redaction.
 - `NP-28`: Covered.
   Public anchors:
-  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_pre_evaluation_denials_are_audited_and_redacted`,
-  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_operation_denial_is_audited_and_preserves_denial_code`,
-  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_rate_limit_is_audited_with_stored_context`,
-  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_binding_denials_are_audited_and_redacted`,
-  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_holder_proof_replay_is_audited_and_redacted`,
-  `crates/registry-notary-server/tests/standalone_http.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`,
-  `crates/registry-notary-server/tests/standalone_http.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`,
-  `crates/registry-notary-server/tests/self_attestation_guard_test.rs::self_attestation_credential_issuance_rejects_disallowed_profile`,
-  `crates/registry-notary-server/src/api.rs::evaluation_access_uses_stored_claim_version_scope`,
-  `crates/registry-notary-server/src/runtime.rs::credential_profile_for_rejects_profile_not_listed_in_claim`,
-  and `crates/registry-notary-server/src/api.rs::issue_credential_fails_closed_when_status_record_write_fails`.
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_pre_evaluation_denials_are_audited_and_redacted`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_operation_denial_is_audited_and_preserves_denial_code`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_rate_limit_is_audited_with_stored_context`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_binding_denials_are_audited_and_redacted`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_holder_proof_replay_is_audited_and_redacted`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::direct_credential_purpose_mismatch_denial_is_audited_and_redacted`,
+  `crates/registry-notary-server/tests/standalone_http/credentials.rs::strict_credentials_issue_rejects_oid4vci_proof_at_http_boundary`,
+  `crates/registry-notary-server/tests/subject_access_guard_test.rs::subject_access_credential_issuance_rejects_disallowed_profile`,
+  `crates/registry-notary-server/src/api/tests/evaluations.rs::evaluation_access_uses_stored_claim_version_scope`,
+  `crates/registry-notary-server/src/runtime/tests/render.rs::credential_profile_for_rejects_profile_not_listed_in_claim`,
+  and `crates/registry-notary-server/src/api/tests/credentials.rs::issue_credential_fails_closed_when_status_record_write_fails`.
   Disposition: caller-triggered pre-evaluation request, classification, and
   lookup denials emit a minimal `credential_denied` event without recording an
   untrusted evaluation id. Evaluation-bound binding, stored-access, policy,

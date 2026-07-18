@@ -44,7 +44,8 @@ flowchart LR
 Relay owns every registry source origin, credential, adaptation recipe, and minimized
 consultation result. Notary consumes a compiler-pinned Relay consultation for registry-backed
 claims. A Notary-only deployment evaluates source-free or self-attested claims and has no source
-connection.
+connection. It cannot issue credentials. Credential issuance requires a combined deployment and a
+fresh exact Relay-backed evaluation for every selected claim.
 
 ## Before you start
 

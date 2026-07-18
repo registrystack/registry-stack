@@ -1,0 +1,40 @@
+version: 1
+entities:
+  person:
+    provider:
+      type: xlsx
+      path: /var/lib/registry/benefits_casework.xlsx
+      sheet: Persons
+      header_row: 1
+    columns:
+      person_id: person_id
+      household_id: household_id
+      given_name: given_name
+      family_name: family_name
+      date_of_birth: date_of_birth
+      relationship_to_head: relationship_to_head
+      registration_status: registration_status
+      national_id: national_id
+    source_revision: tutorial-benefits-workbook-v1
+    generation: tutorial-local-v1
+callers:
+  tutorial-evaluator:
+    api_key_fingerprint: { secret: TUTORIAL_EVALUATOR_HASH }
+    scopes: ["benefits_casework:evidence"]
+relay:
+  origin: http://127.0.0.1:8082
+  issuer: http://127.0.0.1:8081
+  jwks_url: http://127.0.0.1:8083/jwks.json
+  audience: registry-relay
+  allowed_clients: [registry-notary]
+notary_relay:
+  base_url: http://127.0.0.1:8082
+  workload_client_id: registry-notary
+  token_file: /run/secrets/notary-relay.jwt
+notary_cel:
+  # Accommodates the amd64 emulation overhead used by this cross-platform tutorial.
+  worker_memory_bytes: 1073741824
+deployment:
+  profile: local
+  relay: { service: registry-relay-consultation }
+  notary: { service: registry-notary }

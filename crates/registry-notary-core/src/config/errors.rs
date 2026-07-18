@@ -75,6 +75,22 @@ pub enum EvidenceConfigError {
         default: String,
         allowed: Vec<String>,
     },
+    #[error(
+        "claim '{claim}' formats must not be empty; omit formats to use the default \
+         application/vnd.registry-notary.claim-result+json representation, or list one or more response formats"
+    )]
+    EmptyClaimFormats { claim: String },
+    #[error(
+        "claim '{claim}' formats must include the canonical evaluation response format \
+         application/vnd.registry-notary.claim-result+json; add it alongside any supported additional evaluation renderers"
+    )]
+    MissingCanonicalClaimFormat { claim: String },
+    #[error(
+        "claim '{claim}' has unsupported evaluation response format '{format}' in formats; \
+         supported formats are application/vnd.registry-notary.claim-result+json and \
+         application/ld+json; profile=\"cccev\". SD-JWT VC belongs in credential_profiles, not claim formats"
+    )]
+    UnsupportedClaimFormat { claim: String, format: String },
     #[error("allowed purpose must not be empty")]
     InvalidPurpose,
     #[error("concurrency.subjects must be >= 1")]
@@ -110,6 +126,8 @@ pub enum EvidenceConfigError {
          claim; an empty list would permit any claim at issuance"
     )]
     EmptyAllowedClaims { profile: String },
+    #[error("invalid credential claim binding: {reason}")]
+    InvalidCredentialClaimBinding { reason: String },
     /// Registry Notary currently issues only SD-JWT VC credentials using the
     /// current `application/dc+sd-jwt` media type. Reject aliases and profile
     /// labels so operator config cannot drift from the wire contract.

@@ -72,7 +72,7 @@ The registry stack comprises four formal products. Product names are Title Case.
 
 **Registry Manifest** (`registry-manifest`): Rust workspace for modeling, validating, and rendering standards-facing service, registry, form, and policy metadata without running Registry Relay. Provides a library (`registry-manifest-core`) and a command-line interface (`registry-manifest-cli`).
 
-**Registry Notary** (`registry-notary`): Standalone Rust service for Relay-backed or self-attested claim evaluation, disclosure policy, credential issuance, and audit. It has no direct registry source connector.
+**Registry Notary** (`registry-notary`): Standalone Rust service for Relay-backed or self-attested claim evaluation, disclosure policy, credential issuance from exact Relay-backed evaluation provenance, and audit. Source-free claims are evaluation-only. It has no direct registry source connector.
 
 **Solmara Lab** (`solmara-lab`): Separately maintained adopter demo for the fictional Republic of Solmara. It runs published Registry Stack images in local and hosted topologies. Solmara Lab is not a formal Registry Stack product and has no conformance weight in the Registry Stack specifications.
 
@@ -88,7 +88,7 @@ The registry stack comprises four formal products. Product names are Title Case.
 
 **wallet**: A holder-owned application that stores credentials and presents them to verifiers. Registry Notary issues credentials; the wallet that stores, unlocks, and presents them is a separate component owned by the holder.
 
-**self-attestation**: Registry Notary access pattern where an authenticated OIDC principal is the protected requester for configured claim evaluation or credential issuance. Registry Notary has two self-attestation access modes: `self_attestation` (direct self-attestation), where the authenticated principal is the credential subject, and `delegated_attestation` (delegated self-attestation), where the authenticated principal is the requester and a configured dependent target can be evaluated only when scoped authorization details name the same target, relationship, and proof claim. Registry Stack product term.
+**self-attestation**: Registry Notary access pattern where an authenticated OIDC principal is the protected requester for configured claim evaluation. Registry Notary has two self-attestation access modes: `self_attestation` (direct self-attestation), where the authenticated principal is the subject, and `delegated_attestation` (delegated self-attestation), where the authenticated principal is the requester and a configured dependent target can be evaluated only when scoped authorization details name the same target, relationship, and proof claim. Source-free and delegated claims are evaluation-only. Subject access can authorize credential issuance only for non-delegated registry-backed evidence. Registry Stack product term.
 
 **delegated self-attestation**: Registry Notary self-attestation access mode `delegated_attestation`. The requester is derived from the authenticated principal, the request target and scoped authorization details identify the same configured dependent subject, the relationship is derived from scoped authorization details, and the dependent claim can continue only after the compiler-pinned Relay proof consultation evaluates to boolean `true`. This is distinct from static-peer delegated evaluation under Notary federation. Registry Stack product term.
 
@@ -100,7 +100,7 @@ The registry stack comprises four formal products. Product names are Title Case.
 
 **DID**: Decentralized Identifier. W3C DID Core 1.0. Registry Relay no longer publishes a DID document. Registry Notary parses `did:jwk` values for credential subjects.
 
-**eSignet**: Open-source identity and authentication service (part of MOSIP). The hosted Solmara Lab topology uses eSignet as the authorization server a citizen signs in to before Registry Notary issues a self-attestation credential. Not a Registry Stack product term; included here because it appears in Solmara Lab documentation.
+**eSignet**: Open-source identity and authentication service (part of MOSIP). Registry Notary can use eSignet as the authorization server for subject-bound evaluation and registry-backed credential flows. Not a Registry Stack product term; included here because it appears in Solmara Lab documentation.
 
 ## 3. Metadata and standards terms
 

@@ -6,6 +6,10 @@ use super::*;
 pub const MAX_CLAIM_DEPENDENCY_NODES_V1: usize = 64;
 pub const MAX_CLAIM_DEPENDENCY_EDGES_V1: usize = 256;
 
+fn default_claim_formats() -> Vec<String> {
+    vec![FORMAT_CLAIM_RESULT_JSON.to_string()]
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimDefinition {
@@ -35,7 +39,10 @@ pub struct ClaimDefinition {
     pub operations: ClaimOperationsConfig,
     #[serde(default)]
     pub disclosure: DisclosureConfig,
-    #[serde(default)]
+    /// Omitting this field keeps existing authored claims renderable using the
+    /// canonical claim-result representation. An explicitly empty list is
+    /// rejected during configuration validation.
+    #[serde(default = "default_claim_formats")]
     pub formats: Vec<String>,
     #[serde(default)]
     pub credential_profiles: Vec<String>,
@@ -178,6 +185,7 @@ pub enum RequestVariableType {
 pub enum RelayConsultationInput {
     TargetId,
     TargetIdentifier(String),
+    TargetAttribute(String),
     RequesterId,
     RequesterIdentifier(String),
 }
@@ -188,6 +196,7 @@ impl RelayConsultationInput {
         match self {
             Self::TargetId => "target.id",
             Self::TargetIdentifier(path) => path,
+            Self::TargetAttribute(path) => path,
             Self::RequesterId => "request.requester.id",
             Self::RequesterIdentifier(path) => path,
         }
@@ -207,6 +216,14 @@ impl RelayConsultationInput {
 
     #[must_use]
     pub const fn is_target_derived(&self) -> bool {
+        matches!(
+            self,
+            Self::TargetId | Self::TargetIdentifier(_) | Self::TargetAttribute(_)
+        )
+    }
+
+    #[must_use]
+    pub const fn is_authenticated_target_identifier(&self) -> bool {
         matches!(self, Self::TargetId | Self::TargetIdentifier(_))
     }
 }
@@ -239,13 +256,19 @@ impl<'de> Deserialize<'de> for RelayConsultationInput {
                 Ok(Self::TargetIdentifier(mapping))
             }
             _ if mapping
+                .strip_prefix("request.target.attributes.")
+                .is_some_and(is_target_attribute_name) =>
+            {
+                Ok(Self::TargetAttribute(mapping))
+            }
+            _ if mapping
                 .strip_prefix("request.requester.identifiers.")
                 .is_some_and(is_request_identifier_name) =>
             {
                 Ok(Self::RequesterIdentifier(mapping))
             }
             _ => Err(serde::de::Error::custom(
-                "unsupported consultation input mapping; v1 permits target.id, request.requester.id, request.target.identifiers.<stable-id>, or request.requester.identifiers.<stable-id>",
+                "unsupported consultation input mapping; v1 permits target.id, request.requester.id, request.target.identifiers.<stable-id>, request.target.attributes.<stable-name>, or request.requester.identifiers.<stable-id>",
             )),
         }
     }
@@ -429,23 +452,6 @@ pub(in crate::config) fn validate_self_attested_dependency_modes(
                 );
             }
             pending.extend(dependency.depends_on.iter().map(String::as_str));
-        }
-    }
-    Ok(())
-}
-
-pub(in crate::config) fn validate_registry_backed_dependency_modes(
-    claims: &[ClaimDefinition],
-) -> Result<(), EvidenceConfigError> {
-    for claim in claims
-        .iter()
-        .filter(|claim| claim.evidence_mode.is_registry_backed())
-    {
-        if !claim.depends_on.is_empty() {
-            return invalid_claim_evidence_mode(
-                claim,
-                "the initial registry_backed journey cannot declare depends_on; one claim maps only its pinned Relay consultation",
-            );
         }
     }
     Ok(())
@@ -688,6 +694,13 @@ fn is_request_identifier_name(value: &str) -> bool {
                 b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-' | b'_'
             )
         })
+}
+
+fn is_target_attribute_name(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    matches!(bytes.next(), Some(b'a'..=b'z'))
+        && value.len() <= 64
+        && bytes.all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
 }
 
 fn is_stable_id(value: &str) -> bool {

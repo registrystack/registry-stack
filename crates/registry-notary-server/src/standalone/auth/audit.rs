@@ -57,6 +57,10 @@ pub(crate) struct AuditPipeline {
     pub(in super::super) chain: Arc<OnceCell<ChainState>>,
     pub(in super::super) profile: AuditProfile,
     pub(in super::super) tail_init_in_progress: Arc<AtomicBool>,
+    /// Process-lifetime retained-chain integrity latch. Only confirmed chain
+    /// integrity failures flip this to false; transient operational failures
+    /// remain retryable and do not poison readiness.
+    pub(in super::super) chain_healthy: Arc<AtomicBool>,
 }
 
 pub(in super::super) struct TailInitReset(Arc<AtomicBool>);
@@ -127,6 +131,7 @@ impl AuditPipeline {
             chain: Arc::new(OnceCell::new()),
             profile,
             tail_init_in_progress: Arc::new(AtomicBool::new(false)),
+            chain_healthy: Arc::new(AtomicBool::new(true)),
         })
     }
 
@@ -137,6 +142,7 @@ impl AuditPipeline {
             chain: Arc::new(OnceCell::new()),
             profile: AuditProfile::unkeyed_dev_only(),
             tail_init_in_progress: Arc::new(AtomicBool::new(false)),
+            chain_healthy: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -149,17 +155,54 @@ impl AuditPipeline {
     }
 
     pub(crate) async fn emit(&self, event: &EvidenceAuditEvent) -> Result<(), AuditError> {
-        let chain = self
+        let result = async {
+            let chain = self
+                .chain
+                .get_or_try_init(|| async {
+                    self.profile
+                        .bootstrap_or_start_empty(self.sink.as_ref())
+                        .await
+                })
+                .await?;
+            let record = serde_json::to_value(event).map_err(AuditError::Json)?;
+            chain.append(self.sink.as_ref(), record).await?;
+            Ok(())
+        }
+        .await;
+        self.mark_chain_unhealthy_on_integrity_error(&result);
+        result
+    }
+
+    /// Eagerly verify the retained chain before the runtime can be served.
+    ///
+    /// Integrity failures latch readiness unhealthy for the process lifetime.
+    /// I/O, JSON, secret-loading, and other operational errors remain retryable
+    /// and do not change readiness.
+    pub(crate) async fn verify_chain_eager(&self) -> Result<(), AuditError> {
+        let result = self
             .chain
             .get_or_try_init(|| async {
                 self.profile
                     .bootstrap_or_start_empty(self.sink.as_ref())
                     .await
             })
-            .await?;
-        let record = serde_json::to_value(event).map_err(AuditError::Json)?;
-        chain.append(self.sink.as_ref(), record).await?;
-        Ok(())
+            .await
+            .map(|_| ());
+        self.mark_chain_unhealthy_on_integrity_error(&result);
+        result
+    }
+
+    fn mark_chain_unhealthy_on_integrity_error<T>(&self, result: &Result<T, AuditError>) {
+        if matches!(
+            result,
+            Err(AuditError::ChainForkDetected { .. } | AuditError::ChainVerification(_))
+        ) {
+            self.chain_healthy.store(false, Ordering::SeqCst);
+        }
+    }
+
+    pub(crate) fn chain_healthy(&self) -> bool {
+        self.chain_healthy.load(Ordering::SeqCst)
     }
 
     pub(crate) async fn current_tail_hash_bounded(&self) -> Option<[u8; 32]> {
@@ -187,6 +230,7 @@ impl AuditPipeline {
                 })
                 .await
                 .map(|chain| chain.try_last_hash().flatten());
+            pipeline.mark_chain_unhealthy_on_integrity_error(&result);
             result
         });
         match tokio::time::timeout(DEADLINE, worker).await {

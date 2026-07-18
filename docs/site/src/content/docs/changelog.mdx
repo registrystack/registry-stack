@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-docs
-last_reviewed: "2026-07-16"
+last_reviewed: "2026-07-18"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -15,6 +15,32 @@ This page records notable changes to the documentation site and the product vers
 documents.
 Per-product release notes live in each product repository; the entries below link to the
 relevant product pages on this site rather than duplicating release notes.
+
+## 2026-07-18
+
+Documentation updates for the v0.11.0 beta-13 release:
+
+- Advanced current source citations, install commands, verification examples,
+  contracts, projects, and standards links to Registry Stack `v0.11.0`.
+- Added the `v0.11.0` archived docset while retaining the v0.10.0 and earlier
+  archives. The public release inventory remains eight artifacts. The optional
+  language server, VS Code preview, and Zed preview remain source-installed
+  developer tools, not release or marketplace artifacts.
+- Published the registry-backed local Notary tutorial and the maintained
+  authoring-workspace catalog. Registryctl continues to expose exactly five
+  public starters. The local tutorial proves evaluation only, not credential,
+  wallet, presentation, or OID4VCI interoperability.
+- Documented the credential-issuance migration: only fresh, non-delegated,
+  registry-backed evaluations with exact Relay provenance are credential
+  capable. Source-free and delegated results remain evaluation and rendering
+  surfaces, and old evaluations require re-evaluation before issuance. No
+  database migration is required solely for this narrowing.
+- Added migration coverage for ambiguous primary credentials, strict empty
+  environment expansion, Relay Script host-call diagnostics, and offline audit
+  quarantine recovery.
+
+This beta does not claim stable 1.0 completion, full OID4VCI interoperability,
+hosted promotion, audit completion, or an external pilot result.
 
 ## 2026-07-16
 

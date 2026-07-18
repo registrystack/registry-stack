@@ -48,6 +48,117 @@ fn boot_bundle_acceptance_audit_failure_aborts_before_antirollback_persist() {
 
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
+async fn governed_boot_integrity_failure_persists_nothing_and_serves_nothing() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    std::env::set_var("TEST_NOTARY_LOADER_API_HASH", sha256_hash("api-token"));
+    std::env::set_var(
+        "TEST_NOTARY_LOADER_AUDIT_HASH_SECRET",
+        "registry-notary-loader-audit-secret-32-bytes",
+    );
+    std::env::set_var(
+        "TEST_NOTARY_LOADER_ISSUER_JWK",
+        demo_issuer_jwk("did:web:issuer.example#key-1").expect("issuer key generates"),
+    );
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let public_probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe binds");
+    let public_addr = public_probe.local_addr().expect("probe address");
+    let admin_probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe binds");
+    let admin_addr = admin_probe.local_addr().expect("probe address");
+    drop(public_probe);
+    drop(admin_probe);
+
+    let profile = registry_platform_audit::AuditProfile::registry_notary_from_env(
+        "TEST_NOTARY_LOADER_AUDIT_HASH_SECRET",
+    )
+    .expect("audit profile loads");
+    {
+        let sink = registry_platform_audit::JsonlFileSink::new(&audit_path);
+        let chain = registry_platform_audit::ChainState::bootstrap_or_start_empty(
+            &sink,
+            profile.chain_hasher(),
+        )
+        .await
+        .expect("audit chain starts");
+        chain
+            .append(&sink, json!({ "event": "governed.boot.preexisting" }))
+            .await
+            .expect("audit event writes");
+    }
+    let contents = std::fs::read_to_string(&audit_path).expect("audit reads");
+    std::fs::write(
+        &audit_path,
+        contents.replace("governed.boot.preexisting", "governed.boot.tampered"),
+    )
+    .expect("audit is tampered");
+
+    let runtime_config = notary_bundle_runtime_config()
+        .replace("127.0.0.1:4255", &public_addr.to_string())
+        .replace("127.0.0.1:4256", &admin_addr.to_string())
+        .replace(
+            "audit:\n  sink: stdout\n  hash_secret_env: TEST_NOTARY_LOADER_AUDIT_HASH_SECRET",
+            &format!(
+                "audit:\n  sink: file\n  path: {}\n  hash_secret_env: TEST_NOTARY_LOADER_AUDIT_HASH_SECRET",
+                audit_path.display()
+            ),
+        );
+    let fixture = write_signed_notary_bundle_with_config(&tmp, runtime_config);
+    let config_path = tmp.path().join("bootstrap.yaml");
+    std::fs::write(&config_path, notary_bootstrap_config(&fixture)).expect("bootstrap writes");
+
+    let error = run_server(&config_path, None, true)
+        .await
+        .expect_err("governed boot audit failure aborts startup");
+    assert!(
+        error
+            .to_string()
+            .contains("audit chain verification failed"),
+        "unexpected error: {error}"
+    );
+    let key = registry_platform_ops::AntiRollbackKey {
+        product: "registry-notary".to_string(),
+        instance_id: String::new(),
+        environment: "development".to_string(),
+        stream_id: "notary-loader-test".to_string(),
+    };
+    let state_error = registry_platform_ops::FileAntiRollbackStore::new(&fixture.state_path)
+        .load(&key)
+        .expect_err("bundle acceptance state remains absent");
+    assert_eq!(
+        state_error,
+        registry_platform_ops::AntiRollbackStoreError::MissingState
+    );
+    let rebound_public = std::net::TcpListener::bind(public_addr)
+        .expect("public listener was released before any serving loop");
+    let rebound_admin = std::net::TcpListener::bind(admin_addr)
+        .expect("admin listener was released before any serving loop");
+    drop(rebound_public);
+    drop(rebound_admin);
+
+    audit_quarantine(
+        &config_path,
+        AuditQuarantineArgs {
+            reason: "recover governed first boot".to_string(),
+            operator: Some("ci".to_string()),
+        },
+    )
+    .expect("offline recovery can read the verified pending bundle");
+    let state_after_recovery =
+        registry_platform_ops::FileAntiRollbackStore::new(&fixture.state_path)
+            .load(&key)
+            .expect_err("offline audit recovery does not accept the bundle");
+    assert_eq!(
+        state_after_recovery,
+        registry_platform_ops::AntiRollbackStoreError::MissingState
+    );
+
+    std::env::remove_var("TEST_NOTARY_LOADER_API_HASH");
+    std::env::remove_var("TEST_NOTARY_LOADER_AUDIT_HASH_SECRET");
+    std::env::remove_var("TEST_NOTARY_LOADER_ISSUER_JWK");
+}
+
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn boot_listener_bind_failure_aborts_before_antirollback_persist() {
     let _guard = ENV_LOCK.lock().expect("env lock");
     std::env::set_var("TEST_NOTARY_LOADER_API_HASH", sha256_hash("api-token"));

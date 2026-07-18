@@ -17,6 +17,7 @@ services:
         integration: health-record
         input:
           tracked_entity: request.target.identifiers.dhis2_tracked_entity
+          include_inactive: request.target.attributes.include_inactive
     claims:
       tracked-entity-first-name: { output: health.first_name, disclosure: value }
       tracked-entity-last-name: { output: health.last_name, disclosure: value }

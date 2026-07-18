@@ -13,10 +13,11 @@ if (selected.length === 0) {
 ---
 
 <p>
-  Run these commands in order. The focused test prints a safe synthetic trace. The next command
-  starts the same fixture as a watch smoke; press <code>Ctrl+C</code> after its initial passing
-  report. The final three commands test every fixture, explain the redacted plan, and build the
-  unsigned product inputs.
+  Run these commands in order. Initialization creates the editor files, and the next idempotent
+  command verifies them against the running <code>registryctl</code>. The focused test prints a safe
+  synthetic trace. The following command starts the same fixture as a watch smoke; press
+  <code>Ctrl+C</code> after its initial passing report. The final three commands test every fixture,
+  explain the redacted plan, and build the unsigned product inputs.
 </p>
 
 {selected.map((item) => (

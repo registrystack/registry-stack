@@ -17,6 +17,18 @@ This page lists the environment variables read directly by the Registry Notary b
 
 Secret material such as credential hashes, signing keys, and upstream tokens is not read from a fixed variable name. Instead, each config field names the environment variable to read, and the operator chooses the name. Those per-deployment variables are documented in the synced configuration references rather than repeated on this page. See the [Registry Notary operator config reference](../../products/registry-notary/operator-config-reference/) and the [Registry Relay configuration reference](../../products/registry-relay/configuration/) for the config fields that name secret environment variables.
 
+## Configuration expansion
+
+Registry Notary and Registry Relay expand `${VAR}` expressions before YAML
+parsing.
+`${VAR}` requires `VAR` to be set to a non-empty value.
+`${VAR:-fallback}` uses `fallback` when `VAR` is unset or empty, including
+`${VAR:-}` for an explicit empty result.
+`${VAR:?message}` fails with `message` when `VAR` is unset or empty.
+Whitespace-only values are non-empty.
+Diagnostics name the variable or use the supplied message; they never include
+the variable value.
+
 ## Registry Notary
 
 The Registry Notary binary reads the variables below. Each also has an equivalent command-line flag.

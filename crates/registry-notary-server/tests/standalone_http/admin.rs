@@ -34,7 +34,9 @@ pub(super) async fn admin_reload_401_unauth_403_wrong_scope_501_admin() {
     add_admin_api_key(&mut config);
     enable_shared_admin_listener(&mut config);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let unauthenticated = server.post("/admin/v1/reload").await;
@@ -110,7 +112,9 @@ pub(super) async fn admin_posture_requires_ops_read_not_admin_and_ops_cannot_rel
     add_admin_api_key(&mut config);
     add_ops_read_api_key(&mut config);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     server
@@ -179,7 +183,9 @@ pub(super) async fn admin_capabilities_requires_ops_read_and_reports_notary_surf
     add_admin_api_key(&mut config);
     add_ops_read_api_key(&mut config);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     server
@@ -292,10 +298,12 @@ pub(super) async fn dedicated_topology_splits_admin_routes_and_reports_capabilit
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
     add_ops_read_api_key(&mut config);
 
-    let routers = notary_routers_from_runtime(
-        compile_notary_runtime(config).expect("runtime compiles for dedicated topology"),
-    )
-    .expect("Notary-only runtime is serve-ready");
+    let runtime = compile_notary_runtime(config)
+        .expect("runtime compiles for dedicated topology")
+        .activate()
+        .await
+        .expect("runtime activates for dedicated topology");
+    let routers = notary_routers_from_runtime(runtime).expect("Notary-only runtime is serve-ready");
     let public = TestServer::builder().http_transport().build(routers.public);
     let admin = TestServer::builder().http_transport().build(routers.admin);
 
@@ -386,7 +394,9 @@ pub(super) async fn admin_posture_rejects_unknown_tier_with_shared_error_code() 
     enable_shared_admin_listener(&mut config);
     add_ops_read_api_key(&mut config);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -425,7 +435,9 @@ pub(super) async fn admin_posture_reports_configured_instance_override() {
     config.instance.public_base_url = Some("https://notary.example.test".to_string());
     add_ops_read_api_key(&mut config);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
@@ -458,7 +470,9 @@ pub(super) async fn admin_posture_top_level_keys_match_documented_example() {
     enable_shared_admin_listener(&mut config);
     add_ops_read_api_key(&mut config);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let default_posture = server
@@ -559,7 +573,9 @@ pub(super) async fn admin_posture_reports_subject_access_summary_and_redacts_sig
         "scope": "ops_read",
     }));
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
@@ -634,7 +650,9 @@ pub(super) async fn admin_posture_reports_oid4vci_bearer_offer_mode() {
         "scope": "ops_read",
     }));
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
@@ -700,7 +718,9 @@ pub(super) async fn admin_posture_redacts_runtime_config_signing_secrets() {
     );
     add_ops_read_api_key(&mut config);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
@@ -742,7 +762,9 @@ pub(super) async fn admin_posture_classifies_in_memory_state_storage() {
     enable_shared_admin_listener(&mut config);
     add_ops_read_api_key(&mut config);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
@@ -772,7 +794,9 @@ pub(super) async fn admin_posture_warns_for_production_like_in_memory_state() {
     config.instance.environment = "production".to_string();
     add_ops_read_api_key(&mut config);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
@@ -806,7 +830,9 @@ pub(super) async fn admin_posture_federation_summary_omits_peer_private_data() {
     enable_shared_admin_listener(&mut config);
     add_ops_read_api_key(&mut config);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let posture = server
         .get("/admin/v1/posture")
@@ -847,7 +873,9 @@ pub(super) async fn metrics_requires_metrics_scope_and_keeps_health_public() {
     add_admin_api_key(&mut config);
     add_metrics_read_api_key(&mut config);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let health = server.get("/healthz").await;

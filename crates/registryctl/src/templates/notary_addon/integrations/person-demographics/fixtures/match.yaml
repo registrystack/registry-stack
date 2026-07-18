@@ -1,0 +1,10 @@
+name: jo-elm-match
+classification: synthetic
+input: { given_name: Jo, family_name: Elm, date_of_birth: "2019-02-03" }
+interactions:
+  - expect: { method: GET, path: /snapshot }
+    respond: { status: 200, body: { registration_status: active } }
+expect:
+  outcome: match
+  outputs: { registration_status: active }
+  claims: { person-registration-accepted: true }

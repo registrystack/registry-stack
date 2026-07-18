@@ -3921,6 +3921,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
+name = "ls-types"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "896e16b8e17d8732b9efe4d5b66cb0cc162b3023a2d8122f2aea6f7f185e0a67"
+dependencies = [
+ "bitflags",
+ "fluent-uri",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lz4_flex"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5179,7 +5192,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "registry-config-report"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "jsonschema 0.46.6",
  "serde",
@@ -5187,8 +5200,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-language-server"
+version = "0.11.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tower-lsp-server",
+ "tree-sitter",
+ "tree-sitter-yaml",
+]
+
+[[package]]
 name = "registry-manifest-cli"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "registry-manifest-core",
  "serde",
@@ -5199,7 +5225,7 @@ dependencies = [
 
 [[package]]
 name = "registry-manifest-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "oxiri",
  "oxjsonld",
@@ -5214,7 +5240,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "axum",
  "axum-test",
@@ -5229,6 +5255,7 @@ dependencies = [
  "registry-config-report",
  "registry-notary-core",
  "registry-notary-server",
+ "registry-platform-audit",
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-ops",
@@ -5249,7 +5276,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-client"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5276,7 +5303,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-core"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "base64",
  "humantime-serde",
@@ -5303,7 +5330,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-server"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5361,7 +5388,7 @@ dependencies = [
 
 [[package]]
 name = "registry-notary-worker-harness"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "libc",
  "serde",
@@ -5373,7 +5400,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-audit"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "hmac 0.13.0",
@@ -5394,7 +5421,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-authcommon"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "proptest",
  "serde",
@@ -5408,7 +5435,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-cache"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "sha2 0.11.0",
@@ -5419,7 +5446,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-canonical-json"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "ryu-js",
  "serde",
@@ -5429,7 +5456,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-config"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -5444,7 +5471,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-crypto"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -5467,7 +5494,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httpsec"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "axum",
  "http",
@@ -5482,7 +5509,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-httputil"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "axum",
  "base64",
@@ -5509,7 +5536,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oid4vci"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "base64",
  "registry-platform-crypto",
@@ -5524,7 +5551,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-oidc"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "axum",
  "base64",
@@ -5540,7 +5567,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-ops"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "fs2",
  "jsonschema 0.46.6",
@@ -5557,14 +5584,14 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-pdp"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "registry-platform-replay"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "getrandom 0.4.3",
@@ -5576,7 +5603,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-sdjwt"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -5593,7 +5620,7 @@ dependencies = [
 
 [[package]]
 name = "registry-platform-testing"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -5619,7 +5646,7 @@ dependencies = [
 
 [[package]]
 name = "registry-relay"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "arc-swap",
  "assert-json-diff",
@@ -5673,6 +5700,7 @@ dependencies = [
  "reqwest",
  "rhai",
  "rustix",
+ "schemars 1.2.1",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -5699,19 +5727,22 @@ dependencies = [
 
 [[package]]
 name = "registryctl"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "base64",
  "clap",
  "crc32fast",
+ "ed25519-dalek",
  "getrandom 0.4.3",
  "hex",
  "include_dir",
  "ipnet",
  "jsonschema 0.18.3",
+ "rcgen",
  "regex",
  "registry-config-report",
+ "registry-language-server",
  "registry-notary-core",
  "registry-notary-server",
  "registry-platform-authcommon",
@@ -6070,8 +6101,21 @@ checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
 dependencies = [
  "dyn-clone",
  "ref-cast",
+ "schemars_derive",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d115b50f4aaeea07e79c1912f645c7513d81715d0420f8bc77a18c6260b307f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn",
 ]
 
 [[package]]
@@ -6188,11 +6232,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_derive_internals"
+version = "0.29.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18d26a20a969b9e3fdf2fc2d9f21eda6c40e2de84c9408bb5d3b05d499aae711"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "serde_json"
 version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
+ "indexmap 2.14.0",
  "itoa",
  "memchr",
  "serde",
@@ -6543,6 +6599,12 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+
+[[package]]
+name = "streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2231b7c3057d5e4ad0156fb3dc807d900806020c5ffa3ee6ff2c8c76fb8520"
 
 [[package]]
 name = "stringprep"
@@ -7001,6 +7063,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "121c2a6cda46980bb0fcd1647ffaf6cd3fc79a013de288782836f6df9c48780e"
 
 [[package]]
+name = "tower-lsp-server"
+version = "0.23.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f0e711655c89181a6bc6a2cc348131fcd9680085f5b06b6af13427a393a6e72"
+dependencies = [
+ "bytes",
+ "dashmap",
+ "futures",
+ "httparse",
+ "ls-types",
+ "memchr",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
+]
+
+[[package]]
 name = "tower-service"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7079,6 +7161,36 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "tree-sitter"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af1c71c1c4cc0920b20d6b0f6572e7682cd07a6a2faec71067a31fa394c586df"
+dependencies = [
+ "cc",
+ "regex",
+ "regex-syntax 0.8.11",
+ "serde_json",
+ "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-language"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
+
+[[package]]
+name = "tree-sitter-yaml"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53c223db85f05e34794f065454843b0668ebc15d240ada63e2b5939f43ce7c97"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
 ]
 
 [[package]]

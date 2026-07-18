@@ -102,7 +102,7 @@ const DOCTOR_COMMAND: &str = "doctor";
 /// Prints a redacted resolved configuration explanation.
 const EXPLAIN_CONFIG_COMMAND: &str = "explain-config";
 
-/// Prints a lightweight JSON schema for top-level config discovery.
+/// Prints the complete product-owned Relay runtime configuration schema.
 const SCHEMA_COMMAND: &str = "schema";
 
 /// Top-level namespace for operator configuration commands.
@@ -546,7 +546,7 @@ async fn run_explain_config(
 async fn run_schema(format: OutputFormat) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match format {
         OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&lightweight_schema())?);
+            print!("{}", config::schema::document_json());
             Ok(())
         }
     }
@@ -1965,30 +1965,6 @@ fn parse_output_format(value: String) -> Result<OutputFormat, CliError> {
     }
 }
 
-fn lightweight_schema() -> Value {
-    json!({
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Registry Relay config",
-        "type": "object",
-        "required": ["server", "catalog", "auth", "audit", "datasets"],
-        "properties": {
-            "instance": { "type": "object" },
-            "server": { "type": "object" },
-            "config_trust": { "type": "object" },
-            "metadata": { "type": "object" },
-            "catalog": { "type": "object" },
-            "vocabularies": { "type": "object" },
-            "auth": { "type": "object" },
-            "audit": { "type": "object" },
-            "consultation": { "type": ["object", "null"] },
-            "datasets": { "type": "array" },
-            "standards": { "type": "object" },
-            "deployment": { "type": "object" }
-        },
-        "additionalProperties": false
-    })
-}
-
 fn parse_deployment_profile(value: String) -> Result<DeploymentProfile, CliError> {
     match value.as_str() {
         "local" => Ok(DeploymentProfile::Local),
@@ -2613,8 +2589,8 @@ fn install_sigterm_listener() -> io::Result<tokio::signal::unix::Signal> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_audit_chain_profile, build_audit_sink, compile_relay_runtime, lightweight_schema,
-        load_env_file_arg, parse_cli_command_from, parse_env_file_value, redacted_resolved_config,
+        build_audit_chain_profile, build_audit_sink, compile_relay_runtime, load_env_file_arg,
+        parse_cli_command_from, parse_env_file_value, redacted_resolved_config,
         relay_config_value_classification, relay_live_apply_classes, render_generated_api_key,
         required_env_report, run_audit_quarantine, run_healthcheck, url_contains_userinfo,
         CliCommand, ConfigValueClassification, ConsultationBootstrapStateCommand,
@@ -3402,12 +3378,15 @@ audit:
     }
 
     #[test]
-    fn lightweight_schema_declares_optional_consultation_root() {
-        let schema = lightweight_schema();
-        assert_eq!(
-            schema["properties"]["consultation"]["type"],
-            json!(["object", "null"])
-        );
+    fn config_schema_declares_optional_consultation_root() {
+        let schema = registry_relay::config::schema::document();
+        let variants = schema["properties"]["consultation"]["anyOf"]
+            .as_array()
+            .expect("optional consultation uses alternatives");
+        assert!(variants.iter().any(|variant| variant["type"] == "null"));
+        assert!(variants
+            .iter()
+            .any(|variant| { variant["$ref"] == "#/$defs/ConsultationConfig" }));
         assert!(!schema["required"]
             .as_array()
             .expect("required is an array")

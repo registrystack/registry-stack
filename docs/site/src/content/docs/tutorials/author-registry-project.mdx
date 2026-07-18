@@ -1,7 +1,7 @@
 ---
 title: Author an HTTP Registry Stack project
 description: Copy the HTTP starter, run its offline fixtures, review the generated plan, and build unsigned Relay and Notary Config Bundle inputs.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
@@ -53,16 +53,21 @@ Create a local project workspace:
 registryctl init --from http --project-dir registry-project
 ```
 
-The JSON report contains:
+The human-readable result confirms the project, starter provenance, and next command:
 
 ```text
-"status": "initialized",
-"explanation": {
-  "id": "http",
-  "release": "0.10.0",
-  "state": "matches"
-}
+Initialized Registry Stack project "fictional-citizen-registry".
+  Directory: registry-project
+  Starter: http (Registry Stack 0.11.0)
+  Starter content: matches bundled digest
+  Editor support: VS Code and Zed (registry-project/.registry-stack-editor/manifest.json)
+
+Next:
+  cd registry-project
+  registryctl test --project-dir .
 ```
+
+Add `--format json` when another program needs the versioned initialization report.
 
 The copied `registry-stack.yaml` keeps the complete starter provenance,
 including its authored-content digest. Later, `check --explain` reports whether
@@ -73,6 +78,14 @@ The command creates this authored layout:
 ```text
 registry-project/
   registry-stack.yaml
+  .registry-stack-editor/
+    manifest.json
+    schemas/
+  .vscode/
+    extensions.json
+    settings.json
+  .zed/
+    settings.json
   integrations/
     person-record/
       integration.yaml
@@ -83,6 +96,22 @@ registry-project/
 
 The starter is copied into your workspace.
 Registry Stack does not resolve a remote package or download integration code at runtime.
+
+## Open the editor workspace
+
+Initialization copies the five schemas embedded in `registryctl` and configures both VS Code and
+Zed. The second command in the canonical sequence,
+`registryctl authoring editor --project-dir registry-project`, verifies the same deterministic
+setup and is also available for existing projects.
+
+Open `registry-project` itself as the editor root. In VS Code, accept the Red Hat YAML workspace
+recommendation. Zed starts its native YAML language server. Open
+`integrations/person-record/integration.yaml` and check key completion, field descriptions on
+hover, and the document outline.
+
+For a short validation demo, add an `unexpected: true` top-level field. Both editors must mark the
+unknown field as invalid. Remove the field before continuing. A separate YAML file outside the five
+reserved Registry Stack path suffixes, such as `notes.yaml`, keeps its normal editor behavior.
 
 ## Trace one fixture offline
 
@@ -166,6 +195,20 @@ The integration fixes the method, path, input placement, minimized output fields
 deployment. The environment binds the one logical source origin and credentials.
 Consultation inputs can populate only declared request values.
 They cannot select an origin, method, credential, capability, projection, or response mapper.
+
+For target-derived consultation inputs, use one of these closed mappings:
+
+- `request.target.id` for the target's primary request identifier
+- `request.target.identifiers.<stable-id>` for a named institutional identifier
+- `request.target.attributes.<stable-name>` for an ordinary target attribute
+
+A target attribute name must match `[a-z][a-z0-9_]{0,63}`.
+Use an identifier mapping for values that identify a record within an issuing scheme.
+Use an attribute mapping for other request-bound values, and make the mapped value satisfy the
+integration input's declared type and bounds.
+An attribute is caller-supplied context. Mapping an attribute does not authenticate the value or
+turn the value into an identifier.
+Registryctl rejects any other target path before generating Relay or Notary configuration.
 
 ## Add another integration
 

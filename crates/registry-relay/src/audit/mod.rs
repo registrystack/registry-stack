@@ -601,10 +601,11 @@ pub struct AuditPipeline {
     chain: Arc<OnceCell<registry_platform_audit::ChainState>>,
     profile: registry_platform_audit::AuditChainProfile,
     tail_init_in_progress: Arc<std::sync::atomic::AtomicBool>,
-    /// Startup chain-verification health, reflected in `/ready` (#196). Starts
-    /// healthy and flips to `false` only when eager startup verification finds
-    /// the retained chain inconsistent, so the brick surfaces as an actionable
-    /// readiness signal instead of a confusing per-request 503.
+    /// Retained-chain integrity health, reflected in `/ready` (#196, #299).
+    /// Starts healthy and permanently flips to `false` when startup verification
+    /// or a write-time tail self-check finds the chain inconsistent. The brick
+    /// then surfaces as an actionable readiness signal instead of a confusing
+    /// per-request 503.
     chain_healthy: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -654,16 +655,21 @@ impl AuditPipeline {
     }
 
     pub async fn write_record(&self, record: AuditRecord) -> Result<(), AuditError> {
-        let chain = self
-            .chain
-            .get_or_try_init(|| async {
-                self.profile
-                    .bootstrap_or_start_empty(self.sink.as_ref())
-                    .await
-            })
-            .await?;
-        chain.append(self.sink.as_ref(), record).await?;
-        Ok(())
+        let result = async {
+            let chain = self
+                .chain
+                .get_or_try_init(|| async {
+                    self.profile
+                        .bootstrap_or_start_empty(self.sink.as_ref())
+                        .await
+                })
+                .await?;
+            chain.append(self.sink.as_ref(), record).await?;
+            Ok(())
+        }
+        .await;
+        self.mark_chain_unhealthy_on_integrity_error(&result);
+        result
     }
 
     /// Return the live keyed chain tail used to bind an off-host ack cursor
@@ -716,7 +722,7 @@ impl AuditPipeline {
 
     /// Eagerly bootstrap and verify the retained chain at startup (#196).
     ///
-    /// On a chain-verification failure the pipeline is marked unhealthy so
+    /// On an integrity failure the pipeline is marked unhealthy so
     /// `/ready` reports not-ready ([`AUDIT_CHAIN_INCONSISTENT_CODE`]); startup
     /// is intentionally NOT aborted, so a bricked chain becomes an actionable
     /// readiness signal (recover with `registry-relay audit quarantine`) rather
@@ -732,14 +738,25 @@ impl AuditPipeline {
             })
             .await
             .map(|_| ());
-        let healthy = !matches!(result, Err(AuditError::ChainVerification(_)));
-        self.chain_healthy
-            .store(healthy, std::sync::atomic::Ordering::SeqCst);
+        self.mark_chain_unhealthy_on_integrity_error(&result);
         result
     }
 
-    /// Whether the retained chain passed startup verification (#196). `/ready`
-    /// reports not-ready when this is `false`.
+    fn mark_chain_unhealthy_on_integrity_error(&self, result: &Result<(), AuditError>) {
+        if matches!(
+            result,
+            Err(AuditError::ChainForkDetected { .. } | AuditError::ChainVerification(_))
+        ) {
+            // This is a one-way latch for the process lifetime. Repair requires
+            // operator recovery and a restarted process, never an automatic
+            // readiness transition after a later successful operation.
+            self.chain_healthy
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Whether the retained chain has remained consistent for this process
+    /// lifetime. `/ready` reports not-ready when this is `false`.
     #[must_use]
     pub fn chain_healthy(&self) -> bool {
         self.chain_healthy.load(std::sync::atomic::Ordering::SeqCst)
@@ -1222,9 +1239,9 @@ fn consultation_denial_reason(
             | "auth.kid_unknown"
             | "auth.algorithm_not_allowed",
         ) => Some(ConsultationDenialReason::InvalidCredentials),
-        Some("consultation.invalid_request" | "auth.purpose_required") => {
-            Some(ConsultationDenialReason::InvalidRequest)
-        }
+        Some(
+            "consultation.invalid_request" | "auth.multiple_credentials" | "auth.purpose_required",
+        ) => Some(ConsultationDenialReason::InvalidRequest),
         Some(
             "consultation.denied"
             | "auth.scope_denied"
@@ -1689,6 +1706,32 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Default)]
+    struct VerificationFailureSink;
+
+    #[async_trait::async_trait]
+    impl registry_platform_audit::AuditSink for VerificationFailureSink {
+        async fn write(
+            &self,
+            _envelope: &registry_platform_audit::AuditEnvelope,
+        ) -> Result<(), AuditError> {
+            Err(AuditError::ChainVerification(
+                registry_platform_audit::ChainVerificationError::RecordHashMismatch { line: 1 },
+            ))
+        }
+
+        async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(None)
+        }
+
+        async fn tail_hash_with_hasher(
+            &self,
+            _hasher: &registry_platform_audit::AuditChainHasher,
+        ) -> Result<Option<[u8; 32]>, AuditError> {
+            Ok(None)
+        }
+    }
+
     #[test]
     fn timestamp_helper_emits_24_chars_ending_in_z() {
         let s = now_iso8601_millis();
@@ -1770,6 +1813,10 @@ mod tests {
         );
         assert_eq!(
             consultation_denial_reason(StatusCode::BAD_REQUEST, Some("auth.purpose_required")),
+            Some(ConsultationDenialReason::InvalidRequest)
+        );
+        assert_eq!(
+            consultation_denial_reason(StatusCode::BAD_REQUEST, Some("auth.multiple_credentials")),
             Some(ConsultationDenialReason::InvalidRequest)
         );
         assert_eq!(
@@ -2022,6 +2069,33 @@ mod tests {
         assert!(
             !pipeline.chain_healthy(),
             "readiness must flip to not-ready on an inconsistent chain"
+        );
+
+        // Restoring the file lets a new bootstrap succeed, but cannot restore
+        // readiness in this process. Operator recovery requires a restart.
+        std::fs::write(&path, contents).expect("restore valid chain");
+        pipeline
+            .verify_chain_eager()
+            .await
+            .expect("repaired retained chain verifies");
+        assert!(
+            !pipeline.chain_healthy(),
+            "audit-chain readiness must remain latched after an integrity failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn write_time_chain_verification_failure_latches_readiness() {
+        let pipeline = AuditPipeline::new(Arc::new(VerificationFailureSink));
+
+        let error = pipeline
+            .write_operational_event(OperationalAuditEvent::success("test.verification-failure"))
+            .await
+            .expect_err("verification failure must reject the audit write");
+        assert!(matches!(error, AuditError::ChainVerification(_)));
+        assert!(
+            !pipeline.chain_healthy(),
+            "write-time verification failures must latch audit readiness"
         );
     }
 }

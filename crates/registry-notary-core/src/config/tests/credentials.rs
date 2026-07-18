@@ -26,6 +26,7 @@ allowed_claims:
         .evidence
         .credential_profiles
         .insert("test-profile".to_string(), profile);
+    add_registry_credential_claim(&mut config, "some-claim", "test-profile");
     assert!(
         config.validate().is_ok(),
         "did:jwk only should pass validation"
@@ -242,6 +243,7 @@ allowed_claims:
         .evidence
         .credential_profiles
         .insert("test-profile".to_string(), profile);
+    add_registry_credential_claim(&mut config, "some-claim", "test-profile");
 
     config
         .validate()
@@ -398,6 +400,7 @@ allowed_claims:
         .evidence
         .credential_profiles
         .insert("test-profile".to_string(), profile);
+    add_registry_credential_claim(&mut config, "some-claim", "test-profile");
 
     config.validate().expect("PKCS#11 key shape validates");
 }
@@ -431,6 +434,7 @@ allowed_claims:
         .evidence
         .credential_profiles
         .insert("test-profile".to_string(), profile);
+    add_registry_credential_claim(&mut config, "some-claim", "test-profile");
 
     config.validate().expect("file-watch key shape validates");
 }
@@ -835,6 +839,176 @@ pub(super) fn disclosure_default_outside_allowed_is_rejected() {
     assert!(
         message.contains("residency-status") && message.contains("disclosure"),
         "error must name the offending claim id and field: {message}"
+    );
+}
+
+#[test]
+pub(super) fn omitted_claim_formats_default_to_claim_result_json() {
+    let claim = minimal_claim("default-format");
+
+    assert_eq!(
+        claim.formats,
+        vec![FORMAT_CLAIM_RESULT_JSON.to_string()],
+        "omitted formats must retain the canonical evaluation representation"
+    );
+}
+
+#[test]
+pub(super) fn explicit_empty_claim_formats_are_rejected() {
+    let mut config = minimal_config();
+    let claim: ClaimDefinition = serde_norway::from_str(
+        r#"
+id: empty-format
+title: Empty format claim
+version: "1.0"
+subject_type: person
+evidence_mode:
+  type: self_attested
+rule:
+  type: cel
+  expression: "true"
+formats: []
+"#,
+    )
+    .expect("claim YAML is valid");
+    config.evidence.claims = vec![claim];
+
+    let err = config
+        .validate()
+        .expect_err("an explicitly empty formats list must fail validation");
+    match &err {
+        EvidenceConfigError::EmptyClaimFormats { claim } => {
+            assert_eq!(claim, "empty-format");
+        }
+        other => panic!("unexpected error variant: {other}"),
+    }
+    let message = err.to_string();
+    assert!(
+        message.contains("empty-format") && message.contains("omit formats"),
+        "error must name the claim and explain how to use the default: {message}"
+    );
+}
+
+#[test]
+pub(super) fn canonical_claim_format_is_valid() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("canonical-format");
+    claim.formats = vec![FORMAT_CLAIM_RESULT_JSON.to_string()];
+    config.evidence.claims = vec![claim];
+
+    config
+        .validate()
+        .expect("the canonical evaluation format must validate");
+}
+
+#[test]
+pub(super) fn canonical_and_cccev_claim_formats_are_valid() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("canonical-and-cccev");
+    claim.formats = vec![
+        FORMAT_CLAIM_RESULT_JSON.to_string(),
+        FORMAT_CCCEV_JSONLD.to_string(),
+    ];
+    config.evidence.claims = vec![claim];
+
+    config
+        .validate()
+        .expect("the canonical and CCCEV evaluation formats must validate");
+}
+
+#[test]
+pub(super) fn cccev_without_canonical_claim_format_is_rejected() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("cccev-only");
+    claim.formats = vec![FORMAT_CCCEV_JSONLD.to_string()];
+    config.evidence.claims = vec![claim];
+
+    let err = config
+        .validate()
+        .expect_err("CCCEV-only formats must fail validation");
+    match &err {
+        EvidenceConfigError::MissingCanonicalClaimFormat { claim } => {
+            assert_eq!(claim, "cccev-only");
+        }
+        other => panic!("unexpected error variant: {other}"),
+    }
+    let message = err.to_string();
+    assert!(
+        message.contains("cccev-only") && message.contains(FORMAT_CLAIM_RESULT_JSON),
+        "error must name the claim and canonical format: {message}"
+    );
+}
+
+#[test]
+pub(super) fn sd_jwt_vc_claim_format_is_rejected_before_canonical_omission() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("sd-jwt-only");
+    claim.formats = vec![FORMAT_SD_JWT_VC.to_string()];
+    config.evidence.claims = vec![claim];
+
+    let err = config
+        .validate()
+        .expect_err("SD-JWT VC is not an evaluation response format");
+    match &err {
+        EvidenceConfigError::UnsupportedClaimFormat { claim, format } => {
+            assert_eq!(claim, "sd-jwt-only");
+            assert_eq!(format, FORMAT_SD_JWT_VC);
+        }
+        other => panic!("unexpected error variant: {other}"),
+    }
+    let message = err.to_string();
+    assert!(
+        message.contains("credential_profiles") && message.contains(FORMAT_SD_JWT_VC),
+        "error must identify SD-JWT VC and its configuration home: {message}"
+    );
+}
+
+#[test]
+pub(super) fn mixed_claim_formats_reject_the_first_unsupported_format() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("mixed-formats");
+    claim.formats = vec![
+        FORMAT_CLAIM_RESULT_JSON.to_string(),
+        FORMAT_SD_JWT_VC.to_string(),
+        "application/example+json".to_string(),
+    ];
+    config.evidence.claims = vec![claim];
+
+    let err = config
+        .validate()
+        .expect_err("mixed formats must reject the unsupported SD-JWT VC entry");
+    match &err {
+        EvidenceConfigError::UnsupportedClaimFormat { claim, format } => {
+            assert_eq!(claim, "mixed-formats");
+            assert_eq!(format, FORMAT_SD_JWT_VC);
+        }
+        other => panic!("unexpected error variant: {other}"),
+    }
+}
+
+#[test]
+pub(super) fn unknown_claim_format_is_rejected() {
+    let mut config = minimal_config();
+    let mut claim = minimal_claim("unknown-format");
+    claim.formats = vec![
+        FORMAT_CLAIM_RESULT_JSON.to_string(),
+        "application/example+json".to_string(),
+    ];
+    config.evidence.claims = vec![claim];
+
+    let err = config
+        .validate()
+        .expect_err("unknown evaluation formats must fail validation");
+    match &err {
+        EvidenceConfigError::UnsupportedClaimFormat { claim, format } => {
+            assert_eq!(claim, "unknown-format");
+            assert_eq!(format, "application/example+json");
+        }
+        other => panic!("unexpected error variant: {other}"),
+    }
+    assert!(
+        err.to_string().contains("application/example+json"),
+        "error must name the offending format: {err}"
     );
 }
 

@@ -22,10 +22,16 @@ pub(crate) struct SignedBundleFixture {
 }
 
 pub(crate) fn write_signed_notary_bundle(tmp: &tempfile::TempDir) -> SignedBundleFixture {
+    write_signed_notary_bundle_with_config(tmp, notary_bundle_runtime_config())
+}
+
+pub(crate) fn write_signed_notary_bundle_with_config(
+    tmp: &tempfile::TempDir,
+    config: String,
+) -> SignedBundleFixture {
     let bundle_dir = tmp.path().join("bundle");
     let config_dir = bundle_dir.join("config");
     std::fs::create_dir_all(&config_dir).expect("bundle config dir");
-    let config = notary_bundle_runtime_config();
     std::fs::write(config_dir.join("notary.yaml"), config.as_bytes()).expect("config writes");
     let config_hash = sha256_uri(config.as_bytes());
     let private = PrivateJwk::parse(CONFIG_BUNDLE_PRIVATE_JWK).expect("private jwk");

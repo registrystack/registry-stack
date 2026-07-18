@@ -64,7 +64,7 @@ Product names are always in English, including on future translated pages.
   <dd>The Relay feature that maps source field names and values to canonical domain terms using configured CEL expressions. Replaces the former `cel-mapping` name. Enabled by the `crosswalk-runtime` Cargo feature and the `standards-cel-mapping` feature alias. Config key: `crosswalk`.</dd>
 
   <dt>credential profile</dt>
-  <dd>Registry Notary configuration that names which claims may be issued as a credential. A Registry Stack project authors claim membership once on the profile, and the compiler derives the product-level claim-to-profile reverse index.</dd>
+  <dd>Registry Notary configuration that names which non-delegated registry-backed claims may be issued as a credential. Profile and claim bindings are mutually validated. Only evaluations whose selected roots share a profile retain private issuance provenance, and issuance requires exact claim pins, per-claim execution bindings, and unique Relay execution records for every selected root's dependency closure.</dd>
 
   <dt>deployment bundle</dt>
   <dd>The target generated, signed artifact for one Registry Stack project and environment. Its root manifest binds compatible Relay and Notary submanifests when both are present. The current authoring command builds separate unsigned product inputs, not a deployment bundle; signed project-root bundles are deferred.</dd>
@@ -79,7 +79,7 @@ Product names are always in English, including on future translated pages.
   <dd>Decentralized Identifier. W3C DID Core 1.0. Registry Relay no longer publishes a `did:web` document. Registry Notary parses `did:jwk` values for credential subjects.</dd>
 
   <dt id="delegated-self-attestation">delegated self-attestation</dt>
-  <dd>Registry Notary self-attestation access mode `delegated_attestation`. The authenticated principal is the requester, the request target and scoped authorization details identify the same configured dependent subject, and the dependent claim can continue only after a compiler-pinned Relay relationship proof evaluates to boolean `true`. This is separate from static-peer delegated evaluation under Notary federation.</dd>
+  <dd>Registry Notary self-attestation access mode `delegated_attestation`. The authenticated principal is the requester, the request target and scoped authorization details identify the same configured dependent subject, and the dependent claim can continue only after a compiler-pinned Relay relationship proof evaluates to boolean `true`. It is evaluation and rendering only in 1.0; direct and OID4VCI credential issuance reject delegated evaluations. This is separate from static-peer delegated evaluation under Notary federation.</dd>
 
   <dt>disclosure profile</dt>
   <dd>Registry Notary control over what the caller receives: `Value` (full value disclosed), `Predicate` (only true/false satisfaction), or `Redacted` (value fully hidden).</dd>
@@ -106,7 +106,7 @@ Product names are always in English, including on future translated pages.
   <dd>Manifest-level binding that connects an external ecosystem profile or governed evidence pack to a Registry Stack runtime surface. A governed evidence ecosystem binding names the evidence pack metadata and policy identity a runtime service can use for PDP enforcement.</dd>
 
   <dt>eSignet</dt>
-  <dd>Open-source identity and authentication service (part of MOSIP). The hosted Solmara Lab demo uses eSignet as the authorization server a citizen signs in to before Registry Notary issues a self-attestation credential.</dd>
+  <dd>Open-source identity and authentication service (part of MOSIP). Registry Notary can use eSignet as an authorization server for subject-bound evaluation and registry-backed credential flows.</dd>
 
   <dt>evidence offering</dt>
   <dd>Metadata entry that describes a verification capability and the access path a client uses to reach it. In the current stack it points a client from Registry Relay metadata to Registry Notary or another evidence service; Relay describes the offering but does not evaluate the claim.</dd>
@@ -220,7 +220,7 @@ Product names are always in English, including on future translated pages.
   <dd>Config-driven Rust service that owns registry source access, product-neutral HTTP and script adaptation, immutable snapshot lookups, and protected read-only consultation APIs. Repo slug: `registry-relay`.</dd>
 
   <dt>Registry Notary</dt>
-  <dd>Standalone Rust service for Relay-backed or self-attested claim evaluation, disclosure policy, credential issuance, and audit. Repo slug: `registry-notary`.</dd>
+  <dd>Standalone Rust service for Relay-backed or self-attested claim evaluation, disclosure policy, credential issuance from exact Relay-backed evaluation provenance, and audit. Source-free claims are evaluation-only. Repo slug: `registry-notary`.</dd>
 
   <dt>Registry Stack project</dt>
   <dd>The authored root for one registry trust domain. A project can describe a Relay-only, Notary-only, or combined deployment and compiles separate product inputs for the selected topology.</dd>
@@ -259,7 +259,7 @@ Product names are always in English, including on future translated pages.
   <dd>Selective Disclosure JWT Verifiable Credential (IETF draft). Registry Notary issues SD-JWT VC credentials signed with EdDSA. Media type: `application/dc+sd-jwt`.</dd>
 
   <dt>self-attestation</dt>
-  <dd>Registry Notary access pattern where an authenticated OIDC principal is the protected requester for configured claim evaluation or credential issuance. In direct self-attestation, the subject is the authenticated requester. In delegated self-attestation, the requester acts for a configured dependent target only when the relationship proof passes.</dd>
+  <dd>Registry Notary access pattern where an authenticated OIDC principal is the protected requester for configured claim evaluation. In direct self-attestation, the subject is the authenticated requester. In delegated self-attestation, the requester acts for a configured dependent target only when the relationship proof passes. Source-free and delegated claims cannot be issued as credentials; subject access can authorize a credential only for a non-delegated registry-backed claim.</dd>
 
   <dt>signed response credentials</dt>
   <dd>Removed Registry Relay feature that attached a W3C VCDM 2.0 VC-JWT signed credential to entity record and aggregate responses. Registry Relay no longer accepts `provenance` or entity `publicschema` credential mapping config, no longer serves `/.well-known/did.json`, `/schemas/{claim_type}/{version}`, or `/contexts/{vocab}/{version}`, and no longer returns `application/vc+jwt`. Use Registry Notary for credential issuance.</dd>

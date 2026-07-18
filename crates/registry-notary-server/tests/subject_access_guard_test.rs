@@ -312,7 +312,6 @@ evidence:
         allowed: [redacted]
       formats:
         - {FORMAT_CLAIM_RESULT_JSON}
-        - {FORMAT_SD_JWT_VC}
       credential_profiles:
         - civil_status_sd_jwt
 subject_access:
@@ -342,7 +341,6 @@ subject_access:
     - person-is-alive
   allowed_formats:
     - {FORMAT_CLAIM_RESULT_JSON}
-    - {FORMAT_SD_JWT_VC}
   allowed_disclosures:
     - redacted
   required_scopes:
@@ -458,20 +456,6 @@ fn sign_holder_proof(holder_id: &str, evaluation_id: &str) -> String {
     let signing_input = format!("{header_b64}.{payload_b64}");
     let signature = sign(signing_input.as_bytes(), &holder).expect("holder proof signs");
     format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
-}
-
-#[cfg(feature = "registry-notary-cel")]
-fn jwt_payload(jwt: &str) -> Value {
-    let payload = jwt
-        .split('.')
-        .nth(1)
-        .expect("compact JWT has a payload segment");
-    serde_json::from_slice(
-        &URL_SAFE_NO_PAD
-            .decode(payload)
-            .expect("payload decodes as base64url"),
-    )
-    .expect("payload decodes as JSON")
 }
 
 #[tokio::test]
@@ -636,7 +620,7 @@ async fn subject_access_credential_issuance_hides_other_principal_evaluation_ids
             "target": subject_access_target(),
             "claims": ["person-is-alive"],
             "disclosure": "redacted",
-            "format": FORMAT_SD_JWT_VC
+            "format": FORMAT_CLAIM_RESULT_JSON
         }))
         .await;
     evaluate.assert_status_ok();
@@ -726,7 +710,7 @@ async fn subject_access_render_rejects_expired_metadata_via_http() {
 
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-async fn subject_access_credential_issuance_requires_holder_proof_and_hides_civil_id() {
+async fn subject_access_credential_issuance_requires_holder_proof_then_registry_provenance() {
     let store = Arc::new(EvidenceStore::default());
     let server = build_issuance_server(
         credential_issuance_config(),
@@ -740,7 +724,7 @@ async fn subject_access_credential_issuance_requires_holder_proof_and_hides_civi
             "target": subject_access_target(),
             "claims": ["person-is-alive"],
             "disclosure": "redacted",
-            "format": FORMAT_SD_JWT_VC
+            "format": FORMAT_CLAIM_RESULT_JSON
         }))
         .await;
     evaluate.assert_status_ok();
@@ -784,44 +768,13 @@ async fn subject_access_credential_issuance_requires_holder_proof_and_hides_civi
             }
         }))
         .await;
-    issued.assert_status_ok();
+    issued.assert_status(StatusCode::FORBIDDEN);
     let issued_body: Value = issued.json();
-    let payload = jwt_payload(
-        issued_body["issuer_signed_jwt"]
-            .as_str()
-            .expect("issuer-signed JWT is returned"),
-    );
-
-    assert_eq!(payload["sub"], json!(holder_id));
+    assert_eq!(issued_body["code"], json!("evaluation.binding_mismatch"));
     assert!(
-        !payload.to_string().contains(SUBJECT_ID),
-        "issuer-signed payload must not expose the raw civil id"
+        !issued_body.to_string().contains(SUBJECT_ID),
+        "source-free issuance denial must not expose the raw civil id"
     );
-    let iat = payload["iat"].as_i64().expect("iat is an integer");
-    let exp = payload["exp"].as_i64().expect("exp is an integer");
-    assert!(
-        exp - iat <= 600,
-        "subject-access credential validity must not exceed 600 seconds"
-    );
-
-    let replay = server
-        .post("/v1/credentials")
-        .json(&json!({
-            "evaluation_id": evaluation_id,
-            "credential_profile": "civil_status_sd_jwt",
-            "format": FORMAT_SD_JWT_VC,
-            "claims": ["person-is-alive"],
-            "disclosure": "redacted",
-            "holder": {
-                "binding": "did",
-                "id": holder_id,
-                "proof": proof
-            }
-        }))
-        .await;
-    replay.assert_status(StatusCode::CONFLICT);
-    let replay_body: Value = replay.json();
-    assert_eq!(replay_body["code"], json!("credential.holder_proof_replay"));
 }
 
 #[tokio::test]
@@ -851,7 +804,7 @@ async fn subject_access_credential_issuance_rejects_disallowed_profile() {
             "target": subject_access_target(),
             "claims": ["person-is-alive"],
             "disclosure": "redacted",
-            "format": FORMAT_SD_JWT_VC
+            "format": FORMAT_CLAIM_RESULT_JSON
         }))
         .await;
     evaluate.assert_status_ok();

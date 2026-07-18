@@ -282,6 +282,55 @@ inputs:
 }
 
 #[test]
+fn consultation_accepts_closed_target_attributes() {
+    let consultation: RelayConsultationConfig = serde_norway::from_str(&format!(
+        r#"
+profile:
+  id: example.birth-record.exact
+  contract_hash: {CONTRACT_HASH}
+inputs:
+  given_name: request.target.attributes.given_name
+  family_name: request.target.attributes.family_name
+  birthdate: request.target.attributes.birthdate
+outputs:
+  exists: {{ type: boolean, nullable: false }}
+"#,
+    ))
+    .expect("closed target attribute mappings parse");
+    assert!(consultation.inputs["given_name"].is_target_derived());
+    assert!(
+        !consultation.inputs["given_name"].is_authenticated_target_identifier(),
+        "caller-supplied target attributes are not authenticated identifiers"
+    );
+    assert_eq!(
+        consultation.inputs["birthdate"].request_context_path(),
+        "target.attributes.birthdate"
+    );
+
+    for invalid in [
+        "request.target.attributes.",
+        "request.target.attributes.GivenName",
+        "request.target.attributes.family-name",
+        "request.target.attributes.name.given",
+        "request.target.attributes.given name",
+    ] {
+        let yaml = format!(
+            r#"
+profile:
+  id: example.birth-record.exact
+  contract_hash: {CONTRACT_HASH}
+inputs:
+  value: {invalid}
+outputs:
+  exists: {{ type: boolean, nullable: false }}
+"#,
+        );
+        serde_norway::from_str::<RelayConsultationConfig>(&yaml)
+            .expect_err("open target attribute mapping is rejected");
+    }
+}
+
+#[test]
 fn consultation_accepts_only_closed_requester_identifiers() {
     let consultation: RelayConsultationConfig = serde_norway::from_str(&format!(
         r#"
@@ -905,6 +954,11 @@ fn subject_access_allows_exact_subject_bound_registry_claims() {
 fn subject_access_still_rejects_registry_backed_dependencies_of_self_attested_claims() {
     let mut config = valid_subject_access_config();
     config.evidence.relay = Some(relay_connection());
+    config.evidence.claims[0].evidence_mode = ClaimEvidenceMode::SelfAttested;
+    config.evidence.claims[0].rule = RuleConfig::Cel {
+        expression: "true".to_string(),
+        bindings: Default::default(),
+    };
     let mut dependency = minimal_claim("registry-dependency");
     make_registry_backed(&mut dependency, "civil_status");
     config.evidence.claims[0]
@@ -915,14 +969,17 @@ fn subject_access_still_rejects_registry_backed_dependencies_of_self_attested_cl
 }
 
 #[test]
-fn registry_backed_v1_rejects_all_claim_dependencies() {
+fn registry_backed_claim_accepts_registry_backed_dependency() {
     let mut config = valid_registry_backed_config();
-    let dependency = minimal_claim("self-attested-dependency");
+    let mut dependency = minimal_claim("registry-dependency");
+    make_registry_backed(&mut dependency, "registry_dependency");
     config.evidence.claims[0]
         .depends_on
         .push(dependency.id.clone());
     config.evidence.claims.push(dependency);
-    expect_mode_error(&config, "cannot declare depends_on");
+    config
+        .validate()
+        .expect("registry-backed claim dependency is supported");
 }
 
 #[test]
@@ -960,13 +1017,18 @@ fn delegated_subject_access_allows_only_its_configured_registry_proof_edge() {
         .expect("configured delegated Relay proof edge validates");
 
     let mut ordinary = config.clone();
-    ordinary
+    let ordinary_claim = ordinary
         .evidence
         .claims
         .iter_mut()
         .find(|claim| claim.id == "date-of-birth")
-        .expect("ordinary self-attested claim")
-        .depends_on = vec!["guardian-link".to_string()];
+        .expect("ordinary claim exists");
+    ordinary_claim.evidence_mode = ClaimEvidenceMode::SelfAttested;
+    ordinary_claim.rule = RuleConfig::Cel {
+        expression: "true".to_string(),
+        bindings: Default::default(),
+    };
+    ordinary_claim.depends_on = vec!["guardian-link".to_string()];
     expect_subject_access_closure_error(&ordinary);
 
     let mut registry_dependent = config;
@@ -977,7 +1039,9 @@ fn delegated_subject_access_allows_only_its_configured_registry_proof_edge() {
         .find(|claim| claim.id == "dependent-date-of-birth")
         .expect("delegated claim");
     make_registry_backed(delegated, "civil_status");
-    expect_subject_access_closure_error(&registry_dependent);
+    delegated.purpose = Some("dependent_attestation".to_string());
+    let reason = expect_subject_access_error(&registry_dependent);
+    assert!(reason.contains("must be self_attested"));
 }
 
 #[test]
@@ -987,14 +1051,26 @@ fn delegated_relay_proof_requires_requester_target_boolean_and_purpose_alignment
         .inputs
         .retain(|_, input| input.is_target_derived());
     let reason = expect_subject_access_error(&missing_requester);
-    assert!(reason.contains("requester-derived and target-derived"));
+    assert!(reason.contains("authenticated target identifier"));
 
     let mut missing_target = valid_delegated_subject_access_config();
     delegated_proof_consultation_mut(&mut missing_target)
         .inputs
         .retain(|_, input| input.is_requester_derived());
     let reason = expect_subject_access_error(&missing_target);
-    assert!(reason.contains("requester-derived and target-derived"));
+    assert!(reason.contains("authenticated target identifier"));
+
+    let mut caller_supplied_attribute = valid_delegated_subject_access_config();
+    let consultation = delegated_proof_consultation_mut(&mut caller_supplied_attribute);
+    consultation.inputs.remove("target_id");
+    consultation.inputs.insert(
+        "target_context".to_string(),
+        RelayConsultationInput::TargetAttribute(
+            "request.target.attributes.person_sequence".to_string(),
+        ),
+    );
+    let reason = expect_subject_access_error(&caller_supplied_attribute);
+    assert!(reason.contains("authenticated target identifier"));
 
     let mut non_boolean = valid_delegated_subject_access_config();
     let proof = non_boolean

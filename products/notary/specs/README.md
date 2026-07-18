@@ -13,7 +13,9 @@ that still tracks open work.
   federation pairwise alignment. **[archived: reconciled design record]**
 - [`citizen-self-attestation-spec.md`](citizen-self-attestation-spec.md):
   citizen self-attestation behavior, guard order, privacy controls, rate
-  limits, credential issuance, and implementation status.
+  limits, and historical source-free credential issuance design. Current
+  source-free claims are evaluation-only; current credential issuance requires
+  exact registry-backed Relay execution provenance.
   **[archived: reconciled design record]**
 - [`federated-evaluation-mvp-spec.md`](federated-evaluation-mvp-spec.md):
   static-peer delegated evaluation MVP. **[implemented]**

@@ -18,6 +18,7 @@ use registry_notary_core::{
     DisclosureDowngrade, DisclosureProfile, EvaluateRequest, EvaluationCapability, EvidenceConfig,
     EvidenceEntity, EvidenceEntityRef, EvidenceError, EvidenceFormat, EvidencePrincipal,
     EvidenceRequestContext, ProvenanceUsed, RegistryNotaryCelConfig, RenderRequest, RuleConfig,
+    StoredIssuanceClaimProvenance, StoredIssuanceConsultationProvenance, StoredIssuanceProvenance,
     StoredSubjectAccessMetadata, SubjectAccessConfig, SubjectAccessDenialCode, SubjectRequest,
     TargetRefView, FORMAT_CCCEV_JSONLD, FORMAT_CLAIM_RESULT_JSON, FORMAT_SD_JWT_VC,
     MAX_CLAIM_DEPENDENCY_EDGES_V1, MAX_CLAIM_DEPENDENCY_NODES_V1, SD_JWT_VC_HOLDER_BINDING_METHOD,
@@ -39,7 +40,7 @@ use zeroize::Zeroizing;
 
 #[cfg(feature = "registry-notary-cel")]
 use crate::cel_worker::{cel_expression_uses_regex, CelWorker, CelWorkerError};
-use crate::digest::hex_encode;
+use crate::digest::{hex_encode, sha256_canonical_json};
 use crate::json_path::get_json_path;
 use crate::problem::evidence_title;
 use crate::request_context::with_request_correlation_id;

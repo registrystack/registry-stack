@@ -432,6 +432,54 @@ rule:
     .expect("minimal claim is valid YAML")
 }
 
+pub(super) fn add_registry_credential_claim(
+    config: &mut StandaloneRegistryNotaryConfig,
+    claim_id: &str,
+    profile_id: &str,
+) {
+    config.evidence.relay = Some(
+        serde_norway::from_str(
+            r#"
+base_url: https://relay.internal.example
+workload_client_id: registry-notary
+token_file: /run/secrets/registry-notary-relay.jwt
+"#,
+        )
+        .expect("Relay connection parses"),
+    );
+    config.evidence.allowed_purposes = vec!["credential-test".to_string()];
+    let mut claim = minimal_claim(claim_id);
+    claim.purpose = Some("credential-test".to_string());
+    claim.required_scopes = vec!["credential:test".to_string()];
+    claim.value.value_type = "boolean".to_string();
+    claim.evidence_mode = ClaimEvidenceMode::RegistryBacked {
+        consultations: BTreeMap::from([(
+            "credential_test".to_string(),
+            RelayConsultationConfig {
+                profile: RelayConsultationProfileRef {
+                    id: "example.credential-test.exact".to_string(),
+                    contract_hash:
+                        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_string(),
+                },
+                inputs: BTreeMap::from([(
+                    "subject_id".to_string(),
+                    RelayConsultationInput::TargetId,
+                )]),
+                outputs: BTreeMap::from([(
+                    "active".to_string(),
+                    RelayOutputContract::Boolean { nullable: false },
+                )]),
+            },
+        )]),
+    };
+    claim.rule = RuleConfig::ConsultationMatched {
+        consultation: "credential_test".to_string(),
+    };
+    claim.credential_profiles = vec![profile_id.to_string()];
+    config.evidence.claims = vec![claim];
+}
+
 #[test]
 pub(super) fn config_trust_is_optional_but_requires_explicit_antirollback_path() {
     let mut config = minimal_config();
@@ -553,6 +601,10 @@ pub(super) fn valid_subject_access_config() -> StandaloneRegistryNotaryConfig {
         r#"
 evidence:
   enabled: true
+  relay:
+    base_url: https://relay.internal.example
+    workload_client_id: registry-notary
+    token_file: /run/secrets/registry-notary-relay.jwt
   signing_keys:
     issuer-key:
       provider: local_jwk_env
@@ -583,20 +635,34 @@ evidence:
       version: "1.0"
       subject_type: person
       evidence_mode:
-        type: self_attested
+        type: registry_backed
+        consultations:
+          civil_status:
+            profile:
+              id: example.civil-status.exact
+              contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+            inputs:
+              national_id: request.target.identifiers.national_id
+            outputs:
+              value:
+                type: boolean
+                nullable: true
       value:
         type: boolean
+        nullable: true
       purpose: citizen_subject_access
+      required_scopes:
+        - subject_access
       rule:
-        type: cel
-        expression: "true"
+        type: consultation_output
+        consultation: civil_status
+        output: value
       disclosure:
         default: value
         allowed:
           - value
       formats:
         - application/vnd.registry-notary.claim-result+json
-        - application/dc+sd-jwt
       credential_profiles:
         - civil_status_sd_jwt
 auth:
@@ -644,7 +710,6 @@ subject_access:
     - date-of-birth
   allowed_formats:
     - application/vnd.registry-notary.claim-result+json
-    - application/dc+sd-jwt
   allowed_disclosures:
     - value
   required_scopes:
@@ -714,6 +779,7 @@ token_file: /run/secrets/registry-notary-relay.jwt
         )]),
     };
     proof.value.nullable = true;
+    proof.credential_profiles.clear();
     proof.rule = RuleConfig::ConsultationOutput {
         consultation: "guardian_link".to_string(),
         output: "established".to_string(),
@@ -724,14 +790,12 @@ token_file: /run/secrets/registry-notary-relay.jwt
     dependent.title = "Dependent date of birth".to_string();
     dependent.purpose = Some("dependent_attestation".to_string());
     dependent.depends_on = vec!["guardian-link".to_string()];
-
-    config
-        .evidence
-        .credential_profiles
-        .get_mut("civil_status_sd_jwt")
-        .expect("credential profile exists")
-        .allowed_claims
-        .push("dependent-date-of-birth".to_string());
+    dependent.evidence_mode = ClaimEvidenceMode::SelfAttested;
+    dependent.rule = RuleConfig::Cel {
+        expression: "true".to_string(),
+        bindings: Default::default(),
+    };
+    dependent.credential_profiles.clear();
 
     config.evidence.claims.push(proof);
     config.evidence.claims.push(dependent);
@@ -743,12 +807,9 @@ token_file: /run/secrets/registry-notary-relay.jwt
             target_id_type: Some("civil_registration_id".to_string()),
             allowed_claims: vec!["dependent-date-of-birth".to_string()],
             allowed_purposes: vec!["dependent_attestation".to_string()],
-            allowed_formats: vec![
-                "application/vnd.registry-notary.claim-result+json".to_string(),
-                "application/dc+sd-jwt".to_string(),
-            ],
+            allowed_formats: vec!["application/vnd.registry-notary.claim-result+json".to_string()],
             allowed_disclosures: vec!["value".to_string()],
-            credential_profiles: vec!["civil_status_sd_jwt".to_string()],
+            credential_profiles: Vec::new(),
         }],
     };
     config

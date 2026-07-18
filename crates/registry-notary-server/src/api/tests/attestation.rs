@@ -879,7 +879,7 @@ fn stored_delegated_attestation_rechecks_current_authorization_details() {
         &evaluation.claim_ids,
         &evaluation.disclosure,
         &evaluation.format,
-        None,
+        false,
     )
     .expect_err("stored delegated access must re-check current proof coverage");
 
@@ -937,7 +937,7 @@ fn stored_delegated_attestation_rechecks_current_target_binding() {
         &evaluation.claim_ids,
         &evaluation.disclosure,
         &evaluation.format,
-        None,
+        false,
     )
     .expect_err("stored delegated access must re-check current target binding");
 
@@ -1087,7 +1087,7 @@ fn stored_subject_access_rechecks_issuer_client_and_audience() {
         &evaluation.claim_ids,
         &evaluation.disclosure,
         &evaluation.format,
-        None,
+        false,
     )
     .expect_err("changed client id must not access stored evaluation");
 
@@ -1134,7 +1134,7 @@ fn stored_subject_access_rejects_expired_metadata_even_with_future_store_ttl() {
         &evaluation.claim_ids,
         &evaluation.disclosure,
         &evaluation.format,
-        None,
+        false,
     )
     .expect_err("expired subject-access metadata must fail closed");
 

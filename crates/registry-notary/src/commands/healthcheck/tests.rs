@@ -68,7 +68,7 @@ fn build_info_reports_compiled_pkcs11_capability() {
 async fn healthcheck_succeeds_for_success_status() {
     let upstream = TestServer::builder()
         .http_transport()
-        .build(Router::new().fallback(get(|| async { StatusCode::OK })));
+        .build(Router::new().route("/healthz", get(|| async { StatusCode::OK })));
     let base_url = upstream.server_address().expect("upstream address");
     let url = format!("{}/healthz", base_url.as_str().trim_end_matches('/'));
 
@@ -81,7 +81,10 @@ async fn healthcheck_succeeds_for_success_status() {
 async fn healthcheck_fails_for_non_success_status() {
     let upstream = TestServer::builder()
         .http_transport()
-        .build(Router::new().fallback(get(|| async { StatusCode::SERVICE_UNAVAILABLE })));
+        .build(Router::new().route(
+            "/healthz",
+            get(|| async { StatusCode::SERVICE_UNAVAILABLE }),
+        ));
     let base_url = upstream.server_address().expect("upstream address");
     let url = format!("{}/healthz", base_url.as_str().trim_end_matches('/'));
 

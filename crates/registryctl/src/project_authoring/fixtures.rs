@@ -685,6 +685,7 @@ fn evaluate_product_claims(
         evaluated_any = true;
         let mut target = EvidenceEntity::new("person");
         let mut identifiers = BTreeMap::new();
+        let mut attributes = BTreeMap::new();
         for consultation in service
             .consultations
             .values()
@@ -694,14 +695,30 @@ fn evaluate_product_claims(
                 let value = fixture
                     .input
                     .get(name)
-                    .and_then(Value::as_str)
                     .ok_or_else(|| anyhow!("fixture omitted a compiled consultation input"))?;
                 if request_path == "request.target.id" {
-                    target.id = Some(value.to_string());
+                    target.id = Some(
+                        value
+                            .as_str()
+                            .ok_or_else(|| anyhow!("target id fixture input must be a String"))?
+                            .to_string(),
+                    );
                 } else if let Some(scheme) =
                     request_path.strip_prefix("request.target.identifiers.")
                 {
-                    identifiers.insert(scheme.to_string(), value.to_string());
+                    identifiers.insert(
+                        scheme.to_string(),
+                        value
+                            .as_str()
+                            .ok_or_else(|| {
+                                anyhow!("target identifier fixture input must be a String")
+                            })?
+                            .to_string(),
+                    );
+                } else if let Some(name) =
+                    request_path.strip_prefix("request.target.attributes.")
+                {
+                    attributes.insert(name.to_string(), value.clone());
                 } else {
                     bail!("compiled consultation input uses an unsupported target path");
                 }
@@ -716,6 +733,7 @@ fn evaluate_product_claims(
                 country: None,
             })
             .collect();
+        target.attributes = attributes;
         let variables = fixture
             .variables
             .iter()
@@ -1753,7 +1771,7 @@ mod fixture_interface_tests {
         assert_eq!(traced_calls.len(), 1);
         assert_eq!(
             traced_calls[0],
-            "call=1 operation=script-source-call method=GET path=/api/tracker/trackedEntities/* query=[fields] headers=[] body=none"
+            "call=1 operation=script-source-call method=GET path=/api/tracker/trackedEntities/* query=[fields,includeDeleted] headers=[] body=none"
         );
         for sensitive in ["A0000000001", "Nia", "REF-0001"] {
             assert!(!traced_calls[0].contains(sensitive));

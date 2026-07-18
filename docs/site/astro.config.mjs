@@ -272,7 +272,6 @@ export default defineConfig({
             { label: 'When to use', slug: 'start/when-to-use' },
             { label: 'Run Solmara Lab', slug: 'tutorials/first-run-with-solmara-lab' },
             { label: 'Hosted Relay demo (held)', slug: 'start/quickstart' },
-            { label: 'Hosted credential tour (held)', slug: 'start/credential-tour' },
           ],
         },
         {

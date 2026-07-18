@@ -5,7 +5,7 @@
 Install a pinned release without cloning this repo:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.10.0/crates/registryctl/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.11.0/crates/registryctl/install.sh | bash
 ```
 
 The quick installer verifies downloaded release assets against `SHA256SUMS`
@@ -23,6 +23,10 @@ registryctl doctor --profile local --format json
 registryctl start
 registryctl smoke
 ```
+
+Initialization prints the created project, notable artifacts, and next commands. Add
+`--format json` to either `init relay` or `init --from` for the versioned
+`registryctl.init.v1` machine-readable report.
 
 The generated project contains a local Registry Relay configuration, sample
 XLSX workbook, Compose file, project manifest, local demo credentials, and an
@@ -46,10 +50,16 @@ and Notary inputs. Available starters are `http`, `dhis2-tracker`,
 
 ```sh
 registryctl init --from http --project-dir registry-project
+registryctl authoring editor --project-dir registry-project
 registryctl test --project-dir registry-project
 registryctl check --project-dir registry-project --environment local --explain
 registryctl build --project-dir registry-project --environment local
 ```
+
+Initialization copies the five schemas embedded in `registryctl`, configures project-relative VS
+Code and Zed schema mappings, and reports the generated editor manifest. The explicit
+`authoring editor` command verifies the setup and safely refreshes an unchanged generated bundle
+after an upgrade.
 
 The authoring contract accepts one to eight exact selector inputs and up to
 sixteen typed inputs in total. Canonical selectors have a fixed 4096-byte
@@ -60,6 +70,19 @@ generated closure with the validators for the selected Relay-only, Notary-only,
 or combined deployment. `test` additionally executes deterministic,
 request-aware source fixtures without granting fixture YAML network,
 credential, filesystem, or worker authority.
+
+When `check` finds invalid authoring, it reports independent problems together
+with stable diagnostic codes and normalized project-relative files. JSON and
+human output contain the same typed diagnostics. Syntax diagnostics include a
+safe 1-based location and authoring-schema command when available. Script
+diagnostics can include a static released-signature suggestion. Diagnostics do
+not echo YAML values, source origins, secret references, fixture observations,
+or Script arguments. Safe missing entity and integration references aggregate.
+Unsafe paths, symlinks, oversized files, and files that cannot be safely
+inspected stop later inspection. The same boundary check covers every
+environment YAML file included in the project digest, even when that
+environment is not selected. Any diagnostic prevents compilation, generated
+product validation, fixture execution, and build output.
 
 `script` uses the release-gated Rhai v1 authoring ABI. Its offline conformance
 fixtures use the isolated implementation-owned worker harness, and deployment
@@ -74,7 +97,7 @@ workers need a platform-specific process limit. The Notary default remains
 128 MiB. The maximum 1 GiB value supports emulated local runtimes and is a
 per-worker data/address-space ceiling, not reserved memory.
 
-The installer defaults to `v0.10.0`. To install a different pinned release, set
+The installer defaults to `v0.11.0`. To install a different pinned release, set
 `REGISTRYCTL_VERSION`:
 
 ```sh
@@ -85,10 +108,10 @@ Fetch the installer from the same pinned tag selected by
 `REGISTRYCTL_VERSION`. An older installer does not know the asset contract of a
 newer release.
 
-Prebuilt binaries are published for the `v0.10.0` stack release on Linux x86_64,
+Prebuilt binaries are published for the `v0.11.0` stack release on Linux x86_64,
 Linux arm64, and macOS arm64. On other platforms, install from source with
-`cargo install --git https://github.com/registrystack/registry-stack --tag v0.10.0 registryctl --locked`.
-Intel macOS has no prebuilt binary for `v0.10.0`, so the installer stops after
+`cargo install --git https://github.com/registrystack/registry-stack --tag v0.11.0 registryctl --locked`.
+Intel macOS has no prebuilt binary for `v0.11.0`, so the installer stops after
 printing that Cargo command. It does not run the source build automatically.
 
 ## Release image lock (`v0.9.0` and later)

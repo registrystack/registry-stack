@@ -2874,7 +2874,7 @@
     },
     "securitySchemes": {
       "apiKeyAuth": {
-        "description": "Compatibility API-key header accepted by API-key deployments. `Authorization: Bearer` takes precedence when both headers are present.",
+        "description": "Compatibility API-key header accepted by API-key deployments. Send exactly one primary credential channel: either this header or `Authorization: Bearer`. Requests containing both are rejected with the generic `auth.multiple_credentials` response before either credential is parsed or validated, without revealing whether either credential is valid.",
         "in": "header",
         "name": "x-api-key",
         "type": "apiKey"
@@ -2903,7 +2903,7 @@
     },
     "summary": "Read-only data gateway exposing entity records, catalog metadata, and SHACL/DCAT-AP shapes for governed datasets.",
     "title": "Registry Relay API",
-    "version": "0.10.0"
+    "version": "0.11.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -5403,6 +5403,31 @@
             },
             "description": "Consultation profile contract metadata."
           },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemDetails"
+                    },
+                    {
+                      "properties": {
+                        "code": {
+                          "const": "auth.multiple_credentials"
+                        },
+                        "status": {
+                          "const": 400
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "The request contains more than one primary authentication credential. Stable code: `auth.multiple_credentials`."
+          },
           "401": {
             "content": {
               "application/problem+json": {
@@ -5587,26 +5612,48 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "allOf": [
+                  "oneOf": [
                     {
-                      "$ref": "#/components/schemas/ProblemDetails"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/ProblemDetails"
+                        },
+                        {
+                          "properties": {
+                            "code": {
+                              "const": "consultation.invalid_request"
+                            },
+                            "status": {
+                              "const": 400
+                            }
+                          },
+                          "type": "object"
+                        }
+                      ]
                     },
                     {
-                      "properties": {
-                        "code": {
-                          "const": "consultation.invalid_request"
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/ProblemDetails"
                         },
-                        "status": {
-                          "const": 400
+                        {
+                          "properties": {
+                            "code": {
+                              "const": "auth.multiple_credentials"
+                            },
+                            "status": {
+                              "const": 400
+                            }
+                          },
+                          "type": "object"
                         }
-                      },
-                      "type": "object"
+                      ]
                     }
                   ]
                 }
               }
             },
-            "description": "The consultation request is invalid. Stable code: `consultation.invalid_request`."
+            "description": "The consultation request is invalid or contains more than one primary authentication credential. Stable codes: `consultation.invalid_request`, `auth.multiple_credentials`."
           },
           "401": {
             "content": {

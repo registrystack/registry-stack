@@ -1,0 +1,20 @@
+version: 1
+id: tutorial-person-demographics
+revision: 1
+input:
+  given_name: { role: selector, type: string, maxLength: 80 }
+  family_name: { role: selector, type: string, maxLength: 80 }
+  date_of_birth: { role: selector, type: string, format: date, maxLength: 10 }
+capability:
+  snapshot:
+    entity: person
+    exact:
+      given_name: { input: given_name }
+      family_name: { input: family_name }
+      date_of_birth: { input: date_of_birth }
+    freshness: 24h
+outputs: [registration_status]
+not_applicable:
+  subject_mismatch:
+    rationale: The exact snapshot selector applies name and date of birth before returning registration status; the minimized projection contains no selector-comparable identifier.
+    request_fixture: jo-elm-match

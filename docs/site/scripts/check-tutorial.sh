@@ -165,8 +165,8 @@ done
 # remove a documented command.
 REGISTRYCTL_TUTORIALS=(
 	"author-registry-project:23"
-	"publish-spreadsheet-secured-registry-api:39"
-	"verify-claim-registry-api:21"
+	"publish-spreadsheet-secured-registry-api:49"
+	"verify-claim-registry-api:79"
 )
 
 count_sh_command_lines() {
@@ -213,6 +213,8 @@ require_literal() {
 
 require_literal "$REPO_ROOT/src/content/docs/tutorials/author-registry-project.mdx" \
 	'registryctl init --from http --project-dir registry-project'
+require_literal "$REPO_ROOT/src/content/docs/tutorials/author-registry-project.mdx" \
+	'registryctl authoring editor --project-dir registry-project'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-fhir-r4.mdx" \
 	'outputs:'
 require_literal "$REPO_ROOT/src/content/docs/tutorials/configure-project-fhir-r4.mdx" \

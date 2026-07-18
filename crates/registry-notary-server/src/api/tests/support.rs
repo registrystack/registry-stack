@@ -3,14 +3,15 @@
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
     use registry_notary_core::{
-        BoundedVerifiedClaims, CredentialStatusConfig, EvidenceAuthorizationDetails,
-        SubjectRequest, VerifiedClaimName, VerifiedClaimValue,
+        BoundedVerifiedClaims, ClaimEvidenceMode, CredentialStatusConfig,
+        EvidenceAuthorizationDetails, RuleConfig, SubjectRequest, VerifiedClaimName,
+        VerifiedClaimValue,
     };
     use registry_platform_crypto::{did_jwk_from_public_jwk, sign, LocalJwkSigner, PrivateJwk};
     use registry_platform_replay::ReplayInsertOutcome;
     use registry_platform_testing::sign_openid4vci_proof_jwt;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::{Arc, Barrier};
+    use std::sync::{Arc, Barrier, Mutex};
     use std::thread;
     use std::time::Instant;
 
@@ -153,7 +154,7 @@
                 allowed_purposes: vec!["dependent_attestation".to_string()],
                 allowed_formats: vec![FORMAT_CLAIM_RESULT_JSON.to_string()],
                 allowed_disclosures: vec!["predicate".to_string()],
-                credential_profiles: vec!["dependent_status_sd_jwt".to_string()],
+                credential_profiles: Vec::new(),
             }],
         };
         config
@@ -220,26 +221,9 @@
                         "allowed": ["predicate"],
                         "downgrade": "deny"
                     },
-                    "formats": [FORMAT_CLAIM_RESULT_JSON],
-                    "credential_profiles": ["dependent_status_sd_jwt"]
+                    "formats": [FORMAT_CLAIM_RESULT_JSON]
                 }
-            ],
-            "credential_profiles": {
-                "dependent_status_sd_jwt": {
-                    "format": FORMAT_SD_JWT_VC,
-                    "issuer": "did:web:issuer.example",
-                    "signing_key": "issuer-key",
-                    "vct": "https://issuer.example/credentials/dependent-status",
-                    "validity_seconds": 600,
-                    "holder_binding": {
-                        "mode": "did",
-                        "proof_of_possession": "required",
-                        "allowed_did_methods": ["did:jwk"]
-                    },
-                    "allowed_claims": ["dependent-person-is-alive"],
-                    "disclosure": { "allowed": ["predicate"] }
-                }
-            }
+            ]
         }))
         .expect("delegated evidence config parses")
     }
@@ -364,7 +348,6 @@
     fn oid4vci_evidence_config() -> EvidenceConfig {
         let mut evidence = evidence_config();
         let claim = evidence.claims.first_mut().expect("claim exists");
-        claim.formats.push(FORMAT_SD_JWT_VC.to_string());
         claim
             .credential_profiles
             .push("civil_status_sd_jwt".to_string());
@@ -398,6 +381,104 @@
             .expect("credential profile parses"),
         );
         evidence
+    }
+
+    fn registry_backed_oid4vci_evidence_config() -> EvidenceConfig {
+        let mut evidence = oid4vci_evidence_config();
+        let claim = evidence.claims.first_mut().expect("claim exists");
+        claim.required_scopes = vec!["subject_access".to_string()];
+        claim.evidence_mode = ClaimEvidenceMode::RegistryBacked {
+            consultations: BTreeMap::from([(
+                "person_status".to_string(),
+                registry_notary_core::RelayConsultationConfig {
+                    profile: registry_notary_core::RelayConsultationProfileRef {
+                        id: "example.person-status.exact".to_string(),
+                        contract_hash:
+                            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                .to_string(),
+                    },
+                    inputs: BTreeMap::from([(
+                        "subject_id".to_string(),
+                        registry_notary_core::RelayConsultationInput::TargetIdentifier(
+                            "request.target.identifiers.national_id".to_string(),
+                        ),
+                    )]),
+                    outputs: BTreeMap::from([(
+                        "active".to_string(),
+                        registry_notary_core::RelayOutputContract::Boolean { nullable: false },
+                    )]),
+                },
+            )]),
+        };
+        claim.rule = RuleConfig::ConsultationMatched {
+            consultation: "person_status".to_string(),
+        };
+        evidence
+    }
+
+    fn registry_backed_oid4vci_evidence_with_dependency() -> EvidenceConfig {
+        let mut evidence = registry_backed_oid4vci_evidence_config();
+        let mut dependency = evidence.claims[0].clone();
+        dependency.id = "civil-record-active".to_string();
+        dependency.title = "Civil record active".to_string();
+        dependency.credential_profiles.clear();
+        let ClaimEvidenceMode::RegistryBacked { consultations } = &mut dependency.evidence_mode
+        else {
+            panic!("dependency is registry backed");
+        };
+        let consultation = consultations
+            .get_mut("person_status")
+            .expect("dependency consultation exists");
+        consultation.profile.id = "example.civil-record.exact".to_string();
+        consultation.profile.contract_hash =
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_string();
+        evidence.claims[0].depends_on = vec![dependency.id.clone()];
+        evidence.claims.push(dependency);
+        evidence
+    }
+
+    #[derive(Debug, Default)]
+    struct RegistryCredentialRelay {
+        calls: AtomicUsize,
+        evaluation_ids: Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::runtime::ActivatedRelayConsultations for RegistryCredentialRelay {
+        async fn check_ready(&self) -> Result<(), crate::relay_client::RelayClientError> {
+            Ok(())
+        }
+
+        fn validate(
+            &self,
+            _key: &crate::runtime::consultation::ConsultationGroupKeyV1,
+        ) -> Result<(), crate::relay_client::RelayClientError> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            key: &crate::runtime::consultation::ConsultationGroupKeyV1,
+        ) -> Result<
+            crate::runtime::consultation::RuntimeRelayConsultationResult,
+            crate::relay_client::RelayClientError,
+        > {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.evaluation_ids
+                .lock()
+                .expect("evaluation id lock is not poisoned")
+                .push(key.evaluation_id().to_string());
+            let outputs = crate::runtime::consultation::RuntimeRelayOutputMap::from_json(
+                BTreeMap::from([("active".to_string(), json!(true))]),
+            )?;
+            crate::runtime::consultation::RuntimeRelayConsultationResult::new(
+                ulid::Ulid::new(),
+                crate::runtime::consultation::RuntimeRelayOutcome::Match,
+                Some(crate::runtime::consultation::RuntimeRelayMatchData::OutputMap(outputs)),
+                OffsetDateTime::now_utc(),
+            )
+        }
     }
 
     fn runtime_config_with_custom_access_token_typ() -> StandaloneRegistryNotaryConfig {
@@ -819,11 +900,12 @@ evaluation_profiles:
             claim_ids: vec!["claim-a".to_string()],
             claim_refs: Vec::new(),
             disclosure: "redacted".to_string(),
-            format: FORMAT_SD_JWT_VC.to_string(),
+            format: FORMAT_CLAIM_RESULT_JSON.to_string(),
             results: Vec::new(),
             created_at: "1970-01-01T00:00:00Z".to_string(),
             expires_at: "1970-01-01T00:00:00Z".to_string(),
             request_hash: "h".to_string(),
+            issuance_provenance: None,
             subject_access: None,
         }
     }
@@ -845,28 +927,162 @@ evaluation_profiles:
             satisfied: Some(true),
             disclosure: "predicate".to_string(),
             redacted_fields: Vec::new(),
-            format: FORMAT_SD_JWT_VC.to_string(),
+            format: FORMAT_CLAIM_RESULT_JSON.to_string(),
             issued_at: "2026-05-23T00:00:00Z".to_string(),
             expires_at: None,
             provenance: registry_notary_core::ClaimProvenance::new(
-                "test".to_string(),
-                "eval-test".to_string(),
-                "claim".to_string(),
+                "registry-notary".to_string(),
+                evaluation_id.to_string(),
+                claim_id.to_string(),
                 "1".to_string(),
                 registry_notary_core::ProvenanceUsed {
-                    relay_consultation_count: 0,
+                    relay_consultation_count: 1,
                 },
             ),
         }
     }
 
+    fn issuance_provenance(
+        claim_id: &str,
+        purpose: &str,
+        evaluation_id: &str,
+    ) -> registry_notary_core::StoredIssuanceProvenance {
+        let mut stored = registry_notary_core::StoredIssuanceProvenance {
+            claims: vec![registry_notary_core::StoredIssuanceClaimProvenance {
+                claim_id: claim_id.to_string(),
+                claim_version: "1".to_string(),
+                relay_profile_id: "example.person-status.exact".to_string(),
+                relay_contract_hash:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                canonical_purpose: purpose.to_string(),
+                consultation_id: "01J00000000000000000000000".to_string(),
+                execution_binding: String::new(),
+            }],
+            consultations: vec![
+                registry_notary_core::StoredIssuanceConsultationProvenance {
+                    consultation_id: "01J00000000000000000000000".to_string(),
+                    acquired_at: "2026-05-23T00:00:00Z".to_string(),
+                },
+            ],
+        };
+        bind_fixture_issuance_claim(&mut stored, 0, evaluation_id, 1);
+        stored
+    }
+
+    fn issuance_provenance_with_dependency(
+        root_claim_id: &str,
+        dependency_claim_id: &str,
+        purpose: &str,
+        evaluation_id: &str,
+    ) -> registry_notary_core::StoredIssuanceProvenance {
+        let mut stored = registry_notary_core::StoredIssuanceProvenance {
+            claims: vec![
+                registry_notary_core::StoredIssuanceClaimProvenance {
+                    claim_id: dependency_claim_id.to_string(),
+                    claim_version: "1".to_string(),
+                    relay_profile_id: "example.civil-record.exact".to_string(),
+                    relay_contract_hash:
+                        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                            .to_string(),
+                    canonical_purpose: purpose.to_string(),
+                    consultation_id: "01J00000000000000000000001".to_string(),
+                    execution_binding: String::new(),
+                },
+                registry_notary_core::StoredIssuanceClaimProvenance {
+                    claim_id: root_claim_id.to_string(),
+                    claim_version: "1".to_string(),
+                    relay_profile_id: "example.person-status.exact".to_string(),
+                    relay_contract_hash:
+                        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                            .to_string(),
+                    canonical_purpose: purpose.to_string(),
+                    consultation_id: "01J00000000000000000000000".to_string(),
+                    execution_binding: String::new(),
+                },
+            ],
+            consultations: vec![
+                registry_notary_core::StoredIssuanceConsultationProvenance {
+                    consultation_id: "01J00000000000000000000000".to_string(),
+                    acquired_at: "2026-05-23T00:00:00Z".to_string(),
+                },
+                registry_notary_core::StoredIssuanceConsultationProvenance {
+                    consultation_id: "01J00000000000000000000001".to_string(),
+                    acquired_at: "2026-05-23T00:00:00Z".to_string(),
+                },
+            ],
+        };
+        bind_fixture_issuance_claim(&mut stored, 0, evaluation_id, 1);
+        bind_fixture_issuance_claim(&mut stored, 1, evaluation_id, 2);
+        stored
+    }
+
+    fn bind_fixture_issuance_claim(
+        stored: &mut registry_notary_core::StoredIssuanceProvenance,
+        claim_index: usize,
+        evaluation_id: &str,
+        relay_consultation_count: usize,
+    ) {
+        let claim = &stored.claims[claim_index];
+        let consultation = stored
+            .consultations
+            .iter()
+            .find(|execution| execution.consultation_id == claim.consultation_id)
+            .expect("claim execution exists");
+        let provenance = registry_notary_core::ClaimProvenance::new(
+            "registry-notary".to_string(),
+            evaluation_id.to_string(),
+            claim.claim_id.clone(),
+            claim.claim_version.clone(),
+            registry_notary_core::ProvenanceUsed {
+                relay_consultation_count,
+            },
+        );
+        let binding = crate::runtime::issuance_execution_binding(
+            claim,
+            consultation,
+            evaluation_id,
+            &consultation.acquired_at,
+            &provenance,
+        )
+        .expect("fixture execution binding hashes");
+        stored.claims[claim_index].execution_binding = binding;
+    }
+
     fn credential_issue_evidence_config() -> EvidenceConfig {
         let mut evidence = evidence_config();
         evidence.service_id = "registry-notary".to_string();
-        evidence
+        let claim = evidence
             .claims
             .first_mut()
-            .expect("person-is-alive claim exists")
+            .expect("person-is-alive claim exists");
+        claim.purpose = Some("test".to_string());
+        claim.required_scopes = vec!["civil_registry:evidence_verification".to_string()];
+        claim.evidence_mode = ClaimEvidenceMode::RegistryBacked {
+            consultations: BTreeMap::from([(
+                "person_status".to_string(),
+                registry_notary_core::RelayConsultationConfig {
+                    profile: registry_notary_core::RelayConsultationProfileRef {
+                        id: "example.person-status.exact".to_string(),
+                        contract_hash:
+                            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                                .to_string(),
+                    },
+                    inputs: BTreeMap::from([(
+                        "subject_id".to_string(),
+                        registry_notary_core::RelayConsultationInput::TargetId,
+                    )]),
+                    outputs: BTreeMap::from([(
+                        "active".to_string(),
+                        registry_notary_core::RelayOutputContract::Boolean { nullable: false },
+                    )]),
+                },
+            )]),
+        };
+        claim.rule = RuleConfig::ConsultationMatched {
+            consultation: "person_status".to_string(),
+        };
+        claim
             .credential_profiles
             .push("civil_status_sd_jwt".to_string());
         evidence.credential_profiles.insert(
@@ -882,6 +1098,28 @@ evaluation_profiles:
             }))
             .expect("credential profile parses"),
         );
+        evidence
+    }
+
+    fn credential_issue_evidence_with_dependency() -> EvidenceConfig {
+        let mut evidence = credential_issue_evidence_config();
+        let mut dependency = evidence.claims[0].clone();
+        dependency.id = "civil-record-active".to_string();
+        dependency.title = "Civil record active".to_string();
+        dependency.credential_profiles.clear();
+        let ClaimEvidenceMode::RegistryBacked { consultations } = &mut dependency.evidence_mode
+        else {
+            panic!("dependency is registry backed");
+        };
+        let consultation = consultations
+            .get_mut("person_status")
+            .expect("dependency consultation exists");
+        consultation.profile.id = "example.civil-record.exact".to_string();
+        consultation.profile.contract_hash =
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_string();
+        evidence.claims[0].depends_on = vec![dependency.id.clone()];
+        evidence.claims.push(dependency);
         evidence
     }
 

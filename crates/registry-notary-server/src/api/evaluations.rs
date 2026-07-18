@@ -505,7 +505,7 @@ pub(super) async fn render(
             .as_deref()
             .unwrap_or(&evaluation.disclosure),
         &request.format,
-        None,
+        false,
     ) {
         return evidence_error_response(error);
     }

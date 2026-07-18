@@ -11,6 +11,7 @@ use super::super::{
     compile_notary_runtime_with_provenance_for_gate_test as compile_notary_runtime_with_provenance,
     notary_routers_from_runtime, notary_shared_router_from_runtime,
     standalone_router_for_gate_test as standalone_router, StandaloneServerError,
+    standalone_router_with_ready_relay_for_gate_test,
 };
 use axum::http::StatusCode;
 use axum_test::TestServer;
@@ -22,7 +23,34 @@ use registry_platform_authcommon::{CredentialFingerprintProvider, CredentialFing
 use registry_platform_ops::ConfigSource;
 use registry_platform_testing::fixtures::ED25519_PRIVATE_JWK;
 use serde_json::{json, Value};
-use std::path::Path;
+use std::{path::Path, sync::Arc};
+
+#[derive(Debug)]
+struct GateReadyRelay;
+
+#[async_trait::async_trait]
+impl crate::runtime::ActivatedRelayConsultations for GateReadyRelay {
+    async fn check_ready(&self) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    fn validate(
+        &self,
+        _key: &crate::runtime::consultation::ConsultationGroupKeyV1,
+    ) -> Result<(), crate::relay_client::RelayClientError> {
+        Ok(())
+    }
+
+    async fn execute(
+        &self,
+        _key: &crate::runtime::consultation::ConsultationGroupKeyV1,
+    ) -> Result<
+        crate::runtime::consultation::RuntimeRelayConsultationResult,
+        crate::relay_client::RelayClientError,
+    > {
+        Err(crate::relay_client::RelayClientError::TransportUnavailable)
+    }
+}
 
 const AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 static SHIPPING_CURSOR_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -208,12 +236,78 @@ impl ConfigBuilder {
         }
     }
 
-    fn claim_credential_profiles(&self) -> &'static str {
-        if self.credential_signer {
-            "      credential_profiles:\n        - gates_sd_jwt\n"
-        } else {
-            ""
+    fn relay_section(&self) -> String {
+        if !self.credential_signer {
+            return String::new();
         }
+        let token_path = Path::new(&self.audit_path)
+            .with_file_name("gates-relay.jwt")
+            .display()
+            .to_string();
+        format!(
+            concat!(
+                "  relay:\n",
+                "    base_url: http://127.0.0.1:1\n",
+                "    workload_client_id: registry-notary\n",
+                "    token_file: \"{}\"\n",
+                "    allow_insecure_localhost: true\n",
+            ),
+            token_path,
+        )
+    }
+
+    fn claim_section(&self) -> &'static str {
+        if self.credential_signer {
+            return concat!(
+                "    - id: farmed-land-size\n",
+                "      title: Farmed land size\n",
+                "      version: 2026-05\n",
+                "      subject_type: person\n",
+                "      evidence_mode:\n",
+                "        type: registry_backed\n",
+                "        consultations:\n",
+                "          farmed_land:\n",
+                "            profile:\n",
+                "              id: example.farmed-land-size.exact\n",
+                "              contract_hash: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                "            inputs:\n",
+                "              subject_id: target.id\n",
+                "            outputs:\n",
+                "              active: { type: boolean, nullable: false }\n",
+                "      purpose: test\n",
+                "      required_scopes: [farmer_registry:evidence_verification]\n",
+                "      value:\n",
+                "        type: boolean\n",
+                "      rule:\n",
+                "        type: consultation_matched\n",
+                "        consultation: farmed_land\n",
+                "      disclosure:\n",
+                "        default: value\n",
+                "        allowed: [value, redacted]\n",
+                "      formats:\n",
+                "        - application/vnd.registry-notary.claim-result+json\n",
+                "      credential_profiles:\n",
+                "        - gates_sd_jwt\n",
+            );
+        }
+        concat!(
+            "    - id: farmed-land-size\n",
+            "      title: Farmed land size\n",
+            "      version: 2026-05\n",
+            "      subject_type: person\n",
+            "      evidence_mode:\n",
+            "        type: self_attested\n",
+            "      value:\n",
+            "        type: boolean\n",
+            "      rule:\n",
+            "        type: cel\n",
+            "        expression: \"true\"\n",
+            "      disclosure:\n",
+            "        default: value\n",
+            "        allowed: [value, redacted]\n",
+            "      formats:\n",
+            "        - application/vnd.registry-notary.claim-result+json\n",
+        )
     }
 
     fn federation_section(&self) -> &'static str {
@@ -274,31 +368,16 @@ impl ConfigBuilder {
   enabled: true
   service_id: evidence.test
   api_base_url: https://evidence.example.test
-{signing}
+{relay}{signing}
   claims:
-    - id: farmed-land-size
-      title: Farmed land size
-      version: 2026-05
-      subject_type: person
-      evidence_mode:
-        type: self_attested
-      value:
-        type: boolean
-      rule:
-        type: cel
-        expression: "true"
-      disclosure:
-        default: value
-        allowed: [value, redacted]
-      formats:
-        - application/vnd.registry-notary.claim-result+json
-{claim_credential_profiles}
+{claim}
 {deployment}{federation}"#,
             server = self.server_section(),
             state = state,
             audit = self.audit_section(),
+            relay = self.relay_section(),
             signing = self.signing_section(),
-            claim_credential_profiles = self.claim_credential_profiles(),
+            claim = self.claim_section(),
             deployment = self.deployment_block,
             federation = self.federation_section(),
         );
@@ -352,9 +431,12 @@ async fn fetch_posture(config: StandaloneRegistryNotaryConfig) -> Value {
     let mut config = config;
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
     add_ops_read_api_key(&mut config);
-    let runtime = compile_notary_runtime(config).expect("runtime compiles for posture");
-    let app =
-        notary_shared_router_from_runtime(runtime).expect("source-free runtime is serve-ready");
+    let runtime = compile_notary_runtime(config)
+        .expect("runtime compiles for posture")
+        .activate()
+        .await
+        .expect("source-free runtime activates");
+    let app = notary_shared_router_from_runtime(runtime).expect("activated runtime is serve-ready");
     let server = TestServer::builder().http_transport().build(app);
     let response = server
         .get("/admin/v1/posture?tier=restricted")
@@ -434,25 +516,27 @@ fn expect_compile_rejected(
     }
 }
 
-#[test]
-fn source_free_standalone_router_builds_without_relay_activation() {
+#[tokio::test]
+async fn source_free_standalone_router_builds_without_relay_activation() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
         .deployment("deployment:\n  profile: local\n")
         .build();
 
-    let _router = standalone_router(config).expect("source-free router builds synchronously");
+    let _router = standalone_router(config)
+        .await
+        .expect("source-free router verifies its audit chain and builds");
 }
 
-#[test]
-fn synchronous_router_requires_async_activation_for_postgresql() {
+#[tokio::test]
+async fn standalone_router_requires_full_activation_for_postgresql() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = ConfigBuilder::new(&audit_path(&tmp))
         .deployment("deployment:\n  profile: production\n  multi_instance: true\n")
         .build();
 
-    let error = match super::super::standalone_router(config) {
-        Ok(_) => panic!("the synchronous helper must reject PostgreSQL state"),
+    let error = match super::super::standalone_router(config).await {
+        Ok(_) => panic!("standalone_router must reject PostgreSQL state"),
         Err(error) => error,
     };
     assert!(matches!(
@@ -462,12 +546,12 @@ fn synchronous_router_requires_async_activation_for_postgresql() {
     assert!(error.to_string().contains("activate().await"));
 }
 
-#[test]
-fn registry_backed_standalone_router_refuses_to_serve_before_activation() {
+#[tokio::test]
+async fn registry_backed_standalone_router_refuses_to_serve_before_activation() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let config = registry_backed_config(&tmp);
 
-    let error = match standalone_router(config) {
+    let error = match standalone_router(config).await {
         Ok(_) => panic!("Registry-backed standalone router must require Relay activation"),
         Err(error) => error,
     };
@@ -475,16 +559,19 @@ fn registry_backed_standalone_router_refuses_to_serve_before_activation() {
 }
 
 #[test]
-fn registry_backed_compiled_runtime_cannot_be_routed_before_activation() {
+fn compiled_runtime_cannot_be_routed_before_audit_verification() {
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let runtime = compile_notary_runtime(registry_backed_config(&tmp))
         .expect("Registry-backed runtime compiles before activation");
 
     let error = match notary_shared_router_from_runtime(runtime) {
-        Ok(_) => panic!("compiled Registry-backed runtime must not be served before activation"),
+        Ok(_) => panic!("compiled runtime must not be served before audit verification"),
         Err(error) => error,
     };
-    assert!(matches!(error, StandaloneServerError::RelayNotActivated));
+    assert!(matches!(
+        error,
+        StandaloneServerError::AuditChainVerificationRequired
+    ));
 }
 
 #[test]
@@ -602,7 +689,7 @@ async fn production_multi_instance_postgresql_default_is_state_ready() {
         .build();
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::Dedicated;
 
-    let app = standalone_router(config).expect("production PostgreSQL config starts in harness");
+    let app = standalone_router(config).await.expect("production PostgreSQL config starts in harness");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status_ok();
@@ -680,7 +767,9 @@ async fn production_unapproved_local_signer_reports_readiness_failure() {
         .deployment("deployment:\n  profile: production\n")
         .build();
 
-    let app = standalone_router(config).expect("production local signer config still starts");
+    let app = standalone_router_with_ready_relay_for_gate_test(config, Arc::new(GateReadyRelay))
+        .await
+        .expect("production local signer config still starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
@@ -719,7 +808,9 @@ async fn production_file_watch_signer_requires_custody_approval() {
         .deployment("deployment:\n  profile: production\n")
         .build();
 
-    let app = standalone_router(config).expect("production file-watch signer config starts");
+    let app = standalone_router_with_ready_relay_for_gate_test(config, Arc::new(GateReadyRelay))
+        .await
+        .expect("production file-watch signer config starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
@@ -738,7 +829,7 @@ async fn production_federation_signer_is_reported_by_surface() {
         .deployment("deployment:\n  profile: production\n")
         .build();
 
-    let app = standalone_router(config).expect("production federation signer config starts");
+    let app = standalone_router(config).await.expect("production federation signer config starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
@@ -773,7 +864,9 @@ async fn production_signer_custody_approval_is_visible_in_readiness() {
         )
         .build();
 
-    let app = standalone_router(config).expect("approved local signer config starts");
+    let app = standalone_router_with_ready_relay_for_gate_test(config, Arc::new(GateReadyRelay))
+        .await
+        .expect("approved local signer config starts");
     let server = TestServer::builder().http_transport().build(app);
     let ready = server.get("/ready").await;
     ready.assert_status_ok();
@@ -957,7 +1050,10 @@ async fn evidence_grade_readiness_rechecks_cursor_binding_and_recovers() {
     add_ops_read_api_key(&mut config);
     let runtime =
         compile_notary_runtime_with_provenance(config, ConfigSource::SignedBundleFile, None)
-            .expect("signed evidence-grade runtime compiles");
+            .expect("signed evidence-grade runtime compiles")
+            .activate()
+            .await
+            .expect("signed evidence-grade runtime activates");
     let routers = notary_routers_from_runtime(runtime).expect("source-free runtime is serve-ready");
     let server = TestServer::builder().http_transport().build(routers.public);
     let admin_server = TestServer::builder().http_transport().build(routers.admin);

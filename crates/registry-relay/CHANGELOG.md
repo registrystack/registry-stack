@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## 0.11.0 - 2026-07-18
+
+- Relay now publishes a reproducible, product-owned Draft 2020-12 schema for
+  the complete runtime configuration. `registry-relay schema --format json`
+  prints the committed artifact byte for byte, and local CI checks schema drift,
+  maintained runtime fixtures, strict nested and tagged shapes, and exact
+  bidirectional configuration-reference key paths. Schema and runtime parsing
+  now share bounded listener-address and duration string grammars, integer
+  widths have explicit JSON Schema bounds, and environment references reflect
+  their consumer-specific runtime invariants.
+- BREAKING: configuration `${VAR}` expansion now rejects environment variables
+  that are unset or empty. `${VAR:-fallback}` uses its fallback for either
+  state, `${VAR:-}` explicitly expands to empty, and `${VAR:?message}` reports
+  its message for either state. Whitespace-only values remain non-empty.
+- Relay now permanently reports `/ready` as unavailable with
+  `audit.chain.inconsistent` after detecting a retained-chain verification
+  failure or a write-time foreign append. Transient audit I/O failures retain
+  their existing request-level policy and do not poison readiness.
+- Script authoring diagnostics now reject unknown `source` and Crosswalk host
+  calls, unsupported arities, and invalid entrypoints before execution. The
+  bounded diagnostic identifies the first authored call, its source location,
+  and the closest valid signatures without retaining authored argument values.
+- Requests that present both `Authorization` and `x-api-key` are rejected
+  before either credential is parsed or validated with the candidate-neutral
+  `auth.multiple_credentials` code. Relay does not fall back to one credential
+  or reveal whether either candidate was valid.
+
 ## 0.10.0 - 2026-07-17
 
 ### Added

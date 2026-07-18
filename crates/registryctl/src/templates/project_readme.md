@@ -33,11 +33,26 @@ curl -sS -G \
   http://127.0.0.1:4242/v1/datasets/benefits_casework/entities/person/records
 ```
 
+The operational `person` projection includes the canonical date of birth, but
+not names or national identifiers. Use the separately scoped identity key to
+read those fields and the household address for one subject:
+
+```sh
+curl -sS \
+  -H "Authorization: Bearer $IDENTITY_READER_RAW" \
+  -H "Data-Purpose: https://example.local/purpose/identity-verification" \
+  'http://127.0.0.1:4242/v1/datasets/benefits_casework/entities/person_identity/records/per-2001?expand=household_contact'
+```
+
+This local identity key can read every record in the restricted projections.
+The one-record response cap is not row-level authorization. In a deployment,
+grant the identity scope only to a role permitted to read those fields.
+
 ## Inspect
 
 ```sh
 registryctl open
-sed -n '1,180p' relay/config.yaml
+sed -n '1,520p' relay/config.yaml
 registryctl doctor --profile local --format json
 ```
 
@@ -47,11 +62,14 @@ Back up that file before upgrades or host moves. It contains the keys that keep
 audit hashes and generated API credentials stable.
 
 The generated Compose file keeps writable Relay state under `state/relay/`.
-If you add Notary, preserve its configured PostgreSQL database because the
-database holds replay, nonce, evaluation, quota, preauthorization, and optional
-credential-status state. Use `registryctl stop` or `docker compose down` for
-container replacement. Do not remove database volumes unless you are following
-the documented restore or clean-cutover procedure.
+If you add Notary, local Notary evaluation state is in memory and resets when the
+Notary container is replaced. The `registry-consultation-db` PostgreSQL volume
+belongs to the private consultation Relay, not Notary. The host directory
+`state/relay-consultation/cache/` may contain cached source rows, so protect it
+like the source workbook and include it in any deliberate cleanup or backup
+decision. Use `registryctl stop` or `docker compose down` for container
+replacement. Remove the consultation database volume or host cache only when
+you intend to reset that local consultation state.
 Docker Compose reads `.env` to run Relay and Notary as the project owner on
 Unix hosts, keeping private state directories writable without widening their
 permissions.

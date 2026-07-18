@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-18
+
+### Added
+
+- `registryctl check` now returns a bounded typed authoring diagnostic
+  list for invalid projects. Human and JSON output use the same stable codes,
+  project-relative files, safe locations, schema hints, causes, suggestions,
+  and remediation. Independent files are checked in deterministic order. Safe
+  missing declared references aggregate, while unsafe paths, symlinks,
+  oversized files, and inspection failures remain terminal.
+- Project consultation inputs now accept the stable
+  `request.target.attributes.<stable-name>` authoring mapping for bounded
+  string, boolean, and integer integration inputs. The committed project JSON
+  Schema and maintained DHIS2 offline journey cover the same closed grammar.
+  Target attributes are caller-supplied request context, not authenticated
+  identifiers.
+- `registryctl init --from` now installs deterministic project-local JSON Schemas and VS Code and
+  Zed workspace mappings. `registryctl authoring editor` verifies or safely refreshes the same
+  version-matched setup for an existing project.
+- `registryctl authoring language-server` now provides bounded cross-file definitions, references,
+  symbols, and reference diagnostics for Registry Stack project YAML. Optional, source-installable
+  developer previews for VS Code and Zed launch the same server alongside their existing YAML
+  language servers. They are not marketplace extensions or release artifacts; generated editor
+  schema setup remains the stable beta path for YAML validation, completion, hover, and formatting.
+- `registryctl add notary` extends the generated local benefits project with
+  an editable, registry-backed Notary evaluation tutorial and a private
+  compiler-pinned Relay consultation. This local journey evaluates claim
+  results only; it does not issue a credential or prove wallet or OID4VCI
+  interoperability.
+- `registryctl init --from` continues to expose exactly five public starters:
+  HTTP, DHIS2 Tracker, OpenCRVS DCI, FHIR R4, and exact snapshot. A committed
+  catalog now drives documentation and tests for additional maintained and
+  conformance workspaces without turning them into public starters.
+
+### Changed
+
+- `registryctl init --from` and `registryctl init relay` now print concise human-readable results
+  with tailored next commands. Both forms accept `--format json` for the versioned
+  `registryctl.init.v1` machine-readable report.
+
+### Removed
+
+- BREAKING: project authoring no longer accepts credential profiles or OID4VCI
+  configurations that select source-free claims. Credential capability now
+  requires registry-backed claim evidence from an exact compiler-pinned Relay
+  consultation; source-free claims remain available only for evaluation when
+  no credential profile selects them.
+
 ## [0.10.0] - 2026-07-17
 
 ### Added

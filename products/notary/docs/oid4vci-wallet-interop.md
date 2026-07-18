@@ -6,9 +6,13 @@ This guide describes the implemented OpenID4VCI wallet facade for Registry
 Notary adopters. It focuses on what wallet and platform teams need to configure
 and test.
 
-The current wallet facade issues source-free `self_attested` claims. A
-Registry-backed wallet service requires its own compiled Relay consultation and
-citizen authorization policy and is not implied by enabling this facade.
+The wallet facade issues only registry-backed claims. Every configured claim
+must execute its exact compiler-pinned Relay consultation, and the stored
+evaluation provenance must match the active claim, profile, purpose, and
+contract hash before signing. A deterministic execution binding also
+cross-checks each claim pin against its Relay ULID, acquisition time, and exact
+claim provenance. Source-free `self_attested` claims are
+evaluation-only and cannot appear in an OID4VCI credential configuration.
 
 ## Use case
 
@@ -24,21 +28,26 @@ The facade is intentionally narrow:
 - Proof type is JWT.
 - Supported proof algorithm is `EdDSA`.
 - Supported holder binding method is `did:jwk`.
-- Issuance is backed by self-attestation policy and source-free
-  `self_attested` claims.
+- Subject access is backed by self-attestation policy, while credential evidence
+  is backed by compiler-pinned Relay consultations.
 - Delegated attestation transaction tokens are rejected. Delegated wallet
   issuance is not part of this OID4VCI facade version.
 
 It is not a full OpenID4VCI issuer product. It is an interoperability facade for
 Registry Notary's current SD-JWT VC issuance path.
 
+The execution binding detects partial mutation of the stored record. It is an
+unkeyed digest, not an authenticity anchor against an operator who can rewrite
+all committed fields and recompute it.
+
 ## Prerequisites
 
-The wallet facade requires server-side OID4VCI and self-attestation
-configuration before any wallet can request a credential. Self-attestation is
-the policy gate that prevents a wallet from using any valid token to request
-another person's credential. The operator who runs Notary owns these settings;
-this guide assumes they are already in place.
+The wallet facade requires server-side OID4VCI, subject-access, Relay, and
+registry-backed claim configuration before any wallet can request a
+credential. Self-attestation is the policy gate that prevents a wallet from
+using any valid token to request another person's credential. The compiled
+Relay binding supplies the evidence provenance. The operator who runs Notary
+owns these settings; this guide assumes they are already in place.
 
 For the full configuration, including the `auth.oidc`, `subject_access`, and
 `oid4vci` blocks and their constraints, see the
@@ -112,7 +121,8 @@ The current wallet-facing flow is:
 4. Wallet requests a nonce when nonce support is enabled.
 5. Wallet sends a credential request with `format: "dc+sd-jwt"` and a JWT proof.
 6. Notary validates the access token, subject binding, self-attestation policy,
-   nonce and proof, evaluates the self-attested claim, and issues the SD-JWT VC.
+   nonce and proof, executes the exact compiler-pinned Relay consultation, and
+   issues the SD-JWT VC only when the stored execution provenance matches.
 
 The credential request should not carry a raw subject id as a free-form wallet
 choice. The subject comes from the OIDC token claim configured in
@@ -386,7 +396,11 @@ configuration overrides in your deployment notes.
 
 ## Security and privacy notes
 
-- `self_attested` claims perform no Relay consultation.
+- Every issued root retains exact compiler pins for its complete
+  registry-backed dependency closure and one normalized record per unique,
+  freshly executed Relay consultation.
+- `self_attested` claims perform no Relay consultation and cannot be issued.
+- Delegated self-attestation is evaluation-only and cannot be issued.
 - Subject binding is exact; do not use normalization that could join different
   civil identifiers.
 - A holder DID can become a correlation handle if reused widely. Wallets should
@@ -400,8 +414,9 @@ logging boundaries, see the
 
 | Symptom | Likely cause | Check |
 | --- | --- | --- |
-| Metadata route is unavailable | `oid4vci.enabled` is false or self-attestation is disabled | Expanded config and startup logs |
-| Config fails validation | OID4VCI references a claim or credential profile outside self-attestation allow-lists | `credential_configurations`, `subject_access.allowed_claims`, `subject_access.credential_profiles` |
+| Metadata route is unavailable | `oid4vci.enabled` is false or subject access is disabled | Expanded config and startup logs |
+| Config fails validation | OID4VCI references a source-free or delegated claim, a mixed profile, or inconsistent claim/profile bindings | `credential_configurations`, `subject_access.allowed_claims`, `subject_access.credential_profiles`, claim evidence modes |
+| Credential denied after an evaluation | Evaluation is legacy, source-free, delegated, or its dependency-closure Relay execution provenance no longer matches active configuration | Re-evaluate the exact non-delegated registry-backed claims and retry with a fresh nonce and holder proof |
 | Delegated token is rejected | The credential endpoint only accepts direct self-attestation access tokens | Token authorization details, `subject_access.delegation` |
 | Wallet token rejected | Audience, issuer, client id, scope, or algorithm mismatch | `auth.oidc`, `oid4vci.accepted_token_audiences`, wallet token header and claims |
 | Wallet never asks for PIN | Offer is still `authorization_code`, pre-authorized-code flow is disabled, or wallet ignored the grant | Issuer metadata `token_endpoint`, offer `grants`, `oid4vci.pre_authorized_code.enabled` |

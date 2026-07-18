@@ -45,7 +45,7 @@ use zeroize::Zeroizing;
 
 use crate::relay_contract::{
     verify_contract, RelayPublicContract, VerifiedAcquisitionClass, VerifiedContractSemantics,
-    VerifiedSourceField, CONTRACT_HASH_DOMAIN,
+    VerifiedInputType, VerifiedSourceField, CONTRACT_HASH_DOMAIN,
 };
 
 const PROFILE_ID_MAX_BYTES: usize = 96;
@@ -525,9 +525,16 @@ impl VerifiedRelayClient {
         let mut canonical = BTreeMap::new();
         for name in &self.profile.input_names {
             let value = inputs.get(name).ok_or(RelayClientError::InvalidRequest)?;
+            let input_type = self
+                .profile
+                .semantics
+                .input_types
+                .get(name)
+                .ok_or(RelayClientError::InvalidConfiguration)?;
             if value.is_empty()
                 || value.len() > INPUT_VALUE_MAX_BYTES
                 || value.chars().any(char::is_control)
+                || !valid_wire_input(value, *input_type)
             {
                 return Err(RelayClientError::InvalidRequest);
             }
@@ -600,6 +607,7 @@ impl VerifiedRelayClient {
             &ExecuteRequestBody {
                 contract_hash: self.profile.pin.contract_hash(),
                 inputs: &inputs,
+                input_types: &self.profile.semantics.input_types,
             },
         )
         .map_err(|_| RelayClientError::InvalidRequest)?;
@@ -877,6 +885,7 @@ pub enum RelayClientError {
 struct ExecuteRequestBody<'a> {
     contract_hash: &'a str,
     inputs: &'a BTreeMap<String, Zeroizing<String>>,
+    input_types: &'a BTreeMap<String, VerifiedInputType>,
 }
 
 impl Serialize for ExecuteRequestBody<'_> {
@@ -886,12 +895,15 @@ impl Serialize for ExecuteRequestBody<'_> {
     {
         let mut root = serializer.serialize_struct("ConsultationExecuteRequest", 2)?;
         root.serialize_field("contract_hash", self.contract_hash)?;
-        root.serialize_field("inputs", &SerializableInputs(self.inputs))?;
+        root.serialize_field("inputs", &SerializableInputs(self.inputs, self.input_types))?;
         root.end()
     }
 }
 
-struct SerializableInputs<'a>(&'a BTreeMap<String, Zeroizing<String>>);
+struct SerializableInputs<'a>(
+    &'a BTreeMap<String, Zeroizing<String>>,
+    &'a BTreeMap<String, VerifiedInputType>,
+);
 
 impl Serialize for SerializableInputs<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -900,9 +912,61 @@ impl Serialize for SerializableInputs<'_> {
     {
         let mut map = serializer.serialize_map(Some(self.0.len()))?;
         for (name, value) in self.0 {
-            map.serialize_entry(name, value.as_str())?;
+            let input_type = self
+                .1
+                .get(name)
+                .ok_or_else(|| serde::ser::Error::custom("verified input type is absent"))?;
+            map.serialize_entry(
+                name,
+                &SerializableInputValue {
+                    value,
+                    input_type: *input_type,
+                },
+            )?;
         }
         map.end()
+    }
+}
+
+struct SerializableInputValue<'a> {
+    value: &'a str,
+    input_type: VerifiedInputType,
+}
+
+impl Serialize for SerializableInputValue<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self.input_type {
+            VerifiedInputType::String => serializer.serialize_str(self.value),
+            VerifiedInputType::Boolean => match self.value {
+                "true" => serializer.serialize_bool(true),
+                "false" => serializer.serialize_bool(false),
+                _ => Err(serde::ser::Error::custom(
+                    "Boolean consultation input is not canonical",
+                )),
+            },
+            VerifiedInputType::Integer => self
+                .value
+                .parse::<i64>()
+                .ok()
+                .filter(|value| value.to_string() == self.value)
+                .ok_or_else(|| {
+                    serde::ser::Error::custom("Integer consultation input is not canonical")
+                })?
+                .serialize(serializer),
+        }
+    }
+}
+
+fn valid_wire_input(value: &str, input_type: VerifiedInputType) -> bool {
+    match input_type {
+        VerifiedInputType::String => true,
+        VerifiedInputType::Boolean => matches!(value, "true" | "false"),
+        VerifiedInputType::Integer => value
+            .parse::<i64>()
+            .is_ok_and(|parsed| parsed.to_string() == value),
     }
 }
 

@@ -38,7 +38,9 @@ use std::time::Duration;
 use axum::http::StatusCode;
 use axum_test::TestServer;
 use datafusion::execution::context::SessionContext;
-use registry_platform_audit::{AuditChainHasher, AuditEnvelope, AuditError, AuditSink};
+use registry_platform_audit::{
+    AuditChainHasher, AuditEnvelope, AuditError, AuditSink, ChainState, JsonlFileSink,
+};
 use registry_platform_ops::{AuditWritePolicy, DeploymentProfile};
 use registry_relay::audit::{AuditPipeline, FileSink, InMemorySink, OperationalAuditEvent};
 use registry_relay::auth::api_key::ApiKeyAuth;
@@ -65,6 +67,40 @@ struct ControlledAuditSinkState {
     tail_reads: AtomicUsize,
     started: tokio::sync::Semaphore,
     release: tokio::sync::Semaphore,
+}
+
+#[derive(Clone, Default)]
+struct FailOnceAuditSink {
+    fail_next: Arc<AtomicBool>,
+}
+
+impl FailOnceAuditSink {
+    fn fail_next_write(&self) {
+        self.fail_next.store(true, Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl AuditSink for FailOnceAuditSink {
+    async fn write(&self, _envelope: &AuditEnvelope) -> Result<(), AuditError> {
+        if self.fail_next.swap(false, Ordering::SeqCst) {
+            return Err(AuditError::Io(std::io::Error::other(
+                "injected transient audit write failure",
+            )));
+        }
+        Ok(())
+    }
+
+    async fn tail_hash(&self) -> Result<Option<[u8; 32]>, AuditError> {
+        Ok(None)
+    }
+
+    async fn tail_hash_with_hasher(
+        &self,
+        _hasher: &AuditChainHasher,
+    ) -> Result<Option<[u8; 32]>, AuditError> {
+        Ok(None)
+    }
 }
 
 impl Default for ControlledAuditSinkState {
@@ -621,6 +657,82 @@ async fn evidence_grade_ready_preserves_audit_chain_inconsistent_code() {
         response.assert_status(StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.json::<Value>()["code"], "audit.chain.inconsistent");
     }
+}
+
+#[tokio::test]
+async fn audit_chain_fork_fails_closed_and_latches_public_readiness() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let pipeline = AuditPipeline::from_sink(FileSink::new(&audit_path, 10, 50).expect("sink"));
+    pipeline
+        .write_operational_event(OperationalAuditEvent::success("test.initial"))
+        .await
+        .expect("initial audit write");
+
+    // This unlocked platform sink represents a foreign writer that bypassed
+    // Relay's advisory lock. It emits a valid envelope from the same tail, so
+    // the live Relay writer catches the fork through its write-time tail check.
+    let foreign_sink = JsonlFileSink::new(&audit_path);
+    let foreign_chain = ChainState::bootstrap_unkeyed_dev_only(&foreign_sink)
+        .await
+        .expect("foreign writer bootstraps from retained tail");
+    foreign_chain
+        .append(
+            &foreign_sink,
+            serde_json::json!({ "event": "foreign.append" }),
+        )
+        .await
+        .expect("foreign writer appends a valid envelope");
+
+    let app = build_test_app_with_health_audit(Arc::clone(&pipeline));
+    let server = TestServer::new(app);
+    let failed_request = server.get("/healthz").await;
+    failed_request.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        failed_request.json::<Value>()["code"],
+        "audit.write_failed",
+        "fail-closed policy must refuse a request without its audit record"
+    );
+
+    let readiness = server.get("/ready").await;
+    readiness.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let readiness_body = readiness.json::<Value>();
+    assert_eq!(readiness_body["code"], "audit.chain.inconsistent");
+    assert_eq!(
+        readiness_body["detail"],
+        "the retained audit chain has an integrity failure and requires operator recovery",
+        "the public response must accurately cover live fork detection"
+    );
+    let readiness_text = serde_json::to_string(&readiness_body).expect("readiness JSON serializes");
+    assert!(
+        !readiness_text.contains(audit_path.to_str().expect("temporary path is UTF-8"))
+            && !readiness_text.contains("record_hash")
+            && !readiness_text.contains("prev_hash"),
+        "public readiness must not expose audit-chain values"
+    );
+    assert!(
+        !pipeline.chain_healthy(),
+        "a detected foreign append must permanently latch audit readiness"
+    );
+}
+
+#[tokio::test]
+async fn transient_audit_write_failure_does_not_poison_readiness() {
+    let sink = FailOnceAuditSink::default();
+    let pipeline = Arc::new(AuditPipeline::new(Arc::new(sink.clone())));
+    let app = build_test_app_with_health_audit(Arc::clone(&pipeline));
+    let server = TestServer::new(app);
+
+    sink.fail_next_write();
+    let failed_request = server.get("/healthz").await;
+    failed_request.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(failed_request.json::<Value>()["code"], "audit.write_failed");
+
+    server.get("/ready").await.assert_status(StatusCode::OK);
+    assert!(
+        pipeline.chain_healthy(),
+        "a transient audit I/O failure must not latch audit readiness"
+    );
 }
 
 #[tokio::test]

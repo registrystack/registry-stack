@@ -1,0 +1,8 @@
+version: 1
+callers:
+  application-service:
+    api_key_fingerprint: { secret: APPLICATION_SERVICE_TOKEN_HASH }
+    scopes: ["evidence:application:read"]
+deployment:
+  profile: local
+  notary: { service: evaluation-notary }

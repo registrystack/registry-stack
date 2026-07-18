@@ -4,8 +4,9 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use registryctl::{
-    BundleSignOptions, DeploymentProfile, DoctorFormat, ProjectBuildOptions, ProjectCheckOptions,
-    ProjectCommandReport, ProjectInitOptions, ProjectStarter, ProjectTestOptions,
+    BundleSignOptions, DeploymentProfile, DoctorFormat, InitProjectKind, InitReport, InitSource,
+    ProjectBuildOptions, ProjectCheckOptions, ProjectCommandReport, ProjectEditorSetupOptions,
+    ProjectInitOptions, ProjectSchemaKind, ProjectStarter, ProjectTestOptions,
     ProjectTestSelection, Sample,
 };
 
@@ -32,27 +33,41 @@ fn main() -> Result<()> {
         Commands::Init {
             from,
             project_dir,
+            format,
             command,
-        } => match (from, command) {
-            (Some(starter), None) => {
-                print_json(&registryctl::init_registry_project(&ProjectInitOptions {
+        } => {
+            let report = match (from, command) {
+                (Some(starter), None) => registryctl::init_registry_project(&ProjectInitOptions {
                     starter,
                     directory: project_dir,
-                })?)?
-            }
-            (None, Some(command)) => {
-                let image_lock = registryctl::load_registryctl_image_lock()?;
-                match *command {
-                    InitCommand::Relay { dir, sample } => {
-                        registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?;
-                    }
-                    InitCommand::SpreadsheetApi { dir, sample } => {
-                        registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?;
+                })?,
+                (None, Some(command)) => {
+                    let image_lock = registryctl::load_registryctl_image_lock()?;
+                    match *command {
+                        InitCommand::Relay { dir, sample } => {
+                            registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?
+                        }
+                        InitCommand::SpreadsheetApi { dir, sample } => {
+                            registryctl::init_spreadsheet_api(&dir, sample, &image_lock)?
+                        }
                     }
                 }
+                _ => anyhow::bail!(
+                    "init requires exactly one of --from or a legacy product subcommand"
+                ),
+            };
+            match format {
+                OutputFormat::Human => println!("{}", render_init_report(&report)?),
+                OutputFormat::Json => print_json(&report)?,
             }
-            _ => {
-                anyhow::bail!("init requires exactly one of --from or a legacy product subcommand")
+        }
+        Commands::Add { command } => match command {
+            AddCommand::Notary => {
+                let image_lock = registryctl::load_registryctl_image_lock()?;
+                print_json(&registryctl::add_notary_to_project(
+                    &std::env::current_dir()?,
+                    &image_lock,
+                )?)?;
             }
         },
         Commands::Test {
@@ -102,15 +117,33 @@ fn main() -> Result<()> {
             let report = registryctl::check_registry_project(&ProjectCheckOptions {
                 project_directory: project_dir,
                 environment,
-                explain: explain || format == ProjectReportFormat::Human,
+                explain: explain || format == OutputFormat::Human,
                 against,
                 anchor,
-            })?;
+            });
+            let report = match report {
+                Ok(report) => report,
+                Err(error) => {
+                    if let Some(report) =
+                        error.downcast_ref::<registryctl::ProjectAuthoringDiagnostics>()
+                    {
+                        match format {
+                            OutputFormat::Human => println!(
+                                "{}",
+                                registryctl::render_project_authoring_diagnostics(report)
+                            ),
+                            OutputFormat::Json => print_json(report)?,
+                        }
+                        std::process::exit(1);
+                    }
+                    return Err(error);
+                }
+            };
             match format {
-                ProjectReportFormat::Human => {
+                OutputFormat::Human => {
                     println!("{}", render_check_report(&report, explain)?)
                 }
-                ProjectReportFormat::Json => print_json(&report)?,
+                OutputFormat::Json => print_json(&report)?,
             }
         }
         Commands::Authoring { command } => match command {
@@ -125,6 +158,17 @@ fn main() -> Result<()> {
                 ),
             },
             AuthoringCommand::Schema { kind } => print!("{}", kind.document()),
+            AuthoringCommand::Editor { project_dir } => print_json(
+                &registryctl::setup_registry_project_editor(&ProjectEditorSetupOptions {
+                    project_directory: project_dir,
+                })?,
+            )?,
+            AuthoringCommand::LanguageServer => {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()?
+                    .block_on(registry_language_server::run_stdio());
+            }
         },
         Commands::Build {
             project_dir,
@@ -219,7 +263,9 @@ fn main() -> Result<()> {
         },
         Commands::Bruno { command } => match command {
             BrunoCommand::Generate { force } => {
-                registryctl::bruno_generate_project(&std::env::current_dir()?, force)?;
+                let collection =
+                    registryctl::bruno_generate_project(&std::env::current_dir()?, force)?;
+                println!("Bruno collection: {}", human_path(&collection));
             }
             BrunoCommand::Open => registryctl::bruno_open_project(&std::env::current_dir()?)?,
             BrunoCommand::Run => registryctl::bruno_run_project(&std::env::current_dir()?)?,
@@ -311,6 +357,87 @@ fn print_json<T: serde::Serialize>(value: &T) -> Result<()> {
         serde_json::to_string_pretty(value).context("failed to render JSON output")?
     );
     Ok(())
+}
+
+fn render_init_report(report: &InitReport) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let project_kind = match report.project_kind {
+        InitProjectKind::RegistryProject => "Registry Stack project",
+        InitProjectKind::RelaySpreadsheetApi => "Relay spreadsheet API",
+    };
+    let mut output = String::new();
+    writeln!(output, "Initialized {project_kind} {:?}.", report.project)?;
+    writeln!(output, "  Directory: {}", human_path(&report.output))?;
+    match &report.source {
+        InitSource::Starter {
+            id,
+            release,
+            content_state,
+            ..
+        } => {
+            writeln!(output, "  Starter: {id} (Registry Stack {release})")?;
+            writeln!(output, "  Starter content: {content_state} bundled digest")?;
+        }
+        InitSource::Sample { id } => writeln!(output, "  Sample: {id}")?,
+    }
+    if let Some(collection) = &report.artifacts.bruno_collection {
+        writeln!(output, "  Bruno collection: {}", human_path(collection))?;
+    }
+    if let Some(manifest) = &report.artifacts.editor_manifest {
+        writeln!(
+            output,
+            "  Editor support: VS Code and Zed ({})",
+            human_path(manifest)
+        )?;
+    }
+
+    writeln!(output, "\nNext:")?;
+    if report.output != std::path::Path::new(".") {
+        writeln!(output, "  cd {}", human_path(&report.output))?;
+    }
+    match report.project_kind {
+        InitProjectKind::RegistryProject => {
+            writeln!(output, "  registryctl test --project-dir .")?;
+        }
+        InitProjectKind::RelaySpreadsheetApi => {
+            writeln!(output, "  registryctl doctor --profile local --format json")?;
+            writeln!(output, "  registryctl start")?;
+        }
+    }
+    Ok(output.trim_end().to_string())
+}
+
+fn human_path(path: &std::path::Path) -> String {
+    let mut value = path.display().to_string();
+    if path.is_relative() && value.starts_with('-') {
+        value.insert_str(0, "./");
+    }
+    if !value.is_empty()
+        && value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "/._-".contains(character))
+    {
+        value
+    } else {
+        let mut escaped = String::with_capacity(value.len());
+        for character in value.chars() {
+            match character {
+                '\\' => escaped.push_str("\\\\"),
+                '\'' => escaped.push_str("\\'"),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                '\t' => escaped.push_str("\\t"),
+                character if character.is_control() => {
+                    use std::fmt::Write as _;
+                    write!(escaped, "\\u{:04x}", character as u32)
+                        .expect("writing to a String cannot fail");
+                }
+                character => escaped.push(character),
+            }
+        }
+        format!("$'{escaped}'")
+    }
 }
 
 fn render_test_summary(report: &ProjectCommandReport) -> String {
@@ -478,8 +605,8 @@ fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false)
             {
-                let self_attested = notary
-                    .get("self_attested_services")
+                let source_free_evaluation = notary
+                    .get("source_free_evaluation_services")
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0);
                 let relay_backed = notary
@@ -490,9 +617,9 @@ fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<
                     output,
                     "  Notary authority: {}, {}",
                     render_count(
-                        self_attested,
-                        "source-free self-attested service",
-                        "source-free self-attested services"
+                        source_free_evaluation,
+                        "source-free evaluation service",
+                        "source-free evaluation services"
                     ),
                     render_count(
                         relay_backed,
@@ -646,7 +773,7 @@ fn render_check_report(report: &ProjectCommandReport, expanded: bool) -> Result<
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum ProjectReportFormat {
+enum OutputFormat {
     Human,
     Json,
 }
@@ -655,31 +782,6 @@ enum ProjectReportFormat {
 enum XwFormat {
     Reference,
     Editor,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum ProjectSchemaKind {
-    Project,
-    Environment,
-    Integration,
-    Fixture,
-    Entity,
-}
-
-impl ProjectSchemaKind {
-    const fn document(self) -> &'static str {
-        match self {
-            Self::Project => include_str!("../schemas/project-authoring/project.schema.json"),
-            Self::Environment => {
-                include_str!("../schemas/project-authoring/environment.schema.json")
-            }
-            Self::Integration => {
-                include_str!("../schemas/project-authoring/integration.schema.json")
-            }
-            Self::Fixture => include_str!("../schemas/project-authoring/fixture.schema.json"),
-            Self::Entity => include_str!("../schemas/project-authoring/entity.schema.json"),
-        }
-    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -694,6 +796,14 @@ enum AuthoringCommand {
         #[arg(long, value_enum)]
         kind: ProjectSchemaKind,
     },
+    /// Install deterministic local schema mappings for VS Code and Zed.
+    Editor {
+        /// Project workspace root containing registry-stack.yaml.
+        #[arg(long, default_value = ".")]
+        project_dir: PathBuf,
+    },
+    /// Run cross-file Registry Stack navigation over the Language Server Protocol.
+    LanguageServer,
 }
 
 #[derive(Debug, Parser)]
@@ -720,8 +830,16 @@ enum Commands {
         /// Destination for a project workspace initialized with --from.
         #[arg(long, default_value = ".")]
         project_dir: PathBuf,
+        /// Human-readable result, or machine-readable JSON.
+        #[arg(long, value_enum, default_value = "human", global = true)]
+        format: OutputFormat,
         #[command(subcommand)]
         command: Option<Box<InitCommand>>,
+    },
+    /// Add another local Registry Stack product to the current project.
+    Add {
+        #[command(subcommand)]
+        command: AddCommand,
     },
     /// Run every project integration fixture offline.
     Test {
@@ -760,7 +878,7 @@ enum Commands {
         explain: bool,
         /// Human-readable review report, or deliberate machine-readable JSON.
         #[arg(long, value_enum, default_value = "human")]
-        format: ProjectReportFormat,
+        format: OutputFormat,
         /// Previously signed product Config Bundle with review and internal approval state.
         #[arg(long)]
         against: Option<PathBuf>,
@@ -828,6 +946,12 @@ enum Commands {
     },
 }
 
+#[derive(Debug, Subcommand)]
+enum AddCommand {
+    /// Add a local Notary and private consultation Relay over the benefits workbook.
+    Notary,
+}
+
 impl Commands {
     fn should_check_for_updates(&self) -> bool {
         !matches!(
@@ -864,8 +988,29 @@ mod tests {
             Commands::Init {
                 from: Some(ProjectStarter::Http),
                 project_dir,
+                format: OutputFormat::Human,
                 command: None,
             } if project_dir == std::path::Path::new("registry-project")
+        ));
+
+        let relay_init = Cli::try_parse_from([
+            "registryctl",
+            "init",
+            "relay",
+            "my-first-api",
+            "--format",
+            "json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            relay_init.command,
+            Commands::Init {
+                from: None,
+                format: OutputFormat::Json,
+                command: Some(command),
+                ..
+            } if matches!(command.as_ref(), InitCommand::Relay { dir, .. }
+                if dir == std::path::Path::new("my-first-api"))
         ));
 
         let test = Cli::try_parse_from([
@@ -948,7 +1093,7 @@ mod tests {
                 project_dir,
                 environment,
                 explain: true,
-                format: ProjectReportFormat::Human,
+                format: OutputFormat::Human,
                 against: Some(against),
                 anchor: Some(anchor),
             } if project_dir == std::path::Path::new("registry-project")
@@ -971,7 +1116,7 @@ mod tests {
         assert!(matches!(
             json_check.command,
             Commands::Check {
-                format: ProjectReportFormat::Json,
+                format: OutputFormat::Json,
                 explain: false,
                 ..
             }
@@ -1020,6 +1165,37 @@ mod tests {
             schema_document["title"],
             "Registry Stack project integration v1"
         );
+
+        let editor = Cli::try_parse_from([
+            "registryctl",
+            "authoring",
+            "editor",
+            "--project-dir",
+            "registry-project",
+        ])
+        .unwrap();
+        assert!(matches!(
+            editor.command,
+            Commands::Authoring {
+                command: AuthoringCommand::Editor { project_dir }
+            } if project_dir == std::path::Path::new("registry-project")
+        ));
+        let default_editor = Cli::try_parse_from(["registryctl", "authoring", "editor"]).unwrap();
+        assert!(matches!(
+            default_editor.command,
+            Commands::Authoring {
+                command: AuthoringCommand::Editor { project_dir }
+            } if project_dir == std::path::Path::new(".")
+        ));
+
+        let language_server =
+            Cli::try_parse_from(["registryctl", "authoring", "language-server"]).unwrap();
+        assert!(matches!(
+            language_server.command,
+            Commands::Authoring {
+                command: AuthoringCommand::LanguageServer
+            }
+        ));
 
         let build = Cli::try_parse_from([
             "registryctl",
@@ -1105,68 +1281,148 @@ mod tests {
     fn human_check_report_identifies_single_product_topologies_and_authority() {
         let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/project-authoring");
-        for (project, topology, authority) in [
-            (
-                "relay-only-records",
-                "topology: Relay-only",
-                "Relay authority: 0 source integrations, 1 records API service, 1 materialized entity definition",
-            ),
-            (
-                "notary-only-self-attested",
-                "topology: Notary-only",
-                "Notary authority: 1 source-free self-attested service, 0 compiler-pinned Relay-backed services",
-            ),
-        ] {
-            let report = registryctl::check_registry_project(&ProjectCheckOptions {
-                project_directory: fixtures.join(project),
-                environment: "local".to_string(),
-                explain: true,
-                against: None,
-                anchor: None,
-            })
-            .expect("single-product project checks");
-            let rendered = render_check_report(&report, false).expect("report renders");
-            assert!(rendered.contains(topology), "{rendered}");
-            assert!(rendered.contains(authority), "{rendered}");
-            if project == "notary-only-self-attested" {
-                assert!(
-                    rendered.contains("Relay source authority: not applicable"),
-                    "{rendered}"
-                );
-            }
-        }
+        let relay_report = registryctl::check_registry_project(&ProjectCheckOptions {
+            project_directory: fixtures.join("relay-only-records"),
+            environment: "local".to_string(),
+            explain: true,
+            against: None,
+            anchor: None,
+        })
+        .expect("Relay-only project checks");
+        let relay_rendered = render_check_report(&relay_report, false).expect("report renders");
+        assert!(relay_rendered.contains("topology: Relay-only"));
+        assert!(relay_rendered.contains(
+            "Relay authority: 0 source integrations, 1 records API service, 1 materialized entity definition"
+        ));
+
+        let notary_report = registryctl::check_registry_project(&ProjectCheckOptions {
+            project_directory: fixtures.join("notary-only-evaluation"),
+            environment: "local".to_string(),
+            explain: true,
+            against: None,
+            anchor: None,
+        })
+        .expect("Notary-only evaluation project checks");
+        let notary_rendered = render_check_report(&notary_report, false).expect("report renders");
+        assert!(notary_rendered.contains("topology: Notary-only"));
+        assert!(notary_rendered.contains(
+            "Notary authority: 1 source-free evaluation service, 0 compiler-pinned Relay-backed services"
+        ));
+        assert!(notary_rendered.contains("Relay source authority: not applicable"));
     }
 
     #[test]
-    fn project_test_watch_reruns_each_maintained_starter_after_an_authored_change() {
-        let starters = [
-            (ProjectStarter::Http, "person-record", "active-person"),
-            (
-                ProjectStarter::Dhis2Tracker,
-                "health-record",
-                "complete-health-match",
-            ),
-            (
-                ProjectStarter::OpencrvsDci,
-                "birth-record",
-                "birth-record-match",
-            ),
-            (ProjectStarter::FhirR4, "coverage", "coverage-active"),
-            (
-                ProjectStarter::Snapshot,
-                "person-snapshot",
-                "snapshot-match",
-            ),
-        ];
+    fn project_test_watch_reruns_each_maintained_fixture_journey_after_an_authored_change() {
+        fn copy_directory(source: &std::path::Path, destination: &std::path::Path) -> Result<()> {
+            std::fs::create_dir_all(destination)?;
+            for entry in std::fs::read_dir(source)? {
+                let entry = entry?;
+                let target = destination.join(entry.file_name());
+                if entry.file_type()?.is_dir() {
+                    copy_directory(&entry.path(), &target)?;
+                } else {
+                    std::fs::copy(entry.path(), target)?;
+                }
+            }
+            Ok(())
+        }
 
-        for (starter, integration, fixture) in starters {
-            let temporary = tempfile::tempdir().expect("temporary directory");
-            let project_directory = temporary.path().join("registry-project");
-            registryctl::init_registry_project(&ProjectInitOptions {
+        let manifest_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let repository_root = manifest_root.join("../..");
+        let catalog: serde_yaml::Value = serde_yaml::from_slice(
+            &std::fs::read(manifest_root.join("tests/fixtures/project-authoring-journeys.yaml"))
+                .expect("project-authoring journey catalog reads"),
+        )
+        .expect("project-authoring journey catalog parses");
+        let mut journeys = Vec::new();
+        for workspace in catalog["workspaces"]
+            .as_sequence()
+            .expect("catalog workspaces")
+        {
+            if !workspace["steps"]
+                .as_sequence()
+                .expect("catalog steps")
+                .iter()
+                .any(|step| step.as_str() == Some("watch"))
+            {
+                continue;
+            }
+            assert_eq!(
+                workspace["classification"].as_str(),
+                Some("maintained"),
+                "watch is a maintained authoring journey"
+            );
+            let starter = workspace["starter"].as_str().map(|starter| match starter {
+                "http" => ProjectStarter::Http,
+                "dhis2-tracker" => ProjectStarter::Dhis2Tracker,
+                "opencrvs-dci" => ProjectStarter::OpencrvsDci,
+                "fhir-r4" => ProjectStarter::FhirR4,
+                "snapshot" => ProjectStarter::Snapshot,
+                other => panic!("unknown catalog starter {other}"),
+            });
+            let id = workspace["id"].as_str().expect("watch id").to_string();
+            let project_dir = workspace["project_dir"]
+                .as_str()
+                .expect("watch project directory")
+                .to_string();
+            let source = repository_root.join(
+                workspace["source"]
+                    .as_str()
+                    .expect("catalog workspace source"),
+            );
+            let project: serde_yaml::Value = serde_yaml::from_slice(
+                &std::fs::read(source.join("registry-stack.yaml")).expect("catalog project reads"),
+            )
+            .expect("catalog project parses");
+            let integrations = project["integrations"]
+                .as_mapping()
+                .expect("watch journey integrations");
+            assert_eq!(integrations.len(), 1, "watch journey integration");
+            let (integration, reference) = integrations.iter().next().expect("watch integration");
+            let integration = integration.as_str().expect("integration id").to_string();
+            let integration_file = reference["file"].as_str().expect("integration file");
+            let fixture_file = workspace["focused_fixture_file"]
+                .as_str()
+                .expect("focused fixture file");
+            let fixture_path = source
+                .join(integration_file)
+                .parent()
+                .expect("integration directory")
+                .join("fixtures")
+                .join(fixture_file);
+            let fixture: serde_yaml::Value =
+                serde_yaml::from_slice(&std::fs::read(fixture_path).expect("watch fixture reads"))
+                    .expect("watch fixture parses");
+            journeys.push((
+                id,
                 starter,
-                directory: project_directory.clone(),
-            })
-            .expect("maintained starter initializes");
+                source,
+                project_dir,
+                integration,
+                fixture["name"]
+                    .as_str()
+                    .expect("watch fixture name")
+                    .to_string(),
+            ));
+        }
+        assert_eq!(
+            journeys.len(),
+            9,
+            "every maintained fixture journey watches"
+        );
+
+        for (id, starter, source, project_dir, integration, fixture) in journeys {
+            let temporary = tempfile::tempdir().expect("temporary directory");
+            let project_directory = temporary.path().join(project_dir);
+            if let Some(starter) = starter {
+                registryctl::init_registry_project(&ProjectInitOptions {
+                    starter,
+                    directory: project_directory.clone(),
+                })
+                .expect("maintained starter initializes");
+            } else {
+                copy_directory(&source, &project_directory).expect("maintained non-starter copies");
+            }
 
             let mut observed_runs = 0;
             watch_project_tests_until(
@@ -1176,9 +1432,9 @@ mod tests {
                     live: false,
                 },
                 ProjectTestSelection {
-                    integration: Some(integration.to_string()),
-                    fixture: Some(fixture.to_string()),
-                    trace: true,
+                    integration: Some(integration),
+                    fixture: Some(fixture),
+                    trace: false,
                 },
                 |completed_runs, root| {
                     observed_runs = completed_runs;
@@ -1198,7 +1454,7 @@ mod tests {
                 },
             )
             .expect("offline watch reruns after an authored project file changes");
-            assert_eq!(observed_runs, 2, "{starter:?}");
+            assert_eq!(observed_runs, 2, "{id}");
         }
     }
 
@@ -1256,6 +1512,18 @@ mod tests {
         let cli = Cli::try_parse_from(["registryctl", "restart"]).unwrap();
 
         assert!(matches!(cli.command, Commands::Restart));
+    }
+
+    #[test]
+    fn add_notary_cli_parses() {
+        let cli = Cli::try_parse_from(["registryctl", "add", "notary"]).unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Commands::Add {
+                command: AddCommand::Notary
+            }
+        ));
     }
 
     #[test]

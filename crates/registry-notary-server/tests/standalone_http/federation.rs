@@ -243,7 +243,7 @@ pub(super) fn audit_records(path: &std::path::Path) -> Vec<Value> {
 }
 
 pub(super) fn subject_access_oidc_config(
-    _base_url: &str,
+    base_url: &str,
     audit_path: &str,
     issuer: &str,
     jwks_uri: &str,
@@ -258,6 +258,7 @@ state:
 
 server:
   bind: 127.0.0.1:0
+  request_timeout: 30s
 auth:
   oidc:
     issuer: "{issuer}"
@@ -286,6 +287,11 @@ evidence:
   enabled: true
   service_id: evidence.test
   api_base_url: https://evidence.example.test
+  relay:
+    base_url: "{base_url}"
+    workload_client_id: registry-notary
+    token_file: "{audit_path}.relay-token"
+    allow_insecure_localhost: true
   signing_keys:
     issuer-key:
       provider: local_jwk_env
@@ -316,13 +322,26 @@ evidence:
       version: 2026-05
       subject_type: person
       evidence_mode:
-        type: self_attested
+        type: registry_backed
+        consultations:
+          person_status:
+            profile:
+              id: {TEST_RELAY_PROFILE_ID}
+              contract_hash: {contract_hash}
+            inputs:
+              subject_id: request.target.identifiers.national_id
+            outputs:
+              active: {{ type: boolean, nullable: true }}
+              birth_date: {{ type: date, nullable: true }}
+              given_name: {{ type: string, nullable: true, max_bytes: 64 }}
       purpose: citizen_subject_access
+      required_scopes:
+        - subject_access
       value:
         type: boolean
       rule:
-        type: cel
-        expression: "true"
+        type: consultation_matched
+        consultation: person_status
       disclosure:
         default: value
         allowed: [value, redacted]
@@ -357,7 +376,6 @@ subject_access:
     - person-is-alive
   allowed_formats:
     - application/vnd.registry-notary.claim-result+json
-    - application/dc+sd-jwt
   allowed_disclosures:
     - value
     - redacted
@@ -373,7 +391,8 @@ subject_access:
     subject_mismatch_per_principal_per_hour: 5
     per_holder_per_hour: 10
     credential_issuance_per_principal_per_hour: 5
-"#
+"#,
+        contract_hash = test_relay_contract_hash(),
     );
     serde_norway::from_str(&raw).expect("subject-access config deserializes")
 }
@@ -442,19 +461,12 @@ pub(super) fn add_subject_access_projection_claim(
     claim.id = claim_id.to_string();
     claim.title = title.to_string();
     claim.value.value_type = value_type.to_string();
-    claim.rule = RuleConfig::Cel {
-        expression: match output_name {
-            "given_name" => "'Miguel'",
-            "birth_date" => "'2016-01-15'",
-            _ => panic!("unsupported self-attested projection output: {output_name}"),
-        }
-        .to_string(),
-        bindings: Default::default(),
+    claim.value.nullable = true;
+    claim.rule = RuleConfig::ConsultationOutput {
+        consultation: "person_status".to_string(),
+        output: output_name.to_string(),
     };
-    claim.formats = vec![
-        "application/vnd.registry-notary.claim-result+json".to_string(),
-        "application/dc+sd-jwt".to_string(),
-    ];
+    claim.formats = vec!["application/vnd.registry-notary.claim-result+json".to_string()];
     claim.credential_profiles = vec!["civil_status_sd_jwt".to_string()];
     config.evidence.claims.push(claim);
     config
@@ -679,6 +691,7 @@ pub(super) async fn federation_route_is_not_mounted_until_enabled() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -710,7 +723,9 @@ pub(super) async fn federation_evaluation_returns_signed_response_and_rejects_re
     add_admin_api_key(&mut config);
     add_metrics_read_api_key(&mut config);
     enable_shared_admin_listener(&mut config);
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let token = federation_request_jwt(
         "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q6Q6",
@@ -839,7 +854,9 @@ pub(super) async fn federation_stale_claim_result_returns_signed_evaluation_erro
         &format!("{}/jwks", peer_jwks.url()),
     );
     config.federation.evaluation_profiles[0].max_claim_result_age_seconds = Some(0);
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -887,7 +904,9 @@ pub(super) async fn federation_auth_exempt_route_still_requires_valid_jws() {
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     );
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -930,6 +949,7 @@ pub(super) async fn federation_two_standalone_notaries_smoke() {
             "https://agency-b.example.gov",
             &format!("{}/jwks", agency_b_jwks.url()),
         ))
+        .await
         .expect("agency A standalone router builds"),
     );
     let agency_b = TestServer::builder().http_transport().build(
@@ -942,6 +962,7 @@ pub(super) async fn federation_two_standalone_notaries_smoke() {
             "https://agency-a.example.gov",
             &format!("{}/jwks", agency_a_jwks.url()),
         ))
+        .await
         .expect("agency B standalone router builds"),
     );
     agency_b.get("/healthz").await.assert_status_ok();
@@ -987,6 +1008,7 @@ pub(super) async fn federation_denial_happens_before_claim_evaluation() {
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let token = federation_request_jwt(
@@ -1201,7 +1223,9 @@ pub(super) async fn assert_federation_emergency_denylist_blocks_before_claim_eva
             .node_ids
             .push("did:web:agency-b.example.gov".to_string());
     }
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let request_jti = if deny_kid {
         "01J9Z6Q6Q6Q6Q6Q6Q6Q6Q6Q7R0"
@@ -1245,6 +1269,7 @@ pub(super) async fn federation_request_claims_must_match_profile_before_claim_ev
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let token = federation_request_jwt_with_claims(
@@ -1298,6 +1323,7 @@ pub(super) async fn federation_audit_write_failure_replaces_signed_success() {
         audit_path.to_str().expect("audit path is UTF-8"),
         &format!("{}/jwks", peer_jwks.url()),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let token = federation_request_jwt(

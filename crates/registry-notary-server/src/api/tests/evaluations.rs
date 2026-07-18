@@ -310,11 +310,12 @@ fn evaluation_access_uses_stored_claim_version_scope() {
         claim_ids: vec!["person-is-alive".to_string()],
         claim_refs: vec![ClaimRef::with_version("person-is-alive", "2.0")],
         disclosure: "predicate".to_string(),
-        format: FORMAT_SD_JWT_VC.to_string(),
+        format: FORMAT_CLAIM_RESULT_JSON.to_string(),
         results: Vec::new(),
         created_at: "2026-05-23T00:00:00Z".to_string(),
         expires_at: "2999-01-01T00:00:00Z".to_string(),
         request_hash: "request-hash".to_string(),
+        issuance_provenance: None,
         subject_access: None,
     };
     let principal = EvidencePrincipal {

@@ -29,6 +29,7 @@ config:
       - HomeLanding
       - QuickstartMeta
       - ProjectStarterSequence
+      - ProjectWorkspaceJourneys
       - Steps
 globs:
   - "**/*.{md,mdx}"

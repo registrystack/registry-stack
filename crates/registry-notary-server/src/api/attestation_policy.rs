@@ -780,17 +780,19 @@ fn prepare_subject_access_evaluation_for_operation(
         policy_hash: Some(policy_hash.clone()),
         evaluation_expires_at: Some(format_time(evaluation_expires_at)),
     };
+    let root_claim_id = (request_claim_ids.len() == 1)
+        .then(|| BoundedClaimId::new(request_claim_ids[0].clone()))
+        .transpose()
+        .map_err(|_| EvidenceError::InvalidRequest)?;
+    let claim_versions = requested_claim_versions(&request.claims)?;
+    let levels = build_claim_levels(evidence, &request.claims, &claim_versions)?;
     let mut allowed_claim_ids = BTreeSet::new();
-    for claim_id in request_claim_ids {
+    for claim_id in levels.into_iter().flatten() {
         allowed_claim_ids
             .insert(BoundedClaimId::new(claim_id).map_err(|_| EvidenceError::InvalidRequest)?);
     }
     let evaluation_capability = EvaluationCapability::SubjectBound {
-        claim_id: if allowed_claim_ids.len() == 1 {
-            allowed_claim_ids.iter().next().cloned()
-        } else {
-            None
-        },
+        claim_id: root_claim_id,
         allowed_claim_ids,
         subject_binding_hash,
     };
@@ -1087,46 +1089,6 @@ pub(super) fn require_subject_access_credential_profile_policy(
     Ok(())
 }
 
-pub(super) fn require_delegated_attestation_credential_profile_policy(
-    config: &SubjectAccessConfig,
-    metadata: &StoredSubjectAccessMetadata,
-    profile_id: &str,
-    profile: &CredentialProfileConfig,
-) -> Result<(), EvidenceError> {
-    let relationship_type = metadata
-        .relationship_type
-        .as_ref()
-        .ok_or_else(|| subject_access_denied(SubjectAccessDenialCode::ProfileDenied))?;
-    let relationship = config
-        .delegation
-        .relationship(relationship_type.as_str())
-        .ok_or_else(|| subject_access_denied(SubjectAccessDenialCode::ProfileDenied))?;
-    let allowed = relationship
-        .credential_profiles
-        .iter()
-        .any(|allowed| allowed == profile_id);
-    let validity_seconds = u64::try_from(profile.validity_seconds).ok();
-    let validity_ceiling = config.token_policy.max_credential_validity_seconds;
-    let did_jwk_only = !profile.holder_binding.allowed_did_methods.is_empty()
-        && profile
-            .holder_binding
-            .allowed_did_methods
-            .iter()
-            .all(|method| method == "did:jwk");
-    if !allowed
-        || profile.format != FORMAT_SD_JWT_VC
-        || validity_seconds.is_none_or(|seconds| seconds == 0 || seconds > validity_ceiling)
-        || profile.holder_binding.mode != "did"
-        || profile.holder_binding.proof_of_possession.as_deref() != Some("required")
-        || !did_jwk_only
-    {
-        return Err(subject_access_denied(
-            SubjectAccessDenialCode::ProfileDenied,
-        ));
-    }
-    Ok(())
-}
-
 pub(super) async fn consume_subject_mismatch_denial(
     state: &RegistryNotaryApiState,
     principal_hash: &Hashed<registry_notary_core::PrincipalIdentifier>,
@@ -1146,7 +1108,7 @@ pub(super) fn require_subject_access_stored_access(
     requested_claims: &[String],
     disclosure: &str,
     format: &str,
-    credential_profile: Option<&str>,
+    issue_credential: bool,
 ) -> Result<(), EvidenceError> {
     let Some(metadata) = evaluation.subject_access.as_ref() else {
         if principal.is_subject_access() {
@@ -1160,12 +1122,12 @@ pub(super) fn require_subject_access_stored_access(
     if principal.access_mode() != metadata.access_mode {
         return Err(EvidenceError::EvaluationBindingMismatch);
     }
-    if credential_profile.is_some() && !state.subject_access.allowed_operations.issue_credential {
+    if issue_credential && !state.subject_access.allowed_operations.issue_credential {
         return Err(EvidenceError::SubjectAccessDenied {
             reason: SubjectAccessDenialCode::OperationDenied,
         });
     }
-    if credential_profile.is_none() && !state.subject_access.allowed_operations.render {
+    if !issue_credential && !state.subject_access.allowed_operations.render {
         return Err(EvidenceError::SubjectAccessDenied {
             reason: SubjectAccessDenialCode::OperationDenied,
         });
@@ -1273,33 +1235,6 @@ pub(super) fn require_subject_access_stored_access(
     }
     if metadata.disclosure.as_str() != disclosure || metadata.result_format.as_str() != format {
         return Err(EvidenceError::EvaluationBindingMismatch);
-    }
-    if let Some(profile_id) = credential_profile {
-        match delegated_relationship {
-            Some(relationship) => {
-                if !relationship
-                    .credential_profiles
-                    .iter()
-                    .any(|allowed| allowed == profile_id)
-                {
-                    return Err(EvidenceError::SubjectAccessDenied {
-                        reason: SubjectAccessDenialCode::ProfileDenied,
-                    });
-                }
-            }
-            None => {
-                if !state
-                    .subject_access
-                    .credential_profiles
-                    .iter()
-                    .any(|allowed| allowed == profile_id)
-                {
-                    return Err(EvidenceError::SubjectAccessDenied {
-                        reason: SubjectAccessDenialCode::ProfileDenied,
-                    });
-                }
-            }
-        }
     }
     let expected_policy_hash = subject_access_policy_hash(
         evidence,

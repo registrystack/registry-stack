@@ -19,6 +19,7 @@ async fn client_evaluates_real_notary_only_self_attested_claim_without_relay() {
     let app = standalone_router(notary_only_config(
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let server_url = server

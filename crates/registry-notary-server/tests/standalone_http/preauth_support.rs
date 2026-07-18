@@ -63,15 +63,6 @@ pub(super) fn subject_access_preauth_config(
     // The credential endpoint must be allowed to issue credentials for the
     // pre-auth happy path.
     config.subject_access.allowed_operations.issue_credential = true;
-    // The person-is-alive claim must support the SD-JWT VC format for OID4VCI
-    // issuance (the base config only lists the claim-result format).
-    for claim in config.evidence.claims.iter_mut() {
-        if claim.id == "person-is-alive" {
-            claim
-                .formats
-                .push(registry_notary_core::FORMAT_SD_JWT_VC.to_string());
-        }
-    }
     config
         .subject_access
         .rate_limits

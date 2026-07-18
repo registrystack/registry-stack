@@ -24,7 +24,9 @@ pub(super) async fn standalone_server_authenticates_and_audits_unsupported_acces
     add_admin_api_key(&mut config);
     add_metrics_read_api_key(&mut config);
     config.server.admin_listener.mode = RegistryNotaryAdminListenerMode::SharedWithPublic;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let denied = server.get("/v1/claims").await;
@@ -121,9 +123,11 @@ pub(super) async fn audit_chain_bootstraps_from_sink_tail() {
         audit_path.to_str().expect("audit path is UTF-8"),
     );
 
-    let first = TestServer::builder()
-        .http_transport()
-        .build(standalone_router(config.clone()).expect("first router builds"));
+    let first = TestServer::builder().http_transport().build(
+        standalone_router(config.clone())
+            .await
+            .expect("first router builds"),
+    );
     first
         .get("/v1/claims")
         .await
@@ -134,9 +138,11 @@ pub(super) async fn audit_chain_bootstraps_from_sink_tail() {
     drop(first);
     tokio::task::yield_now().await;
 
-    let second = TestServer::builder()
-        .http_transport()
-        .build(standalone_router(config).expect("second router builds"));
+    let second = TestServer::builder().http_transport().build(
+        standalone_router(config)
+            .await
+            .expect("second router builds"),
+    );
     second
         .get("/v1/claims")
         .await
@@ -170,9 +176,11 @@ pub(super) async fn audit_chain_detects_inserted_envelope() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
-    let first = TestServer::builder()
-        .http_transport()
-        .build(standalone_router(config.clone()).expect("first router builds"));
+    let first = TestServer::builder().http_transport().build(
+        standalone_router(config.clone())
+            .await
+            .expect("first router builds"),
+    );
     first
         .get("/v1/claims")
         .await
@@ -192,9 +200,11 @@ pub(super) async fn audit_chain_detects_inserted_envelope() {
     lines.insert(1, lines[0]);
     std::fs::write(&audit_path, format!("{}\n", lines.join("\n"))).expect("tampered audit write");
 
-    let second = TestServer::builder()
-        .http_transport()
-        .build(standalone_router(config).expect("second router builds"));
+    let second = TestServer::builder().http_transport().build(
+        standalone_router(config)
+            .await
+            .expect("second router builds"),
+    );
     let response = second
         .get("/v1/claims")
         .add_header("x-api-key", "api-token")
@@ -203,4 +213,56 @@ pub(super) async fn audit_chain_detects_inserted_envelope() {
     response.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     let body: Value = response.json();
     assert_eq!(body["code"], json!("audit.write_failed"));
+}
+
+#[tokio::test]
+pub(super) async fn standalone_router_verifies_audit_before_returning_readiness() {
+    set_audit_secret();
+    std::env::set_var(
+        "TEST_EVIDENCE_API_KEY_HASH",
+        "sha256:a00cf33cd46d9ef96c1eff33df1c9cca20b1a02468cd78ec6a4b2887d1640b51",
+    );
+
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let config = notary_only_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+    );
+    let first = TestServer::builder().http_transport().build(
+        standalone_router(config.clone())
+            .await
+            .expect("first router builds"),
+    );
+    first
+        .get("/v1/claims")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    drop(first);
+    tokio::task::yield_now().await;
+
+    let contents = std::fs::read_to_string(&audit_path).expect("audit was written");
+    std::fs::write(
+        &audit_path,
+        contents.replace("\"status\":401", "\"status\":402"),
+    )
+    .expect("audit is tampered");
+
+    let app = standalone_router(config)
+        .await
+        .expect("public helper returns a router with integrity failure latched");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let ready = server.get("/ready").await;
+    ready.assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = ready.json();
+    assert_eq!(body["code"], json!("audit.chain.inconsistent"));
+    assert_eq!(body["status"], json!(503));
+    assert!(body["request_id"].is_string());
+    assert!(body.get("checks").is_none());
+    assert!(body.get("readiness_status").is_none());
+    let rendered = serde_json::to_string(&body).expect("readiness problem serializes");
+    assert!(!rendered.contains("\"status\":402"));
+    assert!(!rendered.contains(&audit_path.to_string_lossy().to_string()));
+    server.get("/healthz").await.assert_status_ok();
 }

@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-18
+
+### Added
+
+- Added `registry-notary audit quarantine` as an offline recovery path for an
+  inconsistent file-backed audit chain. The command takes the existing
+  single-writer lock, retains the corrupt chain under a timestamped suffix,
+  and starts a keyed `audit.chain.break` segment linked to the last verified
+  local record.
+- Registry-backed Relay consultations can now bind bounded scalar inputs from
+  `request.target.attributes.<stable-name>`. Notary preserves string, boolean,
+  and integer types through single and batch evaluation and Relay requests.
+  Target attributes remain caller-supplied context and cannot satisfy an
+  authenticated target-identifier requirement for delegated subject access.
+
+### Changed
+
+- BREAKING: direct and OID4VCI credential issuance now accept only newly
+  evaluated, non-delegated registry-backed claims with one exact compiler pin
+  for every claim in each selected root's dependency closure and one normalized
+  record per unique Relay execution. A deterministic SHA-256 binding now
+  cross-checks every pin against its execution and claim provenance before
+  signer access. Restricted Relay identifiers are retained only for evaluations
+  whose selected roots share a validated credential profile. Source-free,
+  delegated, and registry-backed evaluation-only claims cannot be
+  configured for credential issuance. Existing stored evaluations remain
+  readable and renderable but must be re-evaluated before issuance. No database
+  migration or correctness-state schema change is required.
+- BREAKING: configuration `${VAR}` expansion now rejects environment variables
+  that are unset or empty. `${VAR:-fallback}` uses its fallback for either
+  state, `${VAR:-}` explicitly expands to empty, and `${VAR:?message}` reports
+  its message for either state. Whitespace-only values remain non-empty.
+- Notary now verifies its retained audit chain during runtime activation.
+  Confirmed chain forks and verification failures latch `/ready` at `503` with
+  the bounded code `audit.chain.inconsistent` until offline recovery and a
+  process restart. `/healthz` remains `200`; transient I/O, JSON, secret, and
+  other operational failures do not permanently poison readiness. Governed
+  signed-bundle acceptance remains write-before-persist and write-before-serve.
+  Embedders must now await `standalone_router`; all router construction paths
+  reject runtimes that have not attempted retained-chain verification.
+- Omitted claim `formats` now defaults to the canonical
+  `application/vnd.registry-notary.claim-result+json` evaluation response
+  format. An explicitly empty `formats: []` is rejected at configuration load
+  with the claim id and remediation. Explicit lists must include the canonical
+  format and may otherwise contain only `application/ld+json; profile="cccev"`.
+  SD-JWT VC is a credential-profile issuance format, not a claim evaluation
+  renderer. Subject-access `allowed_formats` now follows the same evaluation
+  boundary and no longer needs to repeat the credential profile's output
+  format.
+- Requests that present more than one primary credential channel now fail
+  before candidate parsing or validation with `auth.multiple_credentials`.
+  The public response and restricted audit record remain candidate-neutral and
+  do not reveal which credential, if any, was valid.
+- The registryctl local Notary tutorial now exercises a live registry-backed
+  claim through an exact compiler-pinned Relay consultation. It is an
+  evaluation-only tutorial and does not claim credential issuance, wallet
+  interoperability, or OID4VCI interoperability.
+
 ## [0.10.0] - 2026-07-17
 
 ### Added

@@ -6,7 +6,7 @@ owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
-last_reviewed: "2026-06-28"
+last_reviewed: "2026-07-17"
 doc_type: tutorial
 locale: en
 standards_referenced:
@@ -18,21 +18,21 @@ import QuickstartMeta from '../../../components/QuickstartMeta.astro';
 Registry Relay turns a tabular source you already hold, such as a spreadsheet or a database
 table, into a protected, read-only API without copying the data out.
 Use this tutorial to start a protected registry API on your machine.
-You will create a local project from a tiny benefits workbook, make one denied request, make one
-allowed request, and inspect the contract Registry Stack generated.
+You will create a local project from a tiny benefits workbook, compare operational and restricted
+identity reads, and inspect the contract Registry Stack generated.
 
 <QuickstartMeta
-  outcome="A protected local API over a benefits workbook, with anonymous access denied, an authorized record read succeeding, and an edited disclosure rule enforced."
+  outcome="A protected local API over a benefits workbook, with operational and restricted identity reads separated, one canonical birth date retained, and an edited disclosure rule enforced."
   time="About 15 minutes after Docker is installed"
   level="Local single-node"
-  prerequisites={['registryctl 0.10.0', 'A Docker Compose provider', 'curl']}
+  prerequisites={['registryctl 0.11.0', 'A Docker Compose provider', 'curl']}
 />
 
 This tutorial uses synthetic data and local demo credentials.
 Do not use the generated local keys in production.
 
 :::note[Current first-run route]
-The v0.10.0 source beta and this local tutorial can be used while hosted credential publication is
+The v0.11.0 source beta and this local tutorial can be used while hosted credential publication is
 held by [GH#330](https://github.com/registrystack/registry-stack/issues/330) and the incomplete
 [GH#198](https://github.com/registrystack/registry-stack/issues/198) fresh-reader run.
 :::
@@ -42,7 +42,7 @@ held by [GH#330](https://github.com/registrystack/registry-stack/issues/330) and
 Install `registryctl` without cloning the repository:
 
 The quick installer verifies downloaded release assets against the release's
-`SHA256SUMS`. The pinned `v0.10.0` installer installs the binary and matching
+`SHA256SUMS`. The pinned `v0.11.0` installer installs the binary and matching
 release image lock beside each other. It
 does not authenticate the installer script or release. Before running it,
 review the available signature and provenance evidence in the
@@ -50,7 +50,7 @@ canonical [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/
 guide. Evidence availability varies by release, and `v0.8.0` is unsigned.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.10.0/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.10.0 bash
+curl -fsSL https://raw.githubusercontent.com/registrystack/registry-stack/refs/tags/v0.11.0/crates/registryctl/install.sh | REGISTRYCTL_VERSION=v0.11.0 bash
 registryctl --version
 ```
 
@@ -61,7 +61,7 @@ Prebuilt `registryctl` assets exist for Linux x86_64, Linux arm64, and macOS arm
 On Intel macOS, the installer stops after printing the pinned `cargo install` command.
 It does not run the source build automatically.
 After installing a Rust toolchain, run the command printed by the installer. For
-`v0.10.0`, also checksum-verify the matching release image lock and
+`v0.11.0`, also checksum-verify the matching release image lock and
 place it beside the Cargo-installed binary, as described in the troubleshooting table.
 
 ## Create the sample project
@@ -73,11 +73,29 @@ registryctl init relay my-first-api --sample benefits
 cd my-first-api
 ```
 
+The initialization step prints this result before the shell changes directory:
+
+```text
+Initialized Relay spreadsheet API "my-first-api".
+  Directory: my-first-api
+  Sample: benefits
+  Bruno collection: my-first-api/bruno/registry-api
+
+Next:
+  cd my-first-api
+  registryctl doctor --profile local --format json
+  registryctl start
+```
+
 The sample workbook has three sheets:
 
 - `Households`: household registration and district attributes.
-- `Persons`: household members, eligibility status, and sensitive identity fields.
+- `Persons`: household members, dates of birth, registration status, and identity fields.
 - `Applications`: benefit applications, decisions, verification flags, and review dates.
+
+The workbook stores `date_of_birth`, not a second, time-dependent `age_band` value. Registry Notary
+can derive an age or age band for a specific evaluation date when a relying party does not need the
+birth date itself.
 
 ## Start the local stack
 
@@ -112,6 +130,9 @@ PASS metadata key can list datasets
 PASS metadata key cannot read rows
 PASS row read without Data-Purpose returns 400
 PASS row reader can read filtered records
+PASS row reader cannot read restricted identity fields
+PASS identity reader with unpermitted Data-Purpose returns 403
+PASS identity reader can read one restricted identity record
 PASS anonymous caller can fetch runtime OpenAPI
 ```
 
@@ -179,9 +200,28 @@ curl -sS -G \
   http://127.0.0.1:4242/v1/datasets/benefits_casework/entities/person/records
 ```
 
-The response includes synthetic people from household `hh-1001`.
-Sensitive source columns such as full names, national identifiers, and addresses are not exposed as
-public entity fields in this sample.
+The response includes four synthetic people from household `hh-1001`.
+Each record contains the canonical birth date and no stored age band. This abridged response shows
+the first record; three more person records are omitted:
+
+```json
+{
+  "data": [
+    {
+      "date_of_birth": "1989-05-14",
+      "household_id": "hh-1001",
+      "id": "per-2001",
+      "registration_status": "active",
+      "relationship_to_head": "head"
+    }
+  ],
+  "pagination": { "has_more": false }
+}
+```
+
+This proves that the operational `person` projection returns the requested household records without
+full names or national identifiers. The operational `household` projection also excludes the address.
+Those values are available through separate restricted projections in the next section.
 [The person records operation in the running API docs](http://127.0.0.1:4242/docs#tag/benefits-casework-person/GET/v1/datasets/benefits_casework/entities/person/records)
 documents the `household_id` filter and the required `Data-Purpose` header.
 
@@ -198,16 +238,84 @@ curl -i -G \
 Relay refuses this with `403 Forbidden` and the code `auth.scope_denied`.
 The key is valid, but it does not have row-read scope.
 
+## Read restricted identity fields
+
+First, try to read the identity projection with the operational row key:
+
+```sh
+curl -i \
+  -H "Authorization: Bearer $ROW_READER_RAW" \
+  -H "Data-Purpose: https://example.local/purpose/identity-verification" \
+  'http://127.0.0.1:4242/v1/datasets/benefits_casework/entities/person_identity/records/per-2001?expand=household_contact'
+```
+
+Relay returns `403 Forbidden` with `auth.scope_denied`. The row key can read the operational
+projection, but it does not hold the separate `benefits_casework:identity_release` scope.
+
+The response body looks like this; the generated `request_id` is omitted:
+
+```json
+{
+  "type": "https://id.registrystack.org/problems/registry-relay/auth/scope_denied",
+  "title": "Scope denied",
+  "status": 403,
+  "detail": "required scope: benefits_casework:identity_release",
+  "code": "auth.scope_denied"
+}
+```
+
+Now make the same single-subject request with the identity key:
+
+```sh
+curl -sS \
+  -H "Authorization: Bearer $IDENTITY_READER_RAW" \
+  -H "Data-Purpose: https://example.local/purpose/identity-verification" \
+  'http://127.0.0.1:4242/v1/datasets/benefits_casework/entities/person_identity/records/per-2001?expand=household_contact'
+```
+
+Relay returns the synthetic person's `given_name`, `family_name`, and `national_id`, plus the
+household's `address_line` in the expanded `household_contact` object. The restricted projections
+accept only their identity-verification purpose and cap each collection response at one record.
+
+The response is:
+
+```json
+{
+  "family_name": "Elm",
+  "given_name": "Fae",
+  "household_contact": {
+    "address_line": "595 River Rd, Southvale",
+    "id": "hh-1001"
+  },
+  "household_id": "hh-1001",
+  "id": "per-2001",
+  "national_id": "FAKE-856648"
+}
+```
+
+This proves that the additional identity scope and permitted purpose unlock access to the restricted
+projection, including its configured household relationship.
+
+The response cap is not row-level authorization. This local identity key can read every record in
+the restricted projections, one page at a time. In a deployed registry, issue this scope only to a
+role allowed to read those identity fields, or add principal-bound row policy through your IAM
+design. The declared purpose is an additional policy gate, not a substitute for that authorization.
+
+This route is appropriate when an authorized caseworker needs the source fields. When another
+system needs only an age threshold or age band, use Notary to derive that result from
+`date_of_birth` without returning the birth date or the rest of the row.
+
 ## Inspect the generated contract
 
 Now that the API works, inspect what `registryctl` generated:
 
 ```sh
-sed -n '1,180p' relay/config.yaml
+sed -n '1,520p' relay/config.yaml
 ```
 
 The generated Relay contract defines the local service metadata, API-key scopes, source tables,
-public entities, filters, relationships, aggregates, and audit sink.
+operational and restricted projections, purpose allowlists, filters, relationships, aggregates,
+and audit sink.
 Raw keys stay in `secrets/local.env`.
 
 Open the runtime API reference:
@@ -230,11 +338,12 @@ This request returns household counts by district and applies the configured dis
 ```sh
 curl -sS \
   -H "Authorization: Bearer $AGGREGATE_READER_RAW" \
+  -H "Data-Purpose: https://example.local/purpose/tutorial" \
   http://127.0.0.1:4242/v1/datasets/benefits_casework/aggregates/by_district
 ```
 
 The response is `200 OK`, and the workbook has four districts, but only two appear.
-The important fields look like this; other fields are omitted, and the order of
+This abridged response shows the important fields; other fields are omitted, and the order of
 observations can vary:
 
 ```json
@@ -281,12 +390,22 @@ Run the aggregate request from the previous section again:
 ```sh
 curl -sS \
   -H "Authorization: Bearer $AGGREGATE_READER_RAW" \
+  -H "Data-Purpose: https://example.local/purpose/tutorial" \
   http://127.0.0.1:4242/v1/datasets/benefits_casework/aggregates/by_district
 ```
 
 The response is still `200 OK`, but `observations` is now an empty array: no district
 holds three households, so the rule suppresses every group.
 An empty result is the only signal; suppressed groups are omitted, not marked.
+
+```json
+{
+  "disclosure_control": { "min_cell_size": 3, "suppression": "omit" },
+  "observations": []
+}
+```
+
+This proves that the configuration edit changed the API response without changing the workbook.
 
 Now try to weaken the rule instead.
 Set `min_group_size` to 1 and restart again:
@@ -343,17 +462,19 @@ anonymous read was refused with `401` (`auth.missing_credential`), an authorized
 only the rows you asked for, and a key that lacked the row-read scope was refused with `403`
 (`auth.scope_denied`). Relay read the workbook in place and never wrote back to it: the data
 stayed where it started, and only an authorized, scoped request got an answer out.
+The workbook stored one canonical date of birth rather than a drifting age band. Operational reads
+excluded names, national identifiers, and addresses, while a separate identity key and purpose
+allowed a one-subject read of those fields.
 You then raised the aggregate disclosure floor and watched every group disappear, and
 Relay refused to start when the floor dropped under 2 on personal data.
 
 ## Next
 
-- [Evaluate a claim with Registry Notary](../verify-claim-registry-api/): add Notary to this same
-  project and answer a narrow question without exposing the source row.
+- [Evaluate a registry-backed claim locally](../verify-claim-registry-api/): add Notary to this same
+  project, match by name and date of birth, and evaluate registration acceptance without exposing
+  the source row.
 - [Author an HTTP Registry Stack project](../author-registry-project/): adapt a source through
   Relay and compile Notary claims against the exact consultation contract.
-- [Hosted credential tour (held)](../../start/credential-tour/): inspect the hosted issuance path;
-  it is not the promoted first-run route.
 
 ## Troubleshooting
 
@@ -362,7 +483,7 @@ Relay refused to start when the floor dropped under 2 on personal data.
 | `registryctl` is not found | The install directory is not on `PATH`. | Add the directory printed by the installer, usually `~/.local/bin`, to `PATH`. |
 | The installer reports an unsupported platform | No binary is published for that OS or CPU. | Run the pinned `cargo install` command printed by the installer. For `v0.9.0` or later, also checksum-verify the matching `registryctl-vX.Y.Z-image-lock.json` release asset and place it beside the installed binary. |
 | `registryctl start` cannot find Docker | Docker or another Compose provider is not installed or running. | Start Docker Desktop, OrbStack, Colima, Podman, or your supported provider, then run `registryctl start` again. |
-| Docker reports no `linux/arm64` manifest for a Registry Stack image | The v0.10.0 Relay and Notary images are published for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`. |
+| Docker reports no `linux/arm64` manifest for a Registry Stack image | The v0.11.0 Relay and Notary images are published for `linux/amd64` only. | Start with `DOCKER_DEFAULT_PLATFORM=linux/amd64 registryctl start`. |
 | `registryctl start` fails and the container log shows `failed to parse config YAML ... unknown field` | The locally cached container image does not match the digest-pinned image in the generated `compose.yaml`. | Run `docker compose pull` in the project directory (on Apple silicon, prefix it with `DOCKER_DEFAULT_PLATFORM=linux/amd64`), then `registryctl start` again. |
 | `registryctl start` times out and the container log shows `missing field \`commitment\`` | registryctl v0.8.4 pins a service image older than its own generated config format ([GH#278](https://github.com/registrystack/registry-stack/issues/278)). | Pin the project's `compose.yaml` to the published v0.8.4 release digests: `ghcr.io/registrystack/registry-relay@sha256:93e194500a3500ba3f6331d5a0a9a3069127c48a709beccb083a5fcbdbc3ec61` and, when present, `ghcr.io/registrystack/registry-notary@sha256:0cf05184885d7ed17dd9889e20f3797eb2a9ad07517f4ac7c05c03b774a00b8f`. Then run `docker compose pull`; reapply the pins after a generation command rewrites `compose.yaml`. |
 | `registryctl init` reports that its image lock is missing or invalid | The binary was moved or built without the strict image lock from the same release, or the file failed its release, source, platform, or digest checks. | Rerun the installer from the same pinned target tag so it checksum-verifies and installs both files. For an operator-managed or source-test location, set `REGISTRYCTL_IMAGE_LOCK` to the checksum-verified lock from that exact release. Do not substitute a lock from another version or a mutable image tag. |

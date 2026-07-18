@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+## 0.11.0
+
+- BREAKING: Direct and OID4VCI credential issuance now require a fresh,
+  non-delegated stored evaluation with an exact compiler pin for every claim in
+  each selected root's registry-backed dependency closure and one normalized
+  record per unique Relay execution. Source-free and delegated claims are
+  evaluation-only and cannot be configured for credential issuance. Existing
+  evaluations remain readable and renderable but must be re-evaluated before
+  issuance. See the
+  [credential issuance trust-boundary migration](credential-issuance-migration.md).
+- BREAKING: Configuration `${VAR}` expansion now rejects environment variables
+  that are unset or empty. `${VAR:-fallback}` uses its fallback for either
+  state, `${VAR:-}` explicitly expands to empty, and `${VAR:?message}` reports
+  its message for either state. Whitespace-only values remain non-empty.
+- Registry Notary now verifies the retained audit chain during activation and
+  reports confirmed integrity failures as `audit.chain.inconsistent` on
+  `/ready` without exposing audit contents. Stop the process and use
+  `registry-notary audit quarantine` with the deployed configuration to retain
+  the corrupt files and open a tamper-evident break segment. The single-writer
+  lock prevents online recovery, and signed-bundle acceptance audit failures
+  still prevent bundle persistence and serving.
+- Presenting multiple primary credential channels now returns the generic
+  `auth.multiple_credentials` failure before any candidate is parsed or
+  validated. The result does not reveal whether either candidate was valid.
+- Omitted claim `formats` now defaults to canonical claim-result JSON. Explicit
+  empty, unknown, CCCEV-only, and SD-JWT evaluation-format lists fail
+  configuration validation; SD-JWT remains a credential issuance format.
+- Registry-backed Relay consultations may bind bounded string, boolean, and
+  integer inputs from `request.target.attributes.<stable-name>`. These values
+  remain caller-supplied request context and cannot satisfy authenticated
+  target-identifier requirements for delegated subject access.
+- The local registryctl Notary tutorial evaluates one registry-backed claim
+  through an exact Relay compiler pin. It does not exercise issuance, a
+  wallet, credential presentation, or OID4VCI interoperability.
+
 ## 0.10.0
 
 - BREAKING: Notary now has one deployable correctness-state backend: typed,

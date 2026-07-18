@@ -1,8 +1,8 @@
 version: 1
 starter:
   id: dhis2-tracker
-  release: 0.10.0
-  content_digest: sha256:8153ce5e943a860e49dd4d1e5f0f5a36464d806025f08364f084e2124eb4826a
+  release: 0.11.0
+  content_digest: sha256:49a811e0d70e4a0b3d75cb293bd6fb000b83e31b495d0f4dcdc1ed772f92d99d
 registry: { id: fictional-health-registry }
 integrations:
   health-record: { file: integrations/health-record/integration.yaml }
@@ -21,6 +21,7 @@ services:
         integration: health-record
         input:
           tracked_entity: request.target.identifiers.dhis2_tracked_entity
+          include_inactive: request.target.attributes.include_inactive
     claims:
       tracked-entity-first-name: { output: health.first_name, disclosure: value }
       tracked-entity-last-name: { output: health.last_name, disclosure: value }

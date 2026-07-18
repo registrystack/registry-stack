@@ -241,6 +241,273 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.module.check_dockerfile_secret_patterns()
 
+    def write_route_inventory(self):
+        (self.root / "security" / "route-inventory.json").write_text(json.dumps({
+            "version": 1,
+            "service": "registry-notary",
+            "routes": [{
+                "listener": "public",
+                "path": "/x",
+                "methods": ["GET"],
+                "source": "crates/registry-notary-server/src/api.rs",
+            }],
+        }))
+
+    def test_route_sources_ignores_path_included_external_test_module(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        (src / "healthcheck.rs").write_text(
+            "pub fn run() {}\n"
+            "#[cfg(test)]\n"
+            '#[path = "healthcheck/tests.rs"]\n'
+            "mod tests;\n"
+        )
+        (src / "healthcheck").mkdir()
+        (src / "healthcheck" / "tests.rs").write_text(
+            'fn mock() { Router::new().route("/test-only", get(handler)); }\n'
+        )
+
+        self.module.validate_route_sources()
+
+    def test_route_sources_ignores_nested_test_children(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        (src / "widget.rs").write_text("#[cfg(test)]\nmod tests;\n")
+        (src / "widget" / "tests").mkdir(parents=True)
+        (src / "widget" / "tests" / "mod.rs").write_text("mod admin;\n")
+        (src / "widget" / "tests" / "admin.rs").write_text(
+            'fn mock() { Router::new().route("/test-only", get(handler)); }\n'
+        )
+
+        self.module.validate_route_sources()
+
+    def test_route_sources_ignores_transitive_include_shards(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        (src / "runtime.rs").write_text(
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            '    include!("runtime/tests/first.inc");\n'
+            "}\n"
+        )
+        (src / "runtime" / "tests").mkdir(parents=True)
+        (src / "runtime" / "tests" / "first.inc").write_text(
+            'include!("second.inc");\n'
+        )
+        (src / "runtime" / "tests" / "second.inc").write_text(
+            'fn mock() { Router::new().route("/test-only", get(handler)); }\n'
+        )
+
+        self.module.validate_route_sources()
+
+    def test_route_sources_retains_file_with_production_owner(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        (src / "owner.rs").write_text(
+            "mod shared;\n"
+            "#[cfg(test)]\n"
+            '#[path = "owner/shared.rs"]\n'
+            "mod shared_test;\n"
+        )
+        (src / "owner").mkdir()
+        (src / "owner" / "shared.rs").write_text(
+            'fn production() { Router::new().route("/production", get(handler)); }\n'
+        )
+
+        with self.assertRaises(SystemExit):
+            self.module.validate_route_sources()
+
+    def test_string_literal_cannot_spoof_test_only_ownership(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        (src / "spoof.rs").write_text(
+            'const SPOOF: &str = "#[cfg(test)] mod hidden;";\n'
+        )
+        (src / "spoof" / "hidden.rs").parent.mkdir()
+        (src / "spoof" / "hidden.rs").write_text(
+            'fn production() { Router::new().route("/production", get(handler)); }\n'
+        )
+
+        with self.assertRaises(SystemExit):
+            self.module.validate_route_sources()
+
+    def test_inline_test_module_does_not_hide_later_production_route(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        (src / "mixed.rs").write_text(
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            '    fn mock() { Router::new().route("/test-only", get(handler)); }\n'
+            "}\n"
+            'fn production() { Router::new().route("/production", get(handler)); }\n'
+        )
+
+        with self.assertRaises(SystemExit):
+            self.module.validate_route_sources()
+
+    def test_route_sources_fail_closed_on_unresolved_test_module(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        (src / "missing.rs").write_text("#[cfg(test)]\nmod absent;\n")
+
+        with self.assertRaises(SystemExit):
+            self.module.validate_route_sources()
+
+    def test_route_sources_reject_path_escape(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        outside = self.root / "crates" / "outside.rs"
+        outside.write_text("fn helper() {}\n")
+        (src / "escape.rs").write_text(
+            "#[cfg(test)]\n"
+            '#[path = "../../outside.rs"]\n'
+            "mod tests;\n"
+        )
+
+        with self.assertRaises(SystemExit):
+            self.module.validate_route_sources()
+
+    def test_route_sources_reject_symlinked_include(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        outside = self.root / "outside.inc"
+        outside.write_text("fn helper() {}\n")
+        (src / "linked.inc").symlink_to(outside)
+        (src / "symlink.rs").write_text(
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            '    include!("linked.inc");\n'
+            "}\n"
+        )
+
+        with self.assertRaises(SystemExit):
+            self.module.validate_route_sources()
+
+    def test_route_sources_bounds_test_module_recursion(self):
+        self.write_route_inventory()
+        src = self.root / "crates" / "registry-notary-server" / "src"
+        (src / "bounded.rs").write_text("#[cfg(test)]\nmod tests;\n")
+        (src / "bounded" / "tests").mkdir(parents=True)
+        (src / "bounded" / "tests" / "mod.rs").write_text("mod child;\n")
+        (src / "bounded" / "tests" / "child.rs").write_text("fn helper() {}\n")
+        old_depth = self.module.MAX_MODULE_DEPTH
+        self.module.MAX_MODULE_DEPTH = 1
+        try:
+            with self.assertRaises(SystemExit):
+                self.module.validate_route_sources()
+        finally:
+            self.module.MAX_MODULE_DEPTH = old_depth
+
+    def test_cfg_ownership_requires_test_on_every_enabled_branch(self):
+        self.assertTrue(self.module.cfg_requires_test("test"))
+        self.assertTrue(self.module.cfg_requires_test("all(test, unix)"))
+        self.assertTrue(self.module.cfg_requires_test("any(test, all(test, unix))"))
+        self.assertFalse(self.module.cfg_requires_test('any(test, feature = "dev")'))
+        self.assertFalse(self.module.cfg_requires_test("not(test)"))
+
+    def assert_inert_route_is_ignored(self, inert_source):
+        source = (
+            f"{inert_source}\n"
+            "fn executable_router() {\n"
+            '    Router::new().route("/executable", get(handler));\n'
+            "}\n"
+        )
+        self.assertEqual(
+            self.module.extract_axum_routes(source), {("/executable", "GET")}
+        )
+
+    def test_route_extraction_ignores_raw_string_text(self):
+        self.assert_inert_route_is_ignored(
+            'const DOC: &str = r#"Router::new().route("/raw", get(handler))"#;'
+        )
+
+    def test_route_extraction_ignores_seventeen_hash_raw_string(self):
+        hashes = "#" * 17
+        self.assert_inert_route_is_ignored(
+            f'const DOC: &str = r{hashes}"'
+            'Router::new().route("/raw-17", get(handler))'
+            f'"{hashes};'
+        )
+
+    def test_route_extraction_ignores_large_hash_raw_string(self):
+        hashes = "#" * 257
+        self.assert_inert_route_is_ignored(
+            f'const DOC: &str = r{hashes}"'
+            'Router::new().route("/raw-large", get(handler))'
+            f'"{hashes};'
+        )
+
+    def test_route_extraction_ignores_unterminated_large_hash_raw_string(self):
+        hashes = "#" * 257
+        source = (
+            "fn executable_router() {\n"
+            '    Router::new().route("/executable", get(handler));\n'
+            "}\n"
+            f'const DOC: &str = r{hashes}"'
+            'Router::new().route("/unterminated", post(handler));'
+        )
+        self.assertEqual(
+            self.module.extract_axum_routes(source), {("/executable", "GET")}
+        )
+
+    def test_route_extraction_ignores_ordinary_string_text(self):
+        self.assert_inert_route_is_ignored(
+            'const DOC: &str = "Router::new().route(\\"/ordinary\\", get(handler))";'
+        )
+
+    def test_route_extraction_ignores_block_comment_text(self):
+        self.assert_inert_route_is_ignored(
+            '/* Router::new().route("/block-comment", get(handler)); */'
+        )
+
+    def test_route_extraction_ignores_standalone_line_comment_text(self):
+        self.assert_inert_route_is_ignored(
+            '// Router::new().route("/line-comment", get(handler));'
+        )
+
+    def test_route_extraction_ignores_trailing_inline_comment_text(self):
+        self.assert_inert_route_is_ignored(
+            "fn documented_router() {\n"
+            "    let _router = Router::new(); "
+            '// .route("/trailing-comment", get(handler))\n'
+            "}"
+        )
+
+    def test_route_extraction_ignores_method_names_inside_strings(self):
+        source = '''
+fn router() {
+    Router::new()
+        .route("/post", post(handler).layer(Extension("get(")))
+        .route("/get", get(handler).layer(Extension("post(")));
+}
+'''
+        self.assertEqual(
+            self.module.extract_axum_routes(source),
+            {("/post", "POST"), ("/get", "GET")},
+        )
+
+    def test_route_masking_large_input_does_not_match_allocated_suffixes(self):
+        hashes = "#" * 257
+        source = (
+            ("fn filler() {}\n" * 20_000)
+            + f'const DOC: &str = r{hashes}"'
+            + 'Router::new().route("/inert", get(handler))'
+            + f'"{hashes};\n'
+            + "fn executable_router() {\n"
+            + '    Router::new().route("/executable", post(handler));\n'
+            + "}\n"
+        )
+        original_match = self.module.re.match
+        self.module.re.match = lambda *_args, **_kwargs: self.fail(
+            "mask_rust must not regex-match allocated source suffixes"
+        )
+        try:
+            self.assertEqual(
+                self.module.extract_axum_routes(source), {("/executable", "POST")}
+            )
+        finally:
+            self.module.re.match = original_match
+
     def test_extracts_literal_const_format_and_chained_methods(self):
         source = '''
 use axum::{routing::{get, post}, Router};
@@ -272,6 +539,13 @@ mod security_tests {
 
     def test_route_source_scan_ignores_test_only_router_modules(self):
         self.write_contracts(self.entry())
+        (
+            self.root
+            / "crates"
+            / "registry-notary-server"
+            / "src"
+            / "relay_client.rs"
+        ).write_text("#[cfg(test)]\nmod tests;\n")
         test_module = (
             self.root
             / "crates"

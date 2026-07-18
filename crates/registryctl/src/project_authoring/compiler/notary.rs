@@ -34,6 +34,12 @@ fn generated_notary_config(
             }
         }
         for (credential_id, credential) in &service.credential_profiles {
+            validate_compiler_credential_profile_evidence(
+                service_id,
+                credential_id,
+                service,
+                credential,
+            )?;
             let issuance = environment
                 .issuance
                 .as_ref()
@@ -72,16 +78,11 @@ fn generated_notary_config(
                 .filter(|(_, credential)| credential.claims.iter().any(|id| id == claim_id))
                 .map(|(credential, _)| bounded_join_id(&[service_id, credential]))
                 .collect::<Result<Vec<_>>>()?;
-            let mut formats = vec!["application/vnd.registry-notary.claim-result+json".to_string()];
-            formats.extend(
-                service
-                    .credential_profiles
-                    .values()
-                    .filter(|credential| credential.claims.iter().any(|id| id == claim_id))
-                    .map(|credential| normalize_credential_format(&credential.format)),
-            );
-            formats.sort();
-            formats.dedup();
+            // Claim formats describe evaluation renderers, not credential
+            // issuance. SD-JWT VC stays on the credential profile it belongs
+            // to, so every generated claim retains the canonical evaluation
+            // response format.
+            let formats = vec!["application/vnd.registry-notary.claim-result+json".to_string()];
             let (default_disclosure, allowed_disclosures) = expanded_disclosure(&claim.disclosure);
             let (evidence_mode, value_type, nullable, rule) =
                 match inferred_claim_evidence(service, claim)? {
@@ -145,12 +146,12 @@ fn generated_notary_config(
                     }
                     ClaimEvidence::SelfAttested => {
                         let value = claim.value.as_ref().ok_or_else(|| {
-                            anyhow!("self-attested claim value contract is absent")
+                            anyhow!("source-free claim value contract is absent")
                         })?;
                         let expression = claim
                             .cel
                             .as_ref()
-                            .ok_or_else(|| anyhow!("self-attested claim CEL rule is absent"))?;
+                            .ok_or_else(|| anyhow!("source-free claim CEL rule is absent"))?;
                         (
                             json!({ "type": "self_attested" }),
                             claim_value_type(value)?.to_string(),
@@ -331,6 +332,27 @@ fn generated_notary_config(
     Ok(generated)
 }
 
+fn validate_compiler_credential_profile_evidence(
+    service_id: &str,
+    credential_id: &str,
+    service: &ServiceDeclaration,
+    credential: &CredentialProfileDeclaration,
+) -> Result<()> {
+    for claim_id in &credential.claims {
+        let claim = service.claims.get(claim_id).ok_or_else(|| {
+            anyhow!(
+                "credential profile {service_id}.{credential_id} references absent claim {claim_id}"
+            )
+        })?;
+        if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
+            bail!(
+                "credential profile {service_id}.{credential_id} selects source-free claim {claim_id}; refusing to compile credential capability without registry-backed claim evidence"
+            );
+        }
+    }
+    Ok(())
+}
+
 fn add_oid4vci_config(
     generated: &mut Value,
     loaded: &LoadedRegistryProject,
@@ -353,6 +375,11 @@ fn add_oid4vci_config(
         .claims
         .get(claim_id)
         .ok_or_else(|| anyhow!("validated OID4VCI claim is absent"))?;
+    if inferred_claim_evidence(service, claim)? != ClaimEvidence::RegistryBacked {
+        bail!(
+            "refusing to compile OID4VCI credential capability without registry-backed claim evidence"
+        );
+    }
     let profile_id = bounded_join_id(&[
         binding.credential.service.as_str(),
         binding.credential.profile.as_str(),
@@ -404,7 +431,7 @@ fn add_oid4vci_config(
         },
         "allowed_purposes": [service.purpose],
         "allowed_claims": [claim_id],
-        "allowed_formats": ["application/dc+sd-jwt"],
+        "allowed_formats": ["application/vnd.registry-notary.claim-result+json"],
         "allowed_disclosures": allowed_disclosures,
         "scope_policy": "disabled",
         "required_scopes": [],
@@ -1198,8 +1225,13 @@ fn generated_explanation(
             "notary": {
                 "required": requires_notary,
                 "evidence_services": evidence_services.len(),
-                "self_attested_services": evidence_services.iter()
-                    .filter(|service| service.consultations.is_empty()).count(),
+                "source_free_evaluation_services": evidence_services.iter()
+                    .filter(|service| service.claims.values().any(|claim| {
+                        matches!(
+                            inferred_claim_evidence(service, claim),
+                            Ok(ClaimEvidence::SelfAttested)
+                        )
+                    })).count(),
                 "relay_backed_services": evidence_services.iter()
                     .filter(|service| !service.consultations.is_empty()).count(),
             },
@@ -1301,6 +1333,48 @@ fn generated_explanation(
 #[cfg(test)]
 mod notary_compiler_tests {
     use super::*;
+
+    #[test]
+    fn compiler_rejects_source_free_credential_profiles_without_project_validation() {
+        let project: RegistryProject = serde_yaml::from_str(
+            r#"version: 1
+registry: { id: compiler-boundary-test }
+services:
+  evaluation:
+    kind: evidence
+    version: 1
+    purpose: test
+    legal_basis: test
+    consent: not_required
+    access: { scopes: [evidence:test:read] }
+    claims:
+      declaration:
+        cel: "true"
+        value: { type: boolean }
+        disclosure: predicate
+    credential_profiles:
+      declaration:
+        format: dc+sd-jwt
+        type: https://credentials.invalid/declaration/v1
+        validity: 5m
+        claims: [declaration]
+"#,
+        )
+        .expect("compiler-boundary project deserializes");
+        let service = &project.services["evaluation"];
+        let credential = &service.credential_profiles["declaration"];
+
+        let error = validate_compiler_credential_profile_evidence(
+            "evaluation",
+            "declaration",
+            service,
+            credential,
+        )
+        .expect_err("compiler boundary must reject source-free credentials");
+        assert!(format!("{error:#}").contains(
+            "refusing to compile credential capability without registry-backed claim evidence"
+        ));
+    }
 
     #[test]
     fn signed_dci_call_explanation_reports_the_intrinsic_or_authored_one_call_bound() {

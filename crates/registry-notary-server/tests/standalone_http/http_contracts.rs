@@ -18,6 +18,7 @@ pub(super) async fn request_body_limit_returns_413_above_threshold() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::new(app);
 
@@ -67,6 +68,7 @@ pub(super) async fn request_uri_limit_returns_414_problem_details() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let long_path = format!("/{}", "a".repeat(8 * 1024 + 1));
@@ -112,6 +114,7 @@ pub(super) async fn error_responses_match_rfc_9457_problem_details_shape() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -153,6 +156,7 @@ pub(super) async fn evaluation_json_rejections_and_unsupported_idempotency_are_p
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
@@ -262,7 +266,9 @@ pub(super) async fn cors_csp_corp_headers_present_and_corp_conditional() {
         audit_path.to_str().expect("audit path is UTF-8"),
     );
     config.server.cors.allowed_origins = vec!["https://client.example.test".to_string()];
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let response = server
@@ -344,7 +350,9 @@ pub(super) async fn subject_access_cors_uses_wallet_origins_on_browser_paths() {
         &idp.jwks_uri(),
     );
     config.server.cors.allowed_origins = vec!["https://ops.example.test".to_string()];
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let wallet = server
@@ -411,7 +419,9 @@ pub(super) async fn subject_access_preflight_uses_wallet_origin_allow_list() {
         &idp.jwks_uri(),
     );
     config.server.cors.allowed_origins = vec!["https://ops.example.test".to_string()];
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let wallet = server
@@ -492,7 +502,9 @@ pub(super) async fn standalone_router_hides_admin_and_metrics_when_admin_listene
         config.server.admin_listener.mode = mode;
         config.server.admin_listener.bind = "127.0.0.1:19091".parse().expect("valid admin bind");
 
-        let app = standalone_router(config).expect("standalone router builds");
+        let app = standalone_router(config)
+            .await
+            .expect("standalone router builds");
         let server = TestServer::builder().http_transport().build(app);
 
         server.get("/healthz").await.assert_status_ok();
@@ -525,7 +537,9 @@ pub(super) async fn standalone_router_default_config_hides_admin_and_metrics() {
     );
     add_admin_api_key(&mut config);
 
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     server.get("/healthz").await.assert_status_ok();
@@ -557,7 +571,9 @@ pub(super) async fn standalone_server_can_serve_openapi_without_auth_when_config
         audit_path.to_str().expect("audit path is UTF-8"),
     );
     config.server.openapi_requires_auth = false;
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let openapi = server.get("/openapi.json").await;
@@ -592,7 +608,9 @@ pub(super) async fn standalone_server_serves_docs_shell_without_auth() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     );
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     let docs = server.get("/docs").await;
@@ -630,6 +648,7 @@ pub(super) async fn request_uri_limit_414_carries_server_owned_request_id() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let long_path = format!("/{}", "a".repeat(8 * 1024 + 1));
@@ -658,6 +677,7 @@ pub(super) async fn request_body_limit_413_carries_server_owned_request_id() {
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::new(app);
 

@@ -7,6 +7,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-18
+
+- No user-visible Registry Manifest changes.
+
 ## [0.10.0] - 2026-07-17
 
 ### Changed

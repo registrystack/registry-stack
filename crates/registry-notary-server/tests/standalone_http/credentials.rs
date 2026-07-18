@@ -7,6 +7,98 @@ use super::{
 };
 
 #[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+pub(super) async fn direct_registry_dependency_journey_evaluates_and_issues_over_http() {
+    set_audit_secret();
+    std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
+
+    let idp = MockIdp::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let mut config = subject_access_oidc_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+    );
+    config.subject_access.allowed_operations.issue_credential = true;
+    let mut dependency = config.evidence.claims[0].clone();
+    dependency.id = "civil-record-active".to_string();
+    dependency.title = "Civil record active".to_string();
+    dependency.depends_on.clear();
+    dependency.credential_profiles.clear();
+    config.evidence.claims[0].depends_on = vec![dependency.id.clone()];
+    config.evidence.claims.push(dependency);
+
+    let app = standalone_router(config)
+        .await
+        .expect("validated config activates the HTTP Relay adapter");
+    let server = TestServer::builder().http_transport().build(app);
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let token = idp.mint_token(json!({
+        "sub": "citizen-subject",
+        "aud": "registry-notary-citizen",
+        "azp": "citizen-portal",
+        "scope": "subject_access",
+        "national_id": "person-1",
+        "auth_time": now,
+        "iat": now,
+        "exp": now + 300,
+        "nbf": now,
+    }));
+    let authorization = format!("Bearer {token}");
+    let evaluate = server
+        .post("/v1/evaluations")
+        .add_header("authorization", authorization.clone())
+        .json(&json!({
+            "target": person_identifier_target("national_id", "person-1"),
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "format": "application/vnd.registry-notary.claim-result+json"
+        }))
+        .await;
+    evaluate.assert_status_ok();
+    let evaluated: Value = evaluate.json();
+    assert_eq!(evaluated["results"][0]["value"], json!(true));
+    assert_eq!(
+        evaluated["results"][0]["provenance"]["used"]["relay_consultation_count"],
+        json!(1),
+        "the root and dependency share one exact Relay execution"
+    );
+    let evaluation_id = evaluated["results"][0]["evaluation_id"]
+        .as_str()
+        .expect("evaluation id returned")
+        .to_string();
+    let holder_id = holder_did_jwk();
+    let proof =
+        sign_direct_holder_proof(&holder_id, &evaluation_id, "registry-dependency-http-jti-1");
+    let issue = server
+        .post("/v1/credentials")
+        .add_header("authorization", authorization)
+        .json(&json!({
+            "evaluation_id": evaluation_id,
+            "credential_profile": "civil_status_sd_jwt",
+            "format": "application/dc+sd-jwt",
+            "claims": ["person-is-alive"],
+            "disclosure": "value",
+            "holder": {
+                "binding": "did",
+                "id": holder_id,
+                "proof": proof
+            }
+        }))
+        .await;
+    issue.assert_status_ok();
+    let issued: Value = issue.json();
+    assert_eq!(issued["credential_profile"], json!("civil_status_sd_jwt"));
+    assert!(issued["credential"]
+        .as_str()
+        .is_some_and(|credential| credential.contains('~')));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_redacted() {
     set_audit_secret();
     std::env::set_var("TEST_SELF_ATTESTATION_ISSUER_JWK", TEST_ISSUER_JWK);
@@ -20,6 +112,7 @@ pub(super) async fn direct_credential_pre_evaluation_denials_are_audited_and_red
         &idp.issuer(),
         &idp.jwks_uri(),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
@@ -264,14 +357,9 @@ pub(super) async fn direct_credentials_issue_creates_retrievable_status_record()
     );
     enable_credential_status(&mut config);
     config.subject_access.allowed_operations.issue_credential = true;
-    config
-        .evidence
-        .claims
-        .first_mut()
-        .expect("person-is-alive claim exists")
-        .formats
-        .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -294,11 +382,15 @@ pub(super) async fn direct_credentials_issue_creates_retrievable_status_record()
             "target": person_identifier_target("national_id", "person-1"),
             "claims": ["person-is-alive"],
             "disclosure": "value",
-            "format": "application/dc+sd-jwt"
+            "format": "application/vnd.registry-notary.claim-result+json"
         }))
         .await;
     evaluate.assert_status_ok();
     let evaluate_body: Value = evaluate.json();
+    assert_eq!(
+        evaluate_body["results"][0]["format"],
+        json!("application/vnd.registry-notary.claim-result+json")
+    );
     let evaluation_id = evaluate_body["results"][0]["evaluation_id"]
         .as_str()
         .expect("evaluation id returned")
@@ -329,6 +421,7 @@ pub(super) async fn direct_credentials_issue_creates_retrievable_status_record()
         issue_body["credential_profile"],
         json!("civil_status_sd_jwt")
     );
+    assert_eq!(issue_body["format"], json!("application/dc+sd-jwt"));
     let issuer_signed_jwt = issue_body["issuer_signed_jwt"]
         .as_str()
         .expect("issuer signed JWT returned");
@@ -373,22 +466,17 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
-    let mut config = subject_access_oidc_config(
+    let config = subject_access_oidc_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
     );
-    config
-        .evidence
-        .claims
-        .first_mut()
-        .expect("person-is-alive claim exists")
-        .formats
-        .push("application/dc+sd-jwt".to_string());
     assert!(config.subject_access.allowed_operations.evaluate);
     assert!(!config.subject_access.allowed_operations.issue_credential);
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -411,7 +499,7 @@ pub(super) async fn direct_credential_operation_denial_is_audited_and_preserves_
             "target": person_identifier_target("national_id", "person-1"),
             "claims": ["person-is-alive"],
             "disclosure": "value",
-            "format": "application/dc+sd-jwt"
+            "format": "application/vnd.registry-notary.claim-result+json"
         }))
         .await;
     evaluate.assert_status_ok();
@@ -526,14 +614,9 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
         .rate_limits
         .credential_issuance_per_principal_per_hour = 1;
     config.subject_access.token_policy.max_auth_age_seconds = 60;
-    config
-        .evidence
-        .claims
-        .first_mut()
-        .expect("person-is-alive claim exists")
-        .formats
-        .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -568,7 +651,7 @@ pub(super) async fn direct_credential_rate_limit_is_audited_with_stored_context(
             "target": person_identifier_target("national_id", "person-1"),
             "claims": ["person-is-alive"],
             "disclosure": "value",
-            "format": "application/dc+sd-jwt"
+            "format": "application/vnd.registry-notary.claim-result+json"
         }))
         .await;
     evaluate.assert_status_ok();
@@ -776,14 +859,9 @@ pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacte
         &idp.jwks_uri(),
     );
     config.subject_access.allowed_operations.issue_credential = true;
-    config
-        .evidence
-        .claims
-        .first_mut()
-        .expect("person-is-alive claim exists")
-        .formats
-        .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -806,7 +884,7 @@ pub(super) async fn direct_credential_holder_proof_replay_is_audited_and_redacte
             "target": person_identifier_target("national_id", "person-1"),
             "claims": ["person-is-alive"],
             "disclosure": "value",
-            "format": "application/dc+sd-jwt"
+            "format": "application/vnd.registry-notary.claim-result+json"
         }))
         .await;
     evaluate.assert_status_ok();
@@ -933,14 +1011,9 @@ pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_bound
         &idp.jwks_uri(),
     );
     config.subject_access.allowed_operations.issue_credential = true;
-    config
-        .evidence
-        .claims
-        .first_mut()
-        .expect("person-is-alive claim exists")
-        .formats
-        .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -963,7 +1036,7 @@ pub(super) async fn strict_credentials_issue_rejects_oid4vci_proof_at_http_bound
             "target": person_identifier_target("national_id", "person-1"),
             "claims": ["person-is-alive"],
             "disclosure": "value",
-            "format": "application/dc+sd-jwt"
+            "format": "application/vnd.registry-notary.claim-result+json"
         }))
         .await;
     evaluate.assert_status_ok();
@@ -1071,14 +1144,9 @@ pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_red
         &idp.jwks_uri(),
     );
     config.subject_access.allowed_operations.issue_credential = true;
-    config
-        .evidence
-        .claims
-        .first_mut()
-        .expect("person-is-alive claim exists")
-        .formats
-        .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -1101,7 +1169,7 @@ pub(super) async fn direct_credential_purpose_mismatch_denial_is_audited_and_red
             "target": person_identifier_target("national_id", "person-1"),
             "claims": ["person-is-alive"],
             "disclosure": "value",
-            "format": "application/dc+sd-jwt"
+            "format": "application/vnd.registry-notary.claim-result+json"
         }))
         .await;
     evaluate.assert_status_ok();
@@ -1197,14 +1265,9 @@ pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted()
         &idp.jwks_uri(),
     );
     config.subject_access.allowed_operations.issue_credential = true;
-    config
-        .evidence
-        .claims
-        .first_mut()
-        .expect("person-is-alive claim exists")
-        .formats
-        .push("application/dc+sd-jwt".to_string());
-    let app = standalone_router(config).expect("standalone router builds");
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let token = idp.mint_token(json!({
@@ -1227,7 +1290,7 @@ pub(super) async fn direct_credential_binding_denials_are_audited_and_redacted()
             "target": person_identifier_target("national_id", "person-1"),
             "claims": ["person-is-alive"],
             "disclosure": "value",
-            "format": "application/dc+sd-jwt"
+            "format": "application/vnd.registry-notary.claim-result+json"
         }))
         .await;
     evaluate.assert_status_ok();
@@ -1385,6 +1448,7 @@ pub(super) async fn subject_access_subject_mismatch_audit_names_token_claim_not_
         &idp.issuer(),
         &idp.jwks_uri(),
     ))
+    .await
     .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
     let now = OffsetDateTime::now_utc().unix_timestamp();

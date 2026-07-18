@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.11.0
+
+- BREAKING: Configuration `${VAR}` expansion now rejects environment variables
+  that are unset or empty. `${VAR:-fallback}` uses its fallback for either
+  state, `${VAR:-}` explicitly expands to empty, and `${VAR:?message}` reports
+  its message for either state. Whitespace-only values remain non-empty.
+- Relay permanently marks public readiness unavailable with the stable
+  `audit.chain.inconsistent` code after retained-audit-chain verification or
+  write-time fork detection. Transient audit I/O failures do not change
+  readiness.
+- Relay reports bounded authoring diagnostics for unknown or incorrectly
+  called Script host functions, including the first call location and closest
+  valid signatures. Diagnostic output does not include authored argument
+  values.
+- Sending both `Authorization` and `x-api-key` now fails before credential
+  parsing with `auth.multiple_credentials`. The response and audit outcome do
+  not disclose whether either candidate credential was valid.
+
 ## 0.10.0
 
 - Registry Stack project authoring now compiles product-neutral `http`, `script`, and `snapshot`

@@ -35,8 +35,11 @@ shipping the records that justify the answer. Registry Notary is the component t
 those credentials.
 
 In the three-party credential model, Registry Notary is the issuer: it evaluates a configured
-claim from compiler-pinned Relay outputs or permitted self-attestation, applies the disclosure
-policy, and signs an SD-JWT VC.
+registry-backed claim from compiler-pinned Relay outputs, verifies the exact stored Relay execution
+provenance and its per-claim execution binding, applies the disclosure policy,
+and signs an SD-JWT VC. The unkeyed binding detects partial stored-record
+mutation; store access controls remain the authenticity boundary. Permitted self-attestation
+without Relay remains evaluation-only.
 A wallet is the holder: it stores the credential, presents fields selectively, and proves key
 possession. A verifier is the relying party: it checks the issuer signature, reads the presented
 fields, and applies its own program policy. What Notary produces is evidence, a signed receipt
@@ -47,8 +50,8 @@ to the program, not to Notary.
 <figure>
   <img src="../../images/registry-notary-three-parties.svg"
        alt="Registry Notary as issuer in the three-party credential model. Registry Notary
-            evaluates Relay-backed or self-attested claims, applies disclosure policy, and signs an
-            SD-JWT VC. A wallet, the holder, stores the credential, presents selectively,
+            evaluates a Relay-backed claim, verifies its exact execution provenance, applies
+            disclosure policy, and signs an SD-JWT VC. A wallet, the holder, stores the credential, presents selectively,
             and proves key possession. A verifier, the relying party, checks the issuer
             signature, reads presented fields, and applies program policy. Notary produces
             evidence, a signed receipt that a claim was evaluated; the program produces the
@@ -67,12 +70,15 @@ A single claim evaluation moves through five stages.
             (3) Rule evaluation from closed inputs. (4) Disclosure mode:
             value, predicate, or redacted. (5) Evaluation render format: claim-result
             JSON or CCCEV JSON-LD.
-            Eligible stored evaluations can later be materialized as SD-JWT VC credentials." />
+            Eligible registry-backed stored evaluations with exact Relay execution provenance can
+            later be materialized as SD-JWT VC credentials." />
 </figure>
 
 Registry Stack project authoring makes each stage concrete. An evidence service declares typed
 request inputs, compiler-pinned consultations, claims over the closed consultation or
-self-attestation inputs, disclosure modes, and optional credential profiles. Product and source
+self-attestation inputs, disclosure modes, and optional registry-backed credential profiles.
+Private Relay execution ids are retained only for selected roots that share one
+of those validated profiles. Product and source
 version labels record interoperability evidence. They do not select a Relay capability or script
 runtime.
 
@@ -109,6 +115,11 @@ evaluation, or receipt.
    The offer can carry an authorization-code grant (the user authenticates at the authorization
    server, as in the authorization-code grant) or a pre-authorized-code grant; the hosted lab uses pre-authorized-code with
    eSignet (an open-source identity and e-signature platform) as the authorization server.
+   Direct and OID4VCI issuance accept only newly stored, non-delegated
+   evaluations that retain exact claim pins and normalized unique Relay
+   execution records for every selected root's registry-backed dependency
+   closure. Source-free and delegated evaluations cannot enter either
+   credential path.
 3. Verifiable receipt only. The caller does not need a credential at all. It calls
    `POST /v1/evaluations`, accepts the disclosure mode the claim allows (often `predicate` or
    `redacted`), and stores the audit-stamped result. Every evaluation, credential or not, is
@@ -119,10 +130,6 @@ evaluation, or receipt.
    policy, replay state, purpose, profile, and audience before claim evaluation, then returns a
    compact signed JWT response. Federation profiles are source-free in this version and cannot
    select a `registry_backed` claim. This path returns a scoped evaluation result, not a credential.
-
-The [credential tour](../../start/credential-tour/) citizen self-attestation scenario uses path 2:
-eSignet provides the access token, Notary evaluates the permitted authenticated context without a
-registry source, and a wallet completes the OID4VCI flow.
 
 ## Selective disclosure properties
 

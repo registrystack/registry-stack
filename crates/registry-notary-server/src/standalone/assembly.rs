@@ -1,6 +1,6 @@
 use super::*;
 
-/// Build a source-free, explicitly in-memory Notary router synchronously.
+/// Build a source-free, explicitly in-memory Notary router.
 ///
 /// PostgreSQL configurations require asynchronous state-plane activation and
 /// return [`StandaloneServerError::PostgresqlStateActivationRequired`].
@@ -8,14 +8,15 @@ use super::*;
 /// [`StandaloneServerError::RelayNotActivated`]. Processes serving either
 /// configuration must compile the runtime, await
 /// [`NotaryRuntimeSnapshot::activate`], and only then build listeners.
-pub fn standalone_router(
+pub async fn standalone_router(
     config: StandaloneRegistryNotaryConfig,
 ) -> Result<Router, StandaloneServerError> {
     if config.state.storage == STATE_STORAGE_POSTGRESQL {
         return Err(StandaloneServerError::PostgresqlStateActivationRequired);
     }
     let admin_listener_mode = config.server.admin_listener.mode;
-    let runtime = compile_notary_runtime(config)?;
+    let mut runtime = compile_notary_runtime(config)?;
+    runtime.verify_retained_audit_chain().await;
     match admin_listener_mode {
         RegistryNotaryAdminListenerMode::SharedWithPublic => {
             notary_shared_router_from_runtime(runtime)
@@ -35,6 +36,7 @@ pub struct NotaryRuntimeSnapshot {
     wallet_cors_policy: SubjectAccessWalletCorsPolicy,
     http_limits: NotaryHttpLimits,
     federation_enabled: bool,
+    audit_chain_verification_attempted: bool,
 }
 
 impl NotaryRuntimeSnapshot {
@@ -42,7 +44,8 @@ impl NotaryRuntimeSnapshot {
     ///
     /// Source-free in-memory runtimes complete without reading credentials or
     /// performing network I/O.
-    pub async fn activate(self) -> Result<Self, StandaloneServerError> {
+    pub async fn activate(mut self) -> Result<Self, StandaloneServerError> {
+        self.verify_retained_audit_chain().await;
         self.state_plane.activate().await?;
         let config = self
             .api_state
@@ -58,7 +61,35 @@ impl NotaryRuntimeSnapshot {
         Ok(self)
     }
 
+    async fn verify_retained_audit_chain(&mut self) {
+        // Verify the retained chain before dependency activation or listener
+        // binding. Integrity failures are surfaced through readiness and remain
+        // available for offline operator recovery. Operational failures remain
+        // retryable and do not poison readiness.
+        if let Err(error) = self.auth_state.audit.verify_chain_eager().await {
+            if matches!(
+                &error,
+                AuditError::ChainForkDetected { .. } | AuditError::ChainVerification(_)
+            ) {
+                tracing::error!(
+                    code = crate::AUDIT_CHAIN_INCONSISTENT_CODE,
+                    error = %error,
+                    "audit chain failed eager integrity verification"
+                );
+            } else {
+                tracing::warn!(
+                    error = %error,
+                    "audit chain eager verification encountered a retryable operational failure"
+                );
+            }
+        }
+        self.audit_chain_verification_attempted = true;
+    }
+
     fn ensure_ready_to_serve(&self) -> Result<(), StandaloneServerError> {
+        if !self.audit_chain_verification_attempted {
+            return Err(StandaloneServerError::AuditChainVerificationRequired);
+        }
         if !self.state_plane.is_activated() {
             return Err(StandaloneServerError::StatePlane(
                 NotaryPostgresStatePlaneError::DatabaseUnavailable,
@@ -125,11 +156,34 @@ pub(super) fn compile_notary_runtime_for_gate_test(
 }
 
 #[cfg(test)]
-pub(super) fn standalone_router_for_gate_test(
+pub(super) async fn standalone_router_for_gate_test(
     config: StandaloneRegistryNotaryConfig,
 ) -> Result<Router, StandaloneServerError> {
     let admin_listener_mode = config.server.admin_listener.mode;
-    let runtime = compile_notary_runtime_for_gate_test(config)?;
+    let mut runtime = compile_notary_runtime_for_gate_test(config)?;
+    runtime.verify_retained_audit_chain().await;
+    match admin_listener_mode {
+        RegistryNotaryAdminListenerMode::SharedWithPublic => {
+            notary_shared_router_from_runtime(runtime)
+        }
+        RegistryNotaryAdminListenerMode::Dedicated | RegistryNotaryAdminListenerMode::Disabled => {
+            Ok(notary_routers_from_runtime(runtime)?.public)
+        }
+    }
+}
+
+#[cfg(test)]
+pub(super) async fn standalone_router_with_ready_relay_for_gate_test(
+    config: StandaloneRegistryNotaryConfig,
+    activated: Arc<dyn crate::runtime::ActivatedRelayConsultations>,
+) -> Result<Router, StandaloneServerError> {
+    let admin_listener_mode = config.server.admin_listener.mode;
+    let mut runtime = compile_notary_runtime_for_gate_test(config)?;
+    runtime
+        .api_state
+        .install_activated_relay(activated)
+        .map_err(|_| StandaloneServerError::RelayAlreadyActivated)?;
+    runtime.verify_retained_audit_chain().await;
     match admin_listener_mode {
         RegistryNotaryAdminListenerMode::SharedWithPublic => {
             notary_shared_router_from_runtime(runtime)
@@ -312,6 +366,7 @@ fn compile_notary_runtime_with_state_override(
         wallet_cors_policy,
         http_limits,
         federation_enabled,
+        audit_chain_verification_attempted: false,
     })
 }
 
@@ -328,6 +383,7 @@ pub fn notary_shared_router_from_runtime(
         wallet_cors_policy,
         http_limits,
         federation_enabled,
+        audit_chain_verification_attempted: _,
     } = snapshot;
     let mut routes = router();
     if federation_enabled {
@@ -362,6 +418,7 @@ pub fn notary_routers_from_runtime(
         wallet_cors_policy,
         http_limits,
         federation_enabled,
+        audit_chain_verification_attempted: _,
     } = snapshot;
     let mut public_routes = crate::api::public_router();
     if federation_enabled {
@@ -485,6 +542,10 @@ pub enum StandaloneServerError {
     RelayAlreadyActivated,
     #[error("Relay consultation client was not activated before serving")]
     RelayNotActivated,
+    #[error(
+        "the retained audit chain was not verified before serving; call activate().await or use standalone_router(config).await"
+    )]
+    AuditChainVerificationRequired,
     #[error(
         "standalone_router supports only explicit local in-memory state; PostgreSQL requires compile_notary_runtime(config)?.activate().await before building routers"
     )]

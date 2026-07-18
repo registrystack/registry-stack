@@ -17,11 +17,14 @@ anyhow = "1"
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 crc32fast = "1.4"
+ed25519-dalek.workspace = true
 getrandom = "0.4"
 hex.workspace = true
 include_dir = "0.7"
 ipnet.workspace = true
+rcgen.workspace = true
 registry-config-report = { workspace = true }
+registry-language-server.workspace = true
 registry-notary-core.workspace = true
 registry-notary-server = { workspace = true, features = ["registry-notary-cel"] }
 registry-platform-authcommon = { workspace = true }

@@ -810,6 +810,35 @@ outputs:
     }
 
     #[test]
+    fn generated_notary_validation_rejects_empty_claim_formats() {
+        let loaded = load_registry_project(&project_golden("custom-system"), Some("local"))
+            .expect("golden project loads");
+        let mut compiled = compile_project(&loaded, None).expect("golden project compiles");
+        let config_path = Path::new("config/notary.yaml").to_path_buf();
+        let mut notary: Value = serde_yaml::from_slice(
+            compiled
+                .notary_private
+                .get(&config_path)
+                .expect("Notary config exists"),
+        )
+        .expect("generated Notary config parses");
+        notary["evidence"]["claims"][0]["formats"] = Value::Array(Vec::new());
+        compiled.notary_private.insert(
+            config_path,
+            serde_yaml::to_string(&notary)
+                .expect("tampered Notary config serializes")
+                .into_bytes()
+                .into_boxed_slice(),
+        );
+
+        let error = validate_generated_notary(&compiled)
+            .expect_err("generated validation must reject an empty formats list");
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains("formats must not be empty"));
+        assert!(diagnostic.contains("omit formats"));
+    }
+
+    #[test]
     fn disclosure_review_classes_are_directional() {
         let loaded = load_registry_project(&project_golden("custom-system"), None)
             .expect("golden project loads");

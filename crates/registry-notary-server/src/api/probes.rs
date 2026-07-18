@@ -3,6 +3,9 @@
 
 use super::*;
 
+/// Stable public readiness code for a confirmed retained-chain integrity failure.
+pub const AUDIT_CHAIN_INCONSISTENT_CODE: &str = "audit.chain.inconsistent";
+
 pub(super) async fn healthz() -> Response {
     Json(json!({
         "status": "ok",
@@ -16,6 +19,14 @@ pub(super) async fn healthz() -> Response {
 }
 
 pub(super) async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>) -> Response {
+    if state
+        .as_ref()
+        .and_then(|Extension(state)| state.audit.as_ref())
+        .is_some_and(|audit| !audit.chain_healthy())
+    {
+        return audit_chain_not_ready_response();
+    }
+
     let (base_ready, base_degraded, signer_total, signer_ok, signer_failed) = match state.as_ref() {
         Some(Extension(state)) if state.enabled_evidence().is_ok() => {
             let replay_readiness = state.replay.check_ready().await;
@@ -151,6 +162,36 @@ pub(super) async fn ready(state: Option<Extension<Arc<RegistryNotaryApiState>>>)
             "request_id": request_id.as_str(),
             "readiness_status": status_text.as_str(),
             "checks": checks,
+        })),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        "application/problem+json".parse().unwrap(),
+    );
+    response.headers_mut().insert(
+        "x-request-id",
+        request_id
+            .as_str()
+            .parse()
+            .expect("bounded correlation id is a valid header value"),
+    );
+    response
+}
+
+fn audit_chain_not_ready_response() -> Response {
+    let status = StatusCode::SERVICE_UNAVAILABLE;
+    let request_id = crate::standalone::current_request_correlation_id()
+        .unwrap_or_else(crate::standalone::new_request_correlation_id);
+    let mut response = (
+        status,
+        Json(json!({
+            "type": format!("{}/audit/chain-inconsistent", crate::PROBLEM_TYPE_BASE_URL),
+            "title": "Audit chain inconsistent",
+            "status": status.as_u16(),
+            "detail": "the retained audit chain has an integrity failure and requires operator recovery",
+            "code": AUDIT_CHAIN_INCONSISTENT_CODE,
+            "request_id": request_id.as_str(),
         })),
     )
         .into_response();

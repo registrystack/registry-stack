@@ -133,6 +133,11 @@ enum Command {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Inspect or recover the retained Notary audit chain.
+    Audit {
+        #[command(subcommand)]
+        command: AuditCommand,
+    },
     /// Install or attest the Notary-owned PostgreSQL correctness state.
     State {
         #[command(subcommand)]
@@ -190,6 +195,22 @@ enum Command {
 enum ConfigCommand {
     /// Verify a Registry Config Bundle directory against local trust and state.
     VerifyBundle(ConfigVerifyBundleArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum AuditCommand {
+    /// Quarantine an inconsistent file-backed chain and start a break segment.
+    Quarantine(AuditQuarantineArgs),
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+struct AuditQuarantineArgs {
+    /// Operator reason recorded in the tamper-evident chain-break event.
+    #[arg(long)]
+    reason: String,
+    /// Optional operator identity recorded in the chain-break event.
+    #[arg(long)]
+    operator: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -285,6 +306,13 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             command: ConfigCommand::VerifyBundle(verify_args),
         }) => {
             config_verify_bundle(verify_args).await?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Some(Command::Audit {
+            command: AuditCommand::Quarantine(quarantine_args),
+        }) => {
+            let config_path = required_config_path(args.config.as_deref())?;
+            audit_quarantine(config_path, quarantine_args)?;
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::State {

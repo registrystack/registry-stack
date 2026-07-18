@@ -10,6 +10,14 @@ pub enum Sample {
     Benefits,
 }
 
+impl Sample {
+    pub(crate) const fn id(self) -> &'static str {
+        match self {
+            Self::Benefits => "benefits",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Cell {
     Text(&'static str),
@@ -97,11 +105,8 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("given_name"),
             Cell::Text("family_name"),
             Cell::Text("date_of_birth"),
-            Cell::Text("age_band"),
             Cell::Text("relationship_to_head"),
             Cell::Text("registration_status"),
-            Cell::Text("eligibility_status"),
-            Cell::Text("is_primary_applicant"),
             Cell::Text("national_id"),
         ],
         &[
@@ -110,11 +115,8 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("Fae"),
             Cell::Text("Elm"),
             Cell::Text("1989-05-14"),
-            Cell::Text("35-49"),
             Cell::Text("head"),
             Cell::Text("active"),
-            Cell::Text("eligible"),
-            Cell::Bool(true),
             Cell::Text("FAKE-856648"),
         ],
         &[
@@ -123,11 +125,8 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("Jo"),
             Cell::Text("Elm"),
             Cell::Text("2019-02-03"),
-            Cell::Text("5-17"),
             Cell::Text("child"),
             Cell::Text("active"),
-            Cell::Text("eligible"),
-            Cell::Bool(false),
             Cell::Text("FAKE-806707"),
         ],
         &[
@@ -136,11 +135,8 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("Kai"),
             Cell::Text("Elm"),
             Cell::Text("1954-09-21"),
-            Cell::Text("65+"),
             Cell::Text("parent"),
             Cell::Text("active"),
-            Cell::Text("eligible"),
-            Cell::Bool(false),
             Cell::Text("FAKE-219346"),
         ],
         &[
@@ -149,11 +145,8 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("Mina"),
             Cell::Text("Elm"),
             Cell::Text("1991-11-10"),
-            Cell::Text("35-49"),
             Cell::Text("spouse"),
             Cell::Text("active"),
-            Cell::Text("pending_review"),
-            Cell::Bool(false),
             Cell::Text("FAKE-331902"),
         ],
         &[
@@ -162,11 +155,8 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("Dee"),
             Cell::Text("Iron"),
             Cell::Text("1984-01-28"),
-            Cell::Text("35-49"),
             Cell::Text("head"),
             Cell::Text("active"),
-            Cell::Text("eligible"),
-            Cell::Bool(true),
             Cell::Text("FAKE-748201"),
         ],
         &[
@@ -175,11 +165,8 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("Ari"),
             Cell::Text("Iron"),
             Cell::Text("2016-07-18"),
-            Cell::Text("5-17"),
             Cell::Text("child"),
             Cell::Text("active"),
-            Cell::Text("eligible"),
-            Cell::Bool(false),
             Cell::Text("FAKE-671240"),
         ],
         &[
@@ -188,11 +175,8 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("Nia"),
             Cell::Text("Stone"),
             Cell::Text("1998-03-05"),
-            Cell::Text("18-34"),
             Cell::Text("head"),
             Cell::Text("pending"),
-            Cell::Text("pending_review"),
-            Cell::Bool(true),
             Cell::Text("FAKE-503118"),
         ],
         &[
@@ -201,11 +185,8 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("Sol"),
             Cell::Text("Stone"),
             Cell::Text("2022-12-12"),
-            Cell::Text("0-4"),
             Cell::Text("child"),
             Cell::Text("pending"),
-            Cell::Text("pending_review"),
-            Cell::Bool(false),
             Cell::Text("FAKE-663910"),
         ],
         &[
@@ -214,11 +195,8 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("Ren"),
             Cell::Text("Stone"),
             Cell::Text("1970-06-30"),
-            Cell::Text("50-64"),
             Cell::Text("parent"),
             Cell::Text("active"),
-            Cell::Text("ineligible"),
-            Cell::Bool(false),
             Cell::Text("FAKE-447120"),
         ],
         &[
@@ -227,11 +205,8 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("Ivo"),
             Cell::Text("Reed"),
             Cell::Text("1957-04-02"),
-            Cell::Text("65+"),
             Cell::Text("head"),
             Cell::Text("active"),
-            Cell::Text("eligible"),
-            Cell::Bool(true),
             Cell::Text("FAKE-990231"),
         ],
         &[
@@ -240,11 +215,8 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("Uma"),
             Cell::Text("Vale"),
             Cell::Text("1993-08-16"),
-            Cell::Text("18-34"),
             Cell::Text("head"),
             Cell::Text("closed"),
-            Cell::Text("ineligible"),
-            Cell::Bool(true),
             Cell::Text("FAKE-125904"),
         ],
         &[
@@ -253,11 +225,8 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("Lina"),
             Cell::Text("Moss"),
             Cell::Text("1982-10-25"),
-            Cell::Text("35-49"),
             Cell::Text("head"),
             Cell::Text("active"),
-            Cell::Text("eligible"),
-            Cell::Bool(true),
             Cell::Text("FAKE-775120"),
         ],
     ]);
@@ -276,7 +245,6 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("review_due_on"),
             Cell::Text("identity_verified"),
             Cell::Text("residence_verified"),
-            Cell::Text("consent_reference"),
         ],
         &[
             Cell::Text("app-3001"),
@@ -292,7 +260,6 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("2026-01-20"),
             Cell::Bool(true),
             Cell::Bool(true),
-            Cell::Text("consent-9001"),
         ],
         &[
             Cell::Text("app-3002"),
@@ -308,7 +275,6 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("2025-08-10"),
             Cell::Bool(true),
             Cell::Bool(true),
-            Cell::Text("consent-9002"),
         ],
         &[
             Cell::Text("app-3003"),
@@ -324,7 +290,6 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("2024-06-30"),
             Cell::Bool(true),
             Cell::Bool(false),
-            Cell::Text("consent-9003"),
         ],
         &[
             Cell::Text("app-3004"),
@@ -340,7 +305,6 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("2025-09-15"),
             Cell::Bool(true),
             Cell::Bool(true),
-            Cell::Text("consent-9004"),
         ],
         &[
             Cell::Text("app-3005"),
@@ -356,7 +320,6 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("2023-07-25"),
             Cell::Bool(true),
             Cell::Bool(true),
-            Cell::Text("consent-9005"),
         ],
         &[
             Cell::Text("app-3006"),
@@ -372,7 +335,6 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("2024-08-12"),
             Cell::Bool(false),
             Cell::Bool(true),
-            Cell::Text("consent-9006"),
         ],
         &[
             Cell::Text("app-3007"),
@@ -388,7 +350,6 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("2026-06-01"),
             Cell::Bool(true),
             Cell::Bool(true),
-            Cell::Text("consent-9007"),
         ],
         &[
             Cell::Text("app-3008"),
@@ -404,7 +365,6 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("2026-06-15"),
             Cell::Bool(true),
             Cell::Bool(true),
-            Cell::Text("consent-9008"),
         ],
         &[
             Cell::Text("app-3009"),
@@ -420,7 +380,6 @@ pub fn write_benefits_workbook(path: &Path) -> Result<()> {
             Cell::Text("2026-06-18"),
             Cell::Bool(true),
             Cell::Bool(true),
-            Cell::Text("consent-9009"),
         ],
     ]);
 

@@ -11,6 +11,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine as _;
 use clap::ValueEnum;
+use ed25519_dalek::SigningKey as Ed25519SigningKey;
+use rcgen::{generate_simple_self_signed, CertifiedKey};
 use registry_config_report::{
     ConfigDiagnostic, ConfigDiagnosticReport, ConfigSourceKind, ConfigSourceRef,
     DiagnosticSeverity, DiagnosticSummary, RegistryctlProductReport, RegistryctlProjectRef,
@@ -35,9 +37,12 @@ use zeroize::Zeroizing;
 mod project_authoring;
 
 pub use project_authoring::{
-    build_registry_project, check_registry_project, init_registry_project, test_registry_project,
-    test_registry_project_selected, ProjectBuildOptions, ProjectCheckOptions, ProjectCommandReport,
-    ProjectInitOptions, ProjectStarter, ProjectTestOptions, ProjectTestSelection, SemanticChange,
+    build_registry_project, check_registry_project, init_registry_project,
+    render_project_authoring_diagnostics, setup_registry_project_editor, test_registry_project,
+    test_registry_project_selected, ProjectAuthoringDiagnostic, ProjectAuthoringDiagnostics,
+    ProjectBuildOptions, ProjectCheckOptions, ProjectCommandReport, ProjectEditorSetupOptions,
+    ProjectEditorSetupReport, ProjectInitOptions, ProjectSchemaKind, ProjectStarter,
+    ProjectTestOptions, ProjectTestSelection, SemanticChange,
 };
 
 pub use crate::sample::Sample;
@@ -52,8 +57,10 @@ const RELAY_IMAGE_REPOSITORY: &str = "ghcr.io/registrystack/registry-relay";
 const NOTARY_IMAGE_REPOSITORY: &str = "ghcr.io/registrystack/registry-notary";
 const LINUX_AMD64_PLATFORM: &str = "linux/amd64";
 const RELAY_BASE_URL: &str = "http://127.0.0.1:4242";
+const NOTARY_BASE_URL: &str = "http://127.0.0.1:4255";
 const RELAY_DOCS_PATH: &str = "/docs";
 const TUTORIAL_PURPOSE: &str = "https://example.local/purpose/tutorial";
+const TUTORIAL_IDENTITY_PURPOSE: &str = "https://example.local/purpose/identity-verification";
 const BRUNO_COLLECTION_DIR: &str = "bruno/registry-api";
 const BRUNO_GENERATED_MANIFEST: &str = "bruno/registry-api/.registryctl-generated";
 const REGISTRY_STACK_RUNTIME_UID_ENV: &str = "REGISTRY_STACK_RUNTIME_UID";
@@ -71,6 +78,66 @@ const UPDATE_CHECK_CACHE_SECONDS: u64 = 60 * 60 * 24;
 const PROJECT_SCHEMA_VERSION: &str = "registryctl/v1";
 const CONFIG_BUNDLE_SIGNATURE_SCHEMA: &str = "registry.platform.config_bundle_signatures.v1";
 const CONFIG_TRUST_ANCHOR_SCHEMA: &str = "registry.platform.config_trust_anchor.v1";
+const INIT_REPORT_SCHEMA_VERSION: &str = "registryctl.init.v1";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InitProjectKind {
+    RegistryProject,
+    RelaySpreadsheetApi,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InitSource {
+    Starter {
+        id: String,
+        release: String,
+        content_digest: String,
+        content_state: &'static str,
+    },
+    Sample {
+        id: String,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct InitArtifacts {
+    pub project_file: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bruno_collection: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub editor_manifest: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct InitReport {
+    pub schema_version: &'static str,
+    pub status: &'static str,
+    pub project: String,
+    pub project_kind: InitProjectKind,
+    pub output: PathBuf,
+    pub source: InitSource,
+    pub artifacts: InitArtifacts,
+}
+const NOTARY_PROJECT_DIR: &str = "notary/project";
+#[cfg(test)]
+const NOTARY_CONFIG_DIR: &str = "notary/project/.registry-stack/build/local/private/notary/config";
+const NOTARY_CONFIG_PATH: &str =
+    "notary/project/.registry-stack/build/local/private/notary/config/notary.yaml";
+#[cfg(test)]
+const CONSULTATION_RELAY_CONFIG_DIR: &str =
+    "notary/project/.registry-stack/build/local/private/relay/config";
+const CONSULTATION_RELAY_CONFIG_PATH: &str =
+    "notary/project/.registry-stack/build/local/private/relay/config/relay.yaml";
+const NOTARY_CLAIM_FILE: &str = "notary/project/registry-stack.yaml";
+const NOTARY_RELAY_TOKEN_PATH: &str = "secrets/notary-relay.jwt";
+const NOTARY_RELAY_WORKLOAD_JWK_ENV: &str = "REGISTRY_NOTARY_RELAY_WORKLOAD_JWK";
+const NOTARY_RELAY_WORKLOAD_KID: &str = "registry-notary-relay-workload";
+const CONSULTATION_POSTGRES_CERT_PATH: &str = "secrets/consultation-postgres.crt";
+const CONSULTATION_POSTGRES_KEY_PATH: &str = "secrets/consultation-postgres.key";
+const CONSULTATION_RELAY_STATE_DIR: &str = "state/relay-consultation";
+const CONSULTATION_RELAY_CACHE_PATH: &str = "state/relay-consultation/cache";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -95,6 +162,10 @@ struct RegistryctlLockedImages {
 impl RegistryctlImageLock {
     fn relay_image(&self) -> &str {
         &self.images.registry_relay
+    }
+
+    fn notary_image(&self) -> &str {
+        &self.images.registry_notary
     }
 }
 
@@ -903,7 +974,7 @@ pub fn init_spreadsheet_api(
     dir: &Path,
     sample: Sample,
     image_lock: &RegistryctlImageLock,
-) -> Result<()> {
+) -> Result<InitReport> {
     match sample {
         Sample::Benefits => init_benefits_project(dir, image_lock),
     }
@@ -1159,7 +1230,11 @@ pub fn start_project(project_dir: &Path) -> Result<()> {
 }
 
 fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<()> {
-    let project = Project::load(project_dir)?;
+    let mut project = Project::load(project_dir)?;
+    if project.notary.is_some() {
+        prepare_notary_runtime(project_dir)?;
+        project = Project::load(project_dir)?;
+    }
     validate_project_fingerprints(project_dir, &project)?;
     run_compose_for_project(project_dir, &project, &["up", "-d"])?;
     if project.relay.is_some() {
@@ -1167,6 +1242,12 @@ fn start_project_with_timeout(project_dir: &Path, timeout: Duration) -> Result<(
         wait_for_ready("Relay", relay_base_url, timeout)?;
         println!("Relay API:  {relay_base_url}");
         println!("API docs:   {relay_base_url}{RELAY_DOCS_PATH}");
+    }
+    if project.notary.is_some() {
+        let notary_base_url = project.notary_base_url()?;
+        wait_for_ready("Notary", notary_base_url, timeout)?;
+        println!("Notary API: {notary_base_url}");
+        println!("Notary docs: {notary_base_url}{RELAY_DOCS_PATH}");
     }
     Ok(())
 }
@@ -1193,6 +1274,13 @@ pub fn status_project(project_dir: &Path) -> Result<()> {
         print_probe_status("ready", &format!("{relay_base_url}/ready"));
         println!("Relay API:  {relay_base_url}");
         println!("API docs:   {relay_base_url}{RELAY_DOCS_PATH}");
+    }
+    if project.notary.is_some() {
+        let notary_base_url = project.notary_base_url()?;
+        print_probe_status("notary healthz", &format!("{notary_base_url}/healthz"));
+        print_probe_status("notary ready", &format!("{notary_base_url}/ready"));
+        println!("Notary API: {notary_base_url}");
+        println!("Notary docs: {notary_base_url}{RELAY_DOCS_PATH}");
     }
     Ok(())
 }
@@ -1247,14 +1335,13 @@ pub fn smoke_project(project_dir: &Path) -> Result<()> {
     }
 }
 
-pub fn bruno_generate_project(project_dir: &Path, force: bool) -> Result<()> {
+pub fn bruno_generate_project(project_dir: &Path, force: bool) -> Result<PathBuf> {
     let project = Project::load(project_dir)?;
     let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
     let collection_dir = project_dir.join(BRUNO_COLLECTION_DIR);
     let files = bruno_files(&project, &secrets)?;
     write_generated_files(project_dir, &collection_dir, files, force)?;
-    println!("Bruno collection: {}", collection_dir.display());
-    Ok(())
+    Ok(collection_dir)
 }
 
 pub fn bruno_open_project(project_dir: &Path) -> Result<()> {
@@ -1730,7 +1817,544 @@ impl SecretRedactor {
     }
 }
 
-fn init_benefits_project(dir: &Path, image_lock: &RegistryctlImageLock) -> Result<()> {
+#[derive(Debug, Serialize)]
+pub struct AddNotaryReport {
+    status: &'static str,
+    project: String,
+    notary_url: &'static str,
+    claim_file: &'static str,
+}
+
+/// Adds the local tutorial Notary journey to a generated spreadsheet project.
+///
+/// The authored files remain the source of truth. `registryctl start` rebuilds
+/// the reviewed Relay and Notary inputs so edits to the claim take effect after
+/// a restart.
+pub fn add_notary_to_project(
+    project_dir: &Path,
+    image_lock: &RegistryctlImageLock,
+) -> Result<AddNotaryReport> {
+    let mut project = Project::load(project_dir)?;
+    if project.relay.is_none() {
+        bail!("add notary requires a generated Relay spreadsheet project");
+    }
+    if project.notary.is_some() {
+        bail!("this project already has a Notary add-on");
+    }
+    let workbook = project_dir.join("data/benefits_casework.xlsx");
+    if !workbook.is_file() {
+        bail!(
+            "add notary requires the benefits workbook at {}",
+            workbook.display()
+        );
+    }
+    let notary_dir = project_dir.join("notary");
+    for relative in [
+        "notary",
+        NOTARY_RELAY_TOKEN_PATH,
+        CONSULTATION_POSTGRES_CERT_PATH,
+        CONSULTATION_POSTGRES_KEY_PATH,
+        CONSULTATION_RELAY_STATE_DIR,
+    ] {
+        let path = project_dir.join(relative);
+        match fs::symlink_metadata(&path) {
+            Ok(_) => bail!(
+                "Notary destination already exists and was not modified: {}",
+                path.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to stat {}", path.display()));
+            }
+        }
+    }
+    let secrets_path = project_dir.join(&project.local.secrets_env);
+    let compose_path = project_dir.join("compose.yaml");
+    let manifest_path = project_dir.join("registryctl.yaml");
+    let original_secrets = fs::read_to_string(&secrets_path)
+        .with_context(|| format!("failed to read {}", secrets_path.display()))?;
+    let original_compose = fs::read_to_string(&compose_path)
+        .with_context(|| format!("failed to read {}", compose_path.display()))?;
+    let original_manifest = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+
+    let result = (|| {
+        write_notary_addon_files(project_dir)?;
+        write_local_postgres_tls(project_dir)?;
+        add_notary_local_secrets(project_dir)?;
+        create_notary_state_dirs(project_dir)?;
+        prepare_notary_runtime(project_dir)?;
+        merge_notary_compose(project_dir, image_lock)?;
+
+        project.project.products.push("registry-notary".to_string());
+        project.runtime.notary_image = Some(image_lock.notary_image().to_string());
+        project.runtime.notary_base_url = Some(NOTARY_BASE_URL.to_string());
+        project.notary = Some(ProjectNotary {
+            project: PathBuf::from(NOTARY_PROJECT_DIR),
+            config: PathBuf::from(NOTARY_CONFIG_PATH),
+            consultation_relay_config: PathBuf::from(CONSULTATION_RELAY_CONFIG_PATH),
+            claim_file: PathBuf::from(NOTARY_CLAIM_FILE),
+            workload_token: PathBuf::from(NOTARY_RELAY_TOKEN_PATH),
+        });
+        let manifest = serde_yaml::to_string(&project)
+            .context("failed to render registryctl manifest with Notary")?;
+        write_text(project_dir.join("registryctl.yaml"), &manifest)?;
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        let mut rollback_errors = Vec::new();
+        if let Err(rollback) = fs::remove_dir_all(&notary_dir) {
+            if rollback.kind() != std::io::ErrorKind::NotFound {
+                rollback_errors.push(format!("remove {}: {rollback}", notary_dir.display()));
+            }
+        }
+        let consultation_state_dir = project_dir.join(CONSULTATION_RELAY_STATE_DIR);
+        if let Err(rollback) = fs::remove_dir_all(&consultation_state_dir) {
+            if rollback.kind() != std::io::ErrorKind::NotFound {
+                rollback_errors.push(format!(
+                    "remove {}: {rollback}",
+                    consultation_state_dir.display()
+                ));
+            }
+        }
+        if let Err(rollback) = write_private_text(&secrets_path, &original_secrets) {
+            rollback_errors.push(format!("restore {}: {rollback:#}", secrets_path.display()));
+        }
+        for generated_sidecar_path in [
+            NOTARY_RELAY_TOKEN_PATH,
+            CONSULTATION_POSTGRES_CERT_PATH,
+            CONSULTATION_POSTGRES_KEY_PATH,
+        ] {
+            let path = project_dir.join(generated_sidecar_path);
+            if let Err(rollback) = fs::remove_file(&path) {
+                if rollback.kind() != std::io::ErrorKind::NotFound {
+                    rollback_errors.push(format!("remove {}: {rollback}", path.display()));
+                }
+            }
+        }
+        if let Err(rollback) = write_text(compose_path, &original_compose) {
+            rollback_errors.push(format!("restore Compose file: {rollback:#}"));
+        }
+        if let Err(rollback) = write_text(manifest_path, &original_manifest) {
+            rollback_errors.push(format!("restore project manifest: {rollback:#}"));
+        }
+        if !rollback_errors.is_empty() {
+            bail!(
+                "failed to add Notary: {error:#}; rollback also failed: {}",
+                rollback_errors.join("; ")
+            );
+        }
+        return Err(error);
+    }
+
+    Ok(AddNotaryReport {
+        status: "added",
+        project: project.project.name,
+        notary_url: NOTARY_BASE_URL,
+        claim_file: NOTARY_CLAIM_FILE,
+    })
+}
+
+fn write_notary_addon_files(project_dir: &Path) -> Result<()> {
+    let files = [
+        (
+            "notary/project/registry-stack.yaml",
+            include_str!("templates/notary_addon/registry-stack.yaml"),
+        ),
+        (
+            "notary/project/entities/person.yaml",
+            include_str!("templates/notary_addon/entities/person.yaml"),
+        ),
+        (
+            "notary/project/integrations/person-demographics/integration.yaml",
+            include_str!(
+                "templates/notary_addon/integrations/person-demographics/integration.yaml"
+            ),
+        ),
+        (
+            "notary/project/integrations/person-demographics/fixtures/match.yaml",
+            include_str!(
+                "templates/notary_addon/integrations/person-demographics/fixtures/match.yaml"
+            ),
+        ),
+        (
+            "notary/project/integrations/person-demographics/fixtures/pending.yaml",
+            include_str!(
+                "templates/notary_addon/integrations/person-demographics/fixtures/pending.yaml"
+            ),
+        ),
+        (
+            "notary/project/integrations/person-demographics/fixtures/no-match.yaml",
+            include_str!(
+                "templates/notary_addon/integrations/person-demographics/fixtures/no-match.yaml"
+            ),
+        ),
+        (
+            "notary/project/integrations/person-demographics/fixtures/ambiguous.yaml",
+            include_str!(
+                "templates/notary_addon/integrations/person-demographics/fixtures/ambiguous.yaml"
+            ),
+        ),
+        (
+            "notary/project/environments/local.yaml",
+            include_str!("templates/notary_addon/environments/local.yaml"),
+        ),
+        (
+            "notary/postgres-init.sql",
+            include_str!("templates/notary_addon/postgres-init.sql"),
+        ),
+    ];
+    for (relative, contents) in files {
+        let path = project_dir.join(relative);
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow!("generated Notary path has no parent"))?;
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+        write_text(path, contents)?;
+    }
+    write_text(
+        project_dir.join("notary/project/.gitignore"),
+        ".registry-stack/\n",
+    )?;
+    Ok(())
+}
+
+fn add_notary_local_secrets(project_dir: &Path) -> Result<()> {
+    let evaluator = Credential::generate("tutorial-evaluator")?;
+    let workload_jwk = generate_ed25519_jwk(NOTARY_RELAY_WORKLOAD_KID)?;
+    write_local_workload_jwks(project_dir, &workload_jwk)?;
+    let env_path = project_dir.join("secrets/local.env");
+    let current = fs::read_to_string(&env_path)
+        .with_context(|| format!("failed to read {}", env_path.display()))?;
+    let values = vec![
+        ("TUTORIAL_EVALUATOR_RAW".to_string(), evaluator.raw),
+        (
+            "TUTORIAL_EVALUATOR_HASH".to_string(),
+            evaluator.fingerprint,
+        ),
+        (
+            "REGISTRY_NOTARY_AUDIT_HASH_SECRET".to_string(),
+            random_token(48)?,
+        ),
+        (
+            "REGISTRY_RELAY_AUDIT_PSEUDONYM_EPOCH_1".to_string(),
+            random_token(48)?,
+        ),
+        (
+            NOTARY_RELAY_WORKLOAD_JWK_ENV.to_string(),
+            workload_jwk,
+        ),
+        (
+            "REGISTRY_RELAY_CONSULTATION_DATABASE_URL".to_string(),
+            "postgresql://relay_state_runtime@registry-consultation-db:5432/registry_relay?sslmode=require".to_string(),
+        ),
+        (
+            "REGISTRY_RELAY_STATE_MIGRATION_URL".to_string(),
+            "postgresql://postgres@registry-consultation-db:5432/registry_relay?sslmode=require".to_string(),
+        ),
+        (
+            "REGISTRY_RELAY_STATE_KEYRING_MAINTENANCE_URL".to_string(),
+            "postgresql://relay_state_maintenance@registry-consultation-db:5432/registry_relay?sslmode=require".to_string(),
+        ),
+        (
+            "REGISTRY_RELAY_STATE_KEYRING_READER_URL".to_string(),
+            "postgresql://relay_state_reader@registry-consultation-db:5432/registry_relay?sslmode=require".to_string(),
+        ),
+    ];
+    write_private_text(&env_path, &upsert_env_values(&current, &values))?;
+    Ok(())
+}
+
+fn write_local_workload_jwks(project_dir: &Path, private_jwk: &str) -> Result<()> {
+    let mut public_jwk: serde_json::Value =
+        serde_json::from_str(private_jwk).context("generated workload JWK is invalid")?;
+    public_jwk
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("generated workload JWK must be an object"))?
+        .remove("d");
+    let document = serde_json::to_string_pretty(&serde_json::json!({ "keys": [public_jwk] }))
+        .context("failed to render local workload JWKS")?;
+    write_text(
+        project_dir.join("notary/jwks.json"),
+        &format!("{document}\n"),
+    )
+}
+
+fn write_local_postgres_tls(project_dir: &Path) -> Result<()> {
+    let CertifiedKey { cert, key_pair } =
+        generate_simple_self_signed(vec!["registry-consultation-db".to_string()])
+            .context("failed to generate local consultation database TLS identity")?;
+    let certificate_pem = pem_block("CERTIFICATE", cert.der().as_ref());
+    let private_key_pem = Zeroizing::new(pem_block("PRIVATE KEY", &key_pair.serialize_der()));
+    write_text(
+        project_dir.join(CONSULTATION_POSTGRES_CERT_PATH),
+        &certificate_pem,
+    )?;
+    write_private_text(
+        &project_dir.join(CONSULTATION_POSTGRES_KEY_PATH),
+        &private_key_pem,
+    )
+}
+
+fn pem_block(label: &str, der: &[u8]) -> String {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(der);
+    let body = encoded
+        .as_bytes()
+        .chunks(64)
+        .map(|line| std::str::from_utf8(line).expect("base64 output is UTF-8"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("-----BEGIN {label}-----\n{body}\n-----END {label}-----\n")
+}
+
+fn generate_ed25519_jwk(kid: &str) -> Result<String> {
+    let mut seed = [0_u8; 32];
+    getrandom::fill(&mut seed).map_err(|error| anyhow!("random generation failed: {error}"))?;
+    let signing_key = Ed25519SigningKey::from_bytes(&seed);
+    let x = signing_key.verifying_key().to_bytes();
+    serde_json::to_string(&serde_json::json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "d": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(seed),
+        "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(x),
+        "alg": "EdDSA",
+        "kid": kid,
+    }))
+    .context("failed to render workload JWK")
+}
+
+fn prepare_notary_runtime(project_dir: &Path) -> Result<()> {
+    #[cfg(unix)]
+    let runtime_identity = Some(compose_runtime_identity_values(project_dir)?);
+    #[cfg(not(unix))]
+    let runtime_identity = None;
+    project_authoring::build_registry_project_for_local_tutorial(
+        &ProjectBuildOptions {
+            project_directory: project_dir.join(NOTARY_PROJECT_DIR),
+            environment: "local".to_string(),
+            against: None,
+            anchor: None,
+        },
+        runtime_identity,
+    )?;
+    refresh_notary_relay_token(project_dir, runtime_identity)
+}
+
+fn refresh_notary_relay_token(
+    project_dir: &Path,
+    runtime_identity: Option<RuntimeIdentity>,
+) -> Result<()> {
+    let project = Project::load(project_dir).ok();
+    let secrets_path = project
+        .as_ref()
+        .map(|project| project_dir.join(&project.local.secrets_env))
+        .unwrap_or_else(|| project_dir.join("secrets/local.env"));
+    let secrets = LocalEnv::load(&secrets_path)?;
+    let private_jwk = PrivateJwk::parse(secrets.required(NOTARY_RELAY_WORKLOAD_JWK_ENV)?)
+        .context("local Notary workload JWK is invalid")?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_secs();
+    let header = serde_json::json!({
+        "alg": "EdDSA",
+        "typ": "at+jwt",
+        "kid": NOTARY_RELAY_WORKLOAD_KID,
+    });
+    let claims = serde_json::json!({
+        "iss": "http://127.0.0.1:8081",
+        "sub": "registry-notary",
+        "client_id": "registry-notary",
+        "azp": "registry-notary",
+        "aud": "registry-relay",
+        "scope": "registry:consult:registration-verification",
+        "iat": now,
+        "nbf": now.saturating_sub(5),
+        "exp": now.saturating_add(3600),
+        "jti": random_token(16)?,
+    });
+    let encoded_header =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header)?);
+    let encoded_claims =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims)?);
+    let signing_input = format!("{encoded_header}.{encoded_claims}");
+    let signature = sign_payload(signing_input.as_bytes(), &private_jwk)
+        .context("failed to sign local Relay workload token")?;
+    let token = format!(
+        "{signing_input}.{}\n",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature)
+    );
+    write_private_runtime_text(
+        &project_dir.join(NOTARY_RELAY_TOKEN_PATH),
+        &token,
+        runtime_identity,
+    )
+}
+
+fn merge_notary_compose(project_dir: &Path, image_lock: &RegistryctlImageLock) -> Result<()> {
+    let path = project_dir.join("compose.yaml");
+    let contents =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    let mut compose: serde_yaml::Value = serde_yaml::from_str(&contents)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    let fragment = include_str!("templates/notary_addon/compose-fragment.yaml.tmpl")
+        .replace("{{relay_image}}", image_lock.relay_image())
+        .replace("{{notary_image}}", image_lock.notary_image());
+    let fragment: serde_yaml::Value =
+        serde_yaml::from_str(&fragment).context("failed to parse Notary Compose fragment")?;
+    merge_yaml_mapping(&mut compose, &fragment, "services")?;
+    merge_yaml_mapping(&mut compose, &fragment, "volumes")?;
+    merge_yaml_mapping(&mut compose, &fragment, "networks")?;
+    let rendered = serde_yaml::to_string(&compose).context("failed to render Compose file")?;
+    write_text(path, &format!("# Generated by registryctl.\n{rendered}"))
+}
+
+fn merge_yaml_mapping(
+    target: &mut serde_yaml::Value,
+    source: &serde_yaml::Value,
+    key: &str,
+) -> Result<()> {
+    let target_root = target
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow!("Compose document must be a mapping"))?;
+    let yaml_key = serde_yaml::Value::String(key.to_owned());
+    if !target_root.contains_key(&yaml_key) {
+        target_root.insert(
+            yaml_key.clone(),
+            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+        );
+    }
+    let target_mapping = target_root
+        .get_mut(&yaml_key)
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .ok_or_else(|| anyhow!("Compose {key} must be a mapping"))?;
+    let source_mapping = source[key]
+        .as_mapping()
+        .ok_or_else(|| anyhow!("Notary Compose {key} must be a mapping"))?;
+    for (entry_key, value) in source_mapping {
+        if target_mapping.contains_key(entry_key) {
+            bail!("Compose {key} already contains a generated Notary entry");
+        }
+        target_mapping.insert(entry_key.clone(), value.clone());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_private_text(path: &Path, contents: &str) -> Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    let mut permissions = file.metadata()?.permissions();
+    permissions.set_mode(0o600);
+    file.set_permissions(permissions)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_private_text(path: &Path, contents: &str) -> Result<()> {
+    write_text(path.to_path_buf(), contents)
+}
+
+#[cfg(unix)]
+fn write_private_runtime_text(
+    path: &Path,
+    contents: &str,
+    runtime_identity: Option<RuntimeIdentity>,
+) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("private runtime input has no parent"))?;
+    let name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .ok_or_else(|| anyhow!("private runtime input name is invalid"))?;
+    let mut staged = None;
+    for _ in 0..8 {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random).context("failed to create private runtime input identity")?;
+        let staged_path = parent.join(format!(
+            ".{name}.tmp-{}-{}",
+            std::process::id(),
+            hex::encode(random)
+        ));
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&staged_path);
+        match file {
+            Ok(file) => {
+                staged = Some((staged_path, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to stage {}", path.display()));
+            }
+        }
+    }
+    let (staged_path, mut file) =
+        staged.ok_or_else(|| anyhow!("failed to allocate private runtime input staging file"))?;
+    let staged_result = (|| {
+        file.write_all(contents.as_bytes())
+            .with_context(|| format!("failed to write {}", staged_path.display()))?;
+        let metadata = file.metadata()?;
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(0o600);
+        file.set_permissions(permissions)?;
+        if let Some(identity) = runtime_identity {
+            if metadata.uid() != identity.uid || metadata.gid() != identity.gid {
+                rustix::fs::fchown(
+                    &file,
+                    Some(rustix::fs::Uid::from_raw(identity.uid)),
+                    Some(rustix::fs::Gid::from_raw(identity.gid)),
+                )
+                .with_context(|| {
+                    format!(
+                        "failed to assign staged Notary runtime input to {}:{}",
+                        identity.uid, identity.gid
+                    )
+                })?;
+            }
+        }
+        file.sync_all()
+            .with_context(|| format!("failed to sync {}", staged_path.display()))
+    })();
+    drop(file);
+    if let Err(error) = staged_result {
+        let _ = fs::remove_file(&staged_path);
+        return Err(error);
+    }
+    if let Err(error) = fs::rename(&staged_path, path) {
+        let _ = fs::remove_file(&staged_path);
+        return Err(error).with_context(|| format!("failed to publish {}", path.display()));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_private_runtime_text(
+    path: &Path,
+    contents: &str,
+    _runtime_identity: Option<RuntimeIdentity>,
+) -> Result<()> {
+    write_private_text(path, contents)
+}
+
+fn init_benefits_project(dir: &Path, image_lock: &RegistryctlImageLock) -> Result<InitReport> {
     if dir.exists() {
         let mut entries =
             fs::read_dir(dir).with_context(|| format!("failed to inspect {}", dir.display()))?;
@@ -1761,8 +2385,22 @@ fn init_benefits_project(dir: &Path, image_lock: &RegistryctlImageLock) -> Resul
     write_text(dir.join("secrets/local.env"), &credentials.env_file())?;
     write_text(dir.join("output/.gitkeep"), "")?;
     sample::write_benefits_workbook(&dir.join("data/benefits_casework.xlsx"))?;
-    bruno_generate_project(dir, false)?;
-    Ok(())
+    let bruno_collection = bruno_generate_project(dir, false)?;
+    Ok(InitReport {
+        schema_version: INIT_REPORT_SCHEMA_VERSION,
+        status: "initialized",
+        project: generated_project_name(dir),
+        project_kind: InitProjectKind::RelaySpreadsheetApi,
+        output: dir.to_path_buf(),
+        source: InitSource::Sample {
+            id: Sample::Benefits.id().to_string(),
+        },
+        artifacts: InitArtifacts {
+            project_file: dir.join("registryctl.yaml"),
+            bruno_collection: Some(bruno_collection),
+            editor_manifest: None,
+        },
+    })
 }
 
 fn write_text(path: PathBuf, contents: &str) -> Result<()> {
@@ -1782,6 +2420,17 @@ fn create_relay_state_dirs(dir: &Path) -> Result<()> {
     )
 }
 
+fn create_notary_state_dirs(dir: &Path) -> Result<()> {
+    create_state_dirs(
+        dir,
+        &[
+            "state",
+            CONSULTATION_RELAY_STATE_DIR,
+            CONSULTATION_RELAY_CACHE_PATH,
+        ],
+    )
+}
+
 fn create_state_dirs(dir: &Path, paths: &[&str]) -> Result<()> {
     #[cfg(unix)]
     let identity = compose_runtime_identity_values(dir)?;
@@ -1797,10 +2446,14 @@ fn create_state_dirs(dir: &Path, paths: &[&str]) -> Result<()> {
 
 #[cfg(unix)]
 #[derive(Clone, Copy)]
-struct RuntimeIdentity {
+pub(crate) struct RuntimeIdentity {
     uid: u32,
     gid: u32,
 }
+
+#[cfg(not(unix))]
+#[derive(Clone, Copy)]
+pub(crate) struct RuntimeIdentity;
 
 #[cfg(unix)]
 fn compose_runtime_identity_values(dir: &Path) -> Result<RuntimeIdentity> {
@@ -2110,7 +2763,10 @@ fn bruno_relay_files(relay_base_url: &str, _secrets: &LocalEnv) -> Vec<Generated
             "Read households by district",
             11,
             "{{relay_base_url}}/v1/datasets/benefits_casework/entities/household/records?district=south",
-            &[("Authorization", "Bearer {{relay_row_key}}")],
+            &[
+                ("Authorization", "Bearer {{relay_row_key}}"),
+                ("Data-Purpose", "{{purpose}}"),
+            ],
         ),
         bruno_get(
             "Relay/Read household with members.bru",
@@ -2134,9 +2790,9 @@ fn bruno_relay_files(relay_base_url: &str, _secrets: &LocalEnv) -> Vec<Generated
         ),
         bruno_get(
             "Relay/Read pending people.bru",
-            "Read pending people",
+            "Read pending registrations",
             14,
-            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/person/records?eligibility_status=pending_review",
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/person/records?registration_status=pending",
             &[
                 ("Authorization", "Bearer {{relay_row_key}}"),
                 ("Data-Purpose", "{{purpose}}"),
@@ -2190,23 +2846,46 @@ fn bruno_relay_files(relay_base_url: &str, _secrets: &LocalEnv) -> Vec<Generated
             ],
         ),
         bruno_get(
+            "Relay/Row key cannot read identity.bru",
+            "Row key cannot read identity",
+            20,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/person_identity/records/per-2001?expand=household_contact",
+            &[
+                ("Authorization", "Bearer {{relay_row_key}}"),
+                ("Data-Purpose", "{{identity_purpose}}"),
+            ],
+        ),
+        bruno_get(
+            "Relay/Read restricted identity.bru",
+            "Read restricted identity",
+            21,
+            "{{relay_base_url}}/v1/datasets/benefits_casework/entities/person_identity/records/per-2001?expand=household_contact",
+            &[
+                ("Authorization", "Bearer {{relay_identity_key}}"),
+                ("Data-Purpose", "{{identity_purpose}}"),
+            ],
+        ),
+        bruno_get(
             "Relay/List aggregates.bru",
             "List aggregates",
-            20,
+            22,
             "{{relay_base_url}}/v1/datasets/benefits_casework/aggregates",
             &[("Authorization", "Bearer {{relay_aggregate_key}}")],
         ),
         bruno_get(
             "Relay/Run households by district aggregate.bru",
             "Run households by district aggregate",
-            21,
+            23,
             "{{relay_base_url}}/v1/datasets/benefits_casework/aggregates/by_district",
-            &[("Authorization", "Bearer {{relay_aggregate_key}}")],
+            &[
+                ("Authorization", "Bearer {{relay_aggregate_key}}"),
+                ("Data-Purpose", "{{purpose}}"),
+            ],
         ),
         bruno_get(
             "Relay/Run applications aggregate as CSV.bru",
             "Run applications aggregate as CSV",
-            22,
+            24,
             "{{relay_base_url}}/v1/datasets/benefits_casework/aggregates/applications_by_program_status?f=csv",
             &[
                 ("Authorization", "Bearer {{relay_aggregate_key}}"),
@@ -2217,7 +2896,7 @@ fn bruno_relay_files(relay_base_url: &str, _secrets: &LocalEnv) -> Vec<Generated
         bruno_post_json(
             "Relay/Query applications aggregate.bru",
             "Query applications aggregate",
-            23,
+            25,
             "{{relay_base_url}}/v1/datasets/benefits_casework/aggregates/applications_by_program_status/query",
             &[
                 ("Authorization", "Bearer {{relay_aggregate_key}}"),
@@ -2305,6 +2984,7 @@ fn bruno_example_env(project: &Project) -> Result<String> {
 fn bruno_env(project: &Project, secrets: &LocalEnv, example: bool) -> Result<String> {
     let mut values = Vec::new();
     values.push(("purpose", TUTORIAL_PURPOSE.to_string()));
+    values.push(("identity_purpose", TUTORIAL_IDENTITY_PURPOSE.to_string()));
     if project.relay.is_some() {
         values.push(("relay_base_url", project.relay_base_url()?.to_string()));
         values.push((
@@ -2318,6 +2998,10 @@ fn bruno_env(project: &Project, secrets: &LocalEnv, example: bool) -> Result<Str
         values.push((
             "relay_aggregate_key",
             bruno_env_value(secrets, "AGGREGATE_READER_RAW", example),
+        ));
+        values.push((
+            "relay_identity_key",
+            bruno_env_value(secrets, "IDENTITY_READER_RAW", example),
         ));
     }
 
@@ -2341,7 +3025,7 @@ fn bruno_env_value(secrets: &LocalEnv, name: &str, example: bool) -> String {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Project {
     // Not read anywhere today beyond load-time validation (see `deserialize_schema_version`);
@@ -2354,6 +3038,8 @@ struct Project {
     project: ProjectMeta,
     #[serde(default)]
     relay: Option<ProjectRelay>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notary: Option<ProjectNotary>,
     runtime: ProjectRuntime,
     local: ProjectLocal,
 }
@@ -2361,7 +3047,7 @@ struct Project {
 /// The `project:` metadata block `registryctl_manifest` writes into every generated
 /// `registryctl.yaml` (see `ProjectSection`); not consumed elsewhere today, but modeled here
 /// so `deny_unknown_fields` doesn't reject registryctl's own generated files.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectMeta {
     #[allow(dead_code)]
@@ -2382,7 +3068,7 @@ impl Project {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectRelay {
     config: PathBuf,
@@ -2390,6 +3076,16 @@ struct ProjectRelay {
     metadata: Option<PathBuf>,
     #[serde(default)]
     data: Vec<PathBuf>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectNotary {
+    project: PathBuf,
+    config: PathBuf,
+    consultation_relay_config: PathBuf,
+    claim_file: PathBuf,
+    workload_token: PathBuf,
 }
 
 /// Validates `schema_version` against `PROJECT_SCHEMA_VERSION`, the only version
@@ -2410,7 +3106,7 @@ where
     Ok(schema_version)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectRuntime {
     // Not read anywhere today (the compose engine/file are hardcoded elsewhere); modeled so
@@ -2423,9 +3119,13 @@ struct ProjectRuntime {
     relay_image: Option<String>,
     #[serde(default)]
     relay_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notary_image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    notary_base_url: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectLocal {
     secrets_env: PathBuf,
@@ -2441,6 +3141,16 @@ impl Project {
             .relay_base_url
             .as_deref()
             .ok_or_else(|| anyhow!("project runtime is missing relay_base_url"))
+    }
+
+    fn notary_base_url(&self) -> Result<&str> {
+        if self.notary.is_none() {
+            bail!("project does not have a Notary section");
+        }
+        self.runtime
+            .notary_base_url
+            .as_deref()
+            .ok_or_else(|| anyhow!("project runtime is missing notary_base_url"))
     }
 }
 
@@ -2577,11 +3287,17 @@ fn compose_platform_override(
 }
 
 fn project_uses_amd64_only_release_image(project: &Project) -> bool {
-    project
+    let relay_is_amd64_only = project
         .runtime
         .relay_image
         .as_deref()
-        .is_some_and(|image| image.starts_with(&format!("{RELAY_IMAGE_REPOSITORY}@sha256:")))
+        .is_some_and(|image| image.starts_with(&format!("{RELAY_IMAGE_REPOSITORY}@sha256:")));
+    let notary_is_amd64_only = project
+        .runtime
+        .notary_image
+        .as_deref()
+        .is_some_and(|image| image.starts_with(&format!("{NOTARY_IMAGE_REPOSITORY}@sha256:")));
+    relay_is_amd64_only || notary_is_amd64_only
 }
 
 fn is_linux_arm64_platform(platform: &str) -> bool {
@@ -2599,36 +3315,45 @@ fn compose_command_args(compose_file: &str, args: &[&str]) -> Vec<String> {
 }
 
 fn validate_project_fingerprints(project_dir: &Path, project: &Project) -> Result<()> {
-    let Some(relay) = &project.relay else {
-        return Ok(());
-    };
-    let config_path = project_dir.join(&relay.config);
-    let config = fs::read_to_string(&config_path)
+    let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
+    if let Some(relay) = &project.relay {
+        validate_config_api_key_fingerprints(&project_dir.join(&relay.config), "Relay", &secrets)?;
+    }
+    if let Some(notary) = &project.notary {
+        validate_config_api_key_fingerprints(
+            &project_dir.join(&notary.config),
+            "Notary",
+            &secrets,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_config_api_key_fingerprints(
+    config_path: &Path,
+    product: &str,
+    secrets: &LocalEnv,
+) -> Result<()> {
+    let config = fs::read_to_string(config_path)
         .with_context(|| format!("failed to read {}", config_path.display()))?;
     let config: serde_yaml::Value = serde_yaml::from_str(&config)
         .with_context(|| format!("failed to parse {}", config_path.display()))?;
-    let secrets = LocalEnv::load(&project_dir.join(&project.local.secrets_env))?;
     let api_keys = config["auth"]["api_keys"]
         .as_sequence()
-        .ok_or_else(|| anyhow!("relay config auth.api_keys must be a list"))?;
-
+        .ok_or_else(|| anyhow!("{product} config auth.api_keys must be a list"))?;
     for api_key in api_keys {
         let id = api_key["id"]
             .as_str()
-            .ok_or_else(|| anyhow!("relay config api key entry is missing id"))?;
-        let hash_env = api_key["fingerprint"]["name"]
-            .as_str()
-            .ok_or_else(|| anyhow!("relay config api key {id} is missing fingerprint env name"))?;
-
+            .ok_or_else(|| anyhow!("{product} config api key entry is missing id"))?;
+        let hash_env = api_key["fingerprint"]["name"].as_str().ok_or_else(|| {
+            anyhow!("{product} config api key {id} is missing fingerprint env name")
+        })?;
         let fingerprint = secrets.required(hash_env)?;
-        let raw_env = raw_env_name_for(id)?;
-        let raw_key = secrets.required(raw_env)?;
-        let expected_fingerprint = fingerprint_api_key(raw_key);
-        if fingerprint != expected_fingerprint {
+        let raw_key = secrets.required(raw_env_name_for(id)?)?;
+        if fingerprint != fingerprint_api_key(raw_key) {
             bail!("local raw key and fingerprint do not match for {id}");
         }
     }
-
     Ok(())
 }
 
@@ -2637,6 +3362,8 @@ fn raw_env_name_for(id: &str) -> Result<&'static str> {
         "metadata_reader" => Ok("METADATA_READER_RAW"),
         "row_reader" => Ok("ROW_READER_RAW"),
         "aggregate_reader" => Ok("AGGREGATE_READER_RAW"),
+        "identity_reader" => Ok("IDENTITY_READER_RAW"),
+        "tutorial-evaluator" => Ok("TUTORIAL_EVALUATOR_RAW"),
         _ => bail!("unknown generated api key id {id}"),
     }
 }
@@ -2668,6 +3395,7 @@ struct LocalCredentials {
     metadata_reader: Credential,
     row_reader: Credential,
     aggregate_reader: Credential,
+    identity_reader: Credential,
     audit_hash_secret: String,
 }
 
@@ -2677,6 +3405,7 @@ impl LocalCredentials {
             metadata_reader: Credential::generate("metadata_reader")?,
             row_reader: Credential::generate("row_reader")?,
             aggregate_reader: Credential::generate("aggregate_reader")?,
+            identity_reader: Credential::generate("identity_reader")?,
             audit_hash_secret: random_token(48)?,
         })
     }
@@ -2690,6 +3419,8 @@ ROW_READER_RAW={row_raw}
 ROW_READER_HASH={row_hash}
 AGGREGATE_READER_RAW={aggregate_raw}
 AGGREGATE_READER_HASH={aggregate_hash}
+IDENTITY_READER_RAW={identity_raw}
+IDENTITY_READER_HASH={identity_hash}
 REGISTRY_RELAY_AUDIT_HASH_SECRET={audit_hash_secret}
 ",
             metadata_raw = self.metadata_reader.raw,
@@ -2698,6 +3429,8 @@ REGISTRY_RELAY_AUDIT_HASH_SECRET={audit_hash_secret}
             row_hash = self.row_reader.fingerprint,
             aggregate_raw = self.aggregate_reader.raw,
             aggregate_hash = self.aggregate_reader.fingerprint,
+            identity_raw = self.identity_reader.raw,
+            identity_hash = self.identity_reader.fingerprint,
             audit_hash_secret = self.audit_hash_secret,
         )
     }
@@ -2771,11 +3504,7 @@ struct LocalSection<'a> {
 }
 
 fn registryctl_manifest(dir: &Path, image_lock: &RegistryctlImageLock) -> Result<String> {
-    let name = dir
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("my-first-api")
-        .to_string();
+    let name = generated_project_name(dir);
     let manifest = ProjectManifest {
         schema_version: PROJECT_SCHEMA_VERSION,
         project: ProjectSection {
@@ -2802,6 +3531,13 @@ fn registryctl_manifest(dir: &Path, image_lock: &RegistryctlImageLock) -> Result
     serde_yaml::to_string(&manifest).context("failed to render registryctl manifest")
 }
 
+fn generated_project_name(dir: &Path) -> String {
+    dir.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("my-first-api")
+        .to_string()
+}
+
 fn compose_yaml(image_lock: &RegistryctlImageLock) -> String {
     include_str!("templates/compose.yaml").replace("{{relay_image}}", image_lock.relay_image())
 }
@@ -2815,6 +3551,7 @@ fn relay_config(credentials: &LocalCredentials) -> String {
         .replace("{{metadata_id}}", credentials.metadata_reader.id)
         .replace("{{row_id}}", credentials.row_reader.id)
         .replace("{{aggregate_id}}", credentials.aggregate_reader.id)
+        .replace("{{identity_id}}", credentials.identity_reader.id)
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -2895,6 +3632,44 @@ fn run_smoke_checks(base_url: &str, secrets: &LocalEnv) -> SmokeReport {
             (
                 "Data-Purpose".to_string(),
                 "https://example.local/purpose/tutorial".to_string(),
+            ),
+        ],
+    );
+    record_smoke_check(
+        &mut checks,
+        base_url,
+        "row reader cannot read restricted identity fields",
+        "/v1/datasets/benefits_casework/entities/person_identity/records?id=per-2001",
+        403,
+        &[
+            bearer_header(secrets.value("ROW_READER_RAW")),
+            (
+                "Data-Purpose".to_string(),
+                TUTORIAL_IDENTITY_PURPOSE.to_string(),
+            ),
+        ],
+    );
+    record_smoke_check(
+        &mut checks,
+        base_url,
+        "identity reader with unpermitted Data-Purpose returns 403",
+        "/v1/datasets/benefits_casework/entities/person_identity/records?id=per-2001",
+        403,
+        &[
+            bearer_header(secrets.value("IDENTITY_READER_RAW")),
+            ("Data-Purpose".to_string(), TUTORIAL_PURPOSE.to_string()),
+        ],
+    );
+    record_row_data_smoke_check(
+        &mut checks,
+        base_url,
+        "identity reader can read one restricted identity record",
+        "/v1/datasets/benefits_casework/entities/person_identity/records?id=per-2001",
+        &[
+            bearer_header(secrets.value("IDENTITY_READER_RAW")),
+            (
+                "Data-Purpose".to_string(),
+                TUTORIAL_IDENTITY_PURPOSE.to_string(),
             ),
         ],
     );
@@ -3649,7 +4424,7 @@ mod tests {
         assert!(config_text.contains("# The raw bearer keys live in secrets/local.env."));
         assert!(config_text.contains("# Tables describe the source workbook."));
         assert!(config_text.contains("# Aggregates expose predeclared grouped statistics."));
-        assert!(config_text.contains("# Entities are the public API surface."));
+        assert!(config_text.contains("# Entities are API projections."));
         let config: Value = serde_yaml::from_str(&config_text).unwrap();
         let manifest: Value =
             serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
@@ -3683,13 +4458,312 @@ mod tests {
             2
         );
 
+        let entities = config["datasets"][0]["entities"].as_sequence().unwrap();
+        let entity = |name: &str| {
+            entities
+                .iter()
+                .find(|entity| entity["name"] == name)
+                .unwrap()
+        };
+        let person = entity("person");
+        let person_fields = person["fields"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|field| field["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            person_fields,
+            [
+                "id",
+                "household_id",
+                "date_of_birth",
+                "relationship_to_head",
+                "registration_status"
+            ]
+        );
+        assert_eq!(
+            person["api"]["governed_policy"]["permitted_purposes"][0],
+            TUTORIAL_PURPOSE
+        );
+
+        let person_identity = entity("person_identity");
+        assert_eq!(
+            person_identity["access"]["read_scope"],
+            "benefits_casework:identity_release"
+        );
+        assert_eq!(person_identity["api"]["max_limit"], 1);
+        assert_eq!(
+            person_identity["api"]["governed_policy"]["permitted_purposes"][0],
+            TUTORIAL_IDENTITY_PURPOSE
+        );
+        assert_eq!(
+            entity("household_contact")["access"]["read_scope"],
+            "benefits_casework:identity_release"
+        );
+
         let readme = fs::read_to_string(project.join("README.md")).unwrap();
         assert!(readme.contains("registryctl doctor --profile local --format json"));
         assert!(readme.contains("redacts local secret values"));
         assert!(readme.contains("Back up that file before upgrades"));
+        assert!(readme.contains("Notary evaluation state is in memory"));
+        assert!(readme.contains("may contain cached source rows"));
+        assert!(!readme.contains("preserve its configured PostgreSQL database"));
         assert!(readme.contains("https://docs.registrystack.org/operate/backup-and-restore/"));
         assert!(readme
             .contains("https://docs.registrystack.org/operate/single-node-compose-behind-proxy/"));
+    }
+
+    #[test]
+    fn add_notary_builds_an_editable_live_tutorial_addon() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-first-api");
+        let image_lock = test_image_lock();
+        init_spreadsheet_api(&project, Sample::Benefits, &image_lock).unwrap();
+
+        let report = add_notary_to_project(&project, &image_lock).unwrap();
+
+        assert_eq!(report.status, "added");
+        for path in [
+            NOTARY_CLAIM_FILE,
+            NOTARY_CONFIG_PATH,
+            CONSULTATION_RELAY_CONFIG_PATH,
+            NOTARY_RELAY_TOKEN_PATH,
+            CONSULTATION_POSTGRES_CERT_PATH,
+            CONSULTATION_POSTGRES_KEY_PATH,
+            "notary/postgres-init.sql",
+            "notary/jwks.json",
+        ] {
+            assert!(project.join(path).is_file(), "{path} should exist");
+        }
+        let manifest: Value =
+            serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
+                .unwrap();
+        assert_eq!(manifest["runtime"]["notary_base_url"], NOTARY_BASE_URL);
+        assert_eq!(manifest["notary"]["claim_file"], NOTARY_CLAIM_FILE);
+        assert!(project.join(CONSULTATION_RELAY_CACHE_PATH).is_dir());
+        assert_private_state_dirs(
+            &project,
+            &[
+                CONSULTATION_RELAY_STATE_DIR,
+                CONSULTATION_RELAY_CACHE_PATH,
+                NOTARY_CONFIG_DIR,
+                CONSULTATION_RELAY_CONFIG_DIR,
+            ],
+        );
+        assert_private_file(&project, NOTARY_RELAY_TOKEN_PATH);
+        assert_private_file(&project, CONSULTATION_POSTGRES_KEY_PATH);
+        assert_private_file(&project, NOTARY_CONFIG_PATH);
+        assert_private_file(&project, CONSULTATION_RELAY_CONFIG_PATH);
+        assert_notary_runtime_input_owners_match_project(&project);
+        let compose_text = fs::read_to_string(project.join("compose.yaml")).unwrap();
+        let compose: Value = serde_yaml::from_str(&compose_text).unwrap();
+        let services = &compose["services"];
+        let runtime_user =
+            "${REGISTRY_STACK_RUNTIME_UID:-65532}:${REGISTRY_STACK_RUNTIME_GID:-65532}";
+        for service in [
+            "registry-relay-consultation-bootstrap",
+            "registry-relay-consultation",
+            "registry-notary",
+        ] {
+            assert_eq!(services[service]["user"], runtime_user);
+        }
+        for service in ["registry-consultation-db", "registry-notary-jwks"] {
+            assert!(
+                services[service].get("user").is_none(),
+                "{service} must keep its image-provided runtime identity"
+            );
+        }
+        let consultation_mounts = services["registry-relay-consultation"]["volumes"]
+            .as_sequence()
+            .unwrap();
+        assert!(consultation_mounts.iter().any(|mount| {
+            mount == "./state/relay-consultation/cache:/var/lib/registry-relay/cache"
+        }));
+        assert!(!compose["volumes"]
+            .as_mapping()
+            .unwrap()
+            .contains_key("registry-consultation-cache"));
+        assert_eq!(
+            services["registry-notary"]["network_mode"],
+            "service:registry-notary-jwks"
+        );
+        assert!(consultation_mounts.iter().any(|mount| {
+            mount
+                == "./notary/project/.registry-stack/build/local/private/relay/config:/etc/registry-relay:ro"
+        }));
+        assert!(services["registry-notary"]["volumes"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .any(|mount| {
+                mount
+                    == "./notary/project/.registry-stack/build/local/private/notary/config:/etc/registry-notary:ro"
+            }));
+        assert!(!compose_text.contains("config/notary.yaml:/etc/registry-notary/notary.yaml"));
+        let postgres_init = fs::read_to_string(project.join("notary/postgres-init.sql")).unwrap();
+        assert!(!postgres_init.contains("GRANT relay_state_owner"));
+        assert!(
+            postgres_init.contains("GRANT CREATE ON DATABASE registry_relay TO relay_state_owner")
+        );
+        assert_eq!(services["registry-notary-jwks"]["ports"][0], "4255:8081");
+        assert!(services["registry-consultation-db"]["entrypoint"][2]
+            .as_str()
+            .unwrap()
+            .contains("ssl_cert_file=/var/lib/postgresql/tls/server.crt"));
+        assert_eq!(
+            compose["networks"]["registry-notary-internal"]["internal"],
+            true
+        );
+        assert!(compose["networks"].get("registry-notary-public").is_some());
+        assert_eq!(services["registry-notary"]["image"], TEST_NOTARY_IMAGE);
+        let claim_source = fs::read_to_string(project.join(NOTARY_CLAIM_FILE)).unwrap();
+        assert!(claim_source.contains("request.target.attributes.given_name"));
+        assert!(claim_source.contains("request.target.attributes.date_of_birth"));
+        assert!(claim_source.contains("person-registration-accepted"));
+        assert!(claim_source.contains("enrollment.registration_status == \"active\""));
+        assert!(!claim_source.contains("age_on"));
+        let integration = fs::read_to_string(
+            project.join("notary/project/integrations/person-demographics/integration.yaml"),
+        )
+        .unwrap();
+        assert!(integration.contains("outputs: [registration_status]"));
+        assert!(!integration.contains("outputs: [date_of_birth]"));
+        assert!(!integration.contains("outputs: [national_id]"));
+        let environment =
+            fs::read_to_string(project.join("notary/project/environments/local.yaml")).unwrap();
+        assert!(environment.contains("worker_memory_bytes: 1073741824"));
+        let secrets = LocalEnv::load(&project.join("secrets/local.env")).unwrap();
+        assert!(!secrets.value("TUTORIAL_EVALUATOR_RAW").is_empty());
+        assert_eq!(
+            secrets.required("TUTORIAL_EVALUATOR_HASH").unwrap(),
+            fingerprint_api_key(secrets.required("TUTORIAL_EVALUATOR_RAW").unwrap())
+        );
+        let token = fs::read_to_string(project.join(NOTARY_RELAY_TOKEN_PATH)).unwrap();
+        assert_eq!(token.trim().split('.').count(), 3);
+        let claims = token.trim().split('.').nth(1).unwrap();
+        let claims: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .decode(claims)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            claims["scope"],
+            "registry:consult:registration-verification"
+        );
+        let claim_path = project.join(NOTARY_CLAIM_FILE);
+        let claim = fs::read_to_string(&claim_path).unwrap().replace(
+            "enrollment.registration_status == \"active\"",
+            "(enrollment.registration_status == \"active\" || enrollment.registration_status == \"pending\")",
+        );
+        fs::write(&claim_path, claim).unwrap();
+        let fixture_path =
+            project.join("notary/project/integrations/person-demographics/fixtures/pending.yaml");
+        let fixture = fs::read_to_string(&fixture_path).unwrap().replace(
+            "claims: { person-registration-accepted: false }",
+            "claims: { person-registration-accepted: true }",
+        );
+        fs::write(&fixture_path, fixture).unwrap();
+        prepare_notary_runtime(&project).unwrap();
+        assert_notary_runtime_input_owners_match_project(&project);
+        let notary_config_text = fs::read_to_string(project.join(NOTARY_CONFIG_PATH)).unwrap();
+        assert!(notary_config_text.contains("person-registration-accepted"));
+        assert!(notary_config_text.contains("pending"));
+        let notary_config: Value = serde_yaml::from_str(&notary_config_text).unwrap();
+        assert_eq!(notary_config["state"]["storage"], "in_memory");
+        assert!(notary_config["evidence"]["credential_profiles"]
+            .as_mapping()
+            .is_some_and(serde_yaml::Mapping::is_empty));
+        let claims = notary_config["evidence"]["claims"].as_sequence().unwrap();
+        assert!(!claims.is_empty());
+        assert!(claims
+            .iter()
+            .all(|claim| claim["evidence_mode"]["type"] == "registry_backed"));
+        assert!(claims.iter().all(|claim| claim["credential_profiles"]
+            .as_sequence()
+            .is_some_and(Vec::is_empty)));
+        let signing_keys = notary_config["evidence"]["signing_keys"]
+            .as_mapping()
+            .unwrap();
+        assert_eq!(signing_keys.len(), 1);
+        assert!(signing_keys.contains_key("relay-workload"));
+
+        let error = add_notary_to_project(&project, &image_lock).unwrap_err();
+        assert!(format!("{error:#}").contains("already has a Notary"));
+    }
+
+    #[test]
+    fn add_notary_rolls_back_generated_project_files_on_failure() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-first-api");
+        let image_lock = test_image_lock();
+        init_spreadsheet_api(&project, Sample::Benefits, &image_lock).unwrap();
+        let compose_path = project.join("compose.yaml");
+        let secrets_path = project.join("secrets/local.env");
+        let manifest_path = project.join("registryctl.yaml");
+        let conflicting_compose = fs::read_to_string(&compose_path)
+            .unwrap()
+            .replace("services:\n", "services:\n  registry-notary: {}\n");
+        fs::write(&compose_path, &conflicting_compose).unwrap();
+        let original_secrets = fs::read_to_string(&secrets_path).unwrap();
+        let original_manifest = fs::read_to_string(&manifest_path).unwrap();
+
+        let error = add_notary_to_project(&project, &image_lock).unwrap_err();
+
+        assert!(format!("{error:#}").contains("already contains a generated Notary entry"));
+        assert!(!project.join("notary").exists());
+        for path in [
+            NOTARY_RELAY_TOKEN_PATH,
+            CONSULTATION_POSTGRES_CERT_PATH,
+            CONSULTATION_POSTGRES_KEY_PATH,
+        ] {
+            assert!(!project.join(path).exists());
+        }
+        assert!(!project.join(CONSULTATION_RELAY_STATE_DIR).exists());
+        assert_eq!(
+            fs::read_to_string(compose_path).unwrap(),
+            conflicting_compose
+        );
+        assert_eq!(fs::read_to_string(secrets_path).unwrap(), original_secrets);
+        assert_eq!(
+            fs::read_to_string(manifest_path).unwrap(),
+            original_manifest
+        );
+    }
+
+    #[test]
+    fn add_notary_refuses_a_preexisting_sidecar_without_modifying_it() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-first-api");
+        let image_lock = test_image_lock();
+        init_spreadsheet_api(&project, Sample::Benefits, &image_lock).unwrap();
+        let token_path = project.join(NOTARY_RELAY_TOKEN_PATH);
+        fs::write(&token_path, "operator-owned\n").unwrap();
+
+        let error = add_notary_to_project(&project, &image_lock).unwrap_err();
+
+        assert!(format!("{error:#}").contains("destination already exists"));
+        assert_eq!(fs::read_to_string(token_path).unwrap(), "operator-owned\n");
+        assert!(!project.join("notary").exists());
+    }
+
+    #[test]
+    fn add_notary_refuses_preexisting_consultation_state_without_modifying_it() {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("my-first-api");
+        let image_lock = test_image_lock();
+        init_spreadsheet_api(&project, Sample::Benefits, &image_lock).unwrap();
+        let state_dir = project.join(CONSULTATION_RELAY_STATE_DIR);
+        fs::create_dir_all(&state_dir).unwrap();
+        let marker = state_dir.join("operator-owned");
+        fs::write(&marker, "keep\n").unwrap();
+
+        let error = add_notary_to_project(&project, &image_lock).unwrap_err();
+
+        assert!(format!("{error:#}").contains("destination already exists"));
+        assert_eq!(fs::read_to_string(marker).unwrap(), "keep\n");
+        assert!(!project.join("notary").exists());
     }
 
     #[test]
@@ -3715,20 +4789,29 @@ mod tests {
             project.join("bruno/registry-api/Relay/Query applications aggregate.bru"),
         )
         .unwrap();
+        let identity_request = fs::read_to_string(
+            project.join("bruno/registry-api/Relay/Read restricted identity.bru"),
+        )
+        .unwrap();
         let openapi_request =
             fs::read_to_string(project.join("bruno/registry-api/Relay/OpenAPI.bru")).unwrap();
 
         assert!(local_bru.contains(&env_value(&env, "METADATA_READER_RAW")));
         assert!(local_bru.contains(&env_value(&env, "ROW_READER_RAW")));
         assert!(local_bru.contains(&env_value(&env, "AGGREGATE_READER_RAW")));
+        assert!(local_bru.contains(&env_value(&env, "IDENTITY_READER_RAW")));
         assert!(example_bru.contains("replace-with-metadata_reader_raw"));
         assert!(example_bru.contains("replace-with-aggregate_reader_raw"));
+        assert!(example_bru.contains("replace-with-identity_reader_raw"));
         assert!(!request.contains(&env_value(&env, "METADATA_READER_RAW")));
         assert!(!request.contains(&env_value(&env, "ROW_READER_RAW")));
         assert!(!aggregate_request.contains(&env_value(&env, "AGGREGATE_READER_RAW")));
         assert!(request.contains("{{relay_row_key}}"));
         assert!(aggregate_request.contains("{{relay_aggregate_key}}"));
+        assert!(aggregate_request.contains("Data-Purpose"));
         assert!(application_aggregate_request.contains("Data-Purpose"));
+        assert!(identity_request.contains("{{relay_identity_key}}"));
+        assert!(identity_request.contains("{{identity_purpose}}"));
         assert!(!openapi_request.contains("Authorization"));
         assert!(!openapi_request.contains("{{relay_metadata_key}}"));
     }
@@ -3996,6 +5079,7 @@ mod tests {
             ("metadata_reader", "METADATA_READER_HASH"),
             ("row_reader", "ROW_READER_HASH"),
             ("aggregate_reader", "AGGREGATE_READER_HASH"),
+            ("identity_reader", "IDENTITY_READER_HASH"),
         ] {
             let fingerprint = env_value(&env, env_name);
             assert!(
@@ -4025,6 +5109,7 @@ mod tests {
             ("METADATA_READER_HASH", "metadata_reader"),
             ("ROW_READER_HASH", "row_reader"),
             ("AGGREGATE_READER_HASH", "aggregate_reader"),
+            ("IDENTITY_READER_HASH", "identity_reader"),
         ] {
             let temp = TempDir::new().unwrap();
             let project_dir = temp.path().join("my-first-api");
@@ -4053,6 +5138,7 @@ mod tests {
             "METADATA_READER_HASH",
             "ROW_READER_HASH",
             "AGGREGATE_READER_HASH",
+            "IDENTITY_READER_HASH",
         ] {
             let temp = TempDir::new().unwrap();
             let project_dir = temp.path().join("my-first-api");
@@ -4119,6 +5205,14 @@ mod tests {
         assert!(lossy.contains("Applications"));
         assert!(lossy.contains("hh-1001"));
         assert!(lossy.contains("app-3001"));
+        assert!(lossy.contains("date_of_birth"));
+        assert!(lossy.contains("given_name"));
+        assert!(lossy.contains("national_id"));
+        assert!(lossy.contains("address_line"));
+        assert!(!lossy.contains("age_band"));
+        assert!(!lossy.contains("eligibility_status"));
+        assert!(!lossy.contains("is_primary_applicant"));
+        assert!(!lossy.contains("consent_reference"));
     }
 
     #[test]
@@ -4181,6 +5275,10 @@ mod tests {
                     "metadata-secret".to_string(),
                 ),
                 ("ROW_READER_RAW".to_string(), "row-secret".to_string()),
+                (
+                    "IDENTITY_READER_RAW".to_string(),
+                    "identity-secret".to_string(),
+                ),
             ]),
         };
         let report = run_smoke_checks("http://127.0.0.1:1", &secrets);
@@ -4189,8 +5287,9 @@ mod tests {
 
         assert!(!json.contains("metadata-secret"));
         assert!(!json.contains("row-secret"));
+        assert!(!json.contains("identity-secret"));
         assert!(!report.passed);
-        assert_eq!(parsed.checks.len(), 8);
+        assert_eq!(parsed.checks.len(), 11);
     }
 
     #[test]
@@ -4569,6 +5668,21 @@ mod tests {
     fn assert_private_state_dir(_project: &Path, _path: &str) {}
 
     #[cfg(unix)]
+    fn assert_private_file(project: &Path, path: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let actual_mode = fs::metadata(project.join(path))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(actual_mode, 0o600, "{path} should be private");
+    }
+
+    #[cfg(not(unix))]
+    fn assert_private_file(_project: &Path, _path: &str) {}
+
+    #[cfg(unix)]
     #[test]
     fn runtime_identity_uses_default_nonroot_for_root_owner() {
         let identity = runtime_identity_for_owner(0, 0);
@@ -4601,6 +5715,46 @@ mod tests {
             assert_eq!(uid, DEFAULT_NONROOT_CONTAINER_ID);
             assert_eq!(gid, DEFAULT_NONROOT_CONTAINER_ID);
         }
+    }
+
+    #[cfg(unix)]
+    fn assert_notary_runtime_input_owners_match_project(project: &Path) {
+        use std::os::unix::fs::MetadataExt;
+
+        let project_metadata = fs::metadata(project).unwrap();
+        let identity = runtime_identity_for_owner(project_metadata.uid(), project_metadata.gid());
+        for relative in [NOTARY_CONFIG_DIR, CONSULTATION_RELAY_CONFIG_DIR] {
+            assert_runtime_input_tree_owner(&project.join(relative), identity);
+        }
+        let token = project.join(NOTARY_RELAY_TOKEN_PATH);
+        assert_runtime_input_owner(&token, identity);
+    }
+
+    #[cfg(not(unix))]
+    fn assert_notary_runtime_input_owners_match_project(_project: &Path) {}
+
+    #[cfg(unix)]
+    fn assert_runtime_input_tree_owner(path: &Path, expected: RuntimeIdentity) {
+        let metadata = assert_runtime_input_owner(path, expected);
+        if metadata.is_dir() {
+            for entry in fs::read_dir(path).unwrap() {
+                assert_runtime_input_tree_owner(&entry.unwrap().path(), expected);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn assert_runtime_input_owner(path: &Path, expected: RuntimeIdentity) -> fs::Metadata {
+        use std::os::unix::fs::MetadataExt;
+
+        let metadata = fs::symlink_metadata(path).unwrap();
+        assert_eq!(
+            (metadata.uid(), metadata.gid()),
+            (expected.uid, expected.gid),
+            "{} should be owned by the selected runtime identity",
+            path.display()
+        );
+        metadata
     }
 
     fn fake_product_report(product: &str, status: &str, diagnostics: Vec<JsonValue>) -> String {

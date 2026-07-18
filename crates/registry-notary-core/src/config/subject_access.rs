@@ -155,7 +155,6 @@ impl SubjectAccessConfig {
                 profile,
                 &claim_ids,
                 &allowed_claim_ids,
-                &allowed_formats,
                 self.token_policy.max_credential_validity_seconds,
             )?;
         }
@@ -355,17 +354,18 @@ impl SubjectAccessDelegatedRelationshipConfig {
             "subject_access.delegation.credential_profiles",
             &self.credential_profiles,
         )?;
+        if !self.credential_profiles.is_empty() {
+            return invalid_subject_access(format!(
+                "subject_access.delegation.allowed_relationships relationship '{}' credential_profiles must be empty in 1.0; delegated attestation is evaluation-only. Remove credential_profiles to keep delegated evaluation, or issue a registry-backed non-delegated claim through subject_access.credential_profiles",
+                self.relationship_type
+            ));
+        }
         let allowed_purposes: HashSet<&str> =
             self.allowed_purposes.iter().map(String::as_str).collect();
         let allowed_formats: HashSet<&str> =
             self.allowed_formats.iter().map(String::as_str).collect();
         let allowed_disclosures: HashSet<&str> = self
             .allowed_disclosures
-            .iter()
-            .map(String::as_str)
-            .collect();
-        let allowed_profiles: HashSet<&str> = self
-            .credential_profiles
             .iter()
             .map(String::as_str)
             .collect();
@@ -398,23 +398,17 @@ impl SubjectAccessDelegatedRelationshipConfig {
                     self.proof_claim
                 ));
             }
+            if !claim.credential_profiles.is_empty() {
+                return invalid_subject_access(format!(
+                    "delegated claim '{claim_id}' credential_profiles must be empty in 1.0; delegated attestation is evaluation-only. Remove the claim credential_profiles binding to keep delegated evaluation, or issue a registry-backed non-delegated claim"
+                ));
+            }
             validate_delegated_attestation_claim(
-                self,
                 claim,
                 &allowed_purposes,
                 &allowed_formats,
                 &allowed_disclosures,
-                &allowed_profiles,
             )?;
-        }
-        for profile_id in &self.credential_profiles {
-            if !evidence.credential_profiles.contains_key(profile_id) {
-                return Err(EvidenceConfigError::InvalidSubjectAccessConfig {
-                    reason: format!(
-                        "subject_access.delegation credential_profiles references unknown profile '{profile_id}'"
-                    ),
-                });
-            }
         }
         validate_delegated_attestation_allow_lists_are_supported(self, evidence)?;
         Ok(())
@@ -771,7 +765,6 @@ pub(super) fn validate_subject_access_profile(
     profile: &CredentialProfileConfig,
     claim_ids: &HashSet<&str>,
     allowed_claim_ids: &HashSet<&str>,
-    allowed_formats: &HashSet<&str>,
     max_credential_validity_seconds: u64,
 ) -> Result<(), EvidenceConfigError> {
     if profile.validity_seconds <= 0 {
@@ -789,12 +782,6 @@ pub(super) fn validate_subject_access_profile(
     if validity_seconds > max_credential_validity_seconds {
         return invalid_subject_access(format!(
             "credential profile '{profile_id}' validity_seconds must not exceed the subject-access ceiling"
-        ));
-    }
-    if !allowed_formats.contains(profile.format.as_str()) {
-        return invalid_subject_access(format!(
-            "credential profile '{profile_id}' uses unallowed format '{}'",
-            profile.format
         ));
     }
     if profile.holder_binding.mode != "did" {
@@ -867,12 +854,9 @@ pub(super) fn validate_subject_access_allow_lists_are_supported(
         let supported_by_claim = allowed_claims
             .iter()
             .any(|claim| claim.formats.iter().any(|candidate| candidate == format));
-        let supported_by_profile = allowed_profiles
-            .iter()
-            .any(|profile| profile.format == *format);
-        if !supported_by_claim && !supported_by_profile {
+        if !supported_by_claim {
             return invalid_subject_access(format!(
-                "allowed_formats entry '{format}' is not supported by any allowed claim or profile"
+                "allowed_formats entry '{format}' is not supported by any allowed claim"
             ));
         }
     }
@@ -928,10 +912,10 @@ pub(super) fn validate_delegated_proof_claim_binding(
     let has_target = consultation
         .inputs
         .values()
-        .any(RelayConsultationInput::is_target_derived);
+        .any(RelayConsultationInput::is_authenticated_target_identifier);
     if !has_requester || !has_target {
         return invalid_subject_access(format!(
-            "delegated proof_claim '{}' must map both requester-derived and target-derived Relay inputs",
+            "delegated proof_claim '{}' must map both a requester-derived input and an authenticated target identifier",
             relationship.proof_claim
         ));
     }
@@ -951,12 +935,10 @@ pub(super) fn validate_delegated_proof_claim_binding(
 }
 
 pub(super) fn validate_delegated_attestation_claim(
-    relationship: &SubjectAccessDelegatedRelationshipConfig,
     claim: &ClaimDefinition,
     allowed_purposes: &HashSet<&str>,
     allowed_formats: &HashSet<&str>,
     allowed_disclosures: &HashSet<&str>,
-    allowed_profiles: &HashSet<&str>,
 ) -> Result<(), EvidenceConfigError> {
     if !claim.operations.evaluate.enabled {
         return invalid_subject_access(format!(
@@ -1002,17 +984,6 @@ pub(super) fn validate_delegated_attestation_claim(
             claim.id
         ));
     }
-    if !relationship.credential_profiles.is_empty()
-        && !claim
-            .credential_profiles
-            .iter()
-            .any(|profile| allowed_profiles.contains(profile.as_str()))
-    {
-        return invalid_subject_access(format!(
-            "delegated claim '{}' must reference an allowed credential profile",
-            claim.id
-        ));
-    }
     Ok(())
 }
 
@@ -1025,12 +996,6 @@ pub(super) fn validate_delegated_attestation_allow_lists_are_supported(
         .iter()
         .filter_map(|claim_id| evidence.claims.iter().find(|claim| claim.id == *claim_id))
         .collect();
-    let allowed_profiles: Vec<&CredentialProfileConfig> = relationship
-        .credential_profiles
-        .iter()
-        .filter_map(|profile_id| evidence.credential_profiles.get(profile_id))
-        .collect();
-
     for purpose in &relationship.allowed_purposes {
         if !allowed_claims
             .iter()
@@ -1046,12 +1011,9 @@ pub(super) fn validate_delegated_attestation_allow_lists_are_supported(
         let supported_by_claim = allowed_claims
             .iter()
             .any(|claim| claim.formats.iter().any(|candidate| candidate == format));
-        let supported_by_profile = allowed_profiles
-            .iter()
-            .any(|profile| profile.format == *format);
-        if !supported_by_claim && !supported_by_profile {
+        if !supported_by_claim {
             return invalid_subject_access(format!(
-                "subject_access.delegation allowed_formats entry '{format}' is not supported by any allowed claim or profile"
+                "subject_access.delegation allowed_formats entry '{format}' is not supported by any allowed claim"
             ));
         }
     }
@@ -1064,16 +1026,9 @@ pub(super) fn validate_delegated_attestation_allow_lists_are_supported(
                 .iter()
                 .any(|candidate| candidate == disclosure)
         });
-        let supported_by_profile = allowed_profiles.iter().any(|profile| {
-            profile
-                .disclosure
-                .allowed
-                .iter()
-                .any(|candidate| candidate == disclosure)
-        });
-        if !supported_by_claim && !supported_by_profile {
+        if !supported_by_claim {
             return invalid_subject_access(format!(
-                "subject_access.delegation allowed_disclosures entry '{disclosure}' is not supported by any allowed claim or profile"
+                "subject_access.delegation allowed_disclosures entry '{disclosure}' is not supported by any allowed claim"
             ));
         }
     }

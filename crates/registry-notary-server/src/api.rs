@@ -26,6 +26,7 @@ use status::*;
 
 pub(crate) use admin::{ConfigApplyPosture, ConfigEmergencyPosture};
 pub(crate) use audit::{evidence_error_response, evidence_error_response_with_request_id};
+pub use probes::AUDIT_CHAIN_INCONSISTENT_CODE;
 #[cfg(test)]
 use state::{ApiRuntimeSnapshot, IssuerRuntimeBundle};
 pub use state::{EvidenceIssuerResolver, RegistryNotaryApiState};
@@ -112,7 +113,9 @@ use crate::{
     preauth_state::{LoginState, PreauthorizationStateError},
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::{
-        claim_ids, claim_semantics_metadata, validate_batch_subject_limit, EvaluationAuditSnapshot,
+        build_claim_levels, claim_ids, claim_semantics_metadata, requested_claim_versions,
+        require_issuable_evaluation_provenance, require_registry_backed_credential_claims,
+        validate_batch_subject_limit, EvaluationAuditSnapshot,
     },
     standalone::{
         generate_numeric_tx_code, generate_opaque_token, pkce_s256_challenge, pre_auth_audit_event,

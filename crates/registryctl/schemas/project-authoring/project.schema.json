@@ -292,7 +292,7 @@
       }
     },
     "evidenceService": {
-      "description": "Notary evidence policy, consultations, claims, and credential profiles.",
+      "description": "Notary evidence policy, consultations, claims, and registry-backed credential profiles. Source-free claims remain evaluation-only and cannot be selected by a credential profile.",
       "type": "object",
       "additionalProperties": false,
       "required": ["kind", "version", "purpose", "legal_basis", "consent", "access", "claims"],
@@ -319,6 +319,7 @@
           }
         },
         "credential_profiles": {
+          "description": "Credential profiles may select only claims backed by an exact Relay consultation. Source-free claim evaluation cannot be exposed as credential capability.",
           "type": "object",
           "maxProperties": 32,
           "propertyNames": { "$ref": "#/$defs/stableId" },
@@ -347,12 +348,18 @@
       "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["from", "type"], "properties": { "from": { "type": "string", "pattern": "^request\\.variables\\.[a-z][a-z0-9._-]{0,95}$" }, "type": { "const": "date" } } }
     },
     "consultations": {
-      "description": "Relay consultations and their bindings to target request identifiers.",
+      "description": "Relay consultations and their closed bindings to target request identifiers or caller-supplied target attributes.",
       "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/stableId" },
-      "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["integration", "input"], "properties": { "integration": { "$ref": "#/$defs/stableId" }, "input": { "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "type": "string", "pattern": "^request\\.target\\.(?:id|identifiers\\.[A-Za-z][A-Za-z0-9._-]{0,95})$" } } } }
+      "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["integration", "input"], "properties": { "integration": { "$ref": "#/$defs/stableId" }, "input": { "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/stableId" }, "additionalProperties": { "$ref": "#/$defs/targetRequestMapping" } } } }
+    },
+    "targetRequestMapping": {
+      "description": "Closed target request binding. Attribute values are bounded typed caller-supplied context, not authenticated identifiers.",
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^request\\.target\\.(?:id|identifiers\\.[A-Za-z][A-Za-z0-9._-]{0,95}|attributes\\.[a-z][a-z0-9_]{0,63})$"
     },
     "claimValue": {
-      "description": "Explicit claim value type, nullability, and encoded-size bound.",
+      "description": "Explicit claim value type, nullability, and encoded-size bound for source-free evaluation. A source-free claim cannot be selected by a credential profile.",
       "type": "object", "additionalProperties": false, "required": ["type"],
       "properties": { "type": { "enum": ["boolean", "integer", "string", "date"] }, "nullable": { "type": "boolean" }, "max_bytes": { "type": "integer", "minimum": 1, "maximum": 65536 } }
     }

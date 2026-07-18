@@ -402,8 +402,16 @@ pub(crate) struct VerifiedContractSemantics {
     pub(crate) acquisition_class: VerifiedAcquisitionClass,
     pub(crate) integration_id: Box<str>,
     pub(crate) integration_revision: i64,
+    pub(crate) input_types: BTreeMap<String, VerifiedInputType>,
     pub(crate) source_observed_at: VerifiedSourceField,
     pub(crate) source_revision: VerifiedSourceField,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VerifiedInputType {
+    String,
+    Boolean,
+    Integer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -436,7 +444,7 @@ pub(crate) fn verify_contract(
     }
     let spec = contract.spec;
     verify_subject(&spec.subject)?;
-    verify_inputs(&spec.inputs, input_names)?;
+    let input_types = verify_inputs(&spec.inputs, input_names)?;
     verify_outputs(&spec.output, expected_outputs)?;
     verify_authorization(&spec.authorization, workload_client_id, purpose)?;
     verify_behavior(&spec.public_behavior)?;
@@ -471,6 +479,7 @@ pub(crate) fn verify_contract(
         },
         integration_id: spec.integration.id.into_boxed_str(),
         integration_revision: spec.integration.revision,
+        input_types,
         source_observed_at,
         source_revision,
     })
@@ -485,7 +494,10 @@ fn verify_subject(subject: &Subject) -> Result<(), ()> {
     }
 }
 
-fn verify_inputs(inputs: &BTreeMap<String, Input>, expected_names: &[String]) -> Result<(), ()> {
+fn verify_inputs(
+    inputs: &BTreeMap<String, Input>,
+    expected_names: &[String],
+) -> Result<BTreeMap<String, VerifiedInputType>, ()> {
     if !(1..=MAX_INPUTS).contains(&inputs.len())
         || inputs.keys().ne(expected_names.iter())
         || inputs.keys().any(|name| !stable_id(name))
@@ -500,7 +512,8 @@ fn verify_inputs(inputs: &BTreeMap<String, Input>, expected_names: &[String]) ->
         return Err(());
     }
     let mut aggregate_bytes = 0_u32;
-    for input in inputs.values() {
+    let mut input_types = BTreeMap::new();
+    for (name, input) in inputs {
         let (scalar, nullable) = resolved_input_type(&input.schema_type)?;
         if input.role == InputRole::Selector && nullable {
             return Err(());
@@ -555,12 +568,22 @@ fn verify_inputs(inputs: &BTreeMap<String, Input>, expected_names: &[String]) ->
             }
         };
         verify_allowed_values(input, scalar, nullable)?;
+        input_types.insert(
+            name.clone(),
+            match scalar {
+                InputScalarType::String => VerifiedInputType::String,
+                InputScalarType::Boolean => VerifiedInputType::Boolean,
+                InputScalarType::Integer => VerifiedInputType::Integer,
+            },
+        );
         let _ = input.canonicalization;
         aggregate_bytes = aggregate_bytes
             .checked_add(if nullable { bytes.max(4) } else { bytes })
             .ok_or(())?;
     }
-    (aggregate_bytes <= MAX_INPUT_BYTES).then_some(()).ok_or(())
+    (aggregate_bytes <= MAX_INPUT_BYTES)
+        .then_some(input_types)
+        .ok_or(())
 }
 
 fn resolved_input_type(schema: &InputSchemaType) -> Result<(InputScalarType, bool), ()> {

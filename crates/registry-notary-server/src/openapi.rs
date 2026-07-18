@@ -62,7 +62,7 @@ fn build_openapi_document() -> Value {
                     "responses": {
                         "200": { "description": "Evidence runtime is ready" },
                         "4XX": { "description": "Client error" },
-                        "503": { "description": "Evidence runtime is not ready or is degraded" }
+                        "503": { "description": "Evidence runtime is not ready, is degraded, or has an inconsistent audit chain" }
                     }
                 }
             },
@@ -346,7 +346,7 @@ fn build_openapi_document() -> Value {
                 "post": {
                     "summary": "Issue a credential through OpenID4VCI",
                     "operationId": "issueOid4vciCredential",
-                    "description": "Issues a dc+sd-jwt credential for an authenticated subject-access principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
+                    "description": "Issues a dc+sd-jwt credential for an authenticated direct subject-access principal only after a fresh non-delegated registry-backed evaluation records exact compiler pins and normalized unique Relay executions for every selected root's dependency closure. Source-free, delegated, and legacy evaluations are not issuable. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.",
                     "security": [
                         { "bearerAuth": [] }
                     ],
@@ -720,6 +720,7 @@ fn build_openapi_document() -> Value {
             "/v1/credentials": {
                 "post": {
                     "summary": "Issue a credential from a stored evaluation",
+                    "description": "Issues only when a fresh non-delegated registry-backed evaluation has exact compiler pins and normalized unique Relay executions for every selected root's dependency closure, matching the active configuration and public evaluation result. Source-free, delegated, and legacy evaluations remain renderable but are not issuable.",
                     "operationId": "issueCredential",
                     "requestBody": {
                         "required": true,
@@ -880,6 +881,11 @@ fn build_openapi_document() -> Value {
             enabled_signer_surface_checks_schema(),
         ),
         ("ReadinessProblem", readiness_problem_schema()),
+        ("ReadinessCheckProblem", readiness_check_problem_schema()),
+        (
+            "AuditChainInconsistentProblem",
+            audit_chain_inconsistent_problem_schema(),
+        ),
         ("ListClaimsResponse", list_claims_response_schema()),
         ("ClaimSummary", claim_summary_schema()),
         ("ClaimSemantics", claim_semantics_schema()),
@@ -1071,7 +1077,7 @@ fn add_response_examples(document: &mut Value) {
         "/ready",
         "get",
         "503",
-        "Evidence runtime is not ready or is degraded",
+        "Evidence runtime is not ready, is degraded, or has an inconsistent audit chain",
         json!({
             "type": format!("{}/readiness/not-ready", crate::PROBLEM_TYPE_BASE_URL),
             "title": "Evidence runtime is not ready",
@@ -1127,6 +1133,32 @@ fn add_response_examples(document: &mut Value) {
             }
         }),
     );
+    let readiness_media = &mut document["paths"]["/ready"]["get"]["responses"]["503"]["content"]
+        ["application/problem+json"];
+    let readiness_example = readiness_media["example"].take();
+    readiness_media
+        .as_object_mut()
+        .expect("readiness problem media type is an object")
+        .insert(
+            "examples".to_string(),
+            json!({
+                "notReady": {
+                    "summary": "A runtime readiness check is not ready",
+                    "value": readiness_example
+                },
+                "auditChainInconsistent": {
+                    "summary": "The retained audit chain failed integrity verification",
+                    "value": {
+                        "type": format!("{}/audit/chain-inconsistent", crate::PROBLEM_TYPE_BASE_URL),
+                        "title": "Audit chain inconsistent",
+                        "status": 503,
+                        "detail": "the retained audit chain has an integrity failure and requires operator recovery",
+                        "code": "audit.chain.inconsistent",
+                        "request_id": "01J00000000000000000000000"
+                    }
+                }
+            }),
+        );
     set_problem_response(
         document,
         "/admin/v1/reload",
@@ -2825,6 +2857,16 @@ fn enabled_signer_surface_checks_schema() -> Value {
 
 fn readiness_problem_schema() -> Value {
     json!({
+        "description": "Bounded readiness failures. Audit-chain integrity failures do not expose audit records, paths, hashes, or verification details.",
+        "oneOf": [
+            { "$ref": "#/components/schemas/ReadinessCheckProblem" },
+            { "$ref": "#/components/schemas/AuditChainInconsistentProblem" }
+        ]
+    })
+}
+
+fn readiness_check_problem_schema() -> Value {
+    json!({
         "type": "object",
         "required": [
             "type",
@@ -2837,17 +2879,73 @@ fn readiness_problem_schema() -> Value {
             "checks"
         ],
         "properties": {
-            "type": { "type": "string", "format": "uri" },
-            "title": { "type": "string" },
-            "status": { "type": "integer", "format": "int32" },
-            "detail": { "type": "string" },
-            "code": { "type": "string" },
-            "request_id": { "type": "string" },
+            "type": {
+                "type": "string",
+                "format": "uri",
+                "enum": [format!("{}/readiness/not-ready", crate::PROBLEM_TYPE_BASE_URL)]
+            },
+            "title": {
+                "type": "string",
+                "enum": ["Evidence runtime is not ready"]
+            },
+            "status": {
+                "type": "integer",
+                "format": "int32",
+                "enum": [503]
+            },
+            "detail": {
+                "type": "string",
+                "enum": ["one or more readiness checks are not ready"]
+            },
+            "code": {
+                "type": "string",
+                "enum": ["readiness.not_ready"]
+            },
+            "request_id": {
+                "type": "string",
+                "maxLength": 128
+            },
             "readiness_status": {
                 "type": "string",
                 "enum": ["degraded", "not_ready"]
             },
             "checks": { "$ref": "#/components/schemas/ReadinessChecks" }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn audit_chain_inconsistent_problem_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["type", "title", "status", "detail", "code", "request_id"],
+        "properties": {
+            "type": {
+                "type": "string",
+                "format": "uri",
+                "enum": [format!("{}/audit/chain-inconsistent", crate::PROBLEM_TYPE_BASE_URL)]
+            },
+            "title": {
+                "type": "string",
+                "enum": ["Audit chain inconsistent"]
+            },
+            "status": {
+                "type": "integer",
+                "format": "int32",
+                "enum": [503]
+            },
+            "detail": {
+                "type": "string",
+                "enum": ["the retained audit chain has an integrity failure and requires operator recovery"]
+            },
+            "code": {
+                "type": "string",
+                "enum": ["audit.chain.inconsistent"]
+            },
+            "request_id": {
+                "type": "string",
+                "maxLength": 128
+            }
         },
         "additionalProperties": false
     })
@@ -3283,6 +3381,7 @@ fn discovery_example() -> Value {
                 "json_ld_vc_issuance",
                 "data_integrity_proofs",
                 "credential_status",
+                "delegated_credential_issuance",
                 "mso_mdoc",
                 "openid4vci_full_issuer"
             ]
@@ -3483,8 +3582,7 @@ fn farmer_under_4ha_claim_example() -> Value {
         },
         "formats": [
             "application/vnd.registry-notary.claim-result+json",
-            "application/ld+json; profile=\"cccev\"",
-            "application/dc+sd-jwt"
+            "application/ld+json; profile=\"cccev\""
         ],
         "disclosure": {
             "default": "predicate",
@@ -3991,11 +4089,26 @@ mod tests {
             ready["503"]["content"]["application/problem+json"]["schema"]["$ref"],
             json!("#/components/schemas/ReadinessProblem")
         );
-        assert!(doc["components"]["schemas"]["ReadinessProblem"]["required"]
-            .as_array()
-            .expect("required array")
-            .iter()
-            .any(|field| field == "request_id"));
+        assert!(
+            doc["components"]["schemas"]["ReadinessCheckProblem"]["required"]
+                .as_array()
+                .expect("required array")
+                .iter()
+                .any(|field| field == "request_id")
+        );
+        assert_eq!(
+            doc["components"]["schemas"]["ReadinessProblem"]["oneOf"],
+            json!([
+                { "$ref": "#/components/schemas/ReadinessCheckProblem" },
+                { "$ref": "#/components/schemas/AuditChainInconsistentProblem" }
+            ])
+        );
+        let audit_problem = &doc["components"]["schemas"]["AuditChainInconsistentProblem"];
+        assert_eq!(
+            audit_problem["properties"]["code"]["enum"],
+            json!(["audit.chain.inconsistent"])
+        );
+        assert_eq!(audit_problem["additionalProperties"], json!(false));
 
         let custody = &doc["components"]["schemas"]["SignerCustodyChecks"];
         let required = custody["required"].as_array().expect("required array");
@@ -4010,18 +4123,22 @@ mod tests {
         }
 
         for status in ["200", "503"] {
-            let content_type = if status == "200" {
-                "application/json"
+            let checks = if status == "200" {
+                &ready[status]["content"]["application/json"]["example"]["checks"]
             } else {
-                "application/problem+json"
+                &ready[status]["content"]["application/problem+json"]["examples"]["notReady"]
+                    ["value"]["checks"]
             };
-            let checks = &ready[status]["content"][content_type]["example"]["checks"];
             assert!(checks.get("deployment").is_none());
             assert!(checks["relay"].get("total").is_some());
             assert!(checks["signing_providers"]["custody"]["surfaces"]
                 .get("access_token_issuance")
                 .is_some());
         }
+        let audit_example = &ready["503"]["content"]["application/problem+json"]["examples"]
+            ["auditChainInconsistent"]["value"];
+        assert_eq!(audit_example["code"], "audit.chain.inconsistent");
+        assert!(audit_example.get("checks").is_none());
     }
 
     #[test]
@@ -4282,7 +4399,7 @@ mod tests {
         );
         assert_eq!(
             doc["paths"]["/oid4vci/credential"]["post"]["description"],
-            json!("Issues a dc+sd-jwt credential for an authenticated subject-access principal. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.")
+            json!("Issues a dc+sd-jwt credential for an authenticated direct subject-access principal only after a fresh non-delegated registry-backed evaluation records exact compiler pins and normalized unique Relay executions for every selected root's dependency closure. Source-free, delegated, and legacy evaluations are not issuable. Error responses use the OpenID4VCI error envelope, not RFC 9457 Problem Details.")
         );
         assert_eq!(
             doc["components"]["schemas"]["TokenRequest"]["type"],
@@ -4505,23 +4622,31 @@ mod tests {
     }
 
     fn assert_problem_example(doc: &serde_json::Value, path: &str, method: &str, status: &str) {
-        let example = &doc["paths"][path][method]["responses"][status]["content"]
-            ["application/problem+json"]["example"];
+        let media =
+            &doc["paths"][path][method]["responses"][status]["content"]["application/problem+json"];
+        let examples = if media["example"].is_object() {
+            vec![&media["example"]]
+        } else {
+            media["examples"]
+                .as_object()
+                .map(|examples| examples.values().map(|example| &example["value"]).collect())
+                .unwrap_or_default()
+        };
         assert!(
-            example.is_object(),
+            !examples.is_empty() && examples.iter().all(|example| example.is_object()),
             "missing problem example for {method} {path} {status}"
         );
-        assert!(
-            example["type"]
-                .as_str()
-                .is_some_and(|value| {
+        for example in examples {
+            assert!(
+                example["type"].as_str().is_some_and(|value| {
                     value.starts_with("https://id.registrystack.org/problems/registry-notary/")
                 }),
-            "problem example must include a Registry Notary problem type for {method} {path} {status}"
-        );
-        assert!(
-            example["code"].is_string(),
-            "problem example must include a code for {method} {path} {status}"
-        );
+                "problem example must include a Registry Notary problem type for {method} {path} {status}"
+            );
+            assert!(
+                example["code"].is_string(),
+                "problem example must include a code for {method} {path} {status}"
+            );
+        }
     }
 }
