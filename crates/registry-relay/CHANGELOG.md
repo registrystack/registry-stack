@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.0 - 2026-07-18
+
 - Relay now publishes a reproducible, product-owned Draft 2020-12 schema for
   the complete runtime configuration. `registry-relay schema --format json`
   prints the committed artifact byte for byte, and local CI checks schema drift,
@@ -18,6 +20,14 @@
   `audit.chain.inconsistent` after detecting a retained-chain verification
   failure or a write-time foreign append. Transient audit I/O failures retain
   their existing request-level policy and do not poison readiness.
+- Script authoring diagnostics now reject unknown `source` and Crosswalk host
+  calls, unsupported arities, and invalid entrypoints before execution. The
+  bounded diagnostic identifies the first authored call, its source location,
+  and the closest valid signatures without retaining authored argument values.
+- Requests that present both `Authorization` and `x-api-key` are rejected
+  before either credential is parsed or validated with the candidate-neutral
+  `auth.multiple_credentials` code. Relay does not fall back to one credential
+  or reveal whether either candidate was valid.
 
 ## 0.10.0 - 2026-07-17
 

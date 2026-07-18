@@ -122,7 +122,13 @@ What 1.0 promises the institutions that run this.
       [v0.9.0 -> v0.10.0 -> v0.9.0 procedure](exercises/upgrade-v0.9.0-to-v0.10.0.md)
       adds the stopped-writer Notary Redis-to-PostgreSQL cutover, separate Relay
       consultation state bootstrap, multi-instance semantics, and typed-state
-      backup and restore gate for beta-12.
+      backup and restore gate for beta-12. The
+      [v0.10.0 -> v0.11.0 -> v0.10.0 procedure](exercises/upgrade-v0.10.0-to-v0.11.0.md)
+      adds beta-13 proof for issuance provenance narrowing, old-evaluation
+      rejection and re-evaluation, ambiguous credential rejection, retained
+      audit recovery, and version-matched rollback. It requires no database
+      migration solely for issuance narrowing and does not claim a successful
+      run until finalized-source and published-asset evidence are added.
 - [ ] Single-node Compose deployment behind an institution-owned reverse proxy,
       IAM, and front rate limiter documented. Evidence:
       [`single-node-compose-behind-proxy.mdx`](../docs/site/src/content/docs/operate/single-node-compose-behind-proxy.mdx)

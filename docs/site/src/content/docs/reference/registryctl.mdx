@@ -254,7 +254,7 @@ verification. Trust-anchor creation and key changes use the existing `anchor` su
 ## Project setup
 
 The legacy `init relay` command creates a local spreadsheet project.
-In registryctl `v0.10.0`, this generation command requires the strict
+In registryctl `v0.11.0`, this generation command requires the strict
 `registryctl-vX.Y.Z-image-lock.json` from the same release beside the running
 binary. Set `REGISTRYCTL_IMAGE_LOCK` only when an operator has verified the same
 file at a separate explicit path. Registryctl does not search the current
@@ -279,19 +279,21 @@ Notary-only, and combined deployments. Registry Notary does not have a direct-so
 generator. Registry-backed Notary claims consume compiler-pinned Relay consultations, while a
 Notary-only project contains source-free or self-attested evaluation-only claims.
 
-### Next-release local Notary add-on
+### Local Notary add-on
 
-The `release/1.0` source line adds `registryctl add notary`. This command is not in the published
-`v0.10.0` CLI. From a generated `benefits` spreadsheet project, it creates an editable authored
-project under `notary/project/`, adds a private consultation Relay and local Notary services, and
-generates local-only evaluator and workload credentials. It refuses an existing Notary directory
-or a second invocation instead of overwriting authored work.
+Registryctl `v0.11.0` adds `registryctl add notary`. From a generated `benefits` spreadsheet
+project, it creates an editable authored project under `notary/project/`, adds a private
+consultation Relay and local Notary services, and generates local-only evaluator and workload
+credentials. It refuses an existing Notary directory or a second invocation instead of
+overwriting authored work.
 
 `registryctl start` and `registryctl restart` validate and rebuild this add-on from the authored
 project before starting it. Registryctl validates the fixed local runtime overrides with the
 production product models and publishes one complete generated bundle, so services do not observe
 a partially updated contract. The command is a tutorial convenience for the generated benefits
 workbook, not a custom-registry import command.
+The tutorial path evaluates a registry-backed claim only. It does not issue a
+credential or prove wallet, credential-presentation, or OID4VCI interoperability.
 
 ## Lifecycle
 
@@ -347,6 +349,6 @@ Related environment variables are listed in the [environment variable reference]
 
 ## Source
 
-The released command tree comes from the registryctl source at `v0.10.0`.
+The released command tree comes from the registryctl source at `v0.11.0`.
 For its canonical definitions, read the
-[registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.10.0/crates/registryctl/src/main.rs).
+[registryctl command tree in `src/main.rs`](https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registryctl/src/main.rs).

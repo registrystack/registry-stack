@@ -6,6 +6,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
+import { parse } from 'yaml';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../..');
@@ -64,6 +65,17 @@ function latestStackReleaseVersion() {
   return newestVersion(versions, 'release/notes');
 }
 
+function latestStackManifest() {
+  const version = latestStackReleaseVersion();
+  const manifests = readdirSync(resolve(repoRoot, 'release/manifests'))
+    .filter((name) => /^registry-stack-.+[.]yaml$/.test(name))
+    .map((name) => parse(readRepoFile(`release/manifests/${name}`)))
+    .filter((manifest) => manifest?.stack?.version === version);
+
+  assert.equal(manifests.length, 1, `expected one release manifest for ${version}`);
+  return manifests[0];
+}
+
 test('product release notes track newest released changelog headings', () => {
   for (const product of productReleaseNotes) {
     const newestChangelog = newestVersion(
@@ -93,5 +105,26 @@ test('registryctl changelog tracks the latest stack release', () => {
     newestRegistryctl,
     latestStackReleaseVersion(),
     'registryctl changelog must carry a section for the latest stack release',
+  );
+});
+
+test('a hosted-held release does not claim completed current Solmara smoke evidence', () => {
+  const manifest = latestStackManifest();
+  const hostedHeld = manifest.warnings?.some(
+    (warning) => warning.code === 'hosted-publication-held',
+  );
+  if (!hostedHeld) {
+    return;
+  }
+
+  const publicEvidenceData = [
+    readRepoFile('docs/site/src/data/contracts.yaml'),
+    readRepoFile('docs/site/src/data/standards.yaml'),
+  ].join('\n');
+
+  assert.doesNotMatch(publicEvidenceData, /Solmara Lab checks the (?:current )?hosted/);
+  assert.match(
+    publicEvidenceData,
+    /hosted evidence remains pending until the lab is[\s\S]*repinned to published v[0-9]+[.][0-9]+[.][0-9]+ digests/,
   );
 });

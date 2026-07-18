@@ -40,7 +40,7 @@ exclude = [
 resolver = "2"
 
 [workspace.package]
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 rust-version = "1.95"
 license = "Apache-2.0"
@@ -51,29 +51,29 @@ repository = "https://github.com/registrystack/registry-stack"
 unsafe_code = "forbid"
 
 [workspace.dependencies]
-registry-config-report = { path = "crates/registry-config-report", version = "0.10.0" }
-registry-language-server = { path = "crates/registry-language-server", version = "0.10.0" }
-registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.10.0" }
-registry-notary-client = { path = "crates/registry-notary-client", version = "0.10.0" }
-registry-notary-core = { path = "crates/registry-notary-core", version = "0.10.0" }
-registry-relay = { path = "crates/registry-relay", version = "0.10.0" }
-registry-notary-server = { path = "crates/registry-notary-server", version = "0.10.0", default-features = false }
-registry-notary-worker-harness = { path = "crates/registry-notary-worker-harness", version = "0.10.0" }
-registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.10.0" }
-registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.10.0" }
-registry-platform-cache = { path = "crates/registry-platform-cache", version = "0.10.0" }
-registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.10.0" }
-registry-platform-config = { path = "crates/registry-platform-config", version = "0.10.0" }
-registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.10.0" }
-registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.10.0" }
-registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.10.0" }
-registry-platform-oid4vci = { path = "crates/registry-platform-oid4vci", version = "0.10.0" }
-registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.10.0" }
-registry-platform-ops = { path = "crates/registry-platform-ops", version = "0.10.0" }
-registry-platform-pdp = { path = "crates/registry-platform-pdp", version = "0.10.0" }
-registry-platform-replay = { path = "crates/registry-platform-replay", version = "0.10.0" }
-registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.10.0" }
-registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.10.0" }
+registry-config-report = { path = "crates/registry-config-report", version = "0.11.0" }
+registry-language-server = { path = "crates/registry-language-server", version = "0.11.0" }
+registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.11.0" }
+registry-notary-client = { path = "crates/registry-notary-client", version = "0.11.0" }
+registry-notary-core = { path = "crates/registry-notary-core", version = "0.11.0" }
+registry-relay = { path = "crates/registry-relay", version = "0.11.0" }
+registry-notary-server = { path = "crates/registry-notary-server", version = "0.11.0", default-features = false }
+registry-notary-worker-harness = { path = "crates/registry-notary-worker-harness", version = "0.11.0" }
+registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.11.0" }
+registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.11.0" }
+registry-platform-cache = { path = "crates/registry-platform-cache", version = "0.11.0" }
+registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.11.0" }
+registry-platform-config = { path = "crates/registry-platform-config", version = "0.11.0" }
+registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.11.0" }
+registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.11.0" }
+registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.11.0" }
+registry-platform-oid4vci = { path = "crates/registry-platform-oid4vci", version = "0.11.0" }
+registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.11.0" }
+registry-platform-ops = { path = "crates/registry-platform-ops", version = "0.11.0" }
+registry-platform-pdp = { path = "crates/registry-platform-pdp", version = "0.11.0" }
+registry-platform-replay = { path = "crates/registry-platform-replay", version = "0.11.0" }
+registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.11.0" }
+registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.11.0" }
 
 crosswalk-core = { git = "https://github.com/PublicSchema/crosswalk", rev = "1d44ec735fdc8a7c719264b339574371e8330337", version = "0.2.0" }
 crosswalk-functions = { git = "https://github.com/PublicSchema/crosswalk", rev = "1d44ec735fdc8a7c719264b339574371e8330337", version = "0.2.0" }

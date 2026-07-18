@@ -44,7 +44,7 @@ credentials, or production records in commands or source control.
 Pull a release tag or verified digest rather than `latest`:
 
 ```sh
-docker pull ghcr.io/registrystack/registry-relay:v0.10.0
+docker pull ghcr.io/registrystack/registry-relay:v0.11.0
 ```
 
 Review the release verification evidence before promoting an image into an institutional
@@ -89,7 +89,7 @@ Generate an API key and store only its fingerprint in the environment named by t
 
 ```sh
 docker run --rm \
-  ghcr.io/registrystack/registry-relay:v0.10.0 \
+  ghcr.io/registrystack/registry-relay:v0.11.0 \
   generate-api-key --id program-system
 ```
 
@@ -111,7 +111,7 @@ docker run --rm \
   -v "$(pwd)/data:/var/lib/registry-relay/data:ro" \
   -v "$(pwd)/cache:/var/lib/registry-relay/cache" \
   --env-file <verified-private-env-file> \
-  ghcr.io/registrystack/registry-relay:v0.10.0 \
+  ghcr.io/registrystack/registry-relay:v0.11.0 \
   --config /etc/registry-relay/config.yaml
 ```
 

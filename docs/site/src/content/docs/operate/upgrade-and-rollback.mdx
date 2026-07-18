@@ -33,7 +33,7 @@ anti-rollback state before starting its binary. The
 
 ## Prerequisites
 
-- Your deployment pins a version tag (`v0.10.0`) or an image digest, never `latest`.
+- Your deployment pins a version tag (`v0.11.0`) or an image digest, never `latest`.
 - You know where your deployment keeps its persistent state. At minimum: the audit log
   directory of each product, the anti-rollback state file if `config_trust` is enabled
   (`antirollback_state_path`), each PostgreSQL database backing Relay consultation or Registry
@@ -43,7 +43,7 @@ anti-rollback state before starting its binary. The
   before changing the running containers. Store each release's config and anti-rollback
   state as a separate restore set; do not overwrite an older set with a newer file.
 - You can run the release-verification steps in
-  [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.10.0/SECURITY.md)
+  [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.11.0/SECURITY.md)
   (cosign, and slsa-verifier for releases with provenance).
 
 ## Upgrade
@@ -123,6 +123,13 @@ anti-rollback state before starting its binary. The
    issuance, metrics, the historical Redis replay/nonce path used by that release, and
    anti-rollback monotonicity were not exercised by that run. Current Registry Notary releases
    keep replay and nonce correctness state in PostgreSQL.
+
+   The current
+   [v0.10.0 -> v0.11.0 -> v0.10.0 release-gate procedure](https://github.com/registrystack/registry-stack/blob/v0.11.0/release/exercises/upgrade-v0.10.0-to-v0.11.0.md)
+   adds old-evaluation rejection and re-evaluation before issuance,
+   candidate-neutral multiple-credential rejection, and retained audit-chain
+   recovery. It is a prepared procedure and does not claim a successful run
+   until finalized-source and published-asset evidence are attached.
 
 8. Keep the previous release's artifacts, config, exact anti-rollback state, database backups,
    role records, and key-lifecycle restore sets until the new release has run through your soak

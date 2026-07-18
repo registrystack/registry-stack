@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.11.0
+
+- Registry Manifest has no user-visible changes in this release.
+
 ## 0.10.0
 
 - BREAKING: source-manifest and policy digests now use Registry Stack's shared

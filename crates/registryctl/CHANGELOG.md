@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-18
+
 ### Added
 
 - `registryctl check` now returns a bounded typed authoring diagnostic
@@ -28,6 +30,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   developer previews for VS Code and Zed launch the same server alongside their existing YAML
   language servers. They are not marketplace extensions or release artifacts; generated editor
   schema setup remains the stable beta path for YAML validation, completion, hover, and formatting.
+- `registryctl add notary` extends the generated local benefits project with
+  an editable, registry-backed Notary evaluation tutorial and a private
+  compiler-pinned Relay consultation. This local journey evaluates claim
+  results only; it does not issue a credential or prove wallet or OID4VCI
+  interoperability.
+- `registryctl init --from` continues to expose exactly five public starters:
+  HTTP, DHIS2 Tracker, OpenCRVS DCI, FHIR R4, and exact snapshot. A committed
+  catalog now drives documentation and tests for additional maintained and
+  conformance workspaces without turning them into public starters.
 
 ### Changed
 
