@@ -51,5 +51,6 @@ ulid.workspace = true
 axum-test = { version = "20" }
 chrono = { version = "0.4" }
 jsonschema.workspace = true
+registry-platform-authcommon.workspace = true
 tempfile = { version = "3" }
 wiremock = { version = "0.6" }

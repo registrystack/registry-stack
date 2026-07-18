@@ -26,7 +26,7 @@ The crate builds the `registry-notary` binary.
 | `hash-api-key` | Generate or hash a Registry Notary API key. |
 | `demo-issuer-key` | Generate a demo Ed25519 issuer JWK for local VC smoke tests. |
 | `healthcheck` | Probe the local HTTP health endpoint and exit non-zero when unhealthy. |
-| `schema` | Print a lightweight JSON schema for top-level config discovery. |
+| `schema` | Print the complete Draft 2020-12 standalone configuration schema. |
 
 ## Typical Use
 
@@ -47,6 +47,18 @@ Probe the container health endpoint without requiring curl in the image:
 ```sh
 cargo run -p registry-notary -- healthcheck --url http://127.0.0.1:8080/healthz
 ```
+
+Print the committed configuration contract:
+
+```sh
+cargo run -p registry-notary -- schema > schemas/registry-notary.config.schema.json
+```
+
+The repository artifact is regenerated and checked with
+`cd products/notary && just config-schema-check`. The schema covers YAML
+structure and scalar types. `registry-notary doctor` remains authoritative
+for environment and secret availability, filesystem and Relay access,
+deployment gates, and cross-field validation.
 
 ## Features
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added the committed Draft 2020-12 Registry Notary runtime configuration
+  schema at `schemas/registry-notary.config.schema.json`. `registry-notary
+  schema`, `just config-schema-generate`, and the schema drift check all use
+  the production `StandaloneRegistryNotaryConfig` deserialization graph.
+  The operator reference now has a bidirectional key-path contract check.
+
 ## [0.11.0] - 2026-07-18
 
 ### Added

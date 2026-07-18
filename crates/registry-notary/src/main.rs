@@ -187,7 +187,7 @@ enum Command {
     CelWorker,
     /// Print machine-readable build metadata and compiled capabilities.
     BuildInfo,
-    /// Print a lightweight JSON schema for top-level config discovery.
+    /// Print the complete Draft 2020-12 standalone configuration schema.
     Schema,
 }
 
@@ -357,7 +357,7 @@ async fn run(args: Args) -> Result<ExitCode, Box<dyn std::error::Error>> {
             Ok(ExitCode::SUCCESS)
         }
         Some(Command::Schema) => {
-            println!("{}", serde_json::to_string_pretty(&lightweight_schema())?);
+            print!("{}", registry_notary_core::config::schema::document_json());
             Ok(ExitCode::SUCCESS)
         }
     }

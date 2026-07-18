@@ -3,7 +3,7 @@
 
 use super::*;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DisclosureConfig {
     #[serde(default = "default_disclosure_profile")]
@@ -36,7 +36,7 @@ pub(in crate::config) fn default_disclosure_downgrade() -> String {
     "deny".to_string()
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CredentialDisclosureConfig {
     #[serde(default)]

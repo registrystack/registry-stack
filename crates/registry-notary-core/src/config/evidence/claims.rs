@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Claim definitions, rules, and operation configuration.
 
+use std::borrow::Cow;
+
+use schemars::{Schema, SchemaGenerator};
+
 use super::*;
 
 pub const MAX_CLAIM_DEPENDENCY_NODES_V1: usize = 64;
@@ -10,7 +14,7 @@ fn default_claim_formats() -> Vec<String> {
     vec![FORMAT_CLAIM_RESULT_JSON.to_string()]
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimDefinition {
     pub id: String,
@@ -66,21 +70,32 @@ impl<'de> Deserialize<'de> for ClaimEvidenceMode {
     where
         Deserializer: serde::Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-        enum SealedClaimEvidenceMode {
-            RegistryBacked {
-                consultations: BTreeMap<String, RelayConsultationConfig>,
-            },
-            SelfAttested {},
-        }
-
         match SealedClaimEvidenceMode::deserialize(deserializer)? {
             SealedClaimEvidenceMode::RegistryBacked { consultations } => {
                 Ok(Self::RegistryBacked { consultations })
             }
             SealedClaimEvidenceMode::SelfAttested {} => Ok(Self::SelfAttested),
         }
+    }
+}
+
+/// The tagged configuration wire contract shared by deserialization and schema generation.
+#[derive(Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+enum SealedClaimEvidenceMode {
+    RegistryBacked {
+        consultations: BTreeMap<String, RelayConsultationConfig>,
+    },
+    SelfAttested {},
+}
+
+impl JsonSchema for ClaimEvidenceMode {
+    fn schema_name() -> Cow<'static, str> {
+        "ClaimEvidenceMode".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        generator.subschema_for::<SealedClaimEvidenceMode>()
     }
 }
 
@@ -104,24 +119,25 @@ impl ClaimEvidenceMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RelayConsultationConfig {
     pub profile: RelayConsultationProfileRef,
+    #[schemars(with = "BTreeMap<String, schema::RelayConsultationInputSchema>")]
     pub inputs: BTreeMap<String, RelayConsultationInput>,
     /// Complete closed public output schema expected from the pinned profile.
     #[serde(default)]
     pub outputs: BTreeMap<String, RelayOutputContract>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RelayConsultationProfileRef {
     pub id: String,
     pub contract_hash: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RelayOutputContract {
     Boolean {
@@ -167,7 +183,7 @@ impl RelayOutputContract {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RequestVariableConfig {
     pub from: String,
@@ -175,7 +191,7 @@ pub struct RequestVariableConfig {
     pub value_type: RequestVariableType,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestVariableType {
     Date,
@@ -727,7 +743,7 @@ fn invalid_claim_evidence_mode<T>(
     })
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimSemanticConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -744,7 +760,7 @@ pub struct ClaimSemanticConfig {
     pub value_mapping: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimValueConfig {
     #[serde(rename = "type", default)]
@@ -759,7 +775,7 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimInputConfig {
     pub name: String,
@@ -767,7 +783,7 @@ pub struct ClaimInputConfig {
     pub input_type: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RuleConfig {
     ConsultationOutput {
@@ -855,7 +871,7 @@ pub(in crate::config) fn invalid_claim_semantics<T>(
     })
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CelBindingsConfig {
     #[serde(default)]
@@ -864,7 +880,7 @@ pub struct CelBindingsConfig {
     pub vars: BTreeMap<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimBindingConfig {
     pub claim: String,
@@ -872,7 +888,7 @@ pub struct ClaimBindingConfig {
     pub binding_type: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimOperationsConfig {
     #[serde(default = "default_enabled_operation")]
@@ -890,7 +906,7 @@ impl Default for ClaimOperationsConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OperationConfig {
     #[serde(default)]
@@ -901,7 +917,7 @@ pub(in crate::config) fn default_enabled_operation() -> OperationConfig {
     OperationConfig { enabled: true }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BatchOperationConfig {
     #[serde(default)]
@@ -919,7 +935,7 @@ impl Default for BatchOperationConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CccevConfig {
     #[serde(default)]
@@ -930,7 +946,7 @@ pub struct CccevConfig {
     pub evidence_type_iri: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OotsConfig {
     #[serde(default)]

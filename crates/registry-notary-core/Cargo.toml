@@ -22,6 +22,7 @@ registry-platform-httputil.workspace = true
 registry-platform-oid4vci.workspace = true
 registry-platform-ops.workspace = true
 registry-platform-sdjwt.workspace = true
+schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
