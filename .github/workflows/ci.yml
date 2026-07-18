@@ -459,7 +459,10 @@ jobs:
           cache: npm
           cache-dependency-path: editors/vscode/package-lock.json
 
-      - name: Package and test VS Code developer preview
+      - name: Test editor installer
+        run: bash editors/tests/install_test.sh
+
+      - name: Package and test VS Code integration
         working-directory: editors/vscode
         run: |
           npm ci

@@ -151,12 +151,22 @@ the workspace recommendation for Red Hat YAML. Zed includes YAML language-server
 The generated schema setup is the stable beta editor path.
 It provides YAML validation, completion, hover, and formatting without a source checkout.
 
-VS Code and Zed semantic navigation are optional, source-installable developer previews for this
-beta. They are not marketplace extensions and are not available as release assets.
-Build and install them from the Registry Stack source tree only when you want cross-file
-definitions, references, workspace and document symbols, and missing, duplicate, or ambiguous
-reference diagnostics.
-Both previews launch the same semantic server, either as `registry-language-server` or through
+VS Code and Zed semantic navigation are optional beta integrations installed from the Registry
+Stack source tree. They are not marketplace extensions and are not available as release assets.
+Project configuration and editor installation are separate. Configure projects with `init` or
+`authoring editor`, and install an editor integration once from a matching source checkout:
+
+```sh
+./editors/install.sh vscode
+./editors/install.sh zed
+```
+
+The installer verifies the matching `registryctl` and embedded language server without reading or
+changing a project. Pass `--open <existing-directory>` only to open a directory after installation;
+it does not configure that directory. Use these integrations when you want cross-file definitions,
+references, workspace and document symbols, and missing, duplicate, or ambiguous reference
+diagnostics.
+Both integrations launch the same semantic server, either as `registry-language-server` or through
 `registryctl authoring language-server`, alongside the YAML language server.
 The YAML language server continues to own syntax, schemas, completion, hover, and formatting.
 Follow `editors/vscode/README.md` or `editors/zed/README.md` in the same source checkout.
