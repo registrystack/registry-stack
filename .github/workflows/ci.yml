@@ -24,6 +24,7 @@ jobs:
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
       docs: ${{ steps.filter.outputs.docs }}
+      editors: ${{ steps.filter.outputs.editors }}
       registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}
     steps:
       - name: Checkout
@@ -41,6 +42,7 @@ jobs:
           release_tool=false
           release_source_proof=false
           docs=false
+          editors=false
           registryctl_tutorial=false
           all=false
 
@@ -60,6 +62,7 @@ jobs:
             release_tool=true
             release_source_proof=true
             docs=true
+            editors=true
             registryctl_tutorial=true
           }
 
@@ -102,6 +105,11 @@ jobs:
                   ;;
               esac
               case "${path}" in
+                editors/*)
+                  editors=true
+                  ;;
+              esac
+              case "${path}" in
                 Cargo.toml|Cargo.lock|rust-toolchain*|LICENSE|docs/site/package.json|docs/site/package-lock.json|docs/site/scripts/check-registryctl-tutorials.sh|docs/site/scripts/registryctl-tutorial.*|docs/site/src/content/docs/tutorials/publish-spreadsheet-secured-registry-api.mdx|docs/site/src/content/docs/tutorials/verify-claim-registry-api.mdx|crates/registry-config-report/*|crates/registry-manifest-*/*|crates/registry-notary/*|crates/registry-notary-*/*|crates/registry-platform-*/*|crates/registry-relay/*|crates/registryctl/*|products/notary/*|release/docker/Dockerfile.registry-notary|release/docker/Dockerfile.registry-relay)
                   registryctl_tutorial=true
                   ;;
@@ -114,6 +122,7 @@ jobs:
             echo "release_tool=${release_tool}"
             echo "release_source_proof=${release_source_proof}"
             echo "docs=${docs}"
+            echo "editors=${editors}"
             echo "registryctl_tutorial=${registryctl_tutorial}"
           } >> "${GITHUB_OUTPUT}"
 
@@ -377,3 +386,39 @@ jobs:
       - name: Check docs build
         working-directory: docs/site
         run: npm run check
+
+  editor-extensions:
+    name: Editor extensions
+    needs: changes
+    if: needs.changes.outputs.editors == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 22.12.0
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      - name: Package and test VS Code developer preview
+        working-directory: editors/vscode
+        run: |
+          npm ci
+          npm run package:dev
+          cargo build --locked -p registry-language-server
+          xvfb-run -a npm test
+          cmp ../../LICENSE LICENSE
+
+      - name: Install Zed extension target
+        run: rustup target add wasm32-wasip2
+
+      - name: Check Zed extension
+        run: |
+          cargo check --locked --target wasm32-wasip2 --manifest-path editors/zed/Cargo.toml
+          cmp LICENSE editors/zed/LICENSE
