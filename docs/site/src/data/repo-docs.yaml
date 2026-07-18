@@ -8,7 +8,7 @@ repos:
   registry-relay:
     remote: https://github.com/registrystack/registry-stack
     ref: HEAD
-    version: v0.10.0
+    version: v0.11.0
     local: ../..
     openapi: crates/registry-relay/openapi/registry-relay.openapi.json
     archive_remote: https://github.com/jeremi/registry-relay
@@ -23,7 +23,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [openapi, ogc-api-records, ogc-api-features, ogc-api-edr, odrl, sp-dci]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [openapi, ogc-api-records, ogc-api-features, ogc-api-edr, odrl, sp-dci]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
@@ -39,7 +39,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [openapi, sdmx, w3c-did]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [openapi, sdmx, w3c-did]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
@@ -54,7 +54,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [openapi, ogc-api-features, ogc-api-edr, odrl, sp-dci, w3c-did]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [openapi, ogc-api-features, ogc-api-edr, odrl, sp-dci, w3c-did]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
@@ -68,7 +68,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [dcat, bregdcat-ap, ogc-api-records, ogc-api-features, ogc-api-edr, openapi, shacl, json-schema, sdmx, sp-dci, w3c-did]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [dcat, bregdcat-ap, ogc-api-records, ogc-api-features, ogc-api-edr, openapi, shacl, json-schema, sdmx, sp-dci, w3c-did]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
@@ -84,7 +84,7 @@ repos:
         standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, ogc-api-features, shacl, json-schema, json-ld, odrl, sp-dci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, ogc-api-features, shacl, json-schema, json-ld, odrl, sp-dci, w3c-did]
             last_reviewed: unreviewed
       - src: crates/registry-relay/docs/ops.md
@@ -95,7 +95,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [dcat, bregdcat-ap, ogc-api-edr, sp-dci, w3c-did]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [dcat, bregdcat-ap, ogc-api-edr, sp-dci, w3c-did]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
@@ -110,7 +110,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [json-ld, w3c-did]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [json-ld, w3c-did]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
@@ -126,7 +126,7 @@ repos:
         standards_referenced: []
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: []
             last_reviewed: unreviewed
       - src: crates/registry-relay/docs/standards-adapter-operator-guide.md
@@ -137,7 +137,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [ogc-api-records, ogc-api-features, ogc-api-edr, sp-dci]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [ogc-api-records, ogc-api-features, ogc-api-edr, sp-dci]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
@@ -153,7 +153,7 @@ repos:
         standards_referenced: []
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: []
             last_reviewed: unreviewed
       - src: crates/registry-relay/STANDARDS_ASSUMPTIONS.md
@@ -165,7 +165,7 @@ repos:
         standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, odrl, sp-dci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, odrl, sp-dci, w3c-did]
             last_reviewed: unreviewed
       - src: crates/registry-relay/docs/relay-scenario-catalog.md
@@ -177,7 +177,7 @@ repos:
         standards_referenced: [dcat, ogc-api-records, ogc-api-features, openapi, shacl, sp-dci]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [dcat, ogc-api-records, ogc-api-features, openapi, shacl, sp-dci]
             last_reviewed: unreviewed
       - src: crates/registry-relay/docs/release-notes.md
@@ -188,7 +188,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [dcat, ogc-api-edr, openapi, shacl, json-ld, sdmx, sp-dci, w3c-did]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [dcat, ogc-api-edr, openapi, shacl, json-ld, sdmx, sp-dci, w3c-did]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1]
@@ -198,7 +198,7 @@ repos:
   registry-notary:
     remote: https://github.com/registrystack/registry-stack
     ref: HEAD
-    version: v0.10.0
+    version: v0.11.0
     local: ../..
     openapi: products/notary/openapi/registry-notary.openapi.json
     archive_remote: https://github.com/jeremi/registry-notary
@@ -216,7 +216,7 @@ repos:
           - docsets: [beta-2026-06-12]
             standards_referenced: [sd-jwt-vc, oid4vci]
             last_reviewed: unreviewed
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
             standards_referenced: [sd-jwt-vc, oid4vci, fhir-r4]
             last_reviewed: unreviewed
         description: Integrator and operator documentation for Registry Notary.
@@ -232,7 +232,7 @@ repos:
           - docsets: [beta-4, beta-3, beta-2026-06-12]
             standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
             last_reviewed: unreviewed
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5]
             standards_referenced: [sd-jwt-vc, oid4vci, w3c-did, fhir-r4]
             last_reviewed: unreviewed
       - src: products/notary/docs/client-sdk-guide.md
@@ -247,7 +247,7 @@ repos:
           - docsets: [beta-2026-06-12]
             standards_referenced: [sd-jwt-vc, oid4vci]
             last_reviewed: unreviewed
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
             standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
             last_reviewed: unreviewed
       - src: products/notary/docs/identity-and-record-matching.md
@@ -259,7 +259,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [sd-jwt-vc, verifiable-credentials]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
             standards_referenced: [sd-jwt-vc, verifiable-credentials]
             last_reviewed: unreviewed
       - src: products/notary/docs/source-claim-modeling-guide.md
@@ -274,7 +274,7 @@ repos:
           - docsets: [beta-4, beta-3, beta-2026-06-12]
             standards_referenced: [sd-jwt-vc]
             last_reviewed: unreviewed
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5]
             standards_referenced: [sd-jwt-vc, fhir-r4]
             last_reviewed: unreviewed
       - src: products/notary/docs/operator-config-reference.md
@@ -286,7 +286,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [openapi, sd-jwt-vc, sp-dci, oid4vci, w3c-did, fhir-r4]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0]
             standards_referenced: [openapi, sd-jwt-vc, sp-dci, oid4vci, w3c-did, fhir-r4]
             last_reviewed: unreviewed
           - docsets: [v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
@@ -303,7 +303,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: []
         docset_overrides:
-          - docsets: [v0.10.0]
+          - docsets: [v0.11.0, v0.10.0]
             standards_referenced: []
             last_reviewed: unreviewed
         exclude_docsets: [v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
@@ -316,7 +316,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [sd-jwt-vc, w3c-did]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
             standards_referenced: [sd-jwt-vc, w3c-did]
             last_reviewed: unreviewed
       - src: products/notary/docs/credential-issuance-migration.md
@@ -326,6 +326,10 @@ repos:
         doc_type: how-to
         last_reviewed: "2026-07-17"
         standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
+        docset_overrides:
+          - docsets: [v0.11.0]
+            standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
+            last_reviewed: "2026-07-17"
         exclude_docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
       - src: products/notary/docs/signing-key-provider.md
         archive_src: docs/signing-key-provider.md
@@ -336,7 +340,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [sd-jwt-vc, w3c-did]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
             standards_referenced: [sd-jwt-vc, w3c-did]
             last_reviewed: unreviewed
       - src: products/notary/docs/sd-jwt-vc-conformance-profile.md
@@ -348,7 +352,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [json-ld, sd-jwt-vc, verifiable-credentials, oid4vci, w3c-did]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
             standards_referenced: [json-ld, sd-jwt-vc, verifiable-credentials, oid4vci, w3c-did]
             last_reviewed: unreviewed
       - src: products/notary/docs/notary-capability-matrix.md
@@ -360,7 +364,7 @@ repos:
         standards_referenced: [sd-jwt-vc, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [sd-jwt-vc, w3c-did]
             last_reviewed: unreviewed
       - src: products/notary/docs/notary-scenario-patterns.md
@@ -372,7 +376,7 @@ repos:
         standards_referenced: [sd-jwt-vc, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [sd-jwt-vc, w3c-did]
             last_reviewed: unreviewed
       - src: products/notary/docs/federated-evaluation-operator-guide.md
@@ -384,7 +388,7 @@ repos:
         standards_referenced: [w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [w3c-did]
             last_reviewed: unreviewed
       - src: products/notary/docs/self-attestation-operator-guide.md
@@ -396,7 +400,7 @@ repos:
         standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
             last_reviewed: unreviewed
       - src: products/notary/docs/deployment-hardening-runbook.md
@@ -408,7 +412,7 @@ repos:
         standards_referenced: [sd-jwt-vc, oid4vci]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [sd-jwt-vc, oid4vci]
             last_reviewed: unreviewed
       - src: products/notary/docs/api-reference.md
@@ -420,7 +424,7 @@ repos:
         standards_referenced: [openapi, sd-jwt-vc, cccev, oid4vci, fhir-r4]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [openapi, sd-jwt-vc, cccev, oid4vci, fhir-r4]
             last_reviewed: unreviewed
       - src: products/notary/docs/oid4vci-wallet-interop.md
@@ -432,7 +436,7 @@ repos:
         standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [sd-jwt-vc, oid4vci, w3c-did]
             last_reviewed: unreviewed
       - src: products/notary/docs/release-notes.md
@@ -444,13 +448,13 @@ repos:
         standards_referenced: [openapi, sd-jwt-vc, oid4vci, fhir-r4]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [openapi, sd-jwt-vc, oid4vci, fhir-r4]
             last_reviewed: unreviewed
   registry-manifest:
     remote: https://github.com/registrystack/registry-stack
     ref: HEAD
-    version: v0.10.0
+    version: v0.11.0
     local: ../..
     archive_remote: https://github.com/jeremi/registry-manifest
     docs:
@@ -463,7 +467,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, odrl, sp-dci, w3c-did, prov-o, govstack-digital-registries]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, odrl, sp-dci, w3c-did, prov-o, govstack-digital-registries]
             last_reviewed: unreviewed
           - docsets: [beta-2026-06-12]
@@ -482,7 +486,7 @@ repos:
           - docsets: [beta-2026-06-12]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, json-ld, odrl]
             last_reviewed: unreviewed
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, odrl]
             last_reviewed: unreviewed
       - src: products/manifest/docs/profile-fixtures.md
@@ -494,7 +498,7 @@ repos:
         last_reviewed: unreviewed
         standards_referenced: [sp-dci]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3, beta-2026-06-12]
             standards_referenced: [sp-dci]
             last_reviewed: unreviewed
       - src: products/manifest/docs/reference.md
@@ -509,7 +513,7 @@ repos:
           - docsets: [beta-2026-06-12]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, json-schema, json-ld, cccev, odrl, w3c-did]
             last_reviewed: unreviewed
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1, beta-5, beta-4, beta-3]
             standards_referenced: [dcat, bregdcat-ap, cpsv-ap, ogc-api-records, shacl, skos, json-schema, json-ld, cccev, odrl, w3c-did]
             last_reviewed: unreviewed
       - src: products/manifest/docs/itb-semic-validation.md
@@ -521,6 +525,6 @@ repos:
         standards_referenced: [dcat, bregdcat-ap, shacl, skos, json-schema, json-ld]
         exclude_docsets: [beta-5, beta-4, beta-3, beta-2026-06-12]
         docset_overrides:
-          - docsets: [v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
+          - docsets: [v0.11.0, v0.10.0, v0.9.0, v0.8.4, v0.8.3, v0.8.2, v0.8.1]
             standards_referenced: [dcat, bregdcat-ap, shacl, skos, json-schema, json-ld]
             last_reviewed: unreviewed

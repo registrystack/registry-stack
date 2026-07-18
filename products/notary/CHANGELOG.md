@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-07-18
+
 ### Added
 
 - Added `registry-notary audit quarantine` as an offline recovery path for an
@@ -54,6 +56,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renderer. Subject-access `allowed_formats` now follows the same evaluation
   boundary and no longer needs to repeat the credential profile's output
   format.
+- Requests that present more than one primary credential channel now fail
+  before candidate parsing or validation with `auth.multiple_credentials`.
+  The public response and restricted audit record remain candidate-neutral and
+  do not reveal which credential, if any, was valid.
+- The registryctl local Notary tutorial now exercises a live registry-backed
+  claim through an exact compiler-pinned Relay consultation. It is an
+  evaluation-only tutorial and does not claim credential issuance, wallet
+  interoperability, or OID4VCI interoperability.
 
 ## [0.10.0] - 2026-07-17
 
