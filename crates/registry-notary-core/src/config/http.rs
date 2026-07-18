@@ -3,10 +3,11 @@
 
 use super::*;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegistryNotaryHttpConfig {
     #[serde(default = "default_bind_addr")]
+    #[schemars(with = "schema::SocketAddrSchema")]
     pub bind: SocketAddr,
     #[serde(
         default = "default_openapi_requires_auth",
@@ -18,13 +19,16 @@ pub struct RegistryNotaryHttpConfig {
     #[serde(default)]
     pub cors: RegistryNotaryCorsConfig,
     #[serde(default = "default_request_timeout", with = "humantime_serde")]
+    #[schemars(with = "schema::HumantimeDurationSchema")]
     pub request_timeout: Duration,
     #[serde(default = "default_request_body_timeout", with = "humantime_serde")]
+    #[schemars(with = "schema::HumantimeDurationSchema")]
     pub request_body_timeout: Duration,
     #[serde(
         default = "default_http1_header_read_timeout",
         with = "humantime_serde"
     )]
+    #[schemars(with = "schema::HumantimeDurationSchema")]
     pub http1_header_read_timeout: Duration,
     #[serde(default = "default_max_connections")]
     pub max_connections: usize,
@@ -96,7 +100,7 @@ pub(super) fn default_max_connections() -> usize {
     1024
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistryNotaryAdminListenerMode {
     SharedWithPublic,
@@ -115,12 +119,13 @@ impl RegistryNotaryAdminListenerMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegistryNotaryAdminListenerConfig {
     #[serde(default, skip_serializing_if = "admin_listener_mode_is_default")]
     pub mode: RegistryNotaryAdminListenerMode,
     #[serde(default = "default_admin_bind_addr")]
+    #[schemars(with = "schema::SocketAddrSchema")]
     pub bind: SocketAddr,
 }
 

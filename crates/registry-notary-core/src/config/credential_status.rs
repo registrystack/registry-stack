@@ -7,7 +7,7 @@ pub const CREDENTIAL_STATUS_VALID: &str = "valid";
 pub const CREDENTIAL_STATUS_SUSPENDED: &str = "suspended";
 pub const CREDENTIAL_STATUS_REVOKED: &str = "revoked";
 pub const CREDENTIAL_STATUS_EXPIRED: &str = "expired";
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CredentialStatusConfig {
     #[serde(default)]

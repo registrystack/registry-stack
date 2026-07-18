@@ -17,7 +17,7 @@ pub use signing::*;
 
 /// Registry Notary configuration. Disabled by default so existing
 /// Registry Relay deployments load unchanged.
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceConfig {
     #[serde(default)]

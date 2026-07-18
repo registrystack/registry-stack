@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Registry Notary request, response, and view types.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::marker::PhantomData;
 
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -145,7 +147,7 @@ impl EvidenceAuthProfileId {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AccessMode {
     Unknown,
@@ -746,26 +748,26 @@ impl std::ops::Deref for ClaimRef {
     }
 }
 
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ClaimRefObject {
+    id: String,
+    #[serde(default)]
+    version: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(untagged)]
+enum WireClaimRef {
+    Id(String),
+    Object(ClaimRefObject),
+}
+
 impl<'de> Deserialize<'de> for ClaimRef {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct ClaimRefObject {
-            id: String,
-            #[serde(default)]
-            version: Option<String>,
-        }
-
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum WireClaimRef {
-            Id(String),
-            Object(ClaimRefObject),
-        }
-
         match WireClaimRef::deserialize(deserializer)? {
             WireClaimRef::Id(id) => Ok(Self::new(id)),
             WireClaimRef::Object(object) => Ok(Self {
@@ -773,6 +775,16 @@ impl<'de> Deserialize<'de> for ClaimRef {
                 version: object.version,
             }),
         }
+    }
+}
+
+impl JsonSchema for ClaimRef {
+    fn schema_name() -> Cow<'static, str> {
+        "ClaimRef".into()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        generator.subschema_for::<WireClaimRef>()
     }
 }
 
@@ -1626,7 +1638,8 @@ const fn subject_access_access_mode() -> AccessMode {
     AccessMode::SubjectBound
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EvidenceAuthorizationDetails {
     #[serde(rename = "type")]
     pub detail_type: String,
@@ -1663,25 +1676,29 @@ pub struct EvidenceAuthorizationDetails {
     pub assisted_access_context: Option<EvidenceAssistedAccessContext>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EvidenceAuthorizationSubject {
     pub binding_claim: String,
     pub id_type: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EvidenceAuthorizationTarget {
     pub id_type: String,
     pub id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EvidenceAuthorizationRelationship {
     pub relationship_type: String,
     pub proof_claim: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EvidenceAssistedAccessContext {
     pub channel: String,
 }

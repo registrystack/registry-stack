@@ -18,13 +18,14 @@ const fn default_relay_max_in_flight() -> usize {
     8
 }
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RelayConnectionConfig {
     pub base_url: String,
     pub workload_client_id: String,
     pub token_file: PathBuf,
     #[serde(default)]
+    #[schemars(with = "Vec<schema::IpNetSchema>")]
     pub allowed_private_cidrs: Vec<IpNet>,
     #[serde(default)]
     pub allow_insecure_localhost: bool,

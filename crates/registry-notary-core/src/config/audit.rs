@@ -3,7 +3,7 @@
 
 use super::*;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvidenceAuditConfig {
     #[serde(default = "default_audit_sink")]

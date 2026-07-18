@@ -3,7 +3,7 @@
 
 use super::*;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubjectAccessConfig {
     #[serde(default)]
@@ -215,7 +215,7 @@ fn validate_subject_bound_registry_inputs(
     Ok(())
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubjectAccessDelegationConfig {
     #[serde(default)]
@@ -273,7 +273,7 @@ impl SubjectAccessDelegationConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubjectAccessDelegatedRelationshipConfig {
     pub relationship_type: String,
@@ -415,7 +415,7 @@ impl SubjectAccessDelegatedRelationshipConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SubjectAccessScopePolicy {
     #[default]
@@ -424,7 +424,7 @@ pub enum SubjectAccessScopePolicy {
     Disabled,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubjectAccessSubjectBindingConfig {
     #[serde(default)]
@@ -470,7 +470,7 @@ impl SubjectAccessSubjectBindingConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SubjectAccessClaimSource {
     #[default]
@@ -478,20 +478,20 @@ pub enum SubjectAccessClaimSource {
     Userinfo,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub enum SubjectId {
     #[default]
     SubjectId,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SubjectBindingNormalize {
     #[default]
     Exact,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubjectAccessCitizenClientsConfig {
     #[serde(default)]
@@ -539,7 +539,7 @@ impl SubjectAccessCitizenClientsConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubjectAccessTokenPolicyConfig {
     #[serde(default)]
@@ -558,7 +558,7 @@ pub struct SubjectAccessTokenPolicyConfig {
     pub max_clock_leeway_seconds: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SubjectAccessAssuranceClaimSource {
     #[default]
@@ -606,7 +606,7 @@ impl SubjectAccessTokenPolicyConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubjectAccessOperationsConfig {
     #[serde(default)]
@@ -633,7 +633,7 @@ impl SubjectAccessOperationsConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubjectAccessRateLimitsConfig {
     #[serde(default)]
