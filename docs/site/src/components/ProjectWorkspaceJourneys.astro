@@ -1,0 +1,29 @@
+---
+import journeys from '../data/generated/project-authoring-journeys.json';
+
+const nonStarters = journeys.filter((journey) => !journey.starter);
+---
+
+{
+  nonStarters.map((journey) => (
+    <section class="workspace-journey">
+      <h3>{journey.label}</h3>
+      <p>{journey.summary}</p>
+      <dl>
+        <dt>Classification</dt>
+        <dd>{journey.classification === 'conformance-only' ? 'Conformance only' : 'Maintained'}</dd>
+        <dt>Topology</dt>
+        <dd>{journey.topology}</dd>
+        <dt>Authored source</dt>
+        <dd><code>{journey.source}</code></dd>
+      </dl>
+      <pre aria-label={`${journey.label} supported commands`}><code>{journey.commands.join('\n')}</code></pre>
+    </section>
+  ))
+}
+
+<p class="source-note">
+  Generated from <code>crates/registryctl/tests/fixtures/project-authoring-journeys.yaml</code> and
+  its committed workspaces. Run these commands from the repository root. Non-starter entries target
+  their displayed authored source directly and do not support <code>init --from</code>.
+</p>

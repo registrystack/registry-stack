@@ -1,0 +1,341 @@
+[
+  {
+    "id": "http",
+    "label": "Custom HTTP",
+    "summary": "One fixed bounded HTTP request with a closed response projection.",
+    "source": "crates/registryctl/assets/project-starters/bounded-http",
+    "classification": "maintained",
+    "topology": "combined",
+    "starter": "http",
+    "project_dir": "registry-project",
+    "capabilities": [
+      "init",
+      "editor",
+      "trace",
+      "watch",
+      "test",
+      "check",
+      "build"
+    ],
+    "integration": "person-record",
+    "fixture": "active-person",
+    "commands": [
+      "registryctl init --from http --project-dir registry-project",
+      "registryctl authoring editor --project-dir registry-project",
+      "registryctl test --project-dir registry-project --integration person-record --fixture active-person --trace",
+      "registryctl test --project-dir registry-project --integration person-record --fixture active-person --watch",
+      "registryctl test --project-dir registry-project",
+      "registryctl check --project-dir registry-project --environment local --explain",
+      "registryctl build --project-dir registry-project --environment local"
+    ]
+  },
+  {
+    "id": "custom-system",
+    "label": "Custom HTTP conformance workspace",
+    "summary": "Combined HTTP acquisition and registry-backed evidence coverage.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
+    "classification": "maintained",
+    "topology": "combined",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/custom-system",
+    "capabilities": [
+      "trace",
+      "watch",
+      "test",
+      "check",
+      "build"
+    ],
+    "integration": "eligibility",
+    "fixture": "eligible-household",
+    "commands": [
+      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/custom-system --integration eligibility --fixture eligible-household --trace",
+      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/custom-system --integration eligibility --fixture eligible-household --watch",
+      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/custom-system",
+      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/custom-system --environment local --explain",
+      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/custom-system --environment local"
+    ]
+  },
+  {
+    "id": "dhis2-script",
+    "label": "DHIS2 script conformance workspace",
+    "summary": "Conformance coverage for the bounded Script adapter surface.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/dhis2-script",
+    "classification": "conformance-only",
+    "topology": "combined",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/dhis2-script",
+    "capabilities": [
+      "test",
+      "check",
+      "build"
+    ],
+    "commands": [
+      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/dhis2-script",
+      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/dhis2-script --environment local --explain",
+      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/dhis2-script --environment local"
+    ]
+  },
+  {
+    "id": "dhis2-tracker",
+    "label": "DHIS2 Tracker",
+    "summary": "A product-neutral script adapter applied to a bounded DHIS2 Tracker read journey.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/dhis2-tracker",
+    "classification": "maintained",
+    "topology": "combined",
+    "starter": "dhis2-tracker",
+    "project_dir": "dhis2-project",
+    "capabilities": [
+      "init",
+      "editor",
+      "trace",
+      "watch",
+      "test",
+      "check",
+      "build"
+    ],
+    "integration": "health-record",
+    "fixture": "complete-health-match",
+    "commands": [
+      "registryctl init --from dhis2-tracker --project-dir dhis2-project",
+      "registryctl authoring editor --project-dir dhis2-project",
+      "registryctl test --project-dir dhis2-project --integration health-record --fixture complete-health-match --trace",
+      "registryctl test --project-dir dhis2-project --integration health-record --fixture complete-health-match --watch",
+      "registryctl test --project-dir dhis2-project",
+      "registryctl check --project-dir dhis2-project --environment local --explain",
+      "registryctl build --project-dir dhis2-project --environment local"
+    ]
+  },
+  {
+    "id": "fhir-r4-coverage-active",
+    "label": "FHIR R4",
+    "summary": "A product-neutral script adapter with bounded FHIR R4 search-set parsing.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/fhir-r4-coverage-active",
+    "classification": "maintained",
+    "topology": "combined",
+    "starter": "fhir-r4",
+    "project_dir": "fhir-project",
+    "capabilities": [
+      "init",
+      "editor",
+      "trace",
+      "watch",
+      "test",
+      "check",
+      "build"
+    ],
+    "integration": "coverage",
+    "fixture": "coverage-active",
+    "commands": [
+      "registryctl init --from fhir-r4 --project-dir fhir-project",
+      "registryctl authoring editor --project-dir fhir-project",
+      "registryctl test --project-dir fhir-project --integration coverage --fixture coverage-active --trace",
+      "registryctl test --project-dir fhir-project --integration coverage --fixture coverage-active --watch",
+      "registryctl test --project-dir fhir-project",
+      "registryctl check --project-dir fhir-project --environment local --explain",
+      "registryctl build --project-dir fhir-project --environment local"
+    ]
+  },
+  {
+    "id": "nia-attribute-release",
+    "label": "NIA attribute release",
+    "summary": "Solmara-focused conformance coverage for a bounded Relay attribute-release profile.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
+    "classification": "conformance-only",
+    "focus": "solmara",
+    "topology": "relay-only",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release",
+    "capabilities": [
+      "check",
+      "build"
+    ],
+    "commands": [
+      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release --environment local --explain",
+      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/nia-attribute-release --environment local"
+    ]
+  },
+  {
+    "id": "opencrvs-dci",
+    "label": "OpenCRVS DCI",
+    "summary": "A product-neutral script adapter with the signed DCI search verification profile.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs",
+    "classification": "maintained",
+    "topology": "combined",
+    "starter": "opencrvs-dci",
+    "project_dir": "opencrvs-project",
+    "capabilities": [
+      "init",
+      "editor",
+      "trace",
+      "watch",
+      "test",
+      "check",
+      "build"
+    ],
+    "integration": "birth-record",
+    "fixture": "birth-record-match",
+    "commands": [
+      "registryctl init --from opencrvs-dci --project-dir opencrvs-project",
+      "registryctl authoring editor --project-dir opencrvs-project",
+      "registryctl test --project-dir opencrvs-project --integration birth-record --fixture birth-record-match --trace",
+      "registryctl test --project-dir opencrvs-project --integration birth-record --fixture birth-record-match --watch",
+      "registryctl test --project-dir opencrvs-project",
+      "registryctl check --project-dir opencrvs-project --environment local --explain",
+      "registryctl build --project-dir opencrvs-project --environment local"
+    ]
+  },
+  {
+    "id": "opencrvs-country-variant",
+    "label": "OpenCRVS country variant",
+    "summary": "Country-owned DCI mapping coverage for match, no-match, and ambiguity.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant",
+    "classification": "maintained",
+    "topology": "combined",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant",
+    "capabilities": [
+      "trace",
+      "watch",
+      "test",
+      "check",
+      "build"
+    ],
+    "integration": "birth-record",
+    "fixture": "provincial-birth-match",
+    "commands": [
+      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant --integration birth-record --fixture provincial-birth-match --trace",
+      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant --integration birth-record --fixture provincial-birth-match --watch",
+      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant",
+      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant --environment local --explain",
+      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/opencrvs-country-variant --environment local"
+    ]
+  },
+  {
+    "id": "openspp-exact",
+    "label": "OpenSPP exact lookup",
+    "summary": "Offline fixture evidence only, pending the owner-run holdout in GH#357.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/openspp-exact",
+    "classification": "maintained",
+    "topology": "combined",
+    "evidence": "offline-fixture-only-pending-357",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/openspp-exact",
+    "capabilities": [
+      "trace",
+      "watch",
+      "test",
+      "check",
+      "build"
+    ],
+    "integration": "individual",
+    "fixture": "social-registry-match",
+    "commands": [
+      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/openspp-exact --integration individual --fixture social-registry-match --trace",
+      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/openspp-exact --integration individual --fixture social-registry-match --watch",
+      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/openspp-exact",
+      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/openspp-exact --environment local --explain",
+      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/openspp-exact --environment local"
+    ]
+  },
+  {
+    "id": "relay-only-materialization",
+    "label": "Relay-only materialization",
+    "summary": "Fixtureless Relay materialization configuration with no public records service.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization",
+    "classification": "maintained",
+    "topology": "relay-only",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization",
+    "capabilities": [
+      "check",
+      "build"
+    ],
+    "commands": [
+      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization --environment local --explain",
+      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/relay-only-materialization --environment local"
+    ]
+  },
+  {
+    "id": "relay-only-records",
+    "label": "Relay-only records API",
+    "summary": "Fixtureless Relay records configuration with no Notary inputs.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/relay-only-records",
+    "classification": "maintained",
+    "topology": "relay-only",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/relay-only-records",
+    "capabilities": [
+      "check",
+      "build"
+    ],
+    "commands": [
+      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/relay-only-records --environment local --explain",
+      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/relay-only-records --environment local"
+    ]
+  },
+  {
+    "id": "snapshot",
+    "label": "Exact snapshot",
+    "summary": "An exact lookup over one immutable local materialization.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-exact",
+    "classification": "maintained",
+    "topology": "combined",
+    "starter": "snapshot",
+    "project_dir": "snapshot-project",
+    "capabilities": [
+      "init",
+      "editor",
+      "trace",
+      "watch",
+      "test",
+      "check",
+      "build"
+    ],
+    "integration": "person-snapshot",
+    "fixture": "snapshot-match",
+    "commands": [
+      "registryctl init --from snapshot --project-dir snapshot-project",
+      "registryctl authoring editor --project-dir snapshot-project",
+      "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-match --trace",
+      "registryctl test --project-dir snapshot-project --integration person-snapshot --fixture snapshot-match --watch",
+      "registryctl test --project-dir snapshot-project",
+      "registryctl check --project-dir snapshot-project --environment local --explain",
+      "registryctl build --project-dir snapshot-project --environment local"
+    ]
+  },
+  {
+    "id": "snapshot-with-records",
+    "label": "Snapshot with records API",
+    "summary": "Match and no-match evidence sharing one authorized Relay materialization with records.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records",
+    "classification": "maintained",
+    "topology": "combined",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records",
+    "capabilities": [
+      "trace",
+      "watch",
+      "test",
+      "check",
+      "build"
+    ],
+    "integration": "person-snapshot",
+    "fixture": "snapshot-match",
+    "commands": [
+      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records --integration person-snapshot --fixture snapshot-match --trace",
+      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records --integration person-snapshot --fixture snapshot-match --watch",
+      "registryctl test --project-dir crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records",
+      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records --environment local --explain",
+      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/snapshot-with-records --environment local"
+    ]
+  },
+  {
+    "id": "notary-only-evaluation",
+    "label": "Notary-only evaluation",
+    "summary": "Local policy evaluation only, with no credential profile, issuance, or direct source capability.",
+    "source": "crates/registryctl/tests/fixtures/project-authoring/notary-only-evaluation",
+    "classification": "maintained",
+    "topology": "notary-only",
+    "project_dir": "crates/registryctl/tests/fixtures/project-authoring/notary-only-evaluation",
+    "capabilities": [
+      "check",
+      "build"
+    ],
+    "commands": [
+      "registryctl check --project-dir crates/registryctl/tests/fixtures/project-authoring/notary-only-evaluation --environment local --explain",
+      "registryctl build --project-dir crates/registryctl/tests/fixtures/project-authoring/notary-only-evaluation --environment local"
+    ]
+  }
+]

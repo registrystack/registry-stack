@@ -1,0 +1,16 @@
+version: 1
+registry: { id: fictional-evaluation-registry }
+services:
+  applicant-evaluation:
+    kind: evidence
+    version: 1
+    purpose: application-processing
+    legal_basis: application-processing
+    consent: not_required
+    access: { scopes: ["evidence:application:read"] }
+    claims:
+      application-complete:
+        cel: "true"
+        value: { type: boolean }
+        disclosure: predicate
+    credential_profiles: {}

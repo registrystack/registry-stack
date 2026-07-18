@@ -11,15 +11,177 @@ use registryctl::{
     ProjectBuildOptions, ProjectCheckOptions, ProjectEditorSetupOptions, ProjectInitOptions,
     ProjectSchemaKind, ProjectStarter, ProjectTestOptions, ProjectTestSelection,
 };
+use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
 
 const TEST_PRIVATE_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registryctl-test-private-key"}"#;
 const TEST_PUBLIC_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"registryctl-test-private-key"}"#;
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectAuthoringJourneyCatalog {
+    version: u8,
+    workspaces: Vec<ProjectAuthoringJourney>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectAuthoringJourney {
+    id: String,
+    label: String,
+    summary: String,
+    source: String,
+    classification: String,
+    #[serde(default)]
+    focus: Option<String>,
+    topology: String,
+    #[serde(default)]
+    evidence: Option<String>,
+    #[serde(default)]
+    starter: Option<String>,
+    project_dir: String,
+    #[serde(default)]
+    focused_fixture_file: Option<String>,
+    steps: Vec<String>,
+    environment: String,
+    check_explain: bool,
+}
+
 fn golden(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/project-authoring")
         .join(name)
+}
+
+fn repository_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn project_authoring_journey_catalog() -> ProjectAuthoringJourneyCatalog {
+    serde_yaml::from_slice(
+        &std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/project-authoring-journeys.yaml"),
+        )
+        .expect("project-authoring journey catalog reads"),
+    )
+    .expect("project-authoring journey catalog parses")
+}
+
+fn catalog_workspace(journey: &ProjectAuthoringJourney) -> PathBuf {
+    repository_root().join(&journey.source)
+}
+
+fn catalog_focused_selection(journey: &ProjectAuthoringJourney) -> (String, String) {
+    let workspace = catalog_workspace(journey);
+    let project = read_yaml(&workspace.join("registry-stack.yaml"));
+    let integrations = project["integrations"]
+        .as_mapping()
+        .expect("a focused catalog journey has integrations");
+    assert_eq!(
+        integrations.len(),
+        1,
+        "{} must derive one focused integration from its workspace",
+        journey.id
+    );
+    let (integration_id, integration_reference) = integrations
+        .iter()
+        .next()
+        .expect("one integration reference");
+    let integration_id = integration_id
+        .as_str()
+        .expect("integration id is a string")
+        .to_string();
+    let integration_file = integration_reference["file"]
+        .as_str()
+        .expect("integration reference has a file");
+    let fixture_file = journey
+        .focused_fixture_file
+        .as_deref()
+        .expect("focused catalog journey names a fixture file");
+    let fixture_path = workspace
+        .join(integration_file)
+        .parent()
+        .expect("integration file has a parent")
+        .join("fixtures")
+        .join(fixture_file);
+    let fixture = read_yaml(&fixture_path);
+    let fixture_name = fixture["name"]
+        .as_str()
+        .expect("focused fixture has a name")
+        .to_string();
+    (integration_id, fixture_name)
+}
+
+fn catalog_has_authored_fixtures(
+    journey: &ProjectAuthoringJourney,
+    project: &serde_yaml::Value,
+) -> bool {
+    let Some(integrations) = project["integrations"].as_mapping() else {
+        return false;
+    };
+    integrations.values().any(|reference| {
+        let Some(file) = reference["file"].as_str() else {
+            return false;
+        };
+        let fixture_directory = catalog_workspace(journey)
+            .join(file)
+            .parent()
+            .expect("integration file has a parent")
+            .join("fixtures");
+        fixture_directory.is_dir()
+            && std::fs::read_dir(fixture_directory)
+                .expect("fixture directory reads")
+                .any(|entry| {
+                    entry
+                        .expect("fixture entry reads")
+                        .path()
+                        .extension()
+                        .is_some_and(|extension| extension == "yaml")
+                })
+    })
+}
+
+fn catalog_starter(id: &str) -> ProjectStarter {
+    match id {
+        "http" => ProjectStarter::Http,
+        "dhis2-tracker" => ProjectStarter::Dhis2Tracker,
+        "opencrvs-dci" => ProjectStarter::OpencrvsDci,
+        "fhir-r4" => ProjectStarter::FhirR4,
+        "snapshot" => ProjectStarter::Snapshot,
+        _ => panic!("unknown catalog starter {id}"),
+    }
+}
+
+fn validate_public_starter_entries(
+    workspaces: &[ProjectAuthoringJourney],
+) -> std::result::Result<(), String> {
+    let expected = BTreeSet::from([
+        "dhis2-tracker",
+        "fhir-r4",
+        "http",
+        "opencrvs-dci",
+        "snapshot",
+    ]);
+    let entries = workspaces
+        .iter()
+        .filter_map(|journey| journey.starter.as_deref())
+        .collect::<Vec<_>>();
+    if entries.len() != expected.len() {
+        return Err(format!(
+            "expected exactly {} starter entries, found {}",
+            expected.len(),
+            entries.len()
+        ));
+    }
+    let starters = entries.iter().copied().collect::<BTreeSet<_>>();
+    if starters.len() != entries.len() {
+        return Err("duplicate starter entry".to_string());
+    }
+    if starters != expected {
+        return Err(format!("unexpected starter entries: {starters:?}"));
+    }
+    Ok(())
 }
 
 fn authoring_diagnostics(project: &Path) -> ProjectAuthoringDiagnostics {
@@ -726,29 +888,406 @@ fn project_check_unsafe_inputs_are_terminal_and_value_free() {
 }
 
 #[test]
-fn every_project_golden_passes_the_offline_journey() {
-    for project in [
-        "custom-system",
-        "dhis2-tracker",
-        "fhir-r4-coverage-active",
-        "opencrvs",
-        "opencrvs-country-variant",
-        "openspp-exact",
-        "snapshot-exact",
-        "snapshot-with-records",
+fn project_authoring_catalog_classifies_every_golden_and_only_five_starters() {
+    const GOLDEN_SOURCE_PREFIX: &str = "crates/registryctl/tests/fixtures/project-authoring/";
+    const SUPPORTED_STEPS: [&str; 7] =
+        ["init", "editor", "trace", "watch", "test", "check", "build"];
+    let catalog = project_authoring_journey_catalog();
+    assert_eq!(catalog.version, 1);
+
+    let mut ids = BTreeSet::new();
+    let mut sources = BTreeSet::new();
+    let mut catalog_goldens = BTreeSet::new();
+    for journey in &catalog.workspaces {
+        assert!(
+            ids.insert(journey.id.as_str()),
+            "duplicate id {}",
+            journey.id
+        );
+        assert!(
+            sources.insert(journey.source.as_str()),
+            "duplicate source {}",
+            journey.source
+        );
+        assert!(!journey.label.trim().is_empty(), "{} label", journey.id);
+        assert!(!journey.summary.trim().is_empty(), "{} summary", journey.id);
+        assert!(
+            matches!(
+                journey.classification.as_str(),
+                "maintained" | "conformance-only"
+            ),
+            "{} classification",
+            journey.id
+        );
+        assert!(
+            matches!(
+                journey.topology.as_str(),
+                "combined" | "relay-only" | "notary-only"
+            ),
+            "{} topology",
+            journey.id
+        );
+        assert!(
+            !journey.project_dir.trim().is_empty(),
+            "{} project_dir",
+            journey.id
+        );
+        assert_eq!(journey.environment, "local", "{} environment", journey.id);
+        assert!(journey.check_explain, "{} check explanation", journey.id);
+        assert!(catalog_workspace(journey).is_dir(), "{} source", journey.id);
+        assert!(
+            journey
+                .steps
+                .iter()
+                .all(|step| SUPPORTED_STEPS.contains(&step.as_str())),
+            "{} supported steps",
+            journey.id
+        );
+        assert_eq!(
+            journey.steps.iter().collect::<BTreeSet<_>>().len(),
+            journey.steps.len(),
+            "{} duplicate steps",
+            journey.id
+        );
+        assert!(
+            journey.steps.contains(&"check".to_string()),
+            "{} check",
+            journey.id
+        );
+        assert!(
+            journey.steps.contains(&"build".to_string()),
+            "{} build",
+            journey.id
+        );
+
+        let project = read_yaml(&catalog_workspace(journey).join("registry-stack.yaml"));
+        let has_integrations = project["integrations"]
+            .as_mapping()
+            .is_some_and(|values| !values.is_empty());
+        let has_entities = project["entities"]
+            .as_mapping()
+            .is_some_and(|values| !values.is_empty());
+        let services = project["services"]
+            .as_mapping()
+            .expect("catalog workspace services are a mapping");
+        let has_notary = services
+            .values()
+            .any(|service| service["kind"].as_str() == Some("evidence"));
+        let has_relay = has_integrations
+            || has_entities
+            || services
+                .values()
+                .any(|service| service["kind"].as_str() == Some("records_api"));
+        let derived_topology = match (has_relay, has_notary) {
+            (true, true) => "combined",
+            (true, false) => "relay-only",
+            (false, true) => "notary-only",
+            (false, false) => panic!("{} has no product topology", journey.id),
+        };
+        assert_eq!(
+            journey.topology, derived_topology,
+            "{} topology",
+            journey.id
+        );
+
+        let has_authored_fixtures = catalog_has_authored_fixtures(journey, &project);
+        if !has_authored_fixtures {
+            assert_eq!(
+                journey.steps,
+                ["check", "build"],
+                "{} is fixtureless and must not invent test, trace, or watch journeys",
+                journey.id
+            );
+            assert!(
+                journey.focused_fixture_file.is_none(),
+                "{} fixture",
+                journey.id
+            );
+        }
+        if has_authored_fixtures && journey.classification == "maintained" {
+            assert!(
+                journey.steps.contains(&"watch".to_string()),
+                "{} maintained fixture journey must exercise watch",
+                journey.id
+            );
+        }
+        if journey
+            .steps
+            .iter()
+            .any(|step| step == "trace" || step == "watch")
+        {
+            let (integration, fixture) = catalog_focused_selection(journey);
+            assert!(!integration.is_empty(), "{} integration", journey.id);
+            assert!(!fixture.is_empty(), "{} fixture", journey.id);
+        }
+
+        if let Some(starter) = &journey.starter {
+            assert_eq!(journey.steps, SUPPORTED_STEPS, "{starter} starter steps");
+        } else {
+            assert_eq!(
+                journey.project_dir, journey.source,
+                "{} non-starter commands must target the committed workspace",
+                journey.id
+            );
+            assert!(
+                !journey.steps.contains(&"init".to_string()),
+                "{} non-starter cannot initialize",
+                journey.id
+            );
+        }
+        if let Some(name) = journey.source.strip_prefix(GOLDEN_SOURCE_PREFIX) {
+            catalog_goldens.insert(name);
+        }
+    }
+
+    let golden_root =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/project-authoring");
+    let actual_goldens = std::fs::read_dir(golden_root)
+        .expect("golden directory reads")
+        .map(|entry| entry.expect("golden entry reads"))
+        .filter(|entry| entry.file_type().expect("golden type reads").is_dir())
+        .map(|entry| {
+            entry
+                .file_name()
+                .into_string()
+                .expect("golden name is Unicode")
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        catalog_goldens
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>(),
+        actual_goldens,
+        "adding or removing a golden requires an explicit catalog decision"
+    );
+    validate_public_starter_entries(&catalog.workspaces)
+        .expect("catalog has exactly five unique public starter entries");
+
+    let dhis2_script = catalog
+        .workspaces
+        .iter()
+        .find(|journey| journey.id == "dhis2-script")
+        .expect("DHIS2 Script catalog entry");
+    assert_eq!(dhis2_script.classification, "conformance-only");
+    assert!(dhis2_script.starter.is_none());
+    assert_eq!(dhis2_script.steps, ["test", "check", "build"]);
+    let nia = catalog
+        .workspaces
+        .iter()
+        .find(|journey| journey.id == "nia-attribute-release")
+        .expect("NIA attribute-release catalog entry");
+    assert_eq!(nia.classification, "conformance-only");
+    assert_eq!(nia.focus.as_deref(), Some("solmara"));
+    assert!(nia.starter.is_none());
+    let openspp = catalog
+        .workspaces
+        .iter()
+        .find(|journey| journey.id == "openspp-exact")
+        .expect("OpenSPP catalog entry");
+    assert_eq!(
+        openspp.evidence.as_deref(),
+        Some("offline-fixture-only-pending-357")
+    );
+}
+
+#[test]
+fn project_authoring_catalog_rejects_a_duplicate_starter_entry() {
+    let mut catalog = project_authoring_journey_catalog();
+    let fhir = catalog
+        .workspaces
+        .iter_mut()
+        .find(|journey| journey.starter.as_deref() == Some("fhir-r4"))
+        .expect("FHIR starter entry");
+    fhir.starter = Some("http".to_string());
+
+    let error = validate_public_starter_entries(&catalog.workspaces)
+        .expect_err("a duplicate starter value must fail closed");
+    assert!(error.contains("duplicate starter"), "{error}");
+}
+
+#[test]
+fn project_authoring_catalog_rejects_fewer_than_five_starter_entries() {
+    let mut catalog = project_authoring_journey_catalog();
+    let fhir = catalog
+        .workspaces
+        .iter_mut()
+        .find(|journey| journey.starter.as_deref() == Some("fhir-r4"))
+        .expect("FHIR starter entry");
+    fhir.starter = None;
+
+    let error = validate_public_starter_entries(&catalog.workspaces)
+        .expect_err("fewer than five starter entries must fail closed");
+    assert!(
+        error.contains("expected exactly 5 starter entries"),
+        "{error}"
+    );
+}
+
+#[test]
+fn every_cataloged_supported_project_authoring_command_is_automated() {
+    for journey in project_authoring_journey_catalog().workspaces {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        let project = temporary.path().join(&journey.project_dir);
+        if let Some(starter) = &journey.starter {
+            let report = init_registry_project(&ProjectInitOptions {
+                starter: catalog_starter(starter),
+                directory: project.clone(),
+            })
+            .unwrap_or_else(|error| panic!("{} init failed: {error:#}", journey.id));
+            assert_eq!(report.status, "initialized", "{} init", journey.id);
+        } else {
+            std::fs::create_dir_all(project.parent().expect("project path has a parent"))
+                .expect("project parent creates");
+            copy_tree(&catalog_workspace(&journey), &project);
+        }
+
+        if journey.steps.contains(&"editor".to_string()) {
+            let report = setup_registry_project_editor(&ProjectEditorSetupOptions {
+                project_directory: project.clone(),
+            })
+            .unwrap_or_else(|error| panic!("{} editor setup failed: {error:#}", journey.id));
+            assert_eq!(report.status, "configured", "{} editor", journey.id);
+        }
+        if journey.steps.contains(&"trace".to_string()) {
+            let (integration, fixture) = catalog_focused_selection(&journey);
+            let report = test_registry_project_selected(
+                &ProjectTestOptions {
+                    project_directory: project.clone(),
+                    environment: None,
+                    live: false,
+                },
+                &ProjectTestSelection {
+                    integration: Some(integration),
+                    fixture: Some(fixture.clone()),
+                    trace: true,
+                },
+            )
+            .unwrap_or_else(|error| panic!("{} trace failed: {error:#}", journey.id));
+            assert_eq!(report.status, "passed", "{} trace", journey.id);
+            assert!(
+                report
+                    .fixtures
+                    .iter()
+                    .any(|result| result.fixture == fixture && result.passed),
+                "{} focused fixture",
+                journey.id
+            );
+        }
+        if journey.steps.contains(&"test".to_string()) {
+            let report = test_registry_project(&ProjectTestOptions {
+                project_directory: project.clone(),
+                environment: None,
+                live: false,
+            })
+            .unwrap_or_else(|error| panic!("{} offline test failed: {error:#}", journey.id));
+            assert_eq!(report.status, "passed", "{} test", journey.id);
+            assert!(!report.fixtures.is_empty(), "{} fixtures", journey.id);
+            assert!(
+                report.fixtures.iter().all(|fixture| fixture.passed),
+                "{} fixtures",
+                journey.id
+            );
+        }
+
+        let check = check_registry_project(&ProjectCheckOptions {
+            project_directory: project.clone(),
+            environment: journey.environment.clone(),
+            explain: journey.check_explain,
+            against: None,
+            anchor: None,
+        })
+        .unwrap_or_else(|error| panic!("{} check failed: {error:#}", journey.id));
+        assert_eq!(check.status, "valid", "{} check", journey.id);
+        assert!(check.explanation.is_some(), "{} explanation", journey.id);
+
+        let build = build_registry_project(&ProjectBuildOptions {
+            project_directory: project,
+            environment: journey.environment.clone(),
+            against: None,
+            anchor: None,
+        })
+        .unwrap_or_else(|error| panic!("{} build failed: {error:#}", journey.id));
+        assert_eq!(build.status, "built", "{} build", journey.id);
+        let output = PathBuf::from(build.output.expect("catalog build output"));
+        let relay = output.join("private/relay");
+        let notary = output.join("private/notary");
+        match journey.topology.as_str() {
+            "relay-only" => {
+                assert!(relay.is_dir(), "{} Relay inputs", journey.id);
+                assert!(!notary.exists(), "{} Notary inputs", journey.id);
+            }
+            "notary-only" => {
+                assert!(notary.is_dir(), "{} Notary inputs", journey.id);
+                assert!(!relay.exists(), "{} Relay inputs", journey.id);
+            }
+            "combined" => {
+                assert!(relay.is_dir(), "{} Relay inputs", journey.id);
+                assert!(notary.is_dir(), "{} Notary inputs", journey.id);
+                let notary_config = read_yaml(&notary.join("config/notary.yaml"));
+                assert_eq!(
+                    notary_config["state"]["storage"].as_str(),
+                    Some("postgresql"),
+                    "{} Notary correctness state",
+                    journey.id
+                );
+                assert!(
+                    notary_config["evidence"]["relay"].is_mapping(),
+                    "{} compiler-pinned Relay consultation",
+                    journey.id
+                );
+                let rendered = serde_yaml::to_string(&notary_config)
+                    .expect("generated Notary config serializes");
+                assert!(
+                    rendered.contains("contract_hash:"),
+                    "{} compiler-pinned consultation hash",
+                    journey.id
+                );
+                for forbidden in ["redis:", "direct_source:", "source_credential:"] {
+                    assert!(!rendered.contains(forbidden), "{} {forbidden}", journey.id);
+                }
+            }
+            _ => unreachable!("catalog topology is validated"),
+        }
+    }
+}
+
+#[test]
+fn country_variant_and_snapshot_records_keep_their_closed_outcome_sets() {
+    for (project, expected) in [
+        (
+            "opencrvs-country-variant",
+            [
+                ("provincial-birth-match", "match"),
+                ("provincial-birth-no-match", "no_match"),
+                ("provincial-birth-ambiguous", "ambiguous"),
+            ]
+            .as_slice(),
+        ),
+        (
+            "snapshot-with-records",
+            [
+                ("snapshot-match", "match"),
+                ("snapshot-no-match", "no_match"),
+            ]
+            .as_slice(),
+        ),
     ] {
         let report = test_registry_project(&ProjectTestOptions {
             project_directory: golden(project),
             environment: None,
             live: false,
         })
-        .unwrap_or_else(|error| panic!("{project} offline journey failed: {error:#}"));
-        assert_eq!(report.status, "passed", "{project}");
-        assert!(!report.fixtures.is_empty(), "{project}");
-        assert!(
-            report.fixtures.iter().all(|fixture| fixture.passed),
-            "{project}"
-        );
+        .unwrap_or_else(|error| panic!("{project} outcome journey failed: {error:#}"));
+        for (fixture, outcome) in expected {
+            let result = report
+                .fixtures
+                .iter()
+                .find(|result| result.fixture == *fixture)
+                .unwrap_or_else(|| panic!("{project} missing {fixture}"));
+            assert_eq!(result.outcome.as_deref(), Some(*outcome), "{project}");
+            assert!(result.passed, "{project} {fixture}");
+        }
     }
 }
 
@@ -1132,13 +1671,7 @@ fn relay_only_and_notary_only_projects_complete_their_applicable_journeys() {
     .expect("Relay-only project builds");
 
     let notary_root = tempfile::tempdir().expect("Notary-only temporary directory");
-    let notary = create_source_free_evaluation_project(notary_root.path());
-    test_registry_project(&ProjectTestOptions {
-        project_directory: notary.clone(),
-        environment: None,
-        live: false,
-    })
-    .expect("Notary-only project tests");
+    let notary = copy_project("notary-only-evaluation", notary_root.path());
     let check = check_registry_project(&ProjectCheckOptions {
         project_directory: notary.clone(),
         environment: "local".to_string(),
@@ -2715,25 +3248,11 @@ fn strict_project_authoring_schemas_compile_and_accept_every_golden() {
     let integration_schema = compile("integration.schema.json");
     let fixture_schema = compile("fixture.schema.json");
     let entity_schema = compile("entity.schema.json");
-    let mut projects =
-        vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/project-starters/bounded-http")];
-    projects.extend(
-        [
-            "custom-system",
-            "dhis2-tracker",
-            "dhis2-script",
-            "fhir-r4-coverage-active",
-            "opencrvs",
-            "opencrvs-country-variant",
-            "openspp-exact",
-            "nia-attribute-release",
-            "snapshot-exact",
-            "snapshot-with-records",
-            "relay-only-records",
-            "relay-only-materialization",
-        ]
-        .map(golden),
-    );
+    let projects = project_authoring_journey_catalog()
+        .workspaces
+        .iter()
+        .map(catalog_workspace)
+        .collect::<Vec<_>>();
     for project in projects {
         validate_yaml(&project_schema, &project.join("registry-stack.yaml"));
         validate_yaml(
@@ -4150,16 +4669,12 @@ fn records_and_snapshot_share_one_generated_materialization() {
 
 #[test]
 fn relay_only_and_notary_only_projects_emit_only_selected_products() {
-    for (project_name, present, absent, source_free_evaluation) in [
-        ("relay-only-records", "relay", "notary", false),
-        ("notary-only-evaluation", "notary", "relay", true),
+    for (project_name, present, absent) in [
+        ("relay-only-records", "relay", "notary"),
+        ("notary-only-evaluation", "notary", "relay"),
     ] {
         let temporary = tempfile::tempdir().expect("temporary directory");
-        let project = if source_free_evaluation {
-            create_source_free_evaluation_project(temporary.path())
-        } else {
-            copy_project(project_name, temporary.path())
-        };
+        let project = copy_project(project_name, temporary.path());
         let build = build_registry_project(&ProjectBuildOptions {
             project_directory: project,
             environment: "local".to_string(),
@@ -4881,10 +5396,22 @@ fn source_free_evaluation_without_credential_profiles_omits_issuance_and_signing
     .expect("evaluation-only Notary project builds without issuance");
     let output = PathBuf::from(build.output.expect("build output"));
     let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
+    assert_eq!(notary["state"]["storage"].as_str(), Some("postgresql"));
+    assert!(notary["evidence"].get("relay").is_none());
     assert!(notary["evidence"].get("signing_keys").is_none());
     assert!(notary["evidence"]["credential_profiles"]
         .as_mapping()
         .is_some_and(serde_yaml::Mapping::is_empty));
+    assert!(notary.get("oid4vci").is_none());
+    let rendered = serde_yaml::to_string(&notary).expect("Notary-only config serializes");
+    for forbidden in [
+        "redis:",
+        "direct_source:",
+        "source_credential:",
+        "credential_endpoint:",
+    ] {
+        assert!(!rendered.contains(forbidden), "{forbidden}");
+    }
 
     let missing_issuance_root = tempfile::tempdir().expect("temporary directory");
     let missing_issuance = copy_project("custom-system", missing_issuance_root.path());
@@ -6348,44 +6875,7 @@ fn copy_project(name: &str, temporary: &Path) -> PathBuf {
 }
 
 fn create_source_free_evaluation_project(temporary: &Path) -> PathBuf {
-    let project = temporary.join("notary-only-evaluation");
-    std::fs::create_dir_all(project.join("environments"))
-        .expect("evaluation-only project directory creates");
-    let authored_project = serde_yaml::from_str(
-        r#"version: 1
-registry: { id: fictional-evaluation-registry }
-services:
-  applicant-evaluation:
-    kind: evidence
-    version: 1
-    purpose: application-processing
-    legal_basis: application-processing
-    consent: not_required
-    access: { scopes: ["evidence:application:read"] }
-    claims:
-      application-complete:
-        cel: "true"
-        value: { type: boolean }
-        disclosure: predicate
-    credential_profiles: {}
-"#,
-    )
-    .expect("evaluation-only project parses");
-    write_yaml(&project.join("registry-stack.yaml"), &authored_project);
-    let environment = serde_yaml::from_str(
-        r#"version: 1
-callers:
-  application-service:
-    api_key_fingerprint: { secret: APPLICATION_SERVICE_TOKEN_HASH }
-    scopes: ["evidence:application:read"]
-deployment:
-  profile: local
-  notary: { service: evaluation-notary }
-"#,
-    )
-    .expect("evaluation-only environment parses");
-    write_yaml(&project.join("environments/local.yaml"), &environment);
-    project
+    copy_project("notary-only-evaluation", temporary)
 }
 
 fn add_source_free_credential_capability(project: &Path) {
