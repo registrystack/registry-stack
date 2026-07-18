@@ -195,7 +195,8 @@ The signed Grype reports remain `review-required`. Their summaries are 7
 Critical and 17 High matches for the Notary Debian runtime layer, and 1
 Critical and 2 High matches for the Relay distroless Debian runtime layer.
 The match sets are identical to the published `v0.10.0` reports, the recorded
-feed offers no fixed package versions, and the affected images run non-root.
+feed offers no fixed package versions for the Critical and High matches, and
+the affected images run non-root.
 This is transparent prerelease evidence, not a stable-release clearance or a
 claim that the findings are unreachable. Runtime-base migration remains a 1.0
 work item.
