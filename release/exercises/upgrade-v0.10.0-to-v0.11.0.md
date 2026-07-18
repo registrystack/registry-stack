@@ -1,10 +1,10 @@
 # Upgrade and rollback: v0.10.0 -> v0.11.0 -> v0.10.0
 
-Status: release-gate procedure prepared on 2026-07-18. No successful execution
-is claimed by this preparation change. A source-build run may be recorded
-against the finalized source ref before tagging. The complete gate uses the
-immutable published assets after the tag workflow and must pass before release
-acceptance and closeout.
+Status: published-asset verification completed on 2026-07-18. The complete
+stateful upgrade, audit-recovery, and rollback procedure has not been executed,
+so release acceptance and manifest closeout remain held. The immutable
+published assets passed the integrity and developer-journey checks recorded
+below; those checks do not replace the remaining deployment exercise.
 
 ## Purpose
 
@@ -161,3 +161,57 @@ records, or audit contents.
 The source preparation alone does not claim successful execution, full
 OID4VCI interoperability, a hosted promotion, an audit completion, an external
 pilot, or stable 1.0 readiness.
+
+## Published-asset verification record
+
+The `v0.11.0` tag-triggered release workflow completed successfully as run
+`29629077997`. The annotated tag peels to
+`3e587a4f3483b180037b6994fcc4cc0e1d670a16`, whose release manifest source ref
+is `9b851a606c9cfe298c16e515fbbb5f32c28d98cd`.
+
+The independent consumer-side verification used a fresh download directory
+and proved:
+
+- the non-draft prerelease contains exactly 106 assets: 35 payloads, 35 keyless
+  signatures, 35 signing certificates, and one SLSA provenance file;
+- `SHA256SUMS` validates all eight versioned binaries and the Registryctl image
+  lock;
+- every one of the 35 payload signatures has the expected tag-workflow
+  identity, and every payload is a subject of the authenticated SLSA
+  provenance;
+- the image lock, release capsule, file and image SBOMs, image-input checksums,
+  image digest files, and vulnerability-report hashes agree;
+- the public `registry-notary:v0.11.0` and `registry-relay:v0.11.0` tags resolve
+  to the exact locked digests, are anonymously pullable, and run as non-root;
+- the two service binaries report `0.11.0`; the embedded CEL and Rhai workers
+  are internal framed-protocol executables and are not standalone versioned
+  CLIs; and
+- the published macOS Registryctl binary initialized the HTTP starter, emitted
+  the VS Code and Zed editor manifest, passed all 21 generated offline
+  fixtures, passed `check --environment local`, and completed
+  `build --environment local`.
+
+The signed Grype reports remain `review-required`. Their summaries are 7
+Critical and 17 High matches for the Notary Debian runtime layer, and 1
+Critical and 2 High matches for the Relay distroless Debian runtime layer.
+The match sets are identical to the published `v0.10.0` reports, the recorded
+feed offers no fixed package versions for the Critical and High matches, and
+the affected images run non-root.
+This is transparent prerelease evidence, not a stable-release clearance or a
+claim that the findings are unreachable. Runtime-base migration remains a 1.0
+work item.
+
+The following release-gate work remains unexecuted and is not claimed:
+
+- a retained v0.10.0 deployment backup and baseline;
+- the registry-backed direct-issuance and OID4VCI positive and negative proofs;
+- the disposable audit-inconsistency quarantine and recovery proof;
+- restoration of the complete v0.10.0 databases, configuration, audit state,
+  anti-rollback state, and key-lifecycle material; and
+- hosted publication, the Solmara exact-digest adopter repin, or its smoke run.
+
+Accordingly, `release/manifests/registry-stack-beta-13.yaml` remains
+`release-candidate`. The GitHub prerelease is published and integrity-verified,
+but the complete acceptance gate above must pass, or its residual risk must be
+explicitly accepted for this beta, before the manifest is changed to
+`released`.
