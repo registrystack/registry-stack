@@ -1,5 +1,11 @@
 # Registry Stack for VS Code
 
+This is a source-installable developer preview for the current beta.
+It is not published to the VS Code Marketplace and no release VSIX is provided.
+For the stable beta path, run `registryctl init --from <starter>` or
+`registryctl authoring editor --project-dir <project>` and use the generated YAML schema settings.
+Install this preview only for optional semantic navigation.
+
 This extension starts `registry-language-server` for a workspace whose root contains
 `registry-stack.yaml`. It adds cross-file definitions, references, workspace/document symbols,
 and Registry Stack reference diagnostics. Red Hat YAML remains responsible for YAML syntax,
@@ -24,8 +30,9 @@ repository. First complete the [shared smoke-project setup](../README.md#local-e
    code --install-extension ./registry-stack-dev.vsix --force
    ```
 
-   `package:dev` type-checks the source, bundles its runtime dependencies, and creates an
-   installable VSIX. The explicit install affects the active VS Code profile.
+   `package:dev` type-checks the source, bundles its runtime dependencies into
+   `dist/extension.js`, and verifies that the VSIX contains no external `node_modules` runtime.
+   The explicit install affects the active VS Code profile.
 
 2. Open the smoke project as the workspace root:
 
@@ -33,9 +40,10 @@ repository. First complete the [shared smoke-project setup](../README.md#local-e
    code --new-window "$REGISTRY_STACK_SMOKE_PROJECT"
    ```
 
-3. Run **Preferences: Open Workspace Settings (JSON)** and add this property to the existing
-   generated settings object, replacing the example with the absolute value of
-   `$REGISTRY_STACK_REPO`:
+3. Trust the opened workspace. This preview runs a local executable and is disabled in Restricted
+   Mode and virtual workspaces. Then run **Preferences: Open Workspace Settings (JSON)** and add
+   this property to the existing generated settings object, replacing the example with the
+   absolute value of `$REGISTRY_STACK_REPO`:
 
    ```json
    "registryStack.languageServer.path": "/absolute/path/to/registry-stack/target/debug/registry-language-server"
@@ -48,9 +56,12 @@ repository. First complete the [shared smoke-project setup](../README.md#local-e
    `F12` for definitions, `Shift+F12` for references, `Cmd+Shift+O`/`Ctrl+Shift+O` for document
    symbols, and `Cmd+T`/`Ctrl+T` for workspace symbols.
 
-The source VSIX does not contain a platform server binary. Instead of the explicit setting, the
-extension can find `registry-language-server` on `PATH`, then fall back to
-`registryctl authoring language-server` when `registryctl` is on `PATH`.
+The source VSIX contains the extension runtime, not a platform server binary.
+Its server discovery order is: the explicit `registryStack.languageServer.path` setting,
+`registry-language-server` on `PATH`, then a matching `registryctl` on `PATH` running
+`registryctl authoring language-server`.
+The explicit setting is the shortest reliable preview path because it selects the binary built
+from the same checkout.
 
 ## Iterate
 
@@ -67,9 +78,12 @@ extension can find `registry-language-server` on `PATH`, then fall back to
 
 - If activation does not occur, confirm each intended workspace folder root itself contains
   `registry-stack.yaml` and that VS Code trusts the workspace. Opening only a YAML file or a parent
-  directory does not activate it.
-- If startup reports that no executable was found, verify the workspace setting is an absolute
-  path to an executable regular file.
+  directory does not activate it. Select **Workspaces: Manage Workspace Trust**, trust the reviewed
+  project, and run **Registry Stack: Restart Language Server**.
+- If startup reports that no server was found, set `registryStack.languageServer.path` to the
+  executable built in step 3. Otherwise, add `registry-language-server` to `PATH`, or add the
+  matching `registryctl` to `PATH` and restart the language server. The output message names the
+  project folder that failed.
 - If navigation is absent, confirm the file's VS Code language mode is YAML and inspect the output
   channel named for that workspace folder.
 - Red Hat YAML still owns schema validation, completion, hover, formatting, and syntax errors. Its

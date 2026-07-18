@@ -4,6 +4,7 @@
 package-lock.json
 src/**
 test/**
+scripts/**
 out/**
 tsconfig.json
 tsconfig.test.json

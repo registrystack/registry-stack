@@ -1,5 +1,11 @@
 # Registry Stack editor integrations
 
+VS Code and Zed semantic navigation are source-installable developer previews for this beta.
+They are not marketplace extensions or release assets.
+Use `registryctl init --from <starter>` and its generated editor schema setup as the stable beta
+path for YAML validation, completion, hover, and formatting.
+Install an editor preview only when you also want optional cross-file semantic navigation.
+
 The Registry Stack editor support is split into one reusable language server and thin editor
 launchers:
 
@@ -8,9 +14,9 @@ launchers:
 - `vscode` launches the server through VS Code's language-client API.
 - `zed` launches the same server through Zed's extension API.
 
-These integrations intentionally run alongside each editor's YAML language server. The generated
-`.vscode/settings.json` and `.zed/settings.json` files continue to provide version-matched schema
-validation and YAML completion without duplicating that behavior here.
+These integrations intentionally run alongside each editor's YAML language server.
+The generated `.vscode/settings.json` and `.zed/settings.json` files continue to provide
+version-matched schema validation and YAML completion without duplicating that behavior here.
 
 The language server watches Registry Stack YAML paths for changes made by generators, Git, or
 other tools. An open editor buffer remains authoritative until it is closed, so a filesystem event
@@ -33,8 +39,8 @@ cargo run --locked -p registryctl -- init --from http --project-dir "$REGISTRY_S
 Keep that terminal open so the three variables remain available. Then follow the editor-specific
 installation and launch instructions:
 
-- [VS Code](vscode/README.md#package-install-and-launch)
-- [Zed](zed/README.md#install-and-launch)
+- [VS Code developer preview](vscode/README.md#package-install-and-launch)
+- [Zed developer preview](zed/README.md#install-and-launch)
 
 ### Expected behavior
 

@@ -93,6 +93,7 @@ pub struct IndexedSymbol {
     pub container_name: Option<String>,
     pub location: IndexedLocation,
     key: SymbolKey,
+    resolvable: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -148,26 +149,48 @@ impl ProjectIndex {
         let root = root
             .canonicalize()
             .with_context(|| format!("failed to resolve project root {}", root.display()))?;
-        let documents = load_project_documents(&root)?;
-        Ok(Self::from_documents(&root, &documents))
+        let loaded = load_project_documents(&root)?;
+        Ok(Self::from_documents_with_diagnostics(
+            &root,
+            &loaded.documents,
+            loaded.diagnostics,
+        ))
     }
 
     pub fn from_documents(root: &Path, documents: &BTreeMap<PathBuf, String>) -> Self {
-        let root = root.to_path_buf();
-        let parsed = documents
-            .iter()
-            .filter_map(|(path, source)| parse_yaml(source).ok().map(|value| (path.clone(), value)))
-            .collect::<BTreeMap<_, _>>();
+        Self::from_documents_with_diagnostics(root, documents, Vec::new())
+    }
 
-        let (symbols, references) = {
+    pub(crate) fn from_documents_with_diagnostics(
+        root: &Path,
+        documents: &BTreeMap<PathBuf, String>,
+        mut diagnostics: Vec<IndexedDiagnostic>,
+    ) -> Self {
+        let root = root.to_path_buf();
+        let mut parsed = BTreeMap::new();
+        for (path, source) in documents {
+            match parse_yaml(source) {
+                Ok(value) => {
+                    parsed.insert(path.clone(), value);
+                }
+                Err(_) => diagnostics.push(document_diagnostic(
+                    path,
+                    "Invalid YAML syntax; fix this project document before it can be indexed",
+                )),
+            }
+        }
+
+        let (symbols, references, semantic_diagnostics) = {
             let mut builder = IndexBuilder {
                 root: &root,
+                documents,
                 parsed: &parsed,
                 symbols: Vec::new(),
                 references: Vec::new(),
+                diagnostics: Vec::new(),
             };
             builder.build();
-            (builder.symbols, builder.references)
+            (builder.symbols, builder.references, builder.diagnostics)
         };
 
         let mut index = Self {
@@ -177,7 +200,11 @@ impl ProjectIndex {
             diagnostics: Vec::new(),
             document_paths: documents.keys().cloned().collect(),
         };
-        index.diagnostics = index.build_diagnostics();
+        diagnostics.extend(semantic_diagnostics);
+        diagnostics.extend(index.build_diagnostics());
+        diagnostics.sort_by(diagnostic_cmp);
+        diagnostics.dedup();
+        index.diagnostics = diagnostics;
         index
     }
 
@@ -234,7 +261,10 @@ impl ProjectIndex {
         include_declaration: bool,
     ) -> Vec<IndexedLocation> {
         let path = normalize_lookup_path(path);
-        let keys = if let Some(symbol) = self.symbol_at(&path, position) {
+        let keys = if let Some(symbol) = self
+            .symbol_at(&path, position)
+            .filter(|symbol| symbol.resolvable)
+        {
             vec![symbol.key.clone()]
         } else if let Some(reference) = self.reference_at(&path, position) {
             self.definitions_for(&reference.target)
@@ -289,7 +319,7 @@ impl ProjectIndex {
     fn definitions_for(&self, query: &SymbolQuery) -> Vec<&IndexedSymbol> {
         self.symbols
             .iter()
-            .filter(|symbol| self.query_can_resolve_to(query, &symbol.key))
+            .filter(|symbol| symbol.resolvable && self.query_can_resolve_to(query, &symbol.key))
             .collect()
     }
 
@@ -305,7 +335,7 @@ impl ProjectIndex {
     fn build_diagnostics(&self) -> Vec<IndexedDiagnostic> {
         let mut diagnostics = Vec::new();
         let mut definitions: BTreeMap<&SymbolKey, Vec<&IndexedSymbol>> = BTreeMap::new();
-        for symbol in &self.symbols {
+        for symbol in self.symbols.iter().filter(|symbol| symbol.resolvable) {
             definitions.entry(&symbol.key).or_default().push(symbol);
         }
 
@@ -321,10 +351,10 @@ impl ProjectIndex {
                     message: format!(
                         "Duplicate {} definition '{}'{}",
                         key.kind.label(),
-                        key.name,
+                        bounded_value(&key.name),
                         key.scope
                             .as_ref()
-                            .map(|scope| format!(" in service '{scope}'"))
+                            .map(|scope| format!(" in service '{}'", bounded_value(scope)))
                             .unwrap_or_default()
                     ),
                 });
@@ -337,19 +367,19 @@ impl ProjectIndex {
                 0 => Some(format!(
                     "Unknown {} reference '{}'{}",
                     reference.target.kind.label(),
-                    reference.target.name,
+                    bounded_value(&reference.target.name),
                     reference
                         .target
                         .scope
                         .as_ref()
-                        .map(|scope| format!(" in service '{scope}'"))
+                        .map(|scope| format!(" in service '{}'", bounded_value(scope)))
                         .unwrap_or_default()
                 )),
                 1 => None,
                 count => Some(format!(
                     "Ambiguous {} reference '{}': found {count} definitions",
                     reference.target.kind.label(),
-                    reference.target.name
+                    bounded_value(&reference.target.name)
                 )),
             };
             if let Some(message) = message {
@@ -362,12 +392,7 @@ impl ProjectIndex {
             }
         }
 
-        diagnostics.sort_by(|left, right| {
-            left.path
-                .cmp(&right.path)
-                .then_with(|| range_cmp(left.range, right.range))
-                .then_with(|| left.message.cmp(&right.message))
-        });
+        diagnostics.sort_by(diagnostic_cmp);
         diagnostics
     }
 }
@@ -408,24 +433,29 @@ pub fn is_project_document(root: &Path, path: &Path) -> bool {
     }
 }
 
-pub fn load_project_documents(root: &Path) -> Result<BTreeMap<PathBuf, String>> {
+#[derive(Debug)]
+pub struct LoadedProjectDocuments {
+    pub documents: BTreeMap<PathBuf, String>,
+    pub diagnostics: Vec<IndexedDiagnostic>,
+}
+
+pub fn load_project_documents(root: &Path) -> Result<LoadedProjectDocuments> {
     let mut candidates = vec![root.join(PROJECT_FILE)];
-    add_yaml_files(&root.join("entities"), &mut candidates)?;
-    add_yaml_files(&root.join("environments"), &mut candidates)?;
+    add_yaml_files(root, &root.join("entities"), &mut candidates)?;
+    add_yaml_files(root, &root.join("environments"), &mut candidates)?;
 
     let integrations = root.join("integrations");
-    if let Ok(entries) = fs::read_dir(&integrations) {
+    if secure_directory(root, &integrations)? {
+        let entries = fs::read_dir(&integrations)
+            .with_context(|| format!("failed to inspect integrations under {}", root.display()))?;
         for entry in entries {
             let entry = entry.with_context(|| {
-                format!(
-                    "failed to inspect integrations under {}",
-                    integrations.display()
-                )
+                format!("failed to inspect integrations under {}", root.display())
             })?;
-            if entry.file_type()?.is_dir() {
-                let directory = entry.path();
+            let directory = entry.path();
+            if secure_directory(root, &directory)? {
                 candidates.push(directory.join("integration.yaml"));
-                add_yaml_files(&directory.join("fixtures"), &mut candidates)?;
+                add_yaml_files(root, &directory.join("fixtures"), &mut candidates)?;
             }
         }
     }
@@ -433,37 +463,65 @@ pub fn load_project_documents(root: &Path) -> Result<BTreeMap<PathBuf, String>> 
     candidates.sort();
     candidates.dedup();
     let mut documents = BTreeMap::new();
+    let mut diagnostics = Vec::new();
     for path in candidates {
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(error).with_context(|| format!("failed to inspect {}", path.display()))
-            }
+        let Some(metadata) = secure_regular_file(root, &path)? else {
+            continue;
         };
-        if !metadata.file_type().is_file() || metadata.len() > MAX_DOCUMENT_BYTES {
+        if metadata.len() > MAX_DOCUMENT_BYTES {
+            diagnostics.push(document_diagnostic(
+                &path,
+                "Project document exceeds the 1 MiB indexing limit",
+            ));
             continue;
         }
-        let source = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        documents.insert(path, source);
+        match fs::read(&path) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(source) => {
+                    documents.insert(path, source);
+                }
+                Err(_) => diagnostics.push(document_diagnostic(
+                    &path,
+                    "Project document is not valid UTF-8 and cannot be indexed",
+                )),
+            },
+            Err(error) if path.ends_with(PROJECT_FILE) => {
+                return Err(error).context("failed to read registry-stack.yaml")
+            }
+            Err(_) => diagnostics.push(document_diagnostic(
+                &path,
+                "Project document could not be read; check its permissions",
+            )),
+        }
     }
-    Ok(documents)
+    if !documents.contains_key(&root.join(PROJECT_FILE)) {
+        anyhow::bail!("registry-stack.yaml is missing, unsafe, oversized, or not valid UTF-8");
+    }
+    Ok(LoadedProjectDocuments {
+        documents,
+        diagnostics,
+    })
 }
 
-fn add_yaml_files(directory: &Path, candidates: &mut Vec<PathBuf>) -> Result<()> {
-    let entries = match fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to inspect {}", directory.display()));
-        }
-    };
+fn add_yaml_files(root: &Path, directory: &Path, candidates: &mut Vec<PathBuf>) -> Result<()> {
+    if !secure_directory(root, directory)? {
+        return Ok(());
+    }
+    let entries = fs::read_dir(directory).with_context(|| {
+        format!(
+            "failed to inspect a project directory under {}",
+            root.display()
+        )
+    })?;
     for entry in entries {
-        let entry = entry
-            .with_context(|| format!("failed to inspect an entry in {}", directory.display()))?;
-        if entry.file_type()?.is_file() && entry.path().extension().is_some_and(|ext| ext == "yaml")
+        let entry = entry.with_context(|| {
+            format!(
+                "failed to inspect an entry in a project directory under {}",
+                root.display()
+            )
+        })?;
+        if entry.path().extension().is_some_and(|ext| ext == "yaml")
+            && secure_regular_file(root, &entry.path())?.is_some()
         {
             candidates.push(entry.path());
         }
@@ -471,11 +529,60 @@ fn add_yaml_files(directory: &Path, candidates: &mut Vec<PathBuf>) -> Result<()>
     Ok(())
 }
 
+fn secure_directory(root: &Path, path: &Path) -> Result<bool> {
+    Ok(secure_path_metadata(root, path)?.is_some_and(|metadata| metadata.is_dir()))
+}
+
+fn secure_regular_file(root: &Path, path: &Path) -> Result<Option<fs::Metadata>> {
+    Ok(secure_path_metadata(root, path)?.filter(|metadata| metadata.file_type().is_file()))
+}
+
+pub(crate) fn is_safe_authored_file(root: &Path, path: &Path) -> bool {
+    secure_regular_file(root, path).is_ok_and(|metadata| metadata.is_some())
+}
+
+fn secure_path_metadata(root: &Path, path: &Path) -> Result<Option<fs::Metadata>> {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return Ok(None);
+    };
+    if relative
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Ok(None);
+    }
+
+    let mut candidate = root.to_path_buf();
+    let mut metadata = fs::symlink_metadata(root)
+        .with_context(|| format!("failed to inspect project root {}", root.display()))?;
+    for component in relative.components() {
+        candidate.push(component.as_os_str());
+        metadata = match fs::symlink_metadata(&candidate) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).context("failed to inspect a project path"),
+        };
+        if metadata.file_type().is_symlink() {
+            return Ok(None);
+        }
+    }
+
+    let canonical = candidate
+        .canonicalize()
+        .context("failed to prove project path containment")?;
+    if !canonical.starts_with(root) || canonical != candidate {
+        return Ok(None);
+    }
+    Ok(Some(metadata))
+}
+
 struct IndexBuilder<'a> {
     root: &'a Path,
+    documents: &'a BTreeMap<PathBuf, String>,
     parsed: &'a BTreeMap<PathBuf, YamlValue>,
     symbols: Vec<IndexedSymbol>,
     references: Vec<IndexedReference>,
+    diagnostics: Vec<IndexedDiagnostic>,
 }
 
 impl IndexBuilder<'_> {
@@ -517,7 +624,7 @@ impl IndexBuilder<'_> {
             .get("registry")
             .and_then(|registry| registry.get_scalar("id"))
         {
-            self.add_symbol(
+            self.add_resolvable_symbol(
                 SymbolKey::global(RegistrySymbolKind::Registry, &registry_id.value),
                 None,
                 path,
@@ -545,7 +652,7 @@ impl IndexBuilder<'_> {
         };
         for service in services {
             let service_name = service.key.value.clone();
-            self.add_symbol(
+            self.add_resolvable_symbol(
                 SymbolKey::global(RegistrySymbolKind::Service, &service_name),
                 None,
                 path,
@@ -566,7 +673,7 @@ impl IndexBuilder<'_> {
                 .and_then(YamlValue::as_mapping)
             {
                 for consultation in consultations {
-                    self.add_symbol(
+                    self.add_resolvable_symbol(
                         SymbolKey::scoped(
                             RegistrySymbolKind::Consultation,
                             &service_name,
@@ -591,7 +698,7 @@ impl IndexBuilder<'_> {
 
             if let Some(claims) = service.value.get("claims").and_then(YamlValue::as_mapping) {
                 for claim in claims {
-                    self.add_symbol(
+                    self.add_resolvable_symbol(
                         SymbolKey::scoped(
                             RegistrySymbolKind::Claim,
                             &service_name,
@@ -623,7 +730,7 @@ impl IndexBuilder<'_> {
                 .and_then(YamlValue::as_mapping)
             {
                 for profile in profiles {
-                    self.add_symbol(
+                    self.add_resolvable_symbol(
                         SymbolKey::scoped(
                             RegistrySymbolKind::CredentialProfile,
                             &service_name,
@@ -666,10 +773,9 @@ impl IndexBuilder<'_> {
         };
         for alias in aliases {
             let key = SymbolKey::global(kind, &alias.key.value);
-            let definition_path = alias
-                .value
-                .get_scalar("file")
-                .and_then(|file| safe_join(self.root, &file.value));
+            let file = alias.value.get_scalar("file");
+            let definition_path =
+                file.and_then(|file| safe_definition_path(self.root, &file.value, kind));
             let external_id = definition_path
                 .as_ref()
                 .and_then(|path| self.parsed.get(path).map(|document| (path, document)))
@@ -677,14 +783,42 @@ impl IndexBuilder<'_> {
 
             if let Some((path, id)) = external_id {
                 claimed_definition_files.insert(path.clone());
-                self.add_symbol(key, None, path, id.range);
+                self.add_resolvable_symbol(key, None, path, id.range);
                 self.add_reference(
                     SymbolQuery::global(kind, &alias.key.value),
                     manifest_path,
                     alias.key.range,
                 );
-            } else {
-                self.add_symbol(key, None, manifest_path, alias.key.range);
+                continue;
+            }
+
+            let problem = match (file, definition_path.as_ref()) {
+                (None, _) => "does not declare a file",
+                (Some(_), None) => "declares a file outside the supported project layout",
+                (Some(_), Some(path)) if self.parsed.contains_key(path) => {
+                    "targets a document without a scalar id"
+                }
+                (Some(_), Some(path)) if self.documents.contains_key(path) => {
+                    "targets invalid YAML"
+                }
+                (Some(_), Some(_)) => {
+                    "targets a missing, unreadable, unsafe, oversized, or non-UTF-8 file"
+                }
+            };
+            self.diagnostics.push(IndexedDiagnostic {
+                path: manifest_path.to_path_buf(),
+                range: file.map_or(alias.key.range, |file| file.range),
+                severity: DiagnosticSeverity::ERROR,
+                message: format!(
+                    "Declared {} '{}' {problem}; use a regular UTF-8 YAML file inside the documented project layout",
+                    kind.label(),
+                    bounded_value(&alias.key.value),
+                ),
+            });
+            if let Some(path) = definition_path {
+                if self.parsed.contains_key(&path) {
+                    claimed_definition_files.insert(path);
+                }
             }
         }
     }
@@ -696,13 +830,13 @@ impl IndexBuilder<'_> {
         kind: RegistrySymbolKind,
     ) {
         if let Some(id) = document.get_scalar("id") {
-            self.add_symbol(SymbolKey::global(kind, &id.value), None, path, id.range);
+            self.add_non_resolving_symbol(SymbolKey::global(kind, &id.value), None, path, id.range);
         }
     }
 
     fn extract_fixture(&mut self, path: &Path, document: &YamlValue) {
         if let Some(name) = document.get_scalar("name") {
-            self.add_symbol(
+            self.add_resolvable_symbol(
                 SymbolKey::global(RegistrySymbolKind::Fixture, &name.value),
                 None,
                 path,
@@ -727,7 +861,7 @@ impl IndexBuilder<'_> {
     fn extract_environment(&mut self, path: &Path, relative: &Path, document: &YamlValue) {
         if let Some(name) = relative.file_stem().and_then(|name| name.to_str()) {
             let range = Range::new(Position::new(0, 0), Position::new(0, 0));
-            self.add_symbol(
+            self.add_resolvable_symbol(
                 SymbolKey::global(RegistrySymbolKind::Environment, name),
                 None,
                 path,
@@ -750,12 +884,33 @@ impl IndexBuilder<'_> {
         }
     }
 
+    fn add_resolvable_symbol(
+        &mut self,
+        key: SymbolKey,
+        container_name: Option<String>,
+        path: &Path,
+        range: Range,
+    ) {
+        self.add_symbol(key, container_name, path, range, true);
+    }
+
+    fn add_non_resolving_symbol(
+        &mut self,
+        key: SymbolKey,
+        container_name: Option<String>,
+        path: &Path,
+        range: Range,
+    ) {
+        self.add_symbol(key, container_name, path, range, false);
+    }
+
     fn add_symbol(
         &mut self,
         key: SymbolKey,
         container_name: Option<String>,
         path: &Path,
         range: Range,
+        resolvable: bool,
     ) {
         self.symbols.push(IndexedSymbol {
             name: key.name.clone(),
@@ -766,6 +921,7 @@ impl IndexBuilder<'_> {
                 range,
             },
             key,
+            resolvable,
         });
     }
 
@@ -986,7 +1142,7 @@ impl<'a> SourceMap<'a> {
     }
 }
 
-fn safe_join(root: &Path, relative: &str) -> Option<PathBuf> {
+fn safe_definition_path(root: &Path, relative: &str, kind: RegistrySymbolKind) -> Option<PathBuf> {
     let path = Path::new(relative);
     if path.is_absolute()
         || path
@@ -995,7 +1151,48 @@ fn safe_join(root: &Path, relative: &str) -> Option<PathBuf> {
     {
         return None;
     }
-    Some(root.join(path))
+    let candidate = root.join(path);
+    let supported = match kind {
+        RegistrySymbolKind::Integration => is_integration_path(path),
+        RegistrySymbolKind::Entity => is_entity_path(path),
+        _ => false,
+    };
+    supported.then_some(candidate)
+}
+
+pub(crate) fn document_diagnostic(path: &Path, message: &str) -> IndexedDiagnostic {
+    IndexedDiagnostic {
+        path: path.to_path_buf(),
+        range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+        severity: DiagnosticSeverity::ERROR,
+        message: message.to_owned(),
+    }
+}
+
+fn diagnostic_cmp(left: &IndexedDiagnostic, right: &IndexedDiagnostic) -> std::cmp::Ordering {
+    left.path
+        .cmp(&right.path)
+        .then_with(|| range_cmp(left.range, right.range))
+        .then_with(|| left.message.cmp(&right.message))
+}
+
+fn bounded_value(value: &str) -> String {
+    const MAX_CHARS: usize = 120;
+    let mut bounded = value
+        .chars()
+        .take(MAX_CHARS)
+        .map(|character| {
+            if character.is_control() {
+                '�'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    if value.chars().count() > MAX_CHARS {
+        bounded.push('…');
+    }
+    bounded
 }
 
 fn normalize_lookup_path(path: &Path) -> PathBuf {
@@ -1173,6 +1370,8 @@ services:
       shared: { cel: true }
       shared: { cel: false }
       broken: { output: absent.value }
+    credential_profiles:
+      broken: { claims: [absent-claim] }
   second:
     claims:
       shared: { cel: true }
@@ -1181,7 +1380,7 @@ services:
         write(
             temp.path(),
             "integrations/people/fixtures/active.yaml",
-            "name: active-person\nexpect: { claims: { shared: true } }\n",
+            "name: active-person\nexpect: { claims: { shared: true, absent-fixture-claim: true } }\n",
         );
         let index = ProjectIndex::load(temp.path()).unwrap();
         let messages = index
@@ -1202,6 +1401,144 @@ services:
         assert!(messages
             .iter()
             .any(|message| message.contains("Unknown consultation")));
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("Unknown claim reference 'absent-claim'")));
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("Unknown claim reference 'absent-fixture-claim'")));
+    }
+
+    #[test]
+    fn orphan_files_never_satisfy_manifest_or_environment_references() {
+        let temp = TempDir::new().unwrap();
+        write(
+            temp.path(),
+            PROJECT_FILE,
+            r#"version: 1
+registry: { id: demo }
+services:
+  evidence:
+    consultations:
+      lookup: { integration: orphan-integration }
+  records:
+    entity: orphan-entity
+"#,
+        );
+        write(
+            temp.path(),
+            "integrations/orphan/integration.yaml",
+            "version: 1\nid: orphan-integration\n",
+        );
+        write(
+            temp.path(),
+            "entities/orphan.yaml",
+            "version: 1\nid: orphan-entity\n",
+        );
+        write(
+            temp.path(),
+            "environments/local.yaml",
+            "version: 1\nintegrations: { orphan-integration: {} }\nentities: { orphan-entity: {} }\n",
+        );
+
+        let index = ProjectIndex::load(temp.path()).unwrap();
+        let messages = index
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message.contains("Unknown integration reference"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            messages
+                .iter()
+                .filter(|message| message.contains("Unknown entity reference"))
+                .count(),
+            2
+        );
+        assert!(index
+            .workspace_symbols("orphan-integration")
+            .iter()
+            .any(|symbol| symbol.location.path.ends_with("integration.yaml")));
+        assert!(index
+            .workspace_symbols("orphan-entity")
+            .iter()
+            .any(|symbol| symbol.location.path.ends_with("orphan.yaml")));
+        assert!(index
+            .definitions_at(&temp.path().join(PROJECT_FILE), Position::new(6, 38),)
+            .is_empty());
+        assert!(index
+            .references_at(
+                &temp.path().join("integrations/orphan/integration.yaml"),
+                Position::new(1, 5),
+                true,
+            )
+            .is_empty());
+    }
+
+    #[test]
+    fn declared_alias_targets_must_be_valid_indexable_documents() {
+        let temp = TempDir::new().unwrap();
+        write(
+            temp.path(),
+            PROJECT_FILE,
+            r#"version: 1
+registry: { id: demo }
+integrations:
+  missing: { file: integrations/missing/integration.yaml }
+  malformed: { file: integrations/malformed/integration.yaml }
+  non-utf8: { file: integrations/non-utf8/integration.yaml }
+entities:
+  missing-entity: { file: entities/missing.yaml }
+services:
+  evidence:
+    consultations:
+      one: { integration: missing }
+      two: { integration: malformed }
+      three: { integration: non-utf8 }
+  records:
+    entity: missing-entity
+"#,
+        );
+        write(
+            temp.path(),
+            "integrations/malformed/integration.yaml",
+            "id: [\n",
+        );
+        let non_utf8 = temp.path().join("integrations/non-utf8/integration.yaml");
+        fs::create_dir_all(non_utf8.parent().unwrap()).unwrap();
+        fs::write(&non_utf8, [0xff, 0xfe]).unwrap();
+
+        let index = ProjectIndex::load(temp.path()).unwrap();
+        for alias in ["missing", "malformed", "non-utf8"] {
+            assert!(index.diagnostics().iter().any(|diagnostic| {
+                diagnostic.message.contains("Declared integration")
+                    && diagnostic.message.contains(alias)
+            }));
+            assert!(index.diagnostics().iter().any(|diagnostic| {
+                diagnostic
+                    .message
+                    .contains(&format!("Unknown integration reference '{alias}'"))
+            }));
+        }
+        assert!(index.diagnostics().iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Declared entity 'missing-entity'")));
+        assert!(index.diagnostics().iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Unknown entity reference 'missing-entity'")));
+        assert!(index.diagnostics().iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Project document is not valid UTF-8")));
+        assert!(index
+            .diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.message.contains("Invalid YAML syntax")));
     }
 
     #[test]
@@ -1256,5 +1593,165 @@ services:
                 "missing {kind:?} {name}"
             );
         }
+    }
+
+    #[test]
+    fn maintained_authoring_catalog_workspaces_have_no_reference_diagnostics() {
+        let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let catalog_path = repository_root
+            .join("crates/registryctl/tests/fixtures/project-authoring-journeys.yaml");
+        let catalog = parse_yaml(&fs::read_to_string(catalog_path).unwrap()).unwrap();
+        let workspaces = catalog
+            .get("workspaces")
+            .and_then(YamlValue::as_sequence)
+            .unwrap();
+        let mut maintained = 0;
+        for workspace in workspaces {
+            if workspace
+                .get_scalar("classification")
+                .is_none_or(|classification| classification.value != "maintained")
+            {
+                continue;
+            }
+            maintained += 1;
+            let id = &workspace.get_scalar("id").unwrap().value;
+            let source = &workspace.get_scalar("source").unwrap().value;
+            let index = ProjectIndex::load(&repository_root.join(source)).unwrap();
+            let reference_diagnostics = index
+                .diagnostics()
+                .iter()
+                .filter(|diagnostic| {
+                    diagnostic.message.starts_with("Unknown ")
+                        || diagnostic.message.starts_with("Ambiguous ")
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                reference_diagnostics.is_empty(),
+                "{id} has false reference diagnostics: {reference_diagnostics:?}"
+            );
+        }
+        assert_eq!(maintained, 12, "catalog maintenance coverage changed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinks_at_every_authored_directory_layer() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        write(
+            temp.path(),
+            PROJECT_FILE,
+            r#"version: 1
+registry: { id: demo }
+integrations:
+  linked-file: { file: integrations/real/integration.yaml }
+services:
+  check:
+    consultations:
+      linked: { integration: linked-file }
+"#,
+        );
+
+        write(outside.path(), "entity.yaml", "id: outside-entity\n");
+        write(
+            outside.path(),
+            "environment.yaml",
+            "id: outside-environment\n",
+        );
+        write(
+            outside.path(),
+            "integration.yaml",
+            "id: outside-integration\n",
+        );
+        write(outside.path(), "fixture.yaml", "name: outside-fixture\n");
+
+        fs::create_dir_all(temp.path().join("entities")).unwrap();
+        symlink(
+            outside.path().join("entity.yaml"),
+            temp.path().join("entities/linked.yaml"),
+        )
+        .unwrap();
+        fs::create_dir_all(temp.path().join("environments")).unwrap();
+        symlink(
+            outside.path().join("environment.yaml"),
+            temp.path().join("environments/linked.yaml"),
+        )
+        .unwrap();
+        fs::create_dir_all(temp.path().join("integrations/real/fixtures")).unwrap();
+        symlink(
+            outside.path().join("integration.yaml"),
+            temp.path().join("integrations/real/integration.yaml"),
+        )
+        .unwrap();
+        symlink(
+            outside.path().join("fixture.yaml"),
+            temp.path().join("integrations/real/fixtures/linked.yaml"),
+        )
+        .unwrap();
+
+        let index = ProjectIndex::load(temp.path()).unwrap();
+        for outside_name in [
+            "outside-entity",
+            "outside-environment",
+            "outside-integration",
+            "outside-fixture",
+        ] {
+            assert!(index.workspace_symbols(outside_name).is_empty());
+        }
+        assert!(index.diagnostics().iter().any(|diagnostic| diagnostic
+            .message
+            .contains("Declared integration 'linked-file'")));
+
+        let nested_project = TempDir::new().unwrap();
+        write(
+            nested_project.path(),
+            PROJECT_FILE,
+            "version: 1\nregistry: { id: nested }\nservices: {}\n",
+        );
+        symlink(outside.path(), nested_project.path().join("entities")).unwrap();
+        symlink(outside.path(), nested_project.path().join("environments")).unwrap();
+        symlink(outside.path(), nested_project.path().join("integrations")).unwrap();
+        let nested_index = ProjectIndex::load(nested_project.path()).unwrap();
+        assert_eq!(nested_index.symbols().len(), 1);
+
+        let integration_directory_project = TempDir::new().unwrap();
+        write(
+            integration_directory_project.path(),
+            PROJECT_FILE,
+            "version: 1\nregistry: { id: nested-integration }\nservices: {}\n",
+        );
+        fs::create_dir(integration_directory_project.path().join("integrations")).unwrap();
+        symlink(
+            outside.path(),
+            integration_directory_project
+                .path()
+                .join("integrations/linked"),
+        )
+        .unwrap();
+        let nested_index = ProjectIndex::load(integration_directory_project.path()).unwrap();
+        assert_eq!(nested_index.symbols().len(), 1);
+
+        let fixture_directory_project = TempDir::new().unwrap();
+        write(
+            fixture_directory_project.path(),
+            PROJECT_FILE,
+            "version: 1\nregistry: { id: nested-fixture }\nservices: {}\n",
+        );
+        write(
+            fixture_directory_project.path(),
+            "integrations/real/integration.yaml",
+            "id: unclaimed\n",
+        );
+        symlink(
+            outside.path(),
+            fixture_directory_project
+                .path()
+                .join("integrations/real/fixtures"),
+        )
+        .unwrap();
+        let nested_index = ProjectIndex::load(fixture_directory_project.path()).unwrap();
+        assert!(nested_index.workspace_symbols("outside-fixture").is_empty());
     }
 }

@@ -134,12 +134,18 @@ The generated `.vscode/settings.json` and `.zed/settings.json` reserve the five 
 table. Open the Registry Stack project directory as the editor root. In VS Code, install or accept
 the workspace recommendation for Red Hat YAML. Zed includes YAML language-server support.
 
-The source distribution also contains Registry Stack extensions for VS Code and Zed. Both launch
-the same semantic server, either as `registry-language-server` or through
-`registryctl authoring language-server`. The extensions add cross-file definitions, references,
-workspace and document symbols, and missing, duplicate, or ambiguous reference diagnostics. They
-run alongside the YAML language server, which continues to own syntax, schemas, completion, hover,
-and formatting.
+The generated schema setup is the stable beta editor path.
+It provides YAML validation, completion, hover, and formatting without a source checkout.
+
+VS Code and Zed semantic navigation are optional, source-installable developer previews for this
+beta. They are not marketplace extensions and are not available as release assets.
+Build and install them from the Registry Stack source tree only when you want cross-file
+definitions, references, workspace and document symbols, and missing, duplicate, or ambiguous
+reference diagnostics.
+Both previews launch the same semantic server, either as `registry-language-server` or through
+`registryctl authoring language-server`, alongside the YAML language server.
+The YAML language server continues to own syntax, schemas, completion, hover, and formatting.
+Follow `editors/vscode/README.md` or `editors/zed/README.md` in the same source checkout.
 
 The shared YAML language server interprets configured paths as suffix matches at any depth. A file
 such as `notes.yaml` keeps its normal schema detection and formatting, but a nested copy such as

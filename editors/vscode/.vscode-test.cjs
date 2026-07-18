@@ -7,6 +7,7 @@ const path = require('node:path');
 const { defineConfig } = require('@vscode/test-cli');
 
 const testRunDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'registry-stack-vscode-'));
+const trustedUserData = path.join(testRunDirectory, 'trusted-user-data');
 const projectAlpha = path.join(testRunDirectory, 'project-alpha');
 const projectBeta = path.join(testRunDirectory, 'project-beta');
 const workspaceFolder = path.join(testRunDirectory, 'multi-root.code-workspace');
@@ -40,10 +41,6 @@ module.exports = defineConfig({
   files: 'out/test/trusted.test.js',
   version: '1.91.1',
   workspaceFolder,
-  launchArgs: [
-    '--disable-extensions',
-    '--user-data-dir',
-    path.join(testRunDirectory, 'trusted'),
-  ],
+  launchArgs: ['--disable-extensions', '--user-data-dir', trustedUserData],
   mocha: { timeout: 30_000 },
 });

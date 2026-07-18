@@ -52,7 +52,7 @@
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
-          "description": "Path to the registry-language-server executable. Relative paths resolve from the Registry Stack project root. When empty, the extension uses its bundled binary or searches PATH."
+          "description": "Path to the registry-language-server executable. Relative paths resolve from the Registry Stack project root. When empty, the extension searches PATH, then runs `registryctl authoring language-server` from PATH."
         }
       }
     }
@@ -61,7 +61,8 @@
     "compile": "esbuild src/extension.ts --bundle --platform=node --target=node20 --external:vscode --outfile=dist/extension.js --sourcemap --minify",
     "compile-tests": "tsc -p tsconfig.test.json",
     "check": "tsc -p . --noEmit && tsc -p tsconfig.test.json --noEmit",
-    "package:dev": "npm run check && vsce package --no-dependencies --out registry-stack-dev.vsix",
+    "package:dev": "npm run check && npm run compile && vsce package --no-dependencies --out registry-stack-dev.vsix && npm run verify:package",
+    "verify:package": "node scripts/verify-vsix.cjs registry-stack-dev.vsix",
     "pretest": "npm run compile && npm run compile-tests",
     "test": "vscode-test",
     "vscode:prepublish": "npm run compile"

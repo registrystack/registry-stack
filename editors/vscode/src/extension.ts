@@ -68,7 +68,7 @@ async function startClient(
 ): Promise<void> {
   const key = folderKey(projectFolder);
   try {
-    const server = resolveServerCommand(context, projectFolder);
+    const server = resolveServerCommand(projectFolder);
     const serverOptions: ServerOptions = {
       run: {
         command: server.command,
@@ -144,10 +144,10 @@ function folderKey(folder: vscode.WorkspaceFolder): string {
   return folder.uri.toString();
 }
 
-function resolveServerCommand(
-  context: vscode.ExtensionContext,
-  projectFolder: vscode.WorkspaceFolder,
-): { command: string; args: string[] } {
+function resolveServerCommand(projectFolder: vscode.WorkspaceFolder): {
+  command: string;
+  args: string[];
+} {
   const configured = vscode.workspace
     .getConfiguration('registryStack', projectFolder.uri)
     .get<string>('languageServer.path', '')
@@ -157,7 +157,9 @@ function resolveServerCommand(
       ? configured
       : path.resolve(projectFolder.uri.fsPath, configured);
     if (!isExecutableFile(resolved)) {
-      throw new Error(`configured executable does not exist or is not a file: ${resolved}`);
+      throw new Error(
+        `Configured registryStack.languageServer.path is not an executable file: ${resolved}. Update the setting, or clear it to search PATH.`,
+      );
     }
     return { command: resolved, args: [] };
   }
@@ -165,10 +167,6 @@ function resolveServerCommand(
   const executable = process.platform === 'win32'
     ? 'registry-language-server.exe'
     : 'registry-language-server';
-  const bundled = context.asAbsolutePath(path.join('bin', executable));
-  if (isExecutableFile(bundled)) {
-    return { command: bundled, args: [] };
-  }
   const standalone = findExecutableOnPath(executable);
   if (standalone !== undefined) {
     return { command: standalone, args: [] };
@@ -180,7 +178,7 @@ function resolveServerCommand(
     return { command: registryctl, args: ['authoring', 'language-server'] };
   }
   throw new Error(
-    'neither registry-language-server nor registryctl was found on PATH; install Registry Stack or configure registryStack.languageServer.path',
+    'No Registry Stack language server was found. Set registryStack.languageServer.path to an executable, add registry-language-server to PATH, or add a matching registryctl to PATH so it can run "registryctl authoring language-server".',
   );
 }
 

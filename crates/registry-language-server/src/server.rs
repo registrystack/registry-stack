@@ -25,8 +25,8 @@ use tower_lsp_server::{
 };
 
 use crate::index::{
-    is_project_document, is_valid_yaml, load_project_documents, IndexedLocation, IndexedSymbol,
-    ProjectIndex,
+    document_diagnostic, is_project_document, is_safe_authored_file, is_valid_yaml,
+    load_project_documents, IndexedDiagnostic, IndexedLocation, IndexedSymbol, ProjectIndex,
 };
 
 const SERVER_NAME: &str = "Registry Stack Language Server";
@@ -36,6 +36,7 @@ const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 pub struct Backend {
     client: Client,
     state: RwLock<Option<WorkspaceState>>,
+    load_error: RwLock<Option<String>>,
     published_paths: Mutex<BTreeSet<PathBuf>>,
     supports_dynamic_file_watching: AtomicBool,
 }
@@ -45,6 +46,7 @@ impl Backend {
         Self {
             client,
             state: RwLock::new(None),
+            load_error: RwLock::new(None),
             published_paths: Mutex::new(BTreeSet::new()),
             supports_dynamic_file_watching: AtomicBool::new(false),
         }
@@ -97,13 +99,26 @@ impl Backend {
     async fn update_document(&self, path: PathBuf, text: String, version: i32) {
         let path = normalize_document_path(&path);
         let mut state = self.state.write().await;
+        let mut load_error = None;
         if state.is_none() {
-            *state = find_project_root(&path).and_then(|root| WorkspaceState::load(&root).ok());
+            if let Some(root) = find_project_root(&path) {
+                match WorkspaceState::load(&root) {
+                    Ok(loaded) => {
+                        *state = Some(loaded);
+                        *self.load_error.write().await = None;
+                    }
+                    Err(error) => load_error = Some(bounded_load_error(&error)),
+                }
+            }
         }
         if let Some(state) = state.as_mut() {
             state.update(path, text, version);
         }
         drop(state);
+        if let Some(error) = load_error {
+            *self.load_error.write().await = Some(error.clone());
+            self.client.log_message(MessageType::ERROR, error).await;
+        }
         self.publish_diagnostics().await;
     }
 
@@ -125,11 +140,17 @@ impl Backend {
         paths.sort();
         paths.dedup();
         let mut state = self.state.write().await;
+        let mut load_error = None;
         if state.is_none() {
-            *state = paths
-                .iter()
-                .find_map(|path| find_project_root(path))
-                .and_then(|root| WorkspaceState::load(&root).ok());
+            if let Some(root) = paths.iter().find_map(|path| find_project_root(path)) {
+                match WorkspaceState::load(&root) {
+                    Ok(loaded) => {
+                        *state = Some(loaded);
+                        *self.load_error.write().await = None;
+                    }
+                    Err(error) => load_error = Some(bounded_load_error(&error)),
+                }
+            }
         }
         if let Some(state) = state.as_mut() {
             for path in paths {
@@ -137,6 +158,10 @@ impl Backend {
             }
         }
         drop(state);
+        if let Some(error) = load_error {
+            *self.load_error.write().await = Some(error.clone());
+            self.client.log_message(MessageType::ERROR, error).await;
+        }
         self.publish_diagnostics().await;
     }
 }
@@ -153,7 +178,13 @@ impl LanguageServer for Backend {
         self.supports_dynamic_file_watching
             .store(supports_dynamic_file_watching, Ordering::Relaxed);
         if let Some(root) = project_root_from_initialize(&params) {
-            *self.state.write().await = WorkspaceState::load(&root).ok();
+            match WorkspaceState::load(&root) {
+                Ok(state) => {
+                    *self.state.write().await = Some(state);
+                    *self.load_error.write().await = None;
+                }
+                Err(error) => *self.load_error.write().await = Some(bounded_load_error(&error)),
+            }
         }
 
         Ok(InitializeResult {
@@ -213,21 +244,26 @@ impl LanguageServer for Backend {
             }
         }
 
-        let message = {
+        let (message_type, message) = {
             let state = self.state.read().await;
-            state
-                .as_ref()
-                .map(|state| {
+            if let Some(state) = state.as_ref() {
+                (
+                    MessageType::INFO,
                     format!(
                         "Registry Stack project indexed at {}",
                         state.index.root().display()
-                    )
-                })
-                .unwrap_or_else(|| {
-                    "No registry-stack.yaml project found in the workspace".to_owned()
-                })
+                    ),
+                )
+            } else if let Some(error) = self.load_error.read().await.clone() {
+                (MessageType::ERROR, error)
+            } else {
+                (
+                    MessageType::INFO,
+                    "No registry-stack.yaml project found in the workspace".to_owned(),
+                )
+            }
         };
-        self.client.log_message(MessageType::INFO, message).await;
+        self.client.log_message(message_type, message).await;
         self.publish_diagnostics().await;
     }
 
@@ -263,22 +299,22 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let Some(text) = params.text else {
+            return;
+        };
         let Some(path) = params.text_document.uri.to_file_path() else {
             return;
         };
         let path = path.into_owned();
-        let text = params.text.or_else(|| fs::read_to_string(&path).ok());
-        if let Some(text) = text {
-            let version = {
-                let state = self.state.read().await;
-                state
-                    .as_ref()
-                    .and_then(|state| state.open_versions.get(&normalize_document_path(&path)))
-                    .copied()
-                    .unwrap_or(0)
-            };
-            self.update_document(path, text, version).await;
-        }
+        let version = {
+            let state = self.state.read().await;
+            state
+                .as_ref()
+                .and_then(|state| state.open_versions.get(&normalize_document_path(&path)))
+                .copied()
+                .unwrap_or(0)
+        };
+        self.update_document(path, text, version).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -396,18 +432,24 @@ struct WorkspaceState {
     root: PathBuf,
     documents: BTreeMap<PathBuf, String>,
     open_versions: BTreeMap<PathBuf, i32>,
+    disk_diagnostics: Vec<IndexedDiagnostic>,
     index: ProjectIndex,
 }
 
 impl WorkspaceState {
     fn load(root: &Path) -> anyhow::Result<Self> {
         let root = root.canonicalize()?;
-        let documents = load_project_documents(&root)?;
-        let index = ProjectIndex::from_documents(&root, &documents);
+        let loaded = load_project_documents(&root)?;
+        let index = ProjectIndex::from_documents_with_diagnostics(
+            &root,
+            &loaded.documents,
+            loaded.diagnostics.clone(),
+        );
         Ok(Self {
             root,
-            documents,
+            documents: loaded.documents,
             open_versions: BTreeMap::new(),
+            disk_diagnostics: loaded.diagnostics,
             index,
         })
     }
@@ -418,6 +460,8 @@ impl WorkspaceState {
         }
         self.open_versions.insert(path.clone(), version);
         if text.len() <= MAX_DOCUMENT_BYTES && is_valid_yaml(&text) {
+            self.disk_diagnostics
+                .retain(|diagnostic| diagnostic.path != path);
             self.documents.insert(path, text);
             self.rebuild();
         }
@@ -435,31 +479,74 @@ impl WorkspaceState {
         if !is_project_document(&self.root, path) || self.open_versions.contains_key(path) {
             return;
         }
-        match fs::symlink_metadata(path) {
-            Ok(metadata)
-                if metadata.file_type().is_file()
-                    && metadata.len() <= MAX_DOCUMENT_BYTES as u64 =>
-            {
-                if let Ok(text) = fs::read_to_string(path) {
-                    if is_valid_yaml(&text) {
-                        self.documents.insert(path.to_path_buf(), text);
-                    }
+        self.disk_diagnostics
+            .retain(|diagnostic| diagnostic.path != path);
+        if !is_safe_authored_file(&self.root, path) {
+            self.documents.remove(path);
+            self.rebuild();
+            return;
+        }
+        match fs::read(path) {
+            Ok(bytes) if bytes.len() > MAX_DOCUMENT_BYTES => {
+                self.documents.remove(path);
+                self.disk_diagnostics.push(document_diagnostic(
+                    path,
+                    "Project document exceeds the 1 MiB indexing limit",
+                ));
+            }
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(text) if is_valid_yaml(&text) => {
+                    self.documents.insert(path.to_path_buf(), text);
                 }
-            }
-            Ok(_) => {
+                Ok(_) => {
+                    self.documents.remove(path);
+                    self.disk_diagnostics.push(document_diagnostic(
+                        path,
+                        "Invalid YAML syntax; fix this project document before it can be indexed",
+                    ));
+                }
+                Err(_) => {
+                    self.documents.remove(path);
+                    self.disk_diagnostics.push(document_diagnostic(
+                        path,
+                        "Project document is not valid UTF-8 and cannot be indexed",
+                    ));
+                }
+            },
+            Err(_) => {
                 self.documents.remove(path);
+                self.disk_diagnostics.push(document_diagnostic(
+                    path,
+                    "Project document could not be read; check its permissions",
+                ));
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                self.documents.remove(path);
-            }
-            Err(_) => {}
         }
         self.rebuild();
     }
 
     fn rebuild(&mut self) {
-        self.index = ProjectIndex::from_documents(&self.root, &self.documents);
+        self.index = ProjectIndex::from_documents_with_diagnostics(
+            &self.root,
+            &self.documents,
+            self.disk_diagnostics.clone(),
+        );
     }
+}
+
+fn bounded_load_error(error: &anyhow::Error) -> String {
+    const MAX_CHARS: usize = 500;
+    let detail = format!("{error:#}")
+        .chars()
+        .take(MAX_CHARS)
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    format!("Could not index Registry Stack project: {detail}")
 }
 
 fn project_root_from_initialize(params: &InitializeParams) -> Option<PathBuf> {

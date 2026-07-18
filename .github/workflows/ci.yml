@@ -406,7 +406,7 @@ jobs:
           cache: npm
           cache-dependency-path: editors/vscode/package-lock.json
 
-      - name: Check VS Code extension
+      - name: Package and test VS Code developer preview
         working-directory: editors/vscode
         run: |
           npm ci
