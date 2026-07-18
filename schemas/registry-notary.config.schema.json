@@ -683,7 +683,6 @@
       "type": "object"
     },
     "EvidenceAssistedAccessContext": {
-      "additionalProperties": false,
       "properties": {
         "channel": {
           "type": "string"
@@ -790,7 +789,7 @@
       "type": "object"
     },
     "EvidenceAuthorizationDetails": {
-      "additionalProperties": false,
+      "description": "Versioned authorization fields shared by static configuration and token/OIDC JSON.\n\nUnknown metadata is intentionally ignored for forward-compatible interoperability.\nAuthorization decisions consume only the modeled fields and must never infer authority\nfrom an unrecognized extension.",
       "properties": {
         "access_mode": {
           "anyOf": [
@@ -916,7 +915,6 @@
       "type": "object"
     },
     "EvidenceAuthorizationRelationship": {
-      "additionalProperties": false,
       "properties": {
         "proof_claim": {
           "type": "string"
@@ -932,7 +930,6 @@
       "type": "object"
     },
     "EvidenceAuthorizationSubject": {
-      "additionalProperties": false,
       "properties": {
         "binding_claim": {
           "type": "string"
@@ -948,7 +945,6 @@
       "type": "object"
     },
     "EvidenceAuthorizationTarget": {
-      "additionalProperties": false,
       "properties": {
         "id": {
           "type": "string"
