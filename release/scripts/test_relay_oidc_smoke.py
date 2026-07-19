@@ -396,6 +396,20 @@ class RelayOidcSmokeTest(TestCase):
             self.assertEqual(self.runner.os.getuid(), path.stat().st_uid)
             self.assertEqual(self.runner.os.getgid(), path.stat().st_gid)
 
+    def test_helper_writes_all_runtime_json_owner_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "topology.json"
+            env = {
+                "REGISTRY_RELAY_OIDC_SMOKE_RUNTIME_UID": str(self.runner.os.getuid()),
+                "REGISTRY_RELAY_OIDC_SMOKE_RUNTIME_GID": str(self.runner.os.getgid()),
+            }
+            with patch.dict(self.helper.os.environ, env, clear=False):
+                self.helper.atomic_json(path, {"client_id": "synthetic-client"})
+
+            self.assertEqual(0o600, path.stat().st_mode & 0o777)
+            self.assertEqual(self.runner.os.getuid(), path.stat().st_uid)
+            self.assertEqual(self.runner.os.getgid(), path.stat().st_gid)
+
     def test_helper_rejects_invalid_runtime_ownership(self) -> None:
         env = {
             "REGISTRY_RELAY_OIDC_SMOKE_RUNTIME_UID": "not-a-uid",

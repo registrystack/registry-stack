@@ -184,23 +184,24 @@ def runtime_owner() -> tuple[int, int]:
     return uid, gid
 
 
-def atomic_json(path: Path, payload: dict[str, Any], mode: int) -> None:
+def atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.chmod(temporary, mode)
+        os.chmod(temporary, 0o600)
         os.chown(temporary, *runtime_owner())
         os.replace(temporary, path)
     finally:
         try:
             temporary.unlink()
         except FileNotFoundError:
+            # The temporary was atomically replaced or already removed.
             pass
 
 
@@ -222,6 +223,7 @@ def atomic_secret(path: Path, value: str) -> None:
         try:
             temporary.unlink()
         except FileNotFoundError:
+            # The temporary was atomically replaced or already removed.
             pass
 
 
@@ -316,12 +318,10 @@ def provision() -> None:
             "service_account_id": service_id,
             "service_account_org_id": service_org_id,
         },
-        0o644,
     )
     atomic_json(
         SECRET_PATH,
         {"client_id": client_id, "client_secret": client_secret, "canary": canary},
-        0o600,
     )
     print("zitadel-helper: ephemeral project, role, and service account provisioned")
 

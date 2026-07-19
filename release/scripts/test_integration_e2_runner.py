@@ -10,10 +10,9 @@ import shlex
 import stat
 import subprocess
 import tempfile
-import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
-from unittest import mock
+from unittest import TestCase, main, mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -29,7 +28,7 @@ def load_module():
     return module
 
 
-class IntegrationE2RunnerTest(unittest.TestCase):
+class IntegrationE2RunnerTest(TestCase):
     def setUp(self) -> None:
         self.module = load_module()
         self.temporary = tempfile.TemporaryDirectory()
@@ -738,4 +737,4 @@ class IntegrationE2RunnerTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    main()
