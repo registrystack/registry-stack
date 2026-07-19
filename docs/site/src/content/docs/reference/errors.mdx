@@ -7,7 +7,7 @@ source_repos:
   - registry-notary
   - registry-relay
   - registry-platform
-last_reviewed: "2026-07-07"
+last_reviewed: "2026-07-19"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -19,9 +19,14 @@ Registry-owned problem type URIs use `https://id.registrystack.org/problems/...`
 Client code must branch on the stable `code` extension and the response `status`, not by parsing `type` URI paths.
 The `type` URI identifies and documents the problem type.
 
-The HTTP status is omitted from the Registry Notary and Registry Relay tables.
-The Relay source maps each code to a status, but the same code can render at different statuses across versions, and the Notary public code does not carry a status in the taxonomy itself.
-Treat the standard `status` field of the problem response as authoritative for a given request.
+The HTTP status is omitted from the Registry Notary and Registry Relay tables because a code can
+map differently by product and operation.
+Within a stable major release line, each existing product and operation keeps its released
+code-to-status mapping.
+Treat the standard `status` field of the problem response as authoritative for the request, and
+use `code` for the stack-wide meaning.
+The additive compatibility gate uses this reference as the error-code registry and the committed
+OpenAPI documents for operation mappings they enumerate.
 
 ## Shared platform
 
@@ -58,12 +63,12 @@ Registry Notary returns the codes in the table below from its evidence taxonomy.
 | `credential.issuance_failed` | credential issuance failed | The credential could not be issued for an internal reason. |
 | `claim.rule_evaluation_failed` | claim rule evaluation failed | A configured claim rule could not be evaluated. |
 | `idempotency.conflict` | idempotency key was reused with a different request | The idempotency key was reused with a different request body. |
-| `auth.purpose_required` | purpose is required | The request omits a required purpose. |
-| `auth.missing_credential` | credential is missing | No authentication credential was provided. |
+| `auth.purpose_required` | required purpose is missing | The request omits a required purpose. |
+| `auth.missing_credential` | authentication credential is missing | No authentication credential was provided. |
 | `auth.multiple_credentials` | multiple authentication credentials were provided | More than one authentication credential was provided. |
 | `auth.scope_denied` | required scope is missing | The caller's scopes do not include the required scope. |
-| `self_attestation.denied` | self-attestation request is denied | A self-attestation request was denied; also the public code for invalid-token and assurance-denied conditions. The audit record carries the specific reason. |
-| `self_attestation.rate_limited` | self-attestation request is rate limited | Too many self-attestation requests in the configured window. |
+| `subject_access.denied` | subject access is denied | A subject-bound or delegated request was denied; also the public code for invalid-token and assurance-denied conditions. The audit record carries the specific reason. |
+| `subject_access.rate_limited` | subject access is rate limited | Too many subject-access requests were made in the configured window. |
 
 Policy decision denials surface a stable `pdp.*` code carried through from the shared Policy Decision Point, for example `pdp.purpose_not_permitted`, `pdp.assurance_insufficient`, or `pdp.evidence_stale`. The same `pdp.*` codes are listed under [Registry Relay policy](#policy).
 
@@ -135,11 +140,11 @@ Registry Relay returns namespaced codes from its error taxonomy. Codes in the co
 
 | Code | Meaning | Usual cause |
 | --- | --- | --- |
-| `auth.missing_credential` | missing credential | No credential in the `Authorization` or `x-api-key` header. |
+| `auth.missing_credential` | authentication credential is missing | No credential in the `Authorization` or `x-api-key` header. |
 | `auth.invalid_credential` | invalid credential | The credential did not match any configured key. |
 | `auth.malformed_credential` | malformed credential | The credential header could not be parsed. |
-| `auth.scope_denied` | scope denied | The caller lacks the required scope. |
-| `auth.purpose_required` | purpose header required | The `Data-Purpose` header is required for the resource. |
+| `auth.scope_denied` | required scope is missing | The caller lacks the required scope. |
+| `auth.purpose_required` | required purpose is missing | The `Data-Purpose` header is required for the resource. |
 | `auth.purpose_denied` | purpose denied | The `Data-Purpose` header is not permitted by policy for the resource. |
 | `auth.admin_required` | admin scope required | The endpoint requires the admin scope. |
 | `auth.token_expired` | token expired | The bearer token `exp` is in the past beyond the configured leeway. |
@@ -340,9 +345,11 @@ Registry Relay returns namespaced codes from its error taxonomy. Codes in the co
 ## Source
 
 The codes above are transcribed from the error taxonomies in the owning crates.
-For the canonical current definitions, read the
-[Registry Notary `EvidenceError` taxonomy](https://github.com/registrystack/registry-stack/blob/main/crates/registry-notary-core/src/error.rs)
+For the v0.11.0 source definitions, read the
+[Registry Notary `EvidenceError` taxonomy](https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-notary-core/src/error.rs)
 and the
-[Registry Relay error taxonomy](https://github.com/registrystack/registry-stack/blob/main/crates/registry-relay/src/error.rs).
+[Registry Relay error taxonomy](https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-relay/src/error.rs).
 
 The Notary server-layer codes (federation, credential status, configuration, admin, readiness, posture, and request handling) are defined in the `registry-notary-server` crate, principally `src/federation/errors.rs`, `src/federation/mod.rs`, and `src/api.rs`.
+The release compatibility gate compares this registry to its base reference and verifies that every
+listed code remains anchored in Rust or OpenAPI source.

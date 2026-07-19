@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-07"
+last_reviewed: "2026-07-19"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -24,12 +24,11 @@ version-specific config and state restore sets, and restore the previous release
 anti-rollback state before starting its binary. The
 [revert section](#roll-back-to-the-previous-release) covers this.
 
-{/* TODO[review]: GH#203 requires this procedure to be exercised at least once against a
-     real topology. A partial exercise record now exists at
-     release/exercises/upgrade-v0.8.3-to-v0.8.4.md and is linked from the verification
-     step below. Keep status: draft until the remaining gaps are exercised:
-     release-artifact verification, credential issuance, metrics, the historical Redis
-     replay/nonce path used by that release, and anti-rollback monotonicity. */}
+This page remains draft until the complete procedure passes against the exact independently
+verified 1.0 candidate and a pinned standalone Solmara release.
+The candidate-neutral record template is
+`release/exercises/upgrade-exercise-v1.template.json`; a validated template is preparation, not
+release evidence.
 
 ## Prerequisites
 
@@ -52,6 +51,8 @@ anti-rollback state before starting its binary. The
    the target, in order. Collect every `BREAKING:` and `Deprecated` entry that names a config
    key, route, metric, or environment variable you use. Within a major line there are no
    breaking changes once the stack is at `v1.0.0`; before that, minors may contain them.
+   Follow every sequential release hop unless the target release explicitly certifies a direct
+   state path.
 
 2. Download and verify the target release artifacts (cosign signature and, where present,
    SLSA provenance) before anything else touches them.
@@ -65,7 +66,10 @@ anti-rollback state before starting its binary. The
    its digest references with mutable tags. For an intentionally separate verified lock
    location, set `REGISTRYCTL_IMAGE_LOCK` to that exact file.
 
-3. Validate your current config against the new binary offline, before deploying it:
+3. Validate your current config against the committed Draft 2020-12 product schemas at
+   `schemas/registry-relay.config.schema.json` and
+   `schemas/registry-notary.config.schema.json`.
+   Then validate it against the new binary offline, before deploying it:
 
    ```sh
    registry-relay doctor --config <your-config.yaml> --format json
@@ -101,6 +105,8 @@ anti-rollback state before starting its binary. The
    replica without traffic and admit the rest only after every replica attests the same schema
    fingerprint. Keep the old release's binary or image reference, config, database backup, role
    provisioning, and sensitive-state key version until the soak period ends.
+   Never start the previous Notary binary against the target schema, including as a diagnostic
+   shortcut.
 
 7. Verify the new deployment:
 
@@ -118,7 +124,7 @@ anti-rollback state before starting its binary. The
    - Metrics are flowing to your monitoring.
 
    This procedure has been partially exercised against a real topology: the
-   [v0.8.3 -> v0.8.4 exercise record](https://github.com/registrystack/registry-stack/blob/main/release/exercises/upgrade-v0.8.3-to-v0.8.4.md)
+   [v0.8.3 -> v0.8.4 exercise record](https://github.com/registrystack/registry-stack/blob/v0.11.0/release/exercises/upgrade-v0.8.3-to-v0.8.4.md)
    covers the upgrade and roll-back steps above; release-artifact verification, credential
    issuance, metrics, the historical Redis replay/nonce path used by that release, and
    anti-rollback monotonicity were not exercised by that run. Current Registry Notary releases
@@ -137,7 +143,14 @@ anti-rollback state before starting its binary. The
 
 ## Roll back to the previous release
 
-If the new release misbehaves and the cause is not a config error you can fix forward:
+Before target-version traffic is admitted, the general rollback path restores the complete
+previous-release recovery set.
+After the target accepts traffic that writes correctness state, audit evidence, or credentials,
+fix forward by default.
+Rollback after target writes is permitted only when that release documents and proves a safe
+recovery conversion.
+
+If rollback remains permitted:
 
 1. Stop the target release. Restore the previous release's binary or image, the config that
    was running before the upgrade, and that release's exact anti-rollback state at its

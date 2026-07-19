@@ -19,6 +19,9 @@ because losing it rotates generated API credentials, audit HMAC secrets, and the
 Notary issuer identity; then preserve product state directories, every enabled product's
 complete PostgreSQL database, config-trust files, and source inputs.
 
+This page remains draft until complete backup and restore pass against the exact independently
+verified 1.0 candidate and its pinned standalone Solmara topology.
+
 ## When to use this
 
 Use this for `registryctl` generated projects and for hand-written single-node Docker Compose
@@ -34,7 +37,7 @@ preauthorization state survives in PostgreSQL.
 
 ## Before you start
 
-- Know the project directory that contains `compose.yaml`, `registryctl.yaml`, `secrets/`,
+- Know the project directory that contains `compose.yaml`, `registry-stack.yaml`, `secrets/`,
   and `state/`.
 - Know whether Relay consultations or Registry Notary are enabled, which PostgreSQL database each
   product uses, and which role-provisioning record belongs to each database.
@@ -66,7 +69,7 @@ and host-mounted state:
 
 ```sh
 backup_items=""
-for item in registryctl.yaml compose.yaml relay notary state data; do
+for item in registry-stack.yaml compose.yaml relay notary state data; do
   [ -e "$item" ] && backup_items="$backup_items $item"
 done
 [ -f .env ] && backup_items="$backup_items .env"
@@ -303,14 +306,11 @@ Start the deployment and run product checks:
 ```sh
 registryctl start
 registryctl doctor --profile local
-if [ -f registryctl.yaml ] && grep -q '^relay:' registryctl.yaml; then
-  registryctl smoke
-fi
 ```
 
 The human-readable `doctor` report must contain no `startup_fail` findings. Add `--format json`
 when another program needs the versioned report.
-Run `registryctl smoke` only when `registryctl.yaml` declares Relay. For a Notary deployment,
+Run `registryctl smoke` when the generated deployment includes Relay. For a Notary deployment,
 run `registry-notary doctor --config <your-notary-config.yaml> --format json`, then exercise an
 authenticated claim or credential journey appropriate to that deployment. `registryctl` does not
 provide a product-scoped Notary smoke subcommand. When OID4VCI preauthorization is enabled,

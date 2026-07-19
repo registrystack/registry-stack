@@ -1,11 +1,11 @@
 ---
 title: API stability and versioning
 description: The compatibility promise Registry Stack makes at v1.0.0, the surfaces it covers, and what counts as a breaking change.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-07"
+last_reviewed: "2026-07-19"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -15,9 +15,6 @@ This page defines the compatibility promise for Registry Stack releases: which s
 covered, what counts as a breaking change, and which surfaces stay exempt. The promise takes
 effect at `v1.0.0`. Until then, Registry Stack is a pre-1.0 technical release and the
 [pre-1.0 rule](#versioning-scheme) applies.
-
-{/* TODO[review]: this page is a draft policy proposal for GH#203. Open decisions for the
-     maintainer are marked with TODO[review] comments; resolve them before status: current. */}
 
 ## Versioning scheme
 
@@ -38,12 +35,6 @@ From `v1.0.0`:
   new error codes) and may deprecate surface, but not remove or change it incompatibly.
 - A patch release contains fixes only.
 
-{/* TODO[review]: products/platform/docs/versioning.md carries a narrower pre-1.0 policy for
-     the platform export tree, and products/{manifest,notary,platform} keep independent
-     CHANGELOG versions (0.2.1 / 0.6.2 / 0.3.1). Decide whether the stack version becomes the
-     single promise unit at 1.0 and the product trees pin to it, or the product versions stay
-     independently promised. This draft assumes the stack version is the promise unit. */}
-
 ## Covered surfaces
 
 The promise covers the surfaces in this table. For each, the contract artifact is the source
@@ -53,25 +44,29 @@ The enforcement column names the repository CI checks so the mechanism is audita
 
 | Surface | Contract artifact | Enforcement today |
 | --- | --- | --- |
-| Registry Relay HTTP API (default public and admin listener surface) | Committed OpenAPI document `crates/registry-relay/openapi/registry-relay.openapi.json` | `just openapi-contract` byte-for-byte check plus `oasdiff breaking` against the base ref |
-| Registry Notary HTTP API (public and admin listeners) | Committed OpenAPI document `products/notary/openapi/registry-notary.openapi.json` plus the route inventory `products/notary/security/exposure-manifest.json` | `just openapi-check` and `just exposure-check` |
-| Error contract and stable identifiers | RFC 9457 problem shape with the stable `code` member, the [error registry](../errors/), the `pdp.*` denial codes, and the `https://id.registrystack.org/` identifier space | Compatibility test `crates/registry-relay/tests/error_taxonomy.rs`; codes are additive-only |
-| Configuration formats and documented environment variables | The YAML config schemas of both products (`registry-relay schema`, `registry-notary schema`) and the [environment variable reference](../environment-variables/) | `deny_unknown_fields` parsing plus the deprecated-field rejection guard in `registry-platform-config` |
+| Registry Relay HTTP API (approved stable public and admin listener surface) | Committed OpenAPI document `crates/registry-relay/openapi/registry-relay.openapi.json`, scoped by the [authoritative 1.0 support roster](../apis/registry-relay/) | `just openapi-contract` checks byte-for-byte generation, filters only roster entries declared `included_unstable`, then runs `oasdiff breaking` against the base ref |
+| Registry Notary HTTP API (public and admin listeners) | Committed OpenAPI document `products/notary/openapi/registry-notary.openapi.json` plus the route inventory `products/notary/security/exposure-manifest.json` | `just openapi-contract` compares against the base reference; `just openapi-check` and `just exposure-check` detect generated-contract drift |
+| Error contract and stable identifiers | RFC 9457 problem shape with the stable `code` member, the [error registry](../errors/), the `pdp.*` denial codes, and the `https://id.registrystack.org/` identifier space | `release/scripts/check-stable-surface-compatibility.py` permits additions and rejects removal or changed meaning; product tests pin runtime rendering and status mappings |
+| Configuration formats and documented environment variables | The committed Draft 2020-12 schemas `schemas/registry-relay.config.schema.json` and `schemas/registry-notary.config.schema.json`, plus the [environment variable reference](../environment-variables/) | Product `config-schema-check` commands reproduce the schemas from the typed config graphs; strict parsers and the deprecated-field guard reject unknown or retired fields |
 | Signed config bundle format and verification semantics | `registry.platform.config_bundle.v1` manifests, `registry.platform.config_bundle_signatures.v1` signature envelopes, and `registry.platform.config_trust_anchor.v1` trust anchors. Normal signed verification requires a valid, non-empty trust anchor and checks signature acceptance, file closure, product/environment/stream binding, optional instance pinning, and anti-rollback sequence. The hash-pinned `registry.platform.config_break_glass.v1` `accept_rollback` mode keeps signature, binding, closure, hash, and product checks but waives the monotonic sequence rejection for a signed bundle whose config hash matches the override. Its `accept_unsigned` mode skips signature, binding, and sequence checks while retaining exact hash pinning and product config validation. | Shared verifier tests in `registry-platform-config`; break-glass consumption, restart-pin, and sequence tests in `registry-platform-ops`; product CLI coverage in `crates/registry-relay/tests/config_verify_bundle_cli.rs` and `crates/registry-notary/tests/config_verify_bundle_cli.rs` |
 | Registry Manifest schema and rendered artifacts | `registry-manifest/v1` and the rendered artifact schema versions, governed by [RS-DM-MANIFEST](../../spec/rs-dm-manifest/) | `validate_manifest` accepts only `registry-manifest/v1`; REQ-DM-MANIFEST-013 requires strict unknown-key rejection at parse time |
 | Source-adaptation integration surfaces | Registry Relay's compiled `http`, `script`, and `snapshot` consultation plans, including the Rhai `consult(ctx)` host API and versioned protocol helpers | Registry Stack project-authoring schemas and fixtures; Relay source-plan compiler and consultation contract tests |
 | Command-line interfaces | Documented commands and flags of `registryctl`, `registry-relay`, `registry-notary`, and `registry-manifest`, and their machine-readable output modes (`--format json`, `openapi`, `schema`) | CLI reference pages; `registryctl` version test |
 | Release artifacts and verification interface | Released binary and image names (`ghcr.io/registrystack/registry-relay`, `ghcr.io/registrystack/registry-notary`), signature and provenance layout per `release/VERIFY.md` | Release workflow; signed assets verified as documented in [SECURITY.md](https://github.com/registrystack/registry-stack/blob/v0.11.0/SECURITY.md) |
+| Selected Prometheus metrics | Family name, type, label keys, and label meaning in `release/contracts/selected-metrics.json` | `release/scripts/check-stable-surface-compatibility.py` permits additive families and rejects incompatible changes; product tests verify bounded labels and rendering |
 
-{/* TODO[review]: Prometheus metric names are not in this table. Operators build dashboards
-     on them and both products have renamed metrics pre-1.0. Decide the tier: covered like an
-     API (rename only at major), or announced-in-release-notes best effort. */}
+Metric help text, output ordering, and corrections to observed values are not covered.
+New families and new values for an existing bounded label are additive changes.
 
-A route that only exists when a non-default feature or config block enables it (for example
-the OGC namespaces, the SP DCI adapter, or attribute release) is covered by its feature tests
-and product docs, not by presence in the default OpenAPI artifact. When the deployment enables
-it, it behaves as documented, but its availability depends on the deployment's build features
-and configuration.
+The Relay support roster, not mere presence in the default OpenAPI, decides whether a Relay
+surface enters the 1.0 compatibility promise.
+Only roster entries declared stable and canonical are covered.
+Feature-gated experimental adapters and roster entries declared `included_unstable` remain
+outside the promise even when they ship or appear in OpenAPI.
+This specifically keeps CSV and SDMX-JSON aggregate output experimental and feature-frozen while
+JSON aggregate output and the core protected entity record routes remain stable.
+The compatibility filter reads the roster's machine selectors; it does not maintain another
+format list.
 
 ## What counts as a breaking change
 
@@ -79,7 +74,9 @@ For HTTP APIs:
 
 - Removing or renaming a route, parameter, request field, or response field
 - Changing the type, meaning, or optionality of an existing field
-- Removing or renaming a stable error `code`, or changing the HTTP status a code maps to
+- Removing or renaming a stable error `code`
+- Changing the stack-wide meaning of a released error code, or changing an existing
+  product-and-operation HTTP mapping for that code
 - Tightening authentication or scope requirements on an existing route, except as a security
   fix announced in the release notes
 
@@ -95,24 +92,37 @@ For CLIs:
 - Removing or renaming a documented command or flag
 - Changing the schema of a machine-readable output mode incompatibly
 
+For selected metrics:
+
+- Removing or renaming a family
+- Changing a family type, label key, or label meaning
+
 Additive changes (new routes, new optional fields, new optional config keys, new error codes,
 new commands and flags) are minor-release material and are not breaking.
 
 ## Compatibility direction
 
-The promise is backward compatibility: a new binary within a major line reads the config
-files, manifests, and persisted state written for any earlier release of that line.
+The promise is backward compatibility: a new binary within a major line reads the wire data,
+config files, manifests, and persisted state written for any earlier release of that line.
+Every release documents a forward state path from its immediate predecessor.
+An upgrade that skips releases follows each sequential hop unless the target release explicitly
+certifies a direct path.
 
 The reverse is not promised. Both products parse config with `deny_unknown_fields`, so a
 config file that uses keys introduced in a newer release fails to load on an older binary.
 Pin your config to the release you deploy.
 
+Registry Notary state upgrades are forward-only.
+An older Registry Notary binary must never start against a schema installed or changed by a newer
+release.
+The supported combined topology pairs exactly one Notary authority with each Relay authority;
+replicas may share an authority only when they serve the same authority configuration.
+
 ## Defaults are part of the contract
 
-A default value is behavior an operator relies on without writing it down. Within a major
-line, a default changes only in a minor release, with a migration note, and only when the
-change hardens security posture. The migration note must document how to keep the previous
-behavior explicitly.
+A default value is behavior an operator relies on without writing it down.
+Changing a covered default incompatibly requires a major release, except for a documented
+security removal under the [deprecation policy](../deprecation-policy/).
 
 ## Exempt surfaces
 
@@ -149,12 +159,17 @@ The promise is machine-checked where a checker exists:
 
 - Relay: `crates/registry-relay/scripts/check-openapi-contract.sh` regenerates the OpenAPI
   document from the reference config, requires a byte-for-byte match with the committed file,
-  and runs `oasdiff breaking` against the base ref.
-- Notary: `just openapi-check` and `just exposure-check` from `products/notary` keep the
-  OpenAPI document and the exposure manifest in lockstep with the code.
-- Errors: `crates/registry-relay/tests/error_taxonomy.rs` pins the error taxonomy.
-- Config: `registry-platform-config` rejects removed or renamed keys with a pointer to the
-  migration note instead of silently ignoring them.
+  removes only the aggregate representations marked `included_unstable` by the authoritative
+  Relay roster, and runs `oasdiff breaking` against the base ref.
+- Notary: `just openapi-contract` compares the regenerated OpenAPI document against the base
+  reference; `just openapi-check` and `just exposure-check` keep the document and exposure
+  manifest in lockstep with the code.
+- Errors and metrics: `release/scripts/check-stable-surface-compatibility.py` compares the
+  released registry and selected metric contract against the base reference while permitting
+  additions.
+- Config: each product reproduces its committed schema from its typed config graph;
+  `registry-platform-config` rejects removed or renamed keys with a pointer to the migration
+  note instead of silently ignoring them.
 
 A change that a gate flags as breaking lands only in a release whose version number permits
 it, together with the deprecation and migration steps required by the

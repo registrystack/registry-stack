@@ -1,11 +1,11 @@
 ---
 title: Deprecation policy
 description: How Registry Stack retires covered surface, the notice operators get, and the migration notes every removal carries.
-status: draft
+status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-07"
+last_reviewed: "2026-07-19"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -17,22 +17,20 @@ announced, and what a removal must ship with. It takes effect at `v1.0.0`; befor
 breaking changes follow the pre-1.0 rule and are announced with `BREAKING:` CHANGELOG
 entries.
 
-{/* TODO[review]: draft policy proposal for GH#203. The notice period in this page (next major, and
-     no earlier than 6 months after announcement) is a proposal; confirm or change it. */}
-
 ## The lifecycle of a covered element
 
 A covered element (route, field, error code, config key, CLI flag, artifact name) moves
 through three states:
 
 1. Active. The element is documented and supported.
-2. Deprecated. The element still works exactly as before, and its replacement is available
+2. Deprecated. The element remains compatible, and its replacement is available
    and documented. Deprecation happens in a minor release.
 3. Removed. The element is gone. Removal happens in a major release, and no earlier than
    6 months after the release that announced the deprecation.
 
-Nothing skips the deprecated state. A covered element that exists in `v1.0.0` or is added
-later is never removed without a deprecation release first.
+Except for a documented security removal, nothing skips the deprecated state.
+A covered element that exists in `v1.0.0` or is added later is never removed without a
+deprecation release first.
 
 ## How a deprecation is announced
 
@@ -62,9 +60,9 @@ see the `BREAKING:` entries in `products/notary/CHANGELOG.md` and
 ## Security exceptions
 
 A fix for a vulnerability may tighten or remove surface without the full notice period when
-keeping the surface functional would keep deployments exploitable. Such a change is announced
-in the release notes as a security fix with migration steps, and the release notes state
-explicitly that the deprecation window was shortened and why.
+keeping the surface functional would keep deployments exploitable.
+The release notes document the security removal, the shortened window, and migration steps
+without disclosing information that would put unpatched deployments at additional risk.
 
 ## What this policy does not govern
 
