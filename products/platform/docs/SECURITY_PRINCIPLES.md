@@ -54,7 +54,13 @@ Audit chain verification (`registry_platform_audit::verify_chain`) is a consiste
 
 ## 10. Keep Workspace Hygiene Canonical
 
-`clippy.toml`, `rustfmt.toml`, and `deny.toml` in consumer repos come from `registry-platform/templates/`. Consumer CI must run `scripts/check-hygiene-alignment.sh` so lint, formatting, dependency license policy, and advisory posture do not drift.
+Reusable `clippy.toml`, `rustfmt.toml`, and `deny.toml` defaults live in
+`products/platform/templates/`. Root CI runs
+`products/platform/scripts/check-hygiene-alignment.sh` to keep the shared lint
+and formatting files aligned and the platform dependency-policy template
+self-consistent. The root, Relay, Manifest, and Notary `deny.toml` files govern
+different dependency graphs and are reviewed as product-specific policies;
+they are not required to be byte-for-byte copies of the platform template.
 
 ## Telemetry Convention For v0.1.0
 

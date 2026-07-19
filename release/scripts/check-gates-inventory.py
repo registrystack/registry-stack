@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,6 +26,58 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: cargo test --locked -p registry-relay --all-features",
     ),
     ("Cargo deny", "run: cargo deny check"),
+    (
+        "Platform path filter",
+        "platform: ${{ steps.filter.outputs.platform }}",
+    ),
+    (
+        "Config report platform path",
+        "crates/registry-config-report/*|crates/registry-platform-*",
+    ),
+    (
+        "Platform hygiene path filter",
+        "platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}",
+    ),
+    (
+        "Platform all-features build",
+        "run: cargo build --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features",
+    ),
+    (
+        "Platform all-features clippy",
+        "run: cargo clippy --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features -- -D warnings",
+    ),
+    (
+        "Platform all-features tests",
+        "run: cargo test --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features",
+    ),
+    ("Platform coverage job", "platform-coverage:"),
+    ("Platform coverage version pin", 'CARGO_LLVM_COV_VERSION: "0.8.7"'),
+    ("Platform coverage threshold", "--fail-under-lines 80"),
+    (
+        "Config report platform coverage",
+        "cargo llvm-cov --locked\n          -p registry-config-report\n          -p 'registry-platform-*'",
+    ),
+    (
+        "Platform hygiene alignment",
+        "run: products/platform/scripts/check-hygiene-alignment.sh",
+    ),
+    (
+        "Platform config inventory",
+        "products/platform/scripts/audit-configs.sh",
+    ),
+    ("Platform config inventory check", "--check"),
+    ("Secret scan job", "secrets:"),
+    ("Gitleaks version pin", 'GITLEAKS_VERSION: "8.30.1"'),
+    ("Gitleaks archive checksum", "GITLEAKS_LINUX_X64_SHA256:"),
+    ("Gitleaks root config", "--config .gitleaks.toml"),
+    ("Gitleaks redaction", "--redact"),
+    ("Platform fuzz job", "platform-fuzz:"),
+    ("Platform fuzz version pin", 'CARGO_FUZZ_VERSION: "0.13.2"'),
+    ("Platform fuzz bounded runtime", "-max_total_time=60"),
+    (
+        "Platform fuzz directory",
+        "cargo +nightly fuzz run --fuzz-dir fuzz",
+    ),
     ("Notary OpenAPI baseline", "run: just openapi-check"),
     ("Notary OpenAPI contract", "name: Notary OpenAPI contract"),
     ("Notary exposure check", "name: Notary exposure check"),
@@ -129,15 +182,54 @@ def missing_gates(workflow_text: str) -> list[str]:
     return [name for name, snippet in REQUIRED_GATES if snippet not in workflow_text]
 
 
+def nested_workflow_paths(paths: list[str]) -> list[str]:
+    """Return tracked workflows that GitHub cannot run from the repository root."""
+
+    return sorted(
+        path
+        for path in paths
+        if "/.github/workflows/" in f"/{path}"
+        and not path.startswith(".github/workflows/")
+    )
+
+
+def tracked_paths(root: Path) -> list[str]:
+    completed = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    return [
+        path.decode("utf-8")
+        for path in completed.stdout.split(b"\0")
+        if path
+    ]
+
+
 def main() -> int:
     workflow_text = CI_WORKFLOW.read_text(encoding="utf-8")
     missing = missing_gates(workflow_text)
+    nested = nested_workflow_paths(tracked_paths(ROOT))
+    if missing or nested:
+        print("gate inventory check failed", file=sys.stderr)
     if missing:
-        print("gate inventory check failed: missing CI wiring", file=sys.stderr)
+        print("missing root CI wiring:", file=sys.stderr)
         for gate in missing:
             print(f"- {gate}", file=sys.stderr)
+    if nested:
+        print(
+            "nested workflows are inert and must move to root CI or be removed:",
+            file=sys.stderr,
+        )
+        for path in nested:
+            print(f"- {path}", file=sys.stderr)
+    if missing or nested:
         return 1
-    print(f"gate inventory check passed for {len(REQUIRED_GATES)} gates")
+    print(
+        f"gate inventory check passed for {len(REQUIRED_GATES)} gates; "
+        "no inert nested workflows"
+    )
     return 0
 
 

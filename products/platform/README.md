@@ -75,10 +75,11 @@ The `registry-platform-httputil` crate uses `rustls` for outbound HTTPS.
 ### Toolchain pins
 
 - Rust: pinned in [`rust-toolchain.toml`](rust-toolchain.toml) (currently `1.95.0`).
-- `cargo-deny`: install `0.19.7` or newer to match CI; older versions (≤ `0.14.x`) cannot parse the `[graph]` syntax used in [`deny.toml`](deny.toml).
+- `cargo-deny`: install `0.19.8` to match CI; older versions (≤ `0.14.x`)
+  cannot parse the `[graph]` syntax used in [`deny.toml`](deny.toml).
 
 ```sh
-cargo install --locked cargo-deny@0.19.7
+cargo install --locked cargo-deny@0.19.8
 ```
 
 ### Common commands
@@ -87,20 +88,19 @@ Run checks from the workspace root:
 
 ```sh
 cargo fmt --check
-cargo build --workspace --all-targets --all-features
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-targets --all-features
+cargo build --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features
+cargo clippy --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features -- -D warnings
+cargo test --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features
+cargo llvm-cov --locked -p registry-config-report -p 'registry-platform-*' --all-features --fail-under-lines 80
 cargo deny check
-GITLEAKS_CONFIG_TOML="$(cat <<'TOML'
-[extend]
-useDefault = true
-
-[[allowlists]]
-description = "Ignore generated Rust build output."
-paths = ["(^|/)target/"]
-TOML
-)" gitleaks dir --no-banner --redact --verbose --timeout 120 .
+products/platform/scripts/check-hygiene-alignment.sh
+products/platform/scripts/audit-configs.sh --check --format paths
+gitleaks dir --config .gitleaks.toml --no-banner --redact --timeout 120 .
 ```
+
+CI pins `cargo-llvm-cov` 0.8.7, Gitleaks 8.30.1, and `cargo-fuzz`
+0.13.2. Pull requests that change platform crates or their shared dependency
+graph run the all-feature, coverage, and one-minute-per-target fuzz gates.
 
 For focused work on one crate:
 
@@ -111,8 +111,9 @@ cargo test -p registry-platform-oidc
 ## Repository Files
 
 - [`CHANGELOG.md`](CHANGELOG.md) records release-level changes.
-- [`deny.toml`](deny.toml) defines dependency, license, advisory, and source
-  policy.
+- The root [`deny.toml`](../../deny.toml) defines dependency, license,
+  advisory, and source policy for the monorepo dependency graph. The platform
+  copy remains a reusable consumer template.
 - [`rustfmt.toml`](rustfmt.toml) and [`clippy.toml`](clippy.toml) define shared
   Rust hygiene defaults.
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -25,13 +26,127 @@ class GateInventoryTest(unittest.TestCase):
         self.workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
             encoding="utf-8"
         )
+        self.gitleaks_config = (ROOT / ".gitleaks.toml").read_text(encoding="utf-8")
+        parsed_gitleaks = tomllib.loads(self.gitleaks_config)
+        self.gitleaks_paths = {
+            path
+            for allowlist in parsed_gitleaks["allowlists"]
+            for path in allowlist.get("paths", [])
+        }
 
     def test_real_ci_workflow_declares_inventory(self) -> None:
         self.assertEqual([], self.module.missing_gates(self.workflow))
 
+    def test_real_repository_has_no_tracked_nested_workflows(self) -> None:
+        self.assertEqual(
+            [],
+            self.module.nested_workflow_paths(self.module.tracked_paths(ROOT)),
+        )
+
+    def test_root_workflows_are_allowed(self) -> None:
+        self.assertEqual(
+            [],
+            self.module.nested_workflow_paths(
+                [
+                    ".github/workflows/ci.yml",
+                    ".github/workflows/release.yml",
+                ]
+            ),
+        )
+
+    def test_nested_workflow_is_reported(self) -> None:
+        self.assertEqual(
+            ["products/example/.github/workflows/ci.yml"],
+            self.module.nested_workflow_paths(
+                [
+                    ".github/workflows/ci.yml",
+                    "products/example/.github/workflows/ci.yml",
+                ]
+            ),
+        )
+
     def test_missing_relay_exposure_gate_is_reported(self) -> None:
         text = self.workflow.replace("name: Relay exposure check", "name: Relay exposure")
         self.assertIn("Relay exposure check", self.module.missing_gates(text))
+
+    def test_missing_platform_all_features_gate_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "cargo test --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features",
+            "cargo test --locked -p registry-config-report -p 'registry-platform-*' --all-targets",
+        )
+        self.assertIn(
+            "Platform all-features tests", self.module.missing_gates(text)
+        )
+
+    def test_missing_config_report_platform_path_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "crates/registry-config-report/*|crates/registry-platform-*",
+            "crates/registry-platform-*",
+        )
+        self.assertIn("Config report platform path", self.module.missing_gates(text))
+
+    def test_missing_config_report_platform_test_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "cargo test --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features",
+            "cargo test --locked -p 'registry-platform-*' --all-targets --all-features",
+        )
+        self.assertIn(
+            "Platform all-features tests", self.module.missing_gates(text)
+        )
+
+    def test_missing_config_report_platform_build_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "cargo build --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features",
+            "cargo build --locked -p 'registry-platform-*' --all-targets --all-features",
+        )
+        self.assertIn(
+            "Platform all-features build", self.module.missing_gates(text)
+        )
+
+    def test_missing_config_report_platform_clippy_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "cargo clippy --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features -- -D warnings",
+            "cargo clippy --locked -p 'registry-platform-*' --all-targets --all-features -- -D warnings",
+        )
+        self.assertIn(
+            "Platform all-features clippy", self.module.missing_gates(text)
+        )
+
+    def test_missing_platform_coverage_threshold_is_reported(self) -> None:
+        text = self.workflow.replace("--fail-under-lines 80", "--summary-only")
+        self.assertIn("Platform coverage threshold", self.module.missing_gates(text))
+
+    def test_missing_config_report_platform_coverage_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "cargo llvm-cov --locked\n          -p registry-config-report\n          -p 'registry-platform-*'",
+            "cargo llvm-cov --locked\n          -p 'registry-platform-*'",
+        )
+        self.assertIn(
+            "Config report platform coverage", self.module.missing_gates(text)
+        )
+
+    def test_missing_secret_scan_redaction_is_reported(self) -> None:
+        text = self.workflow.replace("--redact", "--verbose")
+        self.assertIn("Gitleaks redaction", self.module.missing_gates(text))
+
+    def test_root_secret_scan_names_all_synthetic_platform_jwt_fixtures(self) -> None:
+        for fixture_path in (
+            r"^products/platform/fuzz/corpus/oid4vci_request_and_proof/credential_request\.json$",
+            r"^products/platform/fuzz/corpus/oid4vci_request_and_proof/valid-proof-jwt$",
+            r"^products/platform/fuzz/corpus/sdjwt_holder_proof/holder_proof\.jwt$",
+            r"^products/platform/fuzz/corpus/sdjwt_holder_proof/valid-holder-proof-jwt$",
+        ):
+            with self.subTest(fixture_path=fixture_path):
+                self.assertIn(fixture_path, self.gitleaks_paths)
+
+    def test_root_secret_scan_does_not_keep_pre_monorepo_fuzz_paths(self) -> None:
+        self.assertFalse(any(path.startswith("^fuzz/") for path in self.gitleaks_paths))
+
+    def test_missing_platform_fuzz_bound_is_reported(self) -> None:
+        text = self.workflow.replace("-max_total_time=60", "-runs=0")
+        self.assertIn(
+            "Platform fuzz bounded runtime", self.module.missing_gates(text)
+        )
 
     def test_missing_registryctl_tutorial_execution_is_reported(self) -> None:
         text = self.workflow.replace(
