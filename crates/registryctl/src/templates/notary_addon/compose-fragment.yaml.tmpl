@@ -74,6 +74,9 @@ services:
     user: "${REGISTRY_STACK_RUNTIME_UID:-65532}:${REGISTRY_STACK_RUNTIME_GID:-65532}"
     env_file:
       - ./secrets/local.env
+    environment:
+      REGISTRY_NOTARY_BIND: 0.0.0.0:8081
+      REGISTRY_NOTARY_HEALTHCHECK_URL: http://127.0.0.1:8081/healthz
     command: [--config, /etc/registry-notary/notary.yaml]
     network_mode: service:registry-notary-jwks
     volumes:

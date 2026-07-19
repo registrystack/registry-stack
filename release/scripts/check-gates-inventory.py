@@ -71,6 +71,12 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ("Gitleaks archive checksum", "GITLEAKS_LINUX_X64_SHA256:"),
     ("Gitleaks root config", "--config .gitleaks.toml"),
     ("Gitleaks redaction", "--redact"),
+    ("oasdiff version pin", 'OASDIFF_VERSION: "1.23.0"'),
+    ("oasdiff archive checksum", "OASDIFF_LINUX_X64_SHA256:"),
+    (
+        "oasdiff pinned install",
+        '"https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"',
+    ),
     ("Platform fuzz job", "platform-fuzz:"),
     ("Platform fuzz version pin", 'CARGO_FUZZ_VERSION: "0.13.2"'),
     ("Platform fuzz bounded runtime", "-max_total_time=60"),

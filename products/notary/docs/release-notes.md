@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.12.0
+
 - BREAKING: The 1.0 wallet facade supports only issuer-initiated
   pre-authorized code backed by a stored registry transaction. The former
   credential-offer and public nonce routes are removed, and the credential
@@ -25,6 +27,12 @@
   selectively disclosable.
 - External wallet, verifier, OIDF, EUDI, or HAIP evidence remains
   candidate-only until recorded against a frozen release artifact.
+- Batch evaluation now has a fixed 100-member platform ceiling with lower
+  operator limits and pre-side-effect `batch.too_large` rejection.
+- Registry Notary publishes a generated Draft 2020-12 runtime configuration
+  schema derived from the production deserialization graph.
+- Maintained Notary runtime images now use Debian 13 distroless. Release checks
+  enforce the expected base and vulnerability policy before publication.
 
 ## 0.11.0
 

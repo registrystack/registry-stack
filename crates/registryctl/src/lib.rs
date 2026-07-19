@@ -4700,6 +4700,14 @@ mod tests {
             services["registry-notary"]["network_mode"],
             "service:registry-notary-jwks"
         );
+        assert_eq!(
+            services["registry-notary"]["environment"]["REGISTRY_NOTARY_BIND"],
+            "0.0.0.0:8081"
+        );
+        assert_eq!(
+            services["registry-notary"]["environment"]["REGISTRY_NOTARY_HEALTHCHECK_URL"],
+            "http://127.0.0.1:8081/healthz"
+        );
         assert!(consultation_mounts.iter().any(|mount| {
             mount
                 == "./notary/project/.registry-stack/build/local/private/relay/config:/etc/registry-relay:ro"
@@ -4783,6 +4791,7 @@ mod tests {
         assert!(notary_config_text.contains("person-registration-accepted"));
         assert!(notary_config_text.contains("pending"));
         let notary_config: Value = serde_norway::from_str(&notary_config_text).unwrap();
+        assert_eq!(notary_config["server"]["bind"], "0.0.0.0:8081");
         assert_eq!(notary_config["state"]["storage"], "in_memory");
         assert!(notary_config["evidence"]["credential_profiles"]
             .as_mapping()
@@ -4800,6 +4809,12 @@ mod tests {
             .unwrap();
         assert_eq!(signing_keys.len(), 1);
         assert!(signing_keys.contains_key("relay-workload"));
+
+        let consultation_relay_config: Value = serde_norway::from_str(
+            &fs::read_to_string(project.join(CONSULTATION_RELAY_CONFIG_PATH)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(consultation_relay_config["server"]["bind"], "0.0.0.0:8082");
 
         let error = add_notary_to_project(&project, &image_lock).unwrap_err();
         assert!(format!("{error:#}").contains("already has a Notary"));

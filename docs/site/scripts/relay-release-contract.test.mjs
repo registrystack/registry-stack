@@ -177,7 +177,7 @@ test('canonical Relay release, local image, and OpenAPI use the same feature set
     'stable link-free OGC Records metadata must remain in the pinned OpenAPI',
   );
 
-  const justfile = await readRepo('crates/registry-relay/Justfile');
+  const justfile = await readRepo('crates/registry-relay/justfile');
   assert.match(justfile, /^\s*cargo test --all-features$/m, 'all-feature tests must remain enabled');
 });
 
