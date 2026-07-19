@@ -1637,7 +1637,7 @@
               "required": true
             }
           },
-          "description": "Pre-authorized-code flow settings. Disabled by default; offers fall\nback to the `authorization_code` grant unless this is enabled."
+          "description": "Issuer-initiated pre-authorized-code flow settings. This is the only\nwallet-facing issuance grant in the 1.0 profile."
         },
         "proof": {
           "$ref": "#/$defs/Oid4vciProofConfig",

@@ -500,6 +500,9 @@
                 audiences: vec![bounded("registry-notary-citizen")],
                 client_id: client_id.map(bounded),
                 token_type: Some(bounded("JWT")),
+                credential_configuration_id: None,
+                issuance_transaction_id: None,
+                issuance_transaction_commitment: None,
                 scopes: scopes.iter().map(|scope| bounded(scope)).collect(),
                 subject: Some(bounded("login-subject")),
                 subject_binding_claim: Some(

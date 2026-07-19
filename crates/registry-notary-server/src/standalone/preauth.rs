@@ -307,6 +307,48 @@ impl PreAuthRuntime {
         self.preauthorization_state.as_ref()
     }
 
+    /// Adapt the eSignet-verified callback subject into the same bounded
+    /// principal shape used by the normal subject-access policy path. Only
+    /// modeled, verified fields are carried forward; arbitrary authorization
+    /// response extensions never enter the issuance transaction.
+    pub(crate) fn principal_for_subject(
+        &self,
+        subject: &registry_notary_core::tokens::BoundSubject,
+    ) -> Result<EvidencePrincipal, EvidenceError> {
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let mut payload = json!({
+            "iss": self.esignet_issuer,
+            "aud": self.notary_audiences,
+            "sub": subject.subject,
+            "client_id": subject.client_id,
+            "scope": subject.scopes.join(" "),
+            "iat": now,
+            "nbf": now,
+            "exp": now + self.access_token_ttl_seconds as i64,
+        });
+        payload[subject.subject_binding_claim.as_str()] =
+            Value::String(subject.subject_binding_value.clone());
+        if let Some(acr) = subject.acr.as_deref() {
+            payload["acr"] = Value::String(acr.to_string());
+        }
+        if let Some(auth_time) = subject.auth_time {
+            payload["auth_time"] = Value::from(auth_time);
+        }
+        let verified =
+            verified_token_from_notary_payload(&payload).ok_or(EvidenceError::MissingCredential)?;
+        principal_from_oidc(
+            &verified,
+            EvidenceAuthProfileId::ExternalOidc,
+            None,
+            None,
+            None,
+            "sub",
+            Some(subject.subject_binding_claim.as_str()),
+            SubjectAccessClaimSource::AccessToken,
+            SubjectAccessAssuranceClaimSource::AccessToken,
+        )
+    }
+
     /// Build the eSignet authorization redirect URL for the citizen browser.
     ///
     /// PKCE S256, the confidential RP `client_id`, the configured redirect URI

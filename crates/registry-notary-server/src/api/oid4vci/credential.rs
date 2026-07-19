@@ -22,6 +22,9 @@ pub(in crate::api) async fn oid4vci_credential(
         Ok(evidence) => evidence,
         Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
     };
+    let Some(preauth) = preauth_runtime(&state) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
     let principal = match classify_subject_access_principal(&state.subject_access, &principal) {
         Ok(principal) if principal.is_subject_access() => principal,
         _ => return oid4vci_error_response(Oid4vciWireError::InvalidToken),
@@ -44,9 +47,6 @@ pub(in crate::api) async fn oid4vci_credential(
             Err(error) => return oid4vci_error_response(error),
         };
     let configuration_claim_ids = configuration.credential_claim_ids();
-    if require_registry_backed_credential_claims(evidence, &configuration_claim_ids).is_err() {
-        return oid4vci_error_response(Oid4vciWireError::AccessDenied);
-    }
     if requested_attestation_access_mode(&principal) == AccessMode::DelegatedAttestation {
         let mut response = oid4vci_error_response(Oid4vciWireError::AccessDenied);
         attach_oid4vci_subject_access_denial_audit(
@@ -71,7 +71,6 @@ pub(in crate::api) async fn oid4vci_credential(
         );
         return response;
     }
-    let preauth = preauth_runtime(&state);
     if let Err(error) = require_oid4vci_issuance_authorization_details(
         evidence,
         &state.subject_access,
@@ -80,7 +79,7 @@ pub(in crate::api) async fn oid4vci_credential(
         oid4vci_requires_authorization_details(
             &principal,
             state.runtime_config().as_deref(),
-            preauth.as_deref(),
+            Some(preauth.as_ref()),
         ),
     ) {
         let denial_code = denial_code_from_error(&error);
@@ -95,317 +94,130 @@ pub(in crate::api) async fn oid4vci_credential(
         );
         return response;
     }
-    let expected_nonce = if state.oid4vci.nonce.enabled {
-        let Some(nonce) = validated_proof.nonce.as_deref() else {
-            return oid4vci_error_response(Oid4vciWireError::InvalidProof);
-        };
-        Some(nonce)
-    } else {
-        None
+    let Some(claims) = principal.verified_claims.as_ref() else {
+        return oid4vci_error_response(Oid4vciWireError::InvalidToken);
     };
+    let (Some(transaction_id), Some(transaction_commitment), Some(token_configuration_id)) = (
+        claims
+            .issuance_transaction_id
+            .as_ref()
+            .map(VerifiedClaimValue::as_str),
+        claims
+            .issuance_transaction_commitment
+            .as_ref()
+            .map(VerifiedClaimValue::as_str),
+        claims
+            .credential_configuration_id
+            .as_ref()
+            .map(VerifiedClaimValue::as_str),
+    ) else {
+        return oid4vci_error_response(Oid4vciWireError::InvalidToken);
+    };
+    if token_configuration_id != configuration_id {
+        return oid4vci_error_response(Oid4vciWireError::InvalidToken);
+    }
+    let Some(nonce) = validated_proof.nonce.as_deref() else {
+        return oid4vci_error_response(Oid4vciWireError::InvalidProof);
+    };
+    let holder_thumbprint = match validated_proof.holder_jwk.jkt() {
+        Ok(thumbprint) => thumbprint,
+        Err(_) => return oid4vci_error_response(Oid4vciWireError::InvalidProof),
+    };
+    let request_hash = match serde_json::to_value(&request)
+        .map_err(|_| EvidenceError::InvalidRequest)
+        .and_then(|value| sha256_canonical_json(&value))
+    {
+        Ok(hash) => hash,
+        Err(_) => return oid4vci_error_response(Oid4vciWireError::InvalidRequest),
+    };
+    let transaction = match preauth
+        .preauthorization_state()
+        .begin_credential_materialization(
+            transaction_id,
+            transaction_commitment,
+            configuration_id,
+            nonce,
+            &holder_thumbprint,
+            &request_hash,
+        )
+        .await
+    {
+        Ok(CredentialMaterialization::Cached(response)) => {
+            state
+                .metrics
+                .record_credential("openid4vci", "retry_cached");
+            return Json(response).into_response();
+        }
+        Ok(CredentialMaterialization::Acquired(transaction)) => transaction,
+        Ok(CredentialMaterialization::Busy) => {
+            return oid4vci_error_response(Oid4vciWireError::ServerError);
+        }
+        Ok(CredentialMaterialization::Denied) | Err(_) => {
+            return oid4vci_error_response(Oid4vciWireError::InvalidToken);
+        }
+    };
+    let materialized = materialize_oid4vci_transaction(
+        &state,
+        evidence,
+        &principal,
+        &validated_proof,
+        configuration_id,
+        configuration,
+        &transaction,
+        nonce,
+    )
+    .await;
+    let (response_body, evaluation) = match materialized {
+        Ok(materialized) => materialized,
+        Err(error) => {
+            let _ = preauth
+                .preauthorization_state()
+                .fail_credential_materialization(transaction_id, &holder_thumbprint)
+                .await;
+            return oid4vci_error_response(error);
+        }
+    };
+    if !matches!(
+        preauth
+            .preauthorization_state()
+            .complete_credential_materialization(
+                transaction_id,
+                &holder_thumbprint,
+                &request_hash,
+                response_body.clone(),
+            )
+            .await,
+        Ok(true)
+    ) {
+        let _ = preauth
+            .preauthorization_state()
+            .fail_credential_materialization(transaction_id, &holder_thumbprint)
+            .await;
+        return oid4vci_error_response(Oid4vciWireError::ServerError);
+    }
     let profile = match evidence
         .credential_profiles
         .get(&configuration.credential_profile)
     {
         Some(profile) => profile,
-        None => return oid4vci_error_response(Oid4vciWireError::UnsupportedCredentialType),
-    };
-    if let Some(nonce) = expected_nonce {
-        let key = match state.subject_access_rate_keys.oid4vci_nonce(
-            &state.oid4vci.credential_issuer,
-            configuration_id,
-            nonce,
-        ) {
-            Ok(key) => key,
-            Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
-        };
-        let replay_scope = match oid4vci_nonce_replay_scope(&state, configuration_id) {
-            Ok(scope) => scope,
-            Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
-        };
-        let replay_key = match ReplayKey::new(key) {
-            Ok(key) => key,
-            Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
-        };
-        match consume_validated_proof_nonce_once(
-            &validated_proof,
-            nonce,
-            state.replay.nonce_store().as_ref(),
-            &replay_scope,
-            &replay_key,
-        )
-        .await
-        {
-            Ok(()) => {
-                state.metrics.record_replay("oid4vci_nonce", "consumed");
-            }
-            Err(registry_platform_oid4vci::ProofError::InvalidNonce) => {
-                state.metrics.record_replay("oid4vci_nonce", "replayed");
-                return oid4vci_error_response(Oid4vciWireError::InvalidProof);
-            }
-            Err(_) => {
-                state.metrics.record_replay("oid4vci_nonce", "invalid");
-                return oid4vci_error_response(Oid4vciWireError::InvalidProof);
-            }
-        }
-    }
-    let holder_id = validated_proof.holder_id.as_str();
-    if let Err(error) =
-        check_oid4vci_subject_access_rate_limit(&state, &principal, Some(holder_id)).await
-    {
-        let mut response = oid4vci_error_response(Oid4vciWireError::RateLimited);
-        attach_subject_access_rate_limit_audit(
-            &mut response,
-            "oid4vci_rate_limited",
-            &configuration_claim_ids,
-            error.bucket(),
-        );
-        return response;
-    }
-    let target = match oid4vci_bound_subject(&state.subject_access, &principal) {
-        Ok(subject) => EvidenceEntity::from_subject_request("Person", subject),
-        Err(_) => {
-            let mut response = oid4vci_error_response(Oid4vciWireError::InvalidToken);
-            attach_oid4vci_subject_access_denial_audit(
-                &mut response,
-                "oid4vci_credential_denied",
-                &configuration_claim_ids,
-                configuration_id,
-                Some(SubjectAccessDenialCode::InvalidToken),
-                Some(state.subject_access.subject_binding.token_claim.as_str()),
-            );
-            return response;
-        }
-    };
-    let request = EvaluateRequest {
-        requester: Some(target.clone()),
-        target: Some(target),
-        relationship: Some(EvidenceRelationship {
-            relationship_type: "self".to_string(),
-            attributes: Default::default(),
-        }),
-        on_behalf_of: None,
-        variables: Default::default(),
-        claims: configuration_claim_ids
-            .iter()
-            .map(|claim_id| ClaimRef::from(claim_id.as_str()))
-            .collect(),
-        disclosure: None,
-        format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
-        purpose: None,
-    };
-    let mut request = request;
-    let context = match prepare_subject_access_credential_evaluation(
-        &state, evidence, &principal, &request,
-    ) {
-        Ok(context) => {
-            request.purpose = Some(context.purpose.clone());
-            context
-        }
-        Err(error) => {
-            let denial_code = denial_code_from_error(&error);
-            let mut response = oid4vci_error_response(oid4vci_error_from_evidence(&error));
-            attach_oid4vci_subject_access_denial_audit(
-                &mut response,
-                "oid4vci_credential_denied",
-                &configuration_claim_ids,
-                configuration_id,
-                denial_code,
-                Some(state.subject_access.subject_binding.token_claim.as_str()),
-            );
-            return response;
-        }
-    };
-    let results = match state
-        .runtime()
-        .evaluate_with_capability(
-            Arc::clone(&state.evidence),
-            &state.store,
-            &principal,
-            context.evaluation_capability,
-            request,
-            None,
-            Some(context.metadata.clone()),
-            None,
-        )
-        .await
-    {
-        Ok(results) => results,
-        Err(error) => {
-            let denial_code = denial_code_from_error(&error);
-            let mut response = oid4vci_error_response(oid4vci_error_from_evidence(&error));
-            attach_oid4vci_subject_access_denial_audit(
-                &mut response,
-                "oid4vci_credential_denied",
-                &configuration_claim_ids,
-                configuration_id,
-                denial_code,
-                Some(state.subject_access.subject_binding.token_claim.as_str()),
-            );
-            return response;
-        }
-    };
-    let evaluation_id = results
-        .first()
-        .map(|result| result.evaluation_id.clone())
-        .unwrap_or_default();
-    let lookup_client_id = match stored_evaluation_client_id(&state, &principal) {
-        Ok(client_id) => client_id,
-        Err(error) => return oid4vci_error_response(oid4vci_error_from_evidence(&error)),
-    };
-    let evaluation = match state.store.get(&evaluation_id, &lookup_client_id).await {
-        Ok(Some(evaluation)) => evaluation,
-        Ok(None) | Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
-    };
-    if let Err(error) = require_subject_access_stored_access(
-        &state,
-        evidence,
-        &principal,
-        &evaluation,
-        &evaluation.claim_ids,
-        &evaluation.disclosure,
-        &evaluation.format,
-        true,
-    ) {
-        return oid4vci_error_response(oid4vci_error_from_evidence(&error));
-    }
-    if !state.subject_access.allowed_operations.issue_credential {
-        return oid4vci_error_response(Oid4vciWireError::AccessDenied);
-    }
-    if let Err(error) = require_subject_access_credential_profile_policy(
-        &state.subject_access,
-        &configuration.credential_profile,
-        profile,
-    ) {
-        return oid4vci_error_response(oid4vci_error_from_evidence(&error));
-    }
-    if let Err(error) =
-        require_issuable_evaluation_provenance(evidence, &evaluation_id, &evaluation)
-    {
-        return oid4vci_error_response(oid4vci_error_from_evidence(&error));
-    }
-    let issuer = match state
-        .issuer_resolver()
-        .issuer(&configuration.credential_profile)
-    {
-        Ok(issuer) => issuer,
-        Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
-    };
-    if holder_key_matches_issuer_key(&validated_proof.holder_jwk, &issuer.public_jwk()) {
-        return oid4vci_error_response(Oid4vciWireError::InvalidProof);
-    }
-    let iat = earliest_issued_at(&evaluation.results).unwrap_or_else(OffsetDateTime::now_utc);
-    let credential_id = state
-        .credential_status
-        .is_enabled()
-        .then(sd_jwt::new_credential_id);
-    let status_claim = credential_id
-        .as_deref()
-        .and_then(|credential_id| state.credential_status.status_claim(credential_id));
-    let projection = oid4vci_sd_jwt_projection(configuration);
-    let signed = match sd_jwt::issue(
-        profile,
-        &issuer,
-        &evaluation.results,
-        holder_id,
-        Some(holder_id),
-        iat,
-        sd_jwt::IssueOptions {
-            credential_id,
-            status: status_claim,
-            projection,
-        },
-    )
-    .await
-    {
-        Ok(signed) => signed,
-        Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
-    };
-    let expires_at = match iat.checked_add(time::Duration::seconds(profile.validity_seconds)) {
-        Some(expires_at) => expires_at,
         None => return oid4vci_error_response(Oid4vciWireError::ServerError),
     };
-    if state.credential_status.is_enabled()
-        && state
-            .credential_status
-            .record_issued(
-                signed.credential_id.clone(),
-                signed.issuer.clone(),
-                configuration.credential_profile.clone(),
-                iat,
-                expires_at,
-            )
-            .await
-            .is_err()
-    {
-        return oid4vci_error_response(Oid4vciWireError::ServerError);
-    }
-    let next_nonce = if state.oid4vci.nonce.enabled {
-        match generate_nonce() {
-            Ok(nonce) => {
-                if let Ok(key) = state.subject_access_rate_keys.oid4vci_nonce(
-                    &state.oid4vci.credential_issuer,
-                    configuration_id,
-                    &nonce,
-                ) {
-                    let expires_at = OffsetDateTime::now_utc()
-                        + time::Duration::seconds(state.oid4vci.nonce.ttl_seconds as i64);
-                    let replay_scope = oid4vci_nonce_replay_scope(&state, configuration_id).ok();
-                    let replay_key = ReplayKey::new(key).ok();
-                    match (replay_scope, replay_key) {
-                        (Some(scope), Some(key)) => {
-                            if state
-                                .replay
-                                .nonce_store()
-                                .reserve_nonce(&scope, &key, expires_at)
-                                .await
-                                .is_ok()
-                            {
-                                state.metrics.record_replay("oid4vci_nonce", "reserved");
-                                Some(nonce)
-                            } else {
-                                state.metrics.record_replay("oid4vci_nonce", "error");
-                                None
-                            }
-                        }
-                        _ => None,
-                    }
-                } else {
-                    None
-                }
-            }
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
-    let credential = signed.compact;
-    let mut response = Json(Oid4vciCredentialResponse {
-        credential: credential.clone().into(),
-        credentials: vec![CredentialResponseCredential {
-            credential: credential.into(),
-        }],
-        format: Some(SD_JWT_VC_FORMAT.to_string()),
-        c_nonce: next_nonce,
-        c_nonce_expires_in: state
-            .oid4vci
-            .nonce
-            .enabled
-            .then_some(state.oid4vci.nonce.ttl_seconds),
-    })
-    .into_response();
+    let mut response = Json(response_body).into_response();
     state.metrics.record_credential("openid4vci", "issued");
     if attach_subject_access_credential_audit(
         &mut response,
         &state.subject_access_rate_keys,
-        &evaluation_id,
+        &transaction.evaluation_id,
         &evaluation.claim_ids,
         &evaluation.results,
         evaluation.results.len() as u64,
         SubjectAccessCredentialAuditDetails {
             profile_id: &configuration.credential_profile,
             holder_binding_mode: &profile.holder_binding.mode,
-            policy_hash: context.metadata.policy_hash,
+            policy_hash: evaluation
+                .subject_access
+                .as_ref()
+                .and_then(|metadata| metadata.policy_hash.clone()),
             purposes: Some(vec![evaluation.purpose.clone()]),
             protocol: Some("openid4vci"),
             credential_configuration_id: Some(configuration_id),
@@ -416,6 +228,151 @@ pub(in crate::api) async fn oid4vci_credential(
         return oid4vci_error_response(Oid4vciWireError::ServerError);
     }
     response
+}
+
+pub(in crate::api) async fn materialize_oid4vci_transaction(
+    state: &RegistryNotaryApiState,
+    evidence: &EvidenceConfig,
+    principal: &EvidencePrincipal,
+    validated_proof: &ValidatedProof,
+    configuration_id: &str,
+    configuration: &Oid4vciCredentialConfigurationConfig,
+    transaction: &IssuanceTransaction,
+    nonce: &str,
+) -> Result<(Value, registry_notary_core::StoredEvaluation), Oid4vciWireError> {
+    let key = state
+        .subject_access_rate_keys
+        .oid4vci_nonce(&state.oid4vci.credential_issuer, configuration_id, nonce)
+        .map_err(|_| Oid4vciWireError::ServerError)?;
+    let replay_scope = oid4vci_nonce_replay_scope(state, configuration_id)?;
+    let replay_key = ReplayKey::new(key).map_err(|_| Oid4vciWireError::ServerError)?;
+    consume_validated_proof_nonce_once(
+        validated_proof,
+        nonce,
+        state.replay.nonce_store().as_ref(),
+        &replay_scope,
+        &replay_key,
+    )
+    .await
+    .map_err(|_| Oid4vciWireError::InvalidProof)?;
+    state.metrics.record_replay("oid4vci_nonce", "consumed");
+    check_oid4vci_subject_access_rate_limit(
+        state,
+        principal,
+        Some(validated_proof.holder_id.as_str()),
+    )
+    .await
+    .map_err(|_| Oid4vciWireError::RateLimited)?;
+    let evaluation = state
+        .store
+        .get(
+            &transaction.evaluation_id,
+            &transaction.evaluation_client_id,
+        )
+        .await
+        .map_err(|_| Oid4vciWireError::ServerError)?
+        .ok_or(Oid4vciWireError::AccessDenied)?;
+    if evaluation.claim_ids != configuration.credential_claim_ids() {
+        return Err(Oid4vciWireError::AccessDenied);
+    }
+    require_oid4vci_transaction_stored_access(
+        state,
+        evidence,
+        principal,
+        &evaluation,
+        &evaluation.claim_ids,
+        &evaluation.disclosure,
+        &evaluation.format,
+    )
+    .map_err(|error| oid4vci_error_from_evidence(&error))?;
+    let profile = evidence
+        .credential_profiles
+        .get(&configuration.credential_profile)
+        .ok_or(Oid4vciWireError::UnsupportedCredentialType)?;
+    require_subject_access_credential_profile_policy(
+        &state.subject_access,
+        &configuration.credential_profile,
+        profile,
+    )
+    .map_err(|error| oid4vci_error_from_evidence(&error))?;
+    require_issuable_evaluation_provenance(evidence, &transaction.evaluation_id, &evaluation)
+        .map_err(|error| oid4vci_error_from_evidence(&error))?;
+    let configuration_fingerprint =
+        oid4vci_configuration_fingerprint(evidence, configuration_id, configuration)
+            .map_err(|_| Oid4vciWireError::ServerError)?;
+    let commitment = oid4vci_issuance_transaction_commitment(
+        &transaction.transaction_id,
+        evidence,
+        configuration_id,
+        configuration,
+        &configuration_fingerprint,
+        &transaction.evaluation_id,
+        &evaluation,
+    )
+    .map_err(|_| Oid4vciWireError::ServerError)?;
+    if commitment != transaction.commitment {
+        return Err(Oid4vciWireError::AccessDenied);
+    }
+    let issuer = state
+        .issuer_resolver()
+        .issuer(&configuration.credential_profile)
+        .map_err(|_| Oid4vciWireError::ServerError)?;
+    if holder_key_matches_issuer_key(&validated_proof.holder_jwk, &issuer.public_jwk()) {
+        return Err(Oid4vciWireError::InvalidProof);
+    }
+    let holder_id = validated_proof.holder_id.as_str();
+    let iat = earliest_issued_at(&evaluation.results).unwrap_or_else(OffsetDateTime::now_utc);
+    let credential_id = state
+        .credential_status
+        .is_enabled()
+        .then(sd_jwt::new_credential_id);
+    let status_claim = credential_id
+        .as_deref()
+        .and_then(|credential_id| state.credential_status.status_claim(credential_id));
+    let signed = sd_jwt::issue(
+        profile,
+        &issuer,
+        &evaluation.results,
+        holder_id,
+        Some(holder_id),
+        iat,
+        sd_jwt::IssueOptions {
+            credential_id,
+            status: status_claim,
+            projection: oid4vci_sd_jwt_projection(configuration),
+        },
+    )
+    .await
+    .map_err(|_| Oid4vciWireError::ServerError)?;
+    let expires_at = iat
+        .checked_add(time::Duration::seconds(profile.validity_seconds))
+        .ok_or(Oid4vciWireError::ServerError)?;
+    if state.credential_status.is_enabled() {
+        state
+            .credential_status
+            .record_issued(
+                signed.credential_id.clone(),
+                signed.issuer.clone(),
+                configuration.credential_profile.clone(),
+                iat,
+                expires_at,
+            )
+            .await
+            .map_err(|_| Oid4vciWireError::ServerError)?;
+    }
+    let credential = signed.compact;
+    let response = Oid4vciCredentialResponse {
+        credential: credential.clone().into(),
+        credentials: vec![CredentialResponseCredential {
+            credential: credential.into(),
+        }],
+        format: Some(SD_JWT_VC_FORMAT.to_string()),
+        // The 1.0 profile has no response next-nonce.
+        c_nonce: None,
+        c_nonce_expires_in: None,
+    };
+    let response = serde_json::to_value(response).map_err(|_| Oid4vciWireError::ServerError)?;
+    Ok((response, evaluation))
 }
 
 pub(in crate::api) fn earliest_issued_at(
@@ -468,27 +425,6 @@ pub(in crate::api) fn oid4vci_configuration_for_request<'a>(
         .next()
         .map(|(id, configuration)| (id.as_str(), configuration))
         .ok_or(Oid4vciWireError::UnsupportedCredentialType)
-}
-
-pub(in crate::api) fn oid4vci_nonce_configuration_id(
-    config: &Oid4vciConfig,
-    requested_id: Option<String>,
-) -> Result<&str, Oid4vciWireError> {
-    if let Some(id) = requested_id {
-        return config
-            .credential_configurations
-            .get_key_value(&id)
-            .map(|(id, _)| id.as_str())
-            .ok_or(Oid4vciWireError::InvalidRequest);
-    }
-    let mut ids = config.credential_configurations.keys();
-    let Some(first) = ids.next() else {
-        return Err(Oid4vciWireError::InvalidRequest);
-    };
-    if ids.next().is_some() {
-        return Err(Oid4vciWireError::InvalidRequest);
-    }
-    Ok(first.as_str())
 }
 
 pub(in crate::api) fn oid4vci_nonce_replay_scope(

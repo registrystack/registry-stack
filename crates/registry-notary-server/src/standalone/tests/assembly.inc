@@ -138,15 +138,6 @@ async fn static_api_routes_preserve_listener_and_middleware_security_policy() {
             proof_precheck_before_auth: false,
         },
         RouteSecurityCharacterization {
-            matched_path: "/oid4vci/credential-offer",
-            sample_path: "/oid4vci/credential-offer",
-            listener: Public,
-            method: Get,
-            auth: Exempt,
-            wallet_cors: true,
-            proof_precheck_before_auth: false,
-        },
-        RouteSecurityCharacterization {
             matched_path: "/oid4vci/offer/start",
             sample_path: "/oid4vci/offer/start",
             listener: Public,
@@ -171,15 +162,6 @@ async fn static_api_routes_preserve_listener_and_middleware_security_policy() {
             method: Post,
             auth: Exempt,
             wallet_cors: false,
-            proof_precheck_before_auth: false,
-        },
-        RouteSecurityCharacterization {
-            matched_path: "/oid4vci/nonce",
-            sample_path: "/oid4vci/nonce",
-            listener: Public,
-            method: Post,
-            auth: Exempt,
-            wallet_cors: true,
             proof_precheck_before_auth: false,
         },
         RouteSecurityCharacterization {

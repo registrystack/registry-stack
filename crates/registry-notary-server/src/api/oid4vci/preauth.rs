@@ -62,6 +62,8 @@ pub(in crate::api) async fn oid4vci_offer_start(
                 oid4vci_error_response(Oid4vciWireError::RateLimited)
             }
             PreauthorizationStateError::DuplicateLoginState
+            | PreauthorizationStateError::DuplicateIssuanceTransaction
+            | PreauthorizationStateError::IssuanceTransactionCapacity
             | PreauthorizationStateError::Unavailable
             | PreauthorizationStateError::IncompatibleTransactionCodeProof
             | PreauthorizationStateError::InvalidExpiry
@@ -81,6 +83,242 @@ pub(in crate::api) async fn oid4vci_offer_start(
 pub(in crate::api) struct Oid4vciOfferCallbackQuery {
     pub(in crate::api) code: Option<String>,
     pub(in crate::api) state: Option<String>,
+}
+
+pub(in crate::api) async fn prepare_registry_backed_issuance_transaction(
+    state: &RegistryNotaryApiState,
+    preauth: &PreAuthRuntime,
+    bound_subject: &BoundSubject,
+    configuration_id: &str,
+    transaction_id: &str,
+) -> Result<IssuanceTransaction, EvidenceError> {
+    let evidence = state.enabled_evidence()?;
+    let (configuration_id, configuration) = state
+        .oid4vci
+        .credential_configurations
+        .get_key_value(configuration_id)
+        .ok_or(EvidenceError::InvalidRequest)?;
+    let configuration_claim_ids = configuration.credential_claim_ids();
+    require_registry_backed_credential_claims(evidence, &configuration_claim_ids)?;
+    let mut principal = preauth.principal_for_subject(bound_subject)?;
+    add_scope_if_missing(&mut principal.scopes, &configuration.scope);
+    let principal = classify_subject_access_principal(&state.subject_access, &principal)?;
+    if !principal.is_subject_access()
+        || requested_attestation_access_mode(&principal) == AccessMode::DelegatedAttestation
+    {
+        return Err(EvidenceError::SubjectAccessInvalidToken);
+    }
+    let target = EvidenceEntity::from_subject_request(
+        "Person",
+        oid4vci_bound_subject(&state.subject_access, &principal)?,
+    );
+    let mut request = EvaluateRequest {
+        requester: Some(target.clone()),
+        target: Some(target),
+        relationship: Some(EvidenceRelationship {
+            relationship_type: "self".to_string(),
+            attributes: Default::default(),
+        }),
+        on_behalf_of: None,
+        variables: Default::default(),
+        claims: configuration_claim_ids
+            .iter()
+            .map(|claim_id| ClaimRef::from(claim_id.as_str()))
+            .collect(),
+        disclosure: None,
+        format: Some(FORMAT_CLAIM_RESULT_JSON.to_string()),
+        purpose: None,
+    };
+    let context =
+        prepare_subject_access_credential_evaluation(state, evidence, &principal, &request)?;
+    request.purpose = Some(context.purpose.clone());
+    let results = state
+        .runtime()
+        .evaluate_with_capability(
+            Arc::clone(&state.evidence),
+            &state.store,
+            &principal,
+            context.evaluation_capability,
+            request,
+            None,
+            Some(context.metadata),
+            None,
+        )
+        .await?;
+    let evaluation_id = results
+        .first()
+        .map(|result| result.evaluation_id.clone())
+        .filter(|id| !id.is_empty())
+        .ok_or(EvidenceError::CredentialIssuanceFailed)?;
+    let evaluation_client_id = stored_evaluation_client_id(state, &principal)?;
+    let evaluation = state
+        .store
+        .get(&evaluation_id, &evaluation_client_id)
+        .await?
+        .ok_or(EvidenceError::EvaluationNotFound)?;
+    require_subject_access_stored_access(
+        state,
+        evidence,
+        &principal,
+        &evaluation,
+        &evaluation.claim_ids,
+        &evaluation.disclosure,
+        &evaluation.format,
+        true,
+    )?;
+    if !state.subject_access.allowed_operations.issue_credential {
+        return Err(EvidenceError::SubjectAccessDenied {
+            reason: SubjectAccessDenialCode::OperationDenied,
+        });
+    }
+    let profile = evidence
+        .credential_profiles
+        .get(&configuration.credential_profile)
+        .ok_or(EvidenceError::ProfileUnsupported)?;
+    require_subject_access_credential_profile_policy(
+        &state.subject_access,
+        &configuration.credential_profile,
+        profile,
+    )?;
+    require_issuable_evaluation_provenance(evidence, &evaluation_id, &evaluation)?;
+    let configuration_fingerprint =
+        oid4vci_configuration_fingerprint(evidence, configuration_id, configuration)?;
+    let commitment = oid4vci_issuance_transaction_commitment(
+        transaction_id,
+        evidence,
+        configuration_id,
+        configuration,
+        &configuration_fingerprint,
+        &evaluation_id,
+        &evaluation,
+    )?;
+    Ok(IssuanceTransaction {
+        transaction_id: transaction_id.to_string(),
+        evaluation_id,
+        evaluation_client_id,
+        credential_configuration_id: configuration_id.clone(),
+        commitment,
+    })
+}
+
+pub(in crate::api) fn oid4vci_configuration_fingerprint(
+    evidence: &EvidenceConfig,
+    configuration_id: &str,
+    configuration: &Oid4vciCredentialConfigurationConfig,
+) -> Result<String, EvidenceError> {
+    let profile = evidence
+        .credential_profiles
+        .get(&configuration.credential_profile)
+        .ok_or(EvidenceError::ProfileUnsupported)?;
+    let signing_key = evidence
+        .signing_keys
+        .get(&profile.signing_key)
+        .ok_or(EvidenceError::CredentialIssuerNotConfigured)?;
+    let mut normalized = BTreeMap::new();
+    normalized.insert("schema_version", json!("registry-notary-oid4vci-config/v1"));
+    normalized.insert("service_id", json!(evidence.service_id));
+    normalized.insert("credential_configuration_id", json!(configuration_id));
+    normalized.insert(
+        "credential_configuration",
+        serde_json::to_value(configuration).map_err(|_| EvidenceError::InvalidRequest)?,
+    );
+    normalized.insert(
+        "credential_profile",
+        json!({
+            "id": configuration.credential_profile,
+            "format": profile.format,
+            "issuer": profile.issuer,
+            "signing_key": profile.signing_key,
+            "vct": profile.vct,
+            "validity_seconds": profile.validity_seconds,
+            "holder_binding": profile.holder_binding,
+            "allowed_claims": profile.allowed_claims,
+            "disclosure": profile.disclosure,
+        }),
+    );
+    normalized.insert(
+        "signing_key",
+        json!({
+            "id": profile.signing_key,
+            "provider": signing_key.provider,
+            "alg": signing_key.alg,
+            "kid": signing_key.kid,
+            "status": signing_key.status,
+            "publish_until_unix_seconds": signing_key.publish_until_unix_seconds,
+        }),
+    );
+    sha256_canonical_json(
+        &serde_json::to_value(normalized).map_err(|_| EvidenceError::InvalidRequest)?,
+    )
+}
+
+pub(in crate::api) fn oid4vci_issuance_transaction_commitment(
+    transaction_id: &str,
+    evidence: &EvidenceConfig,
+    configuration_id: &str,
+    configuration: &Oid4vciCredentialConfigurationConfig,
+    configuration_fingerprint: &str,
+    evaluation_id: &str,
+    evaluation: &registry_notary_core::StoredEvaluation,
+) -> Result<String, EvidenceError> {
+    let subject_access = evaluation
+        .subject_access
+        .as_ref()
+        .ok_or(EvidenceError::EvaluationBindingMismatch)?;
+    let provenance = evaluation
+        .issuance_provenance
+        .as_ref()
+        .ok_or(EvidenceError::CredentialIssuanceFailed)?;
+    if !subject_access
+        .principal_hash
+        .as_str()
+        .starts_with("hmac-sha256:")
+        || !subject_access
+            .subject_binding_hash
+            .as_str()
+            .starts_with("hmac-sha256:")
+    {
+        return Err(EvidenceError::EvaluationBindingMismatch);
+    }
+    let mut normalized = BTreeMap::new();
+    normalized.insert(
+        "schema_version",
+        json!("registry-notary-oid4vci-issuance-transaction/v1"),
+    );
+    normalized.insert("transaction_id", json!(transaction_id));
+    normalized.insert(
+        "authenticated_principal_hash",
+        json!(subject_access.principal_hash),
+    );
+    normalized.insert(
+        "authenticated_subject_binding_hash",
+        json!(subject_access.subject_binding_hash),
+    );
+    normalized.insert("authenticated_issuer", json!(subject_access.issuer));
+    normalized.insert("authenticated_client", json!(subject_access.client_id));
+    normalized.insert("service", json!(evidence.service_id));
+    normalized.insert("purpose", json!(evaluation.purpose));
+    normalized.insert(
+        "canonical_claim_references",
+        json!(evaluation.selected_claim_refs()),
+    );
+    normalized.insert("credential_configuration_id", json!(configuration_id));
+    normalized.insert(
+        "credential_profile",
+        json!(configuration.credential_profile),
+    );
+    normalized.insert(
+        "configuration_fingerprint",
+        json!(configuration_fingerprint),
+    );
+    normalized.insert(
+        "relay_contract_and_provenance",
+        serde_json::to_value(provenance).map_err(|_| EvidenceError::InvalidRequest)?,
+    );
+    normalized.insert("stored_evaluation_id", json!(evaluation_id));
+    sha256_canonical_json(
+        &serde_json::to_value(normalized).map_err(|_| EvidenceError::InvalidRequest)?,
+    )
 }
 
 /// `GET /oid4vci/offer/callback` (public): consume the login state, exchange the
@@ -176,14 +414,69 @@ pub(in crate::api) async fn oid4vci_offer_callback(
         return preauth_server_error(&preauth, path, "GET", &stored.credential_configuration_id)
             .await;
     };
+    // The registry-backed evaluation is completed before any offer is minted.
+    // A denied, unavailable, stale, malformed, or provenance-invalid Relay
+    // outcome therefore leaves the caller with no wallet grant at all.
+    let transaction = match prepare_registry_backed_issuance_transaction(
+        &state,
+        &preauth,
+        &bound_subject,
+        &stored.credential_configuration_id,
+        &jti,
+    )
+    .await
+    {
+        Ok(transaction) => transaction,
+        Err(error) => {
+            tracing::warn!(
+                code = error.audit_code(),
+                "registry-backed OID4VCI evaluation denied before offer minting"
+            );
+            return preauth_denied(
+                &preauth,
+                path,
+                "GET",
+                Some(&stored.credential_configuration_id),
+                denial_code_from_error(&error).unwrap_or(SubjectAccessDenialCode::OperationDenied),
+                oid4vci_error_from_evidence(&error),
+            )
+            .await;
+        }
+    };
+    let code_exp = now + preauth.pre_authorized_code_ttl_seconds() as i64;
+    let transaction_expires_at = match OffsetDateTime::from_unix_timestamp(
+        code_exp + preauth.access_token_ttl_seconds() as i64,
+    ) {
+        Ok(expires_at) => expires_at,
+        Err(_) => {
+            return preauth_server_error(
+                &preauth,
+                path,
+                "GET",
+                &stored.credential_configuration_id,
+            )
+            .await;
+        }
+    };
+    if preauth
+        .preauthorization_state()
+        .reserve_issuance_transaction(&jti, transaction.clone(), transaction_expires_at)
+        .await
+        .is_err()
+    {
+        return preauth_server_error(&preauth, path, "GET", &stored.credential_configuration_id)
+            .await;
+    }
     let code_claims = PreAuthorizedCodeClaims {
         issuer: preauth.notary_issuer().to_string(),
         jti: jti.clone(),
         credential_configuration_id: stored.credential_configuration_id.clone(),
+        issuance_transaction_id: jti.clone(),
+        issuance_transaction_commitment: transaction.commitment.clone(),
         tx_code_required: preauth.tx_code_required(),
         subject: bound_subject,
         iat: now,
-        exp: now + preauth.pre_authorized_code_ttl_seconds() as i64,
+        exp: code_exp,
     };
     let signed_code = match mint_pre_authorized_code(
         preauth.access_token_signer(),
@@ -517,6 +810,62 @@ pub(in crate::api) async fn oid4vci_token(
         )
         .await;
     };
+    let Some(transaction_id) = verified.claim_str("issuance_transaction_id") else {
+        return token_error_after_invalid_attempt(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            Some(configuration_id),
+            TokenWireError::InvalidGrant,
+        )
+        .await;
+    };
+    let Some(transaction_commitment) = verified.claim_str("issuance_transaction_commitment") else {
+        return token_error_after_invalid_attempt(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            Some(configuration_id),
+            TokenWireError::InvalidGrant,
+        )
+        .await;
+    };
+    if transaction_id != jti {
+        return token_error_after_invalid_attempt(
+            &state,
+            &preauth,
+            path,
+            &client_address,
+            Some(configuration_id),
+            TokenWireError::InvalidGrant,
+        )
+        .await;
+    }
+    let transaction = match preauth
+        .preauthorization_state()
+        .transaction(transaction_id)
+        .await
+    {
+        Ok(Some(transaction))
+            if transaction.commitment == transaction_commitment
+                && transaction.credential_configuration_id == *configuration_id =>
+        {
+            transaction
+        }
+        _ => {
+            return token_error_after_invalid_attempt(
+                &state,
+                &preauth,
+                path,
+                &client_address,
+                Some(configuration_id),
+                TokenWireError::InvalidGrant,
+            )
+            .await;
+        }
+    };
     let mut bound_subject = bound_subject;
     add_scope_if_missing(&mut bound_subject.scopes, &configuration.scope);
     let authorization_details = match oid4vci_issuance_authorization_details(
@@ -590,12 +939,43 @@ pub(in crate::api) async fn oid4vci_token(
         }
     }
     let configuration_id = configuration_id.as_str();
+    let c_nonce = match issue_c_nonce(&state, configuration_id).await {
+        Some(c_nonce) => c_nonce,
+        None => {
+            return token_error_with_audit(
+                &preauth,
+                path,
+                Some(configuration_id),
+                SubjectAccessDenialCode::OperationDenied,
+                TokenWireError::ServerError,
+            )
+            .await;
+        }
+    };
+    if !matches!(
+        preauth
+            .preauthorization_state()
+            .bind_transaction_nonce(transaction_id, &transaction.commitment, c_nonce.clone(),)
+            .await,
+        Ok(true)
+    ) {
+        return token_error_with_audit(
+            &preauth,
+            path,
+            Some(configuration_id),
+            SubjectAccessDenialCode::OperationDenied,
+            TokenWireError::ServerError,
+        )
+        .await;
+    }
     let access_token_claims = AccessTokenClaims {
         issuer: preauth.notary_issuer().to_string(),
         jti: None,
         audiences: preauth.notary_audiences().to_vec(),
         token_type: "Bearer".to_string(),
         credential_configuration_id: configuration_id.to_string(),
+        issuance_transaction_id: transaction_id.to_string(),
+        issuance_transaction_commitment: transaction.commitment.clone(),
         subject: bound_subject,
         authorization_details,
         confirmation: None,
@@ -612,19 +992,6 @@ pub(in crate::api) async fn oid4vci_token(
     {
         Ok(token) => token,
         Err(_) => {
-            return token_error_with_audit(
-                &preauth,
-                path,
-                Some(configuration_id),
-                SubjectAccessDenialCode::OperationDenied,
-                TokenWireError::ServerError,
-            )
-            .await;
-        }
-    };
-    let c_nonce = match issue_c_nonce(&state, configuration_id).await {
-        Some(c_nonce) => c_nonce,
-        None => {
             return token_error_with_audit(
                 &preauth,
                 path,
@@ -905,27 +1272,6 @@ pub(in crate::api) async fn check_token_client_address_rate_limit(
         .subject_access_rate_limiter
         .check_invalid_token_for_client_address_available(&hashed)
         .await
-}
-
-pub(in crate::api) async fn consume_public_client_address_rate_limit(
-    state: &RegistryNotaryApiState,
-    client_address: &str,
-) -> Result<(), SubjectAccessRateLimitError> {
-    let hashed = state
-        .subject_access_rate_keys
-        .client_address(client_address)?;
-    state
-        .subject_access_rate_limiter
-        .check_invalid_token_for_client_address(&hashed)
-        .await
-}
-
-pub(in crate::api) fn replay_store_error_is_capacity(error: &ReplayStoreError) -> bool {
-    matches!(
-        error,
-        ReplayStoreError::Operation { message }
-            if message.contains("in-memory cache store is full")
-    )
 }
 
 /// Record one `tx_code` attempt against the hashed pre-authorized code. After

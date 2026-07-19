@@ -30,12 +30,14 @@ pub(super) use registry_platform_audit::{
 pub(super) use registry_platform_authcommon::{
     CredentialFingerprintProvider, CredentialFingerprintRef,
 };
-pub(super) use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 #[cfg(feature = "registry-notary-cel")]
-pub(super) use registry_platform_crypto::{did_jwk_from_public_jwk, verify};
+pub(super) use registry_platform_crypto::verify;
+pub(super) use registry_platform_crypto::{
+    canonicalize_json, did_jwk_from_public_jwk, sign, PrivateJwk,
+};
 pub(super) use registry_platform_testing::{
-    fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, sign_openid4vci_proof_jwt,
-    MockHttpUpstream, MockIdp, FEDERATION_PROTOCOL, FEDERATION_REQUEST_JWT_TYPE,
+    fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, MockHttpUpstream, MockIdp,
+    FEDERATION_PROTOCOL, FEDERATION_REQUEST_JWT_TYPE,
 };
 pub(super) use serde::Deserialize;
 pub(super) use serde_json::{json, Value};
@@ -284,12 +286,40 @@ pub(super) fn set_audit_secret() {
 }
 
 pub(super) fn sign_oid4vci_proof(audience: &str, nonce: &str) -> String {
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-    sign_openid4vci_proof_jwt(TEST_HOLDER_JWK, audience, Some(nonce), now)
+    sign_oid4vci_did_jwk_proof(audience, Some(nonce), true)
 }
 
-#[cfg(feature = "registry-notary-cel")]
-pub(super) fn sign_oid4vci_proof_without_iss(audience: &str, nonce: &str) -> String {
+fn sign_oid4vci_did_jwk_proof(audience: &str, nonce: Option<&str>, include_iss: bool) -> String {
+    let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
+    let holder_id = did_jwk_from_public_jwk(&holder.public()).expect("holder did:jwk encodes");
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let header_b64 = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&json!({
+            "alg": "EdDSA",
+            "typ": "openid4vci-proof+jwt",
+            "kid": holder_id,
+        }))
+        .expect("header serializes"),
+    );
+    let mut payload = serde_json::Map::from_iter([
+        ("aud".to_string(), json!(audience)),
+        ("iat".to_string(), json!(now)),
+        ("exp".to_string(), json!(now + 60)),
+    ]);
+    if include_iss {
+        payload.insert("iss".to_string(), json!(holder_id));
+    }
+    if let Some(nonce) = nonce {
+        payload.insert("nonce".to_string(), json!(nonce));
+    }
+    let payload_b64 = URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&Value::Object(payload)).expect("payload serializes"));
+    let signing_input = format!("{header_b64}.{payload_b64}");
+    let signature = sign(signing_input.as_bytes(), &holder).expect("holder signs proof");
+    format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
+}
+
+pub(super) fn sign_oid4vci_inline_jwk_proof(audience: &str, nonce: &str) -> String {
     let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let header_b64 = URL_SAFE_NO_PAD.encode(
@@ -312,6 +342,11 @@ pub(super) fn sign_oid4vci_proof_without_iss(audience: &str, nonce: &str) -> Str
     let signing_input = format!("{header_b64}.{payload_b64}");
     let signature = sign(signing_input.as_bytes(), &holder).expect("holder signs proof");
     format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
+}
+
+#[cfg(feature = "registry-notary-cel")]
+pub(super) fn sign_oid4vci_proof_without_iss(audience: &str, nonce: &str) -> String {
+    sign_oid4vci_did_jwk_proof(audience, Some(nonce), false)
 }
 
 #[cfg(feature = "registry-notary-cel")]

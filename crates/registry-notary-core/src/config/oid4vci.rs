@@ -26,8 +26,8 @@ pub struct Oid4vciConfig {
     pub authorization: Oid4vciAuthorizationConfig,
     #[serde(default)]
     pub proof: Oid4vciProofConfig,
-    /// Pre-authorized-code flow settings. Disabled by default; offers fall
-    /// back to the `authorization_code` grant unless this is enabled.
+    /// Issuer-initiated pre-authorized-code flow settings. This is the only
+    /// wallet-facing issuance grant in the 1.0 profile.
     #[serde(default)]
     pub pre_authorized_code: Oid4vciPreAuthorizedCodeConfig,
     #[serde(default)]
@@ -107,6 +107,11 @@ impl Oid4vciConfig {
         if !self.enabled {
             return Ok(());
         }
+        if !self.pre_authorized_code.enabled {
+            return invalid_oid4vci(
+                "enabled oid4vci requires pre_authorized_code.enabled = true; wallet-facing authorization_code issuance is not supported in 1.0",
+            );
+        }
         if !subject_access.enabled {
             return invalid_oid4vci("enabled oid4vci requires subject_access.enabled = true");
         }
@@ -116,11 +121,13 @@ impl Oid4vciConfig {
             &self.credential_endpoint,
             &self.credential_issuer,
         )?;
-        validate_oid4vci_endpoint_url(
-            "oid4vci.offer_endpoint",
-            &self.offer_endpoint,
-            &self.credential_issuer,
-        )?;
+        if !self.offer_endpoint.trim().is_empty() {
+            validate_oid4vci_endpoint_url(
+                "oid4vci.offer_endpoint",
+                &self.offer_endpoint,
+                &self.credential_issuer,
+            )?;
+        }
         validate_oid4vci_non_empty_entries(
             "oid4vci.authorization_servers",
             &self.authorization_servers,
@@ -135,24 +142,15 @@ impl Oid4vciConfig {
         if self.credential_configurations.is_empty() {
             return invalid_oid4vci("credential_configurations must not be empty");
         }
-        if self.nonce.enabled {
-            let nonce_endpoint = self.nonce_endpoint.as_deref().ok_or_else(|| {
-                EvidenceConfigError::InvalidOid4vciConfig {
-                    reason: "nonce_endpoint must be configured when nonce.enabled = true"
-                        .to_string(),
-                }
-            })?;
-            validate_oid4vci_endpoint_url(
-                "oid4vci.nonce_endpoint",
-                nonce_endpoint,
-                &self.credential_issuer,
-            )?;
-        } else if let Some(nonce_endpoint) = self.nonce_endpoint.as_deref() {
-            validate_oid4vci_endpoint_url(
-                "oid4vci.nonce_endpoint",
-                nonce_endpoint,
-                &self.credential_issuer,
-            )?;
+        if !self.nonce.enabled {
+            return invalid_oid4vci(
+                "oid4vci.nonce.enabled must be true for the transaction-scoped token nonce",
+            );
+        }
+        if self.nonce_endpoint.is_some() {
+            return invalid_oid4vci(
+                "oid4vci.nonce_endpoint must be omitted; 1.0 has no public unbound nonce endpoint",
+            );
         }
         self.nonce.validate()?;
         self.authorization.validate()?;

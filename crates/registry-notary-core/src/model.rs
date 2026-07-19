@@ -465,6 +465,12 @@ pub struct BoundedVerifiedClaims {
     pub client_id: Option<VerifiedClaimValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_type: Option<VerifiedClaimValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_configuration_id: Option<VerifiedClaimValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuance_transaction_id: Option<VerifiedClaimValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issuance_transaction_commitment: Option<VerifiedClaimValue>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scopes: Vec<VerifiedClaimValue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -492,6 +498,15 @@ impl fmt::Debug for BoundedVerifiedClaims {
             .field("audiences", &self.audiences)
             .field("client_id", &self.client_id)
             .field("token_type", &self.token_type)
+            .field(
+                "credential_configuration_id",
+                &self.credential_configuration_id,
+            )
+            .field("issuance_transaction_id", &"<redacted>")
+            .field(
+                "issuance_transaction_commitment",
+                &self.issuance_transaction_commitment,
+            )
             .field("scopes", &self.scopes)
             .field("subject", &self.subject.as_ref().map(|_| "<redacted>"))
             .field("subject_binding_claim", &self.subject_binding_claim)
@@ -522,6 +537,15 @@ impl BoundedVerifiedClaims {
             "iss" => Some(self.issuer.as_str()),
             "sub" => self.subject.as_ref().map(Bounded::as_str),
             "typ" | "token_type" => self.token_type.as_ref().map(Bounded::as_str),
+            "credential_configuration_id" => self
+                .credential_configuration_id
+                .as_ref()
+                .map(Bounded::as_str),
+            "issuance_transaction_id" => self.issuance_transaction_id.as_ref().map(Bounded::as_str),
+            "issuance_transaction_commitment" => self
+                .issuance_transaction_commitment
+                .as_ref()
+                .map(Bounded::as_str),
             "client_id" | "azp" => self.client_id.as_ref().map(Bounded::as_str),
             "acr" => self.acr.as_ref().map(Bounded::as_str),
             other => self
@@ -2431,6 +2455,9 @@ mod tests {
             audiences: vec![bounded("registry-notary-citizen")],
             client_id: Some(bounded("citizen-portal")),
             token_type: Some(bounded("JWT")),
+            credential_configuration_id: None,
+            issuance_transaction_id: None,
+            issuance_transaction_commitment: None,
             scopes: vec![bounded("subject_access")],
             subject: Some(bounded("login-subject")),
             subject_binding_claim: Some(bounded("https://id.example.gov/claims/national_id")),
@@ -2459,6 +2486,9 @@ mod tests {
                 audiences: vec![bounded("registry-notary-citizen")],
                 client_id: Some(bounded("citizen-portal")),
                 token_type: Some(bounded("JWT")),
+                credential_configuration_id: None,
+                issuance_transaction_id: None,
+                issuance_transaction_commitment: None,
                 scopes: vec![bounded("subject_access")],
                 subject: Some(bounded("login-subject")),
                 subject_binding_claim: Some(bounded("https://id.example.gov/claims/national_id")),

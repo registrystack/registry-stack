@@ -1110,6 +1110,63 @@ pub(super) fn require_subject_access_stored_access(
     format: &str,
     issue_credential: bool,
 ) -> Result<(), EvidenceError> {
+    require_subject_access_stored_access_inner(
+        state,
+        evidence,
+        principal,
+        evaluation,
+        requested_claims,
+        disclosure,
+        format,
+        issue_credential,
+        false,
+    )
+}
+
+/// Validate a stored evaluation when the credential request is authenticated
+/// by the Notary access token minted from the issuer-initiated transaction.
+///
+/// The callback evaluation records the external identity provider as its
+/// authenticated issuer and audience. The wallet later presents a
+/// Notary-signed, transaction-bound token, so those two token-envelope fields
+/// intentionally change. All subject, client, policy, claim, disclosure, and
+/// format bindings remain enforced here; the caller separately verifies the
+/// Notary token's issuer, audience, transaction id, and commitment.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn require_oid4vci_transaction_stored_access(
+    state: &RegistryNotaryApiState,
+    evidence: &EvidenceConfig,
+    principal: &EvidencePrincipal,
+    evaluation: &registry_notary_core::StoredEvaluation,
+    requested_claims: &[String],
+    disclosure: &str,
+    format: &str,
+) -> Result<(), EvidenceError> {
+    require_subject_access_stored_access_inner(
+        state,
+        evidence,
+        principal,
+        evaluation,
+        requested_claims,
+        disclosure,
+        format,
+        true,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn require_subject_access_stored_access_inner(
+    state: &RegistryNotaryApiState,
+    evidence: &EvidenceConfig,
+    principal: &EvidencePrincipal,
+    evaluation: &registry_notary_core::StoredEvaluation,
+    requested_claims: &[String],
+    disclosure: &str,
+    format: &str,
+    issue_credential: bool,
+    allow_token_envelope_transition: bool,
+) -> Result<(), EvidenceError> {
     let Some(metadata) = evaluation.subject_access.as_ref() else {
         if principal.is_subject_access() {
             return Err(EvidenceError::EvaluationBindingMismatch);
@@ -1199,9 +1256,10 @@ pub(super) fn require_subject_access_stored_access(
         .verified_claims
         .as_ref()
         .ok_or(EvidenceError::SubjectAccessInvalidToken)?;
-    if claims.issuer != metadata.issuer
-        || claims.client_id != metadata.client_id
-        || !verified_audiences_match(&claims.audiences, &metadata.audiences)
+    if claims.client_id != metadata.client_id
+        || (!allow_token_envelope_transition
+            && (claims.issuer != metadata.issuer
+                || !verified_audiences_match(&claims.audiences, &metadata.audiences)))
     {
         return Err(EvidenceError::EvaluationBindingMismatch);
     }

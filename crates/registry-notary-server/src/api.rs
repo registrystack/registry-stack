@@ -77,10 +77,9 @@ use registry_platform_oid4vci::{
     consume_validated_proof_nonce_once, validate_proof_jwt, CredentialConfigurationMetadata,
     CredentialIssuerMetadata, CredentialOffer, CredentialRequest as Oid4vciCredentialRequest,
     CredentialResponse as Oid4vciCredentialResponse, CredentialResponseCredential,
-    DisplayImageMetadata, DisplayMetadata, NonceRequest as Oid4vciNonceRequest, NonceResponse,
-    ProofValidationPolicy, TokenRequest as Oid4vciTokenRequest,
-    TokenResponse as Oid4vciTokenResponse, TxCode, ValidatedProof, WireError,
-    PRE_AUTHORIZED_CODE_GRANT_TYPE, PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
+    DisplayImageMetadata, DisplayMetadata, ProofValidationPolicy,
+    TokenRequest as Oid4vciTokenRequest, TokenResponse as Oid4vciTokenResponse, TxCode,
+    ValidatedProof, WireError, PRE_AUTHORIZED_CODE_GRANT_TYPE, PROOF_TYPE_JWT, SD_JWT_VC_FORMAT,
 };
 use registry_platform_ops::{
     AckObservation, ConfigOverridePin, ConfigProvenance, ConfigSource, PostureApplyResult,
@@ -89,7 +88,7 @@ use registry_platform_pdp::{
     decide as pdp_decide, Decision as PdpDecision, EvidenceRequestContext as PdpRequestContext,
     PolicyInput as PdpPolicyInput,
 };
-use registry_platform_replay::{ReplayKey, ReplayScope, ReplayStoreError, RequiredReplayError};
+use registry_platform_replay::{ReplayKey, ReplayScope, RequiredReplayError};
 use registry_platform_sdjwt::{validate_holder_proof, HolderProofBindings, HolderProofPolicy};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -110,7 +109,9 @@ use crate::{
     metrics::AppMetrics,
     openapi_document,
     posture::{posture_document, PostureContext, PostureDocumentError},
-    preauth_state::{LoginState, PreauthorizationStateError},
+    preauth_state::{
+        CredentialMaterialization, IssuanceTransaction, LoginState, PreauthorizationStateError,
+    },
     replay::{require_replay_insert, ReplayReadiness, ReplayStores},
     runtime::{
         build_claim_levels, claim_ids, claim_semantics_metadata, requested_claim_versions,
@@ -182,11 +183,9 @@ where
             "/.well-known/vct/{*vct_path}",
             get(oid4vci_well_known_type_metadata),
         )
-        .route("/oid4vci/credential-offer", get(oid4vci_credential_offer))
         .route("/oid4vci/offer/start", get(oid4vci_offer_start))
         .route("/oid4vci/offer/callback", get(oid4vci_offer_callback))
         .route("/oid4vci/token", post(oid4vci_token))
-        .route("/oid4vci/nonce", post(oid4vci_nonce))
         .route("/oid4vci/credential", post(oid4vci_credential))
         .route("/v1/claims", get(list_claims))
         .route("/v1/claims/{claim_id}", get(get_claim))

@@ -868,6 +868,14 @@ token_file: /run/secrets/registry-notary-relay.jwt
 pub(super) fn valid_oid4vci_config() -> StandaloneRegistryNotaryConfig {
     let mut config = valid_subject_access_config();
     config
+        .subject_access
+        .rate_limits
+        .tx_code_attempts_per_code_per_minute = 5;
+    config
+        .evidence
+        .signing_keys
+        .insert("access-token-key".to_string(), second_signing_key());
+    config
         .evidence
         .credential_profiles
         .get_mut("civil_status_sd_jwt")
@@ -882,8 +890,6 @@ authorization_servers:
 accepted_token_audiences:
   - http://127.0.0.1:4325
 credential_endpoint: http://127.0.0.1:4325/oid4vci/credential
-offer_endpoint: http://127.0.0.1:4325/oid4vci/credential-offer
-nonce_endpoint: http://127.0.0.1:4325/oid4vci/nonce
 nonce:
   enabled: true
   ttl_seconds: 300
@@ -904,9 +910,40 @@ credential_configurations:
       - EdDSA
     cryptographic_binding_methods_supported:
       - did:jwk
+pre_authorized_code:
+  enabled: true
+  tx_code:
+    required: true
+    input_mode: numeric
+    length: 6
+  esignet:
+    client_id: registry-lab-live-client
+    client_signing_key_id: issuer-key
+    redirect_uri: http://127.0.0.1:4325/oid4vci/offer/callback
+    authorize_url: https://id.example.gov/authorize
+    token_url: https://id.example.gov/oauth/v2/token
+    issuer: https://id.example.gov
+    jwks_uri: https://id.example.gov/oauth/.well-known/jwks.json
+    scopes:
+      - openid
+  pre_authorized_code_ttl_seconds: 300
 "#,
     )
     .expect("oid4vci config is valid YAML");
+    config.auth.access_token_signing = serde_norway::from_str(
+        r#"
+enabled: true
+issuer: http://127.0.0.1:4325
+audiences:
+  - http://127.0.0.1:4325
+allowed_algorithms:
+  - EdDSA
+token_typ: registry-notary-access+jwt
+signing_key_id: access-token-key
+access_token_ttl_seconds: 300
+"#,
+    )
+    .expect("access-token signing config is valid YAML");
     config
 }
 

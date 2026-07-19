@@ -59,6 +59,8 @@ pub(super) fn subject_access_preauth_config(
     // credential endpoint still accepts eSignet tokens on the unchanged path.
     let mut config =
         subject_access_oid4vci_config(base_url, audit_path, esignet_issuer, esignet_jwks_uri);
+    config.oid4vci.offer_endpoint.clear();
+    config.oid4vci.nonce_endpoint = None;
     config.state.storage = registry_notary_core::STATE_STORAGE_IN_MEMORY.to_string();
     // The credential endpoint must be allowed to issue credentials for the
     // pre-auth happy path.

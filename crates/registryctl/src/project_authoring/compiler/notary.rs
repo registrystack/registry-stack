@@ -452,8 +452,6 @@ fn add_oid4vci_config(
         "authorization_servers": [binding.authorization_server.issuer],
         "accepted_token_audiences": [public_base_url, binding.client.id],
         "credential_endpoint": format!("{public_base_url}/oid4vci/credential"),
-        "offer_endpoint": format!("{public_base_url}/oid4vci/credential-offer"),
-        "nonce_endpoint": format!("{public_base_url}/oid4vci/nonce"),
         "nonce": { "enabled": true, "ttl_seconds": 300 },
         "authorization": { "require_pkce_method": "S256" },
         "proof": { "max_age_seconds": 300, "max_clock_skew_seconds": 30 },

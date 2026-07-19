@@ -309,11 +309,9 @@ fn endpoint_kind_from_route(route: &str) -> &'static str {
         | "/.well-known/evidence/jwks.json"
         | "/.well-known/openid-credential-issuer" => "well_known",
         "/.well-known/vct/{*vct_path}" | "/credentials/{*vct_path}" => "credential_metadata",
-        "/oid4vci/credential-offer"
-        | "/oid4vci/offer/start"
+        "/oid4vci/offer/start"
         | "/oid4vci/offer/callback"
         | "/oid4vci/token"
-        | "/oid4vci/nonce"
         | "/oid4vci/credential" => "oid4vci",
         "/v1/claims" | "/v1/claims/{claim_id}" | "/v1/formats" => "catalog",
         "/v1/evaluations" | "/v1/batch-evaluations" | "/v1/evaluations/{evaluation_id}/render" => {

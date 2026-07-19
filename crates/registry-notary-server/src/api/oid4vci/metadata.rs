@@ -18,38 +18,6 @@ pub(in crate::api) async fn oid4vci_issuer_metadata(
     }
 }
 
-pub(in crate::api) async fn oid4vci_credential_offer(
-    state: Option<Extension<Arc<RegistryNotaryApiState>>>,
-    Query(query): Query<Oid4vciCredentialOfferQuery>,
-) -> Response {
-    let Some(Extension(state)) = state else {
-        return oid4vci_error_response(Oid4vciWireError::ServerError);
-    };
-    if !state.oid4vci.enabled {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let credential_configuration_ids = if let Some(id) = query.credential_configuration_id {
-        if !state.oid4vci.credential_configurations.contains_key(&id) {
-            return oid4vci_error_response(Oid4vciWireError::InvalidRequest);
-        }
-        vec![id]
-    } else {
-        state
-            .oid4vci
-            .credential_configurations
-            .keys()
-            .cloned()
-            .collect()
-    };
-    Json(CredentialOffer::authorization_code(
-        state.oid4vci.credential_issuer.clone(),
-        credential_configuration_ids,
-        generate_nonce().unwrap_or_else(|_| "registry-notary:subject-access".to_string()),
-        state.oid4vci.authorization_servers.first().cloned(),
-    ))
-    .into_response()
-}
-
 pub(in crate::api) async fn oid4vci_type_metadata(
     state: Option<Extension<Arc<RegistryNotaryApiState>>>,
     connect_info: Option<Extension<axum::extract::ConnectInfo<SocketAddr>>>,
@@ -132,10 +100,6 @@ pub(in crate::api) fn oid4vci_type_metadata_response(
     .into_response()
 }
 
-#[derive(Debug, Deserialize)]
-pub(in crate::api) struct Oid4vciCredentialOfferQuery {
-    pub(in crate::api) credential_configuration_id: Option<String>,
-}
 pub(in crate::api) fn oid4vci_metadata(
     config: &Oid4vciConfig,
     evidence: &EvidenceConfig,
@@ -143,11 +107,9 @@ pub(in crate::api) fn oid4vci_metadata(
     let metadata = CredentialIssuerMetadata::new(
         config.credential_issuer.clone(),
         config.credential_endpoint.clone(),
-        config
-            .nonce
-            .enabled
-            .then(|| config.nonce_endpoint.clone())
-            .flatten(),
+        // The initial nonce is transaction-scoped and returned only by the
+        // token endpoint. The 1.0 profile has no public nonce endpoint.
+        None,
         config.authorization_servers.clone(),
         config
             .credential_configurations
