@@ -280,6 +280,11 @@ connects them back to the native dataset model.
 
 `GET /metadata/*` is the canonical standards-facing metadata surface. When the runtime config points at a split metadata manifest, these routes render from the compiled portable manifest and filter the compiled view to the caller's metadata scopes. They expose catalog JSON, base DCAT, application-profile DCAT, SHACL, dataset/entity metadata, evidence-offering metadata, Draft 2020-12 JSON Schemas, and link-free OGC Records bodies. Visible aggregate distributions advertise native JSON, SDMX JSON 2.1, CSV, and, for configured spatial aggregates when built with `ogcapi-edr`, the OGC EDR `/area` endpoint. They do not grant row, evidence verification, aggregate, or admin access.
 
+The link-free OGC Records bodies are stable portable metadata. They do not
+enable or stabilize the experimental live OGC API Records adapter. JSON is the
+stable aggregate representation for 1.0; CSV and SDMX-JSON aggregate output
+remain shipped, experimental, and feature-frozen.
+
 Relay-native discovery remains under `/v1/datasets` and runtime entity routes. Portable metadata consumers should use `/metadata/*` or static publication.
 
 Metadata responses include private validators for the authenticated view. Clients can send `If-None-Match`; unchanged metadata returns `304 Not Modified`. The gateway also sets `Cache-Control: private, no-store` and `Vary: Authorization` so shared caches do not reuse one principal's scoped catalog for another caller.

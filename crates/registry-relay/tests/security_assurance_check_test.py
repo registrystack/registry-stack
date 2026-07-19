@@ -94,6 +94,16 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         self.write_contracts(self.entry())
         self.module.validate_manifest()
 
+    def test_feature_gated_endpoint_must_remain_experimental(self):
+        self.write_contracts(self.entry(feature="ogcapi-features", stability="stable"))
+        with self.assertRaises(SystemExit):
+            self.module.validate_manifest()
+
+        self.write_contracts(
+            self.entry(feature="ogcapi-features", stability="experimental")
+        )
+        self.module.validate_manifest()
+
     def test_missing_route_manifest_entry_fails(self):
         self.write_contracts(self.entry(path="/other"))
         with self.assertRaises(SystemExit):

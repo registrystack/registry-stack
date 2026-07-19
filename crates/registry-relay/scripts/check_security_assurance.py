@@ -130,6 +130,11 @@ def validate_manifest() -> None:
         check_value(entry, "stability", STABILITY)
         check_value(entry, "data_classification", DATA)
         check_value(entry, "source", SOURCES)
+        if entry["feature"] is not None and entry["stability"] != "experimental":
+            fail(
+                f"{entry['path']} is feature-gated but has stability "
+                f"{entry['stability']}; the 1.0 optional surfaces are experimental"
+            )
         if entry["method"] not in {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"}:
             fail(f"{entry['path']} has invalid method {entry['method']}")
         if not isinstance(entry["scopes"], list):

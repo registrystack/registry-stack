@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Align the 1.0 standards roster with the canonical no-optional-feature release
+  build. OpenAPI and problem contracts, portable metadata, CSV and XLSX input,
+  and JSON aggregate output are stable. Optional standards adapters and the
+  shipped non-gated Parquet, CSV aggregate, and SDMX-JSON surfaces are
+  experimental and feature-frozen, outside the 1.0 compatibility promise.
+
 ## 0.11.0 - 2026-07-18
 
 - Relay now publishes a reproducible, product-owned Draft 2020-12 schema for

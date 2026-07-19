@@ -21,6 +21,26 @@ Registry Relay is an experiment toward a redesigned [GovStack](https://govstack.
 
 Standards integrations such as DCAT-AP, OGC API Records, OGC API Features, Registry Notary evidence-offering discovery, and the optional [Social Protection Digital Convergence Initiative (SP DCI)](https://spdci.org/) sync adapter are layered on top of the core gateway. [STANDARDS_ASSUMPTIONS.md](STANDARDS_ASSUMPTIONS.md) states precisely what Relay publishes versus what downstream tools may infer.
 
+## 1.0 Support Roster
+
+The canonical 1.0 release has no optional Relay Cargo features enabled. Stable
+support covers OpenAPI 3.x and RFC 9457 errors; RFC 9727 and portable DCAT,
+DCAT-AP, BRegDCAT-AP, JSON-LD, SHACL, JSON Schema, ODRL, and link-free OGC
+Records metadata; CSV and XLSX source input; and JSON aggregate output.
+
+CSV, XLSX, and Parquet are source decoders. Aggregate output supports JSON,
+CSV, and SDMX-JSON. The live OGC API Records adapter, OGC API Features, OGC API
+EDR, SP DCI routes, standards-CEL mapping, CSV and SDMX-JSON aggregate output,
+attribute release, and Parquet source input are experimental and feature-frozen.
+Experimental surfaces are outside the 1.0 compatibility promise. Feature-gated
+source and all-feature tests remain available. Non-feature-gated experimental
+formats remain shipped but unstable to avoid breaking existing configurations.
+
+The stable link-free OGC Records metadata artifacts do not enable or stabilize
+the experimental live OGC API Records adapter. The public
+[support roster](https://docs.registrystack.org/reference/standards/#registry-relay-10-support-roster)
+records the owner, evidence, decision date, and delivery rule for every surface.
+
 ## Get Started
 
 Without cloning this repository, use the Registry Docs tutorials. They create a Relay project from a sample workbook with `registryctl`, start the protected API, and run smoke checks:
