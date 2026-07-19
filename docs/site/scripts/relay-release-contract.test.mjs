@@ -140,7 +140,10 @@ test('canonical Relay release, local image, and OpenAPI use the same feature set
     ? await readFile(workflowPath, 'utf8')
     : await readRepo(workflowPath);
   const workflowRelayFeatures = new Set(
-    [...workflow.matchAll(/registry-relay\/([a-z][a-z0-9-]*)/g)].map((match) => match[1]),
+    [...workflow.matchAll(/--features\s+([^\s'"]+)/g)]
+      .flatMap((match) => match[1].split(','))
+      .filter((feature) => feature.startsWith('registry-relay/'))
+      .map((feature) => feature.slice('registry-relay/'.length)),
   );
   assert.deepEqual(
     workflowRelayFeatures,
