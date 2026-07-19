@@ -96,11 +96,6 @@ def validate_release(value: Any, label: str, *, template: bool) -> None:
         label,
         {"version", "source_commit", "relay_image_digest", "notary_image_digest"},
     )
-
-
-def version_order(value: str) -> tuple[tuple[int, int, int], bool]:
-    core, separator, _prerelease = value.removeprefix("v").partition("-")
-    return tuple(int(part) for part in core.split(".")), not bool(separator)
     bounded_string(release["version"], f"{label}.version", VERSION, template=template)
     bounded_string(release["source_commit"], f"{label}.source_commit", COMMIT, template=template)
     bounded_string(
@@ -115,6 +110,11 @@ def version_order(value: str) -> tuple[tuple[int, int, int], bool]:
         SHA256,
         template=template,
     )
+
+
+def version_order(value: str) -> tuple[tuple[int, int, int], bool]:
+    core, separator, _prerelease = value.removeprefix("v").partition("-")
+    return tuple(int(part) for part in core.split(".")), not bool(separator)
 
 
 def validate_config_schemas(value: Any, *, template: bool, root: Path) -> None:

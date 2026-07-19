@@ -83,6 +83,18 @@ class UpgradeExerciseValidatorTest(unittest.TestCase):
         with self.assertRaisesRegex(self.module.ExerciseError, "must be newer"):
             self.module.validate_record(record, allow_template=False)
 
+    def test_candidate_release_identifiers_are_strict(self) -> None:
+        for field, value in (
+            ("source_commit", "main"),
+            ("relay_image_digest", "latest"),
+            ("notary_image_digest", "latest"),
+        ):
+            with self.subTest(field=field):
+                record = self.candidate()
+                record["target_release"][field] = value
+                with self.assertRaisesRegex(self.module.ExerciseError, "invalid or unsafe"):
+                    self.module.validate_record(record, allow_template=False)
+
     def test_unknown_field_is_rejected_to_prevent_raw_evidence(self) -> None:
         record = self.candidate()
         record["results"][0]["raw_output"] = "Authorization: Bearer secret"
