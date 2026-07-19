@@ -6,6 +6,10 @@ use super::support::*;
 use super::{
     admin::*, audit::*, auth::*, credentials::*, federation::*, http_contracts::*, oid4vci::*,
 };
+#[cfg(feature = "registry-notary-cel")]
+use registry_notary_client::verifier::verify_sd_jwt_vc;
+#[cfg(feature = "registry-notary-cel")]
+use registry_notary_client::{HolderBindingPolicy, VerifyOptions};
 
 #[tokio::test]
 pub(super) async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing() {
@@ -1672,6 +1676,132 @@ pub(super) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
         "an exact retry receives the verbatim cached credential response"
     );
     idp.stop().await;
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+pub(super) async fn preauth_end_to_end_issuer_algorithms_match_metadata_and_client_verification() {
+    set_preauth_env();
+    std::env::set_var("TEST_ISSUER_ES256_JWK", TEST_ISSUER_ES256_JWK);
+
+    for (algorithm, key_env, key_id, key_material) in [
+        (
+            "EdDSA",
+            "TEST_SELF_ATTESTATION_ISSUER_JWK",
+            "issuer-key",
+            TEST_ISSUER_JWK,
+        ),
+        (
+            "ES256",
+            "TEST_ISSUER_ES256_JWK",
+            "issuer-es256-key",
+            TEST_ISSUER_ES256_JWK,
+        ),
+    ] {
+        let idp = MockIdp::start().await;
+        let token_upstream = MockHttpUpstream::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let audit_path = tmp.path().join("audit.jsonl");
+        let mut config = preauth_test_config(
+            "http://127.0.0.1:1",
+            audit_path.to_str().expect("audit path is UTF-8"),
+            &idp,
+            &token_upstream,
+        );
+        let configured_kid = if algorithm == "EdDSA" {
+            "did:web:issuer.example#key-1"
+        } else {
+            "did:web:issuer.example#p256-key-1"
+        };
+        if algorithm == "ES256" {
+            let mut key = local_jwk_signing_key(key_env, configured_kid);
+            key.alg = algorithm.to_string();
+            config.evidence.signing_keys.insert(key_id.to_string(), key);
+            config
+                .evidence
+                .credential_profiles
+                .get_mut("civil_status_sd_jwt")
+                .expect("credential profile exists")
+                .signing_key = key_id.to_string();
+        }
+        let app = standalone_router(config)
+            .await
+            .expect("standalone router builds");
+        let server = TestServer::builder().http_transport().build(app);
+
+        let metadata = server.get("/.well-known/openid-credential-issuer").await;
+        metadata.assert_status_ok();
+        let metadata: Value = metadata.json();
+        let advertised = &metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"];
+        assert_eq!(
+            advertised["credential_signing_alg_values_supported"],
+            json!([algorithm]),
+            "issuer metadata advertises exactly the configured credential algorithm"
+        );
+        assert_eq!(
+            advertised["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"],
+            json!(["EdDSA"]),
+            "holder proof stays EdDSA for both issuer algorithms"
+        );
+        assert_eq!(
+            advertised["cryptographic_binding_methods_supported"],
+            json!(["did:jwk"])
+        );
+        assert!(metadata.get("nonce_endpoint").is_none());
+
+        let page = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
+        let grants = page.offer["grants"]
+            .as_object()
+            .expect("offer grants are an object");
+        assert_eq!(
+            grants.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["urn:ietf:params:oauth:grant-type:pre-authorized_code"],
+            "the wallet-facing offer has only the pre-authorized-code grant"
+        );
+        let pin = page.pin.expect("secure-default offer includes tx_code");
+        let token = redeem_token(&server, &page.code, &pin).await;
+        token.assert_status_ok();
+        let token_body: Value = token.json();
+        let access_token = token_body["access_token"]
+            .as_str()
+            .expect("access token issued");
+        let c_nonce = token_body["c_nonce"]
+            .as_str()
+            .expect("transaction-scoped nonce issued");
+        let proof = sign_oid4vci_proof(NOTARY_ISSUER, c_nonce);
+        let credential = server
+            .post("/oid4vci/credential")
+            .add_header("authorization", format!("Bearer {access_token}"))
+            .json(&json!({
+                "format": "dc+sd-jwt",
+                "credential_configuration_id": "person_is_alive_sd_jwt",
+                "proof": { "proof_type": "jwt", "jwt": proof }
+            }))
+            .await;
+        credential.assert_status_ok();
+        let credential_body: Value = credential.json();
+        assert!(credential_body.get("c_nonce").is_none());
+        assert!(credential_body.get("c_nonce_expires_in").is_none());
+        let compact = credential_body["credential"]
+            .as_str()
+            .expect("credential issued");
+
+        let mut private = PrivateJwk::parse(key_material).expect("issuer key parses");
+        private.alg = Some(algorithm.to_string());
+        private.kid = Some(configured_kid.to_string());
+        let holder_id = holder_did_jwk();
+        let options = VerifyOptions::new("did:web:issuer.example")
+            .expected_vct("http://127.0.0.1:4325/credentials/civil-status")
+            .accepted_algorithms([algorithm])
+            .holder_binding(HolderBindingPolicy::RequiredKid(holder_id.clone()));
+        let verified = verify_sd_jwt_vc(compact, &jwks_from_private_jwk(&private), &options)
+            .expect("the Registry Notary client verifies the issued credential");
+        assert_eq!(verified.algorithm, algorithm);
+        assert_eq!(verified.key_id, configured_kid);
+        assert_eq!(verified.holder_key_id.as_deref(), Some(holder_id.as_str()));
+
+        idp.stop().await;
+    }
 }
 
 #[tokio::test]
