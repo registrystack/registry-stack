@@ -395,7 +395,7 @@ run_notary_tutorial() {
 	cd "$project_dir"
 
 	run_block 'Notary 1: Add Notary to the project' "$blocks/01.sh" success
-	assert_json_fence_subset "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Add Notary to the project' 1
+	assert_fence_lines "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Add Notary to the project' text 1
 	assert_contains "$LAST_OUTPUT" http://127.0.0.1:4255 notary/project/registry-stack.yaml
 	run_block 'Notary 2: Inspect the claim' "$blocks/02.sh" success
 	assert_fence_lines "$LAST_OUTPUT" "$NOTARY_TUTORIAL" 'Inspect the claim' yaml 1

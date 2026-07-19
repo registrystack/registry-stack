@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-14"
+last_reviewed: "2026-07-19"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -39,7 +39,8 @@ complete workflow and generated trust boundary.
 | `init --format json` | Emit the versioned machine-readable initialization report instead of the default human-readable result. |
 | `test --project-dir <dir>` | Compile and run every integration fixture through the Relay decoder and configured claim evaluator offline. Defaults to the current directory. |
 | `test --integration <id> --fixture <name>` | Select one integration fixture. `--fixture` requires `--integration`. |
-| `test --trace` | Include the safe synthetic interaction trace in the JSON report. |
+| `test --trace` | Include the safe synthetic interaction trace in the human or JSON report. |
+| `test --format json` | Emit the versioned machine-readable test report instead of the default human-readable result. |
 | `test --watch` | Rerun the selected offline scope when an authored project file changes and print a concise pass/fail summary. Cannot be combined with `--trace` or `--live`. |
 | `test --environment <name>` | Include one explicit environment binding in offline validation. |
 | `test --environment <name> --live` | After offline fixtures pass, send one governed evaluation through a deployed Notary. The environment must be explicitly non-production. |
@@ -51,16 +52,29 @@ complete workflow and generated trust boundary.
 | `authoring xw --format editor` | Print generated editor metadata for the `xw.v1` function surface. |
 | `authoring schema --kind <kind>` | Print a strict project, environment, integration, fixture, or entity JSON Schema. |
 | `authoring editor --project-dir <dir>` | Create or verify version-matched VS Code and Zed schema configuration. Defaults to the current directory. |
+| `authoring editor --format json` | Emit the versioned machine-readable editor setup report. |
 | `authoring language-server` | Run Registry Stack navigation and reference diagnostics over the Language Server Protocol on standard input and output. |
 | `build --project-dir <dir> --environment <name>` | Emit deterministic unsigned Config Bundle input directories for the products in the selected topology. |
 | `build --against <bundle> --anchor <anchor>` | Build against an explicitly verified signed baseline. Both flags are required together. |
+| `build --format json` | Emit the versioned machine-readable build report instead of the default human-readable result. |
 
-`init` prints a concise human-readable result and tailored next commands by default.
-Use `--format json` with either initialization form to emit only a `registryctl.init.v1` report on
-standard output. The JSON report contains the project identity and kind, destination,
-initialization source, and notable artifact paths. Non-watch `test` and `build` print JSON reports.
-`check` prints a human-readable review report by default and accepts `--format json` for
-automation. Watch mode prints one concise pass/fail summary per run.
+Interactive report commands print concise human-readable results by default. Add `--format json`
+when another program needs a report containing only versioned JSON on standard output. This policy
+covers `init`, `add notary`, non-watch `test`, `check`, `authoring editor`, `build`, `doctor`,
+`bundle`, and `anchor`. Watch mode prints one concise pass/fail summary per run and rejects JSON
+formatting. Artifact and protocol streams retain their native formats, including `authoring xw`,
+`authoring schema`, `authoring language-server`, and `logs`.
+
+| JSON command result | Schema version |
+| --- | --- |
+| `init` | `registryctl.init.v1` |
+| `add notary` | `registryctl.add_notary.v1` |
+| Successful `test`, `check`, or `build` | `registryctl.project_command.v1` |
+| Invalid-project `check` | `registryctl.project_diagnostics.v1` |
+| `authoring editor` | `registryctl.project_editor.v1` |
+| `doctor` | `registryctl.validation.report.v1` |
+| `bundle` or `anchor` | The operation-specific `schema_version` in the report |
+
 An initialized starter records its starter ID, Registry Stack release, and
 authored-content digest in `registry-stack.yaml`. `init` verifies that digest,
 and `check --explain` reports `matches` or `diverged` together with the current
@@ -242,12 +256,15 @@ submanifests is future work and is not emitted by the current CLI.
 | `bundle sign --instance-id <id>` | Optionally bind the bundle to one product instance. |
 | `bundle sign --sequence <n> --bundle-id <id> --out <dir>` | Set the monotonic sequence and bundle identity, then create the output directory. |
 | `bundle verify --bundle-dir <dir> --anchor-path <file>` | Verify the signed closure, signature, trust anchor, and configured identity bindings. |
+| `bundle --format json <subcommand>` | Emit the operation-specific machine-readable report. The global flag is also accepted after the subcommand. |
+| `anchor --format json <subcommand>` | Emit the versioned machine-readable trust-anchor report. The global flag is also accepted after the subcommand. |
 | `check --against <bundle> --anchor <file>` | Verify a signed baseline before calculating semantic changes. Both flags are required. |
 | `build --against <bundle> --anchor <file>` | Verify a signed baseline before producing updated unsigned inputs. Both flags are required. |
 
 `bundle inspect --bundle-dir <dir>` reports manifest and signature metadata without replacing
 verification. Trust-anchor creation and key changes use the existing `anchor` subcommands shown by
-`registryctl anchor --help`.
+`registryctl anchor --help`. Bundle and trust-anchor operations print human-readable results by
+default and accept `--format json` for automation.
 
 {/* Evidence: crates/registryctl/src/main.rs, BundleCommand and AnchorCommand. */}
 
@@ -287,6 +304,9 @@ consultation Relay and local Notary services, and generates local-only evaluator
 credentials. It refuses an existing Notary directory or a second invocation instead of
 overwriting authored work.
 
+The default result identifies the authored claim, the Notary URL available after start, and the
+next command. Add `--format json` for the `registryctl.add_notary.v1` report.
+
 `registryctl start` and `registryctl restart` validate and rebuild this add-on from the authored
 project before starting it. Registryctl validates the fixed local runtime overrides with the
 production product models and publishes one complete generated bundle, so services do not observe
@@ -314,9 +334,9 @@ Inspect commands report on a running or generated project.
 | --- | --- |
 | `open` | Open or print the local API docs URL. |
 | `logs` | Stream Compose logs for the local project. |
-| `doctor` | Run product doctor validation and print a JSON report. |
+| `doctor` | Run product doctor validation and print a human-readable diagnostic report. |
 | `doctor --profile <profile>` | Deployment profile override passed through to product doctor commands. |
-| `doctor --format <format>` | Output format. Defaults to `json`. |
+| `doctor --format json` | Emit the versioned machine-readable diagnostic report. |
 
 ## Testing
 
@@ -339,7 +359,7 @@ Smoke commands run built-in local checks and write a JSON result file.
 
 ## Update check
 
-`registryctl` checks GitHub releases at most once per day for normal human-facing commands and prints an upgrade notice to standard error when a newer release is available. It skips the automatic check in continuous integration and while running `doctor` and the explicit update-check commands, so JSON output stays quiet.
+`registryctl` checks GitHub releases at most once per day for normal human-facing commands and prints an upgrade notice to standard error when a newer release is available. It skips the automatic check in continuous integration and while running `doctor` and the explicit update-check commands, so doctor diagnostics are not accompanied by an update notice.
 
 | Subcommand | Purpose |
 | --- | --- |

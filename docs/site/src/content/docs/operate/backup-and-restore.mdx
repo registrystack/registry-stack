@@ -7,7 +7,7 @@ source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-09"
+last_reviewed: "2026-07-19"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -302,13 +302,14 @@ Start the deployment and run product checks:
 
 ```sh
 registryctl start
-registryctl doctor --profile local --format json
+registryctl doctor --profile local
 if [ -f registryctl.yaml ] && grep -q '^relay:' registryctl.yaml; then
   registryctl smoke
 fi
 ```
 
-Expected output from `doctor` is a JSON report with no `startup_fail` findings.
+The human-readable `doctor` report must contain no `startup_fail` findings. Add `--format json`
+when another program needs the versioned report.
 Run `registryctl smoke` only when `registryctl.yaml` declares Relay. For a Notary deployment,
 run `registry-notary doctor --config <your-notary-config.yaml> --format json`, then exercise an
 authenticated claim or credential journey appropriate to that deployment. `registryctl` does not

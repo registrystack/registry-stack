@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-14"
+last_reviewed: "2026-07-19"
 doc_type: tutorial
 locale: en
 standards_referenced: []
@@ -125,25 +125,23 @@ registryctl test \
   --trace
 ```
 
-The JSON report identifies the selected fixture, typed input, source call, minimized output, claim
-results, and derived security cases. Its primary fixture contains:
+The human-readable report identifies the selected fixture, typed input, source call, minimized
+output, claim results, and derived security cases. The report starts with:
 
-```json
-{
-  "integration": "person-record",
-  "fixture": "active-person",
-  "inputs": ["person_id"],
-  "calls": ["request"],
-  "outputs": ["active"],
-  "claims": ["person-active", "person-record-exists"],
-  "outcome": "match",
-  "passed": true
-}
+```text
+PASS: 7/7 fixtures passed
+  PASS person-record.active-person
+    inputs: person_id
+    calls: call=1 operation=request method=GET path=/people/* query=[fields] headers=[] body=none
+    outputs: active
+    claims: person-active, person-record-exists
+    outcome: match
 ```
 
 The same report includes derived malformed-decoding, byte-ceiling, timeout,
 authorization-before-source, and output-minimization cases. The command does not contact Registry
-Relay, Registry Notary, or a source registry.
+Relay, Registry Notary, or a source registry. Add `--format json` when another program needs the
+versioned fixture report.
 
 ## Watch the selected fixture
 
@@ -257,10 +255,10 @@ cases:
 registryctl test --project-dir registry-project
 ```
 
-The report must again contain:
+The report starts with `PASS` and states how many fixtures passed:
 
 ```text
-"status": "passed"
+PASS: <passed>/<total> fixtures passed
 ```
 
 Failures identify the authored file and fixture.
@@ -304,11 +302,15 @@ registryctl build \
   --environment local
 ```
 
-The JSON report contains:
+The human-readable report starts with the built project and output directory:
 
 ```text
-"status": "built"
+Built Registry Stack project "fictional-citizen-registry".
+  Environment: local
+  Output: registry-project/.registry-stack/build/local
 ```
+
+Add `--format json` when another program needs the versioned build report.
 
 The output root contains:
 

@@ -7,7 +7,7 @@ source_repos:
   - registry-stack
   - registry-relay
   - registry-notary
-last_reviewed: "2026-07-17"
+last_reviewed: "2026-07-19"
 doc_type: tutorial
 locale: en
 standards_referenced: []
@@ -54,16 +54,18 @@ From the `my-first-api` directory left by the first tutorial, add the local Nota
 registryctl add notary
 ```
 
-The command reports the authored claim file and local Notary URL:
+The command reports the authored claim file, local Notary URL, and next command:
 
-```json
-{
-  "status": "added",
-  "project": "my-first-api",
-  "notary_url": "http://127.0.0.1:4255",
-  "claim_file": "notary/project/registry-stack.yaml"
-}
+```text
+Added Registry Notary to "my-first-api".
+  Claim: notary/project/registry-stack.yaml
+  Notary API after start: http://127.0.0.1:4255
+
+Next:
+  registryctl start
 ```
+
+Add `--format json` when another program needs the versioned add-on report.
 
 The add-on creates an editable Registry Stack project under `notary/project/`. It also adds a
 private consultation Relay that reads the same workbook. Relay still owns registry access. Notary
