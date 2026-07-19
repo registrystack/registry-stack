@@ -105,7 +105,7 @@ The registry stack comprises four formal products. Product names are Title Case.
 
 ## 3. Metadata and standards terms
 
-**metadata manifest**: Portable `metadata.yaml` document using schema version `registry-manifest/v1` that describes datasets, entities, fields, public services, forms, requirements, policies, evidence offerings, federation metadata, evaluation profiles, and governed evidence ecosystem bindings. MUST NOT include Registry Relay runtime bindings such as source paths, table names, or scopes. Registry Stack product term.
+**metadata manifest**: Portable `metadata.yaml` document using schema version `registry-manifest/v1` that describes a registry through its catalog and defined collections. The [Registry Manifest reference](../../products/registry-manifest/reference/) is authoritative for the current top-level keys and field schemas. A metadata manifest MUST NOT include Registry Relay runtime bindings such as source paths, table names, or scopes. Registry Stack product term.
 
 **runtime binding**: Registry Relay configuration that connects logical manifest concepts to actual files, database tables, scopes, and backend credentials. Lives in Relay config, not in the manifest. Registry Stack product term.
 

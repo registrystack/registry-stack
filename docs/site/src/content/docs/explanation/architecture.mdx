@@ -67,8 +67,9 @@ updated policy documents without touching deployment config.
 ## Data and contract flow
 
 1. Registry Platform provides reusable security and operational primitives consumed by runtime services.
-2. A metadata manifest (`registry-manifest/v1` schema) describes datasets, entities, fields, policies,
-   and evidence offerings.
+2. A metadata manifest (`registry-manifest/v1` schema) describes a registry through its catalog and
+   defined collections. The [Registry Manifest reference](../../products/registry-manifest/reference/)
+   is authoritative for the current top-level keys and field schemas.
 3. Registry Manifest compiles and validates the manifest, then renders a static discovery bundle
    (catalog, DCAT, BRegDCAT-AP, CPSV-AP, SHACL, JSON Schemas, OGC Records item collection,
    policies, evidence-offering metadata, embedded codelist metadata, and an `index.json`).

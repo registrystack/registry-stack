@@ -145,7 +145,7 @@ Product names are always in English, including on future translated pages.
   <dd>JSON-based linked data format. W3C recommendation (JSON-LD 1.1). Used for catalog, policy, and CCCEV render output.</dd>
 
   <dt>metadata manifest</dt>
-  <dd>Portable `metadata.yaml` document (schema version `registry-manifest/v1`) that describes datasets, entities, fields, public services, forms, requirements, policies, evidence offerings, federation metadata, evaluation profiles, and governed evidence ecosystem bindings. Must not include Relay runtime bindings such as source paths, table names, or scopes.</dd>
+  <dd>Portable `metadata.yaml` document (schema version `registry-manifest/v1`) that describes a registry through its catalog and defined collections. The <a href="../../products/registry-manifest/reference/">Registry Manifest reference</a> is authoritative for the current top-level keys and field schemas. Must not include Relay runtime bindings such as source paths, table names, or scopes.</dd>
 
   <dt>measures</dt>
   <dd>The configured numeric computations in a Registry Relay aggregate definition (renamed from `indicators`). Each measure has an `id`, a label, an aggregation method (`count`, `sum`, `average`, among others), and a source column. Returned in the `AggregateResult.measures` field alongside `observations`. See also: `observations`.</dd>
