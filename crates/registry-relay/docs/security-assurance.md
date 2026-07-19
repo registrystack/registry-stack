@@ -9,8 +9,9 @@ signatures for the container image itself. Final deployments should pin the
 selected image by digest.
 
 A release is gated on zero unreviewed `zizmor` findings at severity `high` or
-above, zero unreviewed Grype image findings at severity `critical` or above,
-and no expired reviewed advisory-baseline entry. Route exposure waivers, when
+above, zero fixable Grype image findings at any severity, zero unreviewed Grype
+image findings at severity `high` or above, and no expired reviewed
+advisory-baseline entry. Route exposure waivers, when
 present, live on the affected `security/exposure-manifest.json` entry so the
 review context stays with the route. GitHub Actions use major-version pins for
 well-known maintained actions, with `zizmor`, the reviewed advisory baseline,
@@ -45,6 +46,15 @@ the same new builder digest and lockfiles, comparing the generated
 with the retired builder. The exact pushed candidate still needs its normal
 digest-bound SBOM, Grype, release-capsule, and standalone implementer evidence.
 
+The Debian 13 migration check on July 19, 2026 scanned a structural Relay image
+with the pinned final base and placeholder binaries. It found the non-fixable
+Debian 13 `libc6` findings CVE-2026-5450 (Critical), CVE-2026-5928 (High), and
+CVE-2026-5435 (High). No risk dispositions are recorded for these findings, so
+a candidate that still reports them remains blocked. This structural scan only
+supports removal of the retired Debian 12 exception. The scan of the exact
+pushed image, including the real Relay and worker binaries, supersedes it for
+release decisions.
+
 For each candidate, execute the image with a read-only root filesystem and only
 the documented cache, data, and audit mounts writable. Confirm that the Relay
 binary and Rhai worker run as `65532:65532`, CA roots support an HTTPS discovery
@@ -58,9 +68,10 @@ to the exact candidate digest; the source checks do not substitute for them.
   no separate `security/waivers.yml` in this repository; deployment-gate waivers
   are runtime configuration and surface through the admin posture document.
 - Reviewed advisory ratchets: [`security/advisory-baseline.json`](../security/advisory-baseline.json).
-  Each reviewed entry names a fingerprint, owner, reason, review date, and
-  expiration date. Stale reviewed entries are reported so the baseline can
-  shrink after the underlying issue is fixed.
+  Fixable Grype findings block at every severity and cannot be dispositioned.
+  Each reviewed High or Critical entry names a matching rule and severity,
+  owner, reason, review date, and expiration date. Stale reviewed entries are
+  reported so the baseline can shrink after the underlying issue is fixed.
 - Unauthenticated endpoint allowlist: [`security/auth-none-allowlist.yml`](../security/auth-none-allowlist.yml).
   Additions require maintainer review through [CODEOWNERS](../CODEOWNERS).
 - GitHub Actions pinning: most workflows pin well-known maintained actions to
