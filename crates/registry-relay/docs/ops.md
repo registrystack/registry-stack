@@ -132,7 +132,8 @@ checklist carry a one-line note.
 
 ### Container runtime policy
 
-- [ ] Production images use the `Dockerfile` (distroless `cc-debian12:nonroot`,
+- [ ] Production images use the `Dockerfile` (Distroless
+  `cc-debian13:nonroot`,
   UID/GID `65532:65532`). `Dockerfile.demo` is not used as production runtime
   evidence.
 - [ ] No shell, package manager, `curl`, or `wget` dependencies are present in
@@ -141,6 +142,10 @@ checklist carry a one-line note.
   by UID/GID `65532:65532`. See [Deployment model](#deployment-model).
 - [ ] TLS client behavior is verified after any base-image change by exercising
   an HTTPS OIDC JWKS/discovery path or a PostgreSQL TLS connection.
+- [ ] The container starts with a read-only root filesystem after writable
+  cache, data, and audit paths are mounted explicitly; both the Relay process
+  and `registry-relay-rhai-worker` execute as UID/GID `65532:65532`, and
+  readiness succeeds with the intended configuration and CA roots.
 
 ### Readiness gates
 

@@ -17,6 +17,40 @@ well-known maintained actions, with `zizmor`, the reviewed advisory baseline,
 and code review enforcing least-privilege permissions and safe event handling
 instead of a blanket SHA-only pin policy.
 
+## Container base lifecycle
+
+Maintained Relay builders and final images use Debian 13. Final production and
+demo images use the shell-free Distroless `cc-debian13:nonroot` base and run as
+UID/GID `65532:65532`. Debian 13 receives full Debian support through August 9,
+2028 and LTS through June 30, 2030. Registry Stack must select a successor base
+before the applicable support window ends. The upstream lifecycle is recorded
+at <https://www.debian.org/releases/trixie/>.
+
+All upstream bases are pinned to multi-architecture image-index digests. An
+immutable digest makes a build input repeatable, but it does not make that input
+perpetually current. Release operators refresh the Rust builder, preparation,
+and Distroless digests together before each release candidate and whenever an
+upstream security update or scan finding requires it. Run the repository gate
+after every refresh:
+
+```sh
+python3 release/scripts/check-debian13-images.py
+```
+
+Changing the builder OS intentionally changes the release build input and may
+change linked binary bytes even when Rust sources and the Rust toolchain version
+do not change. Repeatability is therefore established by two clean builds with
+the same new builder digest and lockfiles, comparing the generated
+`dist/image-bin/SHA256SUMS`; it is not established by matching hashes produced
+with the retired builder. The exact pushed candidate still needs its normal
+digest-bound SBOM, Grype, release-capsule, and standalone implementer evidence.
+
+For each candidate, execute the image with a read-only root filesystem and only
+the documented cache, data, and audit mounts writable. Confirm that the Relay
+binary and Rhai worker run as `65532:65532`, CA roots support an HTTPS discovery
+or PostgreSQL TLS journey, and readiness succeeds. These runtime results belong
+to the exact candidate digest; the source checks do not substitute for them.
+
 ## Repository controls you can audit
 
 - Route exposure waivers: [`security/exposure-manifest.json`](../security/exposure-manifest.json).
