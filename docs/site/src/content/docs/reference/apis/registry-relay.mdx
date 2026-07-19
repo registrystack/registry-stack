@@ -74,7 +74,8 @@ For setup steps, scope strings, and credential configuration, see
 - **Admin routes.** Reload and metrics routes are mounted on a separate, optional admin listener,
   require `registry_relay:admin` for reload/config mutation, `registry_relay:metrics_read` for
   metrics, and `registry_relay:ops_read` for operational posture reads. They do not appear in the
-  public OpenAPI document.
+  public OpenAPI document. [RS-OP-POSTURE](../../spec/rs-op-posture/) defines the versioned
+  posture document returned by `GET /admin/v1/posture`.
 - **Evidence-offering discovery.** Relay publishes evidence-offering metadata at
   `GET /metadata/evidence-offerings` and `GET /metadata/evidence-offerings/{offering_id}`.
   These routes describe where to reach a Notary for verification; Relay does not execute the

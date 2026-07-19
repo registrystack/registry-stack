@@ -12,6 +12,18 @@
     "consumer_note": "Relay, Notary, and future registry services should consume these primitives instead of reimplementing security or operational behavior locally."
   },
   {
+    "id": "registry-platform.ops-posture-v1",
+    "name": "Registry Ops Posture v1",
+    "owner": "registry-platform",
+    "status": "current-source",
+    "surface": "Versioned JSON Schema for protected Registry Relay and Registry Notary operations posture observations, including the shared envelope, component sections, default and restricted sensitivity tiers, deployment findings, audit state, and standards-artifact references.",
+    "source_of_truth": {
+      "label": "Registry Ops Posture v1 JSON Schema",
+      "url": "https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/schemas/registry.ops.posture.v1.schema.json"
+    },
+    "consumer_note": "Validate every document against `registry.ops.posture.v1` before use. The schema is closed: every post-1.0 shape change, including an additive field, requires a new schema identifier. Use the default tier for the emit-only allowlisted projection; restricted output remains protected operational data."
+  },
+  {
     "id": "registry-relay.openapi",
     "name": "Registry Relay OpenAPI",
     "owner": "registry-relay",

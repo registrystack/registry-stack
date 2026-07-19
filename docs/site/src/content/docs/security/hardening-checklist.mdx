@@ -138,7 +138,9 @@ or the [Registry Notary operator configuration reference](../../products/registr
   YAML file trips `relay.config.unsigned` / `notary.config.unsigned` and the process refuses to
   start.
 - Review `GET /admin/v1/posture` regularly. It reports the declared profile, active findings, and
-  active waivers, so the deployment's actual state is inspectable rather than asserted.
+  active waivers, so the deployment's actual state is inspectable rather than asserted. Read
+  [RS-OP-POSTURE](../../spec/rs-op-posture/) before building operational tooling around its
+  default or restricted tier.
 - Give every waiver a non-empty, non-secret reason and a mandatory expiry date. `startup_fail`
   gates are never waivable; a waiver naming one is rejected. Waiver reasons appear only in the
   restricted posture tier.
@@ -169,6 +171,8 @@ or the [Registry Notary operator configuration reference](../../products/registr
   expected for a deliberately unmet `startup_fail` gate).
 - Query `GET /admin/v1/posture` and read the `deployment` object: confirm the profile matches what
   you declared, and that no unwaived finding at or above your profile's threshold is outstanding.
+  Validate the response as [RS-OP-POSTURE](../../spec/rs-op-posture/) before an automated check
+  acts on it.
 - Send a request that should be audited and confirm a corresponding record lands in your configured
   sink, not only `stdout`.
 - Attempt an admin-listener request from outside the private network it is meant to be bound to,
