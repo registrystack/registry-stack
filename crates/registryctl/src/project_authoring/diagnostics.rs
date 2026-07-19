@@ -1073,7 +1073,7 @@ fn diagnostic_parse_yaml<T: for<'de> Deserialize<'de>>(
     kind: &'static str,
     schema_hint: &'static str,
 ) -> DiagnosticResult<T> {
-    serde_yaml::from_slice(bytes).map_err(|error| {
+    serde_norway::from_slice(bytes).map_err(|error| {
         let unknown_field = error.to_string().contains("unknown field");
         let location = error.location();
         Box::new(ProjectAuthoringDiagnostic {
@@ -1084,8 +1084,8 @@ fn diagnostic_parse_yaml<T: for<'de> Deserialize<'de>>(
             },
             file: file.to_string(),
             field: None,
-            line: location.as_ref().map(serde_yaml::Location::line),
-            column: location.as_ref().map(serde_yaml::Location::column),
+            line: location.as_ref().map(serde_norway::Location::line),
+            column: location.as_ref().map(serde_norway::Location::column),
             schema_hint: Some(schema_hint),
             suggestion: None,
             cause: if unknown_field {

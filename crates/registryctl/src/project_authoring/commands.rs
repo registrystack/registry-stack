@@ -823,17 +823,17 @@ fn apply_local_tutorial_runtime_overrides(compiled: &mut CompiledProject) -> Res
         .notary_private
         .get_mut(Path::new("config/notary.yaml"))
         .ok_or_else(|| anyhow!("generated local Notary config is absent"))?;
-    let mut notary_config: serde_yaml::Value = serde_yaml::from_slice(notary)
+    let mut notary_config: serde_norway::Value = serde_norway::from_slice(notary)
         .context("generated local Notary config did not parse")?;
     notary_config["server"]["bind"] =
-        serde_yaml::Value::String("0.0.0.0:8081".to_string());
-    notary_config["state"] = serde_yaml::from_str("storage: in_memory\n")?;
-    notary_config["evidence"]["signing_keys"] = serde_yaml::from_str(&format!(
+        serde_norway::Value::String("0.0.0.0:8081".to_string());
+    notary_config["state"] = serde_norway::from_str("storage: in_memory\n")?;
+    notary_config["evidence"]["signing_keys"] = serde_norway::from_str(&format!(
         "relay-workload:\n  provider: local_jwk_env\n  private_jwk_env: {}\n  alg: EdDSA\n  kid: {}\n  status: active\n",
         super::NOTARY_RELAY_WORKLOAD_JWK_ENV,
         super::NOTARY_RELAY_WORKLOAD_KID,
     ))?;
-    *notary = serde_yaml::to_string(&notary_config)
+    *notary = serde_norway::to_string(&notary_config)
         .context("failed to render local Notary config")?
         .into_bytes()
         .into_boxed_slice();
@@ -842,15 +842,15 @@ fn apply_local_tutorial_runtime_overrides(compiled: &mut CompiledProject) -> Res
         .relay_private
         .get_mut(Path::new("config/relay.yaml"))
         .ok_or_else(|| anyhow!("generated local consultation Relay config is absent"))?;
-    let mut relay_config: serde_yaml::Value = serde_yaml::from_slice(relay)
+    let mut relay_config: serde_norway::Value = serde_norway::from_slice(relay)
         .context("generated local consultation Relay config did not parse")?;
     relay_config["server"]["bind"] =
-        serde_yaml::Value::String("0.0.0.0:8082".to_string());
+        serde_norway::Value::String("0.0.0.0:8082".to_string());
     relay_config["auth"]["oidc"]["allow_dev_insecure_fetch_urls"] =
-        serde_yaml::Value::Bool(true);
+        serde_norway::Value::Bool(true);
     relay_config["consultation"]["state_plane"]["root_certificate_path"] =
-        serde_yaml::Value::String("/run/registry-tls/state-plane-ca.pem".to_string());
-    *relay = serde_yaml::to_string(&relay_config)
+        serde_norway::Value::String("/run/registry-tls/state-plane-ca.pem".to_string());
+    *relay = serde_norway::to_string(&relay_config)
         .context("failed to render local consultation Relay config")?
         .into_bytes()
         .into_boxed_slice();

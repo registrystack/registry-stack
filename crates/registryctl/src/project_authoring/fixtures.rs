@@ -649,7 +649,7 @@ fn evaluate_product_claims(
         .notary_private
         .get(Path::new("config/notary.yaml"))
         .ok_or_else(|| anyhow!("generated Notary config is absent"))?;
-    let notary_config: StandaloneRegistryNotaryConfig = serde_yaml::from_slice(notary_config)
+    let notary_config: StandaloneRegistryNotaryConfig = serde_norway::from_slice(notary_config)
         .context("generated Notary config did not parse for offline evaluation")?;
     let harness =
         OfflineNotaryHarness::compile(notary_config, relay_evidence, project_cel_worker_config()?)

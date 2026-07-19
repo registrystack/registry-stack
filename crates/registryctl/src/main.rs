@@ -1738,7 +1738,7 @@ mod tests {
 
         let manifest_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let repository_root = manifest_root.join("../..");
-        let catalog: serde_yaml::Value = serde_yaml::from_slice(
+        let catalog: serde_norway::Value = serde_norway::from_slice(
             &std::fs::read(manifest_root.join("tests/fixtures/project-authoring-journeys.yaml"))
                 .expect("project-authoring journey catalog reads"),
         )
@@ -1779,7 +1779,7 @@ mod tests {
                     .as_str()
                     .expect("catalog workspace source"),
             );
-            let project: serde_yaml::Value = serde_yaml::from_slice(
+            let project: serde_norway::Value = serde_norway::from_slice(
                 &std::fs::read(source.join("registry-stack.yaml")).expect("catalog project reads"),
             )
             .expect("catalog project parses");
@@ -1799,9 +1799,10 @@ mod tests {
                 .expect("integration directory")
                 .join("fixtures")
                 .join(fixture_file);
-            let fixture: serde_yaml::Value =
-                serde_yaml::from_slice(&std::fs::read(fixture_path).expect("watch fixture reads"))
-                    .expect("watch fixture parses");
+            let fixture: serde_norway::Value = serde_norway::from_slice(
+                &std::fs::read(fixture_path).expect("watch fixture reads"),
+            )
+            .expect("watch fixture parses");
             journeys.push((
                 id,
                 starter,

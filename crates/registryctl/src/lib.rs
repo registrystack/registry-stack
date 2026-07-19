@@ -1637,7 +1637,7 @@ fn relay_doctor_config_path(
 
     let raw = fs::read_to_string(&config_path)
         .with_context(|| format!("failed to read {}", config_path.display()))?;
-    let mut value: serde_yaml::Value = serde_yaml::from_str(&raw)
+    let mut value: serde_norway::Value = serde_norway::from_str(&raw)
         .with_context(|| format!("failed to parse {}", config_path.display()))?;
 
     if let Some(metadata) = &relay.metadata {
@@ -1653,18 +1653,19 @@ fn relay_doctor_config_path(
     fs::create_dir_all(&output_dir)
         .with_context(|| format!("failed to create {}", output_dir.display()))?;
     let doctor_config = output_dir.join("relay.config.yaml");
-    let rendered = serde_yaml::to_string(&value).context("failed to render Relay doctor config")?;
+    let rendered =
+        serde_norway::to_string(&value).context("failed to render Relay doctor config")?;
     write_text(doctor_config.clone(), &rendered)?;
     Ok(doctor_config)
 }
 
-fn set_yaml_path_string(value: &mut serde_yaml::Value, path: &[&str], replacement: String) {
+fn set_yaml_path_string(value: &mut serde_norway::Value, path: &[&str], replacement: String) {
     let mut current = value;
     for segment in &path[..path.len().saturating_sub(1)] {
-        let serde_yaml::Value::Mapping(map) = current else {
+        let serde_norway::Value::Mapping(map) = current else {
             return;
         };
-        let key = serde_yaml::Value::String((*segment).to_string());
+        let key = serde_norway::Value::String((*segment).to_string());
         let Some(next) = map.get_mut(&key) else {
             return;
         };
@@ -1673,21 +1674,21 @@ fn set_yaml_path_string(value: &mut serde_yaml::Value, path: &[&str], replacemen
     let Some(last) = path.last() else {
         return;
     };
-    if let serde_yaml::Value::Mapping(map) = current {
+    if let serde_norway::Value::Mapping(map) = current {
         map.insert(
-            serde_yaml::Value::String((*last).to_string()),
-            serde_yaml::Value::String(replacement),
+            serde_norway::Value::String((*last).to_string()),
+            serde_norway::Value::String(replacement),
         );
     }
 }
 
 fn rewrite_relay_container_data_paths(
-    value: &mut serde_yaml::Value,
+    value: &mut serde_norway::Value,
     project_dir: &Path,
     relay: &ProjectRelay,
 ) {
     match value {
-        serde_yaml::Value::String(text) => {
+        serde_norway::Value::String(text) => {
             const PREFIX: &str = "/var/lib/registry-relay/data/";
             if let Some(relative) = text.strip_prefix(PREFIX) {
                 let host_path = relay
@@ -1699,12 +1700,12 @@ fn rewrite_relay_container_data_paths(
                 *text = project_dir.join(host_path).display().to_string();
             }
         }
-        serde_yaml::Value::Sequence(items) => {
+        serde_norway::Value::Sequence(items) => {
             for item in items {
                 rewrite_relay_container_data_paths(item, project_dir, relay);
             }
         }
-        serde_yaml::Value::Mapping(map) => {
+        serde_norway::Value::Mapping(map) => {
             for value in map.values_mut() {
                 rewrite_relay_container_data_paths(value, project_dir, relay);
             }
@@ -2006,7 +2007,7 @@ pub fn add_notary_to_project(
             claim_file: PathBuf::from(NOTARY_CLAIM_FILE),
             workload_token: PathBuf::from(NOTARY_RELAY_TOKEN_PATH),
         });
-        let manifest = serde_yaml::to_string(&project)
+        let manifest = serde_norway::to_string(&project)
             .context("failed to render registryctl manifest with Notary")?;
         write_text(project_dir.join("registryctl.yaml"), &manifest)?;
         Ok(())
@@ -2308,38 +2309,38 @@ fn merge_notary_compose(project_dir: &Path, image_lock: &RegistryctlImageLock) -
     let path = project_dir.join("compose.yaml");
     let contents =
         fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
-    let mut compose: serde_yaml::Value = serde_yaml::from_str(&contents)
+    let mut compose: serde_norway::Value = serde_norway::from_str(&contents)
         .with_context(|| format!("failed to parse {}", path.display()))?;
     let fragment = include_str!("templates/notary_addon/compose-fragment.yaml.tmpl")
         .replace("{{relay_image}}", image_lock.relay_image())
         .replace("{{notary_image}}", image_lock.notary_image());
-    let fragment: serde_yaml::Value =
-        serde_yaml::from_str(&fragment).context("failed to parse Notary Compose fragment")?;
+    let fragment: serde_norway::Value =
+        serde_norway::from_str(&fragment).context("failed to parse Notary Compose fragment")?;
     merge_yaml_mapping(&mut compose, &fragment, "services")?;
     merge_yaml_mapping(&mut compose, &fragment, "volumes")?;
     merge_yaml_mapping(&mut compose, &fragment, "networks")?;
-    let rendered = serde_yaml::to_string(&compose).context("failed to render Compose file")?;
+    let rendered = serde_norway::to_string(&compose).context("failed to render Compose file")?;
     write_text(path, &format!("# Generated by registryctl.\n{rendered}"))
 }
 
 fn merge_yaml_mapping(
-    target: &mut serde_yaml::Value,
-    source: &serde_yaml::Value,
+    target: &mut serde_norway::Value,
+    source: &serde_norway::Value,
     key: &str,
 ) -> Result<()> {
     let target_root = target
         .as_mapping_mut()
         .ok_or_else(|| anyhow!("Compose document must be a mapping"))?;
-    let yaml_key = serde_yaml::Value::String(key.to_owned());
+    let yaml_key = serde_norway::Value::String(key.to_owned());
     if !target_root.contains_key(&yaml_key) {
         target_root.insert(
             yaml_key.clone(),
-            serde_yaml::Value::Mapping(serde_yaml::Mapping::new()),
+            serde_norway::Value::Mapping(serde_norway::Mapping::new()),
         );
     }
     let target_mapping = target_root
         .get_mut(&yaml_key)
-        .and_then(serde_yaml::Value::as_mapping_mut)
+        .and_then(serde_norway::Value::as_mapping_mut)
         .ok_or_else(|| anyhow!("Compose {key} must be a mapping"))?;
     let source_mapping = source[key]
         .as_mapping()
@@ -3174,7 +3175,7 @@ impl Project {
         let path = project_dir.join("registryctl.yaml");
         let contents = fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", path.display()))?;
-        serde_yaml::from_str(&contents)
+        serde_norway::from_str(&contents)
             .with_context(|| format!("failed to parse {}", path.display()))
     }
 }
@@ -3447,7 +3448,7 @@ fn validate_config_api_key_fingerprints(
 ) -> Result<()> {
     let config = fs::read_to_string(config_path)
         .with_context(|| format!("failed to read {}", config_path.display()))?;
-    let config: serde_yaml::Value = serde_yaml::from_str(&config)
+    let config: serde_norway::Value = serde_norway::from_str(&config)
         .with_context(|| format!("failed to parse {}", config_path.display()))?;
     let api_keys = config["auth"]["api_keys"]
         .as_sequence()
@@ -3639,7 +3640,7 @@ fn registryctl_manifest(dir: &Path, image_lock: &RegistryctlImageLock) -> Result
             output_dir: "output",
         },
     };
-    serde_yaml::to_string(&manifest).context("failed to render registryctl manifest")
+    serde_norway::to_string(&manifest).context("failed to render registryctl manifest")
 }
 
 fn generated_project_name(dir: &Path) -> String {
@@ -3980,7 +3981,7 @@ mod tests {
 
     use registry_config_report::REGISTRYCTL_VALIDATION_REPORT_SCHEMA_V1;
     use serde_json::Value as JsonValue;
-    use serde_yaml::Value;
+    use serde_norway::Value;
     use tempfile::TempDir;
 
     use super::*;
@@ -4536,9 +4537,9 @@ mod tests {
         assert!(config_text.contains("# Tables describe the source workbook."));
         assert!(config_text.contains("# Aggregates expose predeclared grouped statistics."));
         assert!(config_text.contains("# Entities are API projections."));
-        let config: Value = serde_yaml::from_str(&config_text).unwrap();
+        let config: Value = serde_norway::from_str(&config_text).unwrap();
         let manifest: Value =
-            serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
+            serde_norway::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
                 .unwrap();
         let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
         assert!(config.get("metadata").is_none());
@@ -4648,7 +4649,7 @@ mod tests {
             assert!(project.join(path).is_file(), "{path} should exist");
         }
         let manifest: Value =
-            serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
+            serde_norway::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
                 .unwrap();
         assert_eq!(manifest["runtime"]["notary_base_url"], NOTARY_BASE_URL);
         assert_eq!(manifest["notary"]["claim_file"], NOTARY_CLAIM_FILE);
@@ -4668,7 +4669,7 @@ mod tests {
         assert_private_file(&project, CONSULTATION_RELAY_CONFIG_PATH);
         assert_notary_runtime_input_owners_match_project(&project);
         let compose_text = fs::read_to_string(project.join("compose.yaml")).unwrap();
-        let compose: Value = serde_yaml::from_str(&compose_text).unwrap();
+        let compose: Value = serde_norway::from_str(&compose_text).unwrap();
         let services = &compose["services"];
         let runtime_user =
             "${REGISTRY_STACK_RUNTIME_UID:-65532}:${REGISTRY_STACK_RUNTIME_GID:-65532}";
@@ -4781,11 +4782,11 @@ mod tests {
         let notary_config_text = fs::read_to_string(project.join(NOTARY_CONFIG_PATH)).unwrap();
         assert!(notary_config_text.contains("person-registration-accepted"));
         assert!(notary_config_text.contains("pending"));
-        let notary_config: Value = serde_yaml::from_str(&notary_config_text).unwrap();
+        let notary_config: Value = serde_norway::from_str(&notary_config_text).unwrap();
         assert_eq!(notary_config["state"]["storage"], "in_memory");
         assert!(notary_config["evidence"]["credential_profiles"]
             .as_mapping()
-            .is_some_and(serde_yaml::Mapping::is_empty));
+            .is_some_and(serde_norway::Mapping::is_empty));
         let claims = notary_config["evidence"]["claims"].as_sequence().unwrap();
         assert!(!claims.is_empty());
         assert!(claims
@@ -4949,7 +4950,7 @@ mod tests {
         init_spreadsheet_api(&project, Sample::Benefits, &test_image_lock()).unwrap();
 
         let manifest: Value =
-            serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
+            serde_norway::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
                 .unwrap();
         let compose = fs::read_to_string(project.join("compose.yaml")).unwrap();
 
@@ -5008,7 +5009,7 @@ mod tests {
         Project::load(&project).unwrap();
 
         let manifest: Value =
-            serde_yaml::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
+            serde_norway::from_str(&fs::read_to_string(project.join("registryctl.yaml")).unwrap())
                 .unwrap();
         let products = manifest["project"]["products"]
             .as_sequence()
@@ -5182,7 +5183,7 @@ mod tests {
 
         let env = fs::read_to_string(project.join("secrets/local.env")).unwrap();
         let config = fs::read_to_string(project.join("relay/config.yaml")).unwrap();
-        let config_yaml: Value = serde_yaml::from_str(&config).unwrap();
+        let config_yaml: Value = serde_norway::from_str(&config).unwrap();
         assert_eq!(config_yaml["server"]["openapi_requires_auth"], false);
         assert!(!config.contains("commitment:"));
 

@@ -72,6 +72,10 @@ Git dependencies require an immutable commit pin, a rationale, and a documented
 review trigger. Crosswalk's current pin rationale lives in
 [`external/README.md`](external/README.md).
 
+For new Rust YAML parsing or serialization, use the workspace-pinned
+`serde_norway` dependency. Do not introduce a direct `serde_yaml` dependency
+without an approved compatibility or security rationale.
+
 ## Scope
 
 Keep changes focused on the owning area:

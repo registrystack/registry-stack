@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Registryctl now uses the workspace-pinned `serde_norway` YAML parser and
+  serializer, consistent with the supported configuration boundary used by
+  Relay and Notary.
+
 ## [0.11.0] - 2026-07-18
 
 ### Added

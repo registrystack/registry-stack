@@ -1338,7 +1338,7 @@ mod notary_compiler_tests {
 
     #[test]
     fn compiler_rejects_source_free_credential_profiles_without_project_validation() {
-        let project: RegistryProject = serde_yaml::from_str(
+        let project: RegistryProject = serde_norway::from_str(
             r#"version: 1
 registry: { id: compiler-boundary-test }
 services:
