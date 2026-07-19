@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
@@ -238,6 +240,7 @@ class IntegrationE2RunnerTest(unittest.TestCase):
             "teardown": {
                 "attempted": True,
                 "status": "completed",
+                "started_at": "2026-07-19T01:01:59Z",
                 "duration_ms": 1000,
                 "completed_at": "2026-07-19T01:02:00Z",
                 "evidence_sha256": hash_value,
@@ -279,6 +282,7 @@ class IntegrationE2RunnerTest(unittest.TestCase):
         plan = self.module.plan_document(profile)
         self.assertFalse(plan["candidate_evidence"])
         self.assertEqual("planned_not_executed", plan["status"])
+        self.assertEqual("approved_operator_wrapper", plan["executor"])
         self.assertIn("OPENCRVS_CLIENT_SECRET", plan["required_input_names"])
         self.assertEqual(
             self.module.CASE_IDS, tuple(case["id"] for case in plan["cases"])
@@ -298,6 +302,95 @@ class IntegrationE2RunnerTest(unittest.TestCase):
         metadata = self.candidate_metadata(candidate)
         self.assertEqual(self.relay, metadata["relay_image"])
         self.assertEqual(self.commit, metadata["source_commit"])
+
+    def test_authenticity_precedes_candidate_binary_execution(self) -> None:
+        candidate = self.make_candidate()
+        events = []
+
+        def authenticate(_directory, _tag):
+            events.append("authenticated")
+
+        def execute(*_args, **_kwargs):
+            self.assertEqual(["authenticated"], events)
+            events.append("executed")
+            return self.binary_result()
+
+        self.module.verify_candidate_assets(
+            candidate,
+            self.tag,
+            authenticate=authenticate,
+            binary_runner=execute,
+        )
+        self.assertEqual(["authenticated", "executed"], events)
+
+    def test_authenticity_failure_prevents_candidate_binary_execution(self) -> None:
+        candidate = self.make_candidate()
+        events = []
+
+        def reject_authenticity(_directory, _tag):
+            events.append("authenticity-rejected")
+            raise self.module.RunnerError("invalid signature fixture")
+
+        def execute(*_args, **_kwargs):
+            events.append("executed")
+            return self.binary_result()
+
+        with self.assertRaisesRegex(self.module.RunnerError, "invalid signature"):
+            self.module.verify_candidate_assets(
+                candidate,
+                self.tag,
+                authenticate=reject_authenticity,
+                binary_runner=execute,
+            )
+        self.assertEqual(["authenticity-rejected"], events)
+
+    def test_subject_change_during_authenticity_prevents_binary_execution(self) -> None:
+        candidate = self.make_candidate()
+        binary = candidate / f"registryctl-{self.tag}-linux-amd64"
+        events = []
+
+        def mutate_during_authenticity(_directory, _tag):
+            binary.write_bytes(b"changed-after-passive-checks")
+            events.append("mutated")
+
+        def execute(*_args, **_kwargs):
+            events.append("executed")
+            return self.binary_result()
+
+        with self.assertRaisesRegex(self.module.RunnerError, "changed during"):
+            self.module.verify_candidate_assets(
+                candidate,
+                self.tag,
+                authenticate=mutate_during_authenticity,
+                binary_runner=execute,
+            )
+        self.assertEqual(["mutated"], events)
+
+    def test_late_passive_binding_failure_prevents_binary_execution(self) -> None:
+        candidate = self.make_candidate()
+        capsule_path = candidate / f"registry-stack-{self.tag}-release-capsule.json"
+        capsule = json.loads(capsule_path.read_text(encoding="utf-8"))
+        capsule["images"][1]["digest_ref"] = (
+            "ghcr.io/registrystack/registry-notary@sha256:" + "9" * 64
+        )
+        self.write_json(capsule_path, capsule)
+        events = []
+
+        def authenticate(_directory, _tag):
+            events.append("authenticated")
+
+        def execute(*_args, **_kwargs):
+            events.append("executed")
+            return self.binary_result()
+
+        with self.assertRaisesRegex(self.module.RunnerError, "capsule images"):
+            self.module.verify_candidate_assets(
+                candidate,
+                self.tag,
+                authenticate=authenticate,
+                binary_runner=execute,
+            )
+        self.assertEqual([], events)
 
     def test_candidate_rejects_an_unexpected_asset(self) -> None:
         candidate = self.make_candidate()
@@ -356,6 +449,43 @@ class IntegrationE2RunnerTest(unittest.TestCase):
                 for command in cosign_commands
             )
         )
+
+    def test_cli_rejects_symlink_candidate_directory_before_normalization(self) -> None:
+        candidate = self.make_candidate()
+        candidate_link = self.root / "candidate-link"
+        candidate_link.symlink_to(candidate, target_is_directory=True)
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            status = self.module.main(
+                [
+                    "validate",
+                    "--candidate-dir",
+                    str(candidate_link),
+                    "--tag",
+                    self.tag,
+                ]
+            )
+        self.assertEqual(1, status)
+        self.assertIn("non-symlink directory", stderr.getvalue())
+
+    def test_json_const_does_not_accept_integer_for_true(self) -> None:
+        with self.assertRaisesRegex(self.module.RunnerError, "must equal True"):
+            self.module.validate_against_schema(1, {"const": True}, {})
+
+    def test_json_boolean_enum_does_not_accept_integer(self) -> None:
+        with self.assertRaisesRegex(self.module.RunnerError, "closed allowed set"):
+            self.module.validate_against_schema(1, {"enum": [True, False]}, {})
+
+    def test_full_result_rejects_integer_for_boolean_attestation(self) -> None:
+        candidate = self.make_candidate()
+        result = self.make_result("opencrvs-dci-v1.9", candidate)
+        result["project"]["generated_files_unchanged"] = 1
+        with self.assertRaisesRegex(self.module.RunnerError, "must equal True"):
+            self.module.validate_result(
+                self.write_result(result),
+                self.module.load_profile("opencrvs-dci-v1.9"),
+                self.make_canary_file(),
+            )
 
     def test_valid_opencrvs_result_passes(self) -> None:
         candidate = self.make_candidate()
@@ -456,6 +586,91 @@ class IntegrationE2RunnerTest(unittest.TestCase):
         result = self.make_result("opencrvs-dci-v1.9", candidate)
         result["teardown"]["status"] = "failed"
         with self.assertRaisesRegex(self.module.RunnerError, "status is inconsistent"):
+            self.module.validate_result(
+                self.write_result(result),
+                self.module.load_profile("opencrvs-dci-v1.9"),
+                self.make_canary_file(),
+            )
+
+    def test_case_duration_must_match_timestamps(self) -> None:
+        candidate = self.make_candidate()
+        result = self.make_result("opencrvs-dci-v1.9", candidate)
+        result["cases"][0]["duration_ms"] = 999
+        with self.assertRaisesRegex(
+            self.module.RunnerError, "duration_ms does not match"
+        ):
+            self.module.validate_result(
+                self.write_result(result),
+                self.module.load_profile("opencrvs-dci-v1.9"),
+                self.make_canary_file(),
+            )
+
+    def test_case_duration_supports_millisecond_timestamp_precision(self) -> None:
+        candidate = self.make_candidate()
+        result = self.make_result("opencrvs-dci-v1.9", candidate)
+        result["cases"][0]["completed_at"] = "2026-07-19T01:00:00.250Z"
+        result["cases"][0]["duration_ms"] = 250
+        self.module.validate_result(
+            self.write_result(result),
+            self.module.load_profile("opencrvs-dci-v1.9"),
+            self.make_canary_file(),
+        )
+
+    def test_case_timestamp_elapsed_time_must_respect_profile_bound(self) -> None:
+        candidate = self.make_candidate()
+        result = self.make_result("opencrvs-dci-v1.9", candidate)
+        result["cases"][0]["completed_at"] = "2026-07-19T01:01:01Z"
+        result["cases"][0]["duration_ms"] = 61000
+        with self.assertRaisesRegex(self.module.RunnerError, "profile case timeout"):
+            self.module.validate_result(
+                self.write_result(result),
+                self.module.load_profile("opencrvs-dci-v1.9"),
+                self.make_canary_file(),
+            )
+
+    def test_teardown_started_at_is_required_by_closed_schema(self) -> None:
+        candidate = self.make_candidate()
+        result = self.make_result("opencrvs-dci-v1.9", candidate)
+        del result["teardown"]["started_at"]
+        with self.assertRaisesRegex(self.module.RunnerError, "started_at"):
+            self.module.validate_result(
+                self.write_result(result),
+                self.module.load_profile("opencrvs-dci-v1.9"),
+                self.make_canary_file(),
+            )
+
+    def test_teardown_duration_must_match_timestamps(self) -> None:
+        candidate = self.make_candidate()
+        result = self.make_result("opencrvs-dci-v1.9", candidate)
+        result["teardown"]["duration_ms"] = 999
+        with self.assertRaisesRegex(self.module.RunnerError, "teardown duration_ms"):
+            self.module.validate_result(
+                self.write_result(result),
+                self.module.load_profile("opencrvs-dci-v1.9"),
+                self.make_canary_file(),
+            )
+
+    def test_teardown_timestamp_elapsed_time_must_respect_profile_bound(self) -> None:
+        candidate = self.make_candidate()
+        result = self.make_result("opencrvs-dci-v1.9", candidate)
+        result["teardown"]["completed_at"] = "2026-07-19T01:07:00Z"
+        result["teardown"]["duration_ms"] = 301000
+        result["completed_at"] = "2026-07-19T01:08:00Z"
+        with self.assertRaisesRegex(self.module.RunnerError, "teardown exceeds"):
+            self.module.validate_result(
+                self.write_result(result),
+                self.module.load_profile("opencrvs-dci-v1.9"),
+                self.make_canary_file(),
+            )
+
+    def test_teardown_cannot_start_before_cases_complete(self) -> None:
+        candidate = self.make_candidate()
+        result = self.make_result("opencrvs-dci-v1.9", candidate)
+        result["teardown"]["started_at"] = "2026-07-19T01:00:00Z"
+        result["teardown"]["completed_at"] = "2026-07-19T01:00:01Z"
+        with self.assertRaisesRegex(
+            self.module.RunnerError, "before.*test cases complete"
+        ):
             self.module.validate_result(
                 self.write_result(result),
                 self.module.load_profile("opencrvs-dci-v1.9"),

@@ -78,7 +78,7 @@
     },
     "timestamp": {
       "type": "string",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{3})?Z$"
     },
     "image": {
       "type": "string",
@@ -144,6 +144,7 @@
     },
     "project": {
       "type": "object",
+      "description": "Operator-attested project hashes and generated-file comparison. The public validator validates this shape but does not receive the project files.",
       "additionalProperties": false,
       "required": [
         "starter",
@@ -161,7 +162,10 @@
         "build_review_sha256": { "$ref": "#/$defs/sha256" },
         "relay_closure_sha256": { "$ref": "#/$defs/sha256" },
         "notary_closure_sha256": { "$ref": "#/$defs/sha256" },
-        "generated_files_unchanged": { "const": true }
+        "generated_files_unchanged": {
+          "description": "Operator and maintainer attestation backed by restricted comparison evidence.",
+          "const": true
+        }
       }
     },
     "case": {
@@ -210,6 +214,7 @@
     },
     "redaction": {
       "type": "object",
+      "description": "Operator-attested restricted-evidence scan summary. The public runner independently scans only the supplied public result for canaries.",
       "additionalProperties": false,
       "required": [
         "passed",
@@ -238,12 +243,14 @@
     },
     "teardown": {
       "type": "object",
+      "description": "Operator-attested scoped teardown result with validator-cross-checked public timing fields.",
       "additionalProperties": false,
-      "required": ["attempted", "status", "duration_ms", "completed_at", "evidence_sha256"],
+      "required": ["attempted", "status", "started_at", "duration_ms", "completed_at", "evidence_sha256"],
       "properties": {
         "attempted": { "const": true },
         "status": { "enum": ["completed", "failed"] },
-        "duration_ms": { "type": "integer", "minimum": 0, "maximum": 300000 },
+        "started_at": { "$ref": "#/$defs/timestamp" },
+        "duration_ms": { "type": "integer", "minimum": 0, "maximum": 1800000 },
         "completed_at": { "$ref": "#/$defs/timestamp" },
         "evidence_sha256": { "$ref": "#/$defs/sha256" }
       }

@@ -65,14 +65,17 @@ the profile limits:
 
 1. Download the candidate assets listed in `release/VERIFY.md` into a fresh,
    dedicated directory.
-2. Validate checksums, signatures, provenance, capsule lineage, image locks,
-   digest files, and the candidate binary's self-reported version.
+2. Use the public runner to validate checksums, signatures, provenance,
+   capsule lineage, image locks, and digest files. The runner executes the
+   candidate binary for its self-reported version only after every passive and
+   authenticity check passes.
 3. Initialize the profile's starter with the verified candidate
    `registryctl` binary.
 4. Apply only the reviewed authored changes listed in the selected profile.
    Do not edit generated YAML.
-5. Run the offline project `test`, `check`, and `build` commands. Record hashes
-   of authored inputs, the build review, and both generated closures.
+5. Run the offline project `test`, `check`, and `build` commands. Inspect the
+   generated project, then record hashes of authored inputs, the build review,
+   and both generated closures.
 6. Deploy one candidate-digest Registry Relay, Registry Notary, and PostgreSQL
    set per authority.
 7. Query the approved source-side probe before and after every closed test
@@ -80,10 +83,13 @@ the profile limits:
 8. Retain raw evidence only in the approved restricted location. Publish only
    safe result codes, timings, contact classifications, correlation hashes,
    and evidence hashes.
-9. Seed restricted-value canaries, scan the public artifact, and reject any
-   match. Re-hash generated files to prove they were not edited after build.
+9. Seed restricted-value canaries. Scan restricted evidence before producing
+   the public artifact, then re-hash generated files and compare them with the
+   reviewed build hashes. The public runner separately scans the supplied
+   public result for the same canaries.
 10. Attempt scoped teardown from a `finally` path, even after a failed case.
-    Record the bounded duration, outcome, and sanitized evidence hash.
+    Record its start and completion times, bounded duration, outcome, and
+    sanitized evidence hash.
 
 `source_data_access` counts only the profile's reviewed data operation. For
 OpenCRVS, OAuth or JSON Web Key Set (JWKS) traffic does not count as a
@@ -91,7 +97,9 @@ OpenCRVS, OAuth or JSON Web Key Set (JWKS) traffic does not count as a
 that supporting traffic.
 
 The operator wrapper owns product credentials, network access, deployment
-details, source probe invocation, restricted storage, and cleanup. Those
+details, project inspection, source probe invocation, restricted evidence
+inspection and storage, generated-file comparisons, and cleanup. A maintainer
+must compare the public hashes and flags with that restricted evidence. Those
 instance-specific operations are intentionally not embedded in this public
 runner.
 
@@ -121,19 +129,28 @@ python3 release/scripts/integration-e2-runner.py validate \
   --canary-file /restricted/run-72.canaries
 ```
 
-This validation requires `cosign` and `slsa-verifier`. It rejects missing or
-extra candidate assets, symlinks, wrong checksums, invalid signatures or
-provenance, capsule and image-lock disagreements, an unbounded result, an
-unknown public field, a canary match, a passed case without the required
-source-side contact classification, a changed generated project, and failed
-or over-time teardown.
+This validation requires `cosign` and `slsa-verifier`. The runner independently
+rejects missing or extra candidate assets, symlinks, wrong checksums, invalid
+signatures or provenance, capsule and image-lock disagreements, an unbounded
+result, an unknown public field, a public-result canary match, inconsistent
+timestamps or durations, a passed case without the required recorded
+source-contact classification, over-time recorded teardown, and a `passed`
+status paired with failed recorded teardown.
+
+The public runner receives neither the generated project nor restricted raw
+evidence. It validates the closed flags, hashes, timings, and classifications
+in the sanitized result, but it cannot independently re-hash the project,
+inspect source-side audit records, or confirm the restricted redaction report.
+The operator wrapper performs those checks, and a maintainer reviews their
+restricted evidence before treating the result as proof.
 
 The result schema is
 [`schema/run-result.schema.json`](schema/run-result.schema.json). It is closed:
 raw responses, request bodies, headers, tokens, source identifiers, hostnames,
 and credentials have no public fields. A failed run can remain as honest
-non-closing evidence, but `status: passed` requires every applicable case and
-teardown to pass.
+non-closing evidence. The validator accepts `status: passed` only when every
+applicable case and teardown is recorded as passed; maintainer review still
+establishes whether the recorded hashes correspond to the restricted evidence.
 
 ## Review the source packet
 
@@ -145,5 +162,7 @@ teardown to pass.
   only public result shape.
 
 Review raw evidence and the owner attestation outside the public repository.
-Commit only the sanitized result after a maintainer confirms the candidate
-identity, case semantics, redaction report, and teardown status.
+Commit only the sanitized result after a maintainer compares its hashes and
+flags with the generated project, source audit records, redaction report, and
+teardown evidence. Candidate identity is the part the public runner verifies
+directly.

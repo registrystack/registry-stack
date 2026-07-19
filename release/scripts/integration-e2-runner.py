@@ -638,8 +638,16 @@ def verify_candidate_assets(
     tag_match = TAG.fullmatch(tag)
     if tag_match is None:
         raise RunnerError("candidate tag must be a stable vMAJOR.MINOR.PATCH tag")
-    if not asset_dir.is_dir() or asset_dir.is_symlink():
-        raise RunnerError("candidate asset directory must be a real directory")
+    try:
+        asset_dir_info = asset_dir.lstat()
+    except OSError as exc:
+        raise RunnerError(
+            f"candidate asset directory is unavailable: {asset_dir}: {exc}"
+        ) from exc
+    if stat.S_ISLNK(asset_dir_info.st_mode) or not stat.S_ISDIR(asset_dir_info.st_mode):
+        raise RunnerError(
+            "candidate asset directory must be a real, non-symlink directory"
+        )
     required = required_asset_names(tag)
     actual = {path.name for path in asset_dir.iterdir()}
     missing = required - actual
@@ -663,22 +671,6 @@ def verify_candidate_assets(
             raise RunnerError(f"{name} does not match its SHA256SUMS entry")
 
     binary = asset_dir / binary_name
-    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
-    version_result = binary_runner(
-        [str(binary), "--version"],
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=10,
-    )
-    if (
-        version_result.returncode != 0
-        or version_result.stdout.strip() != f"registryctl {tag_match.group(1)}"
-    ):
-        raise RunnerError(
-            f"{binary_name} does not self-report registryctl {tag_match.group(1)}"
-        )
-
     lock = require_object(
         load_json(asset_dir / image_lock_name),
         image_lock_name,
@@ -788,14 +780,39 @@ def verify_candidate_assets(
             "release capsule images do not match the candidate digest files"
         )
 
+    signed_subject_hashes = {
+        name: sha256(asset_dir / name) for name in signed_subject_names(tag)
+    }
+    # Candidate-controlled code must remain passive until every local binding
+    # and both external authenticity mechanisms have accepted the assets.
     authenticate(asset_dir, tag)
+    if any(
+        sha256(asset_dir / name) != digest
+        for name, digest in signed_subject_hashes.items()
+    ):
+        raise RunnerError("a signed candidate subject changed during verification")
+    binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+    version_result = binary_runner(
+        [str(binary), "--version"],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+    if (
+        version_result.returncode != 0
+        or version_result.stdout.strip() != f"registryctl {tag_match.group(1)}"
+    ):
+        raise RunnerError(
+            f"{binary_name} does not self-report registryctl {tag_match.group(1)}"
+        )
     return {
         "tag": tag,
         "version": tag_match.group(1),
         "source_commit": lock["tag_target"],
-        "registryctl_asset_sha256": f"sha256:{sha256(binary)}",
-        "image_lock_sha256": f"sha256:{sha256(asset_dir / image_lock_name)}",
-        "release_capsule_sha256": f"sha256:{sha256(asset_dir / capsule_name)}",
+        "registryctl_asset_sha256": f"sha256:{signed_subject_hashes[binary_name]}",
+        "image_lock_sha256": f"sha256:{signed_subject_hashes[image_lock_name]}",
+        "release_capsule_sha256": f"sha256:{signed_subject_hashes[capsule_name]}",
         "relay_image": relay,
         "notary_image": notary,
     }
@@ -814,15 +831,46 @@ def resolve_ref(schema: dict[str, Any], reference: str) -> dict[str, Any]:
     return value
 
 
+def json_value_equal(actual: Any, expected: Any) -> bool:
+    """Compare JSON values without Python's bool-as-int equivalence."""
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return (
+            isinstance(actual, bool)
+            and isinstance(expected, bool)
+            and actual == expected
+        )
+    if actual is None or expected is None:
+        return actual is expected
+    if isinstance(actual, list) or isinstance(expected, list):
+        return (
+            isinstance(actual, list)
+            and isinstance(expected, list)
+            and len(actual) == len(expected)
+            and all(
+                json_value_equal(left, right) for left, right in zip(actual, expected)
+            )
+        )
+    if isinstance(actual, dict) or isinstance(expected, dict):
+        return (
+            isinstance(actual, dict)
+            and isinstance(expected, dict)
+            and set(actual) == set(expected)
+            and all(json_value_equal(actual[key], expected[key]) for key in actual)
+        )
+    return actual == expected
+
+
 def validate_against_schema(
     value: Any, rule: dict[str, Any], schema: dict[str, Any], label: str = "result"
 ) -> None:
     if "$ref" in rule:
         validate_against_schema(value, resolve_ref(schema, rule["$ref"]), schema, label)
         return
-    if "const" in rule and value != rule["const"]:
+    if "const" in rule and not json_value_equal(value, rule["const"]):
         raise RunnerError(f"{label} must equal {rule['const']!r}")
-    if "enum" in rule and value not in rule["enum"]:
+    if "enum" in rule and not any(
+        json_value_equal(value, allowed) for allowed in rule["enum"]
+    ):
         raise RunnerError(f"{label} is outside the closed allowed set")
     kind = rule.get("type")
     if kind == "object":
@@ -889,8 +937,15 @@ def read_canaries(path: Path) -> list[bytes]:
 
 
 def parse_timestamp(value: str) -> dt.datetime:
-    return dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
-        tzinfo=dt.timezone.utc
+    return dt.datetime.fromisoformat(value.removesuffix("Z") + "+00:00")
+
+
+def elapsed_milliseconds(started: dt.datetime, completed: dt.datetime) -> int:
+    elapsed = completed - started
+    return (
+        elapsed.days * 86_400_000
+        + elapsed.seconds * 1000
+        + elapsed.microseconds // 1000
     )
 
 
@@ -938,6 +993,8 @@ def validate_result(
     all_passed = True
     run_started = parse_timestamp(result["started_at"])
     run_completed = parse_timestamp(result["completed_at"])
+    if run_completed < run_started:
+        raise RunnerError("public result completes before it starts")
     latest_case_completion = run_started
     for case in cases:
         expectation = expectations[case["case_id"]]
@@ -966,18 +1023,21 @@ def validate_result(
                 )
         elif case["outcome"] != "passed":
             all_passed = False
-        if case["duration_ms"] > profile["limits"]["case_timeout_seconds"] * 1000:
-            raise RunnerError(f"{case['case_id']} exceeds the profile case timeout")
         case_started = parse_timestamp(case["started_at"])
         case_completed = parse_timestamp(case["completed_at"])
         if case_completed < case_started:
             raise RunnerError(f"{case['case_id']} completes before it starts")
+        case_elapsed_ms = elapsed_milliseconds(case_started, case_completed)
+        if case["duration_ms"] != case_elapsed_ms:
+            raise RunnerError(
+                f"{case['case_id']} duration_ms does not match its timestamps"
+            )
+        if case_elapsed_ms > profile["limits"]["case_timeout_seconds"] * 1000:
+            raise RunnerError(f"{case['case_id']} exceeds the profile case timeout")
         if case_started < run_started or case_completed > run_completed:
             raise RunnerError(f"{case['case_id']} falls outside the recorded run")
         latest_case_completion = max(latest_case_completion, case_completed)
-    if run_completed < run_started:
-        raise RunnerError("public result completes before it starts")
-    run_ms = (run_completed - run_started).total_seconds() * 1000
+    run_ms = elapsed_milliseconds(run_started, run_completed)
     if run_ms > profile["limits"]["run_timeout_seconds"] * 1000:
         raise RunnerError("public result exceeds the profile run timeout")
     if result["redaction"]["seeded_canaries"] != len(canaries):
@@ -993,14 +1053,19 @@ def validate_result(
         > profile["limits"]["raw_evidence_bytes"]
     ):
         raise RunnerError("restricted raw evidence exceeds the profile byte limit")
-    if (
-        result["teardown"]["duration_ms"]
-        > profile["limits"]["teardown_timeout_seconds"] * 1000
-    ):
-        raise RunnerError("teardown exceeds the profile timeout")
+    teardown_started = parse_timestamp(result["teardown"]["started_at"])
     teardown_completed = parse_timestamp(result["teardown"]["completed_at"])
-    if teardown_completed < latest_case_completion:
-        raise RunnerError("teardown completion precedes a recorded test case")
+    if teardown_completed < teardown_started:
+        raise RunnerError("teardown completes before it starts")
+    teardown_elapsed_ms = elapsed_milliseconds(teardown_started, teardown_completed)
+    if result["teardown"]["duration_ms"] != teardown_elapsed_ms:
+        raise RunnerError("teardown duration_ms does not match its timestamps")
+    if teardown_elapsed_ms > profile["limits"]["teardown_timeout_seconds"] * 1000:
+        raise RunnerError("teardown exceeds the profile timeout")
+    if teardown_started < latest_case_completion:
+        raise RunnerError("teardown starts before the recorded test cases complete")
+    if teardown_started < run_started:
+        raise RunnerError("teardown starts before the recorded run")
     if teardown_completed > run_completed:
         raise RunnerError("public result completion must include the teardown attempt")
     complete = all_passed and result["teardown"]["status"] == "completed"
@@ -1018,6 +1083,7 @@ def plan_document(profile: dict[str, Any]) -> dict[str, Any]:
         "support_status": profile["support_status"],
         "candidate_evidence": False,
         "status": "planned_not_executed",
+        "executor": "approved_operator_wrapper",
         "starter": profile["starter"],
         "pinned_source": profile["source"]["baseline"],
         "source_operations": profile["source"]["operations"],
@@ -1048,6 +1114,9 @@ def print_plan(profile: dict[str, Any], *, as_json: bool) -> None:
         return
     print(f"{plan['profile_id']}: {plan['support_status']}")
     print("Status: planned, not executed; this is not candidate evidence.")
+    print(
+        "Executor: approved operator wrapper; the public runner does not run live stages."
+    )
     print("Prerequisites:")
     for item in plan["prerequisites"]:
         print(f"  - {item}")
@@ -1109,14 +1178,10 @@ def main(argv: list[str] | None = None) -> int:
             candidate = None
             result = None
             if candidate_requested:
-                candidate = verify_candidate_assets(
-                    args.candidate_dir.resolve(), args.tag
-                )
+                candidate = verify_candidate_assets(args.candidate_dir, args.tag)
             if result_requested:
                 profile = load_profile(args.profile)
-                result = validate_result(
-                    args.result.resolve(), profile, args.canary_file.resolve()
-                )
+                result = validate_result(args.result, profile, args.canary_file)
             elif args.profile is not None:
                 load_profile(args.profile)
             if candidate is not None and result is not None:
