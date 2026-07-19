@@ -1,0 +1,76 @@
+---
+import roster from '../data/generated/relay-support.json';
+
+type RosterEntry = (typeof roster)[number];
+
+const stable = roster.filter((entry: RosterEntry) => entry.stability_tier === 'stable');
+const experimental = roster.filter(
+  (entry: RosterEntry) => entry.stability_tier === 'experimental',
+);
+---
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Surface</th>
+        <th>Category</th>
+        <th>Support owner</th>
+        <th>Delivery</th>
+        <th>Evidence</th>
+      </tr>
+    </thead>
+    <tbody>
+      {stable.map((entry: RosterEntry) => (
+        <tr>
+          <td>{entry.name}</td>
+          <td><code>{entry.category}</code></td>
+          <td><code>{entry.support_owner}</code></td>
+          <td>Canonical 1.0 release</td>
+          <td><code>{entry.evidence}</code></td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+
+<h3>Experimental and feature-frozen</h3>
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Surface</th>
+        <th>Category</th>
+        <th>Cargo feature</th>
+        <th>Delivery</th>
+        <th>Evidence</th>
+      </tr>
+    </thead>
+    <tbody>
+      {experimental.map((entry: RosterEntry) => (
+        <tr>
+          <td>{entry.name}</td>
+          <td><code>{entry.category}</code></td>
+          <td>
+            {entry.cargo_features.length > 0
+              ? entry.cargo_features.map((feature: string) => <code>{feature}</code>)
+              : 'Compiled in; not feature-gated'}
+          </td>
+          <td>
+            {entry.cargo_features.length > 0
+              ? 'Source available; excluded from the canonical release'
+              : 'Shipped, unstable, and frozen'}
+          </td>
+          <td><code>{entry.evidence}</code></td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>
+
+<p class="source-note">
+  Generated from <code>src/data/relay-support.yaml</code>. Every decision is dated
+  <code>{roster[0].decision_date}</code> and references
+  <a href={roster[0].decision_reference}>Registry Stack issue #305</a>.
+</p>

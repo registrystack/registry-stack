@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-07-12"
+last_reviewed: "2026-07-19"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -121,9 +121,8 @@ registryctl check \
   --explain
 ```
 
-The first JSON report contains `"status": "passed"`.
-The second human-readable report marks the project `valid` and lists `operator_security` among the
-required reviews for a query credential.
+The first human-readable report starts with `PASS`. The second marks the project `valid` and lists
+`operator_security` among the required reviews for a query credential.
 The redacted explanation names the credential type, reference, and generation without the secret
 value.
 

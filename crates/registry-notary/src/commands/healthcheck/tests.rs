@@ -93,11 +93,3 @@ async fn healthcheck_fails_for_non_success_status() {
         .expect_err("healthcheck fails");
     assert!(err.to_string().contains("HTTP 503"));
 }
-
-#[test]
-fn lightweight_schema_exposes_top_level_config_sections() {
-    let schema = lightweight_schema();
-    assert_eq!(schema["additionalProperties"], json!(false));
-    assert!(schema["properties"]["evidence"].is_object());
-    assert!(schema["properties"]["auth"].is_object());
-}

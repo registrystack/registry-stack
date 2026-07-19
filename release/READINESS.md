@@ -46,12 +46,21 @@ write.
       deployment topology (#205). Must not depend on the retired monorepo lab,
       which was replaced by the standalone
       [Solmara Lab](https://github.com/registrystack/solmara-lab) (#224).
-      The release-owned [harness and plan mapping](conformance/openid/README.md)
-      no longer depend on either lab. Its
+      The release-owned [OIDF harness and plan mapping](conformance/openid/README.md)
+      and [Relay OIDC smoke](conformance/relay-oidc/README.md) no longer depend
+      on either lab. The Relay smoke is source-ready and directly runnable
+      against a digest-pinned published candidate, but no reviewed 1.0
+      candidate result exists yet. The OIDF harness's
       [initial report](conformance/openid/initial-report.md) preserves the
       historical hosted-lab failures but does not yet prove a pinned release
       topology.
 - [ ] Credentialing, OID4VCI, and status-list interop proof (#57).
+- [ ] OpenCRVS and DHIS2 project-authored integration proof (#72). The
+      [candidate-neutral source packet](conformance/integrations/README.md)
+      pins both unofficial profiles, closes the public result shape, and
+      validates published candidate assets. It is not live evidence; the
+      external compatibility, instance, source-side audit, and teardown
+      prerequisites remain required for each candidate run.
 
 ## 4. Adversarial verification
 

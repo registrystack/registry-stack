@@ -111,6 +111,7 @@
     "/build/features",
     "/configuration/trusted_roots",
     "/standards_artifacts/*/url",
+    "/relay/refresh_health",
     "/deployment/findings/*/waiver/reason",
     "/deployment/waivers/*/reason",
     "/notary/signing_keys",

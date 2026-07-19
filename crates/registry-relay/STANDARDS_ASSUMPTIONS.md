@@ -17,6 +17,28 @@ Registry Relay may publish:
 
 Registry Relay does not publish a proprietary source-of-truth flag.
 
+## 1.0 support boundary
+
+The stable 1.0 standards surface is OpenAPI 3.x publication, RFC 9457 problem
+responses, RFC 9727 discovery, and the portable metadata family: DCAT and
+DCAT-AP, BRegDCAT-AP, JSON-LD, SHACL, JSON Schema, ODRL, and link-free OGC
+Records artifacts.
+
+The live OGC API Records adapter, OGC API Features, OGC API EDR, SP DCI sync
+routes, and standards-CEL mapping are experimental and feature-frozen. They are
+outside the 1.0 compatibility promise and excluded from the canonical release
+feature list. Their source and all-feature security tests remain in the
+repository.
+
+Link-free OGC Records bodies under `/metadata/ogc/records` are portable metadata.
+They are not the live adapter under `/ogc/v1/records` and do not depend on its
+`ogcapi-records` Cargo feature.
+
+CSV, XLSX, and Parquet are source decoders, not one output family. CSV and XLSX
+input are stable for 1.0. Parquet input remains shipped, experimental, and
+feature-frozen. Aggregate output supports JSON, CSV, and SDMX-JSON. JSON is
+stable; CSV and SDMX-JSON remain shipped, experimental, and feature-frozen.
+
 ## Facts, publication choices, and downstream hypotheses
 
 Registry Relay publishes machine-readable metadata facts and descriptors. It

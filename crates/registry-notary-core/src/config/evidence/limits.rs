@@ -4,7 +4,7 @@
 use super::*;
 
 /// Per-request cap on concurrently evaluated subjects.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConcurrencyConfig {
     #[serde(default = "default_concurrency_subjects")]
@@ -33,7 +33,7 @@ const fn default_concurrency_subjects() -> usize {
 }
 
 /// Per-principal quota for machine `evaluate`/`batch_evaluate` traffic.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MachineQuotaConfig {
     #[serde(default)]

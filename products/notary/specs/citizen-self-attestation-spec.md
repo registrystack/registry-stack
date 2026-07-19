@@ -18,10 +18,11 @@
 > self-attestation is evaluation-only in 1.0.
 > See `docs/credential-issuance-migration.md` for current operator guidance.
 
-Current status: implemented for evaluation, render, credential issuance, batch
-denial, rate-limit guard, and OpenID4VCI facade integration in 0.3.0. External
-wallet and lab smoke coverage remains separate from the in-repo implementation
-status.
+Historical implementation status: the original design covered evaluation,
+rendering, credential issuance, batch denial, rate limits, and OID4VCI. The
+credential portions below are superseded and must not be implemented or copied.
+Current source-free and delegated self-attestation is evaluation-only. Current
+credential issuance is registry-backed as described in the supersession note.
 
 ## Goal
 

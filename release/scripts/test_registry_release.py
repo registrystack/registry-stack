@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import importlib.util
+import json
 import subprocess
 import sys
 import tempfile
 import unittest
-import json
 from pathlib import Path
 
 import yaml
@@ -17,7 +18,49 @@ IMAGE_DIGEST = "sha256:" + "a" * 64
 IMAGE_DIGEST_REF = f"ghcr.io/registrystack/registry-notary@{IMAGE_DIGEST}"
 
 
+def load_debian13_image_check():
+    path = ROOT / "release/scripts/check-debian13-images.py"
+    spec = importlib.util.spec_from_file_location("check_debian13_images", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load module spec from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class RegistryReleaseTest(unittest.TestCase):
+    def test_maintained_images_follow_debian13_contract(self) -> None:
+        module = load_debian13_image_check()
+        self.assertEqual([], module.check_repository(ROOT))
+
+    def test_debian13_contract_rejects_retired_base_and_unpinned_base(self) -> None:
+        module = load_debian13_image_check()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for relative in module.MAINTAINED_TEXT_PATHS:
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_text(
+                    (ROOT / relative).read_text(encoding="utf-8"),
+                    encoding="utf-8",
+                )
+
+            relay_dockerfile = root / "crates/registry-relay/Dockerfile"
+            text = relay_dockerfile.read_text(encoding="utf-8")
+            text = text.replace(
+                module.RUST_BUILDER,
+                "rust:1.95-" + "book" + "worm",
+                1,
+            )
+            relay_dockerfile.write_text(text, encoding="utf-8")
+
+            failures = module.check_repository(root)
+            self.assertTrue(
+                any("retired Debian image generation marker" in failure for failure in failures)
+            )
+            self.assertTrue(
+                any("not pinned by immutable digest" in failure for failure in failures)
+            )
     def test_contributing_documents_major_functionality_test_policy(self) -> None:
         text = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
 
@@ -52,6 +95,51 @@ class RegistryReleaseTest(unittest.TestCase):
             self.assertIn(dockerfile, workflow)
             text = (ROOT / dockerfile).read_text(encoding="utf-8")
             self.assertIn("dist/image-bin", text)
+
+    def test_release_cargo_cache_is_scoped_to_builder_image(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        binaries_job = workflow[
+            workflow.index("\n  binaries:") : workflow.index("\n  registryctl-extra-binaries:")
+        ]
+
+        fingerprint_step = binaries_job.index("Fingerprint release builder")
+        cache_step = binaries_job.index("Restore Cargo release cache")
+        self.assertLess(fingerprint_step, cache_step)
+        self.assertIn(
+            "printf '%s' \"${RELEASE_BUILDER_IMAGE}\" | sha256sum",
+            binaries_job,
+        )
+        builder_fingerprint = "${{ steps.release-builder.outputs.fingerprint }}"
+        self.assertEqual(2, binaries_job.count(builder_fingerprint))
+        self.assertNotIn(
+            "registry-stack-release-cargo-${{ runner.os }}-rust-1.95.0-",
+            binaries_job,
+        )
+
+    def test_release_image_scans_are_policy_enforced_and_preserved(self) -> None:
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        images_job = workflow[
+            workflow.index("\n  images:") : workflow.index("\n  github-release:")
+        ]
+
+        scan_step = images_job.index("Build, push, and scan images")
+        enforcement_step = images_job.index("Enforce release image scan policy")
+        upload_step = images_job.index("Upload image evidence")
+        self.assertLess(scan_step, enforcement_step)
+        self.assertLess(enforcement_step, upload_step)
+        self.assertIn(
+            "grype dist/grype/registry-notary.grype.json \\\n"
+            "            --subject registry-notary-image",
+            images_job,
+        )
+        self.assertIn(
+            "grype dist/grype/registry-relay.grype.json \\\n"
+            "            --subject registry-relay-image",
+            images_job,
+        )
+        self.assertIn("exit \"${status}\"", images_job)
+        self.assertIn("if: ${{ always() }}", images_job[upload_step:])
+        self.assertIn("dist/grype/*", images_job[upload_step:])
 
     def test_release_packaging_excludes_retired_notary_source_sidecar(self) -> None:
         retired_names = (
@@ -217,7 +305,7 @@ class RegistryReleaseTest(unittest.TestCase):
         result = run_tool("validate-docsets")
 
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("validated 7 versioned docsets", result.stdout)
+        self.assertIn("validated 8 versioned docsets", result.stdout)
 
     def test_validate_docsets_rejects_external_ref_drift(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

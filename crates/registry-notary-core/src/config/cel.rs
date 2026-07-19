@@ -3,7 +3,7 @@
 
 use super::*;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegistryNotaryCelConfig {
     #[serde(default = "default_cel_mode")]

@@ -265,6 +265,65 @@ fn starter_init_json_is_versioned_and_contains_only_init_facts() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn json_init_rejects_non_utf8_destinations_before_all_dispatches() {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let temporary = TempDir::new().expect("temporary directory");
+    for (name, before, after, needs_image_lock) in [
+        (
+            "starter",
+            &["init", "--from", "http", "--project-dir"][..],
+            &["--format", "json"][..],
+            false,
+        ),
+        (
+            "relay",
+            &["init", "relay"][..],
+            &["--format", "json"][..],
+            true,
+        ),
+        (
+            "spreadsheet-api",
+            &["init", "spreadsheet-api"][..],
+            &["--format", "json"][..],
+            true,
+        ),
+    ] {
+        let mut leaf = format!("{name}-").into_bytes();
+        leaf.push(0xff);
+        let destination = temporary.path().join(std::ffi::OsString::from_vec(leaf));
+        let missing_image_lock = temporary.path().join(format!("{name}-missing-lock.json"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_registryctl"));
+        command
+            .args(before)
+            .arg(&destination)
+            .args(after)
+            .env("REGISTRYCTL_NO_UPDATE_CHECK", "1");
+        if needs_image_lock {
+            // Missing on purpose: the UTF-8 preflight must run before image-lock loading.
+            command.env("REGISTRYCTL_IMAGE_LOCK", &missing_image_lock);
+        }
+        let output = command.output().expect("registryctl runs");
+
+        assert!(
+            !output.status.success(),
+            "{name} init unexpectedly succeeded"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("init --format json requires a UTF-8 destination path"),
+            "{name} stderr was: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !destination.exists(),
+            "{name} JSON destination validation must happen before initialization"
+        );
+    }
+}
+
 #[test]
 fn relay_init_defaults_to_the_same_human_result_structure() {
     let temporary = TempDir::new().expect("temporary directory");
@@ -286,7 +345,7 @@ fn relay_init_defaults_to_the_same_human_result_structure() {
     assert_eq!(
         stdout,
         format!(
-            "Initialized Relay spreadsheet API \"my-first-api\".\n  Directory: {}\n  Sample: benefits\n  Bruno collection: {}\n\nNext:\n  cd {}\n  registryctl doctor --profile local --format json\n  registryctl start\n",
+            "Initialized Relay spreadsheet API \"my-first-api\".\n  Directory: {}\n  Sample: benefits\n  Bruno collection: {}\n\nNext:\n  cd {}\n  registryctl doctor --profile local\n  registryctl start\n",
             project.display(),
             project.join("bruno/registry-api").display(),
             project.display(),
@@ -318,7 +377,7 @@ fn relay_init_human_artifact_paths_are_line_safe_and_shell_usable() {
     assert_eq!(
         stdout,
         format!(
-            "Initialized Relay spreadsheet API \"my-first-api\".\n  Directory: {rendered_project}\n  Sample: benefits\n  Bruno collection: {rendered_bruno}\n\nNext:\n  cd {rendered_project}\n  registryctl doctor --profile local --format json\n  registryctl start\n",
+            "Initialized Relay spreadsheet API \"my-first-api\".\n  Directory: {rendered_project}\n  Sample: benefits\n  Bruno collection: {rendered_bruno}\n\nNext:\n  cd {rendered_project}\n  registryctl doctor --profile local\n  registryctl start\n",
         )
     );
     assert_stdout_has_no_terminal_controls(&stdout);
@@ -438,4 +497,210 @@ fn relay_init_accepts_json_format_after_the_subcommand_without_mixed_output() {
             .as_ref()
     );
     assert!(report["artifacts"].get("editor_manifest").is_none());
+}
+
+#[test]
+fn add_notary_defaults_to_human_output_and_keeps_versioned_json_opt_in() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let image_lock = write_image_lock(&temporary);
+
+    let human_project = temporary.path().join("my-first-api");
+    let init = run_registryctl(
+        &[
+            "init",
+            "relay",
+            human_project.to_str().expect("UTF-8 project path"),
+        ],
+        Some(&image_lock),
+    );
+    assert_success(&init);
+    let human = run_registryctl_in(Some(&human_project), &["add", "notary"], Some(&image_lock));
+    assert_success(&human);
+    assert_eq!(
+        String::from_utf8(human.stdout).expect("UTF-8 output"),
+        "Added Registry Notary to \"my-first-api\".\n  Claim: notary/project/registry-stack.yaml\n  Notary API after start: http://127.0.0.1:4255\n\nNext:\n  registryctl start\n"
+    );
+
+    let json_project = temporary.path().join("my-first-api-json");
+    let init = run_registryctl(
+        &[
+            "init",
+            "relay",
+            json_project.to_str().expect("UTF-8 project path"),
+        ],
+        Some(&image_lock),
+    );
+    assert_success(&init);
+    let json_output = run_registryctl_in(
+        Some(&json_project),
+        &["add", "notary", "--format", "json"],
+        Some(&image_lock),
+    );
+    assert_success(&json_output);
+    let report: Value =
+        serde_json::from_slice(&json_output.stdout).expect("add notary emits only JSON");
+    assert_eq!(report["schema_version"], "registryctl.add_notary.v1");
+    assert_eq!(report["status"], "added");
+    assert_eq!(report["project"], "my-first-api-json");
+    assert_eq!(report["notary_url"], "http://127.0.0.1:4255");
+    assert_eq!(report["claim_file"], "notary/project/registry-stack.yaml");
+}
+
+#[test]
+fn project_commands_default_to_human_output_and_keep_versioned_json_opt_in() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let project = temporary.path().join("registry-project");
+    let init = run_registryctl(
+        &[
+            "init",
+            "--from",
+            "http",
+            "--project-dir",
+            project.to_str().expect("UTF-8 project path"),
+        ],
+        None,
+    );
+    assert_success(&init);
+
+    let editor = run_registryctl(
+        &[
+            "authoring",
+            "editor",
+            "--project-dir",
+            project.to_str().expect("UTF-8 project path"),
+        ],
+        None,
+    );
+    assert_success(&editor);
+    let editor = String::from_utf8(editor.stdout).expect("UTF-8 editor output");
+    assert!(editor.starts_with("Configured Registry Stack editor support for "));
+    assert!(editor.contains("\n  Generated files: "));
+
+    let json_editor = run_registryctl(
+        &[
+            "authoring",
+            "editor",
+            "--project-dir",
+            project.to_str().expect("UTF-8 project path"),
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    assert_success(&json_editor);
+    let json_editor: Value =
+        serde_json::from_slice(&json_editor.stdout).expect("editor setup emits only JSON");
+    assert_eq!(
+        json_editor["schema_version"],
+        "registryctl.project_editor.v1"
+    );
+    assert_eq!(json_editor["status"], "configured");
+
+    let test = run_registryctl(
+        &[
+            "test",
+            "--project-dir",
+            project.to_str().expect("UTF-8 project path"),
+        ],
+        None,
+    );
+    assert_success(&test);
+    let test = String::from_utf8(test.stdout).expect("UTF-8 test output");
+    assert!(test.starts_with("PASS: "), "{test}");
+    assert!(test.ends_with(" fixtures passed\n"), "{test}");
+
+    let json_watch = run_registryctl(
+        &[
+            "test",
+            "--project-dir",
+            project.to_str().expect("UTF-8 project path"),
+            "--watch",
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    assert!(!json_watch.status.success());
+    assert!(String::from_utf8_lossy(&json_watch.stderr)
+        .contains("test --watch supports only human output"));
+
+    let trace = run_registryctl(
+        &[
+            "test",
+            "--project-dir",
+            project.to_str().expect("UTF-8 project path"),
+            "--integration",
+            "person-record",
+            "--fixture",
+            "active-person",
+            "--trace",
+        ],
+        None,
+    );
+    assert_success(&trace);
+    let trace = String::from_utf8(trace.stdout).expect("UTF-8 trace output");
+    assert!(
+        trace.contains("\n  PASS person-record.active-person"),
+        "{trace}"
+    );
+    assert!(trace.contains("\n    inputs: person_id"), "{trace}");
+    assert!(trace.contains("\n    outputs: active"), "{trace}");
+
+    let json_test = run_registryctl(
+        &[
+            "test",
+            "--project-dir",
+            project.to_str().expect("UTF-8 project path"),
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    assert_success(&json_test);
+    let json_test: Value = serde_json::from_slice(&json_test.stdout).expect("test emits only JSON");
+    assert_eq!(
+        json_test["schema_version"],
+        "registryctl.project_command.v1"
+    );
+    assert_eq!(json_test["status"], "passed");
+
+    let build = run_registryctl(
+        &[
+            "build",
+            "--project-dir",
+            project.to_str().expect("UTF-8 project path"),
+            "--environment",
+            "local",
+        ],
+        None,
+    );
+    assert_success(&build);
+    let build = String::from_utf8(build.stdout).expect("UTF-8 build output");
+    assert!(
+        build.starts_with("Built Registry Stack project \"fictional-citizen-registry\".\n"),
+        "{build}"
+    );
+    assert!(build.contains("\n  Environment: local\n"), "{build}");
+    assert!(build.contains("\n  Output: "), "{build}");
+
+    let json_build = run_registryctl(
+        &[
+            "build",
+            "--project-dir",
+            project.to_str().expect("UTF-8 project path"),
+            "--environment",
+            "local",
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    assert_success(&json_build);
+    let json_build: Value =
+        serde_json::from_slice(&json_build.stdout).expect("build emits only JSON");
+    assert_eq!(
+        json_build["schema_version"],
+        "registryctl.project_command.v1"
+    );
+    assert_eq!(json_build["status"], "built");
 }

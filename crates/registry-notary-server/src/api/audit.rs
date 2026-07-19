@@ -167,7 +167,7 @@ pub(super) fn attach_batch_evaluate_response_audit(
     response: &mut Response,
     keys: &SubjectAccessRateLimitKeys,
     _evidence: &EvidenceConfig,
-    _request: &BatchEvaluateRequest,
+    request: &BatchEvaluateRequest,
     result: &registry_notary_core::BatchEvaluateResponse,
     audit_purposes: Option<&[String]>,
 ) -> Result<(), EvidenceError> {
@@ -175,12 +175,36 @@ pub(super) fn attach_batch_evaluate_response_audit(
         return Ok(());
     };
     let mut batch_items = Vec::with_capacity(result.items.len());
+    let mut relay_consultation_ids = BTreeSet::new();
+    let mut relay_forwarded_count = 0u64;
     for item in &result.items {
+        let request_item = request
+            .items
+            .get(item.input_index)
+            .ok_or(EvidenceError::InvalidRequest)?;
         let purpose_scope = audit_purposes
             .and_then(|purposes| purposes.get(item.input_index))
             .map(String::as_str);
+        relay_forwarded_count =
+            relay_forwarded_count.saturating_add(item.runtime_audit.relay_forwarded_count);
+        relay_consultation_ids.extend(item.runtime_audit.relay_consultation_ids.iter().cloned());
         batch_items.push(EvidenceBatchItemAuditEvent {
             input_index: item.input_index,
+            outcome: match item.status {
+                registry_notary_core::BatchItemStatus::Succeeded => "succeeded",
+                registry_notary_core::BatchItemStatus::Failed => "failed",
+            }
+            .to_string(),
+            error_code: item
+                .errors
+                .first()
+                .map(|error| error.audit_code.as_ref().unwrap_or(&error.code).clone()),
+            relay_consultation_count: u64::try_from(
+                item.runtime_audit.relay_consultation_ids.len(),
+            )
+            .unwrap_or(u64::MAX),
+            forwarded: item.runtime_audit.relay_forwarded_count > 0,
+            relay_consultation_ids: item.runtime_audit.relay_consultation_ids.clone(),
             target_type: Some(item.target_ref.entity_type.clone())
                 .filter(|entity_type| !entity_type.is_empty()),
             target_ref_hash: if item.errors.is_empty() {
@@ -192,29 +216,42 @@ pub(super) fn attach_batch_evaluate_response_audit(
                     &item.target_ref.handle,
                 )?)
             } else {
-                None
+                hash_audit_matching_attempt(keys, "target", purpose_scope, &request_item.target)?
             },
-            requester_type: item
-                .requester_ref
+            requester_type: request_item
+                .requester
                 .as_ref()
                 .map(|requester| requester.entity_type.clone()),
-            requester_ref_hash: item
-                .requester_ref
-                .as_ref()
-                .filter(|_| item.errors.is_empty())
-                .map(|requester| {
-                    hash_audit_handle(
-                        keys,
-                        "requester",
-                        requester.entity_type.as_str(),
-                        purpose_scope,
-                        &requester.handle,
-                    )
-                })
-                .transpose()?,
+            requester_ref_hash: if item.errors.is_empty() {
+                item.requester_ref
+                    .as_ref()
+                    .map(|requester| {
+                        hash_audit_handle(
+                            keys,
+                            "requester",
+                            requester.entity_type.as_str(),
+                            purpose_scope,
+                            &requester.handle,
+                        )
+                    })
+                    .transpose()?
+            } else {
+                request_item
+                    .requester
+                    .as_ref()
+                    .map(|requester| {
+                        hash_audit_matching_attempt(keys, "requester", purpose_scope, requester)
+                    })
+                    .transpose()?
+                    .flatten()
+            },
         });
     }
     audit.batch_items = Some(batch_items);
+    audit.relay_consultation_count =
+        Some(u64::try_from(relay_consultation_ids.len()).unwrap_or(u64::MAX));
+    audit.forwarded = Some(relay_forwarded_count > 0);
+    audit.relay_consultation_ids = relay_consultation_ids.into_iter().collect();
     Ok(())
 }
 
@@ -232,13 +269,17 @@ pub(super) fn hash_audit_handle(
 }
 
 pub(super) fn hash_audit_matching_attempt(
-    _keys: &SubjectAccessRateLimitKeys,
+    keys: &SubjectAccessRateLimitKeys,
     role: &str,
     purpose_scope: Option<&str>,
     entity: &EvidenceEntity,
 ) -> Result<Option<Hashed<EvidenceEntityReference>>, EvidenceError> {
-    let _ = canonical_audit_identifier_input(role, purpose_scope, entity)?;
-    Ok(None)
+    let Some(input) = canonical_audit_identifier_input(role, purpose_scope, entity)? else {
+        return Ok(None);
+    };
+    keys.audit_pseudonym_ref("matching-attempt-v1", &input)
+        .map(|hash| Some(Hashed::from_hash(hash.as_str().to_string())))
+        .map_err(|error| error.evidence_error())
 }
 
 pub(super) fn canonical_audit_handle_input(

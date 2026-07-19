@@ -60,6 +60,19 @@ pub(super) fn valid_oid4vci_config_passes_validation() {
 }
 
 #[test]
+pub(super) fn oid4vci_rejects_wallet_authorization_code_profile() {
+    let mut config = valid_oid4vci_config();
+    config.oid4vci.pre_authorized_code = Oid4vciPreAuthorizedCodeConfig::default();
+
+    let reason = expect_oid4vci_error(&config);
+    assert!(
+        reason.contains("pre_authorized_code.enabled = true")
+            && reason.contains("authorization_code issuance is not supported"),
+        "unexpected: {reason}"
+    );
+}
+
+#[test]
 pub(super) fn valid_oid4vci_projection_config_passes_validation() {
     let config = valid_oid4vci_projection_config();
     config
@@ -434,9 +447,6 @@ pub(super) fn oid4vci_accepts_vct_under_path_prefixed_credential_issuer() {
     config.oid4vci.credential_issuer = "http://127.0.0.1:4325/notary".to_string();
     config.oid4vci.credential_endpoint =
         "http://127.0.0.1:4325/notary/oid4vci/credential".to_string();
-    config.oid4vci.offer_endpoint =
-        "http://127.0.0.1:4325/notary/oid4vci/credential-offer".to_string();
-    config.oid4vci.nonce_endpoint = Some("http://127.0.0.1:4325/notary/oid4vci/nonce".to_string());
     config
         .evidence
         .credential_profiles
@@ -607,12 +617,15 @@ pub(super) fn oid4vci_rejects_duplicate_credential_configuration_vct() {
 }
 
 #[test]
-pub(super) fn oid4vci_rejects_missing_nonce_endpoint_when_nonce_enabled() {
+pub(super) fn oid4vci_rejects_public_nonce_endpoint() {
     let mut config = valid_oid4vci_config();
-    config.oid4vci.nonce_endpoint = None;
+    config.oid4vci.nonce_endpoint = Some("http://127.0.0.1:4325/oid4vci/nonce".to_string());
 
     let reason = expect_oid4vci_error(&config);
-    assert!(reason.contains("nonce_endpoint"), "unexpected: {reason}");
+    assert!(
+        reason.contains("nonce_endpoint") && reason.contains("must be omitted"),
+        "unexpected: {reason}"
+    );
 }
 
 #[test]

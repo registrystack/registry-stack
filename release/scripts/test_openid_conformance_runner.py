@@ -62,6 +62,37 @@ class OpenIdConformanceRunnerTest(TestCase):
         self.assertNotIn("REGISTRY_LAB_", serialized)
         self.assertNotIn("blocked-by-lab", serialized)
 
+    def test_notary_mapping_is_candidate_only_and_matches_the_1_0_profile(self) -> None:
+        metadata = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-metadata"
+        )
+        full = self.runner.find_scenario(
+            self.plan_map, "notary-oid4vci-issuer-full"
+        )
+
+        self.assertEqual("candidate-only", metadata["status"])
+        self.assertEqual(
+            "pre_authorization_code", metadata["variants"]["vci_grant_type"]
+        )
+        self.assertIn("registry-backed", metadata["surface"])
+        metadata_notes = " ".join(metadata["notes"])
+        self.assertIn("does not support or claim DPoP", metadata_notes)
+        self.assertIn("frozen candidate artifact", metadata_notes)
+
+        self.assertEqual(
+            "blocked-by-suite-profile-and-offer-adapter", full["status"]
+        )
+        self.assertEqual(
+            "pre_authorization_code", full["variants"]["vci_grant_type"]
+        )
+        full_contract = " ".join(full["requires"] + full["notes"])
+        self.assertIn("pre-authorized offer", full_contract)
+        self.assertIn("is not a wallet grant", full_contract)
+        self.assertNotIn(
+            "policy decision on whether the first full run targets",
+            full_contract,
+        )
+
     def test_builder_override_pins_maven_image_by_digest(self) -> None:
         override = self.runner.BUILDER_COMPOSE_OVERRIDE_PATH.read_text(
             encoding="utf-8"
@@ -417,9 +448,32 @@ class OpenIdConformanceRunnerTest(TestCase):
             ]
         )
         with self.assertRaisesRegex(
-            self.runner.RunnerError, "blocked-by-credential-offer-adapter"
+            self.runner.RunnerError, "blocked-by-suite-profile-and-offer-adapter"
         ):
             self.runner.cmd_run(args)
+
+    def test_candidate_only_metadata_scenario_runs_without_blocked_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            args = self.runner.parse_args(
+                [
+                    "run",
+                    "notary-oid4vci-issuer-metadata",
+                    "--issuer-url",
+                    "https://issuer.example.test",
+                    "--output-dir",
+                    tmp,
+                    "--suite-dir",
+                    str(Path(tmp) / "suite"),
+                    "--no-prepare",
+                    "--dry-run",
+                ]
+            )
+            with patch("builtins.print") as printed:
+                self.assertEqual(0, self.runner.cmd_run(args))
+            invocation = json.loads(printed.call_args.args[0])
+            self.assertIn(
+                "oid4vci-1_0-issuer-metadata-test", " ".join(invocation["command"])
+            )
 
 
 if __name__ == "__main__":

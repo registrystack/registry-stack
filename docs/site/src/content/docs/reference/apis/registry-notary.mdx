@@ -42,6 +42,13 @@ evaluation routes); it is not a public discovery endpoint.
 The issuer JWKS at `GET /.well-known/evidence/jwks.json` is public and requires no credentials.
 The evaluation, rendering, credential, and OID4VCI routes are documented in the generated API reference.
 
+The OID4VCI profile is registry-backed and issuer initiated. Its only
+wallet-facing grant is pre-authorized code. It uses EdDSA `did:jwk` holder
+proof and EdDSA or ES256 issuer signing. The identity provider's authorization
+code remains internal to Notary. There is no public nonce route, response next
+nonce, source-free issuance, ES256 holder proof, EUDI, HAIP, PAR, DPoP, or
+wallet-attestation profile.
+
 ## Authentication
 
 Registry Notary runs in static-credential mode or OIDC mode:
@@ -66,9 +73,9 @@ For a full explanation of how the levels interact and the downgrade strategies, 
 
 Notary issues SD-JWT VC credentials:
 
-- Token type `dc+sd-jwt`, signing algorithm EdDSA (Ed25519).
-- The issuer key is sourced from an environment variable (an OKP Ed25519 JWK); the public key is
-  published at `GET /.well-known/evidence/jwks.json`.
+- Token type `dc+sd-jwt`, with issuer signing configured as EdDSA (Ed25519) or ES256 (P-256).
+- The issuer key comes from the configured signing provider; its public JWK is published at
+  `GET /.well-known/evidence/jwks.json`.
 - Individual claim fields are wrapped in SD-JWT disclosures with SHA-256 digests for selective
   disclosure.
 
@@ -113,13 +120,15 @@ or execute direct registry source connectors.
 
 - Plugin rule type: The `Plugin` rule variant is declared in config but has no implementation at
   the pinned commit.
-- Holder binding: `did:jwk` is the only supported proof-of-possession binding method.
+- Holder binding: OID4VCI supports EdDSA `did:jwk` holder proof only.
 - Demo helpers: Generated workflow helpers are examples, not production replay-protection
   profiles. Add freshness, expiry, or nonce checks before copying a helper into a production
   workflow.
 - Admin reload: the standalone router returns `501` with
   `registry.admin.capability.not_supported`; key and configuration changes require a service
   restart.
+- Admin posture: `GET /admin/v1/posture` returns the shared versioned operations observation.
+  [RS-OP-POSTURE](../../../spec/rs-op-posture/) defines its envelope, tiers, and consumer rules.
 
 ## Behavior the schema cannot express
 

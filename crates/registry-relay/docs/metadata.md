@@ -197,7 +197,7 @@ fetched and built by `cargo install --locked --git`.
 Validate one manifest:
 
 ```sh
-just metadata-validate profiles/example-civil-registration/fixtures/metadata.yaml
+just metadata-validate ../../products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml
 ```
 
 Validate all ecosystem profile descriptors and fixture manifests:
@@ -205,6 +205,10 @@ Validate all ecosystem profile descriptors and fixture manifests:
 ```sh
 just metadata-validate-profiles
 ```
+
+This command also rejects copied `example-*` YAML under Relay's local
+`profiles/` directory. Example metadata profiles are owned by Registry
+Manifest so their descriptors and fixtures cannot drift between products.
 
 Validate all demo split configs via the Rust integration test:
 
@@ -240,10 +244,10 @@ direct responses to client requests; any runtime path that surfaces one returns
 Render individual artifacts:
 
 ```sh
-just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml catalog target/metadata/catalog.json
-just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml dcat target/metadata/dcat.jsonld
-just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml shacl target/metadata/shacl.jsonld
-just metadata-render profiles/example-civil-registration/fixtures/metadata.yaml json-schema target/metadata/person.schema.json "--dataset vital-events --entity person"
+just metadata-render ../../products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml catalog target/metadata/catalog.json
+just metadata-render ../../products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml dcat target/metadata/dcat.jsonld
+just metadata-render ../../products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml shacl target/metadata/shacl.jsonld
+just metadata-render ../../products/manifest/profiles/example-civil-registration/fixtures/metadata.yaml json-schema target/metadata/person.schema.json "--dataset vital-events --entity person"
 ```
 
 Supported formats are:
@@ -270,7 +274,7 @@ API Records surface.
 Publish a static bundle:
 
 ```sh
-just metadata-publish profiles/example-social-benefits/fixtures/metadata.yaml target/metadata/example-social-benefits
+just metadata-publish ../../products/manifest/profiles/example-social-benefits/fixtures/metadata.yaml target/metadata/example-social-benefits
 ```
 
 The bundle contains:
@@ -642,14 +646,16 @@ Relay clients.
 
 ## Profiles
 
-The `profiles/` directory contains non-normative data descriptors and fixtures
-for consumers of the portable model. The app profiles are hypothetical examples,
-not OpenCRVS, OpenSPP, or other upstream conformance claims:
+The canonical `products/manifest/profiles/` directory contains non-normative
+data descriptors and fixtures for consumers of the portable model. From the
+Relay directory, the hypothetical examples are located at:
 
-- `profiles/example-civil-registration`
-- `profiles/example-social-benefits`
-- `profiles/example-person-schema`
-- `profiles/example-benefits-sync`
+- `../../products/manifest/profiles/example-civil-registration`
+- `../../products/manifest/profiles/example-social-benefits`
+- `../../products/manifest/profiles/example-person-schema`
+- `../../products/manifest/profiles/example-benefits-sync`
+
+These examples are not OpenCRVS, OpenSPP, or other upstream conformance claims.
 
 Profiles are data first, not Rust crates. Promote one only when there are
 multiple generators or validators that need shared code.

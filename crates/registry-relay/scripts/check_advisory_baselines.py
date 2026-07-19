@@ -31,6 +31,7 @@ SEVERITY_ORDER = {
 REQUIRED_REVIEW_FIELDS = {
     "tool",
     "fingerprint",
+    "rule_id",
     "severity",
     "status",
     "owner",
@@ -48,8 +49,14 @@ class Finding:
     severity: str
     location: str
     summary: str
+    fix_versions: tuple[str, ...] = ()
+    fix_state: str = ""
 
-    def to_json(self) -> dict[str, str]:
+    @property
+    def fixable(self) -> bool:
+        return bool(self.fix_versions) or self.fix_state.casefold() == "fixed"
+
+    def to_json(self) -> dict[str, Any]:
         return {
             "tool": self.tool,
             "fingerprint": self.fingerprint,
@@ -57,6 +64,9 @@ class Finding:
             "severity": self.severity,
             "location": self.location,
             "summary": self.summary,
+            "fixable": self.fixable,
+            "fix_versions": list(self.fix_versions),
+            "fix_state": self.fix_state,
         }
 
 
@@ -179,6 +189,26 @@ def normalize_grype(report: Any, subject: str) -> list[Finding]:
         package_name = str(artifact.get("name", "<unknown>"))
         package_version = str(artifact.get("version", "<unknown>"))
         package_type = str(artifact.get("type", "<unknown>"))
+        fix = vulnerability.get("fix")
+        if fix is None:
+            fix = {}
+        if not isinstance(fix, dict):
+            fail(f"grype finding {vuln_id} has a malformed fix object")
+        fix_versions_value = fix.get("versions", [])
+        if fix_versions_value is None:
+            fix_versions_value = []
+        if not isinstance(fix_versions_value, list) or any(
+            not isinstance(version, str) for version in fix_versions_value
+        ):
+            fail(f"grype finding {vuln_id} has malformed fix versions")
+        fix_versions = tuple(
+            version.strip() for version in fix_versions_value if version.strip()
+        )
+        fix_state_value = fix.get("state", "")
+        if fix_state_value is None:
+            fix_state_value = ""
+        if not isinstance(fix_state_value, str):
+            fail(f"grype finding {vuln_id} has a malformed fix state")
         fingerprint = "|".join(
             [
                 "grype",
@@ -197,6 +227,8 @@ def normalize_grype(report: Any, subject: str) -> list[Finding]:
                 severity=severity,
                 location=subject,
                 summary=f"{vuln_id} in {package_name} {package_version}",
+                fix_versions=fix_versions,
+                fix_state=fix_state_value.strip(),
             )
         )
     return findings
@@ -223,6 +255,8 @@ def load_baseline(path: Path) -> dict[str, Any]:
         severity_rank(str(policy["minimum_severity"]))
         if policy["action"] != "block_unreviewed":
             fail(f"unsupported policy action: {policy['action']}")
+        if policy["tool"] == "grype" and policy.get("block_fixable") is not True:
+            fail("grype policy must set block_fixable to true")
     seen_reviews: set[str] = set()
     for review in reviewed:
         validate_review_entry(review)
@@ -244,10 +278,14 @@ def validate_review_entry(review: Any) -> None:
     severity_rank(str(review["severity"]))
     for field in ("reviewed_at", "expires_at"):
         parse_date(str(review[field]), field)
-    for field in ("fingerprint", "owner", "reason"):
+    for field in ("tool", "fingerprint", "rule_id", "owner", "reason"):
         value = review.get(field)
         if not isinstance(value, str) or not value.strip():
             fail(f"reviewed finding {field} must be a non-blank string")
+    reviewed_at = parse_date(str(review["reviewed_at"]), "reviewed_at")
+    expires_at = parse_date(str(review["expires_at"]), "expires_at")
+    if expires_at < reviewed_at:
+        fail("reviewed finding expires_at must not precede reviewed_at")
 
 
 def parse_date(value: str, field: str) -> dt.date:
@@ -264,6 +302,14 @@ def policy_threshold(baseline: dict[str, Any], tool: str) -> str:
     return str(matches[0]["minimum_severity"]).lower()
 
 
+def finding_is_blocking(
+    finding: Finding, tool: str, threshold_rank: int
+) -> bool:
+    return (
+        tool == "grype" and finding.fixable
+    ) or severity_rank(finding.severity) >= threshold_rank
+
+
 def check_findings(
     tool: str,
     findings: list[Finding],
@@ -273,8 +319,14 @@ def check_findings(
 ) -> int:
     threshold = policy_threshold(baseline, tool)
     threshold_rank = severity_rank(threshold)
-    blocking = [f for f in findings if severity_rank(f.severity) >= threshold_rank]
-    active_fingerprints = {finding.fingerprint for finding in blocking}
+    blocking = [
+        finding
+        for finding in findings
+        if finding_is_blocking(finding, tool, threshold_rank)
+    ]
+    fixable = [finding for finding in blocking if tool == "grype" and finding.fixable]
+    reviewable = [finding for finding in blocking if finding not in fixable]
+    active_fingerprints = {finding.fingerprint for finding in reviewable}
     reviews = {
         str(review["fingerprint"]): review
         for review in baseline["reviewed_findings"]
@@ -284,11 +336,15 @@ def check_findings(
             or str(review["fingerprint"]).startswith(f"{tool}|{review_scope}|")
         )
     }
+    active_reviews = {
+        finding.fingerprint: reviews[finding.fingerprint]
+        for finding in reviewable
+        if finding.fingerprint in reviews
+    }
     expired = [
         review
-        for review in reviews.values()
-        if review["fingerprint"] in active_fingerprints
-        and parse_date(str(review["expires_at"]), "expires_at") < today
+        for review in active_reviews.values()
+        if parse_date(str(review["expires_at"]), "expires_at") < today
     ]
     if expired:
         for review in expired:
@@ -297,9 +353,48 @@ def check_findings(
                 f"expired_at={review['expires_at']}",
                 file=sys.stderr,
             )
-        return 1
+    future_reviewed = [
+        review
+        for review in active_reviews.values()
+        if parse_date(str(review["reviewed_at"]), "reviewed_at") > today
+    ]
+    mismatched = [
+        finding
+        for finding in reviewable
+        if finding.fingerprint in active_reviews
+        and (
+            str(active_reviews[finding.fingerprint]["rule_id"]) != finding.rule_id
+            or str(active_reviews[finding.fingerprint]["severity"]).casefold()
+            != finding.severity.casefold()
+        )
+    ]
+    for finding in fixable:
+        print(
+            "fixable finding cannot be dispositioned: "
+            f"{finding.tool} {finding.rule_id} {finding.severity} "
+            f"{finding.location} fixes={list(finding.fix_versions)} "
+            f"fingerprint={finding.fingerprint}",
+            file=sys.stderr,
+        )
+    for review in future_reviewed:
+        print(
+            f"future-dated reviewed finding: {review['tool']} {review['fingerprint']} "
+            f"reviewed_at={review['reviewed_at']}",
+            file=sys.stderr,
+        )
+    for finding in mismatched:
+        review = active_reviews[finding.fingerprint]
+        print(
+            "reviewed finding metadata mismatch: "
+            f"{finding.fingerprint} report_rule={finding.rule_id} "
+            f"review_rule={review['rule_id']} report_severity={finding.severity} "
+            f"review_severity={review['severity']}",
+            file=sys.stderr,
+        )
 
-    unreviewed = [finding for finding in blocking if finding.fingerprint not in reviews]
+    unreviewed = [
+        finding for finding in reviewable if finding.fingerprint not in reviews
+    ]
     if unreviewed:
         for finding in unreviewed:
             print(
@@ -308,18 +403,17 @@ def check_findings(
                 f"{finding.location} fingerprint={finding.fingerprint}",
                 file=sys.stderr,
             )
-        return 1
-
     stale = sorted(set(reviews) - active_fingerprints)
     print(
         "advisory baseline: "
         f"{tool} threshold={threshold} blocking={len(blocking)} "
-        f"reviewed={len(blocking) - len(unreviewed)} "
-        f"unreviewed={len(unreviewed)} expired={len(expired)} stale={len(stale)}"
+        f"fixable={len(fixable)} reviewed={len(active_reviews)} "
+        f"unreviewed={len(unreviewed)} expired={len(expired)} "
+        f"invalid={len(future_reviewed) + len(mismatched)} stale={len(stale)}"
     )
     if stale:
         print(f"advisory baseline: {tool} has stale reviewed entries: {len(stale)}")
-    return 0
+    return int(bool(fixable or expired or future_reviewed or mismatched or unreviewed))
 
 
 def main() -> None:
@@ -350,7 +444,7 @@ def main() -> None:
         blocking = [
             finding.to_json()
             for finding in findings
-            if severity_rank(finding.severity) >= threshold_rank
+            if finding_is_blocking(finding, args.tool, threshold_rank)
         ]
         print(json.dumps(blocking, indent=2, sort_keys=True))
         return

@@ -1,0 +1,82 @@
+{
+  "schema_version": "registry.release.integration_e2_profile.v1",
+  "profile_id": "dhis2-tracker-2.41.9",
+  "support_status": "Registry Stack-supported unofficial integration profile",
+  "starter": "dhis2-tracker",
+  "source": {
+    "product": "dhis2-tracker",
+    "baseline": [
+      {
+        "component": "dhis2",
+        "version": "2.41.9",
+        "commit": "ce6404687f6a5806e2661cffe4bc7a1d9b2ad2ed"
+      }
+    ],
+    "operations": [
+      {
+        "id": "tracked-entity-read",
+        "role": "data",
+        "method": "GET",
+        "path": "/api/tracker/trackedEntities/{uid}",
+        "selector": "exact tracked entity UID",
+        "field_projection": "trackedEntity,attributes[attribute,value],enrollments[program,status,events[programStage,status]]",
+        "max_calls": 1
+      }
+    ]
+  },
+  "authored_contract": {
+    "integration_alias": "health-record",
+    "generated_yaml_edits_allowed": false,
+    "reviewed_changes": [
+      "Replace every DEMO_* metadata UID in the authored Rhai adapter with an owner-attested instance value.",
+      "Keep the exact singleton trackedEntities resource path, reviewed field projection, and echoed UID comparison.",
+      "Bind the owner-attested source origin and Basic authentication through the reviewed environment input.",
+      "Keep source origins, metadata UIDs, selectors, and credentials out of the checked-in profile and public result."
+    ]
+  },
+  "dynamic_inputs": [
+    { "env": "DHIS2_SOURCE_ORIGIN", "classification": "restricted", "purpose": "source origin" },
+    { "env": "DHIS2_USERNAME", "classification": "secret", "purpose": "Basic authentication username" },
+    { "env": "DHIS2_PASSWORD", "classification": "secret", "purpose": "Basic authentication password" },
+    { "env": "DHIS2_CHILD_PROGRAM_UID", "classification": "restricted", "purpose": "child programme metadata" },
+    { "env": "DHIS2_MATERNAL_PROGRAM_UID", "classification": "restricted", "purpose": "maternal programme metadata" },
+    { "env": "DHIS2_TB_PROGRAM_UID", "classification": "restricted", "purpose": "tuberculosis programme metadata" },
+    { "env": "DHIS2_CHILD_VISIT_STAGE_UID", "classification": "restricted", "purpose": "child visit stage metadata" },
+    { "env": "DHIS2_FIRST_NAME_ATTRIBUTE_UID", "classification": "restricted", "purpose": "first-name attribute metadata" },
+    { "env": "DHIS2_LAST_NAME_ATTRIBUTE_UID", "classification": "restricted", "purpose": "last-name attribute metadata" },
+    { "env": "DHIS2_BIRTH_DATE_ATTRIBUTE_UID", "classification": "restricted", "purpose": "birth-date attribute metadata" },
+    { "env": "DHIS2_RECONCILIATION_ATTRIBUTE_UID", "classification": "restricted", "purpose": "reconciliation attribute metadata" },
+    { "env": "DHIS2_MATCH_TRACKED_ENTITY", "classification": "subject", "purpose": "match selector" },
+    { "env": "DHIS2_NO_MATCH_TRACKED_ENTITY", "classification": "subject", "purpose": "no-match selector" },
+    { "env": "DHIS2_MISMATCH_TRACKED_ENTITY", "classification": "subject", "purpose": "selector-mismatch selector" },
+    { "env": "REGISTRY_INTEGRATION_E2_SOURCE_PROBE", "classification": "restricted", "purpose": "source-side audit probe path" },
+    { "env": "REGISTRY_INTEGRATION_E2_CANARY_FILE", "classification": "restricted", "purpose": "redaction canary file path" }
+  ],
+  "cases": [
+    { "id": "authorized-match", "expected_result_code": "match", "expected_source_data_access": "contacted_once" },
+    { "id": "authorized-no-match", "expected_result_code": "no-match", "expected_source_data_access": "contacted_once" },
+    { "id": "ambiguity", "expected_result_code": "not-applicable", "expected_source_data_access": "not_applicable" },
+    { "id": "invalid-selector", "expected_result_code": "invalid-selector", "expected_source_data_access": "not_contacted" },
+    { "id": "wrong-caller", "expected_result_code": "denied-wrong-caller", "expected_source_data_access": "not_contacted" },
+    { "id": "missing-scope", "expected_result_code": "denied-missing-scope", "expected_source_data_access": "not_contacted" },
+    { "id": "wrong-purpose", "expected_result_code": "denied-wrong-purpose", "expected_source_data_access": "not_contacted" },
+    { "id": "stale-contract", "expected_result_code": "denied-stale-contract", "expected_source_data_access": "not_contacted" },
+    { "id": "subject-mismatch", "expected_result_code": "subject-mismatch", "expected_source_data_access": "contacted_once" },
+    { "id": "source-authorization-failure", "expected_result_code": "source-authorization-failure", "expected_source_data_access": "contacted_once" },
+    { "id": "deadline-enforced", "expected_result_code": "deadline-exceeded", "expected_source_data_access": "contacted_once" }
+  ],
+  "prerequisites": [
+    "A frozen published Registry Stack 1.0 candidate with independently verified assets.",
+    "An owner-approved non-production DHIS2 2.41.9 instance provides stable match, no-match, mismatch, authorization-failure, and delayed-response cases.",
+    "Every DEMO_* value in the starter is replaced by an owner-attested metadata UID before project test, check, and build.",
+    "Source-side audit or request-counter access can prove whether the tracked entity operation was contacted for every case.",
+    "Restricted raw-evidence storage, retention, redaction review, and scoped teardown are approved."
+  ],
+  "limits": {
+    "case_timeout_seconds": 30,
+    "run_timeout_seconds": 1200,
+    "raw_evidence_bytes": 8388608,
+    "public_result_bytes": 1048576,
+    "teardown_timeout_seconds": 300
+  }
+}

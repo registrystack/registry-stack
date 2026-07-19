@@ -14,6 +14,12 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_FUZZ_VERSION: "0.13.2"
+  CARGO_LLVM_COV_VERSION: "0.8.7"
+  GITLEAKS_VERSION: "8.30.1"
+  GITLEAKS_LINUX_X64_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+  OASDIFF_VERSION: "1.23.0"
+  OASDIFF_LINUX_X64_SHA256: "972b10535c3db4366b9dc3ebc11ca021279af3095267c3cffdca854a3a3c4f89"
 
 jobs:
   changes:
@@ -21,6 +27,8 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
+      platform: ${{ steps.filter.outputs.platform }}
+      platform_hygiene: ${{ steps.filter.outputs.platform_hygiene }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
       docs: ${{ steps.filter.outputs.docs }}
@@ -39,6 +47,8 @@ jobs:
         run: |
           set -euo pipefail
           rust=false
+          platform=false
+          platform_hygiene=false
           release_tool=false
           release_source_proof=false
           docs=false
@@ -59,6 +69,8 @@ jobs:
 
           mark_all() {
             rust=true
+            platform=true
+            platform_hygiene=true
             release_tool=true
             release_source_proof=true
             docs=true
@@ -88,9 +100,25 @@ jobs:
                 Cargo.toml|Cargo.lock|deny.toml|rust-toolchain*|crates/*|products/*)
                   rust=true
                   ;;
+                docs/site/src/data/relay-support.yaml|docs/site/src/data/generated/relay-support.json)
+                  rust=true
+                  ;;
+              esac
+              case "${path}" in
+                Cargo.toml|Cargo.lock|clippy.toml|deny.toml|rustfmt.toml|rust-toolchain*|crates/registry-config-report/*|crates/registry-platform-*|products/platform/Cargo.toml|products/platform/fuzz/*|products/platform/rust-toolchain.toml)
+                  platform=true
+                  ;;
+              esac
+              case "${path}" in
+                clippy.toml|deny.toml|rustfmt.toml|crates/registry-relay/clippy.toml|crates/registry-relay/deny.toml|crates/registry-relay/rustfmt.toml|crates/registry-relay/config/*|crates/registry-relay/demo/config/*|crates/registry-relay/perf/config/*|crates/registry-relay/profiles/*|crates/registry-relay/tests/fixtures/config/*|products/platform/clippy.toml|products/platform/deny.toml|products/platform/rustfmt.toml|products/platform/scripts/*|products/platform/templates/*)
+                  platform_hygiene=true
+                  ;;
               esac
               case "${path}" in
                 release/*)
+                  release_tool=true
+                  ;;
+                docs/site/src/content/docs/reference/errors.mdx)
                   release_tool=true
                   ;;
               esac
@@ -119,12 +147,179 @@ jobs:
 
           {
             echo "rust=${rust}"
+            echo "platform=${platform}"
+            echo "platform_hygiene=${platform_hygiene}"
             echo "release_tool=${release_tool}"
             echo "release_source_proof=${release_source_proof}"
             echo "docs=${docs}"
             echo "editors=${editors}"
             echo "registryctl_tutorial=${registryctl_tutorial}"
           } >> "${GITHUB_OUTPUT}"
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Install pinned Gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_LINUX_X64_SHA256}  ${RUNNER_TEMP}/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/gitleaks.tar.gz" -C "${RUNNER_TEMP}/bin" gitleaks
+          chmod +x "${RUNNER_TEMP}/bin/gitleaks"
+
+      - name: Scan tracked source for secrets
+        run: >-
+          "${RUNNER_TEMP}/bin/gitleaks" dir
+          --config .gitleaks.toml
+          --no-banner
+          --redact
+          --timeout 120
+          .
+
+  platform-quality:
+    name: Platform all-features
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: platform-all-features
+
+      - name: Build platform crates with all features
+        run: cargo build --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features
+
+      - name: Lint platform crates with all features
+        run: cargo clippy --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features -- -D warnings
+
+      - name: Test platform crates with all features
+        run: cargo test --locked -p registry-config-report -p 'registry-platform-*' --all-targets --all-features
+
+  platform-coverage:
+    name: Platform line coverage
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: platform-coverage
+
+      - name: Install pinned coverage tool
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
+
+      - name: Enforce platform line coverage
+        run: >-
+          cargo llvm-cov --locked
+          -p registry-config-report
+          -p 'registry-platform-*'
+          --all-features
+          --fail-under-lines 80
+
+  platform-hygiene:
+    name: Platform hygiene and config inventory
+    needs: changes
+    if: needs.changes.outputs.platform_hygiene == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Check shared Rust hygiene files
+        run: products/platform/scripts/check-hygiene-alignment.sh
+
+      - name: Audit monorepo config roots
+        run: >-
+          products/platform/scripts/audit-configs.sh
+          --check
+          --format paths
+          > "${RUNNER_TEMP}/registry-config-inventory.txt"
+
+  platform-fuzz:
+    name: Platform fuzz smoke (${{ matrix.target }})
+    needs: changes
+    if: needs.changes.outputs.platform == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - authcommon_parsers
+          - oid4vci_request_and_proof
+          - sdjwt_holder_proof
+          - sdjwt_issuance
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # nightly
+        with:
+          toolchain: nightly
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: platform-fuzz-${{ matrix.target }}
+
+      - name: Install pinned cargo-fuzz
+        uses: taiki-e/install-action@25435dc8dd3baed7417e0c96d3fe89013a5b2e09 # v2.81.3
+        with:
+          tool: cargo-fuzz@${{ env.CARGO_FUZZ_VERSION }}
+
+      - name: Smoke fuzz target
+        working-directory: products/platform
+        run: |
+          set -euo pipefail
+          mkdir -p "fuzz/artifacts/${{ matrix.target }}"
+          cargo +nightly fuzz run --fuzz-dir fuzz --target x86_64-unknown-linux-gnu "${{ matrix.target }}" -- \
+            -max_total_time=60 \
+            -rss_limit_mb=1024 \
+            -artifact_prefix="fuzz/artifacts/${{ matrix.target }}/" \
+            -print_final_stats=1
+
+      - name: Upload fuzz failures
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: platform-fuzz-${{ matrix.target }}
+          path: products/platform/fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
 
   rust:
     name: Rust workspace
@@ -148,14 +343,39 @@ jobs:
         with:
           tool: cargo-deny@0.19.8,just@1.51.0
 
+      - name: Install pinned oasdiff
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/oasdiff.tar.gz" \
+            "https://github.com/oasdiff/oasdiff/releases/download/v${OASDIFF_VERSION}/oasdiff_${OASDIFF_VERSION}_linux_amd64.tar.gz"
+          echo "${OASDIFF_LINUX_X64_SHA256}  ${RUNNER_TEMP}/oasdiff.tar.gz" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/oasdiff.tar.gz" -C "${RUNNER_TEMP}/bin" oasdiff
+          chmod +x "${RUNNER_TEMP}/bin/oasdiff"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
       - name: Cargo metadata
         run: cargo metadata --locked --format-version 1 >/tmp/registry-stack-cargo-metadata.json
+
+      - name: Validate Manifest profiles
+        working-directory: products/manifest
+        run: cargo run --locked -p registry-manifest-cli -- validate-profiles profiles
 
       - name: Gate inventory
         run: python3 release/scripts/check-gates-inventory.py
 
       - name: Test gate inventory
         run: python3 -m unittest release/scripts/test_check_gates_inventory.py
+
+      - name: Test stable surface compatibility checker
+        run: python3 -m unittest release/scripts/test_check_stable_surface_compatibility.py
+
+      - name: Stable surface compatibility
+        env:
+          STABLE_SURFACE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python3 release/scripts/check-stable-surface-compatibility.py
 
       - name: Format
         run: cargo fmt --check
@@ -182,12 +402,20 @@ jobs:
         working-directory: products/notary
         run: just openapi-check
 
+      - name: Notary OpenAPI contract
+        working-directory: products/notary
+        env:
+          OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: just openapi-contract
+
       - name: Notary exposure check
         working-directory: products/notary
         run: just exposure-check
 
       - name: Relay OpenAPI contract
         working-directory: crates/registry-relay
+        env:
+          OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: just openapi-contract
 
       - name: Relay exposure check
@@ -266,11 +494,42 @@ jobs:
       - name: Test OpenID conformance runner
         run: python3 -m unittest release/scripts/test_openid_conformance_runner.py
 
+      - name: Test external integration evidence runner
+        run: python3 -m unittest release/scripts/test_integration_e2_runner.py
+
+      - name: Validate external integration evidence packet
+        run: python3 release/scripts/integration-e2-runner.py validate
+
+      - name: Test Relay OIDC smoke
+        run: python3 -m unittest release/scripts/test_relay_oidc_smoke.py
+
+      - name: Validate Relay OIDC smoke assets
+        run: python3 release/scripts/relay-oidc-smoke.py validate
+
       - name: Gate inventory
         run: python3 release/scripts/check-gates-inventory.py
 
       - name: Test gate inventory
         run: python3 -m unittest release/scripts/test_check_gates_inventory.py
+
+      - name: Test stable surface compatibility checker
+        run: python3 -m unittest release/scripts/test_check_stable_surface_compatibility.py
+
+      - name: Test Relay OpenAPI stability filter
+        run: python3 -m unittest release/scripts/test_filter_relay_openapi_stability.py
+
+      - name: Test upgrade exercise validator
+        run: python3 -m unittest release/scripts/test_validate_upgrade_exercise.py
+
+      - name: Validate upgrade exercise template
+        run: >-
+          python3 release/scripts/validate-upgrade-exercise.py --template
+          release/exercises/upgrade-exercise-v1.template.json
+
+      - name: Stable surface compatibility
+        env:
+          STABLE_SURFACE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python3 release/scripts/check-stable-surface-compatibility.py
 
       - name: Validate release manifest
         shell: bash
@@ -406,7 +665,10 @@ jobs:
           cache: npm
           cache-dependency-path: editors/vscode/package-lock.json
 
-      - name: Package and test VS Code developer preview
+      - name: Test editor installer
+        run: bash editors/tests/install_test.sh
+
+      - name: Package and test VS Code integration
         working-directory: editors/vscode
         run: |
           npm ci

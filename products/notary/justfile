@@ -47,6 +47,14 @@ audit:
 openapi-generate:
     cargo run -q -p registry-notary -- openapi
 
+# Reproduce the committed Draft 2020-12 runtime configuration schema.
+config-schema-generate:
+    cargo run --quiet --locked -p registry-notary -- schema > ../../schemas/registry-notary.config.schema.json
+
+# Fail when the product-owned runtime schema has drifted from its config graph.
+config-schema-check:
+    tmp_schema="$(mktemp)"; trap 'rm -f "$tmp_schema"' EXIT; cargo run --quiet --locked -p registry-notary -- schema > "$tmp_schema"; cmp -s ../../schemas/registry-notary.config.schema.json "$tmp_schema" || { diff -u ../../schemas/registry-notary.config.schema.json "$tmp_schema"; exit 1; }
+
 # Validate the committed OpenAPI baseline.
 openapi-check:
     python3 scripts/check_security_assurance.py openapi-baseline
@@ -60,16 +68,16 @@ openapi-contract base_ref="":
 exposure-check:
     python3 scripts/check_security_assurance.py manifest
 
-# Validate Dockerfiles for obvious secret-copy hazards.
+# Validate Dockerfiles for secret-copy hazards and the non-root runtime contract.
 container-security:
-    python3 scripts/check_security_assurance.py dockerfile-secrets
+    python3 scripts/check_security_assurance.py dockerfile-secrets container-runtime
 
 # Run security assurance checks that do not require external services.
 security:
     ./scripts/check-security.sh
 
 # Run the monorepo CI preflight for Registry Notary crates.
-ci-preflight:
+ci-preflight: config-schema-check
     ./scripts/ci-preflight.sh
 
 # Run the full local CI gate.

@@ -34,6 +34,23 @@ fn temp_dir(name: &str) -> PathBuf {
     path
 }
 
+fn collect_yaml_files(root: &Path, paths: &mut Vec<PathBuf>) {
+    let entries = fs::read_dir(root)
+        .unwrap_or_else(|error| panic!("read profile directory {}: {error}", root.display()));
+    for entry in entries {
+        let entry = entry.expect("directory entry");
+        let path = entry.path();
+        if entry.file_type().expect("file type").is_dir() {
+            collect_yaml_files(&path, paths);
+        } else if matches!(
+            path.extension().and_then(|value| value.to_str()),
+            Some("yaml" | "yml")
+        ) {
+            paths.push(path);
+        }
+    }
+}
+
 fn write_minimal_manifest(path: &Path, body: &str) {
     fs::write(
         path,
@@ -646,7 +663,7 @@ datasets:
 }
 
 #[test]
-fn validate_profiles_checks_descriptors_and_fixtures() {
+fn validate_profiles_checks_canonical_examples_without_relay_copies() {
     let profiles = manifest_product_root().join("profiles");
     let output = Command::new(bin())
         .args(["validate-profiles", profiles.to_str().unwrap()])
@@ -660,6 +677,41 @@ fn validate_profiles_checks_descriptors_and_fixtures() {
     );
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
     assert!(stdout.contains("validated 4 profile descriptors and fixtures"));
+
+    for profile in [
+        "example-benefits-sync",
+        "example-civil-registration",
+        "example-person-schema",
+        "example-social-benefits",
+    ] {
+        let profile_root = profiles.join(profile);
+        assert!(
+            profile_root.join("profile.yaml").is_file(),
+            "missing canonical descriptor for {profile}"
+        );
+        assert!(
+            profile_root.join("fixtures/metadata.yaml").is_file(),
+            "missing canonical fixture for {profile}"
+        );
+    }
+
+    let relay_profiles = workspace_root().join("crates/registry-relay/profiles");
+    let mut copied_yaml = Vec::new();
+    for entry in fs::read_dir(&relay_profiles).expect("Relay profiles directory") {
+        let entry = entry.expect("Relay profile entry");
+        if entry.file_type().expect("Relay profile file type").is_dir()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("example-"))
+        {
+            collect_yaml_files(&entry.path(), &mut copied_yaml);
+        }
+    }
+    assert!(
+        copied_yaml.is_empty(),
+        "example profile YAML must be owned by products/manifest/profiles, not copied into Relay: {copied_yaml:?}"
+    );
 }
 
 #[test]

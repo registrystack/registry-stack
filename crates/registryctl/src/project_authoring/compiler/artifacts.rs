@@ -142,7 +142,7 @@ fn compile_project_for_environment(
             generated_relay_config(loaded, environment_name, environment, &packs, &profiles)?;
         relay_private.insert(
             PathBuf::from("config/relay.yaml"),
-            serde_yaml::to_string(&relay_config)?
+            serde_norway::to_string(&relay_config)?
                 .into_bytes()
                 .into_boxed_slice(),
         );
@@ -168,7 +168,7 @@ fn compile_project_for_environment(
             generated_notary_config(loaded, environment_name, environment, &profiles)?;
         notary_private.insert(
             PathBuf::from("config/notary.yaml"),
-            serde_yaml::to_string(&notary_config)?
+            serde_norway::to_string(&notary_config)?
                 .into_bytes()
                 .into_boxed_slice(),
         );

@@ -88,4 +88,7 @@ pub use responses::{
     SigningProviderReadinessChecks,
 };
 #[cfg(feature = "verifier")]
-pub use verifier::{HolderBindingPolicy, VerificationError, VerifiedCredential, VerifyOptions};
+pub use verifier::{
+    HolderBindingPolicy, StatusListPolicy, StatusListPolicyError, VerificationError,
+    VerifiedCredential, VerifyOptions,
+};

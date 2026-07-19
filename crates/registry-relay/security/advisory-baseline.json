@@ -9,21 +9,10 @@
     },
     {
       "tool": "grype",
-      "minimum_severity": "critical",
-      "action": "block_unreviewed"
+      "minimum_severity": "high",
+      "action": "block_unreviewed",
+      "block_fixable": true
     }
   ],
-  "reviewed_findings": [
-    {
-      "tool": "grype",
-      "fingerprint": "grype|registry-relay-image|CVE-2023-45853|zlib1g|1:1.2.13.dfsg-1|deb",
-      "rule_id": "CVE-2023-45853",
-      "severity": "critical",
-      "status": "false_positive",
-      "owner": "@PublicSchema/maintainers",
-      "reason": "Not affected. Debian marks CVE-2023-45853 <ignored> for bookworm: the vulnerable contrib/minizip code is not built into the shipped zlib1g binary (no fixed package is coming, so the prior 'until the base image moves to a fixed distro package' exit condition was unreachable). The Relay binary's deflate path is pure-Rust (flate2/miniz_oxide/zlib-rs, no libz-sys C linkage) and the only `zip` crate is a dev-only XLSX test fixture, so MiniZip is never reached. zlib1g is a transitive base-image package only. Suppression retained to keep grype quiet; re-review when the base image leaves Debian bookworm.",
-      "reviewed_at": "2026-06-04",
-      "expires_at": "2027-06-01"
-    }
-  ]
+  "reviewed_findings": []
 }

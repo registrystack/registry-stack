@@ -105,7 +105,9 @@ peer-signed JWS, so it is not anonymous.
 **Notary to Relay.** A runtime boundary sits between Registry Notary and Registry Relay for every
 registry-backed claim. The compiler pins the consultation profile, contract hash, purpose, and
 typed input mapping. Notary authorizes the claim before calling Relay, and Relay applies its own
-workload authorization before source work. Notary has no direct registry source connector.
+workload authorization before source work. Notary has no direct registry source connector. One
+Notary authority pairs with one Relay authority, and Notary owns its PostgreSQL transaction,
+replay, evaluation, audit, and credential-status state.
 
 **Relay to registry sources.** Registry Relay owns the source boundary. Its compiled integration
 fixes the origin, credential interface, method and path authority, input placement, output
@@ -164,8 +166,8 @@ leakage, and privacy regressions that expose raw subject identifiers.
 - Disclosure leakage: A redacted result carries neither the value nor the predicate
   outcome. Selective-disclosure credentials carry SHA-256 digests of unselected fields, so a
   holder cannot present an undisclosed field. Holder binding defaults to `did:jwk` for
-  credential profiles; where a profile keeps binding enabled, and on the self-attestation
-  issuance path, which requires it, the holder is bound by a fresh audience-bound
+  credential profiles; where a profile keeps binding enabled, and on the OID4VCI
+  issuance path, which requires EdDSA `did:jwk`, the holder is bound by a fresh audience-bound
   proof-of-possession. An operator can explicitly configure `holder_binding.mode: none` for
   a bearer-style credential profile, and `registry-notary doctor` warns on that choice.
   Binding applies only to an issued credential; the plain evaluation result is not a
@@ -175,6 +177,15 @@ leakage, and privacy regressions that expose raw subject identifiers.
   principal and scoped authorization details; caller-supplied `requester`, `relationship`, and
   `on_behalf_of` fields are rejected before any Relay consultation or claim evaluation, and
   self-asserted target fields do not satisfy trusted-principal gates.
+- Source-free evaluation promoted to credential evidence: Credential-capable profiles and
+  OID4VCI configurations accept only non-delegated registry-backed claims. Source-free,
+  delegated, legacy, missing, stale, or modified evaluation provenance fails before signer
+  access.
+- Stolen issuer-initiated offer: A transaction code is required by default and is transferred
+  separately from the offer. Codes are single-use, wrong PIN attempts are bounded, and invalid
+  redemptions are rate limited. An explicit no-PIN compatibility profile has a maximum
+  300-second lifetime, but the unredeemed offer remains bearer credential material that a thief
+  can use during that window.
 - Spoofed trust context and ungoverned reads (Relay side): Relay ignores trust-context
   headers unless the principal is scoped to assert that exact value, and a governed read must
   receive a PDP permit or fail closed with a stable `pdp.*` code rather than falling back to an
@@ -187,7 +198,8 @@ leakage, and privacy regressions that expose raw subject identifiers.
   peers are admitted, and before any Relay consultation or claim evaluation the server verifies peer identity, request
   signature, freshness, single use, purpose, profile, and audience. The single-use and
   freshness checks are backed by a real replay-store primitive that tracks one-time JWT `jti`
-  and nonce values (federation request `jti`, OID4VCI `c_nonce`, and holder-proof `jti`).
+  and nonce values (federation request `jti`, transaction-bound OID4VCI proof nonce, and
+  holder-proof `jti`).
 
 **Audit as a control.** Every request touching person-level data can be recorded with the
 hashed principal, request id, the principal's granted scopes, and `Data-Purpose` context
@@ -229,7 +241,9 @@ These are the risks the design does *not* close:
 - Known product gaps: No revocation flow is specified (though an optional,
   off-by-default credential-status surface can be enabled to mark a credential `revoked`),
   there is no `/.well-known/jwt-vc-issuer` endpoint, and no built-in data-subject erasure
-  workflow in this version.
+  workflow in this version. When a status-bearing credential is used, its top-level status is
+  not selectively disclosable and client verification fails closed unless the signed status is
+  valid at the exact trusted HTTPS origin.
 - Admin reload is non-functional standalone: Notary's admin reload route returns HTTP 501
   (`registry.admin.capability.not_supported`) in the standalone router and performs no
   reload. Runtime configuration changes require deploying a signed local bundle and
@@ -249,10 +263,11 @@ conformance claim:
   It is not full Evidence Gateway interoperability, not full OID4VCI issuer behavior, not
   dynamic external policy discovery, and not enforcement of ODRL terms outside the supported
   profile. Unsupported ODRL terms or invalid policy identity fail closed.
-- A full credential issuer: The OID4VCI surface is a scoped self-attestation issuance
-  subset of OID4VCI Draft 13, not a full issuer or general external-wallet interoperability.
-  Notary advertises `openid4vci.support: not_full_issuer`, and delegated-attestation
-  transaction tokens are rejected at the credential endpoint.
+- A full credential issuer: The OID4VCI surface is a registry-backed, issuer-initiated
+  pre-authorized subset, not a full issuer or general external-wallet interoperability.
+  Notary advertises `openid4vci.support: not_full_issuer`. It does not claim wallet-facing
+  authorization code, a public nonce endpoint, response next nonce, source-free issuance,
+  ES256 holder proof, EUDI, HAIP, PAR, DPoP, or wallet attestation.
 - Certified standards compliance: Aligning with a standard is not conforming to it:
   speaking the shape of OIDC, OAuth 2.0, SD-JWT VC, OID4VCI, CCCEV, W3C DID, or the rest does
   not certify conformance to any of them, and CCCEV-shaped output is not conformant to CCCEV

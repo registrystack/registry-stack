@@ -31,6 +31,9 @@ pub enum NotaryClientBuildError {
     /// An idempotency key was supplied on a route that ignores it.
     #[error("idempotency key is not supported for this route")]
     UnsupportedIdempotencyKey,
+    /// The request exceeds the hard Registry Notary batch ceiling.
+    #[error("batch contains {actual} members; the hard maximum is {maximum}")]
+    BatchTooLarge { actual: usize, maximum: usize },
 }
 
 /// RFC 9457 Problem Details emitted by Registry Notary.
@@ -313,6 +316,7 @@ impl NotaryClientError {
                         NotaryClientBuildError::UnsupportedIdempotencyKey => {
                             "request.unsupported_idempotency_key"
                         }
+                        NotaryClientBuildError::BatchTooLarge { .. } => "batch.too_large",
                     }
                     .to_string(),
                 ),

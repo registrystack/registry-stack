@@ -3,7 +3,7 @@
 
 use super::*;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vciConfig {
     #[serde(default)]
@@ -26,8 +26,8 @@ pub struct Oid4vciConfig {
     pub authorization: Oid4vciAuthorizationConfig,
     #[serde(default)]
     pub proof: Oid4vciProofConfig,
-    /// Pre-authorized-code flow settings. Disabled by default; offers fall
-    /// back to the `authorization_code` grant unless this is enabled.
+    /// Issuer-initiated pre-authorized-code flow settings. This is the only
+    /// wallet-facing issuance grant in the 1.0 profile.
     #[serde(default)]
     pub pre_authorized_code: Oid4vciPreAuthorizedCodeConfig,
     #[serde(default)]
@@ -107,6 +107,11 @@ impl Oid4vciConfig {
         if !self.enabled {
             return Ok(());
         }
+        if !self.pre_authorized_code.enabled {
+            return invalid_oid4vci(
+                "enabled oid4vci requires pre_authorized_code.enabled = true; wallet-facing authorization_code issuance is not supported in 1.0",
+            );
+        }
         if !subject_access.enabled {
             return invalid_oid4vci("enabled oid4vci requires subject_access.enabled = true");
         }
@@ -116,11 +121,13 @@ impl Oid4vciConfig {
             &self.credential_endpoint,
             &self.credential_issuer,
         )?;
-        validate_oid4vci_endpoint_url(
-            "oid4vci.offer_endpoint",
-            &self.offer_endpoint,
-            &self.credential_issuer,
-        )?;
+        if !self.offer_endpoint.trim().is_empty() {
+            validate_oid4vci_endpoint_url(
+                "oid4vci.offer_endpoint",
+                &self.offer_endpoint,
+                &self.credential_issuer,
+            )?;
+        }
         validate_oid4vci_non_empty_entries(
             "oid4vci.authorization_servers",
             &self.authorization_servers,
@@ -135,24 +142,15 @@ impl Oid4vciConfig {
         if self.credential_configurations.is_empty() {
             return invalid_oid4vci("credential_configurations must not be empty");
         }
-        if self.nonce.enabled {
-            let nonce_endpoint = self.nonce_endpoint.as_deref().ok_or_else(|| {
-                EvidenceConfigError::InvalidOid4vciConfig {
-                    reason: "nonce_endpoint must be configured when nonce.enabled = true"
-                        .to_string(),
-                }
-            })?;
-            validate_oid4vci_endpoint_url(
-                "oid4vci.nonce_endpoint",
-                nonce_endpoint,
-                &self.credential_issuer,
-            )?;
-        } else if let Some(nonce_endpoint) = self.nonce_endpoint.as_deref() {
-            validate_oid4vci_endpoint_url(
-                "oid4vci.nonce_endpoint",
-                nonce_endpoint,
-                &self.credential_issuer,
-            )?;
+        if !self.nonce.enabled {
+            return invalid_oid4vci(
+                "oid4vci.nonce.enabled must be true for the transaction-scoped token nonce",
+            );
+        }
+        if self.nonce_endpoint.is_some() {
+            return invalid_oid4vci(
+                "oid4vci.nonce_endpoint must be omitted; 1.0 has no public unbound nonce endpoint",
+            );
         }
         self.nonce.validate()?;
         self.authorization.validate()?;
@@ -197,7 +195,7 @@ impl Oid4vciConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vciNonceConfig {
     #[serde(default)]
@@ -228,7 +226,7 @@ pub(super) const fn default_oid4vci_nonce_ttl_seconds() -> u64 {
     300
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vciAuthorizationConfig {
     #[serde(default = "default_oid4vci_pkce_method")]
@@ -261,7 +259,7 @@ pub(super) fn default_oid4vci_pkce_method() -> String {
 /// All fields default so existing configs that omit this block load unchanged
 /// with the flow disabled. When `enabled`, the eSignet RP login settings, the
 /// callback redirect, and the TTLs become required (validated cross-block).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vciPreAuthorizedCodeConfig {
     #[serde(default)]
@@ -318,7 +316,7 @@ pub(super) const fn default_pre_authorized_code_ttl_seconds() -> u64 {
 
 /// `tx_code` (PIN) policy for the pre-authorized-code grant. A `tx_code` is
 /// required by default because a code without a PIN is a bearer credential.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vciTxCodeConfig {
     #[serde(default = "default_tx_code_required")]
@@ -368,7 +366,7 @@ pub(super) const fn default_tx_code_length() -> u64 {
 
 /// eSignet relying-party settings for the citizen login leg of the
 /// pre-authorized-code flow.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vciEsignetRpConfig {
     /// Confidential client id the Notary presents to eSignet.
@@ -455,7 +453,7 @@ pub(super) const fn default_login_state_ttl_seconds() -> u64 {
 
 const TX_CODE_INPUT_MODE_NUMERIC: &str = "numeric";
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vciProofConfig {
     #[serde(default = "default_oid4vci_proof_max_age_seconds")]
@@ -493,7 +491,7 @@ pub(super) const fn default_oid4vci_proof_max_clock_skew_seconds() -> u64 {
     60
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vciCredentialConfigurationConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -513,7 +511,7 @@ pub struct Oid4vciCredentialConfigurationConfig {
     pub cryptographic_binding_methods_supported: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vciCredentialClaimConfig {
     pub id: String,
@@ -849,7 +847,7 @@ pub(super) fn is_reserved_oid4vci_projection_output_name(value: &str) -> bool {
     RESERVED.contains(&value)
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vciIssuerDisplayConfig {
     pub name: String,
@@ -870,7 +868,7 @@ impl Oid4vciIssuerDisplayConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vciCredentialDisplayConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -916,7 +914,7 @@ impl Oid4vciCredentialDisplayConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Oid4vciDisplayImageConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]

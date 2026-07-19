@@ -21,6 +21,8 @@ product type.
 
 ## Running locally
 
+From `products/platform/`:
+
 ```bash
 cargo +nightly fuzz run --fuzz-dir fuzz <target> -- -max_total_time=60 -rss_limit_mb=1024
 ```
@@ -40,27 +42,16 @@ filename.
 
 ## CI wiring
 
-`.github/workflows/nightly-security.yml` runs a smoke pass for every committed
-target when the nightly security workflow runs. The job uses the nightly
-toolchain, `cargo-fuzz` 0.13.2, `-max_total_time=60`, `-rss_limit_mb=1024`, and
-uploads `fuzz/artifacts/` on failure.
+The active root workflows provide two event-specific checks:
 
-Issue #26 tracks the fuller crash/corpus regression pattern (persisted corpus
-plus previous-crash replay) for the manifest fuzz work and shared CI shape. Once
-that pattern lands, the intended shape is:
+- `.github/workflows/ci.yml` runs a required one-minute smoke for each target
+  when a pull request changes a platform crate, fuzz harness, or shared Cargo
+  dependency input.
+- `.github/workflows/nightly-security.yml` runs the platform smoke as part of
+  the scheduled security suite.
 
-- **Per-PR smoke** (fast, required): for each target,
-  `cargo +nightly fuzz run --fuzz-dir fuzz <target> -- -max_total_time=60 -rss_limit_mb=1024`
-  against the committed seed corpus only, no persisted state. Catches build
-  breakage and obvious crashes on every PR that touches a fuzzed crate.
-- **Nightly long run** (scheduled, best-effort): each target run for longer
-  (10-30 minutes) against a corpus directory persisted across runs, so
-  coverage accumulates instead of resetting every run. On crash, upload the
-  crash artifact and the minimized failing input as a workflow artifact and
-  fail the run loudly. Do not auto-file public issues from a fuzz crash; a
-  crash in these boundaries may be a security finding and should route
-  through `SECURITY.md` like any other suspected vulnerability.
-
-The nightly smoke is not a replacement for the persisted-corpus regression
-track; it proves the committed targets and corpora keep building and do not
-crash immediately.
+Both use the nightly toolchain, pinned `cargo-fuzz` 0.13.2, the committed seed
+corpus, `-max_total_time=60`, and `-rss_limit_mb=1024`, and upload crash
+artifacts only on failure. A crash at these trust boundaries may be a security
+finding and should route through `SECURITY.md`; automation must not file a
+public issue containing the input.

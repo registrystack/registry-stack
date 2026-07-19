@@ -10,15 +10,61 @@ the selected images by digest.
 
 The Registry Notary image is built with CEL and PKCS#11 compiled in. Runtime
 use remains config-gated, and the image is covered by the CEL worker-protocol
-smoke, SBOM, and Grype critical-vulnerability gate.
+smoke, SBOM, and Grype gate for every fixable finding plus every unreviewed High
+or Critical finding.
 
 ## Container runtime policy
 
 The main Registry Notary image is a distroless Rust service image. Its runtime
-stage must remain `gcr.io/distroless/cc-debian12:nonroot` pinned by digest,
+stage must remain `gcr.io/distroless/cc-debian13:nonroot` pinned by digest,
 shell-free, package-manager-free, and compatible with a binary healthcheck and
 JSON-array entrypoint. The container CI guard enforces the runtime base,
 `registry-notary healthcheck`, and `ENTRYPOINT ["/usr/local/bin/registry-notary"]`.
+
+Debian 13 receives full Debian support through August 9, 2028 and LTS through
+June 30, 2030. Registry Stack must select a successor base before the applicable
+support window ends. The upstream lifecycle is recorded at
+<https://www.debian.org/releases/trixie/>. The Rust builder, runtime-preparation,
+and Distroless bases are pinned to multi-architecture image-index digests. An
+immutable digest makes a build input repeatable, but it does not make that input
+perpetually current. Release operators refresh all three pins together before
+each release candidate and whenever an upstream security update or scan finding
+requires it, then run:
+
+```sh
+python3 release/scripts/check-debian13-images.py
+```
+
+Changing the builder OS intentionally changes the release build input and may
+change linked binary bytes even when Rust sources and the Rust toolchain version
+do not change. Repeatability is established by two clean builds with the same
+new builder digest and lockfiles, comparing `dist/image-bin/SHA256SUMS`; hashes
+from the retired builder are not the expected comparison.
+
+The Debian 13 migration check on July 19, 2026 scanned a structural Notary
+image with the pinned final base and placeholder binaries. It found the
+non-fixable Debian 13 `libc6` findings CVE-2026-5450 (Critical), CVE-2026-5928
+(High), and CVE-2026-5435 (High). No risk dispositions are recorded for these
+findings, so a candidate that still reports them remains blocked. This
+structural scan only supports removal of the retired Debian 12 exception. The
+scan of the exact pushed image, including the real Notary and CEL worker
+binaries, supersedes it for release decisions.
+
+PKCS#11 support remains compiled in but config-gated. A vendor module and any
+vendor-owned shared-library dependencies remain deployment inputs, not image
+layers. Mount them read-only at operator-owned absolute paths and set the
+provider's `module_path` to the mounted module. Do not copy an HSM module, PIN,
+token database, or vendor configuration into the image. Because Distroless has
+no package manager, the exact candidate must prove that the intended external
+module and its dependency closure load on this base.
+
+For each candidate digest, run the Notary container as UID/GID `65532:65532`
+with a read-only root filesystem and only explicitly documented state and audit
+mounts writable. Verify CA-root TLS, binary and CEL-worker execution, PKCS#11
+module loading and signing, filesystem permissions, `registry-notary
+healthcheck`, and readiness. The release workflow must then produce digest-bound
+SBOM, Grype, and capsule evidence. These candidate checks cannot be inferred
+from source-only image-contract tests.
 
 Route exposure waivers, when needed, live on the affected entry in
 `security/exposure-manifest.json` so the review context stays with the route.
@@ -30,13 +76,15 @@ Reviewed advisory ratchets live in `security/advisory-baseline.json`. The
 initial blocking gates are:
 
 - `zizmor` findings with severity `high` or above.
-- Grype image findings with severity `critical` or above.
+- Grype image findings with a known fix, regardless of severity.
+- Grype image findings with severity `high` or above when they do not have a
+  current reviewed disposition.
 
-Every reviewed entry must include a fingerprint, owner, reason, review date,
-and expiration date. New unreviewed findings at or above the threshold fail CI.
-Expired reviewed entries fail CI while the finding is still active. Stale
-reviewed entries are reported so the baseline can shrink after the underlying
-issue is fixed.
+Fixable findings cannot be dispositioned. Every reviewed non-fixable High or
+Critical finding must include a fingerprint, matching rule and severity, owner,
+reason, review date, and expiration date. Future-dated or expired entries fail
+CI while the finding is still active. Stale reviewed entries are reported so
+the baseline can shrink after the underlying issue is fixed.
 
 The unauthenticated endpoint allowlist lives in
 `security/auth-none-allowlist.yml`. Additions require maintainer review through

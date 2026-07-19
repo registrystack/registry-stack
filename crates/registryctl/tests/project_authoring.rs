@@ -58,7 +58,7 @@ fn repository_root() -> PathBuf {
 }
 
 fn project_authoring_journey_catalog() -> ProjectAuthoringJourneyCatalog {
-    serde_yaml::from_slice(
+    serde_norway::from_slice(
         &std::fs::read(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/project-authoring-journeys.yaml"),
@@ -115,7 +115,7 @@ fn catalog_focused_selection(journey: &ProjectAuthoringJourney) -> (String, Stri
 
 fn catalog_has_authored_fixtures(
     journey: &ProjectAuthoringJourney,
-    project: &serde_yaml::Value,
+    project: &serde_norway::Value,
 ) -> bool {
     let Some(integrations) = project["integrations"].as_mapping() else {
         return false;
@@ -231,17 +231,17 @@ fn project_check_aggregates_script_host_call_and_environment_diagnostics_safely(
     let environment_path = project.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
     environment["integrations"]["health-record"]["source"]["credential"]["generation"] =
-        serde_yaml::Value::Number(0.into());
+        serde_norway::Value::Number(0.into());
     environment["integrations"]["health-record"]["source"]["credential"]["username"]["secret"] =
-        serde_yaml::Value::String(ENVIRONMENT_MARKER.to_string());
+        serde_norway::Value::String(ENVIRONMENT_MARKER.to_string());
     write_yaml(&environment_path, &environment);
 
     let fixture_path = project.join("integrations/health-record/fixtures/match.yaml");
     let mut fixture = read_yaml(&fixture_path);
     fixture["variables"]["diagnostic_marker"] =
-        serde_yaml::Value::String(FIXTURE_MARKER.to_string());
+        serde_norway::Value::String(FIXTURE_MARKER.to_string());
     fixture["interactions"][0]["respond"]["body"]["diagnostic_marker"] =
-        serde_yaml::Value::String(RESPONSE_MARKER.to_string());
+        serde_norway::Value::String(RESPONSE_MARKER.to_string());
     write_yaml(&fixture_path, &fixture);
 
     let report = authoring_diagnostics(&project);
@@ -351,9 +351,9 @@ fn project_check_keeps_script_probe_stable_across_metadata_and_ignores_non_calls
     let integration_path = project.join("integrations/health-record/integration.yaml");
     let mut integration = read_yaml(&integration_path);
     integration["source"]["product"] =
-        serde_yaml::Value::String("unrelated-product-metadata".to_string());
+        serde_norway::Value::String("unrelated-product-metadata".to_string());
     integration["source"]["versions"] =
-        serde_yaml::from_str("unverified: [9.9]\n").expect("version metadata");
+        serde_norway::from_str("unverified: [9.9]\n").expect("version metadata");
     write_yaml(&integration_path, &integration);
     assert_eq!(authoring_diagnostics(&project), baseline);
 }
@@ -389,9 +389,9 @@ fn project_check_reports_two_independent_environment_errors_once_each() {
     let environment_path = project.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
     environment["integrations"]["eligibility"]["source"]["origin"] =
-        serde_yaml::Value::String("http://unsafe-origin-marker.invalid".to_string());
+        serde_norway::Value::String("http://unsafe-origin-marker.invalid".to_string());
     environment["integrations"]["eligibility"]["source"]["credential"]["generation"] =
-        serde_yaml::Value::Number(0.into());
+        serde_norway::Value::Number(0.into());
     write_yaml(&environment_path, &environment);
 
     let report = authoring_diagnostics(&project);
@@ -576,6 +576,7 @@ fn project_check_cli_renders_the_same_typed_diagnostic_in_human_and_json() {
     let human = String::from_utf8(human.stdout).expect("human output is UTF-8");
     let json: serde_json::Value =
         serde_json::from_slice(&json.stdout).expect("JSON output is typed diagnostics");
+    assert_eq!(json["schema_version"], "registryctl.project_diagnostics.v1");
     let diagnostics = json["diagnostics"]
         .as_array()
         .expect("diagnostics is an array");
@@ -606,7 +607,7 @@ fn project_check_cli_rejects_an_unselected_environment_symlink_with_typed_output
 
     let fixture_path = project.join("integrations/eligibility/fixtures/eligible.yaml");
     let mut fixture = read_yaml(&fixture_path);
-    fixture["expect"]["outputs"]["approved"] = serde_yaml::Value::Bool(false);
+    fixture["expect"]["outputs"]["approved"] = serde_norway::Value::Bool(false);
     write_yaml(&fixture_path, &fixture);
 
     let run = |format: &str| {
@@ -754,13 +755,13 @@ fn project_check_collects_all_safe_missing_integration_references_without_cascad
     let project_path = project.join("registry-stack.yaml");
     let mut authored = read_yaml(&project_path);
     authored["integrations"]["eligibility"]["file"] =
-        serde_yaml::Value::String("integrations/zeta/missing.yaml".to_string());
+        serde_norway::Value::String("integrations/zeta/missing.yaml".to_string());
     authored["integrations"]
         .as_mapping_mut()
         .expect("integration map")
         .insert(
-            serde_yaml::Value::String("alpha".to_string()),
-            serde_yaml::from_str("file: integrations/alpha/missing.yaml\n")
+            serde_norway::Value::String("alpha".to_string()),
+            serde_norway::from_str("file: integrations/alpha/missing.yaml\n")
                 .expect("missing integration reference"),
         );
     write_yaml(&project_path, &authored);
@@ -833,7 +834,7 @@ fn project_check_unsafe_inputs_are_terminal_and_value_free() {
     let project_path = traversal.join("registry-stack.yaml");
     let mut project = read_yaml(&project_path);
     project["integrations"]["eligibility"]["file"] =
-        serde_yaml::Value::String("../unsafe-marker/integration.yaml".to_string());
+        serde_norway::Value::String("../unsafe-marker/integration.yaml".to_string());
     write_yaml(&project_path, &project);
     let traversal_report = authoring_diagnostics(&traversal);
     assert_eq!(traversal_report.diagnostics.len(), 1);
@@ -1236,7 +1237,7 @@ fn every_cataloged_supported_project_authoring_command_is_automated() {
                     "{} compiler-pinned Relay consultation",
                     journey.id
                 );
-                let rendered = serde_yaml::to_string(&notary_config)
+                let rendered = serde_norway::to_string(&notary_config)
                     .expect("generated Notary config serializes");
                 assert!(
                     rendered.contains("contract_hash:"),
@@ -1722,7 +1723,7 @@ fn local_rhai_modules_are_a_static_hash_covered_closure() {
     let integration_path = integration_directory.join("integration.yaml");
     let mut integration = read_yaml(&integration_path);
     integration["capability"]["script"]["modules"] =
-        serde_yaml::from_str("[lib/normalize.rhai]").expect("module list");
+        serde_norway::from_str("[lib/normalize.rhai]").expect("module list");
     write_yaml(&integration_path, &integration);
 
     let options = ProjectBuildOptions {
@@ -1781,8 +1782,8 @@ fn public_rhai_commands_accept_the_released_contract_for_an_unknown_product() {
     let source = integration["source"]
         .as_mapping_mut()
         .expect("Rhai source mapping");
-    source.remove(serde_yaml::Value::String("product".to_string()));
-    source.remove(serde_yaml::Value::String("versions".to_string()));
+    source.remove(serde_norway::Value::String("product".to_string()));
+    source.remove(serde_norway::Value::String("versions".to_string()));
     write_yaml(&metadata_free_integration, &integration);
 
     let exercise = |project_directory: PathBuf| {
@@ -2668,21 +2669,21 @@ expect: { outcome: ambiguous, outputs: {}, claims: {} }
     let project_file = project.join("registry-stack.yaml");
     let mut project_document = read_yaml(&project_file);
     let service = &mut project_document["services"]["person-verification"];
-    service["purpose"] = serde_yaml::Value::String("municipal-benefit-screening".to_string());
-    service["consultations"]["person_record"]["input"] = serde_yaml::from_str(
+    service["purpose"] = serde_norway::Value::String("municipal-benefit-screening".to_string());
+    service["consultations"]["person_record"]["input"] = serde_norway::from_str(
         "municipal_reference: request.target.identifiers.registry_person_id\n",
     )
     .expect("adapted consultation input");
     service["claims"]
         .as_mapping_mut()
         .expect("starter claims")
-        .remove(serde_yaml::Value::String("person-active".to_string()));
+        .remove(serde_norway::Value::String("person-active".to_string()));
     service["claims"]
         .as_mapping_mut()
         .expect("starter claims")
         .insert(
-            serde_yaml::Value::String("person-status".to_string()),
-            serde_yaml::from_str("output: person_record.status\ndisclosure: value\n")
+            serde_norway::Value::String("person-status".to_string()),
+            serde_norway::from_str("output: person_record.status\ndisclosure: value\n")
                 .expect("adapted status claim"),
         );
     service["credential_profiles"]["person-status"]["claims"]
@@ -2691,7 +2692,7 @@ expect: { outcome: ambiguous, outputs: {}, claims: {} }
         .iter_mut()
         .for_each(|claim| {
             if claim.as_str() == Some("person-active") {
-                *claim = serde_yaml::Value::String("person-status".to_string());
+                *claim = serde_norway::Value::String("person-status".to_string());
             }
         });
     write_yaml(&project_file, &project_document);
@@ -2791,8 +2792,8 @@ fn source_product_is_metadata_not_runtime_dispatch() {
     let source = integration["source"]
         .as_mapping_mut()
         .expect("authored source mapping");
-    source.remove(serde_yaml::Value::String("product".to_string()));
-    source.remove(serde_yaml::Value::String("versions".to_string()));
+    source.remove(serde_norway::Value::String("product".to_string()));
+    source.remove(serde_norway::Value::String("versions".to_string()));
     write_yaml(&integration_path, &integration);
     let report = test_registry_project(&ProjectTestOptions {
         project_directory: metadata_free,
@@ -2840,7 +2841,7 @@ fn project_integrations_share_one_logical_source_without_conflating_protocol_hel
     let environment_path = independent_origin.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
     environment["integrations"]["secondary"]["source"]["origin"] =
-        serde_yaml::Value::String("https://unrelated-registry.invalid".to_string());
+        serde_norway::Value::String("https://unrelated-registry.invalid".to_string());
     write_yaml(&environment_path, &environment);
     let error = check_registry_project(&ProjectCheckOptions {
         project_directory: independent_origin,
@@ -2858,7 +2859,7 @@ fn project_integrations_share_one_logical_source_without_conflating_protocol_hel
     let environment_path = protocol_helper.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
     environment["integrations"]["secondary"]["source"]["oauth"]["origin"] =
-        serde_yaml::Value::String("https://oauth-helper.invalid".to_string());
+        serde_norway::Value::String("https://oauth-helper.invalid".to_string());
     write_yaml(&environment_path, &environment);
     check_registry_project(&ProjectCheckOptions {
         project_directory: protocol_helper,
@@ -2969,7 +2970,7 @@ fn authored_unknown_fields_and_traversal_fail_closed() {
     let conformance_escape = copy_project("dhis2-script", temporary.path());
     let fixture_path = conformance_escape.join("integrations/health-record/fixtures/match.yaml");
     let mut fixture = read_yaml(&fixture_path);
-    fixture["worker_probe"] = serde_yaml::Value::String("network".to_string());
+    fixture["worker_probe"] = serde_norway::Value::String("network".to_string());
     write_yaml(&fixture_path, &fixture);
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: conformance_escape,
@@ -3711,7 +3712,7 @@ fn relay_authorization_bindings_follow_authored_service_topology() {
     environment
         .as_mapping_mut()
         .expect("environment mapping")
-        .remove(serde_yaml::Value::String("notary_relay".to_string()));
+        .remove(serde_norway::Value::String("notary_relay".to_string()));
     write_yaml(&environment_path, &environment);
     let error = check_registry_project(&ProjectCheckOptions {
         project_directory: missing_workload,
@@ -3729,7 +3730,7 @@ fn relay_authorization_bindings_follow_authored_service_topology() {
     let environment_path = missing_records_client.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
     environment["relay"]["allowed_clients"] =
-        serde_yaml::from_str("[]\n").expect("empty allowed client list");
+        serde_norway::from_str("[]\n").expect("empty allowed client list");
     write_yaml(&environment_path, &environment);
     let error = check_registry_project(&ProjectCheckOptions {
         project_directory: missing_records_client,
@@ -3882,7 +3883,7 @@ fn integration_input_pattern_schema_matches_the_wire_limit() {
         .with_draft(jsonschema::Draft::Draft202012)
         .compile(&schema)
         .expect("integration schema compiles");
-    let authored: serde_yaml::Value = serde_yaml::from_slice(
+    let authored: serde_norway::Value = serde_norway::from_slice(
         &std::fs::read(golden("custom-system").join("integrations/eligibility/integration.yaml"))
             .expect("integration reads"),
     )
@@ -3962,7 +3963,7 @@ fn api_key_interfaces_keep_values_environment_only_and_use_the_stable_auth_type(
         remove_custom_cel_claim(&project);
         let integration = project.join("integrations/eligibility/integration.yaml");
         let mut document = read_yaml(&integration);
-        document["source"]["auth"] = serde_yaml::from_str(&format!(
+        document["source"]["auth"] = serde_norway::from_str(&format!(
             "type: {credential_type}\nname: {name}\nmax_value_bytes: 128\n"
         ))
         .expect("API-key interface YAML");
@@ -3971,7 +3972,7 @@ fn api_key_interfaces_keep_values_environment_only_and_use_the_stable_auth_type(
         let environment = project.join("environments/local.yaml");
         let mut document = read_yaml(&environment);
         document["integrations"]["eligibility"]["source"]["credential"] =
-            serde_yaml::from_str("value: { secret: PROJECT_SOURCE_API_KEY }\ngeneration: 1\n")
+            serde_norway::from_str("value: { secret: PROJECT_SOURCE_API_KEY }\ngeneration: 1\n")
                 .expect("API-key environment YAML");
         write_yaml(&environment, &document);
 
@@ -3999,7 +4000,7 @@ fn api_key_interfaces_keep_values_environment_only_and_use_the_stable_auth_type(
     let integration = project.join("integrations/eligibility/integration.yaml");
     let mut document = read_yaml(&integration);
     document["source"]["auth"] =
-        serde_yaml::from_str("type: api_key_header\nname: authorization\nmax_value_bytes: 128\n")
+        serde_norway::from_str("type: api_key_header\nname: authorization\nmax_value_bytes: 128\n")
             .expect("invalid API-key header interface");
     write_yaml(&integration, &document);
     let error = test_registry_project(&ProjectTestOptions {
@@ -4015,7 +4016,7 @@ fn api_key_interfaces_keep_values_environment_only_and_use_the_stable_auth_type(
     let integration = project.join("integrations/eligibility/integration.yaml");
     let mut document = read_yaml(&integration);
     document["source"]["auth"] =
-        serde_yaml::from_str("type: api_key_query\nname: fields\nmax_value_bytes: 128\n")
+        serde_norway::from_str("type: api_key_query\nname: fields\nmax_value_bytes: 128\n")
             .expect("colliding API-key query interface");
     write_yaml(&integration, &document);
     let error = test_registry_project(&ProjectTestOptions {
@@ -4031,7 +4032,7 @@ fn api_key_interfaces_keep_values_environment_only_and_use_the_stable_auth_type(
     let integration = project.join("integrations/eligibility/integration.yaml");
     let mut document = read_yaml(&integration);
     document["source"]["auth"] =
-        serde_yaml::from_str("type: api_key_query\nname: apiKey\nmax_value_bytes: 128\n")
+        serde_norway::from_str("type: api_key_query\nname: apiKey\nmax_value_bytes: 128\n")
             .expect("API-key query interface");
     write_yaml(&integration, &document);
     let environment = project.join("environments/local.yaml");
@@ -4090,9 +4091,9 @@ fn dci_exact_and_and_full_date_inputs_fail_closed_before_source_access() {
         .as_mapping_mut()
         .expect("DCI selectors");
     let uin = selectors
-        .remove(serde_yaml::Value::String("uin".to_string()))
+        .remove(serde_norway::Value::String("uin".to_string()))
         .expect("UIN selector");
-    selectors.insert(serde_yaml::Value::String("other".to_string()), uin);
+    selectors.insert(serde_norway::Value::String("other".to_string()), uin);
     write_yaml(&integration_path, &integration);
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
@@ -4123,7 +4124,7 @@ fn dci_exact_and_and_full_date_inputs_fail_closed_before_source_access() {
     document["input"]
         .as_mapping_mut()
         .expect("fixture inputs")
-        .remove(serde_yaml::Value::String("selector_3".to_string()));
+        .remove(serde_norway::Value::String("selector_3".to_string()));
     write_yaml(&fixture, &document);
     let error = test_registry_project(&ProjectTestOptions {
         project_directory: project,
@@ -4195,7 +4196,7 @@ fn opencrvs_composite_dci_uses_unified_exact_predicates_canonically() {
 }
 
 fn validate_yaml(schema: &jsonschema::JSONSchema, path: &Path) {
-    let authored: serde_yaml::Value = serde_yaml::from_slice(
+    let authored: serde_norway::Value = serde_norway::from_slice(
         &std::fs::read(path).unwrap_or_else(|error| panic!("{}: {error}", path.display())),
     )
     .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
@@ -4276,8 +4277,8 @@ fn check_and_build_produce_deterministic_product_inputs() {
     let output = PathBuf::from(first.output.expect("build output"));
     let notary_config = std::fs::read_to_string(output.join("private/notary/config/notary.yaml"))
         .expect("generated Notary config");
-    let notary_document: serde_yaml::Value =
-        serde_yaml::from_str(&notary_config).expect("generated Notary config parses");
+    let notary_document: serde_norway::Value =
+        serde_norway::from_str(&notary_config).expect("generated Notary config parses");
     assert!(
         notary_document.get("cel").is_none(),
         "absent authoring must preserve the Notary product default"
@@ -4307,7 +4308,7 @@ fn check_and_build_produce_deterministic_product_inputs() {
     assert_eq!(first_closure, directory_closure(&output));
     assert_eq!(
         closure_digest(&first_closure),
-        "d15890b0c4e693d7ef1f2a03f5ca1c0451fcab6dcb0241a2464dacf935d69e7f",
+        "a2b871f191e463b9948fb79607a2f7a1c271aa2120d92b181d8ab99e7bc2a8c2",
         "project inputs must match the cross-machine golden digest"
     );
 }
@@ -4331,7 +4332,7 @@ fn generated_relay_contract_activates_through_notary_exactly_and_rejects_a_stale
         "private/relay/config/artifacts/consultation-contracts/household-eligibility-household.json",
     );
     let contract_bytes = std::fs::read(&contract_path).expect("Relay contract artifact reads");
-    let notary: StandaloneRegistryNotaryConfig = serde_yaml::from_slice(
+    let notary: StandaloneRegistryNotaryConfig = serde_norway::from_slice(
         &std::fs::read(output.join("private/notary/config/notary.yaml"))
             .expect("Notary config reads"),
     )
@@ -4403,7 +4404,7 @@ fn generated_snapshot_contracts_activate_through_notary_at_the_authoring_bound()
         let entity_path = project.join("entities/people.yaml");
         let mut entity = read_yaml(&entity_path);
         entity["materialization"]["max_bytes"] =
-            serde_yaml::Value::String(authored_max_bytes.to_string());
+            serde_norway::Value::String(authored_max_bytes.to_string());
         write_yaml(&entity_path, &entity);
 
         let build = build_registry_project(&ProjectBuildOptions {
@@ -4425,7 +4426,7 @@ fn generated_snapshot_contracts_activate_through_notary_at_the_authoring_bound()
             Some(expected_max_bytes)
         );
 
-        let notary: StandaloneRegistryNotaryConfig = serde_yaml::from_slice(
+        let notary: StandaloneRegistryNotaryConfig = serde_norway::from_slice(
             &std::fs::read(output.join("private/notary/config/notary.yaml"))
                 .expect("Notary config reads"),
         )
@@ -4487,7 +4488,7 @@ fn script_only_change_moves_the_relay_closure_without_forking_the_public_contrac
         std::fs::read(first_output.join(pack_relative)).expect("initial integration pack reads");
     let first_binding =
         std::fs::read(first_output.join(binding_relative)).expect("initial private binding reads");
-    let notary: StandaloneRegistryNotaryConfig = serde_yaml::from_slice(
+    let notary: StandaloneRegistryNotaryConfig = serde_norway::from_slice(
         &std::fs::read(first_output.join("private/notary/config/notary.yaml"))
             .expect("initial Notary config reads"),
     )
@@ -4531,7 +4532,7 @@ fn script_only_change_moves_the_relay_closure_without_forking_the_public_contrac
         std::fs::read(second_output.join(pack_relative)).expect("changed integration pack reads");
     let second_binding =
         std::fs::read(second_output.join(binding_relative)).expect("changed private binding reads");
-    let second_notary: StandaloneRegistryNotaryConfig = serde_yaml::from_slice(
+    let second_notary: StandaloneRegistryNotaryConfig = serde_norway::from_slice(
         &std::fs::read(second_output.join("private/notary/config/notary.yaml"))
             .expect("changed Notary config reads"),
     )
@@ -4598,7 +4599,7 @@ fn records_and_snapshot_share_one_generated_materialization() {
     .expect("records plus evidence golden builds through production validation");
     let output = PathBuf::from(build.output.expect("build output"));
     let relay_root = output.join("private/relay");
-    let relay: serde_json::Value = serde_yaml::from_slice(
+    let relay: serde_json::Value = serde_norway::from_slice(
         &std::fs::read(relay_root.join("config/relay.yaml")).expect("Relay config reads"),
     )
     .expect("Relay config parses");
@@ -4785,22 +4786,22 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
     let environment_path = project.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
     environment["relay"]["origin"] =
-        serde_yaml::Value::String("HTTP://127.0.0.1:18080".to_string());
+        serde_norway::Value::String("HTTP://127.0.0.1:18080".to_string());
     environment["relay"]["issuer"] =
-        serde_yaml::Value::String("HTTP://127.0.0.1:18090".to_string());
+        serde_norway::Value::String("HTTP://127.0.0.1:18090".to_string());
     environment["relay"]["jwks_url"] =
-        serde_yaml::Value::String("HTTP://127.0.0.1:18090/jwks.json".to_string());
+        serde_norway::Value::String("HTTP://127.0.0.1:18090/jwks.json".to_string());
     environment["notary_relay"]["base_url"] =
-        serde_yaml::Value::String("HTTP://127.0.0.1:18081".to_string());
-    environment["notary_state"] = serde_yaml::from_str(
+        serde_norway::Value::String("HTTP://127.0.0.1:18081".to_string());
+    environment["notary_state"] = serde_norway::from_str(
         "postgresql:\n  root_certificate_path: /run/secrets/notary-postgres-ca.pem\n",
     )
     .expect("Notary state binding parses");
-    environment["relay_state"] = serde_yaml::from_str(
+    environment["relay_state"] = serde_norway::from_str(
         "postgresql:\n  root_certificate_path: /run/secrets/relay-postgres-ca.pem\n",
     )
     .expect("Relay state binding parses");
-    environment["notary_cel"] = serde_yaml::from_str("worker_memory_bytes: 1073741824\n")
+    environment["notary_cel"] = serde_norway::from_str("worker_memory_bytes: 1073741824\n")
         .expect("Notary CEL binding parses");
     write_yaml(&environment_path, &environment);
 
@@ -4875,10 +4876,10 @@ fn local_loopback_relay_topology_is_explicit_and_nonportable() {
         let rejected = copy_project("custom-system", rejected_root.path());
         let environment_path = rejected.join("environments/local.yaml");
         let mut environment = read_yaml(&environment_path);
-        environment["deployment"]["profile"] = serde_yaml::Value::String(profile.to_string());
-        environment["relay"]["origin"] = serde_yaml::Value::String(origin.to_string());
-        environment["relay"]["issuer"] = serde_yaml::Value::String(issuer.to_string());
-        environment["relay"]["jwks_url"] = serde_yaml::Value::String(jwks_url.to_string());
+        environment["deployment"]["profile"] = serde_norway::Value::String(profile.to_string());
+        environment["relay"]["origin"] = serde_norway::Value::String(origin.to_string());
+        environment["relay"]["issuer"] = serde_norway::Value::String(issuer.to_string());
+        environment["relay"]["jwks_url"] = serde_norway::Value::String(jwks_url.to_string());
         write_yaml(&environment_path, &environment);
         let error = check_registry_project(&ProjectCheckOptions {
             project_directory: rejected,
@@ -4899,9 +4900,9 @@ fn hosted_notary_can_use_an_explicit_loopback_relay_connection() {
     let project = copy_project("custom-system", temporary.path());
     let environment_path = project.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
-    environment["deployment"]["profile"] = serde_yaml::Value::String("hosted_lab".to_string());
+    environment["deployment"]["profile"] = serde_norway::Value::String("hosted_lab".to_string());
     environment["notary_relay"]["base_url"] =
-        serde_yaml::Value::String("http://127.0.0.1:18080".to_string());
+        serde_norway::Value::String("http://127.0.0.1:18080".to_string());
     write_yaml(&environment_path, &environment);
 
     let build = build_registry_project(&ProjectBuildOptions {
@@ -4932,7 +4933,7 @@ fn hosted_notary_can_use_an_explicit_loopback_relay_connection() {
     let rejected_environment_path = rejected.join("environments/local.yaml");
     let mut rejected_environment = read_yaml(&rejected_environment_path);
     rejected_environment["notary_relay"]["base_url"] =
-        serde_yaml::Value::String("http://10.42.0.8:8080".to_string());
+        serde_norway::Value::String("http://10.42.0.8:8080".to_string());
     write_yaml(&rejected_environment_path, &rejected_environment);
     let error = check_registry_project(&ProjectCheckOptions {
         project_directory: rejected,
@@ -4952,7 +4953,7 @@ fn issuance_accepts_a_full_verification_method_kid() {
     let environment_path = project.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
     let kid = "did:web:household-notary.invalid#issuer-key-1";
-    environment["issuance"]["signing_kid"] = serde_yaml::Value::String(kid.to_string());
+    environment["issuance"]["signing_kid"] = serde_norway::Value::String(kid.to_string());
     write_yaml(&environment_path, &environment);
 
     let build = build_registry_project(&ProjectBuildOptions {
@@ -4974,7 +4975,7 @@ fn issuance_accepts_a_full_verification_method_kid() {
     let environment_path = rejected.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
     environment["issuance"]["signing_kid"] =
-        serde_yaml::Value::String("did:web:issuer.invalid#bad kid".to_string());
+        serde_norway::Value::String("did:web:issuer.invalid#bad kid".to_string());
     write_yaml(&environment_path, &environment);
     let error = check_registry_project(&ProjectCheckOptions {
         project_directory: rejected,
@@ -5025,12 +5026,12 @@ fn credential_profiles_reject_mixed_registry_backed_and_source_free_evidence() {
     let mut document = read_yaml(&project_path);
     let service = &mut document["services"]["household-eligibility"];
     service["claims"]["applicant-declaration"] =
-        serde_yaml::from_str("cel: 'true'\nvalue: { type: boolean }\ndisclosure: predicate\n")
+        serde_norway::from_str("cel: 'true'\nvalue: { type: boolean }\ndisclosure: predicate\n")
             .expect("source-free claim");
     service["credential_profiles"]["household-eligibility"]["claims"]
         .as_sequence_mut()
         .expect("credential profile claims")
-        .push(serde_yaml::Value::String(
+        .push(serde_norway::Value::String(
             "applicant-declaration".to_string(),
         ));
     write_yaml(&project_path, &document);
@@ -5076,7 +5077,7 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
     let project_path = project.join("registry-stack.yaml");
     let mut document = read_yaml(&project_path);
     document["services"]["household-eligibility"]["credential_profiles"]["household-eligibility"]
-        ["claims"] = serde_yaml::from_str("[household-record-exists]")
+        ["claims"] = serde_norway::from_str("[household-record-exists]")
         .expect("single registry-backed credential claim");
     write_yaml(&project_path, &document);
     author_oid4vci_binding(
@@ -5122,6 +5123,10 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
         Some("OID4VCI_ACCESS_TOKEN_JWK")
     );
     assert_eq!(
+        notary["evidence"]["signing_keys"]["project-issuer"]["alg"].as_str(),
+        Some("EdDSA")
+    );
+    assert_eq!(
         notary["evidence"]["signing_keys"]["oid4vci-esignet-client"]["alg"].as_str(),
         Some("RS256")
     );
@@ -5157,7 +5162,7 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
     );
     assert_eq!(
         notary["subject_access"]["allowed_formats"],
-        serde_yaml::from_str::<serde_yaml::Value>(
+        serde_norway::from_str::<serde_norway::Value>(
             "[application/vnd.registry-notary.claim-result+json]"
         )
         .expect("canonical evaluation format parses")
@@ -5178,6 +5183,10 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
     assert_eq!(
         notary["oid4vci"]["pre_authorized_code"]["esignet"]["redirect_uri"].as_str(),
         Some("https://notary.example.invalid/oid4vci/offer/callback")
+    );
+    assert_eq!(
+        notary["oid4vci"]["pre_authorized_code"]["tx_code"]["required"].as_bool(),
+        Some(true)
     );
     assert_eq!(
         notary["oid4vci"]["credential_configurations"]
@@ -5214,6 +5223,50 @@ fn authored_oid4vci_binding_generates_the_complete_notary_owned_issuer() {
 }
 
 #[test]
+fn authored_oid4vci_walt_profile_is_explicit_and_keeps_the_bearer_window_bounded() {
+    let temporary = tempfile::tempdir().expect("temporary directory");
+    let project = copy_project("custom-system", temporary.path());
+    let project_path = project.join("registry-stack.yaml");
+    let mut document = read_yaml(&project_path);
+    document["services"]["household-eligibility"]["credential_profiles"]["household-eligibility"]
+        ["claims"] =
+        serde_norway::from_str("[household-record-exists]").expect("single registry-backed claim");
+    write_yaml(&project_path, &document);
+    author_oid4vci_binding(
+        &project,
+        "household-eligibility",
+        "household-eligibility",
+        "household_reference",
+    );
+    merge_environment_yaml(
+        &project.join("environments/local.yaml"),
+        "issuance:\n  algorithm: ES256\noid4vci:\n  tx_code:\n    required: false\n",
+    );
+
+    let build = build_registry_project(&ProjectBuildOptions {
+        project_directory: project,
+        environment: "local".to_string(),
+        against: None,
+        anchor: None,
+    })
+    .expect("explicit Walt-compatible binding builds");
+    let output = PathBuf::from(build.output.expect("build output"));
+    let notary = read_yaml(&output.join("private/notary/config/notary.yaml"));
+    assert_eq!(
+        notary["evidence"]["signing_keys"]["project-issuer"]["alg"].as_str(),
+        Some("ES256")
+    );
+    assert_eq!(
+        notary["oid4vci"]["pre_authorized_code"]["tx_code"]["required"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        notary["oid4vci"]["pre_authorized_code"]["pre_authorized_code_ttl_seconds"].as_u64(),
+        Some(300)
+    );
+}
+
+#[test]
 fn authored_oid4vci_binding_rejects_open_or_incoherent_trust_topologies() {
     for (name, mutate, expected) in [
         (
@@ -5247,8 +5300,9 @@ fn authored_oid4vci_binding_rejects_open_or_incoherent_trust_topologies() {
         let project_path = project.join("registry-stack.yaml");
         let mut document = read_yaml(&project_path);
         document["services"]["household-eligibility"]["credential_profiles"]
-            ["household-eligibility"]["claims"] = serde_yaml::from_str("[household-record-exists]")
-            .expect("single registry-backed credential claim");
+            ["household-eligibility"]["claims"] =
+            serde_norway::from_str("[household-record-exists]")
+                .expect("single registry-backed credential claim");
         write_yaml(&project_path, &document);
         author_oid4vci_binding(
             &project,
@@ -5286,10 +5340,11 @@ fn authored_oid4vci_binding_rejects_open_or_incoherent_trust_topologies() {
         let project_path = project.join("registry-stack.yaml");
         let mut document = read_yaml(&project_path);
         document["services"]["household-eligibility"]["credential_profiles"]
-            ["household-eligibility"]["claims"] = serde_yaml::from_str("[household-record-exists]")
-            .expect("single registry-backed claim");
+            ["household-eligibility"]["claims"] =
+            serde_norway::from_str("[household-record-exists]")
+                .expect("single registry-backed claim");
         document["services"]["household-eligibility"]["access"]["scopes"] =
-            serde_yaml::from_str(scopes).expect("access scopes");
+            serde_norway::from_str(scopes).expect("access scopes");
         write_yaml(&project_path, &document);
         author_oid4vci_binding(
             &project,
@@ -5302,7 +5357,7 @@ fn authored_oid4vci_binding_rejects_open_or_incoherent_trust_topologies() {
         environment
             .as_mapping_mut()
             .expect("environment mapping")
-            .remove(serde_yaml::Value::String("callers".to_string()));
+            .remove(serde_norway::Value::String("callers".to_string()));
         write_yaml(&environment_path, &environment);
         let error = check_registry_project(&ProjectCheckOptions {
             project_directory: project,
@@ -5330,7 +5385,7 @@ fn combined_project_without_relay_consultations_needs_no_notary_relay_workload()
     let project = copy_project("relay-only-records", temporary.path());
     let project_path = project.join("registry-stack.yaml");
     let mut authored_project = read_yaml(&project_path);
-    authored_project["services"]["applicant-declaration"] = serde_yaml::from_str(
+    authored_project["services"]["applicant-declaration"] = serde_norway::from_str(
         r#"kind: evidence
 version: 1
 purpose: application-processing
@@ -5350,12 +5405,12 @@ credential_profiles: {}
 
     let environment_path = project.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
-    environment["callers"] = serde_yaml::from_str(
+    environment["callers"] = serde_norway::from_str(
         "application-service:\n  api_key_fingerprint: { secret: APPLICATION_SERVICE_TOKEN_HASH }\n  scopes: ['evidence:declaration:read']\n",
     )
     .expect("Notary caller binding");
     environment["deployment"]["notary"] =
-        serde_yaml::from_str("service: declaration-notary\n").expect("Notary deployment");
+        serde_norway::from_str("service: declaration-notary\n").expect("Notary deployment");
     write_yaml(&environment_path, &environment);
 
     let build = build_registry_project(&ProjectBuildOptions {
@@ -5401,9 +5456,9 @@ fn source_free_evaluation_without_credential_profiles_omits_issuance_and_signing
     assert!(notary["evidence"].get("signing_keys").is_none());
     assert!(notary["evidence"]["credential_profiles"]
         .as_mapping()
-        .is_some_and(serde_yaml::Mapping::is_empty));
+        .is_some_and(serde_norway::Mapping::is_empty));
     assert!(notary.get("oid4vci").is_none());
-    let rendered = serde_yaml::to_string(&notary).expect("Notary-only config serializes");
+    let rendered = serde_norway::to_string(&notary).expect("Notary-only config serializes");
     for forbidden in [
         "redis:",
         "direct_source:",
@@ -5420,7 +5475,7 @@ fn source_free_evaluation_without_credential_profiles_omits_issuance_and_signing
     environment
         .as_mapping_mut()
         .expect("environment mapping")
-        .remove(serde_yaml::Value::String("issuance".to_string()));
+        .remove(serde_norway::Value::String("issuance".to_string()));
     write_yaml(&missing_issuance_environment, &environment);
     let error = check_registry_project(&ProjectCheckOptions {
         project_directory: missing_issuance,
@@ -5437,7 +5492,7 @@ fn source_free_evaluation_without_credential_profiles_omits_issuance_and_signing
     let project_path = unexpected_issuance.join("registry-stack.yaml");
     let mut authored_project = read_yaml(&project_path);
     authored_project["services"]["household-eligibility"]["credential_profiles"] =
-        serde_yaml::from_str("{}\n").expect("empty credential profiles");
+        serde_norway::from_str("{}\n").expect("empty credential profiles");
     write_yaml(&project_path, &authored_project);
     let error = check_registry_project(&ProjectCheckOptions {
         project_directory: unexpected_issuance,
@@ -5457,24 +5512,24 @@ fn records_standards_share_the_validated_materialization() {
     let entity_path = project.join("entities/people.yaml");
     let mut entity = read_yaml(&entity_path);
     entity["schema"]["properties"]["longitude"] =
-        serde_yaml::from_str("type: [integer, 'null']\nminimum: -180\nmaximum: 180\n")
+        serde_norway::from_str("type: [integer, 'null']\nminimum: -180\nmaximum: 180\n")
             .expect("longitude field");
     entity["schema"]["properties"]["latitude"] =
-        serde_yaml::from_str("type: [integer, 'null']\nminimum: -90\nmaximum: 90\n")
+        serde_norway::from_str("type: [integer, 'null']\nminimum: -90\nmaximum: 90\n")
             .expect("latitude field");
     entity["schema"]["required"]
         .as_sequence_mut()
         .expect("entity required fields")
         .extend([
-            serde_yaml::Value::String("longitude".to_string()),
-            serde_yaml::Value::String("latitude".to_string()),
+            serde_norway::Value::String("longitude".to_string()),
+            serde_norway::Value::String("latitude".to_string()),
         ]);
     write_yaml(&entity_path, &entity);
 
     let project_path = project.join("registry-stack.yaml");
     let mut authored_project = read_yaml(&project_path);
     authored_project["services"]["people-records"]["api"]["standards"]["ogc_features"] =
-        serde_yaml::from_str(
+        serde_norway::from_str(
             r#"collection_id: people
 title: Population locations
 geometry:
@@ -5488,7 +5543,7 @@ max_geometry_vertices: 1
         )
         .expect("OGC spatial mapping");
     authored_project["services"]["people-records"]["api"]["standards"]["sp_dci"] =
-        serde_yaml::from_str(
+        serde_norway::from_str(
             r#"registry: population
 registry_type: civil-registry
 record_type: person
@@ -5514,19 +5569,19 @@ response_fields: { eligible: eligible }
         .as_sequence_mut()
         .expect("records projection")
         .extend([
-            serde_yaml::Value::String("longitude".to_string()),
-            serde_yaml::Value::String("latitude".to_string()),
+            serde_norway::Value::String("longitude".to_string()),
+            serde_norway::Value::String("latitude".to_string()),
         ]);
     authored_project["services"]["people-records"]["api"]["filters"]["registration_status"] =
-        serde_yaml::from_str("[eq]").expect("SP DCI expression filter");
+        serde_norway::from_str("[eq]").expect("SP DCI expression filter");
     write_yaml(&project_path, &authored_project);
 
     let environment_path = project.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
     environment["entities"]["people"]["columns"]["longitude"] =
-        serde_yaml::Value::String("longitude_deg".to_string());
+        serde_norway::Value::String("longitude_deg".to_string());
     environment["entities"]["people"]["columns"]["latitude"] =
-        serde_yaml::Value::String("latitude_deg".to_string());
+        serde_norway::Value::String("latitude_deg".to_string());
     write_yaml(&environment_path, &environment);
 
     let build = build_registry_project(&ProjectBuildOptions {
@@ -5537,7 +5592,7 @@ response_fields: { eligible: eligible }
     })
     .expect("enabled records standards build through Relay production validation");
     let output = PathBuf::from(build.output.expect("build output"));
-    let relay: serde_json::Value = serde_yaml::from_slice(
+    let relay: serde_json::Value = serde_norway::from_slice(
         &std::fs::read(output.join("private/relay/config/relay.yaml")).expect("Relay config reads"),
     )
     .expect("Relay config parses");
@@ -5890,7 +5945,7 @@ fn authored_request_literals_cannot_smuggle_secret_material() {
     let integration_path = project.join("integrations/eligibility/integration.yaml");
     let mut integration = read_yaml(&integration_path);
     integration["capability"]["http"]["request"]["query"]["password"] =
-        serde_yaml::Value::String(SECRET_SENTINEL.to_string());
+        serde_norway::Value::String(SECRET_SENTINEL.to_string());
     write_yaml(&integration_path, &integration);
     let error = check_registry_project(&ProjectCheckOptions {
         project_directory: project.clone(),
@@ -5911,7 +5966,7 @@ fn authored_request_literals_cannot_smuggle_secret_material() {
         let integration_path = project.join("integrations/eligibility/integration.yaml");
         let mut integration = read_yaml(&integration_path);
         integration["capability"]["http"]["request"]["headers"][header] =
-            serde_yaml::Value::String(SECRET_SENTINEL.to_string());
+            serde_norway::Value::String(SECRET_SENTINEL.to_string());
         write_yaml(&integration_path, &integration);
         let error = check_registry_project(&ProjectCheckOptions {
             project_directory: project.clone(),
@@ -6227,7 +6282,7 @@ fn verified_signed_baseline_classifies_semantic_review_dimensions_independently(
 
     let notary_cel_environment = notary_cel_project.join("environments/local.yaml");
     let mut environment = read_yaml(&notary_cel_environment);
-    environment["notary_cel"] = serde_yaml::from_str("worker_memory_bytes: 1073741824\n")
+    environment["notary_cel"] = serde_norway::from_str("worker_memory_bytes: 1073741824\n")
         .expect("Notary CEL binding parses");
     write_yaml(&notary_cel_environment, &environment);
     assert_change_dimensions(
@@ -6350,12 +6405,12 @@ fn extend_exact_selector(project: &Path, golden_name: &str, size: usize) {
     for component in 2..=size {
         let name = format!("selector_{component}");
         let declaration = if component == 4 {
-            serde_yaml::from_str(
+            serde_norway::from_str(
                 "role: selector\ntype: string\nformat: date\nminLength: 10\nmaxLength: 10\n",
             )
             .expect("full-date input declaration")
         } else {
-            serde_yaml::from_str(&format!(
+            serde_norway::from_str(&format!(
                 "role: selector\ntype: string\nmaxLength: 8\npattern: '^S{component}$'\n"
             ))
             .expect("string input declaration")
@@ -6363,14 +6418,14 @@ fn extend_exact_selector(project: &Path, golden_name: &str, size: usize) {
         integration["input"]
             .as_mapping_mut()
             .expect("integration input mapping")
-            .insert(serde_yaml::Value::String(name.clone()), declaration);
+            .insert(serde_norway::Value::String(name.clone()), declaration);
         if golden_name == "custom-system" {
             integration["capability"]["http"]["request"]["query"]
                 .as_mapping_mut()
                 .expect("HTTP query mapping")
                 .insert(
-                    serde_yaml::Value::String(name.clone()),
-                    serde_yaml::from_str(&format!("input: {name}\n"))
+                    serde_norway::Value::String(name.clone()),
+                    serde_norway::from_str(&format!("input: {name}\n"))
                         .expect("query input expression"),
                 );
         } else {
@@ -6378,8 +6433,8 @@ fn extend_exact_selector(project: &Path, golden_name: &str, size: usize) {
                 .as_mapping_mut()
                 .expect("snapshot exact mapping")
                 .insert(
-                    serde_yaml::Value::String(name.clone()),
-                    serde_yaml::from_str(&format!("input: {name}\n"))
+                    serde_norway::Value::String(name.clone()),
+                    serde_norway::from_str(&format!("input: {name}\n"))
                         .expect("snapshot input expression"),
                 );
         }
@@ -6405,8 +6460,8 @@ fn extend_exact_selector(project: &Path, golden_name: &str, size: usize) {
                 .as_mapping_mut()
                 .expect("consultation input mapping")
                 .insert(
-                    serde_yaml::Value::String(name.clone()),
-                    serde_yaml::Value::String(format!("request.target.identifiers.{name}")),
+                    serde_norway::Value::String(name.clone()),
+                    serde_norway::Value::String(format!("request.target.identifiers.{name}")),
                 );
         }
     }
@@ -6432,21 +6487,21 @@ fn extend_exact_selector(project: &Path, golden_name: &str, size: usize) {
                 .as_mapping_mut()
                 .expect("fixture input mapping")
                 .insert(
-                    serde_yaml::Value::String(format!("selector_{component}")),
-                    serde_yaml::Value::String(value.clone()),
+                    serde_norway::Value::String(format!("selector_{component}")),
+                    serde_norway::Value::String(value.clone()),
                 );
             if golden_name == "custom-system" {
                 if let Some(interactions) = document
                     .get_mut("interactions")
-                    .and_then(serde_yaml::Value::as_sequence_mut)
+                    .and_then(serde_norway::Value::as_sequence_mut)
                 {
                     for interaction in interactions {
                         let query = interaction["expect"]["query"]
                             .as_mapping_mut()
                             .expect("fixture expected query mapping");
                         query.insert(
-                            serde_yaml::Value::String(format!("selector_{component}")),
-                            serde_yaml::Value::String(value.clone()),
+                            serde_norway::Value::String(format!("selector_{component}")),
+                            serde_norway::Value::String(value.clone()),
                         );
                     }
                 }
@@ -6466,27 +6521,27 @@ fn extend_exact_selector(project: &Path, golden_name: &str, size: usize) {
                 .as_mapping_mut()
                 .expect("entity properties")
                 .insert(
-                    serde_yaml::Value::String(name.clone()),
+                    serde_norway::Value::String(name.clone()),
                     if component == 4 {
                         // Full-date canonicalization belongs to the consultation input.
                         // Snapshot exact keys remain physical UTF-8 binary values.
-                        serde_yaml::from_str("type: string\nmaxLength: 10\n")
+                        serde_norway::from_str("type: string\nmaxLength: 10\n")
                             .expect("full-date snapshot key field")
                     } else {
-                        serde_yaml::from_str("type: string\nmaxLength: 8\n")
+                        serde_norway::from_str("type: string\nmaxLength: 8\n")
                             .expect("string entity selector field")
                     },
                 );
             entity["schema"]["required"]
                 .as_sequence_mut()
                 .expect("entity required fields")
-                .push(serde_yaml::Value::String(name.clone()));
+                .push(serde_norway::Value::String(name.clone()));
             environment["entities"]["people"]["columns"]
                 .as_mapping_mut()
                 .expect("entity columns")
                 .insert(
-                    serde_yaml::Value::String(name),
-                    serde_yaml::Value::String(format!("selector_col_{component}")),
+                    serde_norway::Value::String(name),
+                    serde_norway::Value::String(format!("selector_col_{component}")),
                 );
         }
         write_yaml(&entity_path, &entity);
@@ -6507,7 +6562,7 @@ fn duplicate_project_integration(project: &Path, source_alias: &str, target_alia
         .join(target_alias)
         .join("integration.yaml");
     let mut integration = read_yaml(&integration_path);
-    integration["id"] = serde_yaml::Value::String(format!("{target_alias}-integration"));
+    integration["id"] = serde_norway::Value::String(format!("{target_alias}-integration"));
     write_yaml(&integration_path, &integration);
 
     let project_path = project.join("registry-stack.yaml");
@@ -6516,8 +6571,8 @@ fn duplicate_project_integration(project: &Path, source_alias: &str, target_alia
         .as_mapping_mut()
         .expect("project integrations mapping")
         .insert(
-            serde_yaml::Value::String(target_alias.to_string()),
-            serde_yaml::from_str(&format!(
+            serde_norway::Value::String(target_alias.to_string()),
+            serde_norway::from_str(&format!(
                 "file: integrations/{target_alias}/integration.yaml\n"
             ))
             .expect("project integration reference"),
@@ -6547,7 +6602,7 @@ fn duplicate_project_integration(project: &Path, source_alias: &str, target_alia
         })
         .expect("source integration consultation");
     let mut duplicated_consultation = duplicated_consultation;
-    duplicated_consultation["integration"] = serde_yaml::Value::String(target_alias.to_string());
+    duplicated_consultation["integration"] = serde_norway::Value::String(target_alias.to_string());
     let service = project_document["services"]
         .as_mapping_mut()
         .and_then(|services| services.get_mut(&service_name))
@@ -6556,7 +6611,7 @@ fn duplicate_project_integration(project: &Path, source_alias: &str, target_alia
         .as_mapping_mut()
         .expect("project consultations mapping")
         .insert(
-            serde_yaml::Value::String(target_alias.to_string()),
+            serde_norway::Value::String(target_alias.to_string()),
             duplicated_consultation,
         );
     let consultation_name = consultation_name
@@ -6584,7 +6639,7 @@ fn duplicate_project_integration(project: &Path, source_alias: &str, target_alia
         .as_mapping_mut()
         .expect("project claims mapping")
         .insert(
-            serde_yaml::Value::String(claim_name.clone()),
+            serde_norway::Value::String(claim_name.clone()),
             duplicated_claim,
         );
     for credential in service["credential_profiles"]
@@ -6595,7 +6650,7 @@ fn duplicate_project_integration(project: &Path, source_alias: &str, target_alia
         credential["claims"]
             .as_sequence_mut()
             .expect("credential profile claims")
-            .push(serde_yaml::Value::String(claim_name.clone()));
+            .push(serde_norway::Value::String(claim_name.clone()));
     }
     write_yaml(&project_path, &project_document);
     rewrite_duplicated_fixture_claims(
@@ -6617,7 +6672,7 @@ fn duplicate_project_integration(project: &Path, source_alias: &str, target_alia
         .as_mapping_mut()
         .expect("environment integrations mapping")
         .insert(
-            serde_yaml::Value::String(target_alias.to_string()),
+            serde_norway::Value::String(target_alias.to_string()),
             source_binding,
         );
     write_yaml(&environment_path, &environment);
@@ -6633,41 +6688,41 @@ fn rewrite_duplicated_fixture_claims(fixtures: &Path, source_claim: &str, target
         let Some(claims) = fixture["expect"]["claims"].as_mapping_mut() else {
             continue;
         };
-        let source_key = serde_yaml::Value::String(source_claim.to_string());
+        let source_key = serde_norway::Value::String(source_claim.to_string());
         let Some(expected) = claims.get(&source_key).cloned() else {
             continue;
         };
         claims.clear();
         claims.insert(
-            serde_yaml::Value::String(target_claim.to_string()),
+            serde_norway::Value::String(target_claim.to_string()),
             expected,
         );
         write_yaml(&path, &fixture);
     }
 }
 
-fn yaml_contains_string(value: &serde_yaml::Value, needle: &str) -> bool {
+fn yaml_contains_string(value: &serde_norway::Value, needle: &str) -> bool {
     match value {
-        serde_yaml::Value::String(value) => value.contains(needle),
-        serde_yaml::Value::Mapping(mapping) => mapping.iter().any(|(key, value)| {
+        serde_norway::Value::String(value) => value.contains(needle),
+        serde_norway::Value::Mapping(mapping) => mapping.iter().any(|(key, value)| {
             yaml_contains_string(key, needle) || yaml_contains_string(value, needle)
         }),
-        serde_yaml::Value::Sequence(sequence) => sequence
+        serde_norway::Value::Sequence(sequence) => sequence
             .iter()
             .any(|value| yaml_contains_string(value, needle)),
         _ => false,
     }
 }
 
-fn replace_yaml_strings(value: &mut serde_yaml::Value, from: &str, to: &str) {
+fn replace_yaml_strings(value: &mut serde_norway::Value, from: &str, to: &str) {
     match value {
-        serde_yaml::Value::String(value) => *value = value.replace(from, to),
-        serde_yaml::Value::Mapping(mapping) => {
+        serde_norway::Value::String(value) => *value = value.replace(from, to),
+        serde_norway::Value::Mapping(mapping) => {
             for value in mapping.values_mut() {
                 replace_yaml_strings(value, from, to);
             }
         }
-        serde_yaml::Value::Sequence(sequence) => {
+        serde_norway::Value::Sequence(sequence) => {
             for value in sequence {
                 replace_yaml_strings(value, from, to);
             }
@@ -6676,21 +6731,21 @@ fn replace_yaml_strings(value: &mut serde_yaml::Value, from: &str, to: &str) {
     }
 }
 
-fn namespace_secret_references(value: &mut serde_yaml::Value, namespace: &str) {
+fn namespace_secret_references(value: &mut serde_norway::Value, namespace: &str) {
     let namespace = namespace.replace('-', "_").to_ascii_uppercase();
     namespace_secret_references_with_suffix(value, &namespace);
 }
 
-fn namespace_secret_references_with_suffix(value: &mut serde_yaml::Value, namespace: &str) {
+fn namespace_secret_references_with_suffix(value: &mut serde_norway::Value, namespace: &str) {
     match value {
-        serde_yaml::Value::Mapping(mapping) => {
+        serde_norway::Value::Mapping(mapping) => {
             if let Some(secret) = mapping
-                .get_mut(serde_yaml::Value::String("secret".to_string()))
+                .get_mut(serde_norway::Value::String("secret".to_string()))
                 .and_then(|value| value.as_str().map(ToOwned::to_owned))
             {
                 mapping.insert(
-                    serde_yaml::Value::String("secret".to_string()),
-                    serde_yaml::Value::String(format!("{secret}_{namespace}")),
+                    serde_norway::Value::String("secret".to_string()),
+                    serde_norway::Value::String(format!("{secret}_{namespace}")),
                 );
                 return;
             }
@@ -6698,7 +6753,7 @@ fn namespace_secret_references_with_suffix(value: &mut serde_yaml::Value, namesp
                 namespace_secret_references_with_suffix(nested, namespace);
             }
         }
-        serde_yaml::Value::Sequence(sequence) => {
+        serde_norway::Value::Sequence(sequence) => {
             for nested in sequence {
                 namespace_secret_references_with_suffix(nested, namespace);
             }
@@ -6707,14 +6762,14 @@ fn namespace_secret_references_with_suffix(value: &mut serde_yaml::Value, namesp
     }
 }
 
-fn read_yaml(path: &Path) -> serde_yaml::Value {
-    serde_yaml::from_slice(&std::fs::read(path).expect("YAML reads")).expect("YAML parses")
+fn read_yaml(path: &Path) -> serde_norway::Value {
+    serde_norway::from_slice(&std::fs::read(path).expect("YAML reads")).expect("YAML parses")
 }
 
-fn write_yaml(path: &Path, document: &serde_yaml::Value) {
+fn write_yaml(path: &Path, document: &serde_norway::Value) {
     std::fs::write(
         path,
-        serde_yaml::to_string(document).expect("YAML serializes"),
+        serde_norway::to_string(document).expect("YAML serializes"),
     )
     .expect("YAML writes");
 }
@@ -6742,7 +6797,9 @@ fn remove_custom_cel_claim(project: &Path) {
     service["claims"]
         .as_mapping_mut()
         .expect("custom claims")
-        .remove(serde_yaml::Value::String("household-eligible".to_string()));
+        .remove(serde_norway::Value::String(
+            "household-eligible".to_string(),
+        ));
     service["credential_profiles"]["household-eligibility"]["claims"]
         .as_sequence_mut()
         .expect("custom credential claims")
@@ -6755,11 +6812,13 @@ fn remove_custom_cel_claim(project: &Path) {
         let mut document = read_yaml(&path);
         let claims = document
             .get_mut("expect")
-            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(serde_norway::Value::as_mapping_mut)
             .and_then(|expect| expect.get_mut("claims"))
-            .and_then(serde_yaml::Value::as_mapping_mut);
+            .and_then(serde_norway::Value::as_mapping_mut);
         if let Some(claims) = claims {
-            claims.remove(serde_yaml::Value::String("household-eligible".to_string()));
+            claims.remove(serde_norway::Value::String(
+                "household-eligible".to_string(),
+            ));
         }
         write_yaml(&path, &document);
     }
@@ -6768,7 +6827,7 @@ fn remove_custom_cel_claim(project: &Path) {
 fn make_opencrvs_composite_dci(project: &Path) {
     let integration_path = project.join("integrations/birth-record/integration.yaml");
     let mut integration = read_yaml(&integration_path);
-    integration["input"] = serde_yaml::from_str(
+    integration["input"] = serde_norway::from_str(
         r#"uin:
   role: selector
   type: string
@@ -6787,7 +6846,7 @@ place:
 "#,
     )
     .expect("composite DCI inputs");
-    integration["source"]["protocol"]["signed_dci"]["selectors"] = serde_yaml::from_str(
+    integration["source"]["protocol"]["signed_dci"]["selectors"] = serde_norway::from_str(
         r#"uin: { field: identifier_value, response_pointer: /identifier/0/identifier_value }
 family: { field: family_name, response_pointer: /child/family_name }
 place: { field: place_of_birth, response_pointer: /place_of_birth }
@@ -6804,7 +6863,7 @@ place: { field: place_of_birth, response_pointer: /place_of_birth }
     let project_path = project.join("registry-stack.yaml");
     let mut project_document = read_yaml(&project_path);
     project_document["services"]["birth-verification"]["consultations"]["birth"]["input"] =
-        serde_yaml::from_str(
+        serde_norway::from_str(
             r#"uin: request.target.identifiers.uin
 family: request.target.identifiers.family
 place: request.target.identifiers.place
@@ -6815,7 +6874,7 @@ place: request.target.identifiers.place
     service["claims"]
         .as_mapping_mut()
         .expect("OpenCRVS claims")
-        .remove(serde_yaml::Value::String("age-band".to_string()));
+        .remove(serde_norway::Value::String("age-band".to_string()));
     service["credential_profiles"]["birth-summary"]["claims"]
         .as_sequence_mut()
         .expect("OpenCRVS credential claims")
@@ -6837,9 +6896,10 @@ place: request.target.identifiers.place
             continue;
         }
         let mut fixture = read_yaml(&path);
-        fixture["input"] =
-            serde_yaml::from_str("uin: '0000000001'\nfamily: Example\nplace: Fictional District\n")
-                .expect("composite DCI fixture inputs");
+        fixture["input"] = serde_norway::from_str(
+            "uin: '0000000001'\nfamily: Example\nplace: Fictional District\n",
+        )
+        .expect("composite DCI fixture inputs");
         let data_interaction = fixture["interactions"]
             .as_sequence_mut()
             .and_then(|interactions| {
@@ -6849,7 +6909,7 @@ place: request.target.identifiers.place
             })
             .expect("DCI data interaction");
         data_interaction["expect"]["body"]["message"]["search_request"][0]["search_criteria"]
-            ["query"]["predicates"] = serde_yaml::from_str(
+            ["query"]["predicates"] = serde_norway::from_str(
             r#"- { field: family_name, operator: eq, value: Example }
 - { field: place_of_birth, operator: eq, value: Fictional District }
 - { field: identifier_value, operator: eq, value: "0000000001" }
@@ -6858,11 +6918,11 @@ place: request.target.identifiers.place
         .expect("composite DCI request predicates");
         if let Some(claims) = fixture
             .get_mut("expect")
-            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(serde_norway::Value::as_mapping_mut)
             .and_then(|expect| expect.get_mut("claims"))
-            .and_then(serde_yaml::Value::as_mapping_mut)
+            .and_then(serde_norway::Value::as_mapping_mut)
         {
-            claims.remove(serde_yaml::Value::String("age-band".to_string()));
+            claims.remove(serde_norway::Value::String("age-band".to_string()));
         }
         write_yaml(&path, &fixture);
     }
@@ -6882,7 +6942,7 @@ fn add_source_free_credential_capability(project: &Path) {
     let project_path = project.join("registry-stack.yaml");
     let mut authored_project = read_yaml(&project_path);
     authored_project["services"]["applicant-evaluation"]["credential_profiles"] =
-        serde_yaml::from_str(
+        serde_norway::from_str(
             r#"application-declaration:
   format: dc+sd-jwt
   type: https://credentials.invalid/application-declaration/v1
@@ -6895,7 +6955,7 @@ fn add_source_free_credential_capability(project: &Path) {
 
     let environment_path = project.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
-    environment["issuance"] = serde_yaml::from_str(
+    environment["issuance"] = serde_norway::from_str(
         r#"issuer: did:web:evaluation-notary.invalid
 signing_kid: project-issuer-key
 signing_key: { secret: REGISTRY_NOTARY_ISSUER_JWK }
@@ -6910,18 +6970,18 @@ fn author_oid4vci_binding(project: &Path, service: &str, profile: &str, id_type:
     let project_path = project.join("registry-stack.yaml");
     let mut authored_project = read_yaml(&project_path);
     authored_project["services"][service]["credential_profiles"][profile]["type"] =
-        serde_yaml::Value::String(format!(
+        serde_norway::Value::String(format!(
             "https://notary.example.invalid/credentials/{profile}/v1"
         ));
     write_yaml(&project_path, &authored_project);
 
     let environment_path = project.join("environments/local.yaml");
     let mut environment = read_yaml(&environment_path);
-    environment["notary_state"] = serde_yaml::from_str(
+    environment["notary_state"] = serde_norway::from_str(
         "postgresql:\n  root_certificate_path: /run/secrets/notary-postgres-ca.pem\n",
     )
     .expect("Notary PostgreSQL state binding");
-    environment["oid4vci"] = serde_yaml::from_str(&format!(
+    environment["oid4vci"] = serde_norway::from_str(&format!(
         r#"public_base_url: https://notary.example.invalid
 credential:
   service: {service}
@@ -6952,9 +7012,9 @@ allowed_wallet_origins: [https://wallet.example.invalid]
 }
 
 fn merge_environment_yaml(path: &Path, patch: &str) {
-    fn merge(target: &mut serde_yaml::Value, patch: serde_yaml::Value) {
+    fn merge(target: &mut serde_norway::Value, patch: serde_norway::Value) {
         match (target, patch) {
-            (serde_yaml::Value::Mapping(target), serde_yaml::Value::Mapping(patch)) => {
+            (serde_norway::Value::Mapping(target), serde_norway::Value::Mapping(patch)) => {
                 for (key, value) in patch {
                     if let Some(target) = target.get_mut(&key) {
                         merge(target, value);
@@ -6970,7 +7030,7 @@ fn merge_environment_yaml(path: &Path, patch: &str) {
     let mut environment = read_yaml(path);
     merge(
         &mut environment,
-        serde_yaml::from_str(patch).expect("environment patch"),
+        serde_norway::from_str(patch).expect("environment patch"),
     );
     write_yaml(path, &environment);
 }

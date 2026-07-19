@@ -7,7 +7,7 @@
     "role": "Shared Rust workspace for security and operational primitives consumed by Registry Relay, Registry Notary, and related registry services, including auth helpers, OIDC verification, JWKS fetching, audit envelopes, HTTP security, outbound HTTP policy, crypto, SD-JWT VC support, and test fixtures.",
     "owns": [
       "Shared auth, OIDC, JWKS fetching, audit, HTTP security, outbound HTTP, crypto, SD-JWT, and testing primitives.",
-      "OID4VCI credential offer, nonce, credential request, and issuer metadata primitives via the `registry-platform-oid4vci` crate.",
+      "OID4VCI pre-authorized offer, token request, credential request, issuer metadata, and replay-bound holder-proof primitives via the `registry-platform-oid4vci` crate.",
       "Cross-service crate APIs that must behave consistently in Relay, Notary, and future registry services.",
       "Shared Rust hygiene templates and supported integration-test fixtures."
     ],
@@ -19,11 +19,11 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.11.0/products/platform/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.12.0/products/platform/README.md"
       },
       {
         "label": "Registry Platform crates",
-        "url": "https://github.com/registrystack/registry-stack/tree/v0.11.0/crates"
+        "url": "https://github.com/registrystack/registry-stack/tree/v0.12.0/crates"
       }
     ],
     "rename_status": "New shared workspace; not part of the 2026-05-23 rename wave."
@@ -48,11 +48,11 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.11.0/products/manifest/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.12.0/products/manifest/README.md"
       },
       {
         "label": "Local examples",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.11.0/products/manifest/examples/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.12.0/products/manifest/examples/README.md"
       }
     ],
     "rename_status": "Already using the target repo name locally."
@@ -81,15 +81,15 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-relay/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.12.0/crates/registry-relay/README.md"
       },
       {
         "label": "Local API docs",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-relay/docs/api.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.12.0/crates/registry-relay/docs/api.md"
       },
       {
         "label": "Local metadata docs",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-relay/docs/metadata.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.12.0/crates/registry-relay/docs/metadata.md"
       }
     ],
     "rename_status": "Local checkout renamed to `registry-relay`; old worktrees under `registry_relay-*` remain for historical evidence."
@@ -106,12 +106,14 @@
       "Registry Notary API routes.",
       "Static-peer delegated evaluation at `/federation/v1/evaluations`.",
       "Credential issuance workflow, exact Relay execution provenance verification, and claim-to-credential mapping.",
-      "OID4VCI Draft 13 credential offer flow (credential-offer, nonce, credential endpoints) and the `/.well-known/openid-credential-issuer` metadata endpoint.",
+      "Profiled OID4VCI issuer-initiated pre-authorized flow, transaction-bound holder proof, Type Metadata, credential endpoint, and issuer metadata.",
       "Compiler-pinned Registry Relay consultation contracts for registry-backed claims.",
       "Source-free and self-attested claim evaluation."
     ],
     "does_not_own": [
       "Registry source access, credentials, protocol adaptation, or Registry Relay runtime internals.",
+      "Source-free, delegated, or registry-backed evaluation-only credential issuance.",
+      "Wallet-facing authorization-code, EUDI, HAIP, PAR, DPoP, wallet-attestation, or ES256-holder profiles.",
       "Portable metadata renderers owned by Registry Manifest.",
       "Shared security and operational primitives owned by Registry Platform.",
       "Open federation, dynamic trust-chain discovery, shared replay storage, or federated credential issuance.",
@@ -121,11 +123,11 @@
     "source_docs": [
       {
         "label": "README",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.11.0/products/notary/README.md"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.12.0/products/notary/README.md"
       },
       {
         "label": "OpenAPI source",
-        "url": "https://github.com/registrystack/registry-stack/blob/v0.11.0/crates/registry-notary-server/src/openapi.rs"
+        "url": "https://github.com/registrystack/registry-stack/blob/v0.12.0/crates/registry-notary-server/src/openapi.rs"
       }
     ],
     "rename_status": "Already using the target repo name locally."

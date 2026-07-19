@@ -1,0 +1,185 @@
+{
+  "schema": "registry-stack.upgrade-exercise/v1",
+  "record_kind": "template",
+  "exercise_id": "<EXERCISE_ID>",
+  "recorded_at": "<RECORDED_AT>",
+  "source_release": {
+    "version": "<SOURCE_VERSION>",
+    "source_commit": "<SOURCE_COMMIT>",
+    "relay_image_digest": "<SOURCE_RELAY_IMAGE_DIGEST>",
+    "notary_image_digest": "<SOURCE_NOTARY_IMAGE_DIGEST>"
+  },
+  "target_release": {
+    "version": "<TARGET_VERSION>",
+    "source_commit": "<TARGET_COMMIT>",
+    "relay_image_digest": "<TARGET_RELAY_IMAGE_DIGEST>",
+    "notary_image_digest": "<TARGET_NOTARY_IMAGE_DIGEST>"
+  },
+  "target_release_manifest_sha256": "<TARGET_RELEASE_MANIFEST_SHA256>",
+  "candidate_frozen": false,
+  "candidate_independently_verified": false,
+  "config_schemas": {
+    "registry-relay": {
+      "path": "schemas/registry-relay.config.schema.json",
+      "sha256": "<RELAY_CONFIG_SCHEMA_SHA256>"
+    },
+    "registry-notary": {
+      "path": "schemas/registry-notary.config.schema.json",
+      "sha256": "<NOTARY_CONFIG_SCHEMA_SHA256>"
+    }
+  },
+  "topology": {
+    "repository": "registrystack/solmara-lab",
+    "release_tag": "<SOLMARA_RELEASE_TAG>",
+    "source_commit": "<SOLMARA_SOURCE_COMMIT>",
+    "relay_authorities": [
+      "<RELAY_AUTHORITY_ID>"
+    ],
+    "notary_authorities": [
+      "<NOTARY_AUTHORITY_ID>"
+    ],
+    "authority_pairs": [
+      {
+        "relay": "<RELAY_AUTHORITY_ID>",
+        "notary": "<NOTARY_AUTHORITY_ID>"
+      }
+    ]
+  },
+  "recovery_set": [
+    {
+      "item": "relay_database",
+      "artifact_sha256": "<RELAY_DATABASE_BACKUP_SHA256>"
+    },
+    {
+      "item": "notary_database",
+      "artifact_sha256": "<NOTARY_DATABASE_BACKUP_SHA256>"
+    },
+    {
+      "item": "config_and_bundle",
+      "artifact_sha256": "<CONFIG_AND_BUNDLE_BACKUP_SHA256>"
+    },
+    {
+      "item": "anti_rollback_state",
+      "artifact_sha256": "<ANTI_ROLLBACK_STATE_BACKUP_SHA256>"
+    },
+    {
+      "item": "audit_state",
+      "artifact_sha256": "<AUDIT_STATE_BACKUP_SHA256>"
+    },
+    {
+      "item": "notary_sensitive_key_reference",
+      "artifact_sha256": "<NOTARY_SENSITIVE_KEY_REFERENCE_SHA256>"
+    },
+    {
+      "item": "relay_key_lifecycle_reference",
+      "artifact_sha256": "<RELAY_KEY_LIFECYCLE_REFERENCE_SHA256>"
+    }
+  ],
+  "results": [
+    {
+      "check_id": "candidate_artifacts_independently_verified",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "source_release_ready",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "pre_upgrade_complete_backup",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "notary_forward_schema_upgrade",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "older_notary_rejects_newer_schema",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "target_products_ready_before_traffic",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "one_notary_authority_per_relay_authority",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "registry_backed_direct_issuance",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "registry_backed_oid4vci_issuance",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "target_restart_retains_correctness_state",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "rollback_before_target_traffic",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "post_write_fix_forward_boundary",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "complete_restore",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "restored_products_ready",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    },
+    {
+      "check_id": "anti_rollback_rejects_older_bundle",
+      "outcome": "not_run",
+      "observed_at": "<OBSERVED_AT>",
+      "evidence_label": "<EVIDENCE_LABEL>",
+      "evidence_sha256": "<EVIDENCE_SHA256>"
+    }
+  ]
+}

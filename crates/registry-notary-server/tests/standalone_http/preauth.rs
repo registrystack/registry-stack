@@ -6,6 +6,10 @@ use super::support::*;
 use super::{
     admin::*, audit::*, auth::*, credentials::*, federation::*, http_contracts::*, oid4vci::*,
 };
+#[cfg(feature = "registry-notary-cel")]
+use registry_notary_client::verifier::verify_sd_jwt_vc;
+#[cfg(feature = "registry-notary-cel")]
+use registry_notary_client::{HolderBindingPolicy, VerifyOptions};
 
 #[tokio::test]
 pub(super) async fn preauth_offer_start_redirects_to_esignet_and_mints_nothing() {
@@ -180,6 +184,41 @@ pub(super) async fn preauth_offer_start_rejects_unknown_configuration_id() {
         .get("/oid4vci/offer/start?credential_configuration_id=unknown_config")
         .await;
     start.assert_status(StatusCode::BAD_REQUEST);
+    idp.stop().await;
+}
+
+#[tokio::test]
+pub(super) async fn preauth_credential_rejects_inline_jwk_holder_proof_before_auth() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let app = standalone_router(subject_access_preauth_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp.issuer(),
+        &idp.jwks_uri(),
+        &format!("{}/authorize", idp.issuer()),
+        &format!("{}/token", token_upstream.url()),
+    ))
+    .await
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+    let response = server
+        .post("/oid4vci/credential")
+        .json(&json!({
+            "format": "dc+sd-jwt",
+            "credential_configuration_id": "person_is_alive_sd_jwt",
+            "proof": {
+                "proof_type": "jwt",
+                "jwt": sign_oid4vci_inline_jwk_proof(NOTARY_ISSUER, "transaction-nonce")
+            }
+        }))
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let body: Value = response.json();
+    assert_eq!(body["error"], json!("invalid_proof"));
     idp.stop().await;
 }
 
@@ -903,7 +942,7 @@ pub(super) async fn preauth_signed_required_policy_and_lockout_survive_optional_
 }
 
 #[tokio::test]
-pub(super) async fn preauth_signed_optional_policy_survives_required_runtime_config() {
+pub(super) async fn preauth_forged_optional_code_without_reserved_transaction_is_rejected() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let token_upstream = MockHttpUpstream::start().await;
@@ -927,9 +966,9 @@ pub(super) async fn preauth_signed_optional_policy_survives_required_runtime_con
     payload["tx_code_required"] = json!(false);
     let signed_optional_code = sign_test_preauthorized_code(payload);
 
-    redeem_token_without_pin(&server, &signed_optional_code)
-        .await
-        .assert_status_ok();
+    let response = redeem_token_without_pin(&server, &signed_optional_code).await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(response.json::<Value>()["error"], json!("invalid_grant"));
     idp.stop().await;
 }
 
@@ -1105,20 +1144,23 @@ pub(super) async fn preauth_random_code_flood_is_throttled_per_client_address() 
 }
 
 #[tokio::test]
-pub(super) async fn preauth_disabled_returns_404_and_offer_is_authorization_code() {
+pub(super) async fn preauth_disabled_exposes_no_wallet_issuance_grant() {
     set_preauth_env();
     let idp = MockIdp::start().await;
     let tmp = TempDir::new().expect("tempdir");
     let audit_path = tmp.path().join("audit.jsonl");
     // Default config: pre-auth disabled.
-    let app = standalone_router(subject_access_oid4vci_config(
+    let mut config = subject_access_oid4vci_config(
         "http://127.0.0.1:1",
         audit_path.to_str().expect("audit path is UTF-8"),
         &idp.issuer(),
         &idp.jwks_uri(),
-    ))
-    .await
-    .expect("standalone router builds");
+    );
+    config.oid4vci.enabled = false;
+    config.oid4vci.pre_authorized_code = Default::default();
+    let app = standalone_router(config)
+        .await
+        .expect("standalone router builds");
     let server = TestServer::builder().http_transport().build(app);
 
     server
@@ -1136,23 +1178,18 @@ pub(super) async fn preauth_disabled_returns_404_and_offer_is_authorization_code
         .await
         .assert_status(StatusCode::NOT_FOUND);
 
-    // Offers fall back to authorization_code.
-    let offer = server.get("/oid4vci/credential-offer").await;
-    offer.assert_status_ok();
-    let body: Value = offer.json();
-    assert!(body["grants"]["authorization_code"].is_object());
-    assert!(body["grants"]
-        .get("urn:ietf:params:oauth:grant-type:pre-authorized_code")
-        .is_none());
+    server
+        .get("/oid4vci/credential-offer")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    server
+        .post("/oid4vci/nonce")
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
 
-    // Issuer metadata advertises no token endpoint when pre-auth is disabled.
+    // Disabling the only supported issuance grant disables issuer metadata.
     let metadata = server.get("/.well-known/openid-credential-issuer").await;
-    metadata.assert_status_ok();
-    let metadata_body: Value = metadata.json();
-    assert!(
-        metadata_body.get("token_endpoint").is_none(),
-        "disabled pre-auth must not advertise a token endpoint"
-    );
+    metadata.assert_status(StatusCode::NOT_FOUND);
     idp.stop().await;
 }
 
@@ -1537,16 +1574,7 @@ pub(super) async fn preauth_notary_access_token_with_empty_authorization_details
         "subject_access person-is-alive",
         Some(json!([])),
     );
-    let nonce = server
-        .post("/oid4vci/nonce")
-        .json(&json!({"credential_configuration_id": "person_is_alive_sd_jwt"}))
-        .await;
-    nonce.assert_status_ok();
-    let c_nonce = nonce.json::<Value>()["c_nonce"]
-        .as_str()
-        .expect("nonce returned")
-        .to_string();
-    let proof = sign_oid4vci_proof(NOTARY_ISSUER, &c_nonce);
+    let proof = sign_oid4vci_proof(NOTARY_ISSUER, "unbound-legacy-nonce");
 
     let credential = server
         .post("/oid4vci/credential")
@@ -1608,18 +1636,21 @@ pub(super) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
     // The Notary-minted token is accepted at the credential endpoint and issues
     // an SD-JWT VC bound to the holder's did:jwk proof.
     let proof = sign_oid4vci_proof(NOTARY_ISSUER, &c_nonce);
+    let credential_request = json!({
+        "format": "dc+sd-jwt",
+        "credential_configuration_id": "person_is_alive_sd_jwt",
+        "proof": { "proof_type": "jwt", "jwt": proof }
+    });
     let credential = server
         .post("/oid4vci/credential")
         .add_header("authorization", format!("Bearer {access_token}"))
-        .json(&json!({
-            "format": "dc+sd-jwt",
-            "credential_configuration_id": "person_is_alive_sd_jwt",
-            "proof": { "proof_type": "jwt", "jwt": proof }
-        }))
+        .json(&credential_request)
         .await;
     credential.assert_status_ok();
     let credential_body: Value = credential.json();
     assert_eq!(credential_body["format"], json!("dc+sd-jwt"));
+    assert!(credential_body.get("c_nonce").is_none());
+    assert!(credential_body.get("c_nonce_expires_in").is_none());
     let sd_jwt = credential_body["credential"]
         .as_str()
         .expect("credential issued");
@@ -1632,6 +1663,229 @@ pub(super) async fn preauth_end_to_end_issues_sd_jwt_vc_bound_to_holder() {
     assert!(
         payload["expirationDate"].as_str().is_some(),
         "wallet-compatible expiration date alias is present"
+    );
+    let retry = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {access_token}"))
+        .json(&credential_request)
+        .await;
+    retry.assert_status_ok();
+    assert_eq!(
+        retry.json::<Value>(),
+        credential_body,
+        "an exact retry receives the verbatim cached credential response"
+    );
+    idp.stop().await;
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+pub(super) async fn preauth_end_to_end_issuer_algorithms_match_metadata_and_client_verification() {
+    set_preauth_env();
+    std::env::set_var("TEST_ISSUER_ES256_JWK", TEST_ISSUER_ES256_JWK);
+
+    for (algorithm, key_env, key_id, key_material) in [
+        (
+            "EdDSA",
+            "TEST_SELF_ATTESTATION_ISSUER_JWK",
+            "issuer-key",
+            TEST_ISSUER_JWK,
+        ),
+        (
+            "ES256",
+            "TEST_ISSUER_ES256_JWK",
+            "issuer-es256-key",
+            TEST_ISSUER_ES256_JWK,
+        ),
+    ] {
+        let idp = MockIdp::start().await;
+        let token_upstream = MockHttpUpstream::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let audit_path = tmp.path().join("audit.jsonl");
+        let mut config = preauth_test_config(
+            "http://127.0.0.1:1",
+            audit_path.to_str().expect("audit path is UTF-8"),
+            &idp,
+            &token_upstream,
+        );
+        let configured_kid = if algorithm == "EdDSA" {
+            "did:web:issuer.example#key-1"
+        } else {
+            "did:web:issuer.example#p256-key-1"
+        };
+        if algorithm == "ES256" {
+            let mut key = local_jwk_signing_key(key_env, configured_kid);
+            key.alg = algorithm.to_string();
+            config.evidence.signing_keys.insert(key_id.to_string(), key);
+            config
+                .evidence
+                .credential_profiles
+                .get_mut("civil_status_sd_jwt")
+                .expect("credential profile exists")
+                .signing_key = key_id.to_string();
+        }
+        let app = standalone_router(config)
+            .await
+            .expect("standalone router builds");
+        let server = TestServer::builder().http_transport().build(app);
+
+        let metadata = server.get("/.well-known/openid-credential-issuer").await;
+        metadata.assert_status_ok();
+        let metadata: Value = metadata.json();
+        let advertised = &metadata["credential_configurations_supported"]["person_is_alive_sd_jwt"];
+        assert_eq!(
+            advertised["credential_signing_alg_values_supported"],
+            json!([algorithm]),
+            "issuer metadata advertises exactly the configured credential algorithm"
+        );
+        assert_eq!(
+            advertised["proof_types_supported"]["jwt"]["proof_signing_alg_values_supported"],
+            json!(["EdDSA"]),
+            "holder proof stays EdDSA for both issuer algorithms"
+        );
+        assert_eq!(
+            advertised["cryptographic_binding_methods_supported"],
+            json!(["did:jwk"])
+        );
+        assert!(metadata.get("nonce_endpoint").is_none());
+
+        let page = drive_offer_to_page(&server, &token_upstream, &idp, "person-1").await;
+        let grants = page.offer["grants"]
+            .as_object()
+            .expect("offer grants are an object");
+        assert_eq!(
+            grants.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec!["urn:ietf:params:oauth:grant-type:pre-authorized_code"],
+            "the wallet-facing offer has only the pre-authorized-code grant"
+        );
+        let pin = page.pin.expect("secure-default offer includes tx_code");
+        let token = redeem_token(&server, &page.code, &pin).await;
+        token.assert_status_ok();
+        let token_body: Value = token.json();
+        let access_token = token_body["access_token"]
+            .as_str()
+            .expect("access token issued");
+        let c_nonce = token_body["c_nonce"]
+            .as_str()
+            .expect("transaction-scoped nonce issued");
+        let proof = sign_oid4vci_proof(NOTARY_ISSUER, c_nonce);
+        let credential = server
+            .post("/oid4vci/credential")
+            .add_header("authorization", format!("Bearer {access_token}"))
+            .json(&json!({
+                "format": "dc+sd-jwt",
+                "credential_configuration_id": "person_is_alive_sd_jwt",
+                "proof": { "proof_type": "jwt", "jwt": proof }
+            }))
+            .await;
+        credential.assert_status_ok();
+        let credential_body: Value = credential.json();
+        assert!(credential_body.get("c_nonce").is_none());
+        assert!(credential_body.get("c_nonce_expires_in").is_none());
+        let compact = credential_body["credential"]
+            .as_str()
+            .expect("credential issued");
+
+        let mut private = PrivateJwk::parse(key_material).expect("issuer key parses");
+        private.alg = Some(algorithm.to_string());
+        private.kid = Some(configured_kid.to_string());
+        let holder_id = holder_did_jwk();
+        let options = VerifyOptions::new("did:web:issuer.example")
+            .expected_vct("http://127.0.0.1:4325/credentials/civil-status")
+            .accepted_algorithms([algorithm])
+            .holder_binding(HolderBindingPolicy::RequiredKid(holder_id.clone()));
+        let verified = verify_sd_jwt_vc(compact, &jwks_from_private_jwk(&private), &options)
+            .expect("the Registry Notary client verifies the issued credential");
+        assert_eq!(verified.algorithm, algorithm);
+        assert_eq!(verified.key_id, configured_kid);
+        assert_eq!(verified.holder_key_id.as_deref(), Some(holder_id.as_str()));
+
+        idp.stop().await;
+    }
+}
+
+#[tokio::test]
+#[cfg(feature = "registry-notary-cel")]
+pub(super) async fn preauth_cached_retry_cannot_escape_failed_credential_audit() {
+    set_preauth_env();
+    let idp = MockIdp::start().await;
+    let token_upstream = MockHttpUpstream::start().await;
+    let tmp = TempDir::new().expect("tempdir");
+    let audit_path = tmp.path().join("audit.jsonl");
+    let audit_backup_path = tmp.path().join("audit.backup.jsonl");
+    let app = standalone_router(preauth_test_config(
+        "http://127.0.0.1:1",
+        audit_path.to_str().expect("audit path is UTF-8"),
+        &idp,
+        &token_upstream,
+    ))
+    .await
+    .expect("standalone router builds");
+    let server = TestServer::builder().http_transport().build(app);
+
+    let (code, pin) = drive_offer_to_code(&server, &token_upstream, &idp, "person-1").await;
+    let token = redeem_token(&server, &code, &pin).await;
+    token.assert_status_ok();
+    let token_body: Value = token.json();
+    let access_token = token_body["access_token"]
+        .as_str()
+        .expect("access token issued")
+        .to_string();
+    let nonce = token_body["c_nonce"]
+        .as_str()
+        .expect("transaction nonce issued");
+    let credential_request = json!({
+        "format": "dc+sd-jwt",
+        "credential_configuration_id": "person_is_alive_sd_jwt",
+        "proof": {
+            "proof_type": "jwt",
+            "jwt": sign_oid4vci_proof(NOTARY_ISSUER, nonce),
+        }
+    });
+
+    // Preserve the valid retained chain, but temporarily replace its active
+    // path with a directory so the first credential-issued append fails.
+    std::fs::rename(&audit_path, &audit_backup_path).expect("audit file moves aside");
+    std::fs::create_dir(&audit_path).expect("audit path becomes unwritable");
+    let failed = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {access_token}"))
+        .json(&credential_request)
+        .await;
+    failed.assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(failed.json::<Value>()["code"], json!("audit.write_failed"));
+
+    std::fs::remove_dir(&audit_path).expect("temporary audit directory is removed");
+    std::fs::rename(&audit_backup_path, &audit_path).expect("audit chain is restored");
+    let recovered = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {access_token}"))
+        .json(&credential_request)
+        .await;
+    recovered.assert_status_ok();
+    let recovered_body: Value = recovered.json();
+    let exact_retry = server
+        .post("/oid4vci/credential")
+        .add_header("authorization", format!("Bearer {access_token}"))
+        .json(&credential_request)
+        .await;
+    exact_retry.assert_status_ok();
+    assert_eq!(
+        exact_retry.json::<Value>(),
+        recovered_body,
+        "recovery and later exact retries use the one cached signature"
+    );
+    let issued_audits = audit_envelopes(&audit_path)
+        .into_iter()
+        .filter(|envelope| {
+            envelope.record["path"] == json!("/oid4vci/credential")
+                && envelope.record["decision"] == json!("credential_issued")
+                && envelope.record["status"] == json!(200)
+        })
+        .count();
+    assert_eq!(
+        issued_audits, 2,
+        "each released cached response must pass credential-issued audit emission"
     );
     idp.stop().await;
 }
@@ -1674,20 +1928,6 @@ pub(super) fn decode_disclosed_claim(sd_jwt: &str, claim_name: &str) -> Value {
         .unwrap_or_else(|| panic!("disclosure for {claim_name} is present"))
 }
 
-/// The evaluated-claim fields that must be stable across issuance paths. The
-/// `issued_at` timestamp legitimately differs between two evaluations, so it is
-/// excluded from the parity comparison.
-#[cfg(feature = "registry-notary-cel")]
-pub(super) fn semantic_claim_fields(disclosure_value: &Value) -> Value {
-    json!({
-        "claim_id": disclosure_value["claim_id"],
-        "version": disclosure_value["version"],
-        "value": disclosure_value["value"],
-        "satisfied": disclosure_value["satisfied"],
-        "subject_type": disclosure_value["subject_type"],
-    })
-}
-
 /// Find the single `credential_issued` audit record for the OID4VCI credential
 /// endpoint. Its `target_ref_hash`/`requester_ref_hash` are HMACs over the
 /// bound subject reference, deterministic for a fixed audit secret, so two paths
@@ -1705,25 +1945,11 @@ pub(super) fn credential_issued_audit(audit_path: &std::path::Path) -> Value {
         .expect("credential_issued audit record exists")
 }
 
-/// The semantic capstone. Drive the full pre-authorized-code path and compare
-/// the issued credential to the one the existing eSignet-token path produces for
-/// the same eSignet-authenticated subject and the same configuration.
-///
-/// It asserts two properties that a shape check cannot:
-///
-/// 1. Subject equality: both paths bind the same eSignet `subject_binding` value
-///    (the civil id), proven by identical, secret-keyed `target_ref_hash` /
-///    `requester_ref_hash` audit hashes. The raw civil id is never logged, so the
-///    hash is the only observable subject handle, and matching it proves the
-///    pre-auth credential is bound to the eSignet subject, not the holder key
-///    alone.
-/// 2. Evaluation parity: the disclosed `person-is-alive` claim result is
-///    byte-identical across the two paths (claim_id, version, value, satisfied,
-///    subject_type), proving the pre-auth path yields an equivalent credential,
-///    not merely a well-shaped one.
+/// A wallet-issued eSignet bearer token cannot bypass the issuer-initiated
+/// transaction, while the approved pre-authorized-code path binds and issues.
 #[tokio::test]
 #[cfg(feature = "registry-notary-cel")]
-pub(super) async fn preauth_credential_subject_and_evaluation_match_esignet_token_path() {
+pub(super) async fn preauth_transaction_cannot_be_bypassed_with_esignet_wallet_token() {
     set_preauth_env();
 
     // The eSignet-token (auth-code) baseline: an eSignet token whose
@@ -1755,16 +1981,7 @@ pub(super) async fn preauth_credential_subject_and_evaluation_match_esignet_toke
         "exp": now + 300,
         "nbf": now,
     }));
-    let baseline_nonce = baseline_server
-        .post("/oid4vci/nonce")
-        .json(&json!({"credential_configuration_id": "person_is_alive_sd_jwt"}))
-        .await;
-    baseline_nonce.assert_status_ok();
-    let baseline_nonce = baseline_nonce.json::<Value>()["c_nonce"]
-        .as_str()
-        .expect("nonce returned")
-        .to_string();
-    let baseline_proof = sign_oid4vci_proof(NOTARY_ISSUER, &baseline_nonce);
+    let baseline_proof = sign_oid4vci_proof(NOTARY_ISSUER, "unbound-wallet-nonce");
     let baseline_credential = baseline_server
         .post("/oid4vci/credential")
         .add_header("authorization", format!("Bearer {esignet_token}"))
@@ -1774,15 +1991,10 @@ pub(super) async fn preauth_credential_subject_and_evaluation_match_esignet_toke
             "proof": { "proof_type": "jwt", "jwt": baseline_proof }
         }))
         .await;
-    baseline_credential.assert_status_ok();
-    let baseline_sd_jwt = baseline_credential.json::<Value>()["credential"]
-        .as_str()
-        .expect("baseline credential issued")
-        .to_string();
-    let baseline_audit = credential_issued_audit(&baseline_audit_path);
+    baseline_credential.assert_status(StatusCode::UNAUTHORIZED);
     assert_eq!(
-        baseline_audit["purposes"],
-        json!(["citizen_subject_access"])
+        baseline_credential.json::<Value>()["error"],
+        json!("invalid_token")
     );
     baseline_idp.stop().await;
 
@@ -1846,47 +2058,18 @@ pub(super) async fn preauth_credential_subject_and_evaluation_match_esignet_toke
     assert_eq!(preauth_audit["purposes"], json!(["citizen_subject_access"]));
     preauth_idp.stop().await;
 
-    // Subject equality: the pre-auth credential is bound to the eSignet subject,
-    // not the holder key alone. The secret-keyed audit hash over the bound
-    // subject reference is identical to the eSignet-token path, which it can be
-    // only if both bound the same civil id.
     assert!(
-        baseline_audit["target_ref_hash"].as_str().is_some(),
-        "baseline credential audit hashes the bound subject"
+        preauth_audit["target_ref_hash"]
+            .as_str()
+            .is_some_and(|hash| hash.starts_with("hmac-sha256:")),
+        "the transaction audit uses only a keyed subject handle"
     );
-    assert_eq!(
-        preauth_audit["target_ref_hash"], baseline_audit["target_ref_hash"],
-        "pre-auth credential subject must equal the eSignet subject_binding value"
-    );
-    assert_eq!(
-        preauth_audit["requester_ref_hash"], baseline_audit["requester_ref_hash"],
-        "pre-auth requester must equal the eSignet-token path requester"
-    );
-    assert_eq!(preauth_audit["target_type"], baseline_audit["target_type"]);
-
-    // The holder binding is independent of the access token: both credentials are
-    // bound to the same holder did:jwk proof key via `cnf`/`sub`.
-    let baseline_payload = decode_sd_jwt_payload(&baseline_sd_jwt);
     let preauth_payload = decode_sd_jwt_payload(&preauth_sd_jwt);
-    assert_eq!(
-        preauth_payload["cnf"], baseline_payload["cnf"],
-        "holder binding comes from the did:jwk proof, identical across paths"
-    );
-    assert_eq!(preauth_payload["vct"], baseline_payload["vct"]);
-    // The registry subject ref is deliberately never exposed in the payload.
     assert!(
         !preauth_payload.to_string().contains("person-1"),
         "the raw civil id must not appear in the credential payload"
     );
-
-    // Evaluation parity: the disclosed person-is-alive result is identical.
-    let baseline_claim = decode_disclosed_claim(&baseline_sd_jwt, "person-is-alive");
     let preauth_claim = decode_disclosed_claim(&preauth_sd_jwt, "person-is-alive");
-    assert_eq!(
-        semantic_claim_fields(&preauth_claim),
-        semantic_claim_fields(&baseline_claim),
-        "the evaluated claim result must be identical to the eSignet-token path"
-    );
     assert_eq!(preauth_claim["claim_id"], json!("person-is-alive"));
     assert_eq!(preauth_claim["value"], json!(true));
     assert_eq!(preauth_claim["satisfied"], json!(true));

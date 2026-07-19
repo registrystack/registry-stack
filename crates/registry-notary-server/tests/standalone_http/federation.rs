@@ -404,13 +404,39 @@ pub(super) fn subject_access_oid4vci_config(
     jwks_uri: &str,
 ) -> StandaloneRegistryNotaryConfig {
     let mut config = subject_access_oidc_config(base_url, audit_path, issuer, jwks_uri);
+    std::env::set_var("TEST_ACCESS_TOKEN_JWK", TEST_ACCESS_TOKEN_JWK);
+    std::env::set_var("TEST_ESIGNET_RP_JWK", TEST_ESIGNET_RP_JWK);
+    config
+        .subject_access
+        .rate_limits
+        .tx_code_attempts_per_code_per_minute = 3;
+    config
+        .subject_access
+        .citizen_clients
+        .allowed_client_ids
+        .push("registry-lab-live-client".to_string());
+    if let Some(oidc) = config.auth.oidc.as_mut() {
+        oidc.allowed_clients
+            .push("registry-lab-live-client".to_string());
+    }
+    config.evidence.signing_keys.insert(
+        "access-token-key".to_string(),
+        local_jwk_signing_key(
+            "TEST_ACCESS_TOKEN_JWK",
+            "did:web:issuer.example#access-token-key",
+        ),
+    );
+    config.evidence.signing_keys.insert(
+        "esignet-rp-key".to_string(),
+        local_jwk_signing_key("TEST_ESIGNET_RP_JWK", "did:web:rp.example#esignet-rp-key"),
+    );
     config
         .evidence
         .credential_profiles
         .get_mut("civil_status_sd_jwt")
         .expect("civil status credential profile exists")
         .vct = "http://127.0.0.1:4325/credentials/civil-status".to_string();
-    config.oid4vci = serde_norway::from_str::<Oid4vciConfig>(
+    config.oid4vci = serde_norway::from_str::<Oid4vciConfig>(&format!(
         r#"
 enabled: true
 credential_issuer: http://127.0.0.1:4325
@@ -419,8 +445,6 @@ authorization_servers:
 accepted_token_audiences:
   - registry-notary-citizen
 credential_endpoint: http://127.0.0.1:4325/oid4vci/credential
-offer_endpoint: http://127.0.0.1:4325/oid4vci/credential-offer
-nonce_endpoint: http://127.0.0.1:4325/oid4vci/nonce
 nonce:
   enabled: true
   ttl_seconds: 300
@@ -437,9 +461,42 @@ credential_configurations:
     scope: person-is-alive
     vct: http://127.0.0.1:4325/credentials/civil-status
     display_name: Person is alive
+pre_authorized_code:
+  enabled: true
+  tx_code:
+    required: true
+    input_mode: numeric
+    length: 6
+  esignet:
+    client_id: registry-lab-live-client
+    client_signing_key_id: esignet-rp-key
+    redirect_uri: http://127.0.0.1:4325/oid4vci/offer/callback
+    authorize_url: {issuer}/authorize
+    token_url: {issuer}/token
+    issuer: {issuer}
+    jwks_uri: {jwks_uri}
+    scopes:
+      - openid
+    login_state_ttl_seconds: 300
+    allow_insecure_localhost: true
+  pre_authorized_code_ttl_seconds: 300
+"#
+    ))
+    .expect("oid4vci config deserializes");
+    config.auth.access_token_signing = serde_norway::from_str(
+        r#"
+enabled: true
+issuer: http://127.0.0.1:4325
+audiences:
+  - registry-notary-citizen
+allowed_algorithms:
+  - EdDSA
+token_typ: registry-notary-access+jwt
+signing_key_id: access-token-key
+access_token_ttl_seconds: 300
 "#,
     )
-    .expect("oid4vci config deserializes");
+    .expect("access-token signing config parses");
     config
 }
 

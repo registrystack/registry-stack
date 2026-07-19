@@ -109,14 +109,6 @@
     },
     {
       "listener": "public",
-      "path": "/oid4vci/credential-offer",
-      "methods": [
-        "GET"
-      ],
-      "source": "crates/registry-notary-server/src/api.rs"
-    },
-    {
-      "listener": "public",
       "path": "/oid4vci/offer/start",
       "methods": [
         "GET"
@@ -134,14 +126,6 @@
     {
       "listener": "public",
       "path": "/oid4vci/token",
-      "methods": [
-        "POST"
-      ],
-      "source": "crates/registry-notary-server/src/api.rs"
-    },
-    {
-      "listener": "public",
-      "path": "/oid4vci/nonce",
       "methods": [
         "POST"
       ],

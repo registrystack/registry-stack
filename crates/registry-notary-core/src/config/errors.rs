@@ -97,6 +97,8 @@ pub enum EvidenceConfigError {
     InvalidConcurrency,
     #[error("invalid evidence.machine_quota config: {reason}")]
     InvalidMachineQuotaConfig { reason: String },
+    #[error("invalid evidence batch config: {reason}")]
+    InvalidBatchConfig { reason: String },
     /// Credential holder binding only works with did:jwk because holder_jwk()
     /// only implements did:jwk resolution. Restrict allowed_did_methods to
     /// ["did:jwk"] or leave it empty when holder binding is disabled.

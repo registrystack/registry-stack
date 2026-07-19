@@ -9,7 +9,7 @@ profile:
 supported_input_artifacts:
   - kind: metadata_manifest
     media_type: application/yaml
-    description: Registry Metadata portable metadata manifest with benefits sync concept references.
+    description: Registry Manifest portable metadata manifest with benefits sync concept references.
   - kind: sync_response_schema
     media_type: application/schema+json
     description: Optional benefits sync response schema used by runtime sync adapters.

@@ -809,6 +809,7 @@ catalog:
         ReadyResource {
             ingest_ulid: readiness_ingest_version,
             registered_at: time::OffsetDateTime::now_utc(),
+            consecutive_refresh_failures: 0,
         },
     );
     snapshot.ready.insert(
@@ -816,6 +817,7 @@ catalog:
         ReadyResource {
             ingest_ulid: readiness_ingest_version,
             registered_at: time::OffsetDateTime::now_utc(),
+            consecutive_refresh_failures: 0,
         },
     );
     let (_tx, readiness) = watch::channel(snapshot);
@@ -2699,6 +2701,7 @@ audit:
         ReadyResource {
             ingest_ulid: ingest_version,
             registered_at: time::OffsetDateTime::now_utc(),
+            consecutive_refresh_failures: 0,
         },
     );
     snapshot.ready.insert(
@@ -2706,6 +2709,7 @@ audit:
         ReadyResource {
             ingest_ulid: ingest_version,
             registered_at: time::OffsetDateTime::now_utc(),
+            consecutive_refresh_failures: 0,
         },
     );
     let (_tx, readiness) = watch::channel(snapshot);

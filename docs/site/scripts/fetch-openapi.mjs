@@ -129,16 +129,18 @@ async function main() {
       mode = 'clone';
     }
 
-    // Parse to fail loudly on malformed JSON and to emit a stable, formatted file.
-    let parsed;
+    // Parse to fail loudly on malformed JSON, then preserve the product-owned
+    // artifact bytes. Re-serializing through JavaScript reorders response keys
+    // such as `4XX` after integer-like status codes and makes the docs copy look
+    // different even though it came from the same generated source.
     try {
-      parsed = JSON.parse(raw);
+      JSON.parse(raw);
     } catch (error) {
       fail(`${repoId}: spec at ${repo.ref}:${specPath} is not valid JSON: ${error.message}`);
     }
 
     const outFile = resolve(openapiDir, `${repoId}.openapi.json`);
-    await writeFile(outFile, `${JSON.stringify(parsed, null, 2)}\n`);
+    await writeFile(outFile, raw.endsWith('\n') ? raw : `${raw}\n`);
     written += 1;
     console.log(
       `Fetched ${repoId} OpenAPI spec at ${repo.ref.slice(0, 12)} (${mode}) -> ${relative(root, outFile)}`,

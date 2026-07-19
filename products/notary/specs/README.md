@@ -11,6 +11,10 @@ that still tracks open work.
   accepted design record for versioned audit pseudonym domains, canonical
   identifier inputs, no-match behavior, retention, key rotation, erasure, and
   federation pairwise alignment. **[archived: reconciled design record]**
+- [`bounded-batch-evaluation-v1.md`](bounded-batch-evaluation-v1.md):
+  hard limits, two-phase processing, per-member audit, cancellation, replay,
+  and issuance boundaries for the synchronous batch evaluation surface.
+  **[implemented]**
 - [`citizen-self-attestation-spec.md`](citizen-self-attestation-spec.md):
   citizen self-attestation behavior, guard order, privacy controls, rate
   limits, and historical source-free credential issuance design. Current

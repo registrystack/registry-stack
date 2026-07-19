@@ -55,7 +55,7 @@ pub(in crate::config) fn validate_signing_key_id(key_id: &str) -> Result<(), Evi
     Ok(())
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CredentialProfileConfig {
     pub format: String,
@@ -72,12 +72,14 @@ pub struct CredentialProfileConfig {
     pub disclosure: CredentialDisclosureConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SigningKeyConfig {
+    #[schemars(with = "schema::SigningKeyProviderSchema")]
     pub provider: SigningKeyProviderConfig,
     pub alg: String,
     pub kid: String,
+    #[schemars(with = "schema::SigningKeyStatusSchema")]
     pub status: SigningKeyStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub publish_until_unix_seconds: Option<u64>,
@@ -291,7 +293,7 @@ pub(in crate::config) const fn default_credential_validity_seconds() -> i64 {
     600
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HolderBindingConfig {
     #[serde(default = "default_holder_binding_mode")]

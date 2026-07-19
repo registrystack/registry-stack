@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-19
+
+### Added
+
+- Added a complete source-tested registry-backed OID4VCI journey for EdDSA and
+  ES256 issuer profiles with EdDSA `did:jwk` holder proof, exact generated
+  metadata assertions, client verification, replay and provenance checks, and
+  unsupported-profile denial.
+- Added registryctl authoring for the issuer signing algorithm and transaction
+  code mode. EdDSA and a required transaction code are secure defaults. An
+  explicit no-PIN profile retains the 300-second compiler ceiling.
+- Added the bounded batch evaluation v1 contract. Batch evaluation has an
+  immutable 100-member platform ceiling with lower-only global and per-claim
+  configuration, client and OpenAPI bounds, and pre-side-effect HTTP 413
+  rejection using `batch.too_large`.
+- Added the committed Draft 2020-12 Registry Notary runtime configuration
+  schema at `schemas/registry-notary.config.schema.json`. `registry-notary
+  schema`, `just config-schema-generate`, and the schema drift check all use
+  the production `StandaloneRegistryNotaryConfig` deserialization graph.
+  The operator reference now has a bidirectional key-path contract check.
+
+### Changed
+
+- BREAKING: the Registry Notary 1.0 wallet facade now supports only
+  issuer-initiated pre-authorized code backed by a stored registry transaction.
+  `GET /oid4vci/credential-offer` and `POST /oid4vci/nonce` are removed, and
+  issuer metadata no longer advertises `nonce_endpoint`. Credential responses
+  no longer expose `c_nonce` or `c_nonce_expires_in`.
+  The Rust, Node.js, and Python client helpers for those removed routes are
+  removed as well.
+  Start at `GET /oid4vci/offer/start`, complete the identity-provider callback,
+  redeem the rendered offer at `POST /oid4vci/token`, and use that token
+  response's transaction-bound proof nonce. The identity provider's
+  authorization code is internal to Notary and is not a wallet grant.
+- Status-bearing credentials now require fail-closed client verification from
+  the configured exact HTTPS status origin. The reserved top-level `status`
+  claim cannot be selectively disclosable.
+- OID4VCI remains limited to EdDSA or ES256 issuer signing and EdDSA `did:jwk`
+  holder proof. No EUDI, HAIP, PAR, DPoP, wallet-attestation, ES256-holder, or
+  external conformance claim is made without frozen candidate evidence.
+- Maintained Notary runtime images now use Debian 13 distroless. Release checks
+  enforce the expected base and vulnerability policy before publication.
+
 ## [0.11.0] - 2026-07-18
 
 ### Added

@@ -1,0 +1,186 @@
+{
+  "schema": "registry-stack.selected-metrics/v1",
+  "release_line": 1,
+  "metrics": [
+    {
+      "product": "registry-relay",
+      "name": "registry_relay_http_requests_total",
+      "type": "counter",
+      "meaning": "Completed HTTP requests grouped by bounded request attributes.",
+      "labels": {
+        "endpoint_kind": "Bounded route family, never a raw request path.",
+        "error_code": "Released machine error code, or none for a successful response.",
+        "method": "Normalized HTTP method.",
+        "status_class": "HTTP status class.",
+        "status_code": "HTTP response status code."
+      },
+      "source": "crates/registry-relay/src/observability.rs"
+    },
+    {
+      "product": "registry-relay",
+      "name": "registry_relay_http_request_duration_seconds",
+      "type": "histogram",
+      "meaning": "HTTP request duration in seconds grouped by bounded request attributes.",
+      "labels": {
+        "endpoint_kind": "Bounded route family, never a raw request path.",
+        "error_code": "Released machine error code, or none for a successful response.",
+        "method": "Normalized HTTP method.",
+        "status_class": "HTTP status class.",
+        "status_code": "HTTP response status code."
+      },
+      "source": "crates/registry-relay/src/observability.rs"
+    },
+    {
+      "product": "registry-relay",
+      "name": "registry_relay_readiness_ready_resources",
+      "type": "gauge",
+      "meaning": "Number of configured resources that are ready.",
+      "labels": {},
+      "source": "crates/registry-relay/src/observability.rs"
+    },
+    {
+      "product": "registry-relay",
+      "name": "registry_relay_readiness_not_ready_resources",
+      "type": "gauge",
+      "meaning": "Number of configured resources that are not ready.",
+      "labels": {},
+      "source": "crates/registry-relay/src/observability.rs"
+    },
+    {
+      "product": "registry-relay",
+      "name": "registry_relay_readiness_failed_resources",
+      "type": "gauge",
+      "meaning": "Number of configured resources whose latest ingest failed.",
+      "labels": {},
+      "source": "crates/registry-relay/src/observability.rs"
+    },
+    {
+      "product": "registry-relay",
+      "name": "registry_relay_readiness_unresolved_entities",
+      "type": "gauge",
+      "meaning": "Number of configured entities without a resolved backing resource.",
+      "labels": {},
+      "source": "crates/registry-relay/src/observability.rs"
+    },
+    {
+      "product": "registry-relay",
+      "name": "registry_relay_readiness_fully_ready",
+      "type": "gauge",
+      "meaning": "Whether every resource is ready and every entity is resolved, represented as zero or one.",
+      "labels": {},
+      "source": "crates/registry-relay/src/observability.rs"
+    },
+    {
+      "product": "registry-relay",
+      "name": "registry_relay_ingest_consecutive_refresh_failures",
+      "type": "gauge",
+      "meaning": "Consecutive failed refresh attempts for a ready resource since its last successful data load or unchanged metadata poll.",
+      "labels": {
+        "dataset_id": "Configured dataset identifier; cardinality is bounded by configured resources.",
+        "resource_id": "Configured resource identifier; cardinality is bounded by configured resources."
+      },
+      "source": "crates/registry-relay/src/observability.rs"
+    },
+    {
+      "product": "registry-relay",
+      "name": "registry_relay_ingest_last_successful_refresh_timestamp_seconds",
+      "type": "gauge",
+      "meaning": "Unix timestamp of the last successful data load for a ready resource.",
+      "labels": {
+        "dataset_id": "Configured dataset identifier; cardinality is bounded by configured resources.",
+        "resource_id": "Configured resource identifier; cardinality is bounded by configured resources."
+      },
+      "source": "crates/registry-relay/src/observability.rs"
+    },
+    {
+      "product": "registry-notary",
+      "name": "registry_notary_http_requests_total",
+      "type": "counter",
+      "meaning": "Completed HTTP requests grouped by bounded request attributes.",
+      "labels": {
+        "endpoint_kind": "Bounded route family, never a raw request path.",
+        "error_code": "Released machine error code, or none for a successful response.",
+        "method": "Normalized HTTP method.",
+        "status_class": "HTTP status class.",
+        "status_code": "HTTP response status code."
+      },
+      "source": "crates/registry-notary-server/src/metrics.rs"
+    },
+    {
+      "product": "registry-notary",
+      "name": "registry_notary_http_request_duration_seconds",
+      "type": "histogram",
+      "meaning": "HTTP request duration in seconds grouped by bounded request attributes.",
+      "labels": {
+        "endpoint_kind": "Bounded route family, never a raw request path.",
+        "error_code": "Released machine error code, or none for a successful response.",
+        "method": "Normalized HTTP method.",
+        "status_class": "HTTP status class.",
+        "status_code": "HTTP response status code."
+      },
+      "source": "crates/registry-notary-server/src/metrics.rs"
+    },
+    {
+      "product": "registry-notary",
+      "name": "registry_notary_audit_events_total",
+      "type": "counter",
+      "meaning": "Audit write attempts grouped by bounded outcome.",
+      "labels": {
+        "outcome": "Bounded audit write outcome."
+      },
+      "source": "crates/registry-notary-server/src/metrics.rs"
+    },
+    {
+      "product": "registry-notary",
+      "name": "registry_notary_replay_events_total",
+      "type": "counter",
+      "meaning": "Replay-store decisions grouped by protocol flow and bounded outcome.",
+      "labels": {
+        "flow": "Bounded replay-protected protocol flow.",
+        "outcome": "Bounded replay decision outcome."
+      },
+      "source": "crates/registry-notary-server/src/metrics.rs"
+    },
+    {
+      "product": "registry-notary",
+      "name": "registry_notary_credential_issuance_total",
+      "type": "counter",
+      "meaning": "Credential issuance attempts grouped by protocol and bounded outcome.",
+      "labels": {
+        "outcome": "Bounded credential issuance outcome.",
+        "protocol": "Credential issuance protocol."
+      },
+      "source": "crates/registry-notary-server/src/metrics.rs"
+    },
+    {
+      "product": "registry-notary",
+      "name": "registry_notary_cel_evaluations_total",
+      "type": "counter",
+      "meaning": "CEL worker evaluations grouped by bounded outcome.",
+      "labels": {
+        "outcome": "Bounded CEL evaluation outcome."
+      },
+      "source": "crates/registry-notary-server/src/metrics.rs"
+    },
+    {
+      "product": "registry-notary",
+      "name": "registry_notary_cel_evaluation_duration_ms_total",
+      "type": "counter",
+      "meaning": "Accumulated CEL evaluation duration in milliseconds grouped by bounded outcome.",
+      "labels": {
+        "outcome": "Bounded CEL evaluation outcome."
+      },
+      "source": "crates/registry-notary-server/src/metrics.rs"
+    },
+    {
+      "product": "registry-notary",
+      "name": "registry_notary_cel_worker_pool",
+      "type": "gauge",
+      "meaning": "Current CEL worker-pool state value.",
+      "labels": {
+        "state": "Bounded worker-pool state name."
+      },
+      "source": "crates/registry-notary-server/src/metrics.rs"
+    }
+  ]
+}

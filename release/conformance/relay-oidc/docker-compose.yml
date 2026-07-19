@@ -1,0 +1,107 @@
+# SPDX-License-Identifier: Apache-2.0
+
+name: registry-release-relay-oidc
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    environment:
+      POSTGRES_DB: zitadel
+      POSTGRES_PASSWORD: ${REGISTRY_RELAY_OIDC_SMOKE_POSTGRES_PASSWORD:?runner must provide PostgreSQL password}
+      POSTGRES_USER: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d zitadel"]
+      interval: 2s
+      timeout: 3s
+      retries: 45
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  seed-init:
+    image: python:3.13-slim-trixie@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
+    user: "0:0"
+    command:
+      - python
+      - -c
+      - "import os; os.chown('/seed', 1000, 1000)"
+    volumes:
+      - zitadel-seed:/seed
+
+  zitadel:
+    image: ghcr.io/zitadel/zitadel:v2.66.4@sha256:13bbbdeb3689fdd4191ab7a355aeee1ebebdc266633e6126c14a2d27f12b808f
+    command:
+      - start-from-init
+      - --masterkey
+      - ${REGISTRY_RELAY_OIDC_SMOKE_ZITADEL_MASTERKEY:?runner must provide Zitadel master key}
+      - --tlsMode
+      - disabled
+    environment:
+      ZITADEL_DATABASE_POSTGRES_ADMIN_PASSWORD: ${REGISTRY_RELAY_OIDC_SMOKE_POSTGRES_PASSWORD}
+      ZITADEL_DATABASE_POSTGRES_ADMIN_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_ADMIN_USERNAME: postgres
+      ZITADEL_DATABASE_POSTGRES_DATABASE: zitadel
+      ZITADEL_DATABASE_POSTGRES_HOST: postgres
+      ZITADEL_DATABASE_POSTGRES_PORT: 5432
+      ZITADEL_DATABASE_POSTGRES_USER_PASSWORD: ${REGISTRY_RELAY_OIDC_SMOKE_POSTGRES_PASSWORD}
+      ZITADEL_DATABASE_POSTGRES_USER_SSL_MODE: disable
+      ZITADEL_DATABASE_POSTGRES_USER_USERNAME: postgres
+      ZITADEL_EXTERNALDOMAIN: localhost
+      ZITADEL_EXTERNALPORT: "8080"
+      ZITADEL_EXTERNALSECURE: "false"
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_NAME: Registry Relay smoke bootstrap
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_MACHINE_USERNAME: relay-smoke-bootstrap
+      ZITADEL_FIRSTINSTANCE_ORG_MACHINE_PAT_EXPIRATIONDATE: "2099-12-31T23:59:59Z"
+      ZITADEL_FIRSTINSTANCE_PATPATH: /seed/bootstrap.pat
+      ZITADEL_TLS_ENABLED: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      seed-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/app/zitadel", "ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 45
+      start_period: 20s
+    ports:
+      - "127.0.0.1:${REGISTRY_RELAY_OIDC_SMOKE_HOST_PORT:?runner must provide Relay host port}:18080"
+    volumes:
+      - zitadel-seed:/seed
+
+  helper:
+    image: python:3.13-slim-trixie@sha256:6771159cd4fa5d9bba1258caf0b82e6b73458c694d178ad97c5e925c2d0e1a91
+    network_mode: service:zitadel
+    depends_on:
+      zitadel:
+        condition: service_healthy
+    environment:
+      REGISTRY_RELAY_OIDC_SMOKE_RUNTIME_GID: ${REGISTRY_RELAY_OIDC_SMOKE_RUNTIME_GID:?runner must provide runtime gid}
+      REGISTRY_RELAY_OIDC_SMOKE_RUNTIME_UID: ${REGISTRY_RELAY_OIDC_SMOKE_RUNTIME_UID:?runner must provide runtime uid}
+      REGISTRY_RELAY_OIDC_SMOKE_RUN_ID: ${REGISTRY_RELAY_OIDC_SMOKE_RUN_ID:?runner must provide run id}
+      REGISTRY_RELAY_OIDC_SMOKE_SECRET_CANARY: ${REGISTRY_RELAY_OIDC_SMOKE_SECRET_CANARY:?runner must provide secret canary}
+    entrypoint: ["python", "/harness/zitadel-helper.py"]
+    volumes:
+      - ${REGISTRY_RELAY_OIDC_SMOKE_CONFIG_DIR:?runner must provide config directory}:/harness:ro
+      - ${REGISTRY_RELAY_OIDC_SMOKE_RUNTIME_DIR:?runner must provide runtime directory}:/runtime
+      - zitadel-seed:/seed:ro
+
+  relay:
+    image: ${REGISTRY_RELAY_OIDC_SMOKE_RELAY_IMAGE:?runner must provide digest-pinned Registry Relay image}
+    platform: linux/amd64
+    network_mode: service:zitadel
+    depends_on:
+      zitadel:
+        condition: service_healthy
+    command: ["--config", "/etc/registry-relay/config.yaml"]
+    environment:
+      REGISTRY_RELAY_AUDIT_HASH_SECRET: ${REGISTRY_RELAY_OIDC_SMOKE_AUDIT_HASH_SECRET:?runner must provide audit hash secret}
+    volumes:
+      - ${REGISTRY_RELAY_OIDC_SMOKE_RELAY_CONFIG:?runner must provide Relay config}:/etc/registry-relay/config.yaml:ro
+      - ${REGISTRY_RELAY_OIDC_SMOKE_CONFIG_DIR}/records.csv:/fixtures/records.csv:ro
+      - relay-cache:/var/lib/registry-relay/cache
+
+volumes:
+  postgres-data:
+  relay-cache:
+  zitadel-seed:

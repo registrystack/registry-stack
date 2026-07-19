@@ -30,12 +30,14 @@ pub(super) use registry_platform_audit::{
 pub(super) use registry_platform_authcommon::{
     CredentialFingerprintProvider, CredentialFingerprintRef,
 };
-pub(super) use registry_platform_crypto::{canonicalize_json, sign, PrivateJwk};
 #[cfg(feature = "registry-notary-cel")]
-pub(super) use registry_platform_crypto::{did_jwk_from_public_jwk, verify};
+pub(super) use registry_platform_crypto::verify;
+pub(super) use registry_platform_crypto::{
+    canonicalize_json, did_jwk_from_public_jwk, sign, PrivateJwk,
+};
 pub(super) use registry_platform_testing::{
-    fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, sign_openid4vci_proof_jwt,
-    MockHttpUpstream, MockIdp, FEDERATION_PROTOCOL, FEDERATION_REQUEST_JWT_TYPE,
+    fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt, MockHttpUpstream, MockIdp,
+    FEDERATION_PROTOCOL, FEDERATION_REQUEST_JWT_TYPE,
 };
 pub(super) use serde::Deserialize;
 pub(super) use serde_json::{json, Value};
@@ -53,9 +55,32 @@ pub(super) use ulid::Ulid;
 
 pub(super) const TEST_AUDIT_SECRET: &str = "0123456789abcdef0123456789abcdef";
 pub(super) const TEST_ISSUER_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#;
+#[cfg(feature = "registry-notary-cel")]
+pub(super) const TEST_ISSUER_ES256_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256"}"#;
+pub(super) const TEST_ACCESS_TOKEN_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"8jFBgUJxaaQimd4NjzxhvPYyNbcOnnZsqOntZbpP3Xk","x":"XvW-aWwJCWSYoYudTB9OZqNHURKElnnyGNa6DQNjzZk","alg":"EdDSA"}"#;
+pub(super) const TEST_ESIGNET_RP_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"EOLPz23yGd5Ju5e-PYybLE-YyvjgXLhGzS6XgmszzXs","x":"3v5jZ5rAf7KGvcC3zuKh6-ujgtA0ABa4jqmAWXq-S_c","alg":"EdDSA"}"#;
 pub(super) const TEST_HOLDER_JWK: &str = r#"{"crv":"Ed25519","d":"f4QIxnAyRWzhuBOmNRgvBTE56mWePdsPL0mvCtl8Gys","x":"pv4e_hXHBLN27rcs6VDFV1ED0TiU8M3xy9vsuWFEsec","kty":"OKP","alg":"EdDSA"}"#;
 pub(super) const TEST_RELAY_PROFILE_ID: &str = "example.person-status.exact";
 pub(super) const TEST_RELAY_CONTRACT_DOMAIN: &[u8] = b"registry.relay.consultation-contract.v1\0";
+
+pub(super) fn local_jwk_signing_key(private_jwk_env: &str, kid: &str) -> SigningKeyConfig {
+    SigningKeyConfig {
+        provider: SigningKeyProviderConfig::LocalJwkEnv,
+        alg: SD_JWT_VC_SIGNING_ALG.to_string(),
+        kid: kid.to_string(),
+        status: SigningKeyStatus::Active,
+        publish_until_unix_seconds: None,
+        private_jwk_env: private_jwk_env.to_string(),
+        public_jwk_env: String::new(),
+        module_path: String::new(),
+        token_label: String::new(),
+        pin_env: String::new(),
+        key_label: String::new(),
+        key_id_hex: String::new(),
+        path: String::new(),
+        password_env: String::new(),
+    }
+}
 
 #[derive(Clone)]
 struct TestRelayState {
@@ -284,12 +309,40 @@ pub(super) fn set_audit_secret() {
 }
 
 pub(super) fn sign_oid4vci_proof(audience: &str, nonce: &str) -> String {
-    let now = OffsetDateTime::now_utc().unix_timestamp();
-    sign_openid4vci_proof_jwt(TEST_HOLDER_JWK, audience, Some(nonce), now)
+    sign_oid4vci_did_jwk_proof(audience, Some(nonce), true)
 }
 
-#[cfg(feature = "registry-notary-cel")]
-pub(super) fn sign_oid4vci_proof_without_iss(audience: &str, nonce: &str) -> String {
+fn sign_oid4vci_did_jwk_proof(audience: &str, nonce: Option<&str>, include_iss: bool) -> String {
+    let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
+    let holder_id = did_jwk_from_public_jwk(&holder.public()).expect("holder did:jwk encodes");
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let header_b64 = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&json!({
+            "alg": "EdDSA",
+            "typ": "openid4vci-proof+jwt",
+            "kid": holder_id,
+        }))
+        .expect("header serializes"),
+    );
+    let mut payload = serde_json::Map::from_iter([
+        ("aud".to_string(), json!(audience)),
+        ("iat".to_string(), json!(now)),
+        ("exp".to_string(), json!(now + 60)),
+    ]);
+    if include_iss {
+        payload.insert("iss".to_string(), json!(holder_id));
+    }
+    if let Some(nonce) = nonce {
+        payload.insert("nonce".to_string(), json!(nonce));
+    }
+    let payload_b64 = URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&Value::Object(payload)).expect("payload serializes"));
+    let signing_input = format!("{header_b64}.{payload_b64}");
+    let signature = sign(signing_input.as_bytes(), &holder).expect("holder signs proof");
+    format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
+}
+
+pub(super) fn sign_oid4vci_inline_jwk_proof(audience: &str, nonce: &str) -> String {
     let holder = PrivateJwk::parse(TEST_HOLDER_JWK).expect("holder JWK parses");
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let header_b64 = URL_SAFE_NO_PAD.encode(
@@ -312,6 +365,11 @@ pub(super) fn sign_oid4vci_proof_without_iss(audience: &str, nonce: &str) -> Str
     let signing_input = format!("{header_b64}.{payload_b64}");
     let signature = sign(signing_input.as_bytes(), &holder).expect("holder signs proof");
     format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
+}
+
+#[cfg(feature = "registry-notary-cel")]
+pub(super) fn sign_oid4vci_proof_without_iss(audience: &str, nonce: &str) -> String {
+    sign_oid4vci_did_jwk_proof(audience, Some(nonce), false)
 }
 
 #[cfg(feature = "registry-notary-cel")]

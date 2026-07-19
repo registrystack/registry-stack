@@ -25,15 +25,21 @@ against official artifacts.
 ## Prerequisites
 
 - Rust toolchain installed.
-- The `registry-manifest` repository cloned locally.
+- The Registry Stack monorepo cloned locally.
+
+Run the commands on this page from the Manifest product directory:
+
+```sh
+cd /path/to/registry-stack/products/manifest
+```
 
 Build the CLI before running commands:
 
 ```sh
-cargo build --bin registry-manifest
+cargo build --locked -p registry-manifest-cli
 ```
 
-The commands in this page use `cargo run --bin registry-manifest --` as a prefix.
+The commands in this page use `cargo run --locked -p registry-manifest-cli --` as a prefix.
 If you have installed the binary directly, replace that prefix with `registry-manifest`.
 
 ## Steps
@@ -42,7 +48,7 @@ If you have installed the binary directly, replace that prefix with `registry-ma
 
 By default the `validate-profiles` subcommand expects a `profiles/` directory path as its
 argument.
-In the repository root, the directory is `profiles/`.
+Relative to the Manifest product directory, the directory is `profiles/`.
 
 List the available profiles:
 
@@ -69,7 +75,7 @@ Each subdirectory that contains a `profile.yaml` is a profile entry.
 ### 2. Run validate-profiles on the full directory
 
 ```sh
-cargo run --bin registry-manifest -- validate-profiles profiles
+cargo run --locked -p registry-manifest-cli -- validate-profiles profiles
 ```
 
 The validator scans every subdirectory for `profile.yaml`, validates the descriptor schema,
@@ -89,7 +95,7 @@ place it under a scratch directory and pass that directory:
 ```sh
 mkdir -p /tmp/profile-check
 cp -r profiles/example-civil-registration /tmp/profile-check/
-cargo run --bin registry-manifest -- validate-profiles /tmp/profile-check
+cargo run --locked -p registry-manifest-cli -- validate-profiles /tmp/profile-check
 ```
 
 This validates only the profiles in `/tmp/profile-check` rather than the full suite.
@@ -140,7 +146,7 @@ for a complete example.
 After running `validate-profiles`, confirm the exit code:
 
 ```sh
-cargo run --bin registry-manifest -- validate-profiles profiles
+cargo run --locked -p registry-manifest-cli -- validate-profiles profiles
 echo "exit code: $?"
 ```
 
@@ -149,7 +155,7 @@ Exit code 0 means every profile descriptor and every referenced fixture passed.
 To confirm the test suite also covers all four example profiles, run:
 
 ```sh
-cargo test -p registry-manifest-core validates_profile_fixtures
+cargo test --locked -p registry-manifest-core validates_profile_fixtures
 ```
 
 This test asserts that all four example profile fixtures pass manifest validation.
@@ -180,4 +186,5 @@ These keys belong in Registry Relay runtime configuration, not in a portable met
 
 Confirm you are running against the same `profiles/` directory path as CI.
 The validator uses the path you pass as its argument.
-Check whether CI is running `validate-profiles profiles` from the repository root.
+Root CI enters `products/manifest` and runs
+`cargo run --locked -p registry-manifest-cli -- validate-profiles profiles`.

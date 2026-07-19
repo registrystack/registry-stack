@@ -21,6 +21,7 @@ use ulid::Ulid;
 
 const ADMIN_TOKEN: &str = "metrics-admin-token-0123456789";
 const METRICS_TOKEN: &str = "metrics-read-token-0123456789";
+const OPS_TOKEN: &str = "ops-read-token-0123456789";
 const SENSITIVE_QUERY_VALUE: &str = "secret-query-value-7788";
 const SENSITIVE_REQUEST_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const SENSITIVE_KEY_ID: &str = "metrics_sensitive_key_id";
@@ -156,7 +157,13 @@ fn build_auth() -> Arc<ApiKeyAuth> {
         make_fingerprint(METRICS_TOKEN),
     )
     .expect("metrics fingerprint parses");
-    Arc::new(ApiKeyAuth::new(vec![admin_entry, metrics_entry]))
+    let ops_entry = ApiKeyEntry::new(
+        "ops_reader".to_string(),
+        ScopeSet::from_iter(["registry_relay:ops_read"]),
+        make_fingerprint(OPS_TOKEN),
+    )
+    .expect("ops fingerprint parses");
+    Arc::new(ApiKeyAuth::new(vec![admin_entry, metrics_entry, ops_entry]))
 }
 
 fn ready_snapshot() -> ReadinessSnapshot {
@@ -166,6 +173,7 @@ fn ready_snapshot() -> ReadinessSnapshot {
         ReadyResource {
             ingest_ulid: Ulid::from_string("01BX5ZZKBKACTAV9WEVGEMMVS0").unwrap(),
             registered_at: time::OffsetDateTime::now_utc(),
+            consecutive_refresh_failures: 2,
         },
     );
     snapshot
@@ -311,6 +319,7 @@ fn assert_denial_body_does_not_expose_admin_state(body: &str) {
         "01BX5ZZKBKACTAV9WEVGEMMVS0",
         ADMIN_TOKEN,
         METRICS_TOKEN,
+        OPS_TOKEN,
         SENSITIVE_KEY_ID,
     ] {
         assert!(
@@ -536,6 +545,58 @@ async fn metrics_response_is_plain_prometheus_text_with_request_and_readiness_me
     assert_prometheus_text(&body);
     assert_contains_request_metrics(&body);
     assert_contains_readiness_gauge(&body);
+    assert!(body.contains(
+        "registry_relay_ingest_consecutive_refresh_failures{dataset_id=\"social_registry\",resource_id=\"beneficiaries_csv\"} 2"
+    ));
+    assert!(body.contains(
+        "registry_relay_ingest_last_successful_refresh_timestamp_seconds{dataset_id=\"social_registry\",resource_id=\"beneficiaries_csv\"} "
+    ));
+    assert_eq!(
+        body.lines()
+            .filter(|line| line.starts_with("registry_relay_ingest_consecutive_refresh_failures{"))
+            .count(),
+        1,
+        "refresh-failure series cardinality is bounded by configured ready resources"
+    );
+}
+
+#[tokio::test]
+async fn per_resource_refresh_health_is_restricted_to_authorized_posture() {
+    let fixture = build_fixture();
+
+    let default = fixture
+        .admin
+        .get("/admin/v1/posture")
+        .add_header("x-api-key", OPS_TOKEN)
+        .await;
+    default.assert_status(StatusCode::OK);
+    let default: serde_json::Value = default.json();
+    assert!(default["relay"].get("refresh_health").is_none());
+
+    let restricted = fixture
+        .admin
+        .get("/admin/v1/posture?tier=restricted")
+        .add_header("x-api-key", OPS_TOKEN)
+        .await;
+    restricted.assert_status(StatusCode::OK);
+    let restricted: serde_json::Value = restricted.json();
+    assert_eq!(restricted["tier"], "restricted");
+    assert_eq!(
+        restricted["relay"]["refresh_health"][0]["dataset_id"],
+        "social_registry"
+    );
+    assert_eq!(
+        restricted["relay"]["refresh_health"][0]["resource_id"],
+        "beneficiaries_csv"
+    );
+    assert_eq!(
+        restricted["relay"]["refresh_health"][0]["consecutive_refresh_failures"],
+        2
+    );
+    assert_eq!(
+        restricted["relay"]["refresh_health"][0]["serving_last_good"],
+        true
+    );
 }
 
 #[tokio::test]
@@ -569,6 +630,7 @@ async fn metrics_do_not_expose_sensitive_or_high_cardinality_values() {
         SENSITIVE_QUERY_VALUE,
         SENSITIVE_REQUEST_ID,
         ADMIN_TOKEN,
+        OPS_TOKEN,
         SENSITIVE_KEY_ID,
         SENSITIVE_PURPOSE,
     ] {

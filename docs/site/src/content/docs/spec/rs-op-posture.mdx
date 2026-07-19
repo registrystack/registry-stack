@@ -1,0 +1,263 @@
+---
+title: "RS-OP-POSTURE: Operations posture document"
+description: "The normative contract for the registry.ops.posture.v1 operations posture document: its envelope, component sections, sensitivity tiers, producer and consumer duties, and immutable schema evolution."
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-platform
+  - registry-relay
+  - registry-notary
+last_reviewed: "2026-07-19"
+doc_type: specification
+doc_id: RS-OP-POSTURE
+category: normative
+evidence: verified
+locale: en
+standards_referenced:
+  - json-schema
+layer:
+  - administration
+  - operations
+audience:
+  - integrator
+  - operator
+  - maintainer
+---
+
+This document defines the operations posture observation that Registry Relay and Registry Notary
+return from their protected admin surfaces. It gives operators and tooling authors one stable,
+versioned document for observing build, runtime, configuration, deployment, audit, and
+component-specific status without treating that observation as an authorization decision or a
+source of secrets.
+
+The key words in this document are interpreted per [RS-DOC](../rs-doc/) Section 2.
+Defined terms are used per [RS-TERMS](../rs-terms/).
+The [Registry Ops Posture v1 JSON Schema](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/schemas/registry.ops.posture.v1.schema.json)
+is the source of truth for validation; this specification defines the operational meaning and
+evolution rules that JSON Schema alone does not express.
+
+## Version history
+
+| Version | Date | Status | Change |
+| --- | --- | --- | --- |
+| 0.1.0 | 2026-07-19 | draft | Initial posture-document contract for `registry.ops.posture.v1`. |
+| 0.1.1 | 2026-07-19 | draft | Added restricted Relay per-resource refresh health before the 1.0 schema freeze. |
+
+## 1. Scope and surface
+
+This specification covers a point-in-time operations observation returned by
+`GET /admin/v1/posture`.
+Registry Relay and Registry Notary expose that route on their protected admin surfaces, not in
+the public Registry Relay API document.
+The product route and authorization details remain with the
+[Registry Relay API reference](../../reference/apis/registry-relay/) and the
+[Registry Notary API reference](../../reference/apis/registry-notary/).
+
+This specification does not define deployment configuration, profile-gate policy, audit
+retention, or a new authorization scope.
+It also does not make a posture document a health guarantee, a conformance certificate, or proof
+that an external artifact is safe to trust.
+
+## 2. Document envelope
+
+The schema identifier is `registry.ops.posture.v1`.
+Its canonical JSON Schema identifier is
+`https://id.registrystack.org/schemas/registry-platform/registry.ops.posture.v1.schema.json`.
+The root object and named nested objects use `additionalProperties: false`, except for two
+explicitly modeled maps.
+`standards_artifacts` accepts producer-selected artifact labels, while each artifact-reference
+value has the closed shape defined by the schema.
+`notary.signing_keys.readiness` accepts signing-key identifiers, while each value is one of the
+defined readiness states.
+
+REQ-OP-POSTURE-001: A producer MUST emit a JSON object that validates against
+`registry.ops.posture.v1`.
+It MUST include `schema`, `observed_at`, `component`, `instance`, `build`, `runtime`,
+`configuration`, `standards_artifacts`, and `posture`.
+`observed_at` MUST be an RFC 3339 date-time and `schema` MUST equal
+`registry.ops.posture.v1`.
+A producer MUST NOT add a root or nested property that the schema does not model.
+
+REQ-OP-POSTURE-002: A runtime endpoint producer MUST include `tier` as either `default` or
+`restricted`, even though the v1 schema permits its omission.
+Consumers of a runtime endpoint MUST treat an absent `tier` as invalid for that endpoint rather
+than silently guessing the disclosure class.
+
+### Component rules
+
+`component` is exactly one of `registry-relay` and `registry-notary`.
+The component selects one, and only one, component section.
+
+| `component` value | Required section | Forbidden section |
+| --- | --- | --- |
+| `registry-relay` | `relay` | `notary` |
+| `registry-notary` | `notary` | `relay` |
+
+REQ-OP-POSTURE-003: A `registry-relay` document MUST contain `relay` and MUST NOT contain
+`notary`.
+A `registry-notary` document MUST contain `notary` and MUST NOT contain `relay`.
+A consumer MUST reject a document that does not satisfy this pairing, even when the shared
+envelope itself appears complete.
+
+The shared sections state the following categories of observation:
+
+- `instance`: deployment identity and environment, with optional owner, jurisdiction, and URL.
+- `build`: package and version, with optional source revision and enabled features.
+- `runtime`: authentication mode, admin enablement, and readiness state.
+- `configuration`: configuration source, reload support, the latest applied state, and optional
+  emergency or trusted-root state.
+- `deployment`: optional profile, findings, and waivers.
+- `audit`: optional assurance characteristics for the configured audit path.
+- `standards_artifacts`: observed published-artifact references keyed by artifact label.
+- `posture`: warnings, actionable findings, and the observed audit-shipping state.
+
+The `relay` section reports configured surface counts, metadata-manifest state, adapter state, and
+restricted per-resource refresh health.
+The `notary` section reports claim and credential-profile counts plus state, credential-status,
+federation, OID4VCI, and optional subject-access observations.
+
+## 3. Examples
+
+The schema-valid [Registry Relay default example](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/examples/registry-relay.posture.valid.json)
+and [Registry Notary default example](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/examples/registry-notary.posture.valid.json)
+show the default projection for each component.
+The [restricted-tier fixture](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/fixtures/posture/restricted-posture.valid.json)
+shows fields that are valid but intentionally absent from the default projection.
+The checked-in `registry-relay.restricted-posture.valid.json` fixture shows the Relay refresh-health
+shape and its last-good serving state.
+
+Examples are observations, not deployment templates.
+An operator MUST supply actual deployment configuration through the product's configuration
+surface, not by copying posture values into configuration.
+
+## 4. Sensitivity tiers and emit-only filtering
+
+The tier identifies the disclosure class of the document, not the caller's authorization level.
+The product endpoint remains responsible for authentication and authorization before it returns
+either tier.
+A deployment MUST NOT assume that selecting `restricted` grants a caller any new permission.
+
+REQ-OP-POSTURE-004: A producer of the `default` tier MUST create its emitted document from the
+default JSON-pointer allowlist.
+It MUST use an emit-only projection, not a blacklist redaction pass over a complete operational
+object.
+If a leaf is not allowlisted, the producer MUST omit it rather than mask it, hash it, or preserve
+it in an opaque nested value.
+
+The default projection includes operational status, counts, selected digests, finding identifiers
+and severities, and non-secret audit-shipping observations.
+It excludes values that can reveal topology or operational free text, including instance URLs,
+build revisions and features, trusted roots, artifact URLs, waiver reasons, signing-key details,
+and Notary federation identities or peers.
+The checked-in sensitive fixture proves that the projection excludes credentials, private keys,
+source URLs, subject identifiers, raw rows, claim values, and the restricted topology fields.
+The default tier also excludes `relay.refresh_health`, including its dataset and resource
+identifiers.
+
+REQ-OP-POSTURE-005: A `restricted` document MAY contain every field modeled by the v1 schema,
+including fields excluded from the default allowlist.
+It MUST still conform to the closed schema and MUST NOT contain secret material, raw registry
+data, claim values, subject identifiers, bearer tokens, or private keys.
+The restricted tier is not a substitute for a private admin listener, access control, or operator
+review.
+
+Consumers MUST treat a missing field as unreported, not as `false`, `none`, or a failed check.
+Consumers MUST NOT reconstruct excluded values from a default-tier document or compare a default
+and restricted observation as though omission proves a configuration change.
+
+## 5. Schema evolution
+
+The v1 schema is a strict closed contract, not an extensible envelope.
+Its `schema` field is a constant and the root and named nested objects reject unknown keys, apart
+from the explicitly modeled maps in Section 2.
+This lets consumers validate a complete known shape before making an operational decision.
+
+REQ-OP-POSTURE-006: The identifier `registry.ops.posture.v1` MUST continue to name exactly its
+published v1 shape and meaning.
+Every post-1.0 shape change, including an additive optional property, a new required property, a
+removed or renamed property, a changed type or enum, or a changed field meaning, requires a new
+schema identifier and new JSON Schema document.
+A producer MUST NOT send a changed shape while retaining `registry.ops.posture.v1`.
+
+Adding an artifact label inside `standards_artifacts` does not change the v1 shape because that map
+is the explicitly modeled extension point.
+The new entry's value MUST remain a v1 `artifact_reference` object.
+
+REQ-OP-POSTURE-007: A consumer MUST dispatch on `schema` before interpreting the document.
+It MUST validate the complete document against the corresponding schema, reject an unknown
+schema identifier, and reject unknown properties in a v1 document.
+A consumer that supports a later schema identifier MUST retain an explicit validation path for v1
+until its own compatibility policy retires v1.
+
+## 6. Producer and consumer expectations
+
+REQ-OP-POSTURE-008: A producer MUST observe the current runtime state, set `observed_at` at the
+time of that observation, select the component section that matches the runtime, and emit a result
+that conforms to the selected schema and tier.
+It MUST select posture fields through typed, explicit construction and apply the selected tier's
+emit-only projection.
+This construction MUST prevent secret-bearing configuration and production data from being copied
+into the output.
+
+REQ-OP-POSTURE-009: A consumer MUST use posture as an observation for operations and troubleshooting
+only.
+It MUST evaluate readiness, findings, audit status, and artifact observations according to its own
+policy and MUST NOT treat any of them as an authorization grant, an external conformance claim,
+or proof of remote receipt or retention.
+
+### Relay refresh health
+
+REQ-OP-POSTURE-010: A restricted Registry Relay producer MUST include one
+`relay.refresh_health` entry for every resource with a valid last-good table.
+Each entry MUST carry the configured `dataset_id` and `resource_id`, the RFC 3339
+`last_successful_refresh_at` data-load time, a saturating `consecutive_refresh_failures` count, and
+`serving_last_good`.
+`serving_last_good` MUST be `true` exactly when the resource remains ready and the consecutive
+failure count is greater than zero.
+A failed refresh or metadata poll MUST increment the count without advancing the last successful
+data-load time or making a valid last-good resource unready.
+A successful data load MUST reset the count and advance the time.
+A successful unchanged metadata poll MUST reset the count without advancing the time.
+
+Refresh health describes Relay's ability to observe and load the configured source.
+It MUST NOT be interpreted as semantic or domain freshness of the source records.
+An operator SHOULD alert at three consecutive failures and MAY use a lower threshold when a
+freshness service-level objective requires it.
+
+## Conformance
+
+A producer conforms to this specification when it emits a schema-valid, component-consistent,
+tier-labeled observation; uses the emit-only allowlist for default output; keeps restricted output
+within the same secret and source-data boundary; assigns a new schema identifier for every
+post-1.0 shape change; and reports Relay refresh health when applicable (REQ-OP-POSTURE-001 through
+REQ-OP-POSTURE-006, REQ-OP-POSTURE-008, and REQ-OP-POSTURE-010).
+
+A consumer conforms when it validates and dispatches by schema, enforces component pairing,
+handles omissions as unreported, and does not elevate posture observations into proof or authority
+(REQ-OP-POSTURE-002, REQ-OP-POSTURE-003, REQ-OP-POSTURE-007, and REQ-OP-POSTURE-009).
+
+## Evidence
+
+This specification is `verified`: its document shape, examples, component pairing, and tier
+filter are shipped in Registry Platform and exercised by contract tests.
+
+- The [v1 JSON Schema](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/schemas/registry.ops.posture.v1.schema.json)
+  defines the closed envelope, schema constant, and Relay/Notary component pairing
+  (Sections 2 and 5).
+- The [posture contract tests](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-platform-ops/tests/posture_contract.rs)
+  validate both examples, the default allowlist projection, the sensitive fixture, and exclusion
+  of restricted fields from default output (Sections 3, 4, and 6).
+- The checked-in restricted Relay posture fixture and Registry Relay admin tests validate
+  per-resource last-good state, tier filtering, and the live producer shape (Sections 4 and 6).
+- The [Registry Relay admin handler](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-relay/src/api/admin.rs)
+  and [Registry Notary admin handler](https://github.com/registrystack/registry-stack/blob/c84b1b9288b925e7c9cc89c47c33cc1f50753d8c/crates/registry-notary-server/src/api/admin.rs)
+  select the requested tier and return the shared posture document (Sections 1, 4, and 6).
+
+## Next
+
+- [Harden a production deployment](../../security/hardening-checklist/) explains how an operator
+  uses posture findings while preparing a deployment.
+- [Registry Relay protocol](../rs-pr-relay/) defines the Relay admin-surface boundary.
+- [Registry Notary protocol](../rs-pr-notary/) defines Registry Notary's protected service surface.
+- [RS-SEC-G](../rs-sec-g/) defines the security model and the operator boundary this observation
+  helps inspect.

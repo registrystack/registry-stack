@@ -230,11 +230,9 @@ pub(in super::super) fn is_auth_exempt_path(path: &str, policy: AuthExemptionPol
             | "/ready"
             | "/.well-known/evidence/jwks.json"
             | "/.well-known/openid-credential-issuer"
-            | "/oid4vci/credential-offer"
             | "/oid4vci/offer/start"
             | "/oid4vci/offer/callback"
             | "/oid4vci/token"
-            | "/oid4vci/nonce"
             // Auth-exempt only from API-key/OIDC middleware. The federation
             // handler still requires and verifies the peer-signed JWS.
             | "/federation/v1/evaluations"

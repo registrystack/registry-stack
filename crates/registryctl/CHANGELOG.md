@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-19
+
+### Changed
+
+- Interactive report commands now print concise human-readable results by
+  default. This covers project initialization, Notary add-on setup, offline
+  tests, checks, editor setup, builds, doctor validation, Config Bundle
+  operations, and trust-anchor operations. Add `--format json` for versioned
+  machine-readable reports. Artifact and protocol streams keep their existing
+  formats.
+- Registryctl now uses the workspace-pinned `serde_norway` YAML parser and
+  serializer, consistent with the supported configuration boundary used by
+  Relay and Notary.
+
+### Fixed
+
+- `registryctl init` now stages starter editor setup before publication and
+  rejects non-UTF-8 JSON destinations before invoking an initializer, avoiding
+  partial projects on either failure path.
+
 ## [0.11.0] - 2026-07-18
 
 ### Added
@@ -39,12 +59,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   HTTP, DHIS2 Tracker, OpenCRVS DCI, FHIR R4, and exact snapshot. A committed
   catalog now drives documentation and tests for additional maintained and
   conformance workspaces without turning them into public starters.
-
-### Changed
-
-- `registryctl init --from` and `registryctl init relay` now print concise human-readable results
-  with tailored next commands. Both forms accept `--format json` for the versioned
-  `registryctl.init.v1` machine-readable report.
 
 ### Removed
 

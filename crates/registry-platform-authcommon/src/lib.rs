@@ -172,25 +172,51 @@ pub fn validate_api_key_entropy(plaintext: &str) -> Result<(), EntropyError> {
     Ok(())
 }
 
-/// Provider for a canonical credential fingerprint.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-#[non_exhaustive]
-pub enum CredentialFingerprintProvider {
-    /// Resolve from an environment variable.
-    Env,
-    /// Resolve from a local file.
-    File,
+/// Define a closed string vocabulary once for its Rust enum, parser labels,
+/// diagnostics, and schema consumers.
+macro_rules! define_string_roster {
+    (
+        $(#[$enum_meta:meta])*
+        $visibility:vis enum $name:ident {
+            $(
+                $(#[$variant_meta:meta])*
+                $variant:ident => $label:literal,
+            )+
+        }
+    ) => {
+        $(#[$enum_meta])*
+        $visibility enum $name {
+            $(
+                $(#[$variant_meta])*
+                #[serde(rename = $label)]
+                $variant,
+            )+
+        }
+
+        impl $name {
+            /// Every label accepted by the parser, in stable declaration order.
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            /// Stable provider label for redacted diagnostics.
+            #[must_use]
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $label,)+
+                }
+            }
+        }
+    };
 }
 
-impl CredentialFingerprintProvider {
-    /// Stable provider label for redacted diagnostics.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Env => "env",
-            Self::File => "file",
-        }
+define_string_roster! {
+    #[doc = "Provider for a canonical credential fingerprint."]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+    #[non_exhaustive]
+    pub enum CredentialFingerprintProvider {
+        /// Resolve from an environment variable.
+        Env => "env",
+        /// Resolve from a local file.
+        File => "file",
     }
 }
 

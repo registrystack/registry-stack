@@ -447,6 +447,7 @@ fn build_posture_with_observation(
                 "ogcapi_edr": feature_status(cfg!(feature = "ogcapi-edr")),
                 "spdci": feature_status(cfg!(feature = "spdci-api-standards") && config.standards.spdci.is_some()),
             },
+            "refresh_health": relay_refresh_health(readiness),
         },
         "posture": {
             "warnings": warnings,
@@ -455,6 +456,25 @@ fn build_posture_with_observation(
         },
     });
     filter_posture_for_tier(posture, tier)
+}
+
+fn relay_refresh_health(readiness: Option<&ReadinessSnapshot>) -> Value {
+    let resources = readiness
+        .into_iter()
+        .flat_map(|snapshot| &snapshot.ready)
+        .map(|((dataset_id, resource_id), resource)| {
+            json!({
+                "dataset_id": dataset_id.as_str(),
+                "resource_id": resource_id.as_str(),
+                "last_successful_refresh_at": resource.registered_at
+                    .format(&Rfc3339)
+                    .expect("ready timestamp formats as RFC3339"),
+                "consecutive_refresh_failures": resource.consecutive_refresh_failures,
+                "serving_last_good": resource.consecutive_refresh_failures > 0,
+            })
+        })
+        .collect::<Vec<_>>();
+    Value::Array(resources)
 }
 
 fn posture_warnings(config: &Config, readiness: Option<&ReadinessSnapshot>) -> Vec<String> {

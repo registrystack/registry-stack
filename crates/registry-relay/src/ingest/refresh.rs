@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::audit::{AuditPipeline, OperationalAuditEvent};
 
-use super::IngestPlan;
+use super::{restricted_change_token_revision, IngestPlan};
 
 /// Refresh schedule policy parsed from `ResourceConfig.refresh`.
 pub enum RefreshPolicy {
@@ -102,7 +102,6 @@ async fn run_mtime_loop(
     audit_sink: Option<Arc<AuditPipeline>>,
 ) {
     let mut backoff = BackoffState::new();
-    let mut last_change_token: Option<String> = None;
 
     loop {
         let wait = backoff.next_wait(interval);
@@ -134,11 +133,12 @@ async fn run_mtime_loop(
             }
         };
 
-        let current_change_token = meta.change_token.clone();
-        let changed = match (&last_change_token, &current_change_token) {
-            (None, _) => true, // First poll: treat as changed.
+        let current_source_revision =
+            restricted_change_token_revision(meta.change_token.as_deref());
+        let loaded_source_revision = plan.loaded_source_revision();
+        let changed = match (&loaded_source_revision, &current_source_revision) {
             (Some(prev), Some(cur)) => prev != cur,
-            (Some(_), None) => true, // Connector lost its token: re-ingest.
+            _ => true, // Missing token: conservatively re-ingest.
         };
 
         if !changed {
@@ -149,6 +149,8 @@ async fn run_mtime_loop(
             );
             // Successful poll (no change): reset backoff.
             backoff.reset();
+            plan.record_unchanged_metadata_success();
+            publish_readiness();
             continue;
         }
 
@@ -160,7 +162,6 @@ async fn run_mtime_loop(
 
         match plan.refresh().await {
             Ok(()) => {
-                last_change_token = current_change_token;
                 backoff.reset();
                 publish_readiness();
             }

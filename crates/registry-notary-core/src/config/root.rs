@@ -16,7 +16,7 @@ const MIN_RELAY_OUTER_REQUEST_TIMEOUT: Duration = Duration::from_secs(
 pub const CREDENTIAL_SIGNING_ALG_ES256: &str = "ES256";
 pub const CLIENT_ASSERTION_SIGNING_ALG_RS256: &str = "RS256";
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StandaloneRegistryNotaryConfig {
     #[serde(default, skip_serializing_if = "instance_config_is_default")]
@@ -45,7 +45,7 @@ pub struct StandaloneRegistryNotaryConfig {
     pub deployment: DeploymentConfig,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NotaryInstanceConfig {
     #[serde(default = "default_instance_id")]
@@ -64,7 +64,7 @@ pub struct NotaryInstanceConfig {
 ///
 /// Simple local deployments omit this block. Signed/governed apply requires it
 /// so anti-rollback state lives in an explicit durable location.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigTrustConfig {
     pub trust_anchor_path: PathBuf,
@@ -154,6 +154,7 @@ impl StandaloneRegistryNotaryConfig {
         }
         self.evidence.concurrency.validate()?;
         self.evidence.machine_quota.validate()?;
+        self.evidence.validate_batch_limits()?;
         if let Some(relay) = &self.evidence.relay {
             relay.validate()?;
             if !self

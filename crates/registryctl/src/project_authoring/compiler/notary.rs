@@ -210,7 +210,7 @@ fn generated_notary_config(
             json!({
                 "provider": "local_jwk_env",
                 "private_jwk_env": issuance.signing_key.secret,
-                "alg": "EdDSA",
+                "alg": issuance.algorithm.as_str(),
                 "kid": issuance.signing_kid,
                 "status": "active",
             }),
@@ -452,14 +452,16 @@ fn add_oid4vci_config(
         "authorization_servers": [binding.authorization_server.issuer],
         "accepted_token_audiences": [public_base_url, binding.client.id],
         "credential_endpoint": format!("{public_base_url}/oid4vci/credential"),
-        "offer_endpoint": format!("{public_base_url}/oid4vci/credential-offer"),
-        "nonce_endpoint": format!("{public_base_url}/oid4vci/nonce"),
         "nonce": { "enabled": true, "ttl_seconds": 300 },
         "authorization": { "require_pkce_method": "S256" },
         "proof": { "max_age_seconds": 300, "max_clock_skew_seconds": 30 },
         "pre_authorized_code": {
             "enabled": true,
-            "tx_code": { "required": true, "input_mode": "numeric", "length": 6 },
+            "tx_code": {
+                "required": binding.tx_code.required,
+                "input_mode": "numeric",
+                "length": 6,
+            },
             "esignet": {
                 "client_id": binding.client.id,
                 "client_signing_key_id": "oid4vci-esignet-client",
@@ -1336,7 +1338,7 @@ mod notary_compiler_tests {
 
     #[test]
     fn compiler_rejects_source_free_credential_profiles_without_project_validation() {
-        let project: RegistryProject = serde_yaml::from_str(
+        let project: RegistryProject = serde_norway::from_str(
             r#"version: 1
 registry: { id: compiler-boundary-test }
 services:

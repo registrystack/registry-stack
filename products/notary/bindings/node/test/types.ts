@@ -62,8 +62,6 @@ const jwks: Promise<unknown> = client.issuerJwks();
 const refreshedJwks: Promise<unknown> = client.refreshJwks();
 const jwk: Promise<Record<string, unknown> | undefined> = client.getJwk("key-1");
 const oidMetadata: Promise<unknown> = client.oid4vciIssuerMetadata();
-const oidOffer: Promise<unknown> = client.oid4vciCredentialOffer("config one");
-const oidNonce: Promise<unknown> = client.oid4vciNonce();
 const oidCredential: Promise<unknown> = client.oid4vciCredential({ proof: { jwt: "jwt" } });
 const federation: Promise<string> = client.federationEvaluateJws("request.jws.compact");
 
@@ -87,8 +85,6 @@ void jwks;
 void refreshedJwks;
 void jwk;
 void oidMetadata;
-void oidOffer;
-void oidNonce;
 void oidCredential;
 void federation;
 void errors;

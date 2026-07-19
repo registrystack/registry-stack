@@ -62,87 +62,28 @@ pub async fn oid4vci_proof_precheck_middleware(
         Ok(proof) => proof,
         Err(_) => return oid4vci_error_response(Oid4vciWireError::InvalidProof),
     };
+    if require_oid4vci_did_jwk_proof(&validated_proof).is_err() {
+        return oid4vci_error_response(Oid4vciWireError::InvalidProof);
+    }
     let mut request = Request::from_parts(parts, Body::from(bytes));
     request.extensions_mut().insert(validated_proof);
     next.run(request).await
 }
-pub(in crate::api) async fn oid4vci_nonce(
-    state: Option<Extension<Arc<RegistryNotaryApiState>>>,
-    connect_info: Option<Extension<axum::extract::ConnectInfo<SocketAddr>>>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    let Some(Extension(state)) = state else {
-        return oid4vci_error_response(Oid4vciWireError::ServerError);
-    };
-    if !state.oid4vci.enabled || !state.oid4vci.nonce.enabled {
-        return StatusCode::NOT_FOUND.into_response();
-    }
-    let client_address = token_client_address(&state, &headers, connect_info.as_deref());
-    if consume_public_client_address_rate_limit(&state, &client_address)
-        .await
-        .is_err()
-    {
-        return oid4vci_error_response(Oid4vciWireError::RateLimited);
-    }
-    let request = if body.is_empty() {
-        Oid4vciNonceRequest {
-            credential_configuration_id: None,
-        }
-    } else {
-        match serde_json::from_slice::<Oid4vciNonceRequest>(&body) {
-            Ok(request) => request,
-            Err(_) => return oid4vci_error_response(Oid4vciWireError::InvalidRequest),
-        }
-    };
-    let configuration_id =
-        match oid4vci_nonce_configuration_id(&state.oid4vci, request.credential_configuration_id) {
-            Ok(configuration_id) => configuration_id,
-            Err(error) => return oid4vci_error_response(error),
-        };
-    let nonce = match generate_nonce() {
-        Ok(nonce) => nonce,
-        Err(error) => return evidence_error_response(error),
-    };
-    let key = match state.subject_access_rate_keys.oid4vci_nonce(
-        &state.oid4vci.credential_issuer,
-        configuration_id,
-        &nonce,
-    ) {
-        Ok(key) => key,
-        Err(error) => return evidence_error_response(error.evidence_error()),
-    };
-    let replay_scope = match oid4vci_nonce_replay_scope(&state, configuration_id) {
-        Ok(scope) => scope,
-        Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
-    };
-    let replay_key = match ReplayKey::new(key) {
-        Ok(key) => key,
-        Err(_) => return oid4vci_error_response(Oid4vciWireError::ServerError),
-    };
-    let expires_at =
-        OffsetDateTime::now_utc() + time::Duration::seconds(state.oid4vci.nonce.ttl_seconds as i64);
-    if let Err(error) = state
-        .replay
-        .nonce_store()
-        .reserve_nonce(&replay_scope, &replay_key, expires_at)
-        .await
-    {
-        if replay_store_error_is_capacity(&error) {
-            state.metrics.record_replay("oid4vci_nonce", "rate_limited");
-            return oid4vci_error_response(Oid4vciWireError::RateLimited);
-        }
-        state.metrics.record_replay("oid4vci_nonce", "error");
-        return oid4vci_error_response(Oid4vciWireError::ServerError);
-    }
-    state.metrics.record_replay("oid4vci_nonce", "reserved");
-    Json(NonceResponse {
-        c_nonce: nonce,
-        c_nonce_expires_in: state.oid4vci.nonce.ttl_seconds,
-    })
-    .into_response()
-}
 
+pub(in crate::api) fn require_oid4vci_did_jwk_proof(
+    proof: &ValidatedProof,
+) -> Result<(), Oid4vciWireError> {
+    if proof
+        .kid
+        .as_deref()
+        .is_some_and(|kid| kid.starts_with("did:jwk:"))
+        && proof.holder_id.starts_with("did:jwk:")
+    {
+        Ok(())
+    } else {
+        Err(Oid4vciWireError::InvalidProof)
+    }
+}
 pub(in crate::api) fn oid4vci_proof_nonce(proof_jwt: &str) -> Result<String, Oid4vciWireError> {
     #[derive(Deserialize)]
     struct NonceClaims {
@@ -191,6 +132,36 @@ pub(in crate::api) fn generate_nonce() -> Result<String, EvidenceError> {
     let mut nonce = [0_u8; 32];
     getrandom::fill(&mut nonce).map_err(|_| EvidenceError::CredentialIssuanceFailed)?;
     Ok(URL_SAFE_NO_PAD.encode(nonce))
+}
+
+#[cfg(test)]
+mod oid4vci_proof_tests {
+    use super::*;
+
+    fn proof(kid: Option<&str>) -> ValidatedProof {
+        ValidatedProof {
+            holder_jwk: PublicJwk::parse(
+                r#"{"kty":"OKP","crv":"Ed25519","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA"}"#,
+            )
+            .expect("public JWK parses"),
+            holder_id: "did:jwk:eyJjcnYiOiJFZDI1NTE5Iiwia3R5IjoiT0tQIiwieCI6IjFhal9yTEpzR0Zndy01djkyNUVNbWVaalBKcDQ0eGVnYWZFS2ZaYmR4YyJ9".to_string(),
+            kid: kid.map(str::to_string),
+            nonce: Some("nonce".to_string()),
+            iat: 1,
+            exp: Some(2),
+            raw_claims: json!({}),
+        }
+    }
+
+    #[test]
+    fn oid4vci_holder_proof_requires_explicit_did_jwk_key_reference() {
+        let did = proof(None).holder_id;
+        assert!(require_oid4vci_did_jwk_proof(&proof(Some(&did))).is_ok());
+        assert_eq!(
+            require_oid4vci_did_jwk_proof(&proof(None)),
+            Err(Oid4vciWireError::InvalidProof)
+        );
+    }
 }
 
 #[derive(Debug)]

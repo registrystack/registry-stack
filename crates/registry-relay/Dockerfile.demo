@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # Keep the tag for humans and the digest for reproducible pulls.
-FROM rust:1-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS builder
+FROM rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 AS builder
 WORKDIR /workspace/registry_relay
 
 COPY Cargo.toml Cargo.lock ./
@@ -15,23 +15,21 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/workspace/registry_relay/target \
     cargo build --release --locked --features spdci-api-standards,standards-cel-mapping,attribute-release && \
     cp /workspace/registry_relay/target/release/registry-relay /usr/local/bin/registry-relay && \
-    cp /workspace/registry_relay/target/release/registry-relay-rhai-worker /usr/local/bin/registry-relay-rhai-worker
+    cp /workspace/registry_relay/target/release/registry-relay-rhai-worker /usr/local/bin/registry-relay-rhai-worker && \
+    mkdir -p \
+        /workspace/runtime-root/etc/registry-relay \
+        /workspace/runtime-root/var/lib/registry-relay/cache \
+        /workspace/runtime-root/var/lib/registry-relay/data \
+        /workspace/runtime-root/var/log/registry-relay && \
+    chown -R 65532:65532 /workspace/runtime-root
 
-FROM debian:bookworm-slim@sha256:0104b334637a5f19aa9c983a91b54c89887c0984081f2068983107a6f6c21eeb AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:d97bc0a941b8d4be647dc0ee75b264ddbb772f1ac5ba690a4309c00723b23775 AS runtime
 
-RUN groupadd --system --gid 10001 registry_relay && \
-    useradd --system --uid 10001 --gid registry_relay --home-dir /var/lib/registry-relay --shell /usr/sbin/nologin registry_relay && \
-    mkdir -p /etc/registry-relay /var/lib/registry-relay/cache /var/lib/registry-relay/data && \
-    chown -R registry_relay:registry_relay /var/lib/registry-relay && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
-
+COPY --from=builder --chown=65532:65532 /workspace/runtime-root/ /
 COPY --from=builder /usr/local/bin/registry-relay /usr/local/bin/registry-relay
 COPY --from=builder /usr/local/bin/registry-relay-rhai-worker /usr/local/bin/registry-relay-rhai-worker
 COPY LICENSE /licenses/registry-relay/LICENSE
 
-USER registry_relay:registry_relay
 WORKDIR /var/lib/registry-relay
 
 ENV REGISTRY_RELAY_CONFIG=/etc/registry-relay/config.yaml

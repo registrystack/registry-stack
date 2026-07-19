@@ -13,9 +13,9 @@ registryctl build --project-dir . --environment local
 registryctl authoring xw --format reference
 ```
 
-`check` is human-readable by default. Use `--format json` only for machine
-consumers. Editor setup uses the five schemas copied from this `registryctl`
-build for VS Code and Zed.
+`authoring editor`, `test`, `check`, and `build` are human-readable by default. Use `--format json`
+with those report commands only for machine consumers. Editor setup uses the five schemas copied
+from this `registryctl` build for VS Code and Zed.
 
 Project-owned Rhai handles traversal and normalization. Relay owns signature,
 correlation, selector, sender, receiver, and cardinality verification.
