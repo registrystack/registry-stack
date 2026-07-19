@@ -1,9 +1,0 @@
-# One-time accepted Registry Stack 1.0 break. The wallet facade now exposes
-# registry-backed, issuer-initiated pre-authorized issuance only. The contract
-# check also requires every line below to remain present in the raw diff, so this
-# file must be removed after the comparison baseline includes the new contract.
-GET /oid4vci/credential-offer api path removed without deprecation
-POST /oid4vci/nonce api path removed without deprecation
-GET /.well-known/openid-credential-issuer removed the optional property 'nonce_endpoint' from the response with the '200' status
-POST /oid4vci/credential removed the optional property 'c_nonce' from the response with the '200' status
-POST /oid4vci/credential removed the optional property 'c_nonce_expires_in' from the response with the '200' status
