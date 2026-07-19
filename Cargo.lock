@@ -5283,6 +5283,7 @@ dependencies = [
  "axum",
  "axum-test",
  "base64",
+ "flate2",
  "registry-notary-core",
  "registry-notary-server",
  "registry-platform-crypto",

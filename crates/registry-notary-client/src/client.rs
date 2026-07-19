@@ -304,28 +304,54 @@ impl RegistryNotaryClient {
     /// This method is opt-in. Transport methods continue to decode response
     /// bodies without performing verification. Verification reuses the
     /// `issuer_jwks` TTL cache, forces one `refresh_jwks` on `key.unknown`,
-    /// and never performs an unbounded refresh loop.
+    /// and never performs an unbounded refresh loop. A status-bearing
+    /// credential additionally requires [`crate::StatusListPolicy`] in the
+    /// options. Its signed status list is fetched through a DNS-pinned,
+    /// no-redirect, no-proxy, bounded HTTPS request and fails closed.
     pub async fn verify_sd_jwt_vc(
         &self,
         compact: &str,
         options: VerifyOptions,
     ) -> Result<VerifiedCredential, VerificationError> {
-        let jwks = self
+        let mut jwks = self
             .issuer_jwks(RequestOptions::default())
             .await
             .map_err(|_| VerificationError::jwks_unavailable())?
             .body;
-        match crate::verifier::verify_sd_jwt_vc(compact, &jwks, &options) {
+        let pending = match crate::verifier::verify_sd_jwt_vc_pending(compact, &jwks, &options) {
             Err(error) if error.is_unknown_key() => {
-                let refreshed = self
+                jwks = self
                     .refresh_jwks(RequestOptions::default())
                     .await
                     .map_err(|_| VerificationError::jwks_unavailable())?
                     .body;
-                crate::verifier::verify_sd_jwt_vc(compact, &refreshed, &options)
+                crate::verifier::verify_sd_jwt_vc_pending(compact, &jwks, &options)?
             }
-            result => result,
+            Err(error) => return Err(error),
+            Ok(pending) => pending,
+        };
+        if let Some(status) = &pending.status {
+            let status_token = crate::verifier::fetch_status_list_token(status, &options).await?;
+            match crate::verifier::verify_status_list_token(&status_token, status, &jwks, &options)
+            {
+                Err(error) if error.is_status_unknown_key() => {
+                    jwks = self
+                        .refresh_jwks(RequestOptions::default())
+                        .await
+                        .map_err(|_| VerificationError::jwks_unavailable())?
+                        .body;
+                    crate::verifier::verify_status_list_token(
+                        &status_token,
+                        status,
+                        &jwks,
+                        &options,
+                    )?;
+                }
+                Err(error) => return Err(error),
+                Ok(()) => {}
+            }
         }
+        Ok(pending.credential)
     }
 
     #[cfg(feature = "verifier")]
