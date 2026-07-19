@@ -22,6 +22,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     ("Cargo deny", "run: cargo deny check"),
     ("Notary OpenAPI baseline", "run: just openapi-check"),
+    ("Notary OpenAPI contract", "name: Notary OpenAPI contract"),
     ("Notary exposure check", "name: Notary exposure check"),
     ("Notary exposure command", "run: just exposure-check"),
     ("Relay OpenAPI contract", "name: Relay OpenAPI contract"),
@@ -45,6 +46,38 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     ("Gate inventory self-check", "run: python3 release/scripts/check-gates-inventory.py"),
     ("Gate inventory tests", "run: python3 -m unittest release/scripts/test_check_gates_inventory.py"),
+    (
+        "Stable surface compatibility",
+        "run: python3 release/scripts/check-stable-surface-compatibility.py",
+    ),
+    (
+        "Stable surface compatibility tests",
+        "run: python3 -m unittest release/scripts/test_check_stable_surface_compatibility.py",
+    ),
+    (
+        "Relay OpenAPI stability filter tests",
+        "run: python3 -m unittest release/scripts/test_filter_relay_openapi_stability.py",
+    ),
+    (
+        "Upgrade exercise validator tests",
+        "run: python3 -m unittest release/scripts/test_validate_upgrade_exercise.py",
+    ),
+    (
+        "Upgrade exercise template validation",
+        "python3 release/scripts/validate-upgrade-exercise.py --template",
+    ),
+    (
+        "Base-reference compatibility input",
+        "STABLE_SURFACE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}",
+    ),
+    (
+        "OpenAPI base-reference input",
+        "OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}",
+    ),
+    (
+        "Stable error registry path filter",
+        "docs/site/src/content/docs/reference/errors.mdx)",
+    ),
     ("Docs dependency install", "run: npm ci"),
     ("Docs tests", "run: npm test"),
     ("Docs build check", "run: npm run check"),

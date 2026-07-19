@@ -58,6 +58,43 @@ class GateInventoryTest(unittest.TestCase):
             "OpenID conformance runner tests", self.module.missing_gates(text)
         )
 
+    def test_missing_stable_surface_gate_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: python3 release/scripts/check-stable-surface-compatibility.py",
+            "run: python3 release/scripts/skip-stable-surface-compatibility.py",
+        )
+        self.assertIn("Stable surface compatibility", self.module.missing_gates(text))
+
+    def test_missing_relay_openapi_stability_filter_tests_are_reported(self) -> None:
+        text = self.workflow.replace(
+            "run: python3 -m unittest release/scripts/test_filter_relay_openapi_stability.py",
+            "run: python3 -m unittest release/scripts/skip_filter_relay_openapi_stability.py",
+        )
+        self.assertIn("Relay OpenAPI stability filter tests", self.module.missing_gates(text))
+
+    def test_missing_openapi_base_reference_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "OPENAPI_CONTRACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}",
+            "OPENAPI_CONTRACT_BASE_REF: disabled",
+        )
+        self.assertIn("OpenAPI base-reference input", self.module.missing_gates(text))
+
+    def test_missing_upgrade_exercise_template_validation_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "python3 release/scripts/validate-upgrade-exercise.py --template",
+            "python3 release/scripts/validate-upgrade-exercise.py --skip-template",
+        )
+        self.assertIn(
+            "Upgrade exercise template validation", self.module.missing_gates(text)
+        )
+
+    def test_missing_stable_error_registry_path_filter_is_reported(self) -> None:
+        text = self.workflow.replace(
+            "docs/site/src/content/docs/reference/errors.mdx)",
+            "docs/site/src/content/docs/reference/removed-errors.mdx)",
+        )
+        self.assertIn("Stable error registry path filter", self.module.missing_gates(text))
+
     def test_missing_registryctl_tutorial_path_filter_is_reported(self) -> None:
         text = self.workflow.replace(
             "registryctl_tutorial: ${{ steps.filter.outputs.registryctl_tutorial }}",
