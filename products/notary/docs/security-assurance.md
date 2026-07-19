@@ -15,10 +15,46 @@ smoke, SBOM, and Grype critical-vulnerability gate.
 ## Container runtime policy
 
 The main Registry Notary image is a distroless Rust service image. Its runtime
-stage must remain `gcr.io/distroless/cc-debian12:nonroot` pinned by digest,
+stage must remain `gcr.io/distroless/cc-debian13:nonroot` pinned by digest,
 shell-free, package-manager-free, and compatible with a binary healthcheck and
 JSON-array entrypoint. The container CI guard enforces the runtime base,
 `registry-notary healthcheck`, and `ENTRYPOINT ["/usr/local/bin/registry-notary"]`.
+
+Debian 13 receives full Debian support through August 9, 2028 and LTS through
+June 30, 2030. Registry Stack must select a successor base before the applicable
+support window ends. The upstream lifecycle is recorded at
+<https://www.debian.org/releases/trixie/>. The Rust builder, runtime-preparation,
+and Distroless bases are pinned to multi-architecture image-index digests. An
+immutable digest makes a build input repeatable, but it does not make that input
+perpetually current. Release operators refresh all three pins together before
+each release candidate and whenever an upstream security update or scan finding
+requires it, then run:
+
+```sh
+python3 release/scripts/check-debian13-images.py
+```
+
+Changing the builder OS intentionally changes the release build input and may
+change linked binary bytes even when Rust sources and the Rust toolchain version
+do not change. Repeatability is established by two clean builds with the same
+new builder digest and lockfiles, comparing `dist/image-bin/SHA256SUMS`; hashes
+from the retired builder are not the expected comparison.
+
+PKCS#11 support remains compiled in but config-gated. A vendor module and any
+vendor-owned shared-library dependencies remain deployment inputs, not image
+layers. Mount them read-only at operator-owned absolute paths and set the
+provider's `module_path` to the mounted module. Do not copy an HSM module, PIN,
+token database, or vendor configuration into the image. Because Distroless has
+no package manager, the exact candidate must prove that the intended external
+module and its dependency closure load on this base.
+
+For each candidate digest, run the Notary container as UID/GID `65532:65532`
+with a read-only root filesystem and only explicitly documented state and audit
+mounts writable. Verify CA-root TLS, binary and CEL-worker execution, PKCS#11
+module loading and signing, filesystem permissions, `registry-notary
+healthcheck`, and readiness. The release workflow must then produce digest-bound
+SBOM, Grype, and capsule evidence. These candidate checks cannot be inferred
+from source-only image-contract tests.
 
 Route exposure waivers, when needed, live on the affected entry in
 `security/exposure-manifest.json` so the review context stays with the route.

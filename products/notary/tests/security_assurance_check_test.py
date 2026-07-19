@@ -241,6 +241,39 @@ class SecurityAssuranceCheckTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.module.check_dockerfile_secret_patterns()
 
+    def test_container_runtime_contract_accepts_debian13_and_rejects_vendor_module(self):
+        digest = "a" * 64
+        (self.root / "Dockerfile").write_text(
+            f"FROM rust:1.95-trixie@sha256:{digest} AS builder\n"
+            'ARG REGISTRY_NOTARY_FEATURES="registry-notary-cel,pkcs11"\n'
+            "RUN touch /registry-notary-cel-worker\n"
+            f"FROM gcr.io/distroless/cc-debian13:nonroot@sha256:{digest} AS runtime\n"
+            "COPY --from=builder --chown=65532:65532 /workspace/runtime-root/ /\n"
+            "COPY --from=builder /registry-notary-cel-worker /usr/local/bin/registry-notary-cel-worker\n"
+            "WORKDIR /var/lib/registry-notary\n"
+            'HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/registry-notary", "healthcheck"]\n'
+            'ENTRYPOINT ["/usr/local/bin/registry-notary"]\n'
+        )
+        self.module.check_container_runtime_contract()
+
+        with (self.root / "Dockerfile").open("a") as dockerfile:
+            dockerfile.write("COPY vendor-pkcs11-module.so /usr/lib/module.so\n")
+        with self.assertRaises(SystemExit):
+            self.module.check_container_runtime_contract()
+
+    def test_container_runtime_contract_rejects_unpinned_runtime(self):
+        (self.root / "Dockerfile").write_text(
+            'ARG REGISTRY_NOTARY_FEATURES="registry-notary-cel,pkcs11"\n'
+            "RUN touch /registry-notary-cel-worker\n"
+            "FROM gcr.io/distroless/cc-debian13:nonroot AS runtime\n"
+            "COPY --from=builder --chown=65532:65532 /workspace/runtime-root/ /\n"
+            "WORKDIR /var/lib/registry-notary\n"
+            'HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD ["/usr/local/bin/registry-notary", "healthcheck"]\n'
+            'ENTRYPOINT ["/usr/local/bin/registry-notary"]\n'
+        )
+        with self.assertRaises(SystemExit):
+            self.module.check_container_runtime_contract()
+
     def write_route_inventory(self):
         (self.root / "security" / "route-inventory.json").write_text(json.dumps({
             "version": 1,

@@ -68,9 +68,9 @@ openapi-contract base_ref="":
 exposure-check:
     python3 scripts/check_security_assurance.py manifest
 
-# Validate Dockerfiles for obvious secret-copy hazards.
+# Validate Dockerfiles for secret-copy hazards and the non-root runtime contract.
 container-security:
-    python3 scripts/check_security_assurance.py dockerfile-secrets
+    python3 scripts/check_security_assurance.py dockerfile-secrets container-runtime
 
 # Run security assurance checks that do not require external services.
 security:
