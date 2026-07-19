@@ -205,8 +205,10 @@ def plan_document(relay_image: str, source_ref: str, release_id: str) -> dict[st
         "live_evidence": False,
         "notes": [
             "This plan validates checked-in inputs only and is not conformance evidence.",
-            "A live run remains unreviewed until its digest-bound report is "
-            "reviewed without raw secrets.",
+            (
+                "A live run remains unreviewed until its digest-bound report is "
+                + "reviewed without raw secrets."
+            ),
         ],
     }
 
@@ -417,6 +419,7 @@ def atomic_text(path: Path, value: str, mode: int = 0o644) -> None:
         try:
             temporary.unlink()
         except FileNotFoundError:
+            # The temporary was atomically replaced or already removed.
             pass
 
 
