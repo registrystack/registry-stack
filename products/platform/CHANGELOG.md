@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## v0.12.0 - 2026-07-19
+
+### Added
+
+- `registry-platform-ops` now carries the restricted per-resource Relay
+  refresh-health posture contract and a matching reference fixture.
+- `CredentialFingerprintProvider`, `KeyProviderKind`, and `KeyStatus` expose
+  declaration-ordered `ALL` rosters so config-schema generation consumes the
+  same closed labels as runtime parsing and diagnostics.
+
 ## v0.11.0 - 2026-07-18
 
 - BREAKING: shared configuration `${VAR}` expansion now rejects environment

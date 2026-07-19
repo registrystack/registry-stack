@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-07-19
+
 ### Added
 
 - Added a complete source-tested registry-backed OID4VCI journey for EdDSA and
@@ -45,6 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OID4VCI remains limited to EdDSA or ES256 issuer signing and EdDSA `did:jwk`
   holder proof. No EUDI, HAIP, PAR, DPoP, wallet-attestation, ES256-holder, or
   external conformance claim is made without frozen candidate evidence.
+- Maintained Notary runtime images now use Debian 13 distroless. Release checks
+  enforce the expected base and vulnerability policy before publication.
 
 ## [0.11.0] - 2026-07-18
 
