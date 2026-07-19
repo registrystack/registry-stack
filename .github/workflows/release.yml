@@ -22,7 +22,7 @@ env:
   CARGO_TERM_COLOR: always
   REGISTRY: ghcr.io
   IMAGE_NAMESPACE: registrystack
-  RELEASE_BUILDER_IMAGE: rust:1.95-bookworm@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb
+  RELEASE_BUILDER_IMAGE: rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3
   SYFT_VERSION: v1.45.1
   SYFT_LINUX_AMD64_SHA256: 20c84195e24927f50a3b2269946be51f4c4abc9d2f145fee7388b4199149f716
   GRYPE_VERSION: v0.114.0
@@ -121,6 +121,9 @@ jobs:
 
       - name: Release source model
         run: REGISTRY_RELEASE_SOURCE_MODE=monorepo release/scripts/check-release-source-model.sh
+
+      - name: Verify Debian 13 image contract
+        run: release/scripts/check-debian13-images.py
 
   binaries:
     name: Build release binaries
